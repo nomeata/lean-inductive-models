@@ -117,6 +117,30 @@ def replaceDeclarationType (x : Export) (name : Name) (type : Expr) : Export :=
         if got == name then .opaq got params type value isUnsafe all else declaration
     | _ => declaration }
 
+def replaceDefinitionSafety (x : Export) (name : Name) (safety : String) : Export :=
+  { x with decls := x.decls.map fun declaration => match declaration with
+    | .defn got params type value hints _ all =>
+        if got == name then .defn got params type value hints safety all else declaration
+    | _ => declaration }
+
+def replaceImplementationWithAxiom (x : Export) (name : Name) : Export :=
+  { x with decls := x.decls.map fun declaration => match declaration with
+    | .defn got params type _ _ _ _ =>
+        if got == name then .ax got params type false else declaration
+    | _ => declaration }
+
+def replaceTheoremWithDefinition (x : Export) (name : Name) : Export :=
+  { x with decls := x.decls.map fun declaration => match declaration with
+    | .thm got params type value all =>
+        if got == name then .defn got params type value .opaque "safe" all else declaration
+    | _ => declaration }
+
+def replaceConst (type : Expr) (target replacement : Name) : Expr :=
+  type.replace fun
+    | .const name levels =>
+        if name == target then some (.const replacement levels) else none
+    | _ => none
+
 /-- Raise only the universe argument of a theorem's outer equality, retaining
 the complete binder telescope and all three equality arguments literally. -/
 partial def raiseOuterEqLevel? : Expr → Option Expr
@@ -139,6 +163,19 @@ def hasMissingViolation (owner declaration : Name) : Check.Violation → Bool
 def hasExtraProjectionViolation (owner declaration : Name) : Check.Violation → Bool
   | .extraProjection gotOwner gotDeclaration =>
       gotOwner == owner && gotDeclaration == declaration
+  | _ => false
+
+def hasKindViolation (owner declaration : Name)
+    (expected actual : Check.DeclarationKind) : Check.Violation → Bool
+  | .declarationKind gotOwner gotDeclaration gotExpected gotActual =>
+      gotOwner == owner && gotDeclaration == declaration &&
+        gotExpected == expected && gotActual == actual
+  | _ => false
+
+def hasSafetyViolation (owner declaration : Name) (actual : String) :
+    Check.Violation → Bool
+  | .declarationSafety gotOwner gotDeclaration gotActual =>
+      gotOwner == owner && gotDeclaration == declaration && gotActual == actual
   | _ => false
 
 def main : IO UInt32 := do
@@ -253,6 +290,12 @@ def main : IO UInt32 := do
     (declarationType? wGenerated wtyRule0).any fun type => !containsConst ``Eq.rec type
   state := state.check "dependent recursive field has the canonical transport" <|
     (declarationType? wGenerated wtyRule1).any (containsConst ``Eq.rec)
+  let corruptedTransport := (declarationType? wGenerated wtyRule1).map fun type =>
+    replaceDeclarationType wGenerated wtyRule1 (replaceConst type ``Eq.rec ``Eq.ndrec)
+  state := state.check "checker rejects a corrupted dependent projection transport" <|
+    corruptedTransport.any fun corrupted =>
+      (declarationType? corrupted wtyRule1).any (containsConst ``Eq.ndrec) &&
+        (Check.check corrupted).any (hasTypeViolation `Wty wtyRule1)
 
   let (wrapperDeclarations, wrapperReport) ← runExport wrapperRaw
   let wrapperGenerated := outputExport wrapperRaw wrapperDeclarations
@@ -329,6 +372,20 @@ def main : IO UInt32 := do
   let missingRule := Check.check (withoutDeclaration generated witnessRule)
   state := state.check "checker rejects a missing projection rule" <|
     missingRule.any (hasMissingViolation `Dep witnessRule)
+  let axiomProjection := Check.check <|
+    replaceImplementationWithAxiom generated payloadModel
+  state := state.check "checker requires a projection implementation definition" <|
+    axiomProjection.any
+      (hasKindViolation `Dep payloadModel .defn .axiom)
+  let unsafeProjection := Check.check <|
+    replaceDefinitionSafety generated payloadModel "unsafe"
+  state := state.check "checker requires a safe projection implementation" <|
+    unsafeProjection.any (hasSafetyViolation `Dep payloadModel "unsafe")
+  let definitionRule := Check.check <|
+    replaceTheoremWithDefinition generated payloadRule
+  state := state.check "checker requires a projection iota theorem" <|
+    definitionRule.any
+      (hasKindViolation `Dep payloadRule .thm .defn)
   let badModelType := Check.check <|
     replaceDeclarationType generated payloadModel (.sort (.succ .zero))
   state := state.check "checker compares projection types syntactically" <|
