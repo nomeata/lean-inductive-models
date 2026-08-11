@@ -49,3 +49,8 @@ supportInterpreter = true
 name = "checktest"
 root = "CheckTest"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "ordertest"
+root = "OrderTest"
+supportInterpreter = true
