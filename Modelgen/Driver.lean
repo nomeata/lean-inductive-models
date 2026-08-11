@@ -238,23 +238,32 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
     unitlikes := unitlikes.push (k, theoremName)
   return { is with decls := out, unitlikes }
 
-/-- Build the parameter/motive/minor prefix for one selected member of a
-mutual model recursor.
+private partial def findConstructorApp? (targetConstructor : Name)
+    (expression : Expr) : Option Expr :=
+  if expression.getAppFn.isConstOf targetConstructor then some expression
+  else match expression with
+    | .app fn argument =>
+      findConstructorApp? targetConstructor fn <|>
+        findConstructorApp? targetConstructor argument
+    | .lam _ type body _ | .forallE _ type body _ =>
+      findConstructorApp? targetConstructor type <|>
+        findConstructorApp? targetConstructor body
+    | .letE _ type value body _ =>
+      findConstructorApp? targetConstructor type <|>
+        findConstructorApp? targetConstructor value <|>
+        findConstructorApp? targetConstructor body
+    | .mdata _ body => findConstructorApp? targetConstructor body
+    | .proj _ _ struct => findConstructorApp? targetConstructor struct
+    | _ => none
 
-The selected motive and constructor-field index are supplied by the caller;
-the selected minor is read from the recursor telescope, whose initial binders
-are the constructor fields and whose remaining binders are induction
-hypotheses. Every unrelated
-motive is the constant inhabited lift of `major = major` into the recursor's
-motive sort, and every unrelated minor returns its lifted reflexivity.  This is the common elimination adapter
-for structure metadata (projections and eta): it permits selecting one member
-without assuming an inhabitant of any sibling's codomain. -/
-def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
+/-- Build the parameter/motive/minor prefix for one selected member of a
+mutual model recursor.  The callback supplies the body of the selected minor;
+all unrelated motives and minors receive inhabited propositional lifts. -/
+private def structureRecursorPreArgumentsWith (eqi : EqInfo) (sourceRecursor : ERec)
     (modelRecursor targetConstructor : Name) (motiveIndex : Nat)
-    (params : Array Expr) (carrier major targetMotive : Expr) (targetFieldIndex : Nat)
-    (numConstructorFields : Nat)
-    (motiveLevel : Level) (recLevels modelLevels : List Level)
-    (projectionModels : Array (Name × Nat × Name × Name)) (owner : Name) :
+    (params : Array Expr) (carrier major targetMotive : Expr)
+    (motiveLevel : Level) (recLevels : List Level)
+    (selectedMinorBody : Array Expr → Expr → GenM Expr) :
     GenM (Array Expr) := do
   let modelRecursorInfo ← constInfo modelRecursor
   let recType := modelRecursorInfo.type.instantiateLevelParams
@@ -272,23 +281,12 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
     (eqi.refl' carrierLevel carrier major)
   let constantMotive := fun (domain proposition : Expr) =>
     forallTelescope domain fun binders _ => mkLambdaFVars binders proposition
-  let rec findConstructorApp? (expression : Expr) : Option Expr :=
-    if expression.getAppFn.isConstOf targetConstructor then some expression
-    else match expression with
-      | .app fn argument => findConstructorApp? fn <|> findConstructorApp? argument
-      | .lam _ type body _ | .forallE _ type body _ =>
-        findConstructorApp? type <|> findConstructorApp? body
-      | .letE _ type value body _ =>
-        findConstructorApp? type <|> findConstructorApp? value <|> findConstructorApp? body
-      | .mdata _ body => findConstructorApp? body
-      | .proj _ _ struct => findConstructorApp? struct
-      | _ => none
   let selectedMinorIndex ← forallBoundedTelescope current (some sourceRecursor.numMotives)
       fun _ afterMotives =>
     forallBoundedTelescope afterMotives (some sourceRecursor.numMinors) fun minors _ => do
       let mut selected : Option Nat := none
       for i in [:minors.size] do
-        if (findConstructorApp? (← inferType minors[i]!)).isSome then
+        if (findConstructorApp? targetConstructor (← inferType minors[i]!)).isSome then
           if selected.isSome then
             badShape s!"{modelRecursor} has several minors for {targetConstructor}"
           selected := some i
@@ -307,7 +305,25 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
       | badShape s!"{modelRecursor} has too few minor binders"
     let value ← if minorIndex == selectedMinorIndex then
       forallTelescope domain fun binders conclusion => do
-        let some constructorApp := findConstructorApp? conclusion
+        mkLambdaFVars binders (← selectedMinorBody binders conclusion)
+      else forallTelescope domain fun binders _ => mkLambdaFVars binders fillerValue
+    arguments := arguments.push value
+    current := body.instantiate1 value
+  return arguments
+
+/-- Build the recursor prefix selecting one intrinsic structure projection.
+The selected minor is normalized with the already-generated lower field
+projections and their literal reduction theorems. -/
+def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
+    (modelRecursor targetConstructor : Name) (motiveIndex : Nat)
+    (params : Array Expr) (carrier major targetMotive : Expr) (targetFieldIndex : Nat)
+    (numConstructorFields : Nat)
+    (motiveLevel : Level) (recLevels modelLevels : List Level)
+    (projectionModels : Array (Name × Nat × Name × Name)) (owner : Name) :
+    GenM (Array Expr) :=
+  structureRecursorPreArgumentsWith eqi sourceRecursor modelRecursor targetConstructor
+    motiveIndex params carrier major targetMotive motiveLevel recLevels fun binders conclusion => do
+        let some constructorApp := findConstructorApp? targetConstructor conclusion
           | badShape s!"{targetConstructor}'s selected minor has no constructor conclusion"
         let constructorArgs := constructorApp.getAppArgs
         unless constructorArgs.size >= params.size + numConstructorFields do
@@ -336,11 +352,18 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
             (Naming.projectionName owner targetFieldIndex) normalizedFields targetFieldIndex with
           | .ok value => pure value
           | .error message => badShape message
-        mkLambdaFVars binders normalized
-      else forallTelescope domain fun binders _ => mkLambdaFVars binders fillerValue
-    arguments := arguments.push value
-    current := body.instantiate1 value
-  return arguments
+        pure normalized
+
+/-- Build the recursor prefix used by a structure-eta proof.  The selected
+minor is supplied exactly; unrelated arms are inhabited without assuming
+anything about sibling field codomains. -/
+private def structureEtaRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
+    (modelRecursor targetConstructor : Name) (motiveIndex : Nat)
+    (params : Array Expr) (carrier major targetMotive targetMinor : Expr)
+    (recLevels : List Level) : GenM (Array Expr) :=
+  structureRecursorPreArgumentsWith eqi sourceRecursor modelRecursor targetConstructor
+    motiveIndex params carrier major targetMotive .zero recLevels fun binders _ =>
+      pure (targetMinor.beta binders)
 
 private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : Nat)
     (current : Expr) : MetaM Bool := do
@@ -582,15 +605,11 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
 /-- Add the literal structure-eta theorem for every non-propositional member
 on which Lean's kernel enables structure eta.
 
-Each field selector is declaration-local.  If the export contains a primitive
-projection for that field, the theorem uses its exact modeled declaration.
-Otherwise it inlines the canonical elimination through the modeled recursor;
-no synthetic public projection slot is invented.  Building selectors from
-left to right is essential for dependent structures: the type of selector
-`j` contains the already-built selectors `0 .. j-1`. -/
+The reconstruction uses the member's intrinsic modeled projections in
+zero-based field order.  This interface is independent of whether the export
+also contains named wrapper definitions for any fields. -/
 def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor)
-    (recursors : Array ERec) (projections : Array EProjection)
-    (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+    (recursors : Array ERec) (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
   let mut eligible : Array Nat := #[]
   for k in [0:types.size] do
     let type := types[k]!
@@ -633,7 +652,6 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
     let some recursor := recursors.find? fun recursor =>
         recursor.rules.any (·.ctor == constructorName)
       | badShape s!"{type.name} has no corresponding exported recursor rule"
-    let minorIndex ← recursorMinorIndex constructors recursors recursor constructorName
     let some motiveIndex := recursor.all.idxOf? type.name
       | badShape s!"{recursor.name} has no motive for {type.name}"
     unless recursor.numIndices == 0 do
@@ -652,6 +670,12 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
     let typeInfo ← constInfo modelType
     let constructorInfo ← constInfo modelConstructor
     let recursorInfo ← constInfo modelRecursor
+    let mut modelProjections : Array Name := #[]
+    for fieldIndex in [0:constructor.numFields] do
+      let some (_, _, modelProjection, _) := is.projections.find? fun entry =>
+          entry.1 == type.name && entry.2.1 == fieldIndex
+        | badShape s!"{type.name} has no intrinsic modeled projection for field {fieldIndex}"
+      modelProjections := modelProjections.push modelProjection
 
     let declaration ← forallBoundedTelescope typeInfo.type (some type.numParams)
         fun params _ => do
@@ -659,46 +683,10 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
       let carrierLevel ← ilevel carrier
       let constructorTail ← instForall constructorInfo.type params
       withLocalDeclD `x carrier fun x => do
-        let selectors ← forallBoundedTelescope constructorTail
-            (some constructor.numFields) fun fields _ => do
-          let mut selectors : Array Expr := #[]
-          for fieldIndex in [0:constructor.numFields] do
-            let selector ← withLocalDeclD (`field.mkNum fieldIndex) carrier fun z => do
-              let namedProjection? := projections.find? fun projection =>
-                projection.owner == type.name && projection.fieldIndex == fieldIndex
-              let body ← match namedProjection? with
-                | some projection =>
-                  let some (_, modelProjection, _) := is.projections.find?
-                      (·.1 == projection.name)
-                    | badShape s!"{projection.name} has no modeled projection"
-                  pure (mkAppN (.const modelProjection us) (params.push z))
-                | none => do
-                  let some field := fields[fieldIndex]?
-                    | badShape s!"{constructorName} has no field {fieldIndex}"
-                  let earlierFields := fields.extract 0 fieldIndex
-                  let earlierValues := selectors.map (mkApp · z)
-                  let result := (← inferType field).replaceFVars earlierFields earlierValues
-                  let targetMotive ← mkLambdaFVars #[z] result
-                  let targetMinor ← mkLambdaFVars fields field
-                  let resultLevel ← ilevel result
-                  let recLevels ←
-                    if recursorInfo.levelParams.length == is.levelParams.length + 1 then
-                      pure (resultLevel :: us)
-                    else if recursorInfo.levelParams.length == is.levelParams.length then
-                      pure us
-                    else
-                      badShape s!"{modelRecursor} carries unexpected universe parameters"
-                  let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-                    motiveIndex minorIndex params carrier z targetMotive targetMinor
-                    resultLevel recLevels
-                  pure (mkAppN (.const modelRecursor recLevels) (pre.push z))
-              mkLambdaFVars #[z] body
-            selectors := selectors.push selector
-          return selectors
-
         let reconstruct := fun z =>
           mkAppN (.const modelConstructor us)
-            (params ++ selectors.map (mkApp · z))
+            (params ++ modelProjections.map fun projection =>
+              mkAppN (.const projection us) (params.push z))
         let proposition := eqi.mk' carrierLevel carrier x (reconstruct x)
         let targetMotive ← withLocalDeclD `z carrier fun z =>
           mkLambdaFVars #[z] (eqi.mk' carrierLevel carrier z (reconstruct z))
@@ -713,8 +701,8 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
             pure us
           else
             badShape s!"{modelRecursor} carries unexpected universe parameters"
-        let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-          motiveIndex minorIndex params carrier x targetMotive targetMinor .zero recLevels
+        let pre ← structureEtaRecursorPreArguments eqi recursor modelRecursor
+          modelConstructor motiveIndex params carrier x targetMotive targetMinor recLevels
         let proof := mkAppN (.const modelRecursor recLevels) (pre.push x)
         return Declaration.thmDecl
           { name := theoremName, levelParams := is.levelParams
@@ -731,7 +719,7 @@ def addStructureModels (types : Array EIndType) (constructors : Array ECtor)
     (recursors : Array ERec) (projections : Array EProjection)
     (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
   let is ← addProjectionModels types constructors recursors projections reserved is
-  let is ← addStructureEtaTheorems types constructors recursors projections reserved is
+  let is ← addStructureEtaTheorems types constructors recursors reserved is
   addUnitlikeTheorems types constructors recursors reserved is
 
 private abbrev FilterState := Array EDecl × Report × Array PendingModel

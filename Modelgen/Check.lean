@@ -627,6 +627,74 @@ private partial def instantiateForallsExact (expression : Expr) (arguments : Arr
     | .forallE _ _ body _ => instantiateForallsExact (body.instantiate1 argument) arguments (index + 1)
     | _ => none
 
+/-- Check the exact non-Prop structure-eta statement.  Reconstruction is
+through the intrinsic projection slots for the owner's fields, in constructor
+telescope order; exported projection wrapper declarations are irrelevant. -/
+private def checkEta (x : Export) (family : Family) (declarations : DeclarationTypes)
+    (metadata : Naming.Metadata) : Array Violation := Id.run do
+  let models := declarations.getD metadata.name #[]
+  if models.isEmpty then return #[.missingPublic metadata.owner metadata.name]
+  if models.size != 1 then
+    return #[.duplicatePublic metadata.owner metadata.name models.size]
+  let model := models[0]!
+  let .induct ownerTypes constructors _ := x.decls[family.ownerDecl]!
+    | return #[.declarationType metadata.owner metadata.name]
+  let some ownerType := ownerTypes.find? (fun type => type.name == metadata.owner)
+    | return #[.declarationType metadata.owner metadata.name]
+  let [constructorName] := ownerType.ctors
+    | return #[.declarationType metadata.owner metadata.name]
+  let some constructor := constructors.find? fun candidate =>
+      candidate.name == constructorName && candidate.induct == metadata.owner
+    | return #[.declarationType metadata.owner metadata.name]
+  unless ownerType.isKernelStructureLike constructors &&
+      !isPropositionFormer x ownerType.type do
+    return #[.declarationType metadata.owner metadata.name]
+  if ownerType.levelParams.length != model.levelParams.length then
+    return #[.universeArity metadata.owner metadata.name
+      ownerType.levelParams.length model.levelParams.length]
+  let some typePair := family.correspondence.typeFormers.find?
+      (·.owner == metadata.owner)
+    | return #[.declarationType metadata.owner metadata.name]
+  let some constructorPair := family.correspondence.constructors.find?
+      (·.owner == constructorName)
+    | return #[.declarationType metadata.owner metadata.name]
+  let levels := model.levelParams.map Level.param
+  let mappedOwnerType := family.correspondence.expectedType
+    ownerType.levelParams model.levelParams ownerType.type
+  let (parameterBinders, ownerResult) : Array OpenBinder × Expr := openForalls
+    ((`_check.structureEtaOwner).append metadata.owner) mappedOwnerType
+  unless parameterBinders.size == ownerType.numParams && ownerType.numIndices == 0 do
+    return #[.declarationType metadata.owner metadata.name]
+  let params := parameterBinders.map fun binder => binder.value
+  let .sort carrierLevel := formerWhnf x ownerResult
+    | return #[.declarationType metadata.owner metadata.name]
+  let carrier := mkAppN (.const typePair.model levels) params
+  let selfValue := mkFVar (FVarId.mk
+    ((`_check.structureEtaSelf).append metadata.owner))
+  let selfBinder : OpenBinder :=
+    { name := `x, type := carrier, info := .default, value := selfValue }
+  let mappedConstructorType := family.correspondence.expectedType
+    constructor.levelParams model.levelParams constructor.type
+  let some constructorTail := instantiateForallsExact mappedConstructorType params
+    | return #[.declarationType metadata.owner metadata.name]
+  let (fieldBinders, _) : Array OpenBinder × Expr := openForalls
+    ((`_check.structureEtaFields).append metadata.owner) constructorTail
+  unless fieldBinders.size == constructor.numFields do
+    return #[.declarationType metadata.owner metadata.name]
+  let mut fields : Array Expr := #[]
+  for fieldIndex in [0:constructor.numFields] do
+    let some projection := family.correspondence.projections.find? fun projection =>
+        projection.owner == metadata.owner && projection.fieldIndex == fieldIndex
+      | return #[.declarationType metadata.owner metadata.name]
+    fields := fields.push <| mkAppN (.const projection.name levels) (params.push selfValue)
+  let reconstruction := mkAppN (.const constructorPair.model levels) (params ++ fields)
+  let expectedBody := mkAppN (.const ``Eq [carrierLevel])
+    #[carrier, selfValue, reconstruction]
+  let expected := closeForalls (parameterBinders.push selfBinder) expectedBody
+  if model.type != expected then
+    return #[.declarationType metadata.owner metadata.name]
+  return #[]
+
 private abbrev ExactLocals := Array (FVarId × Expr)
 
 private def ExactLocals.typeOf? (locals : ExactLocals) (id : FVarId) : Option Expr :=
@@ -916,6 +984,8 @@ def check (x : Export) : Array Violation := Id.run do
       violations := violations ++ checkTheoremSlot declarations metadata.owner metadata.name
       if metadata.kind == .unitlike then
         violations := violations ++ checkUnitlike x family declarations metadata
+      else if metadata.kind == .eta then
+        violations := violations ++ checkEta x family declarations metadata
       else if metadata.kind == .ruleK then
         violations := violations ++ checkRuleK x family declarations metadata
     for pair in family.correspondence.recursors do
@@ -939,6 +1009,11 @@ def check (x : Export) : Array Violation := Id.run do
         let name := Naming.unitlikeName type.name
         unless (declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .unitlike)
+      unless type.isKernelStructureLike constructors &&
+          !isPropositionFormer x type.type do
+        let name := Naming.etaName type.name
+        unless (declarations.getD name #[]).isEmpty do
+          violations := violations.push (.extraMetadata type.name name .eta)
     for recursor in recursors do
       unless recursor.k do
         let name := Naming.ruleKName recursor.name
