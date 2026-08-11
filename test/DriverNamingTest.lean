@@ -1,5 +1,7 @@
 import Modelgen.Driver
+import Modelgen.Check
 import Modelgen.Naming
+import Modelgen.Order
 
 open Lean Meta Modelgen Modelgen.Naming
 
@@ -56,14 +58,19 @@ def FixtureResult.generated (result : FixtureResult) (owner : Name) : Bool :=
 def FixtureResult.declined (result : FixtureResult) (owner : Name) : Bool :=
   result.report.declined.any (fun entry => entry.1 == owner)
 
-def FixtureResult.declineReason? (result : FixtureResult) (owner : Name) : Option String :=
-  (result.report.declined.find? fun entry => entry.1 == owner).map (·.2)
-
 def FixtureResult.hasExactCarrier (result : FixtureResult) (owner : Name) : Bool :=
   result.hasName (modelName owner)
 
 def FixtureResult.hasLegacyCarrier (result : FixtureResult) (owner : Name) : Bool :=
   result.hasName (Name.str (modelName owner) "self")
+
+def declarationIndex? (output : Export) (name : Name) : Option Nat :=
+  output.decls.findIdx? (·.names.contains name)
+
+def declarationBefore (output : Export) (first second : Name) : Bool :=
+  match declarationIndex? output first, declarationIndex? output second with
+  | some i, some j => i < j
+  | _, _ => false
 
 def generatedOwnersExact (result : FixtureResult) : Bool :=
   result.report.generated.all fun entry =>
@@ -98,15 +105,36 @@ def main : IO UInt32 := do
   state := state.check "W support closure emits exact carriers"
     (generatedOwnersExact w)
 
-  -- Red-boundary pin: the W target is replayed before the input's exact Iff
-  -- block and propext. The basis wait drains at Eq, but the old late set does
-  -- not recognise Iff, so it loses the target rather than retrying it after
-  -- the logical interface arrives.
-  let lateW ← runFixture "test/fixtures/modelgen/w_late_iff.ndjson"
+  -- The W target is replayed before the input's exact Iff block and propext.
+  -- Its first basis wait drains at Eq; the late wait must remain atomic until
+  -- Iff, both of its kernel-owned declarations, and propext are all installed.
+  let lateText ← IO.FS.readFile "test/fixtures/modelgen/w_late_iff.ndjson"
+  let .ok lateInput := Modelgen.parse lateText (analyse := false)
+    | throw <| IO.userError "cannot parse test/fixtures/modelgen/w_late_iff.ndjson"
+  let lateW ← runExport "late W logical basis" lateInput false
     { noGeneration with simple := true, basic := true }
-  state := state.check "W target currently declines at the later exact Iff block"
-    (!lateW.generated `LateW && lateW.declineReason? `LateW ==
-      some "prim model name taken (Iff)")
+  let lateOutput : Export := { lateInput with decls := lateW.output }
+  let lateOrdered ← match Order.reorder lateOutput with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot order late W output: {repr error}"
+  let lateOutputCheck := Check.checkReport lateOrdered
+  let .ok lateSerialized := Modelgen.parse lateOrdered.render (analyse := false)
+    | throw <| IO.userError "cannot parse serialized late W output"
+  let lateInputCheck := Check.checkReport lateSerialized
+  state := state.check "W target retries after the complete later logical basis"
+    (lateW.generated `LateW && !lateW.declined `LateW)
+  state := state.check "late W ordered output and serialized input check exactly"
+    (lateOutputCheck.violations.isEmpty && lateInputCheck.violations.isEmpty &&
+      lateOutputCheck.familiesChecked > 0 &&
+      lateOutputCheck.familiesChecked == lateInputCheck.familiesChecked)
+  state := state.check "late W dependencies precede its model and owner"
+    (declarationBefore lateOrdered `Eq `Iff &&
+      declarationBefore lateOrdered `Iff `propext &&
+      declarationBefore lateOrdered `propext (modelName `LateW) &&
+      declarationBefore lateOrdered (modelName `LateW) `LateW)
+  state := state.check "late W retains each reordered source record exactly once"
+    ([`LateW, `Eq, `Iff, `propext].all fun name =>
+      (lateOrdered.decls.filter (·.names.contains name)).size == 1)
 
   let graph ← runFixture "test/fixtures/modelgen/prim_graph.ndjson"
     { noGeneration with simple := true, basic := true }
