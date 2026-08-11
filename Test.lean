@@ -1034,8 +1034,9 @@ that `modelgen` *takes* the escape.
 module is an error; the collision only exists in an export, which is many
 modules. So the probe parses a fixture and adds a second copy of one inductive
 under a private name that normalizes back onto the original — which is exactly
-the shape the export has, and `EDecl.renameRoot` is the same function the fix
-uses, applied here to manufacture the problem rather than to solve it.
+the shape the export has.  The copy is made with an explicit whole-name
+`AliasMap` and `EDecl.renameAliases`, the same exact substitution machinery
+used to serialize a collision retry.
 
 Three checks, and the third is the one that would catch a half-done renaming:
 
@@ -1060,7 +1061,9 @@ def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
     return check a false "the manufactured private name does not normalize onto Sv"
   let some i := x.decls.findIdx? (·.names.contains tgt)
     | return check a false "prim_shapes no longer declares Sv"
-  let dup := x.decls[i]!.renameRoot tgt priv
+  let aliases := x.decls[i]!.names.foldl (init := Naming.AliasMap.empty) fun aliases name =>
+    aliases.insert name (name.replacePrefix tgt priv)
+  let dup := x.decls[i]!.renameAliases aliases
   let decls := x.decls.extract 0 (i + 1) ++ #[dup] ++ x.decls.extract (i + 1) x.decls.size
   let env ← importModules #[] {}
   let ctx : Core.Context :=
@@ -1077,7 +1080,7 @@ def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
   a := check a (outD.any (·.names.contains modelN))
     s!"alias: the output does not carry {modelN}, so the declaration-local contract moved"
   let leaked := outD.flatMap edeclNames |>.filter fun n =>
-    n.components.any (· == `_mgalt)
+    n.components.any (· == `_modelgen_alias)
   a := check a leaked.isEmpty
     s!"alias: the alias root leaked into the output on {leaked.toList.take 4}"
   return a
