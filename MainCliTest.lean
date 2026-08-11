@@ -101,12 +101,26 @@ def main (args : List String) : IO UInt32 := do
     (monoRun.stdout.splitOn "_at").length > 1
 
   -- The final-output check also covers models after monomorphization.  This
-  -- fixture has use sites at distinct universe instantiations; suppressing
-  -- output keeps the process-boundary test small without skipping any pass.
+  -- fixture has nested/mutual models at distinct universe instantiations.  The
+  -- simple/bootstrap composition is a separate Mono capability, so keep this
+  -- assertion on the established polymorphic nested/mutual route.
   let poly := s!"{root}/tests/poly_nested_used.ndjson"
-  let monoModels ← runModelgen binary ["--mono-levels", "--no-output", "--quiet", poly]
+  let monoModels ← runModelgen binary
+    ["--mono-levels", "--no-simple", "--no-basic", "--quiet", poly]
   state := state.check "monomorphized generated models pass the final check"
-    (monoModels.exitCode == 0 && monoModels.stdout.isEmpty)
+    (monoModels.exitCode == 0 && !monoModels.stdout.isEmpty)
+
+  -- Check the serialized bytes again.  This pins both the post-Mono ordering
+  -- pass and the stdout writer: an in-memory result cannot make this second
+  -- input check green if serialization changes the declaration order.
+  let monoModeledPath := s!"{scratch}/main-cli-mono-modeled.ndjson"
+  IO.FS.writeFile monoModeledPath monoModels.stdout
+  let monoCheckedAgain ← runModelgen binary [
+    "--no-inductives", "--check-input", "--no-check-output", "--no-output",
+    monoModeledPath]
+  state := state.check "serialized monomorphized models remain ordered and check"
+    (monoCheckedAgain.exitCode == 0 && monoCheckedAgain.stdout.isEmpty)
+  IO.FS.removeFile monoModeledPath
 
   IO.println s!"main CLI: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

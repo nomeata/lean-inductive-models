@@ -237,7 +237,12 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
             for error in report.errors do IO.eprintln s!"  ! {error}"
             return exitInternal
           reportMono config report
-          pure output
+          match Modelgen.Order.reorder output with
+          | .error error =>
+              IO.eprintln s!"{input}: cannot order monomorphized output: \
+                {orderErrorMessage error}"
+              return exitInternal
+          | .ok orderedOutput => pure orderedOutput
     else
       pure ordered
 
