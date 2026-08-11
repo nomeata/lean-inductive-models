@@ -579,6 +579,161 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
 
   return { is with decls := out, projections := projectionModels, spliced, aliases := aliases }
 
+/-- Add the literal structure-eta theorem for every non-propositional member
+on which Lean's kernel enables structure eta.
+
+Each field selector is declaration-local.  If the export contains a primitive
+projection for that field, the theorem uses its exact modeled declaration.
+Otherwise it inlines the canonical elimination through the modeled recursor;
+no synthetic public projection slot is invented.  Building selectors from
+left to right is essential for dependent structures: the type of selector
+`j` contains the already-built selectors `0 .. j-1`. -/
+def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor)
+    (recursors : Array ERec) (projections : Array EProjection)
+    (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+  let mut eligible : Array Nat := #[]
+  for k in [0:types.size] do
+    let type := types[k]!
+    if type.isKernelStructureLike constructors.toList && !(← isPropFormerType type.type) then
+      eligible := eligible.push k
+  if eligible.isEmpty then return is
+  unless types.size == is.numAll && is.selfNames.size == is.numAll do
+    badShape "the structure-eta member table does not match the generated model"
+
+  let publicTable := eligible.foldl (fun table k =>
+    table.addMetadata .eta types[k]!.name) Naming.Table.empty
+  let occupied := reserved.fold (fun names name => names.push name) #[]
+  let census := publicTable.collisionCensus occupied
+  if let some name := census.taken[0]? <|> census.duplicateRequirements[0]? then
+    declineWith (.nameTaken name)
+
+  -- A mutual recursor's unrelated motives need an inhabitant at the selected
+  -- motive sort.  The common adapter uses the primitive propositional lift.
+  let puliftDecls ← if types.size > 1 then ensurePULiftP reserved else pure #[]
+  let env ← getEnv
+  let eqi ← match EqInfo.check env with
+    | .ok eqi => pure eqi
+    | .error message => badShape message
+  let us := is.levelParams.map Level.param
+  let mut out := is.decls
+  let mut spliced := is.spliced
+  let mut etas := is.etas
+  let mut aliases := is.aliases
+  for declaration in puliftDecls do
+    out := out.push declaration
+    spliced := spliced ++ declaration.getNames.toArray
+
+  for k in eligible do
+    let type := types[k]!
+    let [constructorName] := type.ctors
+      | badShape s!"{type.name} changed shape while generating structure eta"
+    let some constructor := constructors.find? fun constructor =>
+        constructor.name == constructorName && constructor.induct == type.name
+      | badShape s!"{constructorName} has no constructor record"
+    let some recursor := recursors.find? fun recursor =>
+        recursor.rules.any (·.ctor == constructorName)
+      | badShape s!"{type.name} has no corresponding exported recursor rule"
+    let minorIndex ← recursorMinorIndex constructors recursors recursor constructorName
+    let some motiveIndex := recursor.all.idxOf? type.name
+      | badShape s!"{recursor.name} has no motive for {type.name}"
+    unless recursor.numIndices == 0 do
+      badShape s!"structure recursor {recursor.name} unexpectedly has indices"
+    unless recursor.numMotives == recursor.all.length &&
+        recursor.numMinors == constructors.size do
+      badShape s!"{recursor.name} has an unexpected mutual telescope"
+
+    let modelType := is.selfNames[k]!
+    let some (_, modelConstructor) := is.ctors.find? (·.1 == constructorName)
+      | badShape s!"{constructorName} has no model constructor"
+    let modelRecursor := is.recs[k]!
+    let theoremName := Name.str modelType "eta"
+    let publicName := Naming.etaName type.name
+    if (← getEnv).constants.contains theoremName then declineWith (.nameTaken publicName)
+    let typeInfo ← constInfo modelType
+    let constructorInfo ← constInfo modelConstructor
+    let recursorInfo ← constInfo modelRecursor
+
+    let declaration ← forallBoundedTelescope typeInfo.type (some type.numParams)
+        fun params _ => do
+      let carrier := mkAppN (.const modelType us) params
+      let carrierLevel ← ilevel carrier
+      let constructorTail ← instForall constructorInfo.type params
+      withLocalDeclD `x carrier fun x => do
+        let selectors ← forallBoundedTelescope constructorTail
+            (some constructor.numFields) fun fields _ => do
+          let mut selectors : Array Expr := #[]
+          for fieldIndex in [0:constructor.numFields] do
+            let selector ← withLocalDeclD (`field.mkNum fieldIndex) carrier fun z => do
+              let namedProjection? := projections.find? fun projection =>
+                projection.owner == type.name && projection.fieldIndex == fieldIndex
+              let body ← match namedProjection? with
+                | some projection =>
+                  let some (_, modelProjection, _) := is.projections.find?
+                      (·.1 == projection.name)
+                    | badShape s!"{projection.name} has no modeled projection"
+                  pure (mkAppN (.const modelProjection us) (params.push z))
+                | none => do
+                  let some field := fields[fieldIndex]?
+                    | badShape s!"{constructorName} has no field {fieldIndex}"
+                  let earlierFields := fields.extract 0 fieldIndex
+                  let earlierValues := selectors.map (mkApp · z)
+                  let result := (← inferType field).replaceFVars earlierFields earlierValues
+                  let targetMotive ← mkLambdaFVars #[z] result
+                  let targetMinor ← mkLambdaFVars fields field
+                  let resultLevel ← ilevel result
+                  let recLevels ←
+                    if recursorInfo.levelParams.length == is.levelParams.length + 1 then
+                      pure (resultLevel :: us)
+                    else if recursorInfo.levelParams.length == is.levelParams.length then
+                      pure us
+                    else
+                      badShape s!"{modelRecursor} carries unexpected universe parameters"
+                  let pre ← structureRecursorPreArguments eqi recursor modelRecursor
+                    motiveIndex minorIndex params carrier z targetMotive targetMinor
+                    resultLevel recLevels
+                  pure (mkAppN (.const modelRecursor recLevels) (pre.push z))
+              mkLambdaFVars #[z] body
+            selectors := selectors.push selector
+          return selectors
+
+        let reconstruct := fun z =>
+          mkAppN (.const modelConstructor us)
+            (params ++ selectors.map (mkApp · z))
+        let proposition := eqi.mk' carrierLevel carrier x (reconstruct x)
+        let targetMotive ← withLocalDeclD `z carrier fun z =>
+          mkLambdaFVars #[z] (eqi.mk' carrierLevel carrier z (reconstruct z))
+        let targetMinor ← forallBoundedTelescope constructorTail
+            (some constructor.numFields) fun fields _ => do
+          let major := mkAppN (.const modelConstructor us) (params ++ fields)
+          mkLambdaFVars fields (eqi.refl' carrierLevel carrier major)
+        let recLevels ←
+          if recursorInfo.levelParams.length == is.levelParams.length + 1 then
+            pure (.zero :: us)
+          else if recursorInfo.levelParams.length == is.levelParams.length then
+            pure us
+          else
+            badShape s!"{modelRecursor} carries unexpected universe parameters"
+        let pre ← structureRecursorPreArguments eqi recursor modelRecursor
+          motiveIndex minorIndex params carrier x targetMotive targetMinor .zero recLevels
+        let proof := mkAppN (.const modelRecursor recLevels) (pre.push x)
+        return Declaration.thmDecl
+          { name := theoremName, levelParams := is.levelParams
+            type := ← mkForallFVars (params.push x) proposition
+            value := ← mkLambdaFVars (params.push x) proof }
+    addChecked declaration
+    out := out.push declaration
+    etas := etas.push (k, theoremName)
+    aliases := aliases.insert theoremName publicName
+  return { is with decls := out, etas, spliced, aliases }
+
+/-- Add all declaration-local structure metadata in dependency order. -/
+def addStructureModels (types : Array EIndType) (constructors : Array ECtor)
+    (recursors : Array ERec) (projections : Array EProjection)
+    (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+  let is ← addProjectionModels types constructors recursors projections reserved is
+  let is ← addStructureEtaTheorems types constructors recursors projections reserved is
+  addUnitlikeTheorems types constructors recursors reserved is
+
 private abbrev FilterState := Array EDecl × Report × Array PendingModel
 
 /-- Read one inductive block back out of the environment, including the
@@ -624,9 +779,8 @@ def addInstalledStructureModels (names : Array Name) (projections : Array EProje
     (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
   let .induct types constructors recursors ← indEDecl names
     | badShape s!"{names} did not read back as an inductive block"
-  let is ← addProjectionModels types.toArray constructors.toArray recursors.toArray
+  addStructureModels types.toArray constructors.toArray recursors.toArray
     projections reserved is
-  addUnitlikeTheorems types.toArray constructors.toArray recursors.toArray reserved is
 
 /-- Read the exact recursor records of a block generated inside this pass. -/
 def recursorsOfNames (names : Array Name) : MetaM (Array ERec) := do
@@ -1400,17 +1554,15 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
             let mut result ← (do
               let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray
                 pl reserved
-              let is ← addProjectionModels ts.toArray cs.toArray inputRecursors.toArray
-                #[] reserved is
-              addUnitlikeTheorems ts.toArray cs.toArray inputRecursors.toArray reserved is).run
+              addStructureModels ts.toArray cs.toArray inputRecursors.toArray
+                #[] reserved is).run
             if let .error (.nameLost _) := result then
               setEnv saved
               result ← (do
                 let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray pl reserved
                   (some (Naming.retryRoot t.name))
-                let is ← addProjectionModels ts.toArray cs.toArray inputRecursors.toArray
-                  #[] reserved is
-                addUnitlikeTheorems ts.toArray cs.toArray inputRecursors.toArray reserved is).run
+                addStructureModels ts.toArray cs.toArray inputRecursors.toArray
+                  #[] reserved is).run
             match result with
             | .error dec =>
               setEnv saved
@@ -1454,15 +1606,13 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                 let mut mutualResult ← (do
                   let is2 ← mutualIso is.members is.levelParams t.numParams
                     tys2 ctors2 reserved
-                  let is2 ← addInstalledStructureModels is.members #[] reserved is2
-                  addInstalledUnitlikeTheorems is.members reserved is2).run
+                  addInstalledStructureModels is.members #[] reserved is2).run
                 if let .error (.nameLost _) := mutualResult then
                   setEnv saved2
                   mutualResult ← (do
                     let is2 ← mutualIso is.members is.levelParams t.numParams
                       tys2 ctors2 reserved (some (Naming.retryRoot composedRoot))
-                    let is2 ← addInstalledStructureModels is.members #[] reserved is2
-                    addInstalledUnitlikeTheorems is.members reserved is2).run
+                    addInstalledStructureModels is.members #[] reserved is2).run
                 match mutualResult with
                 | .error dec =>
                   setEnv saved2

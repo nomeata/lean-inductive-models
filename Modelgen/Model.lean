@@ -1999,6 +1999,11 @@ structure Iso where
   /-- `(member, theorem)` for the real members on which Lean's kernel enables
   its unit-like equality shortcut. -/
   unitlikes : Array (Nat × Name) := #[]
+  /-- `(member, theorem)` for the non-propositional members on which Lean's
+  kernel enables structure eta.  The theorem reconstructs the value with the
+  exact modeled constructor and modeled projections (or canonical recursor
+  selectors when the export has no named projection). -/
+  etas : Array (Nat × Name) := #[]
   /-- `(source recursor, rule-K theorem)` for exactly those exported recursors
   whose literal kernel metadata has `k = true`. -/
   ruleKs : Array (Name × Name) := #[]
