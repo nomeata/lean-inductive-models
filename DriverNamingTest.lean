@@ -20,19 +20,32 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
 def noGeneration : Modelgen.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
 
-def runFixture (path : String) (generation : Modelgen.Cli.Config) : IO FixtureResult := do
-  let text ← IO.FS.readFile path
-  let .ok input := Modelgen.parse text (analyse := false)
-    | throw <| IO.userError s!"cannot parse {path}"
+def runExport (label : String) (input : Export) (checkRecursors : Bool)
+    (generation : Modelgen.Cli.Config) : IO FixtureResult := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<driver-naming-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let ((output, report), _) ← Lean.Core.CoreM.toIO
-    (Lean.Meta.MetaM.run' (runFilter input false generation)) context { env }
+    (Lean.Meta.MetaM.run' (runFilter input checkRecursors generation)) context { env }
   unless report.stmtErrors.isEmpty do
-    throw <| IO.userError s!"{path}: generated statements differ: {report.stmtErrors}"
+    throw <| IO.userError s!"{label}: generated statements differ: {report.stmtErrors}"
   return { output, report }
+
+def runFixture (path : String) (generation : Modelgen.Cli.Config) : IO FixtureResult := do
+  let text ← IO.FS.readFile path
+  let .ok input := Modelgen.parse text (analyse := false)
+    | throw <| IO.userError s!"cannot parse {path}"
+  runExport path input false generation
+
+def flipFirstRecursorSafety (input : Export) : Option (Export × Name) := do
+  let index ← input.decls.findIdx? fun declaration => match declaration with
+    | .induct _ _ (_ :: _) => true
+    | _ => false
+  let .induct types constructors (recursor :: recursors) := input.decls[index]! | none
+  let changed := { recursor with isUnsafe := !recursor.isUnsafe }
+  let declaration := EDecl.induct types constructors (changed :: recursors)
+  return ({ input with decls := input.decls.set! index declaration }, recursor.name)
 
 def FixtureResult.hasName (result : FixtureResult) (name : Name) : Bool :=
   result.output.any fun declaration => declaration.names.contains name
@@ -56,6 +69,15 @@ def generatedOwnersExact (result : FixtureResult) : Bool :=
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
+
+  let safetyText ← IO.FS.readFile "tests/nested_iota_arm.ndjson"
+  let .ok safetyInput := Modelgen.parse safetyText (analyse := false)
+    | throw <| IO.userError "cannot parse tests/nested_iota_arm.ndjson"
+  let some (wrongSafety, recursorName) := flipFirstRecursorSafety safetyInput
+    | throw <| IO.userError "no recursor to mutate in tests/nested_iota_arm.ndjson"
+  let safetyResult ← runExport "mutated recursor safety" wrongSafety true noGeneration
+  state := state.check "kernel-regenerated recursor safety is checked"
+    (safetyResult.report.recMismatch.contains recursorName)
 
   let carve ← runFixture "tests/prim_carve.ndjson"
     { noGeneration with simple := true, basic := true }

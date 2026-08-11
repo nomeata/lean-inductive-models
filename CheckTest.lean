@@ -63,35 +63,38 @@ partial def forallBody : Expr → Expr
   | .forallE _ _ body _ => forallBody body
   | body => body
 
-def modelAxiom (table : Correspondence) (x : Export) (pair : ConstantPair) : Option EDecl := do
+def modelDefinition (table : Correspondence) (x : Export) (pair : ConstantPair) : Option EDecl := do
   let (ownerParams, ownerType) ← exportDeclarationType? x pair.owner
   let params := modelParams ownerParams
-  return .ax pair.model params (table.expectedType ownerParams params ownerType) false
+  return .defn pair.model params (table.expectedType ownerParams params ownerType)
+    (.sort .zero) .opaque "safe" [pair.model]
 
-def modelIotaAxiom (table : Correspondence) (x : Export) (ownerDecl : Nat)
+def modelIotaTheorem (table : Correspondence) (x : Export) (ownerDecl : Nat)
     (iota : Naming.Iota) : Option EDecl := do
   let (ownerParams, ownerType) ←
     iotaProposition? x ownerDecl iota.recursor iota.ruleIndex
   let params := modelParams ownerParams
-  return .ax iota.name params (table.expectedIotaType ownerParams params ownerType) false
+  return .thm iota.name params (table.expectedIotaType ownerParams params ownerType)
+    (.sort .zero) [iota.name]
 
-def modelMetadataAxiom (table : Correspondence) (x : Export) (ownerDecl : Nat)
+def modelMetadataTheorem (table : Correspondence) (x : Export) (ownerDecl : Nat)
     (metadata : Naming.Metadata) : Option EDecl := do
   let (ownerParams, ownerType) ← match metadata.kind with
     | .unitlike => unitlikeProposition? x ownerDecl metadata.owner
     | .ruleK => ruleKProposition? x ownerDecl metadata.owner
     | _ => none
   let params := modelParams ownerParams
-  return .ax metadata.name params (table.expectedIotaType ownerParams params ownerType) false
+  return .thm metadata.name params (table.expectedIotaType ownerParams params ownerType)
+    (.sort .zero) [metadata.name]
 
 def modelDeclarations (x : Export) (table : Correspondence) (helper : Name) : Array EDecl :=
   let constants := (table.typeFormers ++ table.constructors ++ table.recursors).filterMap
-    (modelAxiom table x)
+    (modelDefinition table x)
   let iotas := match table.typeFormers[0]?.bind (ownerIndex? x ·.owner) with
-    | some ownerDecl => table.iotas.filterMap (modelIotaAxiom table x ownerDecl)
+    | some ownerDecl => table.iotas.filterMap (modelIotaTheorem table x ownerDecl)
     | none => #[]
   let metadata := match table.typeFormers[0]?.bind (ownerIndex? x ·.owner) with
-    | some ownerDecl => table.metadata.filterMap (modelMetadataAxiom table x ownerDecl)
+    | some ownerDecl => table.metadata.filterMap (modelMetadataTheorem table x ownerDecl)
     | none => #[]
   #[EDecl.ax helper [] (.sort (.succ .zero)) false] ++ constants ++ iotas ++ metadata
 
@@ -129,6 +132,33 @@ def withDeclarationType (x : Export) (name : Name) (type : Expr) : Export :=
           if got == name then .opaq got params type value isUnsafe all else declaration
       | _ => declaration }
 
+def withDefinitionSafety (x : Export) (name : Name) (safety : String) : Export :=
+  { x with decls := x.decls.map fun declaration => match declaration with
+      | .defn got params type value hints _ all =>
+          if got == name then .defn got params type value hints safety all else declaration
+      | _ => declaration }
+
+def withImplementationAxiom (x : Export) (name : Name) : Export :=
+  { x with decls := x.decls.map fun declaration => match declaration with
+      | .defn got params type _ _ _ _ =>
+          if got == name then .ax got params type false else declaration
+      | _ => declaration }
+
+def withProofDefinition (x : Export) (name : Name) : Export :=
+  { x with decls := x.decls.map fun declaration => match declaration with
+      | .thm got params type value all =>
+          if got == name then .defn got params type value .opaque "safe" all else declaration
+      | _ => declaration }
+
+def withUnsafeOwner (x : Export) (ownerDecl : Nat) : Export :=
+  let declaration := match x.decls[ownerDecl]! with
+    | .induct types constructors recursors =>
+        .induct (types.map fun type => { type with isUnsafe := true })
+          (constructors.map fun constructor => { constructor with isUnsafe := true })
+          (recursors.map fun recursor => { recursor with isUnsafe := true })
+    | declaration => declaration
+  { x with decls := x.decls.set! ownerDecl declaration }
+
 def withoutDeclaration (x : Export) (name : Name) : Export :=
   { x with decls := x.decls.filter (!·.names.contains name) }
 
@@ -160,6 +190,18 @@ def isMissing (owner declaration : Name) : Violation → Bool
 def isTypeMismatch (owner declaration : Name) : Violation → Bool
   | .declarationType gotOwner gotDeclaration =>
       gotOwner == owner && gotDeclaration == declaration
+  | _ => false
+
+def isKindMismatch (owner declaration : Name) (expected actual : DeclarationKind) :
+    Violation → Bool
+  | .declarationKind gotOwner gotDeclaration gotExpected gotActual =>
+      gotOwner == owner && gotDeclaration == declaration &&
+        gotExpected == expected && gotActual == actual
+  | _ => false
+
+def isSafetyMismatch (owner declaration : Name) (safety : String) : Violation → Bool
+  | .declarationSafety gotOwner gotDeclaration actual =>
+      gotOwner == owner && gotDeclaration == declaration && actual == safety
   | _ => false
 
 def isDuplicate (owner declaration : Name) : Violation → Bool
@@ -214,6 +256,17 @@ def run (root : String) : IO UInt32 := do
       state ← state.check "family key" false
       state ← state.check "only exact public records establish the family" false
     state ← state.check "valid ordering and independence" (check valid).isEmpty
+    state ← state.check "unsafe owner may have an independently safe model" <|
+      (check (withUnsafeOwner valid validOwnerDecl)).isEmpty
+    state ← state.check "unsafe model implementation is rejected" <|
+      (check (withDefinitionSafety valid carrier "unsafe")).any
+        (isSafetyMismatch owner carrier "unsafe")
+    state ← state.check "partial model implementation is rejected" <|
+      (check (withDefinitionSafety valid carrier "partial")).any
+        (isSafetyMismatch owner carrier "partial")
+    state ← state.check "axiom model implementation is rejected" <|
+      (check (withImplementationAxiom valid carrier)).any
+        (isKindMismatch owner carrier .defn .axiom)
 
     let eqOwner := `Eq
     let some rawEqDecl := ownerIndex? raw eqOwner | do
@@ -306,6 +359,9 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "missing iota theorem is rejected" <|
       (check (withoutDeclaration valid firstRule.name)).any
         (isMissing firstRule.recursor firstRule.name)
+    state ← state.check "non-theorem iota proof slot is rejected" <|
+      (check (withProofDefinition valid firstRule.name)).any
+        (isKindMismatch firstRule.recursor firstRule.name .thm .defn)
     let some firstRuleDecl := exportDeclaration? valid firstRule.name | do
       IO.eprintln "checktest: first iota declaration missing"
       return 1

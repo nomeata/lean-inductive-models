@@ -318,13 +318,13 @@ structure Family where
 /-- The export-level declaration kind relevant to the public model contract. -/
 inductive DeclarationKind where
   | axiom
-  | definition
-  | theorem
-  | opaque
+  | defn
+  | thm
+  | opaq
   | quotient
-  | inductive
-  | constructor
-  | recursor
+  | induct
+  | ctor
+  | rec
   deriving Inhabited, Repr, BEq
 
 /-- A structural model-contract violation. -/
@@ -444,23 +444,23 @@ private def declTypes : EDecl → Array DeclType
   | .ax name levelParams type _ =>
       #[{ name, levelParams, type, kind := .axiom }]
   | .defn name levelParams type _ _ safety _ =>
-      #[{ name, levelParams, type, kind := .definition, safety? := some safety }]
+      #[{ name, levelParams, type, kind := .defn, safety? := some safety }]
   | .thm name levelParams type .. =>
-      #[{ name, levelParams, type, kind := .theorem }]
+      #[{ name, levelParams, type, kind := .thm }]
   | .opaq name levelParams type .. =>
-      #[{ name, levelParams, type, kind := .opaque }]
+      #[{ name, levelParams, type, kind := .opaq }]
   | .quot name levelParams type _ =>
       #[{ name, levelParams, type, kind := .quotient }]
   | .induct types ctors recursors =>
       types.toArray.map (fun type =>
         { name := type.name, levelParams := type.levelParams, type := type.type,
-          kind := .inductive }) ++
+          kind := .induct }) ++
       ctors.toArray.map (fun ctor =>
         { name := ctor.name, levelParams := ctor.levelParams, type := ctor.type,
-          kind := .constructor }) ++
+          kind := .ctor }) ++
       recursors.toArray.map (fun recursor =>
         { name := recursor.name, levelParams := recursor.levelParams, type := recursor.type,
-          kind := .recursor })
+          kind := .rec })
 
 private abbrev DeclarationTypes := Std.HashMap Name (Array DeclType)
 
@@ -473,16 +473,16 @@ private def declarationTypes (x : Export) : DeclarationTypes := Id.run do
   return declarations
 
 private def checkImplementationDecl (owner : Name) (declaration : DeclType) : Array Violation :=
-  if declaration.kind != .definition then
-    #[.declarationKind owner declaration.name .definition declaration.kind]
+  if declaration.kind != .defn then
+    #[.declarationKind owner declaration.name .defn declaration.kind]
   else if declaration.safety? != some "safe" then
     #[.declarationSafety owner declaration.name (declaration.safety?.getD "<missing>")]
   else
     #[]
 
 private def checkTheoremDecl (owner : Name) (declaration : DeclType) : Array Violation :=
-  if declaration.kind == .theorem then #[]
-  else #[.declarationKind owner declaration.name .theorem declaration.kind]
+  if declaration.kind == .thm then #[]
+  else #[.declarationKind owner declaration.name .thm declaration.kind]
 
 private def checkPair (table : Correspondence) (declarations : DeclarationTypes)
     (pair : ConstantPair) : Array Violation := Id.run do
