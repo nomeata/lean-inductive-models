@@ -4938,7 +4938,12 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     let (cn, modelC) := ctorPairs[j]!
     unless rule.ctor == cn do
       badShape s!"{ern}'s rule {j} is for {rule.ctor}, not {cn}"
-    let modelCTy := (← constInfo modelC).type
+    -- Walk the exact exported constructor type at the model's names. Reading
+    -- the installed definition back with `constInfo` is not syntax preserving:
+    -- the kernel may βζ-normalise a field domain while storing it. The public
+    -- constructor declaration still carries the exported redex literally, and
+    -- the iota theorem's telescope is part of the same literal interface.
+    let modelCTy := restore tbl exportCtors[j]!.2
     let d ← forallBoundedTelescope recTy (some (np + 1 + nc)) fun pre _ => do
       let ps := pre.extract 0 np
       let motive := pre[np]!
