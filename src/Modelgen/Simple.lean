@@ -1568,6 +1568,10 @@ structure GraphCtx where
   position it *is*; and, for a recursive field, its binder count. -/
   isData : Array Bool
   idxPos : Array Nat
+  /-- Index positions not supplied by a constructor data field.  The graph
+  inversion packs exactly this dependent subsequence and transports its step
+  value from the constructor indices to the caller indices. -/
+  nonPiv : Array Nat
   recNb : Array (Option Nat)
   eqi : EqInfo
   /-- The `funext` the `Graph.unique` congruence transports along, `none` when
@@ -1585,6 +1589,7 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
   let np := c.np
   let ni := c.ni
   let nf := c.nf
+  let nnp := c.nonPiv.size
   -- the recursive slots, in field order
   let rs := (Array.range nf).filter fun i => c.recNb[i]!.isSome
   let nr := rs.size
@@ -1610,6 +1615,46 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
       mkAppN (.const c.grInvTN c.recLs) (pre ++ is ++ #[t, val])
     let idxTele ← instForall c.memberTy ps
     let ctorTele ← instForall c.ctorTy ps
+
+    -- The dependent tuple of non-pivot indices at a caller's pivot values.
+    -- Pivot types cannot mention non-pivots (the classifier checks that before
+    -- entering this arm), so leaving the pivots free while closing exactly the
+    -- complementary subsequence is sound even when the two are interleaved.
+    let pkAt := fun (is : Array Expr) => do
+      if nnp == 0 then return (none : Option (Expr × Level))
+      forallBoundedTelescope idxTele (some ni) fun opened _ => do
+        let (pk, ℓ) ← packTyAt opened c.nonPiv 0
+        pure (some (pk.replaceFVars opened is, ℓ))
+
+    let packedAt := fun (pk : Expr) (is : Array Expr) =>
+      packChain nnp pk (c.nonPiv.map (is[·]!)) 0
+
+    let indexEqAt := fun (is ctorIs : Array Expr) => do
+      let some (pk, ℓ) ← pkAt is
+        | badShape "the graph index equality was requested without a non-pivot"
+      let lhs ← packedAt pk ctorIs
+      let rhs ← packedAt pk is
+      pure (pk, ℓ, lhs, rhs, c.eqi.mk' ℓ pk lhs rhs)
+
+    -- Move a step value from the constructor's fibre to the arbitrary fibre
+    -- at which GraphInv is queried.  The motive transports a function over the
+    -- proof-valued carrier: after the indices move, proof irrelevance identifies
+    -- its argument with the transported constructor proof, so applying it to
+    -- the caller's `t` needs no second equality.
+    let transportStep := fun (is : Array Expr) (t : Expr) (ctorIs : Array Expr)
+        (major value heq : Expr) => do
+      if nnp == 0 then return value
+      let (pk, ℓ, lhs, rhs, _) ← indexEqAt is ctorIs
+      let motiveE ← withLocalDeclD `y pk fun y => do
+        let ys ← unpackChain nnp pk y
+        let mut full := is
+        for k in [0:nnp] do full := full.set! c.nonPiv[k]! ys[k]!
+        withLocalDeclD `s (selfAt full) fun s => do
+          let body ← mkForallFVars #[s] (motAt full s)
+          mkLambdaFVars #[y] body
+      let base ← withLocalDeclD `s (selfAt ctorIs) fun s =>
+        mkLambdaFVars #[s] value
+      pure (mkApp (c.eqi.recAt c.v ℓ pk lhs motiveE base rhs heq) t)
 
     -- A recursive field's own binders, and the index vector it lands at. The
     -- telescope is opened **bounded**: `forallTelescope` would whnf through
@@ -1707,11 +1752,19 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
     -- ── `GraphInv` ──
     -- The `k` argument's type, shared by the definition and by the two places
     -- that build or consume an inhabitant of it.
-    let invArmTyAt := fun (is : Array Expr) (t val : Expr) (fs : Array Expr) (D : Expr) => do
+    let invArmTyAt := fun (is : Array Expr) (t val : Expr) (fs ctorIs : Array Expr)
+        (D : Expr) => do
       withLocalsD (← gTysAt fs) 0 #[] fun gs => do
         withLocalsD (← hTysAt fs gs) 0 #[] fun hs => do
-          let eq := c.eqi.mk' c.v (motAt is t) val (mkAppN step (fs ++ gs))
-          mkForallFVars (gs ++ hs) (.forallE `he eq D .default)
+          if nnp == 0 then
+            let eq := c.eqi.mk' c.v (motAt is t) val (mkAppN step (fs ++ gs))
+            mkForallFVars (gs ++ hs) (.forallE `he eq D .default)
+          else
+            let (_, _, _, _, idxEq) ← indexEqAt is ctorIs
+            withLocalDeclD `hidx idxEq fun hidx => do
+              let rhs ← transportStep is t ctorIs (ctorAt fs) (mkAppN step (fs ++ gs)) hidx
+              let eq := c.eqi.mk' c.v (motAt is t) val rhs
+              mkForallFVars (gs ++ hs ++ #[hidx]) (.forallE `he eq D .default)
     let grInvVal ← forallBoundedTelescope idxTele (some ni) fun is _ =>
       withLocalDeclD `t (selfAt is) fun t =>
         withLocalDeclD `val (motAt is t) fun val => do
@@ -1731,7 +1784,7 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
 its own data field"
             withLocalDeclD `D (.sort .zero) fun D => do
               mkForallFVars (bnd ++ #[D])
-                (.forallE `k (← invArmTyAt is t val fs D) D .default)
+                (.forallE `k (← invArmTyAt is t val fs e D) D .default)
           mkLambdaFVars (pre ++ is ++ #[t, val]) body
     let dGrInvT := Declaration.defnDecl
       { name := c.grInvTN, levelParams := c.recLevels, type := grTy, value := grInvVal
@@ -1781,12 +1834,17 @@ its own data field"
                   let major := ctorAt fs
                   let val' := mkAppN step (fs ++ gs)
                   let aTerm := mkAppN (.const c.grMkN c.recLs) (pre ++ bnd ++ gs ++ hgs)
-                  let bTerm ← fields (some e) fun fs' bnd' _ => do
+                  let bTerm ← fields (some e) fun fs' bnd' res' => do
                     withLocalDeclD `D (.sort .zero) fun D => do
-                      withLocalDeclD `k (← invArmTyAt e major val' fs' D) fun k' =>
-                        mkLambdaFVars (bnd' ++ #[D, k'])
-                          (mkAppN k' (gs ++ hgs ++
-                            #[c.eqi.refl' c.v (motAt e major) val']))
+                      let e' ← idxOfRes res'
+                      withLocalDeclD `k (← invArmTyAt e major val' fs' e' D) fun k' => do
+                        let args ← if nnp == 0 then
+                            pure (gs ++ hgs ++ #[c.eqi.refl' c.v (motAt e major) val'])
+                          else do
+                            let (pk, ℓ, lhs, _, _) ← indexEqAt e e'
+                            pure (gs ++ hgs ++ #[c.eqi.refl' ℓ pk lhs,
+                              c.eqi.refl' c.v (motAt e major) val'])
+                        mkLambdaFVars (bnd' ++ #[D, k']) (mkAppN k' args)
                   let aT := grAt e major val'
                   let bT := grInvAt e major val'
                   let pair ← withLocalDeclD `D (.sort .zero) fun D =>
@@ -2825,27 +2883,14 @@ arm-F transport applies to one data field and no proof fields"
     gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size; gNonPiv := npv
     gNonPivData := npd; gPivotTransport? := pt
 
-  -- **Arm G's half of the index axis.** The graph route's `GraphInv ι⃗ t val`
-  -- concludes
-  -- `val = step f⃗ g⃗`, whose right-hand side lands at the constructor's own
-  -- index expressions `ι⃗_ctor`; where those are not `ι⃗` the two sides sit at
-  -- different indices and the statement does not typecheck. A transport along
-  -- arm F's packed equation would have to be threaded through five
-  -- declarations. **At a non-pivot whose own type is a `Prop` no transport is
-  -- needed at all**: `ι⃗_ctor[j]` and `ι⃗[j]` are then two proofs of one
-  -- proposition, the kernel identifies them by proof irrelevance, and every
-  -- statement in the arm is already well-typed as written. It propagates, too
-  -- — a later index type mentioning `j` is defeq at the two, so a whole
-  -- suffix of proof positions is free. `Acc.below`'s index 1 is `Acc r a`, and
-  -- every `.below` Lean mints beside a recursive `Prop` is that shape.
-  --
-  -- What is left is a non-pivot at a **data** position — `BadC`'s constant
-  -- `N.z` — where the transport really is owed and really is not built.
+  -- **Arm G's half of the index axis.** `GraphInv ι⃗ t val` carries one
+  -- equality at the dependent tuple of non-pivot indices.  Its continuation
+  -- transports the constructor step from `ι⃗_ctor` to `ι⃗`; pivots stay
+  -- fixed because their data fields are supplied from the caller's indices.
+  -- Proof-valued non-pivots still reduce for free by proof irrelevance, while
+  -- data-valued ones (`BadC`, `Rgd`, and their `.below` declarations) now take
+  -- the same explicit packed transport as arm F.
   let armG := armGRec
-  if armG && !gNonPivData.isEmpty then
-    badShape s!"{exportCtors[0]!.1}'s index {gNonPivData[0]!} is not one of its own data \
-fields, so the graph route's inversion cannot be stated at an arbitrary index (the \
-packed non-pivot equation arm F carries is not threaded through the graph)"
 
   let (eqi, eqDecls) ← ensureEq reserved
   let mut out : Array Declaration := eqDecls
@@ -4746,7 +4791,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
           grUniqN := Name.str impl "graph_unique", grExN := Name.str impl "graph_exists"
           recGrN := Name.str impl "rec_graph"
           memberTy, ctorTy := restore tbl exportCtors[0]!.2
-          isData := gIsData, idxPos := gIdxPos, recNb := gRecNb, eqi, fx? := gFx? }
+          isData := gIsData, idxPos := gIdxPos, nonPiv := gNonPiv
+          recNb := gRecNb, eqi, fx? := gFx? }
       for d in ← graphArm ctx recTy do out := out.push d
     else
       let dRec := Declaration.defnDecl
