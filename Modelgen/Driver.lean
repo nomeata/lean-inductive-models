@@ -34,10 +34,9 @@ there is a model to write, [`Modelgen.Export.render`] re-interns from scratch.
 
 Lean's kernel builds the nested construction itself: given `Tree`'s
 `inductDecl` it generates **both** `Tree.rec` and `Tree.rec_1`, at the shapes
-the export declares. So replaying the input already compares every recursor in
-the file against Lean's own, and `--check-recursors` reports the difference.
-That is `mini/tests/mutual.rs`'s `the_generated_recursors_are_the_ones_lean_
-exports` obtained for nothing, over the whole corpus rather than the fixtures.
+the export declares. The optional internal recursor audit compares those
+installed recursors with the export while replaying the file. The public
+`--check` instead verifies the literal exported model interface.
 -/
 
 open Lean Meta
@@ -576,9 +575,9 @@ def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr)) : MetaM (O
   return none
 
 /-- One simple inductive's model from the primitives, generated and
-accounted for — the third construction, [`Modelgen.primIso`], behind
-`--prim-models`. Shared by the input's own simple inductives and the
-composition (the single inductives the other two constructions emit).
+accounted for — [`Modelgen.primIso`], selected by `--simple`. Shared by the
+input's own simple inductives and the composition (the single inductives the
+other two constructions emit).
 
 `canWait` says whether the caller can hold the model back: a decline at a
 quotient name the replay has not reached ([`Modelgen.Decline.isLateWait`]) then
@@ -944,7 +943,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                   pending := pending.push
                     { all := is.members, numParams := t.numParams, iso := is2,
                       recursors := modelRecursors }
-                  -- ── the third step of the chain (`--prim-models`) ─────────
+                  -- ── the third step of the chain (`--simple`) ──────────────
                   -- The mutual model's own single inductives, modelled from
                   -- the primitives — nested → mutual → primitives, one pass.
                   if generation.simple then
@@ -1016,7 +1015,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
             waitingPrim := waitingPrim ++ jobs
           else
             waiting := waiting.push job
-        -- ── a simple inductive (`--prim-models`): the third construction ──
+        -- ── a simple inductive (`--simple`) ──────────────────────────────
         -- Generated after the replay, like the plain mutual block and for
         -- the same reason: the statements are the installed recursor's own,
         -- restored, and there is nothing else to read them off.

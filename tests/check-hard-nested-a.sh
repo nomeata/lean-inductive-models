@@ -13,11 +13,10 @@ trap 'rm -rf "$work"' EXIT
 
 ulimit -Sv "${MODELGEN_MEMORY_KB:-16777216}"
 TMPDIR="$work" "$bin" "$here/hard_nested_mutual_index.ndjson" \
-  -o "$work/modelled.ndjson" --check-recursors 2>"$work/report"
+  -o "$work/modelled.ndjson" --no-simple --no-basic 2>"$work/report"
 
 grep -q '^C: model of ' "$work/report"
 grep -q '^A: model of ' "$work/report"
 ! grep -Eq '^(C|A): declined' "$work/report"
 grep -q '^statements: .* 0 differ$' "$work/report"
-grep -q '^recursors: .* 0 differ$' "$work/report"
 [[ -s "$work/modelled.ndjson" ]]

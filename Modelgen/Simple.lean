@@ -4,12 +4,10 @@ import Modelgen.Naming
 /-!
 # The model of a **simple inductive from four primitives**, generated
 
-The third construction in this package, behind `--prim-models` and off by
-default. Where the first two constructions remove *nesting* and *mutuality*,
-this one removes the inductive declaration itself: a plain (non-mutual,
-non-nested) inductive's carrier, constructors, recursor and ι rules are
-emitted as ordinary `def`s and `theorem`s over a fixed basis of primitive
-inductives —
+The `--simple` construction removes the inductive declaration itself: a plain
+(non-mutual, non-nested) inductive's carrier, constructors, recursor and ι
+rules are emitted as ordinary `def`s and `theorem`s over a fixed basis of
+primitive inductives —
 
     Eq   PSigma   Nat   PULiftP
 

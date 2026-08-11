@@ -64,3 +64,8 @@ supportInterpreter = true
 name = "rulektest"
 root = "RuleKTest"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "mainclitest"
+root = "MainCliTest"
+supportInterpreter = true
