@@ -88,6 +88,8 @@
      finding rather than a gap** — see below.
    * `Fmid` — a pivot whose type moves with a preceding non-pivot; arm F
      transports a function over that pivot along the packed equation.
+   * `FChain` — the same pivot type mentions **two** preceding non-pivots,
+     showing that the transport is per pivot rather than per dependency edge.
    * `Rv` — arm G's control, `Acc`'s own shape, every index a pivot; `Rxh` and
      `Rvx` its two mixed cells, a proof non-pivot beside no pivot and beside
      one.
@@ -105,6 +107,7 @@
    | **E** the unpacked components written back at the identity positions | `Fdep` |
    | **N** the non-pivot positions taken as a prefix rather than as the complement | `Fdep` |
    | **M** the dependent pivot cast to the constructor endpoint and back instead of transported as a function | `Fmid` |
+   | **L** the pivot dependency scan treating two mentioned non-pivots as two pivots to transport | `FChain` |
    | **H** the rebuilt carrier handed every field rather than the bound ones | `Fdep`, `Fdup` |
    | **C** the whole index vector packed rather than the non-pivot subsequence | every cell with a pivot; `Fg` and `Fxh` green |
    | **D** the non-pivot subsequence reversed | nothing here; `prim_shapes`'s `Hq` and the W core's `HEq`, whose packs are dependent |
@@ -215,6 +218,9 @@ inductive Fxh (q : Prop) (k : q → N) : N → Prop where
 
 inductive Fmid : (α : Type) → α → α → Prop where
   | mk (x : N) : Fmid N x N.z
+
+inductive FChain : (α : Type) → (β : α → Type) → (a : α) → β a → Prop where
+  | mk (x : N) : FChain N (fun _ => N) N.z x
 
 -- ── arm G: the recursive row ──
 

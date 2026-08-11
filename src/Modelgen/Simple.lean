@@ -2745,10 +2745,14 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
                 if !piv[m]! && jt.containsFVar is[m]!.fvarId! then
                   let some i := (Array.range nfg).find? fun i => isD[i]! && pos[i]! == j
                     | badShape s!"{cn}'s pivot index {j} has no constructor data field"
-                  if pivotTransport?.isSome || isD.any (!·) then
+                  if isD.any (!·) then
                     badShape s!"{cn}'s index {j} needs a pivot transport, but the exact \
 arm-F transport applies to one data field and no proof fields"
-                  pivotTransport? := some (i, j)
+                  match pivotTransport? with
+                  | none => pivotTransport? := some (i, j)
+                  | some ij =>
+                    unless ij == (i, j) do
+                      badShape s!"{cn} has more than one data field needing a pivot transport"
           -- A non-pivot position whose declared type is a `Prop` is a **proof
           -- position**, and the two arms treat it differently; the arm-G guard
           -- below is what the distinction is for.

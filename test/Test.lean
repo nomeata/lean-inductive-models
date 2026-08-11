@@ -457,7 +457,7 @@ def expectedPrim : List Row :=
   -- positive arm-F control whose pivot type moves along the packed equation.
   , ("prim_idx",
       [("N", 9), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 14),
-       ("Rxh", 18), ("Rxh.below", 22), ("Fam", 6), ("Inf.below", 18),
+       ("Rxh", 18), ("Rxh.below", 22), ("FChain", 4), ("Fam", 6), ("Inf.below", 18),
        ("Fg", 5), ("Rv.below", 13), ("Fall3", 4), ("Fxh", 6), ("Fmid", 4), ("Fdep", 4),
        ("Rvx.below", 13), ("Fdup", 4)],
       [ ("Eq", "prim model: a basis primitive")

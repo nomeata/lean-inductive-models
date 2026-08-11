@@ -284,12 +284,14 @@ def main : IO UInt32 := do
     | .error error => throw <| IO.userError s!"cannot order dependent-pivot fixture: {repr error}"
   state := state.check "dependent arm-F pivot models" <|
     fmidReport.generated.contains (`Fmid, 4) &&
-      !fmidReport.declined.any fun (owner, _) => owner == `Fmid
+      fmidReport.generated.contains (`FChain, 4) &&
+      !fmidReport.declined.any fun (owner, _) => owner == `Fmid || owner == `FChain
   state := state.check "dependent arm-F pivot satisfies the exact public checker" <|
-    (Check.check fmidOrdered).all fun violation => violation.familyOwner != `Fmid
+    (Check.check fmidOrdered).all fun violation =>
+      violation.familyOwner != `Fmid && violation.familyOwner != `FChain
   state := state.check "dependent arm-F recursor performs equality transport" <|
-    (definitionValue? fmidGenerated (Naming.modelName `Fmid.rec)).any
-      (containsConst ``Eq.rec)
+    #[`Fmid.rec, `FChain.rec].all fun recursor =>
+      (definitionValue? fmidGenerated (Naming.modelName recursor)).any (containsConst ``Eq.rec)
 
   -- The parameter-dependent proposition field takes the same route.  Its
   -- source owner precedes the input's own lift declaration, so generation has
