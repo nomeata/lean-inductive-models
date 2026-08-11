@@ -87,6 +87,61 @@ def streamed (root : String) (y : Export) : IO String := do
   finally
     IO.FS.removeFile p
 
+/-- Exact model-role discovery must not parse `_model` components. This tiny
+export makes that observable with both an original type already named
+`Foo._model` and a raw private constructor name. -/
+def modelNameProbe : Array String := Id.run do
+  let outer : Name := `Foo
+  let typeN : Name := `Foo._model
+  let ctorN : Name := (`_private.M).mkNum 7 |>.str "mk"
+  let recN : Name := `Foo._model.rec
+  let rule : ERecRule := { ctor := ctorN, nfields := 0, rhs := .sort .zero }
+  let ty : EIndType :=
+    { name := typeN, levelParams := [`u], type := .sort (.param `u),
+      all := [typeN], ctors := [ctorN], numParams := 0, numIndices := 0,
+      numNested := 1, isRec := true, isReflexive := false, isUnsafe := false }
+  let ctor : ECtor :=
+    { name := ctorN, levelParams := [`u], type := .sort (.param `u), cidx := 0,
+      numParams := 0, numFields := 0, induct := typeN, isUnsafe := false }
+  let recD : ERec :=
+    { name := recN, levelParams := [`w, `u], type := .sort (.param `u),
+      all := [recN], numParams := 0, numIndices := 0, numMotives := 1,
+      numMinors := 1, rules := [rule], k := false, isUnsafe := false }
+  let defn := fun n => EDecl.defn n [`u] (.sort (.param `u)) (.sort (.param `u))
+    EHints.abbrev "safe" [n]
+  let iotaN := Naming.iotaName recN 0
+  let helper := `Foo._model._impl.pack
+  let outerTy : EIndType :=
+    { name := outer, levelParams := [], type := .sort (.succ .zero),
+      all := [outer], ctors := [], numParams := 0, numIndices := 0,
+      numNested := 0, isRec := false, isReflexive := false, isUnsafe := false }
+  let x : Export := { metaLine := .null, decls := #[
+    defn (Naming.modelName typeN),
+    defn (Naming.modelName ctorN),
+    defn (Naming.modelName recN),
+    .thm iotaN [`w, `u] (.sort (.param `u)) (.sort (.param `u)) [iotaN],
+    defn helper,
+    .induct [ty] [ctor] [recD],
+    .induct [outerTy] [] []
+  ] }
+  let table := Mono.modelTable x
+  let mut errors : Array String := #[]
+  let expect := fun (errors : Array String) (name owner : Name) (role : Mono.ModelRole) =>
+    match table[name]? with
+    | some entry =>
+      if entry.owner == owner && entry.role == role then errors
+      else errors.push s!"{name}: wrong model entry ({entry.owner})"
+    | none => errors.push s!"{name}: exact model entry missing"
+  errors := expect errors (Naming.modelName typeN) typeN .typeFormer
+  errors := expect errors (Naming.modelName ctorN) typeN .constructor
+  errors := expect errors (Naming.modelName recN) typeN .recursor
+  errors := expect errors iotaN typeN .iota
+  if table.contains (Naming.modelName outer) then
+    errors := errors.push "the original Foo._model inductive was parsed as Foo's carrier"
+  if table.contains helper then
+    errors := errors.push "an _impl helper was parsed as a public model declaration"
+  return errors
+
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   initSearchPath (← findSysroot)
@@ -95,6 +150,9 @@ def main (args : List String) : IO UInt32 := do
     { fileName := "<monotest>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
   let mut fails : Array String := #[]
   let mut ran := 0
+
+  ran := ran + 1
+  for e in modelNameProbe do fails := fails.push s!"model names: {e}"
 
   -- ── The fixtures.
   for r in expected do

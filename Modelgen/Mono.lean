@@ -1,4 +1,5 @@
 import Modelgen.Format
+import Modelgen.Naming
 
 /-!
 # `monomorph` — universe levels, removed from an export
@@ -9,7 +10,7 @@ constant occurrence to name the copy it means. The output's level parameters
 are gone: every `Sort` is `Sort n` for a numeral `n`, and every constant is
 used at no levels at all — with two exceptions, both named in `MONOMORPH.md`
 and both deliberate: mode A keeps the motive's universe — on a recursor, and on
-a model's `rec_k`/`iota_k_j`, which carry the same one — and the built-ins are
+its declaration-local model recursor and iota theorems — and the built-ins are
 carried through untouched.
 
 The contract a consumer is written against is `MONOMORPH.md` §1. What is
@@ -35,7 +36,7 @@ group is one node, collects one demand set, and is emitted whole. A mutual
 `def` block is *not* a group — see [`buildGroups`].
 
 **One edge is not in the file.** A `modelgen` model is referenced by nothing —
-`mini` builds `T._model.self` off `T` rather than finding it through a use site
+the consumer builds `T._model` off `T` rather than finding it through a use site
 — so the sweep would see no demand on it at all and every model group would
 take the default: one model, however many copies of `T`. [`modelKeying`]
 supplies the edge and [`pushInst`] carries it, and because it runs against the
@@ -117,67 +118,96 @@ structure Info where
   /-- The declaration's own **eliminating universe**, when it has one: the
   motive's, which mode A keeps as a level parameter rather than folding into the
   marker. A recursor has one when its block eliminates largely, and so — for
-  exactly the same reason, since it is the *same* universe — does a `modelgen`
-  model's `rec_k` and `iota_k_j` ([`modelCarrier`]). -/
+  exactly the same reason, since it is the same universe — do the corresponding
+  declaration-local model recursor and iota theorems. -/
   elim : Option Name := none
   deriving Inhabited
 
-/-- **The innermost `_model` prefix of `n`**, or `none` if it has none. The one
-name walk [`modelCarrier`] and [`modelOwner`] are both derived from, so that
-"which model" and "a model of what" cannot disagree. -/
-def modelPrefix : Name → Option Name
-  | .anonymous => none
-  | n@(.str p s) => if s == "_model" then some n else modelPrefix p
-  | .num p _ => modelPrefix p
+/-- The exact public role of a generated model declaration. -/
+inductive ModelRole where
+  | typeFormer
+  | constructor
+  | recursor
+  | iota
+  deriving BEq, Inhabited
 
-/-- **`P.self`, where `P` is the innermost `_model` prefix of `n`** — the
-carrier of the model `n` belongs to, or `none` if `n` is not under a `_model`
-prefix at all.
+/-- A generated public declaration and the original inductive record that owns
+its universe instantiation. `owner` is read from that record, never recovered
+by splitting a generated name. -/
+structure ModelEntry where
+  owner : Name
+  ownerDecl : Nat
+  ownerLevelParams : List Name
+  role : ModelRole
+  deriving Inhabited
 
-This is the *one* place the pass reads a name for anything but renaming, and
-what it reads is a `modelgen` convention (`MODELGEN.md` §1, property 3): every
-declaration a model introduces hangs off `T._model` and **carries exactly `ℓ⃗`**
-— except `rec_k` and `iota_k_j`, which carry the motive universe in front of it.
-So the carrier's level parameters *are* `ℓ⃗`, and the difference against them
-says which parameter is the motive's: the same set difference [`introOf`] takes
-for a recursor against its block, and for the same reason.
+/-- Exact generated names which Mono can key to their original inductive
+record. Ambiguous candidates are deliberately absent. -/
+abbrev ModelTable := Std.HashMap Name ModelEntry
 
-**The carrier and not a block member**, because `modelgen` has two constructions
-and they do not agree on what the block is called. The nested model's members
-are `T._model.0 … T._model.{n−1}`; the mutual model's are `T._model.tag` and
-`T._model.aux`. `T._model.self` is in both — it is the keying, so it is the one
-name a model cannot be a model without — and `T = R₀` means it hangs off the
-same prefix `rec_k` does even when the block is mutual.
+private inductive SiteKind where
+  | value
+  | theorem
+  | inductive
+  | other
+  deriving BEq
 
-Reading the name is what makes the marker commute with the model: without it
-`T._model.rec_k` has arity `|ℓ⃗| + 1` where its sibling families have `|ℓ⃗|`,
-the two land under different markers, and a consumer that derives the whole
-family from the type's name finds seven of nine (`MONOMORPH.md` §1.3). It is a
-*lookup* and not a rename: a file with a `_model` name that is not a model's —
-no carrier — is left exactly as it was. -/
-def modelCarrier (n : Name) : Option Name := (modelPrefix n).map (.str · "self")
+private structure Site where
+  kind : SiteKind
 
-/-- **`T`, where `T._model` is the innermost `_model` prefix of `n`** — the
-declaration `n` is part of a model *of*, or `none` if `n` is not under a
-`_model` prefix at all.
+private def siteKind : EDecl → SiteKind
+  | .defn .. => .value
+  | .thm .. => .theorem
+  | .induct .. => .inductive
+  | _ => .other
 
-`modelCarrier` says which model `n` belongs to; this says what that model
-models, and it is the other half of the same convention. The two read the *same*
-prefix, so they agree on what a model is by construction rather than by two
-name walks that could drift: `T._model.rec_k` gives carrier `T._model.self` and
-owner `T`, and `T._model.0._model.ctor_j` — the model of a model, which the
-nested construction produces because its own block is mutual (`MODELGEN.md`
-§1.6) — gives carrier `T._model.0._model.self` and owner `T._model.0`. Reading
-the *innermost* prefix is what makes the second layer come out as a model of
-`T._model.0` rather than of `T`.
+/-- Build the model relation from exact original roles.
 
-This is what [`modelKeying`] instantiates a model off, and it is a lookup for
-the same reason `modelCarrier` is: the owner must be a declaration the file
-actually introduces, or there is no model here to key. -/
-def modelOwner (n : Name) : Option Name :=
-  match modelPrefix n with
-  | some (.str p _) => some p
-  | _ => none
+The declaration-local contract is generated from each inductive record:
+`T._model`, `C._model`, `R._model`, and `R._model.iota_j`. A candidate counts
+only when the export contains a declaration of the generated role's kind. That
+condition distinguishes an original inductive literally named `Foo._model`
+from the definition serving as the carrier model of `Foo`; its own model is, exactly,
+`Foo._model._model`. It also makes raw private names ordinary exact keys.
+
+If two source roles demand the same public name, neither owns it here. The
+generator's collision census prevents such a model from being emitted, and
+guessing would silently attach the declaration to one of two universe sets. -/
+def modelTable (x : Export) : ModelTable := Id.run do
+  let mut sites : Std.HashMap Name Site := {}
+  for i in [0:x.decls.size] do
+    let d := x.decls[i]!
+    for n in d.names do sites := sites.insert n { kind := siteKind d }
+  let mut table : ModelTable := {}
+  let mut ambiguous : Std.HashSet Name := {}
+  let add := fun (table : ModelTable) (ambiguous : Std.HashSet Name)
+      (name : Name) (want : SiteKind) (entry : ModelEntry) =>
+    match sites[name]? with
+    | some site =>
+      if site.kind != want then (table, ambiguous)
+      else if ambiguous.contains name then (table, ambiguous)
+      else if table.contains name then (table.erase name, ambiguous.insert name)
+      else (table.insert name entry, ambiguous)
+    | none => (table, ambiguous)
+  for oi in [0:x.decls.size] do
+    let .induct ts cs rs := x.decls[oi]! | continue
+    let some ownerT := ts.head? | continue
+    let entry := fun role =>
+      { owner := ownerT.name, ownerDecl := oi,
+        ownerLevelParams := ownerT.levelParams, role }
+    for t in ts do
+      (table, ambiguous) := add table ambiguous (Naming.modelName t.name) .value
+        (entry .typeFormer)
+    for c in cs do
+      (table, ambiguous) := add table ambiguous (Naming.modelName c.name) .value
+        (entry .constructor)
+    for r in rs do
+      (table, ambiguous) := add table ambiguous (Naming.modelName r.name) .value
+        (entry .recursor)
+      for j in [:r.rules.length] do
+        (table, ambiguous) := add table ambiguous (Naming.iotaName r.name j) .theorem
+          (entry .iota)
+  return table
 
 /-- One node of the declaration DAG. -/
 structure Group where
@@ -238,7 +268,8 @@ and removes the whole class, not the five that happened to be caught.
 The members of a split block are therefore instantiated independently, each at
 the instantiations its own users demand, and the `all` field of a copy names
 only that copy ([`emitOne`]). -/
-def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name Info) := do
+def buildGroups (x : Export) (models : ModelTable) :
+    Except String (Array Group × Std.HashMap Name Info) := do
   let mut groups : Array Group := #[]
   let mut info : Std.HashMap Name Info := {}
   for i in [0 : x.decls.size] do
@@ -285,20 +316,17 @@ def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name In
       for r in rs do
         for p in r.levelParams do
           unless lp.contains p || elims.contains p do elims := elims.push p
-    -- **A model's `rec_k` and `iota_k_j` are recursors for this purpose.** They
-    -- are `def`s and `theorem`s, so nothing structural says so, but the extra
-    -- universe they carry over their eight sibling families *is* the motive's —
-    -- the very one mode A keeps for the recursor they model. Keeping it here is
-    -- what puts all nine families under one marker; see [`modelCarrier`], which
-    -- is where `ℓ⃗` comes from and where the whole convention is written down.
+    -- A declaration-local model recursor and its iota theorems are recursors
+    -- for this purpose. Their exact roles and owner's parameters come from the
+    -- original inductive record in `models`; no generated name is parsed.
     let mut lp := lp
     let mut modelElim : Option Name := none
     match d with
     | .induct .. => pure ()
     | _ =>
-      if let some b := modelCarrier d.names[0]! then
-        if let some bi := info[b]? then
-          let blockLp := groups[bi.group]!.levelParams
+      if let some mi := models[(d.names[0]!)]? then
+        if mi.role == .recursor || mi.role == .iota then
+          let blockLp := mi.ownerLevelParams
           let extra := lp.filter (fun p => !blockLp.contains p)
           -- One extra parameter, and it is the head — the same two conditions
           -- the recursor branch above asserts, for the same reason. Anything
@@ -317,8 +345,8 @@ def buildGroups (x : Export) : Except String (Array Group × Std.HashMap Name In
 
 /-! ## The models
 
-A `modelgen` model is the one thing in the file **nothing references**: `mini`
-finds `T._model.self` by constructing the name off `T`, not through a use site
+A `modelgen` model is the one thing in the file **nothing references**: a
+consumer finds `T._model` by constructing the name off `T`, not through a use site
 (`MODELGEN.md` §1). The backward sweep is driven entirely by references, so
 left alone it sees no demand on a model at all and every model group takes the
 default — one model for however many copies `T` has. That is the defect
@@ -328,8 +356,8 @@ naming: the marker already commutes with the model.
 What closes it is an edge the sweep does not get from the file: **a model's
 groups are instantiated at exactly the `σ` set of the declaration they model**.
 It is not a reference — a model of `T` need not mention `T` — so it is
-recovered from the naming convention, by [`modelOwner`], and then propagated as
-if it were one. -/
+recovered from the exact role table [`modelTable`], and then propagated as if
+it were one. -/
 
 /-- Which group each model group is keyed to, and the reverse index the sweep
 cascades along. -/
@@ -339,17 +367,17 @@ structure Keying where
   owner : Array (Option Nat) := #[]
   /-- The reverse index: for each group, every model group keyed to it. **This
   is what makes the propagation transitive**, and the second layer of the
-  composed naming needs it to be: `T._model.0._model.self` is keyed to
-  `T._model.0`, which is itself keyed to `T`, so `σ` reaches it only by
+  composed naming needs it to be: `T._model._impl.0._model` is keyed to
+  `T._model._impl.0`, which is itself part of `T`'s model, so `σ` reaches it only by
   cascading through the first layer. -/
   models : Array (Array Nat) := #[]
   /-- Model groups whose `σ` could not be determined, and why. **Named, not
   defaulted** — a silent default is the defect this pass exists to remove, and
   guessing one level along is the same mistake. -/
   declined : Array String := #[]
-  /-- **The tenth family**, per group. A declaration under `T._model` whose
-  level-parameter arity is not `T`'s is not one of the nine (`MONOMORPH.md`
-  §1.3): a spliced `T._model.funext` is genuinely polymorphic in universes that
+  /-- A declaration below a model's implementation namespace whose
+  level-parameter arity is not the owner's: a spliced `T._model._impl.funext` is
+  genuinely polymorphic in universes that
   are nobody's motive, so `T`'s `σ` says nothing about its own and there is no
   positional mapping to make. It monomorphizes by demand like any other
   declaration, which is *right* — unlike the nine, it is referenced, by the
@@ -369,26 +397,27 @@ structure Keying where
 
 /-- **Key every model group to the declaration it models.**
 
-A group is a model's when a name it introduces is under a `_model` prefix
-*whose carrier the file declares* — the same fail-closed test [`modelCarrier`]
-already makes, so a file that happens to spell `_model` and is not a model is
-untouched. The owner is then [`modelOwner`]'s, looked up in `info`.
+A group is a model's when a name it introduces has an exact entry in the model
+table built from an original inductive record. A file that merely spells
+`_model`, an implementation helper below `_impl`, and an original declaration
+whose own name ends in `_model` are therefore untouched. The owner stored in
+the entry is looked up in `info`.
 
 **Every name of the record is asked, and they must agree.** A record is one
 group and takes one instantiation, so a record whose names model two different
-declarations has no single `σ` to take; it declines. In practice they agree by
-construction — the nested model's block declares `T._model.0 … T._model.{n−1}`
-and every constructor and recursor under them, all owned by `T` — and the
-agreement is checked rather than assumed because the cost is one comparison.
+declarations has no single `σ` to take; it declines. Public model declarations
+are normally one-name records, while the check also covers any future grouped
+emission without assuming that all of its names have the same owner.
 
 **The `σ` mapping is the identity**, which is a claim about `modelgen` and so is
 checked: the model's declarations carry exactly `ℓ⃗` (`MODELGEN.md` §1, property
-3), and [`buildGroups`] has already lifted the motive's universe out of `rec_k`
-and `iota_k_j`, so what is left is the owner's own parameter list. A group whose
+3), and [`buildGroups`] has already lifted the motive's universe out of model
+recursors and iota theorems, so what is left is the owner's own parameter list. A group whose
 arity does not match its owner's is `Keying.loose` — the tenth family — and is
 left to its own demand rather than truncated or padded onto a mapping that does
 not exist. -/
 def modelKeying (x : Export) (groups : Array Group) (info : Std.HashMap Name Info)
+    (models : ModelTable) (refs : Array (Array (Name × List Level)))
     (carried : Std.HashSet Nat) : Keying := Id.run do
   let mut k : Keying :=
     { owner := Array.replicate groups.size none, models := Array.replicate groups.size #[]
@@ -399,15 +428,11 @@ def modelKeying (x : Export) (groups : Array Group) (info : Std.HashMap Name Inf
     let mut owners : Array Nat := #[]
     let mut orphan : Option Name := none
     for (n, _) in introOf d do
-      let some c := modelCarrier n | continue
-      unless info.contains c do continue
+      let some mi := models[n]? | continue
       isModel := true
-      match modelOwner n with
+      match info[mi.owner]? with
       | none => orphan := some n
-      | some o =>
-        match info[o]? with
-        | none => orphan := some n
-        | some i => unless owners.contains i.group do owners := owners.push i.group
+      | some i => unless owners.contains i.group do owners := owners.push i.group
     unless isModel do continue
     let nm := d.names[0]!
     let decline (why : String) : Keying := { k with declined := k.declined.push s!"{nm}: {why}" }
@@ -433,6 +458,43 @@ def modelKeying (x : Export) (groups : Array Group) (info : Std.HashMap Name Inf
         if lp != olp then k := { k with renamed := k.renamed + 1 }
         k := { k with owner := k.owner.set! gi (some oi)
                       models := k.models.set! oi (k.models[oi]!.push gi) }
+
+  -- **The model-of-a-model bridge, structural rather than nominal.** A nested
+  -- model's carrier definition directly mentions its private implementation
+  -- inductive. That block can itself have a public model, emitted after the
+  -- block; without an edge from the root to the block, the backward sweep sees
+  -- the second model before demand reaches its owner and reports it as late.
+  --
+  -- Identify the bridge by three exact facts: this is a type-former model from
+  -- `models`, its definition references an inductive group, and that group has
+  -- exact public model children of its own. No `_model` or `_impl` component is
+  -- inspected. Ordinary dependencies do not qualify unless modelgen actually
+  -- emitted a model for them.
+  for (modelN, entry) in models.toArray do
+    unless entry.role == .typeFormer do continue
+    let some mi := info[modelN]? | continue
+    let some oi := info[entry.owner]? | continue
+    unless k.owner[mi.group]! == some oi.group do continue
+    for (dep, _) in refs[mi.group]! do
+      let some hi := info[dep]? | continue
+      if hi.group == oi.group || k.models[hi.group]!.isEmpty then continue
+      unless x.decls[groups[hi.group]!.decl]! matches .induct .. do continue
+      if carried.contains hi.group then continue
+      match k.owner[hi.group]! with
+      | some previous =>
+        if previous != oi.group then
+          k := { k with declined :=
+            (k.declined.push s!"{dep}: a modeled helper belongs to two model families") }
+      | none =>
+        let lp := groups[hi.group]!.levelParams
+        let olp := groups[oi.group]!.levelParams
+        if lp.length != olp.length then
+          k := { k with declined := (k.declined.push
+            s!"{dep}: a modeled helper has different universe arity than its model owner") }
+        else
+          if lp != olp then k := { k with renamed := k.renamed + 1 }
+          k := { k with owner := k.owner.set! hi.group (some oi.group),
+                        models := k.models.set! oi.group (k.models[oi.group]!.push hi.group) }
   return k
 
 /-- Add `σ` to a group's demand **and to every model keyed to it**, transitively.
@@ -448,7 +510,7 @@ model in `modelgen`'s output, but the second layer sits *after* the block it
 models, so the cascade runs both ways against the file's order. What holds in
 practice is that the whole chain is filled in one step, from the first `σ` to
 reach the root: `T` is the last of the lot in file order, so `T._model.…` and
-`T._model.0._model.…` are both still ahead of the sweep when demand arrives at
+`T._model._impl.0._model.…` are both still ahead of the sweep when demand arrives at
 `T`, and every later push repeats a `σ` the chain already has and stops at the
 first line. **Measured at zero** over `modelgen/tests` (both modes),
 `modelgen/monotests`, `vendor/arena-tests` and Mathlib — `MONOMORPH.md` §2.3,
@@ -887,8 +949,8 @@ def RwCtx.maskId (c : RwCtx) (m : UInt64) : StateM RwState Nat := do
 Three outcomes, and they are the whole of §1.2. A **carried** target keeps its
 name and takes numerals for its level arguments. An ordinary target becomes the
 copy at the instantiation the arguments evaluate to, at no levels. A
-target **with an eliminating universe** — a recursor, or a model's
-`rec_k`/`iota_k_j` — splits its argument list: the head is that universe, which
+target **with an eliminating universe** — a recursor, or its model recursor and
+iota theorems — splits its argument list: the head is that universe, which
 mode A keeps and mode B folds into the name. The head, and not a stored index,
 because this is the hot path; [`buildGroups`] refuses a file in which the
 universe is anywhere else, so the two readings cannot disagree here. -/
@@ -1147,8 +1209,8 @@ def emitOne (c : RwCtx) (cache : Std.HashSet Expr) (st : IO.Ref RwState)
   -- **What survives is what `σ` does not bind**, which is the eliminating
   -- universe and nothing else: `blockLp` is the group's own parameters, so for
   -- an ordinary declaration this is the empty list, for a recursor it is the
-  -- motive's universe, and for a model's `rec_k`/`iota_k_j` it is the same
-  -- universe for the same reason ([`modelCarrier`]).
+  -- motive's universe, and for a model recursor or iota theorem it is the same
+  -- universe by its exact role in [`modelTable`].
   let lp (orig : List Name) : List Name :=
     if keepParams then orig else orig.filter (fun p => !blockLp.contains p)
   match d with
@@ -1213,8 +1275,8 @@ def kernelRecs (env : Environment) (rs : List ERec) : List ERec × Nat := Id.run
 
 The eliminating universe, folded into the name. A pure pass over mode A's own
 output: the only level parameter mode A leaves standing is an eliminating
-universe — a recursor's, or a model `rec_k`/`iota_k_j`'s, which is the same
-universe ([`modelCarrier`]) — every use of it in the file is at a numeral, and
+universe — a recursor's, or its model recursor and iota theorems' — every use
+of it in the file is at a numeral, and
 this replaces each such declaration by one copy per numeral used.
 
 **Which names those are is not re-derived here.** Mode A knows: it decided, per
@@ -1245,7 +1307,7 @@ partial def foldRefs (elimOf : Std.HashSet Name) (e : Expr) : StateM (Std.HashMa
 
 /-- Every declaration with an eliminating universe of its own, and the numerals
 the file uses it at. `elimDefs` is mode A's own answer for the non-recursors —
-the model's `rec_k` and `iota_k_j`. -/
+the declaration-local model recursors and iota theorems. -/
 def elimUses (x : Export) (defaults : Array Nat) (elimDefs : Std.HashSet Name) :
     Std.HashMap Name (Array Nat) := Id.run do
   let mut ws : Std.HashMap Name (Array Nat) := {}
@@ -1281,7 +1343,7 @@ def foldElim (x : Export) (defaults : Array Nat) (elimDefs : Std.HashSet Name) :
   let ws := elimUses x defaults elimDefs
   let names : Std.HashSet Name := ws.toArray.foldl (fun s (n, _) => s.insert n) {}
   let fold (e : Expr) : Expr := (foldRefs names e).run' {}
-  -- A model's `rec_k`/`iota_k_j` splits exactly as a recursor does: one copy per
+  -- A model recursor or iota theorem splits exactly as a recursor does: one copy per
   -- numeral the file uses it at, the universe substituted and folded into the
   -- name. `all` names the copy, as everywhere else in this pass. A declaration
   -- that does not split is rebuilt unchanged, `all` included.
@@ -1349,8 +1411,9 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
         return (x, { rep with refused := some s!"the file already declares {n}, which spells a marker" })
   phase "entry"
   let base ← getEnv
+  let models := modelTable x
   let (groups, info) ←
-    match buildGroups x with
+    match buildGroups x models with
     | .error e => return (x, { rep with refused := some e })
     | .ok r => pure r
   rep := { rep with groups := groups.size }
@@ -1479,7 +1542,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
   -- ── The models, keyed to what they model. The keying needs the carried set
   -- (a carried group has no `σ` to key to) and the sweep needs the keying, so
   -- it goes exactly here.
-  let keying := modelKeying x groups info carried
+  let keying := modelKeying x groups info models refs carried
   let modelGroups := keying.owner.foldl (fun a o => if o.isSome then a + 1 else a) 0
   let modelLoose := keying.loose.foldl (fun a b => if b then a + 1 else a) 0
   if monoStats then
@@ -1636,7 +1699,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
                  poly := if memoMode == .off || memoMode == .pure then {} else t.poly }
       let mut e ← emitOne c projCache st isCarried g.levelParams x.decls[g.decl]!
       -- The non-recursor copies that came out with an eliminating universe
-      -- still standing — a model's `rec_k` and `iota_k_j`. Mode B needs the
+      -- still standing — model recursors and iota theorems. Mode B needs the
       -- list and must not guess it back off the output file.
       unless isCarried || g.elims.isEmpty do
         match e with
