@@ -44,3 +44,8 @@ supportInterpreter = true
 name = "generationflagstest"
 root = "GenerationFlagsTest"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "checktest"
+root = "CheckTest"
+supportInterpreter = true
