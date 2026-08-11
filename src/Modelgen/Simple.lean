@@ -1192,6 +1192,28 @@ def labelFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr))
       i := i + 1
     return true
 
+/-- The field domain used by an internal erasure or spine.
+
+Usually this is the exported field domain byte for byte.  The one exception is
+a specialised redex which mentions the owner only in an annotation that βζ
+reduction discards, such as `(fun _ : T i => N) k`.  Its normal form `N` is the
+actual non-recursive field type, so an internal representation stores that form
+instead of mistaking the annotation for a recursive occurrence.
+
+The test on the reduct is load-bearing: if the owner survives, this returns the
+written domain.  In particular, normalisation does not erase or rearrange a
+hidden binder or a nested occurrence. -/
+def erasureFieldDomain (tname : Name) (dom : Expr) : Expr :=
+  if mentionsAny #[tname] dom then
+    let reduced := headNorm dom
+    if mentionsAny #[tname] reduced then dom else reduced
+  else dom
+
+/-- Whether an internal erasure or spine field contains an occurrence which
+must be replaced, after discarding only βζ-dead owner mentions. -/
+def erasureRecursive (tname : Name) (dom : Expr) : Bool :=
+  mentionsAny #[tname] (erasureFieldDomain tname dom)
+
 /-- Which field of a constructor is the recursive one, if any. Declines the
 shapes the tower cannot express, each by name. -/
 def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr)
@@ -1213,46 +1235,20 @@ def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr)
   let mut slot : Option Nat := none
   for i in [0:nf] do
     let .forallE _ d b _ := cur | badShape "field telescope shorter than its field count"
+    let d := erasureFieldDomain tname d
     if mentionsAny #[tname] d then
       if slot.isSome then
         badShape s!"{cn} has two recursive fields: the tuple tower's spine is one \
 Nat and a constructor takes one predecessor, so a branching constructor needs the \
 W/path construction (plan B){bill}"
-      -- The same two reasons the indexed guard separates below: a mention the
-      -- reduct keeps and does not head with `tname` is a real binder or a real
-      -- nesting; a mention the reduct *loses* was never over the occurrence.
-      unless mentionsAny #[tname] (headNorm d) do
-        badShape s!"{cn} has a field whose type mentions {tname} only inside a binder \
-that βζ-reduction discards, so the spine would take a predecessor from a field that is \
-not recursive{bill}"
+      -- A βζ-dead mention was removed above.  Every domain which remains is a
+      -- real binder or nesting if its head is not the owner itself.
       unless (headNorm d).getAppFn.isConstOf tname do
         badShape s!"{cn} has a recursive field that is not a bare occurrence of \
 {tname} — under a binder, or nested, neither of which the tuple tower reaches{bill}"
       slot := some i
     cur := b
   return slot
-
-/-- The domain stored in an index-erasure skeleton.
-
-Usually this is the exported field domain byte for byte.  The one exception is
-a specialised redex which mentions the owner only in an annotation that βζ
-reduction discards, such as `(fun _ : T i => N) k`.  Its normal form `N` is the
-actual non-recursive field type, so the internal skeleton stores that form
-instead of replacing the whole domain by its carrier.
-
-The test on the reduct is load-bearing: if the owner survives, this returns the
-written domain.  In particular, normalisation does not erase or rearrange a
-hidden binder or a nested occurrence. -/
-def erasureFieldDomain (tname : Name) (dom : Expr) : Expr :=
-  if mentionsAny #[tname] dom then
-    let reduced := headNorm dom
-    if mentionsAny #[tname] reduced then dom else reduced
-  else dom
-
-/-- Whether a skeleton field contains an occurrence which the index erasure
-must replace, after discarding only βζ-dead owner mentions. -/
-def erasureRecursive (tname : Name) (dom : Expr) : Bool :=
-  mentionsAny #[tname] (erasureFieldDomain tname dom)
 
 /-- A recursive field's domain with the **occurrence** replaced by `Vn` and the
 binders it sits under kept verbatim: `T p⃗ e⃗` becomes `Vn` and `∀ z⃗, T p⃗ e⃗`
