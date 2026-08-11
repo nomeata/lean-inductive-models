@@ -11,7 +11,8 @@
 #
 # The exporter checkout, compiler output, and intermediate exports all live
 # below the repository-local `_tmp/` directory. `LEAN4EXPORT_DIR` and
-# `MODELGEN_BIN` may point at existing builds.
+# `MODELGEN_BIN` may point at existing builds. Every child inherits a 16 GiB
+# virtual-memory limit.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -21,6 +22,13 @@ FILTER="${MODELGEN_FILTER:-1}"
 TOOLCHAIN="leanprover/lean4:v4.29.1"
 EXPORT_REV="caccfbe"
 EXPORT_DIR="${LEAN4EXPORT_DIR:-$ROOT/_tmp/lean4export}"
+MEMORY_LIMIT_KIB=16777216
+
+current_memory_limit="$(ulimit -Sv)"
+if [[ "$current_memory_limit" == unlimited ]] ||
+    ((current_memory_limit > MEMORY_LIMIT_KIB)); then
+  ulimit -Sv "$MEMORY_LIMIT_KIB"
+fi
 
 command -v elan >/dev/null || { echo "elan is not on PATH" >&2; exit 2; }
 mkdir -p "$ROOT/_tmp" "$OUT"

@@ -20,8 +20,10 @@ The basis is:
 Eq  Nat  PULiftP  PSigma
 ```
 
-These four inductives are not modeled. Generated developments may use the
-standard axioms `Classical.choice`, `propext`, and `Quot.sound`.
+These four inductives are not modeled. Generated developments may also use
+Lean's kernel quotient declarations `Quot`, `Quot.mk`, `Quot.lift`, and
+`Quot.ind`, together with the standard axioms `Classical.choice`, `propext`,
+and `Quot.sound`.
 
 ## Command line
 
@@ -483,8 +485,9 @@ and no output is written.
 - Unsupported inductive shapes are reported as declines and pass through
   without a model.
 - A checker consuming the models as an inductive front end must implement the
-  four basis inductives and admit the standard axioms `Classical.choice`,
-  `propext`, and `Quot.sound` when a generated development uses them.
+  four basis inductives and Lean's kernel quotient declarations, and admit the
+  standard axioms `Classical.choice`, `propext`, and `Quot.sound` when a
+  generated development uses them.
 - Universe monomorphization is optional, off by default, and is exposed only
   through `modelgen --mono-levels`. Its library-level correctness suite is
   `monotest`.

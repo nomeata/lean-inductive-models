@@ -292,9 +292,9 @@ def checkPULiftP (env : Environment) : Except String Unit := do
     throw "PULiftP.rec is not large-eliminating (no motive universe)"
 
 /-- `Nat` at Lean's shape, **including the large elimination the whole Type
-route rests on**: `Nat.rec` must carry a motive universe. The commission
-asked for this to be checked rather than assumed, and this is where it is
-checked — on the input's own `Nat` as much as on a spliced one. -/
+route rests on**: `Nat.rec` must carry a motive universe. This property is
+checked rather than assumed — on the input's own `Nat` as much as on a
+spliced one. -/
 def checkNat (env : Environment) : Except String Unit := do
   let some (.inductInfo iv) := env.constants.find? `Nat | throw "it is not an inductive type"
   unless iv.numParams == 0 && iv.numIndices == 0 && iv.ctors == [`Nat.zero, `Nat.succ] do
