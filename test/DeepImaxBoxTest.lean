@@ -58,6 +58,10 @@ partial def containsConst (target : Name) : Expr → Bool
   | .mdata _ body => containsConst target body
   | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => false
 
+partial def bodyHeadIs (target : Name) : Expr → Bool
+  | .lam _ _ body _ => bodyHeadIs target body
+  | value => value.getAppFn.isConstOf target
+
 def ownerPasses (input : Export) (owner : Name) : Bool :=
   (Check.check input).all (·.familyOwner != owner)
 
@@ -126,9 +130,10 @@ def main : IO UInt32 := do
   let bindCtors := #[Naming.modelName `WBind.leaf, Naming.modelName `WBind.lim]
   let bindRec := Naming.modelName `WBind.rec
   let bindIotas := #[Naming.iotaName `WBind.rec 0, Naming.iotaName `WBind.rec 1]
-  state := state.check "W data and binder imax shapes generate" <|
-    #[`WData, `WBind].all fun owner =>
-      wReport.generated.any (·.1 == owner) && !wReport.declined.any (·.1 == owner)
+  state := state.check "W data and binder imax shapes generate at their pinned sizes" <|
+    wReport.generated.any (· == (`WData, 218)) &&
+      wReport.generated.any (· == (`WBind, 12)) &&
+      #[`WData, `WBind].all fun owner => !wReport.declined.any (·.1 == owner)
   state := state.check "W imax shapes have constructors, recursors, and both iotas" <|
     (#[dataModel, dataRec, bindModel, bindRec] ++ dataCtors ++ dataIotas ++
       bindCtors ++ bindIotas).all wNames.contains
@@ -136,6 +141,10 @@ def main : IO UInt32 := do
     [`WData._model._impl.wD, `WData._model._impl.wF,
       `WBind._model._impl.wTel, `WBind._model._impl.wF].all fun name =>
         (declarationValue? wGenerated name).any (containsConst `PSigma)
+  state := state.check "successor-level W carriers remain the direct core shape" <|
+    #[dataModel, bindModel].all fun name =>
+      (declarationValue? wGenerated name).any fun value =>
+        bodyHeadIs `_wcore.WT.W value && !containsConst `PULiftP value
   state := state.check "literal correspondence accepts both W imax families" <|
     ownerPasses wGenerated `WData && ownerPasses wGenerated `WBind
   let dataAxioms ← axiomsOf wEnvironment dataRec
@@ -144,6 +153,29 @@ def main : IO UInt32 := do
     #[dataAxioms, bindAxioms].all fun axioms =>
       axioms.contains `propext && axioms.contains `Quot.sound &&
         !axioms.contains `Classical.choice && axioms.size == 2
+
+  -- `max 1 u` is positive but has no syntactic predecessor. Arm W therefore
+  -- builds its core in `Type` and exposes it at the literal public sort through
+  -- the four-primitive constrained lift `PSigma low (fun _ => PULiftP True)`.
+  let maxRaw ← readExport "test/fixtures/modelgen/w_max.ndjson"
+  let (maxGenerated, maxReport, _) ← runExport maxRaw
+  let maxModel := Naming.modelName `WMax
+  state := state.check "predecessor-free W generates at its pinned size" <|
+    maxReport.generated.any (· == (`WMax, 218)) &&
+      !maxReport.declined.any (·.1 == `WMax)
+  state := state.check "predecessor-free W keeps its exact recursor statements" <|
+    maxReport.stmtChecked == 67 && maxReport.stmtErrors.isEmpty
+  state := state.check "predecessor-free W carrier uses the constrained basis lift" <|
+    (declarationValue? maxGenerated maxModel).any fun value =>
+      containsConst `PSigma value && containsConst `PULiftP value
+  let maxOutputCheck := Check.checkReport maxGenerated
+  let maxSerialized ← match parse maxGenerated.render (analyse := false) with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot parse serialized WMax output: {error}"
+  let maxInputCheck := Check.checkReport maxSerialized
+  state := state.check "predecessor-free W passes output and serialized input Check" <|
+    maxOutputCheck.violations.isEmpty && maxInputCheck.violations.isEmpty &&
+      maxOutputCheck.familiesChecked == 19 && maxInputCheck.familiesChecked == 19
 
   -- Recursive-result recognition may unfold a transparent former, but the
   -- model interface may not. `AliasW.lim` is accepted as infinitary because

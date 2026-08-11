@@ -4,7 +4,8 @@
    `WMax`.  It is not definitionally a successor level, however: there is no
    level expression `v` for which `v + 1` normalizes to `max 1 u`.  The two
    recursive fields force the simple generator past its linear tuple route and
-   make this the smallest probe of the W arm's carrier-level boundary.
+   make this the smallest probe of the W arm's constrained exact-sort lift:
+   a low W core paired by `PSigma` with a canonical `PULiftP True` proof.
 -/
 prelude
 
