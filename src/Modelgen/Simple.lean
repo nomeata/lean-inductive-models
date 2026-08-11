@@ -910,6 +910,20 @@ structure PField where
   rec? : Option Nat
   deriving Inhabited
 
+/-- Recognize an application of `owner` through transparent definitional
+wrappers, and return its complete argument vector when its arity is exact.
+
+`whnfUntil` is important here: ordinary `whnf` may continue by unfolding the
+owner itself, while a syntactic `getAppFn` rejects a field written through a
+transparent former such as `At T i := T i`.  This helper stops at the named
+owner.  It is used only for route selection and for recovering recursive
+indices; the exported constructor, recursor and iota types are never replaced
+by the reduced expression. -/
+def ownerAppArgs? (owner : Name) (np ni : Nat) (e : Expr) : GenM (Option (Array Expr)) := do
+  let some app ← whnfUntil e owner | return none
+  let args := app.getAppArgs
+  return if args.size == np + ni then some args else none
+
 /-- Rewrite a constructor's telescope for the Church encoding: recursive
 fields' types and the result both get `C` in place of `T p⃗`. Returns the
 rewritten telescope and the per-field classification.
@@ -920,9 +934,8 @@ partial def churchSwapAt (tname : Name) (np ni : Nat) (C : Expr) (nf : Nat) (t :
     (acc : Array PField := #[]) : GenM (Expr × Array PField) := do
   if nf == 0 then
     -- the constructor's result: `T p⃗ ι⃗_j` ↦ `C ι⃗_j`
-    let args := t.getAppArgs
-    unless t.getAppFn.isConstOf tname && args.size == np + ni do
-      badShape s!"a constructor of {tname} does not end in {tname} applied to \
+    let some args ← ownerAppArgs? tname np ni t
+      | badShape s!"a constructor of {tname} does not end in {tname} applied to \
         {np} parameters and {ni} indices"
     return (mkAppN C (args.extract np args.size), acc)
   let .forallE x d b bi := t | badShape "telescope shorter than its field count"
@@ -930,9 +943,8 @@ partial def churchSwapAt (tname : Name) (np ni : Nat) (C : Expr) (nf : Nat) (t :
   let mut fld : PField := { rec? := none }
   if mentionsAny #[tname] d then
     let (dd, nb) ← forallTelescope d fun zs res => do
-      let args := res.getAppArgs
-      unless res.getAppFn.isConstOf tname && args.size == np + ni do
-        badShape s!"a field of {tname} mentions {tname} other than as a recursive \
+      let some args ← ownerAppArgs? tname np ni res
+        | badShape s!"a field of {tname} mentions {tname} other than as a recursive \
           occurrence (∀ z, {tname} p e) — a nested occurrence, which is layer 1's business"
       for z in zs do
         if mentionsAny #[tname] (← ityp z) then
@@ -1224,7 +1236,7 @@ def erasureRecursive (tname : Name) (dom : Expr) : Bool :=
 
 /-- Which field of a constructor is the recursive one, if any. Declines the
 shapes the tower cannot express, each by name. -/
-def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr)
+def recSlotOf (tname : Name) (np ni : Nat) (cn : Name) (nf : Nat) (tele : Expr)
     (tagged : Bool := true) (typeU : Bool := true) (labelled : Bool := true) :
     GenM (Option Nat) := do
   -- **The W arm's bill, printed at the decline that names W**, and it is two
@@ -1251,7 +1263,7 @@ Nat and a constructor takes one predecessor, so a branching constructor needs th
 W/path construction (plan B){bill}"
       -- A βζ-dead mention was removed above.  Every domain which remains is a
       -- real binder or nesting if its head is not the owner itself.
-      unless (headNorm d).getAppFn.isConstOf tname do
+      unless (← ownerAppArgs? tname np ni d).isSome do
         badShape s!"{cn} has a recursive field that is not a bare occurrence of \
 {tname} — under a binder, or nested, neither of which the tuple tower reaches{bill}"
       slot := some i
@@ -1336,10 +1348,9 @@ partial def pairArm (tname : Name) (np ni : Nat) (us : List Level)
     (motive : Expr) (cN : Name) (minor : Expr) (ps : Array Expr)
     (nf : Nat) (tele : Expr) (elems ihs : Array Expr) : GenM Expr := do
   if nf == 0 then
-    let args := tele.getAppArgs
+    let some args ← ownerAppArgs? tname np ni tele
+      | badShape s!"a constructor of {tname} does not present {ni} index arguments"
     let isj := args.extract np args.size
-    unless isj.size == ni do
-      badShape s!"a constructor of {tname} does not present {ni} index arguments"
     let sfj := selfAt isj
     let built := mkAppN (.const cN us) (ps ++ elems)
     return ← withLocalDeclD `D (.sort .zero) fun D => do
@@ -1359,11 +1370,13 @@ partial def pairArm (tname : Name) (np ni : Nat) (us : List Level)
   -- a recursive field `∀ z⃗, T p⃗ e⃗`: bind it at `∀ z⃗, Pair e⃗`
   let nb ← forallTelescope d fun zs _ => pure zs.size
   let dPair ← forallBoundedTelescope d (some nb) fun zs res => do
-    let a := res.getAppArgs
+    let some a ← ownerAppArgs? tname np ni res
+      | badShape s!"a recursive field of {tname} does not present {ni} index arguments"
     mkForallFVars zs (← pairAt (a.extract np a.size))
   withLocalDecl x bi dPair fun pv => do
     let (el, ih) ← forallBoundedTelescope d (some nb) fun zs res => do
-      let a := res.getAppArgs
+      let some a ← ownerAppArgs? tname np ni res
+        | badShape s!"a recursive field of {tname} does not present {ni} index arguments"
       let ris := a.extract np a.size
       let sf := selfAt ris
       let baseTy ← baseAt ris
@@ -1666,9 +1679,8 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
     -- `T._model.self` and open the Church encoding's own Π as well.
     let recAt := fun (f : Expr) (nb : Nat) (k : Array Expr → Array Expr → GenM Expr) => do
       forallBoundedTelescope (← ityp f) (some nb) fun zs res => do
-        let args := res.getAppArgs
-        unless res.getAppFn.isConstOf c.selfN && args.size == np + ni do
-          badShape s!"a recursive field of {c.tname} does not land at {c.selfN}"
+        let some args ← ownerAppArgs? c.selfN np ni res
+          | badShape s!"a recursive field of {c.tname} does not land at {c.selfN}"
         k zs (args.extract np args.size)
 
     -- The constructor's field telescope. `is?` supplies the data fields.
@@ -1678,9 +1690,8 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
 
     -- The index vector a walked telescope ends at.
     let idxOfRes := fun (res : Expr) => do
-      let args := res.getAppArgs
-      unless res.getAppFn.isConstOf c.selfN && args.size == np + ni do
-        badShape s!"{c.ctorN0}'s result is not {c.selfN} at {np} parameters and {ni} indices"
+      let some args ← ownerAppArgs? c.selfN np ni res
+        | badShape s!"{c.ctorN0}'s result is not {c.selfN} at {np} parameters and {ni} indices"
       pure (args.extract np args.size)
 
     -- `g_i : ∀ z⃗_i, motive e⃗_i (f_i z⃗_i)`, the value functions.
@@ -2174,10 +2185,9 @@ partial def withRecSlot [Inhabited α] (tname : Name) (np ni : Nat) (dom : Expr)
     withLocalDecl x bi z fun zv =>
       withRecSlot tname np ni (b.instantiate1 zv) k (zs.push zv)
   | h =>
-    let args := h.getAppArgs
-    unless h.getAppFn.isConstOf tname && args.size == np + ni do
-      badShape s!"a recursive field of {tname} is not a bare application at {np} \
-        parameters and {ni} indices"
+    let some args ← ownerAppArgs? tname np ni h
+      | badShape s!"a recursive field of {tname} is not a bare application at {np} \
+          parameters and {ni} indices"
     k zs (args.extract np args.size)
 
 /-! ## Arm W's kit
@@ -2792,7 +2802,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- non-indexed declaration away from arm W and handed it to a tower that
   -- cannot express it, so the infinitary test is split out rather than
   -- deleted.
-  let erasureBareWhy : Option String := Id.run do
+  let erasureBareWhy : Option String ← do
     for (cn, cty) in exportCtors do
       let mut t := cty
       let mut short := false
@@ -2823,13 +2833,15 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
           if inBinder then
             return some s!"binder mention: a binder of {cn}'s recursive field mentions \
 {tname}, and the erasure keeps binder types verbatim"
-          let d := headNorm core
           -- A mention which βζ discards was filtered by
           -- [`Modelgen.erasureFieldDomain`] above, so every domain reaching this
           -- point still contains the occurrence the skeleton will replace.
           -- A binder βζ reveals has already been peeled above, so the only
-          -- remaining specialisation shape is a genuinely nested occurrence.
-          if !d.getAppFn.isConstOf tname then
+          -- remaining unsupported shape is a genuinely nested occurrence.
+          -- A transparent former around `T p⃗ e⃗` is still bare: inspect it by
+          -- definitional reduction here, without changing the literal type
+          -- which the public model and checker retain.
+          if (← ownerAppArgs? tname np ni core).isNone then
             return some s!"nested: {cn} has a recursive occurrence that is not an \
 application of {tname}"
         t := b
@@ -2955,9 +2967,8 @@ application of {tname}"
       let nfg := numForalls tele
       let flds ← classifyCtor tname nfg tele
       forallBoundedTelescope tele (some nfg) fun fs res => do
-        let args := res.getAppArgs
-        unless res.getAppFn.isConstOf tname && args.size == np + ni do
-          badShape s!"{cn} does not end in {tname} at {np} parameters and {ni} indices"
+        let some args ← ownerAppArgs? tname np ni res
+          | badShape s!"{cn} does not end in {tname} at {np} parameters and {ni} indices"
         let idx := args.extract np args.size
         let mut isD : Array Bool := #[]
         let mut pos : Array Nat := #[]
@@ -3051,7 +3062,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       withParams fun ps =>
         exportCtors.mapM fun (cn, cty) => do
           let tele ← instForall cty ps
-          recSlotOf tname np cn (numForalls tele) tele
+          recSlotOf tname np ni cn (numForalls tele) tele
             (tagFactored tname np exportCtors)
             w.normalize.dec.isSome (labelFactored tname np exportCtors)
     else
@@ -3556,9 +3567,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- The index vector a walked result type ends at, at either head: the
     -- export's `T p⃗ ι⃗` or the model's own `T._model.self p⃗ ι⃗`.
     let idxOfRes := fun (hd : Name) (res : Expr) => do
-      let args := res.getAppArgs
-      unless res.getAppFn.isConstOf hd && args.size == np + ni do
-        badShape s!"{cn0} does not end in {hd} at {np} parameters and {ni} indices"
+      let some args ← ownerAppArgs? hd np ni res
+        | badShape s!"{cn0} does not end in {hd} at {np} parameters and {ni} indices"
       pure (args.extract np args.size)
 
     -- The constructor's field telescope with the **data fields substituted**
@@ -3850,9 +3860,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       let tele ← instForall cty ps
       let nf := numForalls tele
       forallBoundedTelescope tele (some nf) fun fs res => do
-        let args := res.getAppArgs
-        unless res.getAppFn.isConstOf tname && args.size == np + ni do
-          badShape s!"{cn} does not end in {tname} at {np} parameters and {ni} indices"
+        let some args ← ownerAppArgs? tname np ni res
+          | badShape s!"{cn} does not end in {tname} at {np} parameters and {ni} indices"
         let idx := (args.extract np args.size).map (·.replaceFVars fs gs)
         let mut slots : Array (Nat × Expr) := #[]
         for i in [0:nf] do
@@ -4502,7 +4511,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     let slots : Array (Option Nat) ← withParams fun ps =>
       exportCtors.mapM fun (cn, cty) => do
         let tele ← instForall cty ps
-        recSlotOf tname np cn (numForalls tele) tele wTagged
+        recSlotOf tname np ni cn (numForalls tele) tele wTagged
           w.normalize.dec.isSome (labelFactored tname np exportCtors)
     let baseJ := (Array.range nc).filter fun j => slots[j]!.isNone
     let stepJ := (Array.range nc).filter fun j => slots[j]!.isSome
