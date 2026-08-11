@@ -162,6 +162,26 @@ def main : IO UInt32 := do
       Naming.projectionIotaName `SortFields fieldIndex]
   let mut state : TestState := {}
 
+  -- A maybe-zero singleton cannot use the ordinary Church/PULiftP carrier:
+  -- that carrier forgets which payload constructed it, while the kernel's
+  -- intrinsic projection retains the payload at positive instantiations.
+  -- The field-preserving PSigma tower therefore has its own focused occupant.
+  let primRaw ← readExport "tests/prim_shapes.ndjson"
+  let (primDeclarations, primReport) ← runExport primRaw
+  let primGenerated := outputExport primRaw primDeclarations
+  let piProjection := Naming.projectionName `PI 0
+  let piRule := Naming.projectionIotaName `PI 0
+  let primNames := primDeclarations.flatMap (·.names.toArray)
+  state := state.check "variable-sort singleton retains its intrinsic field" <|
+    primReport.generated.any (·.1 == `PI) &&
+      !primReport.declined.any (·.1 == `PI) &&
+      primNames.contains piProjection && primNames.contains piRule
+  state := state.check "variable-sort singleton projection is exact" <|
+    (Check.check primGenerated).all (·.familyOwner != `PI)
+  state := state.check "variable-sort singleton selector avoids its small recursor" <|
+    (definitionValue? primGenerated piProjection).any fun value =>
+      !containsConst `PI.rec._model value
+
   let (wrapperDeclarations, wrapperReport) ← runExport wrapperRaw
   let wrapperGenerated := outputExport wrapperRaw wrapperDeclarations
   let wrapperNames := wrapperDeclarations.flatMap (·.names.toArray)

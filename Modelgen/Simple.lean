@@ -2679,14 +2679,15 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
     { decls := #[], levelParams := lparams, members := #[], selfNames := #[selfN]
       numAll := 1, ctors := ctorPairs, recs := #[recN], iotas := #[], spliced := #[] }
 
-  -- A non-recursive singleton at a maybe-zero sort must retain its fields.
-  -- The Church/PULiftP route records only a proof of inhabitation; at a
-  -- positive instantiation two constructor payloads then become equal, so no
-  -- intrinsic projection can satisfy both constructor rules.  A dependent
-  -- PSigma tower lands at the same `Sort w`, including when `w = 0`, and its
-  -- projections reduce definitionally on the model constructor.
-  let directFieldTower :=
-    (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0
+  -- A one-field singleton at a maybe-zero sort must retain its field.  The
+  -- Church/PULiftP route records only a proof of inhabitation; at a positive
+  -- instantiation two constructor payloads then become equal, so no intrinsic
+  -- projection can satisfy both constructor rules.  The field type itself is
+  -- the exact carrier at every universe instantiation, and identity supplies
+  -- the constructor, small recursor and intrinsic projection.
+  let directFieldIdentity :=
+    (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
+      numForalls exportCtors[0]!.2 - np == 1
 
   -- The indexed subsingleton has a different carrier from the Church routes —
   -- a packed index equation, not a fold — so it branches before them.
@@ -3073,17 +3074,16 @@ data tower would have to hold a type the branch tower cannot see"
       let a2 := psigmaSnd (.succ .zero) w wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  if directFieldTower then
-    for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+  if directFieldIdentity then
     let (_, cty0) := exportCtors[0]!
     let modelCtorTy := restore tbl cty0
     let selfAt := fun (ps : Array Expr) => mkAppN (.const selfN us) ps
 
     let selfVal ← withParams fun ps => do
       let tele ← instForall cty0 ps
-      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
-        mkLambdaFVars ps (← wTowerTy w fs 0)
+      let .forallE _ fieldType _ _ := tele
+        | badShape s!"{exportCtors[0]!.1} is not a one-field constructor"
+      mkLambdaFVars ps fieldType
     let dSelf := Declaration.defnDecl
       { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
@@ -3092,8 +3092,8 @@ data tower would have to hold a type the branch tower cannot see"
 
     let ctorVal ← withParams fun ps => do
       let tele ← instForall modelCtorTy ps
-      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
-        mkLambdaFVars (ps ++ fs) (← wTowerMk w fs 0 fs)
+      forallBoundedTelescope tele (some 1) fun fs _ =>
+        mkLambdaFVars (ps ++ fs) fs[0]!
     let dCtor := Declaration.defnDecl
       { name := ctorN 0, levelParams := lparams, type := modelCtorTy, value := ctorVal
         hints := ← hintsFor ctorVal, safety := .safe }
@@ -3102,13 +3102,9 @@ data tower would have to hold a type the branch tower cannot see"
 
     let recTy := restore tbl rv.type
     let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
-      let ps := bs.extract 0 np
       let minor := bs[np + 1]!
       let self := bs[bs.size - 1]!
-      let tele ← instForall modelCtorTy ps
-      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
-        let fields ← wTowerProjs w fs 0 self #[]
-        mkLambdaFVars bs (mkAppN minor fields)
+      mkLambdaFVars bs (mkApp minor self)
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
@@ -3118,23 +3114,16 @@ data tower would have to hold a type the branch tower cannot see"
     -- Route-specific selector bodies let the common driver retain ownership
     -- of public names, types, collision checks and ordering without trying to
     -- eliminate the small source recursor into a potentially positive sort.
-    let fieldCount := numForalls cty0 - np
-    for fieldIndex in [0:fieldCount] do
-      let selector ← withParams fun ps => do
-        let tele ← instForall cty0 ps
-        forallBoundedTelescope tele (some fieldCount) fun fs _ => do
-          withLocalDeclD `self (selfAt ps) fun self => do
-            let fields ← wTowerProjs w fs 0 self #[]
-            mkLambdaFVars (ps.push self) fields[fieldIndex]!
-      let proof ← withParams fun ps => do
-        let tele ← instForall modelCtorTy ps
-        forallBoundedTelescope tele (some fieldCount) fun fs _ => do
-          let field := fs[fieldIndex]!
-          let fieldType ← inferType field
-          let fieldLevel ← ilevel fieldType
-          mkLambdaFVars (ps ++ fs) (eqi.refl' fieldLevel fieldType field)
-      projectionOverrides := projectionOverrides.push
-        (tname, fieldIndex, selector, proof)
+    let selector ← withParams fun ps => withLocalDeclD `self (selfAt ps) fun self =>
+      mkLambdaFVars (ps.push self) self
+    let proof ← withParams fun ps => do
+      let tele ← instForall modelCtorTy ps
+      forallBoundedTelescope tele (some 1) fun fs _ => do
+        let field := fs[0]!
+        let fieldType ← inferType field
+        let fieldLevel ← ilevel fieldType
+        mkLambdaFVars (ps ++ fs) (eqi.refl' fieldLevel fieldType field)
+    projectionOverrides := projectionOverrides.push (tname, 0, selector, proof)
   else if armF then
     -- ════ arm F: the indexed subsingleton, by one packed index equation ════
     --
