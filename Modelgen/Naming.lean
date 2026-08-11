@@ -1,0 +1,185 @@
+import Lean
+
+/-!
+# Public names of inductive models
+
+This module is the single, purely syntactic source of public names emitted for
+an inductive model.  Every function takes the exact `Name` stored in an export;
+in particular, none of them searches for or removes an `_model` component.
+
+Keeping the operations on raw names matters for declarations whose names are
+private, numeric, or already end in `_model`.  Consumers that need to work
+around kernel normalization of private names must do so only after constructing
+the public names recorded here.
+-/
+
+open Lean
+
+namespace Modelgen.Naming
+
+/-- The model declaration corresponding to the exact exported declaration `n`. -/
+def modelName (n : Name) : Name := Name.str n "_model"
+
+/-- The theorem for rule `j` of the exact exported recursor `recursor`.
+
+Rule numbers are positions in the export's recursor-rule array. -/
+def iotaName (recursor : Name) (j : Nat) : Name :=
+  Name.str (modelName recursor) s!"iota_{j}"
+
+/-- The proof that a kernel-unit-like inductive has at most one inhabitant. -/
+def unitlikeName (typeFormer : Name) : Name :=
+  Name.str (modelName typeFormer) "unitlike"
+
+/-- The structure-eta theorem for an inductive type former. -/
+def etaName (typeFormer : Name) : Name :=
+  Name.str (modelName typeFormer) "eta"
+
+/-- The model of a structure projection is named like every other modeled
+declaration.  This alias makes projection call sites state their intent. -/
+def projectionName (projection : Name) : Name := modelName projection
+
+/-- The projection-reduction theorem for a structure projection. -/
+def projectionIotaName (projection : Name) : Name :=
+  Name.str (projectionName projection) "iota"
+
+/-- The rule-K reduction theorem belonging to a recursor. -/
+def ruleKName (recursor : Name) : Name :=
+  Name.str (modelName recursor) "ruleK"
+
+/-- The role of an original declaration in a model table. -/
+inductive DeclarationKind where
+  | typeFormer
+  | constructor
+  | recursor
+  | projection
+  deriving BEq, DecidableEq, Inhabited, Repr
+
+/-- An exact original declaration and its declaration-local model name. -/
+structure Declaration where
+  kind : DeclarationKind
+  original : Name
+  model : Name
+  deriving BEq, DecidableEq, Inhabited, Repr
+
+/-- Construct the declaration entry for `original`. -/
+def Declaration.ofOriginal (kind : DeclarationKind) (original : Name) : Declaration :=
+  { kind, original, model := modelName original }
+
+/-- One ordered iota theorem for an exported recursor rule. -/
+structure Iota where
+  recursor : Name
+  ruleIndex : Nat
+  name : Name
+  deriving BEq, DecidableEq, Inhabited, Repr
+
+/-- Construct the entry for rule position `ruleIndex` of `recursor`. -/
+def Iota.ofRecursor (recursor : Name) (ruleIndex : Nat) : Iota :=
+  { recursor, ruleIndex, name := iotaName recursor ruleIndex }
+
+/-- The kernel feature certified by an additional model theorem. -/
+inductive MetadataKind where
+  | unitlike
+  | eta
+  | projectionIota
+  | ruleK
+  deriving BEq, DecidableEq, Inhabited, Repr
+
+/-- A metadata theorem and the exact declaration that owns the feature. -/
+structure Metadata where
+  kind : MetadataKind
+  owner : Name
+  name : Name
+  deriving BEq, DecidableEq, Inhabited, Repr
+
+/-- Construct a metadata entry from its feature and exact exported owner. -/
+def Metadata.ofOwner (kind : MetadataKind) (owner : Name) : Metadata :=
+  let name := match kind with
+    | .unitlike => unitlikeName owner
+    | .eta => etaName owner
+    | .projectionIota => projectionIotaName owner
+    | .ruleK => ruleKName owner
+  { kind, owner, name }
+
+/-- The declaration-local public-name requirements for any collection of
+inductive groups.  The table does not infer ownership from generated names;
+the exact originals remain attached to every entry. -/
+structure Table where
+  declarations : Array Declaration := #[]
+  iotas : Array Iota := #[]
+  metadata : Array Metadata := #[]
+  deriving BEq, Inhabited, Repr
+
+/-- An empty set of public-name requirements. -/
+def Table.empty : Table := {}
+
+/-- Add an original declaration and its model declaration to a table. -/
+def Table.addDeclaration (table : Table) (kind : DeclarationKind)
+    (original : Name) : Table :=
+  { table with declarations := table.declarations.push (.ofOriginal kind original) }
+
+/-- Add a recursor and all its iota theorems in exported rule order. -/
+def Table.addRecursor (table : Table) (recursor : Name) (numRules : Nat) : Table :=
+  let table := table.addDeclaration .recursor recursor
+  let rules := (List.range numRules).toArray.map (Iota.ofRecursor recursor)
+  { table with iotas := table.iotas ++ rules }
+
+/-- Add one metadata theorem requirement. -/
+def Table.addMetadata (table : Table) (kind : MetadataKind) (owner : Name) : Table :=
+  { table with metadata := table.metadata.push (.ofOwner kind owner) }
+
+/-- Add a projection model and its reduction theorem together. -/
+def Table.addProjection (table : Table) (projection : Name) : Table :=
+  (table.addDeclaration .projection projection).addMetadata .projectionIota projection
+
+/-- Look up a model by exact original name and declaration role. -/
+def Table.modelName? (table : Table) (kind : DeclarationKind) (original : Name) : Option Name :=
+  (table.declarations.find? fun entry =>
+    entry.kind == kind && entry.original == original).map (·.model)
+
+/-- Look up an original by exact model name and declaration role.
+
+This is a table lookup, not an attempt to parse `_model` from `model`. -/
+def Table.originalName? (table : Table) (kind : DeclarationKind) (model : Name) : Option Name :=
+  (table.declarations.find? fun entry =>
+    entry.kind == kind && entry.model == model).map (·.original)
+
+/-- Every public name required by the table, retaining requirement order and
+duplicates.  Keeping duplicates lets the collision census diagnose a malformed
+table instead of silently accepting it. -/
+def Table.requiredNames (table : Table) : Array Name :=
+  table.declarations.map (·.model) ++ table.iotas.map (·.name) ++ table.metadata.map (·.name)
+
+private def pushUnique (names : Array Name) (name : Name) : Array Name :=
+  if names.contains name then names else names.push name
+
+/-- Exact-name conflicts discovered before generating a group.
+
+`taken` lists required names that occur in the input. `duplicateRequirements`
+lists names required more than once by the proposed table. Both arrays contain
+each conflicting name once, in first-conflict order. -/
+structure CollisionCensus where
+  taken : Array Name := #[]
+  duplicateRequirements : Array Name := #[]
+  deriving BEq, Inhabited, Repr
+
+/-- Whether an atomic generation request has any public-name conflict. -/
+def CollisionCensus.isEmpty (census : CollisionCensus) : Bool :=
+  census.taken.isEmpty && census.duplicateRequirements.isEmpty
+
+/-- Census exact public-name collisions against `occupied`.
+
+No private-name normalization and no `_model` prefix parsing is performed. -/
+def Table.collisionCensus (table : Table) (occupied : Array Name) : CollisionCensus := Id.run do
+  let mut seen : Array Name := #[]
+  let mut taken : Array Name := #[]
+  let mut duplicateRequirements : Array Name := #[]
+  for name in table.requiredNames do
+    if occupied.contains name then
+      taken := pushUnique taken name
+    if seen.contains name then
+      duplicateRequirements := pushUnique duplicateRequirements name
+    else
+      seen := seen.push name
+  return { taken, duplicateRequirements }
+
+end Modelgen.Naming
