@@ -1,4 +1,5 @@
 import Lean
+import Modelgen.Naming
 import Modelgen.Plan
 
 /-!
@@ -391,9 +392,13 @@ partial def restore (heads : Std.HashMap Name (Nat × Expr)) (e : Expr) : Expr :
 
 /-- The generator's read-only context. -/
 structure Gen where
-  /-- `T._model`. -/
+  /-- The private implementation namespace below the primary carrier. -/
   model : Name
-  /-- `R_k._model.self` for each **real** member `R_k` — the carriers. One
+  /-- Original constructors in flattened declaration order. -/
+  exportCtors : Array Name
+  /-- Original recursors in motive order, including nested recursors. -/
+  exportRecs : Array Name
+  /-- `R_k._model` for each **real** member `R_k` — the carriers. One
   unless the declaration is a mutual block. -/
   selfNames : Array Name
   /-- How many block members are the export's own; the rest are mimics. Written
@@ -587,10 +592,10 @@ def packName (g : Gen) (i : Nat) : Name := .str g.model s!"pack_{i}"
 def unpackName (g : Gen) (i : Nat) : Name := .str g.model s!"unpack_{i}"
 def retractName (g : Gen) (i : Nat) : Name := .str g.model s!"unpackPack_{i}"
 def sectionName (g : Gen) (i : Nat) : Name := .str g.model s!"packUnpack_{i}"
-def ctorName (g : Gen) (j : Nat) : Name := .str g.model s!"ctor_{j}"
-def recName (g : Gen) (k : Nat) : Name := .str g.model s!"rec_{k}"
+def ctorName (g : Gen) (j : Nat) : Name := Naming.modelName g.exportCtors[j]!
+def recName (g : Gen) (k : Nat) : Name := Naming.modelName g.exportRecs[k]!
 def congrPackName (g : Gen) (i : Nat) : Name := .str g.model s!"congrPack_{i}"
-def iotaName (g : Gen) (k j : Nat) : Name := .str g.model s!"iota_{k}_{j}"
+def iotaName (g : Gen) (k j : Nat) : Name := Naming.iotaName g.exportRecs[k]! j
 
 /-- Is block member `k` one of the export's own, rather than a mimic? -/
 def isReal (g : Gen) (k : Nat) : Bool := k < g.numAll
@@ -2016,9 +2021,8 @@ structure Iso where
   emitAs? : Option (Name × Name) := none
   deriving Inhabited
 
-/-- **The export's names rewritten to the model's**: the carrier for each real
-member, the model's constructor for each of the export's, and `T._model.rec_k`
-for the export's recursor at block index `k`.
+/-- **The export's names rewritten to the model's**: `T._model` for each real
+member, `C._model` for each constructor, and `R._model` for each recursor.
 
 One table, two readers. [`Modelgen.checkModel`] uses it to rebuild every emitted
 statement from the rule the *installed* recursor carries, and
@@ -2550,18 +2554,44 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   for k in [0:r] do
     unless (← sortOf pl.types[k]!.type).2 == u do
       badShape "a mutual block whose members land at different sorts"
-  let model := Name.str root "_model"
+  let primaryCarrier := Naming.modelName root
+  let model := Name.str primaryCarrier "_impl"
   let b := fun (i : Nat) => Name.num model i
+  let exportCtorNames := exportCtors.flatMap fun ctors => ctors.map (·.1)
+  let exportRecs := (Array.range pl.types.size).map (exportRecName all)
   -- **One carrier per real member.** `A.rec` and `B.rec` are distinct
   -- recursors over distinct majors, and a consumer keys `⟦A⟧` and `⟦B⟧`
   -- separately; a single carrier could stand for only one of them. For a
-  -- one-member block this is `T._model.self` and nothing has moved.
-  let selfNames := all.extract 0 r |>.map fun n => Name.str (Name.str n "_model") "self"
-  -- **The whole file, not just the prefix.** `mini/tests/fixtures/nested_
-  -- keying.lean` declares `UTree._model.self` itself, *after* `UTree`, exactly
-  -- so that a consumer keying on the convention is not fooled by it. A guard
-  -- that only looked at the environment as it stands would generate a second
-  -- `UTree._model.self` and emit an export with a duplicate declaration.
+  -- one-member block this is exactly `T._model`.
+  let selfNames := all.extract 0 r |>.map Naming.modelName
+  let blockCtors := (Array.range pl.types.size).map fun i =>
+    pl.types[i]!.ctors.map fun (cn, _) => Name.str (b i) (lastStr cn)
+
+  -- The public contract is declaration-local. Census its exact names as one
+  -- atomic request, including every nested recursor's rule theorems, before
+  -- adding any implementation declaration to the environment.
+  let mut publicNames : Naming.Table := .empty
+  for name in all.extract 0 r do
+    publicNames := publicNames.addDeclaration .typeFormer name
+  for name in exportCtorNames do
+    publicNames := publicNames.addDeclaration .constructor name
+  for k in [0:exportRecs.size] do
+    publicNames := publicNames.addRecursor exportRecs[k]! pl.types[k]!.ctors.size
+  let mut helpers : Array Name := (Array.range pl.types.size).map b
+  helpers := helpers ++ blockCtors.flatten
+  for k in [0:pl.types.size] do helpers := helpers.push (Name.str (b k) "rec")
+  for i in [0:pl.mimics.size] do
+    for suffix in [s!"pack_{i}", s!"unpack_{i}", s!"unpackPack_{i}",
+        s!"packUnpack_{i}", s!"congrPack_{i}"] do
+      helpers := helpers.push (Name.str model suffix)
+  helpers := helpers.push (Name.str model "funext")
+  let census := publicNames.collisionCensus (reserved.toArray ++ helpers)
+  if let some name := census.duplicateRequirements[0]? then
+    badShape s!"the public naming contract requires {name} more than once"
+  if let some name := census.taken[0]? then declineWith (.nameTaken name)
+  -- **The whole file, not just the prefix.** A contract name may be declared
+  -- after its source declaration. A guard that only looked at the environment
+  -- as it stands would then emit a duplicate declaration.
   let taken : Name → GenM Unit := fun n => do
     if reserved.contains n || (← getEnv).constants.contains n then declineWith (.nameTaken n)
   for i in [0:pl.types.size] do taken (b i)
@@ -2583,8 +2613,6 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let ren : Std.HashMap Name (Nat × Expr) :=
     (Array.range pl.types.size).foldl
       (fun m i => m.insert pl.types[i]!.name (0, .const (b i) us)) {}
-  let blockCtors := (Array.range pl.types.size).map fun i =>
-    pl.types[i]!.ctors.map fun (cn, _) => Name.str (b i) (lastStr cn)
   let its : List InductiveType := (Array.range pl.types.size).toList.map fun i =>
     { name := b i, type := pl.types[i]!.type
       ctors := (Array.range pl.types[i]!.ctors.size).toList.map fun j =>
@@ -2615,7 +2643,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let largeElim ← do
     let .recInfo rv ← constInfo (.str (b 0) "rec") | badShape "the block has no recursor"
     pure (rv.levelParams.length == us.length + 1)
-  let g0 : Gen := { model, selfNames, numAll := r, np, u, us
+  let g0 : Gen := { model, exportCtors := exportCtorNames, exportRecs,
+                    selfNames, numAll := r, np, u, us
                     members := (Array.range pl.types.size).map b
                     blockCtors, nidx, occs, eqi, fx := none, largeElim }
 
@@ -2749,9 +2778,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- model's constructor carries the **export's** declared type with `T`
   -- rewritten to the carrier, so that the keying is an alias.
   --
-  -- **Flattened over the real members, in the export's `all` order**: for a
-  -- mutual block `T._model.ctor_j` runs over `A`'s constructors and then `B`'s,
-  -- which is the order the block's minors arrive in.
+  -- **Flattened over the real members, in the export's `all` order** so the
+  -- constructor table remains aligned with the order of the block's minors.
   let mut ctors : Array (Name × Name) := #[]
   let mut ctorTys : Array (Name × Name × Expr) := #[]
   for k in [0:r] do
