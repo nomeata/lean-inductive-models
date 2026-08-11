@@ -1,6 +1,5 @@
-/- **The simple-model construction's refusals**, one fixture per
-   decline path of `src/Modelgen/Simple.lean`, each asserting the refusal and
-   its printed reason:
+/- **Former simple-model refusal boundaries**, retained as positive regression
+   cases for the routes that replaced them:
 
    * `MixI` — an indexed subsingleton with a **pivot**: a fresh constructor
      argument that literally *is* one of the output's indices, with a proof
@@ -25,15 +24,11 @@
      two do not — data on both sides of a child, a dependent data tower, a
      parameter and a level parameter, and the arm's own boundary (`Bad`, whose
      branch type does not factor through the tag).
-   * `Inf.below` — the `below` Lean mints for the recursive proposition
-     beside it. It is a recursive subsingleton too and reaches **arm G**, and
-     is refused there: its index is `Inf.mk a` rather than one of the
-     constructor's own data fields, so the graph route's inversion cannot be
-     stated at an arbitrary index. `prim_graph.lean`'s `BadC` is the same
-     refusal reached deliberately rather than by accident, and
-     `prim_idx.lean`'s `Rxh` is this one written deliberately. **Arm F now
-     models the same index shape and arm G does not**, which is the whole of
-     what is left of this tranche's boundary.
+   * `Inf.below` — the `below` Lean mints for the recursive proposition beside
+     it. It is a recursive subsingleton too and reaches **arm G**. Graph
+     inversion now carries and transports the packed non-pivot index equality,
+     so this generated declaration, `prim_graph.lean`'s `BadC`, and
+     `prim_idx.lean`'s corresponding deliberate cases all model.
    * `SvIx` — a carrier whose index telescope is **hidden behind a
      definition** *and* whose constructor's indices are its own fields.
      **Neither half is a refusal any more**: the shape check unfolds the
@@ -66,13 +61,10 @@
    reported on its own row and is not counted a decline: it is what makes the
    construction well-founded rather than a shape it cannot reach.
 
-   **Two of this file's refusals became models in the tranche that split the
-   index axis** — `MixI` and `SvIx` above — and the paragraph each carries says
-   so where a reader meets it rather than in an appendix. The decline path they
-   used to occupy, arm F's "index-variable field", **no longer exists**: it was
-   not a bound but a missing case. What replaces them as this file's
-   subsingleton refusals is `Inf.below` alone, and `prim_idx.lean` carries the
-   rest of the grid. -/
+   The old arm-F "index-variable field" and arm-G non-pivot refusal paths no
+   longer exist: they were missing transport cases rather than semantic
+   bounds. `prim_idx.lean` and `prim_graph.lean` carry the complete regression
+   grids for those routes. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false

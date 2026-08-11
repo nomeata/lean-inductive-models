@@ -52,10 +52,10 @@
      data **on both sides** of a label-dependent child, so the projection the
      binder needs is not at depth 1. `nil` is the base constructor.
 
-   The boundary is now one field further out and `Utd` is not it: what neither
-   instantiation reaches is a child whose binders mention an earlier
-   **recursive** field, since the label carries no children for `Tel` to read
-   one from. -/
+   A constructor-local child whose binder type mentions an earlier recursive
+   field is rejected by Lean's nested-inductive compilation before this route;
+   `Utd` therefore covers the far edge of the kernel-accepted direct W shapes,
+   rather than sitting beside an unimplemented W case. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false

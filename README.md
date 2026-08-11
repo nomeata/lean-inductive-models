@@ -504,7 +504,7 @@ The correctness executables are:
 TMPDIR="$PWD/_tmp/build-tmp" lake build \
   test monotest clitest generationflagstest checktest ordertest namingtest \
   drivernamingtest privatealiastest simplenamingtest rulektest mainclitest \
-  projectiontest structureetatest
+  projectiontest structureetatest deepimaxboxtest vanishingerasuretest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe clitest
@@ -519,6 +519,8 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe rulektest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe mainclitest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe projectiontest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe structureetatest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe deepimaxboxtest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe vanishingerasuretest
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-a.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-c.sh
 ```

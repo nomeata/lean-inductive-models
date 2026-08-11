@@ -141,12 +141,13 @@ instead eliminates the constructor's empty recursive field; the graph arm
 uses its single-valuedness because its `Classical.choice` recursor reduces to
 nothing; and arm W applies the W core's propositional ι theorem.
 
-## What declines, and why
+## Routing boundaries
 
-* **branching recursion at a never-zero sort** (`Lean.ParserDescr`) — the
-  tuple tower ([`Modelgen.recSlotOf`]) carries *linear* recursion, and its
-  spine is a single `Nat`, so a constructor with two recursive fields (or one
-  under a binder) has no predecessor to take. That needs W/path, plan B.
+* **branching and infinitary recursion at a never-zero sort**
+  (`Lean.ParserDescr`) routes to arm W. The tuple tower
+  ([`Modelgen.recSlotOf`]) remains deliberately linear; its refusal is the
+  dispatcher signal that selects the W/path construction rather than a public
+  generation decline.
 * **indexed at a never-zero sort whose index erasure contains a nested
   occurrence** — an occurrence inside a container belongs to layer 1, not to
   the simple representation. A recursive occurrence under binders is carried,
