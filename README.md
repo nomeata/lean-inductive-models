@@ -1,170 +1,115 @@
 # Lean inductive models
 
-`modelgen` reads a Lean 4 NDJSON export and adds propositional models of its
-inductive declarations. A model provides ordinary Lean declarations for the
-inductive type former, constructors, recursors, and recursor reduction rules.
-The reduction rules are theorems: a consumer need not give the generated
-recursor the same definitional reduction behavior as Lean's kernel.
+`modelgen` is a Lean 4 NDJSON-to-NDJSON filter. It adds a propositional model
+of each supported inductive declaration: ordinary Lean declarations for its
+type former, constructors, and recursors, together with equality theorems for
+the recursor reduction rules. The original inductive declaration remains in
+the export.
 
-The original inductive declaration remains in the export. The model is a
-second implementation of its public kernel interface, not a replacement for
-it.
+There are two reasons to use these models:
 
-## Why
+- A proof checker can check a proof through both the inductive declaration and
+  its separately represented model. This gives additional protection against
+  mistakes in inductive handling.
+- A checker that does not implement general inductive declarations can use the
+  models as a front end, while implementing only a small trusted basis.
 
-There are two intended uses.
-
-First, a proof checker can check a proof through both the inductive declaration
-and its independently checkable model. This is additional protection against
-an incorrect implementation of inductive types: accepting the same proof
-through two substantially different representations reduces the amount of
-logic that must be trusted only once.
-
-Second, the transformed export is a front end for checkers that do not want to
-implement general inductive declarations. Such a checker can recognize a small
-basis and use the ordinary definitions and equality theorems generated for
-everything else.
-
-The simple-inductive construction currently works over this basis:
+The basis is:
 
 ```text
 Eq  Nat  PULiftP  PSigma
 ```
 
-Those four declarations are intentionally not modeled. Some constructions can
-also use Lean's standard `Quot` interface and the standard axioms
-`Classical.choice`, `propext`, and `Quot.sound`; the generated developments are
-not claimed to be axiom-free.
+These four inductives are not modeled. Generated developments may use the
+standard axioms `Classical.choice`, `propext`, and `Quot.sound`.
 
-## Status
-
-The generator handles nested, mutual, and a broad range of simple inductives.
-Every declaration it generates is checked by Lean before it is emitted, and an
-internal oracle compares generated recursor-rule statements with the rules
-installed for the modeled declaration.
-
-The target command-line parser is implemented in
-[`Modelgen/Cli.lean`](Modelgen/Cli.lean), and its generation switches are wired
-through [`Modelgen/Driver.lean`](Modelgen/Driver.lean). The executable in
-[`Main.lean`](Main.lean) has not switched to that parser yet. It still exposes
-the compatibility command line documented under [Current executable](#current-executable).
-
-The structural `--check-input` and `--check-output` contract described below is
-the specification. Its checker currently implements only part of that
-contract, using the generator's legacy model names. The current internal
-statement oracle and Lean's kernel checking provide additional checks, but
-neither replaces the complete structural check specified here.
-
-The declaration-local names in this README are the target public convention.
-The generator still emits legacy block-indexed names such as
-`T._model.self`, `T._model.ctor_j`, `T._model.rec_k`, and
-`T._model.iota_k_j` until the naming migration lands. Consumers should not
-mistake those current spellings for the stable lookup contract.
-
-Models for unit-like types, structure projections, projection reductions,
-recursor rule K, and structure eta are also planned rather than implemented.
-Their names below are explicitly provisional.
-
-## Target command line
-
-The intended public interface is:
+## Command line
 
 ```console
 modelgen [OPTIONS] IN.ndjson
 ```
 
-With no options, it is equivalent to:
+With no options, `modelgen` generates all supported inductive models, checks
+models in both the input and final output, and writes the transformed export to
+standard output. Equivalently, its model-generation and checking defaults are
+`--inductives --check`; output is enabled and `--mono-levels` is disabled.
 
-```console
-modelgen --inductives --check --output IN.ndjson
-```
-
-The transformed export is written to standard output by default. Diagnostics
-go to standard error. Options are applied from left to right, so a later
-individual switch can override part of an earlier bundle and vice versa.
+Diagnostics go to standard error.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--nested` / `--no-nested` | on | Model nested inductives. |
-| `--mutual` / `--no-mutual` | on | Model non-nested mutual blocks. |
-| `--simple` / `--no-simple` | on | Model ordinary non-mutual inductives. |
-| `--basic` / `--no-basic` | on | Model bootstrap inputs (`Acc` and `Nonempty`) and the generated support closure needed to reduce simple models to the basis. |
-| `--inductives` / `--no-inductives` | on | Set all four switches above. |
-| `--check-input` / `--no-check-input` | on | Check model declarations already present in the input. |
-| `--check-output` / `--no-check-output` | on | Check model declarations generated by this run. |
-| `--check` / `--no-check` | on | Set both check switches above. |
-| `--mono-levels` / `--no-mono-levels` | off | Run the universe-level monomorphization pass. This is an optional secondary pass, not the main purpose of the tool. |
-| `--output` / `--no-output` | on | Enable or suppress the transformed export. |
-| `-o PATH` | stdout | Write to `PATH`; `-` denotes standard output and also enables output. |
-| `--quiet` / `--no-quiet` | off | Suppress or enable diagnostics. |
+| `--nested` / `--no-nested` | on | Enable or disable models for nested inductives. |
+| `--mutual` / `--no-mutual` | on | Enable or disable models for mutual inductives. |
+| `--simple` / `--no-simple` | on | Enable or disable models for ordinary non-mutual inductives. |
+| `--basic` / `--no-basic` | on | Enable or disable models for the bootstrap inputs `Acc` and `Nonempty` and generated support inductives needed by simple models. |
+| `--inductives` / `--no-inductives` | on | Enable or disable all four generation branches above. |
+| `--check-input` / `--no-check-input` | on | Check model families already present in the input export. |
+| `--check-output` / `--no-check-output` | on | Check model families in the final transformed export. |
+| `--check` / `--no-check` | on | Enable or disable both checks. |
+| `--mono-levels` / `--no-mono-levels` | off | Enable or disable the optional universe-level monomorphization pass. |
+| `--output` / `--no-output` | on | Enable or suppress writing the transformed export. |
+| `-o PATH` | `-` | Write to `PATH`; `-` means standard output. This also enables output. |
+| `--quiet` / `--no-quiet` | off | Suppress or enable successful-pass diagnostics. |
 
-For example, once the target interface is connected to the executable, this
-will validate models without generating inductive models or writing an
-export:
+Options are applied from left to right. Bundle options and individual options
+therefore override one another in command-line order. For example,
+`--no-inductives --simple` enables only the simple branch, whereas
+`--simple --no-inductives` disables every generation branch. Similarly,
+`--no-check --check-output` enables only the final-output check.
+
+`--no-output` suppresses only the final write. Parsing, enabled checks,
+monomorphization, ordering, and generation still run. This validates an input
+without generating models or writing an export:
 
 ```console
 modelgen --check --no-inductives --no-output IN.ndjson
 ```
 
-### Current executable
+The processing order is:
 
-The executable currently accepts:
+1. Parse the input export.
+2. If enabled, check model families in the unmodified input.
+3. If enabled, monomorphize the input universe levels and order the result.
+4. Generate the selected inductive models.
+5. Put the complete result in dependency and model-before-owner order.
+6. If enabled, check model families in that final result.
+7. If enabled, write the result.
 
-```console
-.lake/build/bin/modelgen IN.ndjson [-o OUT.ndjson|-] \
-  [--check-recursors] [--prim-models] [--quiet]
-```
+Thus `--mono-levels` runs before inductive-model generation. It is an optional
+secondary pass rather than part of the model correspondence.
 
-Nested and mutual models are enabled. `--prim-models` enables both simple
-models and their bootstrap closure. `--check-recursors` compares exported
-recursors with those installed by Lean; it is not the target structural
-`--check`. Without `-o`, the current executable writes no export.
+## Public model declarations
 
-The universe-level experiment is still a separate executable:
+The public interface is attached to exact exported declaration names. For an
+inductive type former `T`, a constructor whose actual name is `C`, and a
+recursor whose actual name is `R`, the model declarations are:
 
-```console
-.lake/build/bin/monomorph IN.ndjson [-o OUT.ndjson] \
-  [--mono-recursors] [--default N[,N...]] [--check] [--quiet]
-```
-
-## Model declarations
-
-Every public name is obtained from the declaration it models. The lookup is
-the same whether the inductive is simple, mutual, or the result of eliminating
-nested occurrences:
-
-| Declaration | Role |
+| Original declaration | Model declaration |
 | --- | --- |
-| `T._model` | Model of inductive type former `T`. |
-| `T.ctor._model` | Model of constructor `T.ctor`. |
-| `T.rec._model` | Model of recursor `T.rec`. |
-| `T.rec._model.iota_j` | Equality theorem for rule `j` of `T.rec`. |
+| `T` | `T._model` |
+| `C` | `C._model` |
+| `R` | `R._model` |
+| exported rule `j` of `R` | `R._model.iota_j` |
 
-Here `j` is the rule's position in that recursor's exported rule list. It is
-local to `T.rec`; no constructor or block-wide numbering is part of lookup.
+For example, `C` may be named `Vec.nil` or `Vec.cons`; it is not the word
+`ctor` followed by an index. Likewise, `R` is the exported recursor name—for
+the example below, `Vec.rec`. Only `j` is numeric: it is the zero-based
+position in that recursor's exported rule array.
 
-For a mutual block containing `Even` and `Odd`, for example, the two carriers
-are found independently as `Even._model` and `Odd._model`; their constructors
-and recursors are found by extending their own exported names. A consumer does
-not need to know which member was first, reconstruct global constructor
-numbers, or recognize an implementation-specific model group.
+This contract does not expose mutual-group bookkeeping. If `Even` and `Odd`
+are declared together, their carriers are still named independently as
+`Even._model` and `Odd._model`, and every constructor and recursor is modeled
+under its own exact name. A declaration type may mention a sibling model when
+the original type mentions the sibling; that dependency is part of the
+declaration-local types, not a separate public group interface.
 
-The types of these declarations may refer to sibling models. In particular,
-the model of an `Even` constructor may mention `Odd._model`, just as the
-original constructor mentions `Odd`. This exposes the dependencies that are
-already present in declaration types without exposing the generator's mutual
-encoding or its group bookkeeping.
-
-The encoding may introduce additional support declarations. For example, a
-mutual model uses a tag and a single indexed auxiliary inductive, and some
-simple models use generated skeleton or well-founded-recursion support. These
-are implementation declarations, not public lookup slots. With `--basic`,
-every generated non-basis support inductive needed by a simple model is modeled
-recursively.
+The generator may add private implementation support. Consumers locate the
+public interface through the names above and do not need to recognize that
+support.
 
 ### Example: length-indexed vectors
 
-For the following inductive:
+Consider:
 
 ```lean
 inductive Vec.{u} (α : Type u) : Nat → Type u where
@@ -172,14 +117,15 @@ inductive Vec.{u} (α : Type u) : Nat → Type u where
   | cons {n : Nat} : α → Vec α n → Vec α (Nat.succ n)
 ```
 
-the public model interface has the following types. The declarations are shown
-as axioms only to display the complete interface; generated implementations
-are ordinary definitions and the reduction statements are theorems.
+Its public model interface has these types. They are written as axioms here
+only to display the interface; the generator emits definitions and proved
+theorems.
 
 ```lean
 axiom Vec._model.{u} (α : Type u) : Nat → Type u
 
-axiom Vec.nil._model.{u} {α : Type u} : Vec._model α 0
+axiom Vec.nil._model.{u} {α : Type u} :
+  Vec._model α 0
 
 axiom Vec.cons._model.{u} {α : Type u} {n : Nat} :
   α → Vec._model α n → Vec._model α (Nat.succ n)
@@ -211,120 +157,160 @@ axiom Vec.rec._model.iota_1.{v, u} {α : Type u}
       cons head tail (Vec.rec._model nil cons tail)
 ```
 
-The index of `cons` is not erased: both the modeled constructor result and the
-recursor motive use `Nat.succ n`. The `iota_1` statement likewise exposes the
-recursive call at index `n` and the result at index `Nat.succ n`.
+The modeled constructor and recursor retain the index `n`, and the second
+reduction theorem exposes both the recursive call in the `n` fiber and the
+result in the `Nat.succ n` fiber.
 
-## Structural check specification
+## Unit-like inductives
 
-The structural check is deliberately stricter than type checking and stricter
-than definitional equality. Its purpose is to make recognition of a model
-small, deterministic, and independent of the implementation that generated
-it.
+For each member `T` with Lean's kernel unit-like treatment, the generator adds:
 
-For each modeled inductive declaration and its public model declarations, the
-checker must establish all of the following.
+```text
+T._model.unitlike
+```
 
-1. **Order.** Every model declaration occurs before the inductive record
-   containing the declaration it models.
-2. **No backreference.** No declaration belonging to the modeled inductive
-   block mentions a model declaration. Thus a model cannot influence the
-   declaration it claims to model.
-3. **One correspondence.** Collect the modeled type formers, constructors, and
-   recursors actually referenced by the declarations and rules being compared.
-   Construct one simultaneous constant substitution `σ` containing their
-   declaration-local correspondences:
+The predicate is read directly from the exported inductive metadata and
+constructor records. It holds exactly when all of these conditions hold for
+that member:
 
-   ```text
-   T       ↦ T._model
-   T.ctor  ↦ T.ctor._model
-   T.rec   ↦ T.rec._model
-   ```
+- `T` is non-recursive;
+- `T` has no indices;
+- `T` has exactly one constructor; and
+- that constructor belongs to `T` and has no fields.
 
-   For a mutual block this single table includes every sibling declaration
-   that occurs in any compared type. The checker need not expose or reproduce
-   the generator's grouping decisions. Constants outside this correspondence,
-   including the trusted basis, remain unchanged.
-4. **Exact public slots.** There is exactly one declaration at every required
-   public model name and no unmatched declaration claiming an additional
-   constructor, recursor, or reduction-rule slot.
-5. **Type-former types.** After applying `σ` to the modeled side,
-   `type(T)` is syntactically equal to `type(T._model)` for every member.
-6. **Constructor types.** After the same substitution,
-   `type(T.ctor)` is syntactically equal to `type(T.ctor._model)` for every
-   constructor.
-7. **Recursor types.** After the same substitution, `type(T.rec)` is
-   syntactically equal to `type(T.rec._model)` for every recursor.
-8. **Reduction rules.** Apply `σ` to each reduction rule carried by the modeled
-   recursor. The resulting equality proposition must be syntactically equal to
-   the type of the corresponding `T.rec._model.iota_j` theorem. There must be
-   one theorem for every rule and no unmatched theorem.
+The test is per type former, including for members declared in a mutual block.
+For parameters `p` of `T`, the theorem type is:
 
-“Syntactically equal” means equality of the Lean expressions after only that
-single, capture-avoiding constant substitution. The check does not unfold
-definitions, reduce redexes, normalize universe levels, invoke typeclass
-search, use proof irrelevance, or ask whether the expressions are definitionally
-equal. Constant occurrences keep their universe arguments; only their names
-change. The substitution is simultaneous, so a replacement is not traversed a
-second time.
+```lean
+∀ p (x y : T._model p), x = y
+```
 
-`--check-input` applies this contract to models found in the input bytes.
-`--check-output` applies it to models generated during the current run.
-`--check` enables both. A failed check is an error, not a shape decline.
+with the original parameter telescope and universe parameters preserved. For
+example, a model of
 
-## Planned inductive metadata
+```lean
+inductive UnitBox.{u} (α : Type u) : Type u where
+  | mk : UnitBox α
+```
 
-Lean gives some inductive declarations behavior beyond ordinary recursor iota
-rules. The public model contract is intended to cover that behavior too. The
-following names are **provisional** until their exact spelling and indexing are
-pinned by fixtures.
+contains:
 
-- **Unit-like uniqueness.** If the kernel treats `T` as unit-like, add a theorem
-  provisionally called `T._model.unitlike` with the appropriately parameterized
-  form `∀ (x y : T._model …), x = y`.
-- **Structure projections.** For a structure, add model projection definitions,
-  provisionally `P._model` for each projection declaration `P`, with the
-  substituted type of `P`.
-- **Projection reductions.** For every model projection, add an equality
-  theorem for its reduction on the model constructor, provisionally
-  `P._model.iota`.
-- **Recursor rule K.** If a recursor carries a kernel rule-K reduction, add a
-  theorem about that recursor's rule-K behavior, provisionally
-  `T.rec._model.ruleK`. This is metadata of the recursor, not a property
-  attached to the carrier.
-- **Structure eta.** If the kernel grants structure eta, add a theorem
-  provisionally called `T._model.eta`, of the form
-  `∀ x, x = ctor (proj₀ x) … (projₘ x)` with parameters and indices restored.
+```lean
+theorem UnitBox._model.unitlike.{u} (α : Type u)
+    (x y : UnitBox._model α) : x = y
+```
 
-The structural checker will extend the same one-substitution rule to the types
-of these declarations and compare them with the corresponding kernel metadata.
-Naming and the exact handling of projection aliases are not yet specified.
+The checker requires exactly that name and literal substituted proposition for
+every qualifying member. It rejects a missing or duplicate theorem, a changed
+universe arity or proposition, and a `T._model.unitlike` theorem attached to a
+member that does not satisfy the predicate.
 
-Derived library declarations such as `recOn`, `casesOn`, generated decidable
-equality, and user definitions are ordinary declarations rather than separate
-slots in this model contract. If a future export format exposes another
-piece of kernel inductive metadata that changes reduction or equality, it will
-need an explicit contract entry rather than being accepted through definitional
-equality.
+## Recursor rule K
 
-## Limits
+If an exported recursor `R` has its literal `k` flag set, the generator adds:
 
-- This is not a verifier for arbitrary NDJSON input. The input export is
-  replayed as trusted input; declarations generated by the tool are checked.
-- Translation is not complete for every kernel-accepted inductive shape.
-  Unsupported shapes are reported as declines and remain in the output without
-  a model. The hard nested/mutual/index interaction is retained as the
-  regression fixture
-  [`tests/hard_nested_mutual_index.lean`](tests/hard_nested_mutual_index.lean)
-  alongside its committed export.
-- The four basis inductives are intentionally exempt. A consumer using models
-  as its inductive front end must still implement that basis and any admitted
-  standard quotient or axiom interface.
-- `--mono-levels` is optional and off by default in the target interface. Its
-  separate executable and tests remain available, but universe
-  monomorphization is not part of the model correspondence.
-- The structural checker is incomplete and still recognizes legacy names. The
-  metadata theorems listed above are not yet implemented.
+```text
+R._model.ruleK
+```
+
+This is a property of `R`, not of its inductive type former. A K recursor has
+one exported rule for a constructor with no fields. Start with the ordinary
+model iota proposition for that rule:
+
+```text
+∀ Γ, R._model ... C._model = rhs
+```
+
+where `Γ` contains the recursor parameters, motives, and minor premises. The
+rule-K theorem replaces the constructor major on the left by an arbitrary
+inhabitant of that constructor's exact result fiber:
+
+```text
+∀ Γ (major : T._model parameters constructor-result-indices),
+  R._model ... major = rhs
+```
+
+In particular, indexed families do not gain a theorem over arbitrary indices:
+the major remains in the same index fiber as the nullary constructor.
+
+The checker requires `R._model.ruleK` exactly when the exported `k` flag is
+set. It reconstructs the proposition from the recursor's first ordinary rule,
+verifies the one-rule, zero-field shape, substitutes the public model names,
+and compares the result literally. Missing, duplicate, differently typed, or
+wrong-universe theorems are rejected. A theorem at that name is also rejected
+when `R` does not have the `k` flag.
+
+## Structural check
+
+The check is deliberately stricter than type checking or definitional
+equality. An inductive record determines its correspondence directly from its
+exported declarations:
+
+```text
+T  ↦ T._model
+C  ↦ C._model
+R  ↦ R._model
+```
+
+Every member of an atomic mutual record contributes its own entries to this
+single simultaneous substitution. That is only how sibling references are
+rewritten; it does not add a public mutual-group interface.
+
+If any exact public slot for an inductive record is present, the checker
+validates the complete model family:
+
+1. Every declaration record containing a public model slot occurs before the
+   inductive record containing its owner.
+2. The modeled inductive record does not refer to any declaration introduced
+   by its model family. This includes references in names, declaration types,
+   recursor rules, and nested expression fields.
+3. Every type former, constructor, and recursor has exactly one declaration at
+   its declaration-local model name.
+4. Every exported recursor rule has exactly one theorem at
+   `R._model.iota_j`. A direct iota slot with a nonexistent or noncanonical
+   index is rejected.
+5. Every required unit-like and rule-K theorem is present exactly once, and
+   those metadata names are rejected when the corresponding kernel feature is
+   absent.
+6. Each model declaration has the same number of universe parameters as its
+   original. Parameter names are aligned by position.
+7. After that universe alignment and the one simultaneous constant
+   substitution, the type of each modeled type former, constructor, and
+   recursor is literally equal to the corresponding model declaration type.
+8. The equality proposition determined by each exported recursor rule is
+   instantiated with its specified parameters and fields, rewritten by the
+   same substitution, and compared literally with its iota theorem type. The
+   unit-like and rule-K propositions are checked the same way.
+
+The outer equality in a generated theorem remains the export's `Eq`; modeling
+the `Eq` inductive does not turn the theorem relation itself into `Eq._model`.
+The checker does not unfold definitions, invoke typeclass search, use proof
+irrelevance, or ask Lean for definitional equality. It compares declaration
+types, not declaration values or proof terms.
+
+`--check-input` applies this check before any transformation.
+`--check-output` applies it after monomorphization, generation, and final
+ordering. The absence of all public model slots for an inductive is not itself
+an error: unsupported or disabled generation may leave an original inductive
+without a model.
+
+Every generated declaration is also submitted to Lean's kernel before it is
+emitted. In addition, the generator compares its generated recursor statements
+against the recursor rules installed by Lean; a mismatch is an internal error
+and no output is written.
+
+## Scope
+
+- The tool is not a verifier for arbitrary NDJSON input. It adds and checks
+  model interfaces; it does not establish the provenance of the original
+  declarations.
+- Unsupported inductive shapes are reported as declines and pass through
+  without a model.
+- A checker consuming the models as an inductive front end must implement the
+  four basis inductives and admit the standard axioms `Classical.choice`,
+  `propext`, and `Quot.sound` when a generated development uses them.
+- Universe monomorphization is optional, off by default, and has a separate
+  `monomorph` executable and test suite.
 
 ## Build and test
 
@@ -332,14 +318,19 @@ The Lean version is pinned by [`lean-toolchain`](lean-toolchain).
 
 ```console
 mkdir -p _tmp/build-tmp
-TMPDIR="$PWD/_tmp/build-tmp" lake build modelgen test clitest generationflagstest
+TMPDIR="$PWD/_tmp/build-tmp" lake build modelgen
 ```
 
-The focused and core suites use committed NDJSON fixtures:
+Representative focused suites are:
 
 ```console
+TMPDIR="$PWD/_tmp/build-tmp" lake build \
+  test clitest generationflagstest checktest rulektest mainclitest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe clitest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe generationflagstest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe checktest "$PWD"
+TMPDIR="$PWD/_tmp/build-tmp" lake exe rulektest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe mainclitest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
 ```
 
@@ -350,37 +341,21 @@ TMPDIR="$PWD/_tmp/build-tmp" lake build monomorph monotest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"
 ```
 
-[`CliTest.lean`](CliTest.lean) pins target option defaults, negative forms, and
-left-to-right overrides. [`GenerationFlagsTest.lean`](GenerationFlagsTest.lean)
-pins the four generation stages and the bootstrap closure. [`Test.lean`](Test.lean)
-checks generated declaration counts, kernel acceptance, recursor statements,
-round trips, name collisions, and designed decline cases. Human-readable Lean
-sources live beside the exports under [`tests/`](tests/).
-
-Fixture regeneration is optional and requires network access for the pinned
-exporter:
+Human-readable Lean fixture sources and committed NDJSON exports live under
+[`tests/`](tests/). Regenerating a fixture requires the pinned exporter:
 
 ```console
 TMPDIR="$PWD/_tmp/build-tmp" tests/export.sh prim_shapes
 ```
 
-All regeneration scratch data is kept under the repository-local `_tmp/`
-directory.
+All scratch data is kept under the repository-local `_tmp/` directory.
 
-## Continuous integration
-
-The focused workflow in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
-runs the fixture and universe-level suites on ordinary hosted runners, with a
-12 GiB per-process limit and a repository-local temporary directory.
-
-The full-Mathlib workflow in
-[`.github/workflows/mathlib.yml`](.github/workflows/mathlib.yml) requires a
-self-hosted Linux runner labeled `lean-high-memory-48gb`. It enforces a 40 GiB
-cgroup limit with no swap, requires at least 30 GiB free below `_tmp/`, and
-records instruction counts with `perf`. The workflow is integration
-infrastructure for the target CLI: while `Main.lean` still exposes the current
-interface, its target-CLI generation and structural-check steps are not yet a
-claim that the full job passes.
+The focused workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+runs the fixture and universe-level suites with a per-process memory limit. The
+full-Mathlib workflow
+[`.github/workflows/mathlib.yml`](.github/workflows/mathlib.yml) generates and
+checks a pinned Mathlib export under a cgroup memory limit and records
+instruction counts with `perf`.
 
 ## Copyright and license
 
