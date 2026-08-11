@@ -32,7 +32,7 @@ Eq  Nat  PULiftP  PSigma
 ```
 
 Those four declarations are intentionally not modeled. Some constructions can
-also use Lean's standard `Quot` interface and standard axioms such as
+also use Lean's standard `Quot` interface and the standard axioms
 `Classical.choice`, `propext`, and `Quot.sound`; the generated developments are
 not claimed to be axiom-free.
 
