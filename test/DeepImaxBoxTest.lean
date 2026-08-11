@@ -158,7 +158,7 @@ def main : IO UInt32 := do
   let aliasRec := Naming.modelName `AliasW.rec
   let aliasIotas := #[Naming.iotaName `AliasW.rec 0, Naming.iotaName `AliasW.rec 1]
   state := state.check "transparent W result aliases generate as infinitary children" <|
-    aliasReport.generated.any (·.1 == `AliasW) &&
+    aliasReport.generated.any (· == (`AliasW, 215)) &&
       !aliasReport.declined.any (·.1 == `AliasW)
   state := state.check "transparent W result alias has the complete public interface" <|
     (#[aliasModel, aliasRec] ++ aliasCtors ++ aliasIotas).all aliasNames.contains
@@ -171,9 +171,9 @@ def main : IO UInt32 := do
   let inputCheck := Check.checkReport aliasSerialized
   state := state.check "transparent W alias passes output and serialized input Check" <|
     outputCheck.violations.isEmpty && inputCheck.violations.isEmpty &&
-      outputCheck.familiesChecked == inputCheck.familiesChecked
+      outputCheck.familiesChecked == 20 && inputCheck.familiesChecked == 20
   state := state.check "transparent W alias recursor statements remain literal" <|
-    aliasReport.stmtChecked > 0 && aliasReport.stmtErrors.isEmpty
+    aliasReport.stmtChecked == 70 && aliasReport.stmtErrors.isEmpty
 
   IO.println s!"deep imax box: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
