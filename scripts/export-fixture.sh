@@ -139,7 +139,7 @@
 # the same package.
 #
 # Set `LEAN4EXPORT_DIR` to reuse an existing clone; the default is a scratch
-# checkout under `target/`, which is gitignored.
+# checkout under the repository-local `_tmp/`, which is gitignored.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

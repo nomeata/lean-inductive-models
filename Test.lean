@@ -1224,7 +1224,8 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
   a := check a ((r.stdout.splitOn "prelude spliced").length == 1)
     "CLI: a report line reached stdout"
   -- …and stdout is the export, byte for byte what `-o FILE` writes.
-  let tmp := s!"{root}/.lake/build/cli-test.ndjson"
+  IO.FS.createDirAll s!"{root}/_tmp"
+  let tmp := s!"{root}/_tmp/cli-test.ndjson"
   let f ← mg [input, "-o", tmp, "--quiet"]
   a := check a (f.exitCode == 0) s!"CLI: `-o FILE --quiet` exited {f.exitCode}"
   a := check a f.stderr.isEmpty s!"CLI: `--quiet` still wrote to stderr: {f.stderr}"

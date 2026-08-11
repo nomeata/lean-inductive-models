@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.suite }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TMPDIR: ${{ github.workspace }}/_tmp
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [fixtures, mono]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare project-local temporary directory
+        run: mkdir -p _tmp
+
+      - name: Set up Lean
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          build: false
+          test: false
+          use-mathlib-cache: false
+
+      - name: Build and run ${{ matrix.suite }} suite
+        env:
+          SUITE: ${{ matrix.suite }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Each process is capped at 12 GiB and cannot raise its own limit.
+          ulimit -Sv 12582912
+          ulimit -Hv 12582912
+
+          case "$SUITE" in
+            fixtures)
+              lake build modelgen test
+              lake exe test "$GITHUB_WORKSPACE" | tee _tmp/fixtures.log
+              count="$(sed -nE 's/^([0-9]+) checks, 0 failed$/\1/p' _tmp/fixtures.log | tail -n1)"
+              ;;
+            mono)
+              lake build monomorph monotest
+              lake exe monotest "$GITHUB_WORKSPACE" | tee _tmp/mono.log
+              count="$(sed -nE 's/^monotest: ([0-9]+) checks, all pass$/\1/p' _tmp/mono.log | tail -n1)"
+              ;;
+            *)
+              echo "unknown suite: $SUITE" >&2
+              exit 2
+              ;;
+          esac
+
+          if [[ -z "$count" || "$count" -eq 0 ]]; then
+            echo "$SUITE suite did not report a positive check count" >&2
+            exit 1
+          fi

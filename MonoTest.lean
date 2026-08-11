@@ -73,9 +73,13 @@ def readExport (p : String) : IO (Option (String × Export)) := do
   | .ok x => return some (t, x)
 
 /-- What `monomorph -o` would put in the file: [`Export.writeTo`] through a
-temporary, read back. -/
-def streamed (y : Export) : IO String := do
-  let (h, p) ← IO.FS.createTempFile
+project-local temporary, read back. -/
+def streamed (root : String) (y : Export) : IO String := do
+  let dir := s!"{root}/_tmp"
+  IO.FS.createDirAll dir
+  let stamp ← IO.monoNanosNow
+  let p := s!"{dir}/monotest-stream-{stamp}.ndjson"
+  let h ← IO.FS.Handle.mk p .write
   try
     y.writeTo (IO.FS.Stream.ofHandle h)
     h.flush
@@ -131,7 +135,7 @@ def main (args : List String) : IO UInt32 := do
         -- **The two consumers of the writer agree.** `render` is what the
         -- checks above read and `writeTo` is what the binary actually emits;
         -- they share one fold, and this is what says so.
-        unless (← streamed y) == y.render do
+        unless (← streamed root y) == y.render do
           fails := fails.push s!"{r.file}[{tag}]: writeTo and render disagree"
 
   -- ── A file with no universe parameter anywhere is the identity, byte for
@@ -143,7 +147,7 @@ def main (args : List String) : IO UInt32 := do
     let ((y, _), _) ←
       Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (monomorphize x {})) ctx { env }
     unless y.render == text do fails := fails.push "001_basicDef: not byte-identical"
-    unless (← streamed y) == text do
+    unless (← streamed root y) == text do
       fails := fails.push "001_basicDef: not byte-identical through writeTo"
 
   -- ── The corpus, when it is present: no `good/` file may report a problem,
