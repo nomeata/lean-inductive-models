@@ -18,32 +18,24 @@
      substitutes the recursor's own index argument for it.
    * anything else — an arbitrary term over the parameters, the data fields and
      the *proof* fields. Nothing can be recovered from such a position, so arm
-     F discharges it by a **Henry-Ford equation at the non-pivot subsequence**
-     and arm G, where the position is at a `Prop`, by nothing at all: see
-     below, it is where the two rows end in different places.
+     F and G discharge it by a **Henry-Ford equation at the non-pivot
+     subsequence**. In arm G the equation transports the graph inversion's
+     step value into the caller's fibre.
 
-   The two arms meet at mixed pivot/non-pivot vectors: arm F supplies equations
-   for the non-pivots, while arm G can omit proof-valued non-pivots. The grid
-   makes those intermediate cases explicit.
+   The two arms meet at mixed pivot/non-pivot vectors and use the same packed
+   dependent subsequence. The grid makes those intermediate cases explicit.
 
    |            | ground | pivot | expr over data | expr over proof |
    |------------|--------|-------|----------------|-----------------|
    | non-rec, F | `Fg`   | `Fall3`, `Fdup`, `Fdep` | `Fdup`, `Fdep` | `Fxh` |
    | rec, G     | `BadC` (`prim_graph`), `Rgd` | `Rv`, `Rvx` | — | `Rxh`, `Rvx`, `Rgd` |
 
-   **Both rows model but for the ground column of arm G's**, and the reason
-   the two rows end in different places is the third splitting of the axis and
-   the last: a non-pivot index position is either at a **data** type or at a
-   `Prop`. Arm F must equate either way — it packs a `PSigma` and builds an
-   `Eq.rec`, and at a proof position that equation is inhabited by `rfl` and
-   costs nothing but is still written. **Arm G need not equate at a proof
-   position at all.** Its `GraphInv ι⃗ t val` concludes `val = step f⃗ g⃗` at
-   the constructor's own index vector `ι⃗_ctor`, and where `ι⃗_ctor[j]` and
-   `ι⃗[j]` are both proofs of one proposition the kernel identifies them by
-   proof irrelevance: the statement is already the one wanted, and there is
-   nothing to transport. It propagates through the telescope, too — a later
-   index type mentioning `j` is defeq at the two — so a whole *suffix* of
-   proof positions is free.
+   **Both rows model every cell.** A non-pivot may live at a data type or at a
+   `Prop`; either way the arm packs the dependent non-pivot subsequence and
+   builds one `Eq.rec`. At a proof position the equation and its transport are
+   definitionally trivial by proof irrelevance. At a data position the
+   transport is essential: `GraphInv ι⃗ t val` moves `step f⃗ g⃗` from the
+   constructor's vector `ι⃗_ctor` to the arbitrary caller vector `ι⃗`.
 
    The recursive proof-index class is represented by `Acc.below`: its index 1
    is `Acc r a`, and every `.below` Lean generates beside a recursive `Prop`
@@ -51,9 +43,9 @@
    `prim_graph`'s `G*.below` column exercise the same boundary. `Rxh` and `Rvx`
    isolate the two mixed cases deliberately.
 
-   What is left is a non-pivot at a **data** position, where the transport
-   really needs a transport that is not built: `BadC`
-   in `prim_graph`, and `Rgd` here.
+   `BadC` in `prim_graph` is the one-index data case. `Rgd` here puts a proof
+   non-pivot before the data one, so the test also pins the selected positions,
+   their order, and the dependent pack used by graph inversion.
 
    # Why every cell needs a leading non-pivot
 
@@ -93,11 +85,9 @@
    * `Rv` — arm G's control, `Acc`'s own shape, every index a pivot; `Rxh` and
      `Rvx` its two mixed cells, a proof non-pivot beside no pivot and beside
      one.
-   * `Rgd` — arm G's **refusal**, and a sharper one than `BadC`: a **proof**
-     non-pivot at index 0 standing in front of a **data** non-pivot at index
-     1. It declines naming index **1**, which is what says the arm asks its
-     question of every non-pivot and not of the first one it meets. `BadC`
-     alone cannot say that — its first non-pivot is already the data one.
+   * `Rgd` — a **proof** non-pivot at index 0 standing in front of a **data**
+     non-pivot at index 1. Together with `BadC`, it distinguishes a complete
+     left-to-right pack from code that handles only its first component.
 
    | mutation | red |
    |---|---|
@@ -111,19 +101,8 @@
    | **H** the rebuilt carrier handed every field rather than the bound ones | `Fdep`, `Fdup` |
    | **C** the whole index vector packed rather than the non-pivot subsequence | every cell with a pivot; `Fg` and `Fxh` green |
    | **D** the non-pivot subsequence reversed | nothing here; `prim_shapes`'s `Hq` and the W core's `HEq`, whose packs are dependent |
-   | **P** arm G's guard dropped, every non-pivot taken as free | `BadC`, `BadC.below` — they decline at `GraphInv`'s own test instead |
-   | **Q** arm G's guard asked of the *first* non-pivot rather than of every one | `Rgd`, `Rgd.below`; `BadC` green |
-   | **R** either half of arm G's change reverted — the guard back to every non-pivot, or `GraphInv`'s index test back to syntactic | `Rxh`, `Rvx` and every `.below` here and in `prim_graph`; every arm-F cell green |
-
-   **`GraphInv`'s index test is a backstop and is measured as one.** Dropping
-   it alone (mutation **T**) is green everywhere, because behind the guard it
-   cannot fire: at a pivot the two index terms are the same term and at a
-   proof position they are defeq. Under **P** it is what catches `BadC`, and
-   under **Q** it is what catches `Rgd` — and with **both** it and the guard
-   gone, `BadC` reaches the kernel and is rejected at
-   `BadC._model.graph_inv_ty` with an application type mismatch. That is the
-   measurement that says the test is worth its lines: it is the difference
-   between a named decline and a kernel diagnostic when the guard is widened.
+   | **G** arm G transports only the first packed component, or rebuilds components out of order | `Rgd`, `Rgd.below`; `BadC` green |
+   | **I** arm G omits the packed transport | `BadC`, `BadC.below`, `Rgd`, `Rgd.below`; proof-only cells green by proof irrelevance |
 
    **C and D cascade.** A decline moves a splice, so both take out the whole W
    core fragment in `prim_declines`, `prim_carve` and `prim_w`; the columns
@@ -164,16 +143,15 @@
    caller's term and would leave the recursor motive at the wrong syntactic
    index. The function transport makes both endpoints exact and keeps ι `rfl`.
 
-   # Arm G's refusal, and it is one column and not a row
+   # Arm G's transport
 
-   `Rgd` and `prim_graph`'s `BadC` decline at the generalisation arm F has and
-   arm G does not: `GraphInv ι⃗ t val` concludes `val = step f⃗ g⃗`, whose
-   right-hand side lands at the constructor's index expressions, and with a
-   **data** non-pivot among them the two sides sit at genuinely different
-   indices, so the equation needs a transport along the very packed equation
-   arm F carries. Proof irrelevance is why it is not owed for the proof column.
-   It is not built, and these
-   two are what go green when it is.
+   `Rgd` and `prim_graph`'s `BadC` force the generalisation: `GraphInv ι⃗ t val`
+   concludes with a value in the caller fibre, while the constructor step
+   starts in the fibre at its own index expressions. The graph inversion
+   carries one equality at the dependent non-pivot tuple and transports a
+   function over the proof-valued carrier along it. `graph_inv`,
+   `graph_unique`, `graph_exists`, `rec_graph`, and the public iota theorem
+   then all check at the exact exported types.
 
    `Inf` and `N` beside them are the controls that say the arms are not
    swallowing the file: `Inf` is arm G's degenerate positive and `N` an

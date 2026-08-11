@@ -51,13 +51,11 @@
    declares those itself, and splices nothing.
 
    `N` beside them is an ordinary `Type`-route model and the control that says
-   the arm is not swallowing everything. `BadC` is the refusal: an index that
-   is a **constant** rather than one of the constructor's own data fields, so
-   inversion cannot be stated at an arbitrary index. Lean grants it large
-   elimination, so it really does reach this arm and really is refused by it.
-   The `.below` declarations Lean mints for each of these are refused for the
-   same reason — their index is `T.mk a`, not a field — and that is recorded
-   rather than skipped, because the boundary of an arm is a measurement. -/
+   the arm is not swallowing everything. `BadC` forces the transport case: its
+   index is a **constant** rather than one of the constructor's data fields,
+   so graph inversion must move the step value from `N.z` to its arbitrary
+   caller index. The `.below` declarations add proof-valued non-pivots, and
+   together pin the dependent packed equality used by the same transport. -/
 prelude
 
 universe u v

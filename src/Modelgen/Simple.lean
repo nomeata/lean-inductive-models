@@ -165,15 +165,13 @@ nothing; and arm W applies the W core's propositional ι theorem.
   branches too and nothing modelled a branching non-indexed inductive; arm W
   does, so the carve now carries every recursive slot and hands the skeleton
   to W.
-* **a recursive subsingleton with a non-pivot index at a *data* position** —
-  the graph arm's own boundary, not the class: a *recursive subsingleton*
-  models, by [`Modelgen.graphArm`]. What that arm cannot reach is an index it
-  cannot invert at *and* cannot let the kernel identify — a constant
-  (`mk : P 0 → P 0`), or a term over the fields, at a position whose type is
-  data. At a position whose type is a **`Prop`** it needs nothing: the two
-  index terms are two proofs of one proposition and proof irrelevance closes
-  it, which is what puts the `below` Lean mints beside every recursive `Prop`
-  — `Acc.below` included — on the modelled side.
+* **a recursive subsingleton at mixed pivot and non-pivot indices** models by
+  [`Modelgen.graphArm`]. Its inversion carries one equality at the dependent
+  tuple of non-pivots and transports the constructor step into the caller's
+  fibre. Data-valued constants such as `mk : P 0 → P 0`, proof-valued
+  expressions, and the `below` Lean mints beside recursive propositions all
+  use this one construction; proof irrelevance makes the proof-only transports
+  definitionally trivial.
 * **a level gap no recursive box closes** — exposed Π structure is boxed at
   every depth, so a nested domain such as `((α → β) → β)` is supported. A
   genuinely opaque atomic type whose declared sort itself contains an `imax`
