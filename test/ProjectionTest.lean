@@ -1,6 +1,7 @@
 import Modelgen.Driver
 import Modelgen.Check
 import Modelgen.Mono
+import Modelgen.Order
 
 open Lean Meta Modelgen
 
@@ -162,16 +163,36 @@ def main : IO UInt32 := do
       Naming.projectionIotaName `SortFields fieldIndex]
   let mut state : TestState := {}
 
-  -- A maybe-zero singleton cannot use the ordinary Church/PULiftP carrier:
-  -- that carrier forgets which payload constructed it, while the kernel's
-  -- intrinsic projection retains the payload at positive instantiations.
-  -- The field-preserving PSigma tower therefore has its own focused occupant.
+  -- A maybe-zero singleton cannot use the ordinary Church carrier: it forgets
+  -- which payload constructed it, while an intrinsic projection retains that
+  -- payload at positive instantiations.  `PI` uses its exact-sort field as the
+  -- carrier; `PF` lifts its exactly proposition-valued field with `PULiftP`.
   let primRaw ← readExport "test/fixtures/modelgen/prim_shapes.ndjson"
   let (primDeclarations, primReport) ← runExport primRaw
   let primGenerated := outputExport primRaw primDeclarations
+  let pfProjection := Naming.projectionName `PF 0
+  let pfRule := Naming.projectionIotaName `PF 0
+  let pfSlots := #[Naming.modelName `PF, Naming.modelName `PF.mk,
+    Naming.modelName `PF.rec, Naming.iotaName `PF.rec 0, pfProjection, pfRule]
   let piProjection := Naming.projectionName `PI 0
   let piRule := Naming.projectionIotaName `PI 0
+  let piDefinitions := #[Naming.modelName `PI, Naming.modelName `PI.mk,
+    Naming.modelName `PI.rec, piProjection]
   let primNames := primDeclarations.flatMap (·.names.toArray)
+  state := state.check "proposition-field singleton emits its six exact slots" <|
+    primReport.generated.any (·.1 == `PF) &&
+      !primReport.declined.any (·.1 == `PF) && pfSlots.all primNames.contains
+  state := state.check "proposition-field singleton interface is exact" <|
+    (Check.check primGenerated).all (·.familyOwner != `PF)
+  state := state.check "proposition-field model uses the existing lift basis" <|
+    (definitionValue? primGenerated (Naming.modelName `PF)).any (containsConst `PULiftP) &&
+    (definitionValue? primGenerated (Naming.modelName `PF.mk)).any
+      (containsConst `PULiftP.up) &&
+    (definitionValue? primGenerated (Naming.modelName `PF.rec)).any
+      (containsConst `PULiftP.rec) &&
+    (definitionValue? primGenerated pfProjection).any (containsConst `PULiftP.rec)
+  state := state.check "proposition-field projection iota is literal and uncast" <|
+    (declarationType? primGenerated pfRule).any fun type => !containsConst ``Eq.rec type
   state := state.check "variable-sort singleton retains its intrinsic field" <|
     primReport.generated.any (·.1 == `PI) &&
       !primReport.declined.any (·.1 == `PI) &&
@@ -181,6 +202,34 @@ def main : IO UInt32 := do
   state := state.check "variable-sort singleton selector avoids its small recursor" <|
     (definitionValue? primGenerated piProjection).any fun value =>
       !containsConst `PI.rec._model value
+  state := state.check "exact-sort singleton remains the identity route" <|
+    piDefinitions.all fun name => (definitionValue? primGenerated name).any fun value =>
+      !containsConst `PULiftP value && !containsConst `PULiftP.up value &&
+        !containsConst `PULiftP.rec value
+
+  -- The parameter-dependent proposition field takes the same route.  Its
+  -- source owner precedes the input's own lift declaration, so generation has
+  -- to wait, use that declaration, and let the stable order pass place the
+  -- complete interface back before its owner.
+  let pfpRaw ← readExport "test/fixtures/modelgen/tight_prop_field_late.ndjson"
+  let (pfpDeclarations, pfpReport) ← runExport pfpRaw
+  let pfpGenerated := outputExport pfpRaw pfpDeclarations
+  let pfpProjection := Naming.projectionName `PFP 0
+  let pfpRule := Naming.projectionIotaName `PFP 0
+  let pfpSlots := #[Naming.modelName `PFP, Naming.modelName `PFP.mk,
+    Naming.modelName `PFP.rec, Naming.iotaName `PFP.rec 0, pfpProjection, pfpRule]
+  let pfpNames := pfpDeclarations.flatMap (·.names.toArray)
+  let pfpOrdered ← match Order.reorder pfpGenerated with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot order late-PULift fixture: {repr error}"
+  state := state.check "parameterized proposition-field fixture has a late lift" <|
+    (declarationIndex? pfpRaw `PFP).any fun owner =>
+      (declarationIndex? pfpRaw `PULiftP).any (owner < ·)
+  state := state.check "parameterized proposition field waits for the input lift" <|
+    pfpReport.generated.any (·.1 == `PFP) && !pfpReport.declined.any (·.1 == `PFP) &&
+      pfpSlots.all pfpNames.contains
+  state := state.check "ordered late-lift projection interface is exact" <|
+    (Check.check pfpOrdered).all (·.familyOwner != `PFP)
 
   -- Arm W's recursor iota is propositional.  A later recursive field whose
   -- domain depends on an earlier data field therefore needs the canonical
