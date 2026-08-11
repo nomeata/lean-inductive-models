@@ -147,11 +147,11 @@ nothing; and arm W applies the W core's propositional ι theorem.
   tuple tower ([`Modelgen.recSlotOf`]) carries *linear* recursion, and its
   spine is a single `Nat`, so a constructor with two recursive fields (or one
   under a binder) has no predecessor to take. That needs W/path, plan B.
-* **indexed at a never-zero sort whose index erasure is not bare** — a
-  recursive occurrence under a binder or inside a container, which the erasure
-  cannot replace: there is no whole domain to swap. That is *infinitary* and it
-  is the arm's remaining boundary. **The head is read through
-  [`Modelgen.headNorm`]**, so a field written `(fun x => T p⃗ e⃗) k` — which is
+* **indexed at a never-zero sort whose index erasure contains a nested
+  occurrence** — an occurrence inside a container belongs to layer 1, not to
+  the simple representation. A recursive occurrence under binders is carried,
+  including when βζ-reduction first reveals those binders. **The head is read
+  through [`Modelgen.headNorm`]**, so a field written `(fun x => T p⃗ e⃗) k` — which is
   what Lean's nested specialisation leaves at a container's family parameter —
   is the bare occurrence it reduces to and not a binder; the same head
   normalization is required at layer 1. A field whose type mentions `T`
@@ -1081,20 +1081,16 @@ question whose answer is invariant under β and ζ:
 * **what binders does a recursive field have** — [`Modelgen.tagFactored`],
   which has none to peel until the redex is gone.
 
-and, for the indexed erasure, at one deliberately narrower boundary:
-[`Modelgen.erasureFieldDomain`] normalises an internal skeleton field only when
-head normalisation makes a written mention of the erased owner disappear.
-Such a field was never recursive; retaining its redex would make the erasure
-mistake a dead binder annotation for an occurrence.  No public declaration
-type is normalised. A field whose reduct still mentions the owner — including
-a hidden binder or a genuinely nested occurrence — is kept as written, and a
+and at the indexed erasure's internal boundary:
+[`Modelgen.erasureFieldDomain`] head-normalises a field which syntactically
+mentions the erased owner. If the occurrence disappears, the field was never
+recursive; if binders appear, the skeleton keeps those binders and replaces
+the occurrence beneath them. No public declaration type is normalised, and a
 declaration whose constructor types are already βζ-normal therefore takes
-exactly the path it took before, byte for byte.
+exactly the path it took before, byte for byte. A genuinely nested occurrence
+survives head normalisation under its foreign type former and is still routed
+back to layer 1.
 
-**That last invariant is why a binder βζ *reveals* is a decline.** The two
-readers disagree about it: the erasure emits the domain as written and so keeps
-no binder, while `withRecSlot` reads through here and would open one.
-`erasureBareWhy` refuses it by name rather than letting the two diverge.
 `PFunctor.Approx.CofixA`'s `(F.B a → CofixA n)` is a binder that is genuinely
 *written*, so none of this touches it — it is arm C's infinitary erasure that
 carries it, and `prim_carve`'s `Inf2`, `Cf` and `Bif` are its fixtures. -/
@@ -1211,23 +1207,17 @@ def labelFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr))
 
 /-- The field domain used by an internal erasure or spine.
 
-Usually this is the exported field domain byte for byte.  The one exception is
-a specialised redex which mentions the owner only in an annotation that βζ
-reduction discards, such as `(fun _ : T i => N) k`.  Its normal form `N` is the
-actual non-recursive field type, so an internal representation stores that form
-instead of mistaking the annotation for a recursive occurrence.
-
-The test on the reduct is load-bearing: if the owner survives, this returns the
-written domain.  In particular, normalisation does not erase or rearrange a
-hidden binder or a nested occurrence. -/
+Usually this is the exported field domain byte for byte. A specialised redex
+which syntactically mentions the owner is head-normalised at this internal
+boundary. Thus `(fun _ : T i => N) k` becomes the genuinely non-recursive `N`,
+while a redex reducing to `∀ z, T i` exposes the binder the erasure must retain.
+A nested occurrence remains nested after the same reduction and is declined by
+the routing guard. Public declaration types never pass through this function. -/
 def erasureFieldDomain (tname : Name) (dom : Expr) : Expr :=
-  if mentionsAny #[tname] dom then
-    let reduced := headNorm dom
-    if mentionsAny #[tname] reduced then dom else reduced
-  else dom
+  if mentionsAny #[tname] dom then headNorm dom else dom
 
 /-- Whether an internal erasure or spine field contains an occurrence which
-must be replaced, after discarding only βζ-dead owner mentions. -/
+must be replaced, after exposing its βζ head and discarding dead mentions. -/
 def erasureRecursive (tname : Name) (dom : Expr) : Bool :=
   mentionsAny #[tname] (erasureFieldDomain tname dom)
 
@@ -1271,14 +1261,16 @@ W/path construction (plan B){bill}"
 binders it sits under kept verbatim: `T p⃗ e⃗` becomes `Vn` and `∀ z⃗, T p⃗ e⃗`
 becomes `∀ z⃗, Vn`.
 
-`Vn` is closed over the parameter scope and never mentions `z⃗`, which is what
+The domain is read through [`Modelgen.headNorm`], so the same operation handles
+a binder exposed only by βζ reduction. `Vn` is closed over the parameter scope
+and never mentions `z⃗`, which is what
 makes keeping the binders and replacing only the core well typed. The binder
 types themselves are kept **as written** — they may mention the constructor's
 earlier non-recursive fields, and `erasureBareWhy` has already refused a binder
 type that mentions `tname`, which is the one shape that would not survive the
 retyping of the field it names. -/
 partial def swapOcc (Vn : Expr) (d : Expr) : GenM Expr := do
-  match d with
+  match headNorm d with
   | .forallE x z b bi =>
     withLocalDecl x bi z fun zv => do mkForallFVars #[zv] (← swapOcc Vn (b.instantiate1 zv))
   | _ => return Vn
@@ -2131,11 +2123,11 @@ the binders is right, and a field this would corrupt has been declined.
 exactly as a linear one does, which is why arm C is gated on bareness alone.
 
 `eraseOcc` is where the infinitary field is carried. `∀ z⃗, T p⃗ e⃗` erases to
-`∀ z⃗, S p⃗` — the binder types are kept as written, because they mention the
-parameters and the constructor's earlier non-recursive fields and neither
-moves, and each binder crossed pushes the parameters one index further out,
-which is what its `d` counts. At zero binders it is the whole-domain
-replacement this function has always done, byte for byte. -/
+`∀ z⃗, S p⃗` — the binder types are kept from the field's head-normal form.
+They may mention the parameters and the constructor's earlier non-recursive
+fields, neither of which moves, and each binder crossed pushes the parameters
+one index further out, which is what its `d` counts. At zero binders it is the
+whole-domain replacement this function has always done, byte for byte. -/
 partial def eraseCtorTy (tname skelN : Name) (us : List Level) (np : Nat) (e : Expr) : Expr :=
   let skelAt := fun (d : Nat) => mkAppN (.const skelN us)
     ((Array.range np).map fun k => Expr.bvar (np - 1 - k + d))
@@ -2164,12 +2156,12 @@ component, the recursor's induction hypothesis — is a `mkLambdaFVars zs` or a
 `mkForallFVars zs` around what the continuation returns, and at `zs = #[]` each
 of them is the term the bare case built before this existed.
 
-**Read through [`Modelgen.headNorm`]**, exactly as `erasureBareWhy` reads it:
-the guard and this must agree about how many binders a field has and what its
-index vector is, and a domain that arrives as a redex has neither until it is
-reduced. The guard has already refused the one case where the two would
-disagree about what is *emitted* — a binder that only βζ reveals — because
-[`Modelgen.eraseCtorTy`] keeps the written binders and normalises nothing.
+**Read through [`Modelgen.headNorm`]**, exactly as `erasureBareWhy`,
+[`Modelgen.eraseCtorTy`], [`Modelgen.spineSwap`] and [`Modelgen.swapOcc`] read
+it: the guard and every internal consumer must agree about how many binders a
+field has and what its index vector is. A domain that arrives as a redex has
+neither until it is reduced; only the internal skeleton sees that reduction,
+while the public declaration remains literal.
 
 Not a decline path in practice: every refusal it can make, `erasureBareWhy`
 has already made before the arm was entered. It is stated rather than
@@ -2762,11 +2754,12 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
       -- class — empty, unit, payload, enum — is the Church encoding lifted.
       pure .bare
 
-  -- **Is the index erasure bare, and is it linear?** — the two questions arm
+  -- **Is the index erasure unnested, and is it linear?** — the two questions arm
   -- C's reach turns on, and the second is the same test the tuple tower
-  -- applies ([`Modelgen.recSlotOf`]). *Bare*: every recursive occurrence is a
-  -- `T p⃗ e⃗` rather than one under a binder or inside a container. *Linear*:
-  -- bare, and at most one such field per constructor. Erasing the indices
+  -- applies ([`Modelgen.recSlotOf`]). *Unnested* (the historical
+  -- `erasureBare` name below): every recursive occurrence reduces to
+  -- `∀ z⃗, T p⃗ e⃗`, rather than sitting inside a container. *Linear*:
+  -- unnested, and at most one such field per constructor. Erasing the indices
   -- moves neither test — a field `T p⃗ e⃗` erases to `S p⃗`, one field either
   -- way — so both can be asked here, of the family itself, before anything is
   -- built.
@@ -2809,10 +2802,12 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
       if short then return some s!"{cn}'s telescope is shorter than {np} parameters"
       while t matches .forallE .. do
         let .forallE _ dom b _ := t | unreachable!
-        if erasureRecursive tname dom then
-          -- **Peel the field's own binders, as written**, and ask of the core.
-          -- The erasure keeps the binder types verbatim, so a binder type that
-          -- mentions `tname` would still name the field's own carrier after
+        let dom := erasureFieldDomain tname dom
+        if mentionsAny #[tname] dom then
+          -- **Peel the field's own binders after βζ head normalisation**, and
+          -- ask of the core.
+          -- The erasure keeps binder types from the head-normal form, so a
+          -- binder type mentioning `tname` would still name the field's own carrier after
           -- the erasure has retyped it. Lean's positivity check makes that
           -- unwritable directly — there is no function out of `T` before `T`
           -- exists — but a specialisation can leave one behind, and the
@@ -2829,20 +2824,10 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
 {tname}, and the erasure keeps binder types verbatim"
           let d := headNorm core
           -- A mention which βζ discards was filtered by
-          -- [`Modelgen.erasureRecursive`] above, so every domain reaching this
+          -- [`Modelgen.erasureFieldDomain`] above, so every domain reaching this
           -- point still contains the occurrence the skeleton will replace.
-          -- The two remaining specialisation shapes are deliberately kept
-          -- distinct below.
-          -- **A binder βζ *reveals*, rather than one written.** The erasure
-          -- retains this domain as written because the owner survives its
-          -- reduct, so it would keep no binder here and replace the whole
-          -- redex — dropping the branching. `withRecSlot` reads through
-          -- `headNorm` and would open
-          -- the binder, so the two would disagree about the very same field.
-          -- It is a decline rather than a silent divergence.
-          if d matches .forallE .. then
-            return some s!"hidden binder: {cn} has a recursive occurrence under a binder \
-that only βζ-reduction reveals, and the erasure emits binders as written"
+          -- A binder βζ reveals has already been peeled above, so the only
+          -- remaining specialisation shape is a genuinely nested occurrence.
           if !d.getAppFn.isConstOf tname then
             return some s!"nested: {cn} has a recursive occurrence that is not an \
 application of {tname}"
@@ -2895,11 +2880,9 @@ application of {tname}"
       badShape s!"an indexed family at a never-zero sort whose index erasure is not \
         bare (arm C splices the erasure and carves the family out of it, \
         so its reach is bounded by whether that erasure \
-        models, and an erasure that is not bare moves the erasure itself: a \
-        mention βζ discards, a binder only βζ reveals, a binder type naming \
-        the declaration, and an occurrence that is not an application of it \
-        have between them no occurrence to replace under the binders as \
-        written, and `why` says which this is); \
+        models, and an erasure that is not bare has either a binder type naming \
+        the declaration or an occurrence that remains under a foreign type \
+        former after βζ head normalization; `why` says which this is); \
         erasure linear: no; B factors through the tag: \
         {if tagFactored tname np exportCtors then "yes" else "no"}\
         ; through the label: \
@@ -3798,8 +3781,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- Each constructor keeps its field telescope; only the recursive fields'
     -- types and the codomain lose their indices. [`Modelgen.spineSwap`] does
     -- the first and is the tuple tower's own swap, which is the same swap
-    -- because `erasureBare` has already said the recursive occurrence is a
-    -- bare `T p⃗ e⃗`.
+    -- because `erasureBare` has already said the recursive occurrence reduces
+    -- to `∀ z⃗, T p⃗ e⃗` rather than remaining nested.
     let skelDecl : Declaration :=
       .inductDecl lparams np
         [{ name := skelN, type := eraseSelfTy np w memberTy,
