@@ -56,6 +56,9 @@ def FixtureResult.generated (result : FixtureResult) (owner : Name) : Bool :=
 def FixtureResult.declined (result : FixtureResult) (owner : Name) : Bool :=
   result.report.declined.any (fun entry => entry.1 == owner)
 
+def FixtureResult.declineReason? (result : FixtureResult) (owner : Name) : Option String :=
+  (result.report.declined.find? fun entry => entry.1 == owner).map (·.2)
+
 def FixtureResult.hasExactCarrier (result : FixtureResult) (owner : Name) : Bool :=
   result.hasName (modelName owner)
 
@@ -94,6 +97,16 @@ def main : IO UInt32 := do
     (w.generated `Wt && !w.declined `Wt && w.hasExactCarrier `Wt)
   state := state.check "W support closure emits exact carriers"
     (generatedOwnersExact w)
+
+  -- Red-boundary pin: the W target is replayed before the input's exact Iff
+  -- block and propext. The basis wait drains at Eq, but the old late set does
+  -- not recognise Iff, so it loses the target rather than retrying it after
+  -- the logical interface arrives.
+  let lateW ← runFixture "test/fixtures/modelgen/w_late_iff.ndjson"
+    { noGeneration with simple := true, basic := true }
+  state := state.check "W target currently declines at the later exact Iff block"
+    (!lateW.generated `LateW && lateW.declineReason? `LateW ==
+      some "prim model name taken (Iff)")
 
   let graph ← runFixture "test/fixtures/modelgen/prim_graph.ndjson"
     { noGeneration with simple := true, basic := true }
