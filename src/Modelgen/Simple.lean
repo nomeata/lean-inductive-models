@@ -2960,7 +2960,11 @@ application of {tname}"
         let idx := args.extract np args.size
         let mut isD : Array Bool := #[]
         let mut pos : Array Nat := #[]
-        let mut piv : Array Bool := (Array.range ni).map fun _ => false
+        -- A pivot and the data field which supplies it are one fact, not two.
+        -- Keeping the field index here makes the formerly defensive
+        -- "pivot with no field" state unrepresentable: an index is a pivot
+        -- exactly when this slot is `some i`.
+        let mut pivotField : Array (Option Nat) := Array.replicate ni none
         for i in [0:nfg] do
           if (← ilevel (← ityp fs[i]!)).normalize.isZero then
             isD := isD.push false
@@ -2969,10 +2973,17 @@ application of {tname}"
             let mut at? : Option Nat := none
             for k in [0:ni] do
               if at?.isNone && idx[k]! == fs[i]! then at? := some k
-            -- **Unreachable through the kernel, and kept anyway.** The rule
-            -- above is what mints the large eliminator this arm is modelling,
-            -- so a data field that is not an index arrives only from a
-            -- hand-written export. It is a decline with a reason rather than a
+            -- **Unreachable from a kernel-accepted declaration, and kept for
+            -- inconsistent unchecked exports.** This block is entered only
+            -- when the installed recursor is `large`. For a one-constructor
+            -- proposition (including the maybe-zero `Sort u` analogue), the
+            -- kernel mints that recursor only when every non-proof field is
+            -- literally recoverable as a conclusion index. A declaration may
+            -- contain an unrecoverable data field and still be accepted, but
+            -- its recursor is small and `armFNonRec` / `armGRec` are false.
+            -- `arm_f_guards` pins that route boundary. Only a raw export whose
+            -- recursor metadata contradicts the installed kernel declaration
+            -- can arrive here, and that remains a named decline rather than a
             -- wrong model.
             let some k := at?
               | badShape s!"{cn} has a data field that is not one of the conclusion's \
@@ -2980,7 +2991,7 @@ index arguments, so nothing in the model can recover it — the kernel's own \
 subsingleton rule refuses that shape and mints no large eliminator for it"
             isD := isD.push true
             pos := pos.push k
-            piv := piv.set! k true
+            if pivotField[k]!.isNone then pivotField := pivotField.set! k (some i)
         -- **A pivot's own type may mention an earlier non-pivot index.** Arm
         -- F records every such field.  Its carrier zipper inserts an equality
         -- for the complete earlier index prefix, transports the caller's pivot
@@ -2991,15 +3002,14 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
           let mut pivotTransports : Array (Nat × Nat) := #[]
           for j in [0:ni] do
-            if piv[j]! then
+            if let some i := pivotField[j]! then
               let jt ← ityp is[j]!
               for m in [0:ni] do
-                if !piv[m]! && jt.containsFVar is[m]!.fvarId! then
-                  let some i := (Array.range nfg).find? fun i => isD[i]! && pos[i]! == j
-                    | badShape s!"{cn}'s pivot index {j} has no constructor data field"
+                if pivotField[m]!.isNone && jt.containsFVar is[m]!.fvarId! then
                   unless pivotTransports.contains (i, j) do
                     pivotTransports := pivotTransports.push (i, j)
-          return (isD, pos, flds.map (·.rec?), (Array.range ni).filter (!piv[·]!),
+          return (isD, pos, flds.map (·.rec?),
+            (Array.range ni).filter (pivotField[·]!.isNone),
             pivotTransports)
     gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size; gNonPiv := npv
     gPivotTransports := pt
