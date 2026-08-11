@@ -484,6 +484,14 @@ private def checkTheoremDecl (owner : Name) (declaration : DeclType) : Array Vio
   if declaration.kind == .thm then #[]
   else #[.declarationKind owner declaration.name .thm declaration.kind]
 
+/-- Kind-check a proof slot without duplicating its missing/duplicate diagnostics,
+which remain the responsibility of the slot's exact statement checker. -/
+private def checkTheoremSlot (declarations : DeclarationTypes) (owner name : Name) :
+    Array Violation :=
+  match declarations.getD name #[] with
+  | #[declaration] => checkTheoremDecl owner declaration
+  | _ => #[]
+
 private def checkPair (table : Correspondence) (declarations : DeclarationTypes)
     (pair : ConstantPair) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
@@ -536,7 +544,7 @@ private def checkUnitlike (x : Export) (family : Family)
       unitlikeProposition? x family.ownerDecl metadata.owner
     | return #[.declarationType metadata.owner metadata.name]
   let model := models[0]!
-  let mut violations := checkTheoremDecl metadata.owner model
+  let mut violations : Array Violation := #[]
   if ownerParams.length != model.levelParams.length then
     return violations.push (.universeArity metadata.owner metadata.name
       ownerParams.length model.levelParams.length)
@@ -555,7 +563,7 @@ private def checkRuleK (x : Export) (family : Family) (declarations : Declaratio
   let some (ownerParams, ownerType) := ruleKProposition? x family.ownerDecl metadata.owner
     | return #[.declarationType metadata.owner metadata.name]
   let model := models[0]!
-  let mut violations := checkTheoremDecl metadata.owner model
+  let mut violations : Array Violation := #[]
   if ownerParams.length != model.levelParams.length then
     return violations.push (.universeArity metadata.owner metadata.name
       ownerParams.length model.levelParams.length)
@@ -660,7 +668,7 @@ private def checkProjectionIota (x : Export) (family : Family) (declarations : D
       (·.owner == constructor.name)
     | return #[.declarationType metadata.owner metadata.name]
   let model := models[0]!
-  let mut violations := checkTheoremDecl metadata.owner model
+  let mut violations : Array Violation := #[]
   if projection.levelParams.length != model.levelParams.length then
     return violations.push (.universeArity metadata.owner metadata.name
       projection.levelParams.length model.levelParams.length)
@@ -755,6 +763,7 @@ def check (x : Export) : Array Violation := Id.run do
     for iota in family.correspondence.iotas do
       violations := violations ++ checkIota x constructors family declarations iota
     for metadata in family.correspondence.metadata do
+      violations := violations ++ checkTheoremSlot declarations metadata.owner metadata.name
       if metadata.kind == .unitlike then
         violations := violations ++ checkUnitlike x family declarations metadata
       else if metadata.kind == .ruleK then
