@@ -3,13 +3,13 @@ import Modelgen.Check
 import Modelgen.Order
 
 /-!
-# Focused test for βζ-dead owner mentions in an index erasure
+# Focused test for βζ-dead owner mentions in internal erasures
 
 Lean's nested specialisation can leave a field type such as
 `(fun _ : T i => N) k`: the exported expression mentions `T`, but its reduct
-does not.  The public constructor retains that exact expression.  Only the
-internal erased skeleton may use its reduct and treat the field as
-non-recursive.
+does not.  The public constructor retains that exact expression.  Only an
+internal erased skeleton or tuple spine may use its reduct and treat the field
+as non-recursive.
 -/
 
 open Lean Meta Modelgen
@@ -104,6 +104,21 @@ def main : IO UInt32 := do
     #[okAux, keyAux, okSkeleton, keySkeleton].all (ownerPasses generated)
   state := state.check "all generated recursor statements stay literal" <|
     report.stmtChecked == 443 && report.stmtErrors.isEmpty
+
+  -- The same syntax at the ordinary non-indexed Type route.  `Dead.step` has
+  -- one genuine recursive child followed by a field whose annotation mentions
+  -- `Dead` but whose β-reduct is `N`; the tuple spine must count only the
+  -- former.
+  let nonindexedRaw ← readExport "test/fixtures/modelgen/nonindexed_vanishing.ndjson"
+  let (nonindexedGenerated, nonindexedReport) ← runExport nonindexedRaw
+  state := state.check "the raw non-indexed constructor retains a dead owner mention" <|
+    (constructorTypes nonindexedRaw `Dead).any (hasVanishingDomain `Dead)
+  state := state.check "the non-indexed tuple route models one real predecessor" <|
+    generatedExactly nonindexedReport `Dead 6 &&
+      !nonindexedReport.declined.any fun (owner, _) => owner == `Dead
+  state := state.check "the non-indexed public interface checks literally" <|
+    ownerPasses nonindexedGenerated `Dead && nonindexedReport.stmtChecked == 6 &&
+      nonindexedReport.stmtErrors.isEmpty
 
   -- Unit-level boundary controls.  These expressions need not elaborate: the
   -- erasure helper is intentionally raw syntax surgery over exported Exprs.

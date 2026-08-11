@@ -108,7 +108,9 @@
 {"const":{"name":26,"us":[]},"ie":73}
 {"in":29,"str":{"pre":0,"str":"child"}}
 {"in":30,"str":{"pre":0,"str":"payload"}}
-{"forallE":{"binderInfo":"default","body":73,"name":30,"type":43},"ie":74}
+{"ie":106,"lam":{"binderInfo":"default","body":43,"name":8,"type":73}}
+{"app":{"arg":1,"fn":106},"ie":107}
+{"forallE":{"binderInfo":"default","body":73,"name":30,"type":107},"ie":74}
 {"forallE":{"binderInfo":"default","body":74,"name":29,"type":73},"ie":75}
 {"in":31,"str":{"pre":26,"str":"rec"}}
 {"forallE":{"binderInfo":"default","body":0,"name":13,"type":73},"ie":76}
@@ -122,7 +124,7 @@
 {"app":{"arg":2,"fn":80},"ie":81}
 {"app":{"arg":81,"fn":26},"ie":82}
 {"forallE":{"binderInfo":"default","body":82,"name":34,"type":30},"ie":83}
-{"forallE":{"binderInfo":"default","body":83,"name":30,"type":43},"ie":84}
+{"forallE":{"binderInfo":"default","body":83,"name":30,"type":107},"ie":84}
 {"forallE":{"binderInfo":"default","body":84,"name":29,"type":73},"ie":85}
 {"forallE":{"binderInfo":"default","body":54,"name":13,"type":73},"ie":86}
 {"forallE":{"binderInfo":"default","body":86,"name":33,"type":85},"ie":87}
@@ -139,7 +141,7 @@
 {"app":{"arg":13,"fn":97},"ie":98}
 {"app":{"arg":2,"fn":98},"ie":99}
 {"app":{"arg":99,"fn":94},"ie":100}
-{"ie":101,"lam":{"binderInfo":"default","body":100,"name":30,"type":43}}
+{"ie":101,"lam":{"binderInfo":"default","body":100,"name":30,"type":107}}
 {"ie":102,"lam":{"binderInfo":"default","body":101,"name":29,"type":73}}
 {"ie":103,"lam":{"binderInfo":"default","body":102,"name":33,"type":85}}
 {"ie":104,"lam":{"binderInfo":"default","body":103,"name":32,"type":78}}

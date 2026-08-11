@@ -378,13 +378,19 @@ to `max`, and the forward and inverse maps are definitionally inverse.  The
 seven declarations recorded below include its intrinsic projection and eta;
 no level-normalizer relaxation or axiom is involved. -/
 def expectedPrim : List Row :=
-  [ -- The two small-elimination seams under `PULiftP`. `MI` forces the pair
+  [ -- A non-indexed tuple spine with one real child and a later field whose
+    -- written owner mention β-reduces away.  The payload is non-recursive, so
+    -- `Dead.step` consumes exactly one predecessor and the ordinary tuple
+    -- route emits its six public declarations.
+    ("nonindexed_vanishing", [("N", 9), ("Dead", 6)],
+      [("Eq", "prim model: a basis primitive")])
+  -- The two small-elimination seams under `PULiftP`. `MI` forces the pair
     -- motive at two distinct result indices; `MR.step` forces a recursive
     -- carrier through `down` in the constructor and through `down`/`up` in the
     -- pair's element projection; `MRI` crosses both at a changing child fibre.
     -- Each has six public declarations; the first model in each raw export also
     -- pays for the `Eq` and `PULiftP` support records.
-    ("maybe_zero_indexed", [("MI", 8)], [])
+  , ("maybe_zero_indexed", [("MI", 8)], [])
   , ("maybe_zero_recursive", [("MRI", 8), ("MR", 6)], [])
   -- Lifted arm F at its minimum: one proof field and one constant result
   -- index. The latter forces the packed equation; the existing one-field
