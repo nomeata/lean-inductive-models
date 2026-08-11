@@ -101,9 +101,10 @@ inductive Decline where
   flattens many modules, so it holds both `_private.M.0.X` and a public `X`,
   we model both, and `privateToUserName` makes the two model names one
   (`MODELGEN.md` §8.14). The name is ours, nothing in the input is using it,
-  and the fix is therefore ours too: regenerate under a root whose normalized
-  form cannot collide and rename on the way out. `Modelgen.genPrim` does
-  exactly that, and only on this constructor. -/
+  and the fix is therefore ours too: regenerate under exact collision-safe
+  aliases and translate those names on the way out. The driver does exactly
+  that for nested, mutual, and simple generation, and only on this constructor.
+  -/
   | nameLost (n : Name)
   /-- Two mimics whose containers mention each other, so `pack` would have to
   be mutually recursive. -/
@@ -392,6 +393,9 @@ partial def restore (heads : Std.HashMap Name (Nat × Expr)) (e : Expr) : Expr :
 
 /-- The generator's read-only context. -/
 structure Gen where
+  /-- Exact declaration owner and the collision-safe owner used in this build. -/
+  owner : Name
+  buildOwner : Name
   /-- The private implementation namespace below the primary carrier. -/
   model : Name
   /-- Original constructors in flattened declaration order. -/
@@ -592,10 +596,13 @@ def packName (g : Gen) (i : Nat) : Name := .str g.model s!"pack_{i}"
 def unpackName (g : Gen) (i : Nat) : Name := .str g.model s!"unpack_{i}"
 def retractName (g : Gen) (i : Nat) : Name := .str g.model s!"unpackPack_{i}"
 def sectionName (g : Gen) (i : Nat) : Name := .str g.model s!"packUnpack_{i}"
-def ctorName (g : Gen) (j : Nat) : Name := Naming.modelName g.exportCtors[j]!
-def recName (g : Gen) (k : Nat) : Name := Naming.modelName g.exportRecs[k]!
+def ctorName (g : Gen) (j : Nat) : Name :=
+  Naming.modelName (Naming.relocateSource g.owner g.buildOwner g.exportCtors[j]!)
+def recName (g : Gen) (k : Nat) : Name :=
+  Naming.modelName (Naming.relocateSource g.owner g.buildOwner g.exportRecs[k]!)
 def congrPackName (g : Gen) (i : Nat) : Name := .str g.model s!"congrPack_{i}"
-def iotaName (g : Gen) (k j : Nat) : Name := Naming.iotaName g.exportRecs[k]! j
+def iotaName (g : Gen) (k j : Nat) : Name :=
+  Naming.iotaName (Naming.relocateSource g.owner g.buildOwner g.exportRecs[k]!) j
 
 /-- Is block member `k` one of the export's own, rather than a mimic? -/
 def isReal (g : Gen) (k : Nat) : Bool := k < g.numAll
@@ -2007,18 +2014,10 @@ structure Iso where
   unmodelled when it does not. [`Modelgen.genPrim`] is where the withdrawal
   happens. Empty for every other arm, so nothing else changes shape. -/
   requires : Array Name := #[]
-  /-- **The root this model was *built* under and the root it must be
-  *emitted* under**, when the two differ. They differ only where a
-  normalized-name collision (`MODELGEN.md` §8.14) made the contract names
-  unusable *in the environment*: the four names are a property of the output
-  and what collides is a property of the async constant map, so the model is
-  generated under a root whose normalized form cannot collide and the
-  export records are renamed back. The renaming is injective and touches only
-  constants this run introduced, so the declaration the kernel accepted and
-  the declaration emitted are the same up to it, and `T._model.self` still
-  means what `modelgen/README.md` says. `none` — and so no renaming at all —
-  for every declaration that did not collide, which is all but a handful. -/
-  emitAs? : Option (Name × Name) := none
+  /-- Exact build-name to export-name aliases used only after a normalized-name
+  collision.  This is a whole-name table: raw private constructor names need
+  not share any prefix with their owner. -/
+  aliases : Naming.AliasMap := .empty
   deriving Inhabited
 
 /-- **The export's names rewritten to the model's**: `T._model` for each real
@@ -2518,7 +2517,7 @@ The whole of the checker interaction is [`Modelgen.addChecked`], once per
 generated declaration. Nothing is emitted unchecked. -/
 def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     (exportCtors : Array (Array (Name × Expr))) (pl : Plan)
-    (reserved : Std.HashSet Name) : GenM Iso := do
+    (reserved : Std.HashSet Name) (buildRoot? : Option Name := none) : GenM Iso := do
   -- **The declaration's own level parameters are carried, not refused.** Every
   -- generated constant is declared at `lparams` and referenced at `us`; a
   -- recursor is declared at its motive universe *followed by* `lparams`, which
@@ -2529,6 +2528,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let np := numParams
   let r := pl.numAll
   let some root := all[0]? | badShape "the declaration has no members"
+  let buildRoot := buildRoot?.getD root
   let some rootT := pl.types[0]? | badShape "the plan has no members"
   -- The block's resultant sort and each member's index count. **The
   -- declaration's indices are carried**: what is left after the parameters is
@@ -2554,7 +2554,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   for k in [0:r] do
     unless (← sortOf pl.types[k]!.type).2 == u do
       badShape "a mutual block whose members land at different sorts"
-  let primaryCarrier := Naming.modelName root
+  let primaryCarrier := Naming.modelName buildRoot
+  let exactPrimaryCarrier := Naming.modelName root
   let model := Name.str primaryCarrier "_impl"
   let b := fun (i : Nat) => Name.num model i
   let exportCtorNames := exportCtors.flatMap fun ctors => ctors.map (·.1)
@@ -2563,7 +2564,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- recursors over distinct majors, and a consumer keys `⟦A⟧` and `⟦B⟧`
   -- separately; a single carrier could stand for only one of them. For a
   -- one-member block this is exactly `T._model`.
-  let selfNames := all.extract 0 r |>.map Naming.modelName
+  let selfNames := all.extract 0 r |>.map fun n =>
+    Naming.modelName (Naming.relocateSource root buildRoot n)
   let blockCtors := (Array.range pl.types.size).map fun i =>
     pl.types[i]!.ctors.map fun (cn, _) => Name.str (b i) (lastStr cn)
 
@@ -2585,15 +2587,23 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
         s!"packUnpack_{i}", s!"congrPack_{i}"] do
       helpers := helpers.push (Name.str model suffix)
   helpers := helpers.push (Name.str model "funext")
-  let census := publicNames.collisionCensus (reserved.toArray ++ helpers)
+  let exactHelper := fun n =>
+    if primaryCarrier.isPrefixOf n then n.replacePrefix primaryCarrier exactPrimaryCarrier else n
+  let census := publicNames.collisionCensus (reserved.toArray ++ helpers.map exactHelper)
   if let some name := census.duplicateRequirements[0]? then
     badShape s!"the public naming contract requires {name} more than once"
   if let some name := census.taken[0]? then declineWith (.nameTaken name)
+  for name in publicNames.requiredNames do
+    if (← getEnv).constants.contains name then declineWith (.nameTaken name)
   -- **The whole file, not just the prefix.** A contract name may be declared
   -- after its source declaration. A guard that only looked at the environment
   -- as it stands would then emit a duplicate declaration.
   let taken : Name → GenM Unit := fun n => do
-    if reserved.contains n || (← getEnv).constants.contains n then declineWith (.nameTaken n)
+    let exact := exactHelper n
+    if reserved.contains exact || (← getEnv).constants.contains exact then
+      declineWith (.nameTaken exact)
+    if buildRoot != root && (reserved.contains n || (← getEnv).constants.contains n) then
+      declineWith (.nameTaken n)
   for i in [0:pl.types.size] do taken (b i)
   for n in selfNames do taken n
   -- **The `Eq` first, because everything downstream is written at it** — and
@@ -2643,7 +2653,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let largeElim ← do
     let .recInfo rv ← constInfo (.str (b 0) "rec") | badShape "the block has no recursor"
     pure (rv.levelParams.length == us.length + 1)
-  let g0 : Gen := { model, exportCtors := exportCtorNames, exportRecs,
+  let g0 : Gen := { owner := root, buildOwner := buildRoot,
+                    model, exportCtors := exportCtorNames, exportRecs,
                     selfNames, numAll := r, np, u, us
                     members := (Array.range pl.types.size).map b
                     blockCtors, nidx, occs, eqi, fx := none, largeElim }
@@ -2845,8 +2856,20 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       out := out.push d
       iotas := iotas.push (k, key, nm)
 
+  let mut aliases := Naming.AliasMap.empty
+  if buildRoot != root then
+    aliases := Naming.AliasMap.forRetry primaryCarrier (Naming.modelName root)
+      (out.flatMap (·.getNames.toArray))
+    for k in [0:r] do
+      aliases := aliases.insert selfNames[k]! (Naming.modelName all[k]!)
+    for j in [0:exportCtorNames.size] do
+      aliases := aliases.insert (g.ctorName j) (Naming.modelName exportCtorNames[j]!)
+    for k in [0:exportRecs.size] do
+      aliases := aliases.insert (g.recName k) (Naming.modelName exportRecs[k]!)
+      for j in [0:pl.types[k]!.ctors.size] do
+        aliases := aliases.insert (g.iotaName k j) (Naming.iotaName exportRecs[k]! j)
   return { decls := out, levelParams := lparams, members := g.members, selfNames
            numAll := r, ctors
-           recs := (Array.range pl.types.size).map g.recName, iotas, spliced }
+           recs := (Array.range pl.types.size).map g.recName, iotas, spliced, aliases }
 
 end Modelgen

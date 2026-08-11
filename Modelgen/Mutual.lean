@@ -148,16 +148,19 @@ The whole of the checker interaction is [`Modelgen.addChecked`], once per
 generated declaration. Nothing is emitted unchecked. -/
 def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     (memberTys : Array Expr) (exportCtors : Array (Array (Name × Expr)))
-    (reserved : Std.HashSet Name) : GenM Iso := do
+    (reserved : Std.HashSet Name) (buildRoot? : Option Name := none) : GenM Iso := do
   let us := lparams.map Level.param
   let r := all.size
   unless r ≥ 2 && memberTys.size == r && exportCtors.size == r do
     badShape "not a mutual block"
   let root := all[0]!
+  let buildRoot := buildRoot?.getD root
   -- Tag, auxiliary carrier and their constructors are implementation details.
   -- Only names obtained directly from an exported declaration through
   -- `Modelgen.Naming` are public contract slots.
-  let impl := Name.str (Naming.modelName root) "_impl"
+  let buildCarrier := Naming.modelName buildRoot
+  let exactCarrier := Naming.modelName root
+  let impl := Name.str buildCarrier "_impl"
   let tagN := Name.str impl "tag"
   let auxN := Name.str impl "aux"
   let tagCtorN := fun (k : Nat) => Name.num tagN k
@@ -166,11 +169,15 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   -- components agree — `A.mk` beside `B.mk` is the common case — and the
   -- constructors of every member live on one inductive here.
   let auxCtorN := fun (k : Nat) (cn : Name) => Name.str (Name.num auxN k) (lastStr cn)
-  let selfNames := all.map Naming.modelName
-  let ctorN := Naming.modelName
+  let selfNames := all.map fun n =>
+    Naming.modelName (Naming.relocateSource root buildRoot n)
+  let ctorN := fun n =>
+    Naming.modelName (Naming.relocateSource root buildRoot n)
   let exportRecs := (Array.range r).map (exportRecName all)
-  let recN := fun (k : Nat) => Naming.modelName exportRecs[k]!
-  let iotaN := fun (k j : Nat) => Naming.iotaName exportRecs[k]! j
+  let recN := fun (k : Nat) =>
+    Naming.modelName (Naming.relocateSource root buildRoot exportRecs[k]!)
+  let iotaN := fun (k j : Nat) =>
+    Naming.iotaName (Naming.relocateSource root buildRoot exportRecs[k]!) j
 
   -- Public collisions are an atomic property of the declaration-local naming
   -- table.  Census the whole table before emitting even implementation
@@ -190,13 +197,19 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   let census := publicTable.collisionCensus occupied
   if let some name := census.taken[0]? <|> census.duplicateRequirements[0]? then
     declineWith (.nameTaken name)
+  for name in publicTable.requiredNames do
+    if (← getEnv).constants.contains name then declineWith (.nameTaken name)
 
   -- **The whole file, not just the prefix replayed so far.** A model may not
   -- take a name the input introduces later; `mini/tests/fixtures/nested_
   -- keying.lean` is why the guard looks at `reserved` and not only at the
   -- environment.
   let taken : Name → GenM Unit := fun n => do
-    if reserved.contains n || (← getEnv).constants.contains n then declineWith (.nameTaken n)
+    let exact := if buildCarrier.isPrefixOf n then n.replacePrefix buildCarrier exactCarrier else n
+    if reserved.contains exact || (← getEnv).constants.contains exact then
+      declineWith (.nameTaken exact)
+    if buildRoot != root && (reserved.contains n || (← getEnv).constants.contains n) then
+      declineWith (.nameTaken n)
   taken tagN
   taken auxN
   for k in [0:r] do
@@ -471,7 +484,18 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       out := out.push d
       iotas := iotas.push (k, cn, nm)
 
+  let mut aliases := Naming.AliasMap.empty
+  if buildRoot != root then
+    aliases := Naming.AliasMap.forRetry (Naming.modelName buildRoot) (Naming.modelName root)
+      (out.flatMap (·.getNames.toArray))
+    for k in [0:r] do
+      aliases := aliases.insert selfNames[k]! (Naming.modelName all[k]!)
+      aliases := aliases.insert (recN k) (Naming.modelName exportRecs[k]!)
+      for j in [0:exportCtors[k]!.size] do
+        let cn := exportCtors[k]![j]!.1
+        aliases := aliases.insert (ctorN cn) (Naming.modelName cn)
+        aliases := aliases.insert (iotaN k j) (Naming.iotaName exportRecs[k]! j)
   return { decls := out, levelParams := lparams, members := #[tagN, auxN], selfNames
-           numAll := r, ctors, recs, iotas, spliced }
+           numAll := r, ctors, recs, iotas, spliced, aliases }
 
 end Modelgen

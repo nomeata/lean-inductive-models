@@ -17,6 +17,62 @@ open Lean
 
 namespace Modelgen.Naming
 
+/-- A collision retry's exact build-name to export-name substitution.
+
+The entries are deliberately whole names, rather than namespace prefixes.  A
+private constructor need not live below its inductive's name, so prefix
+substitution is not a naming model.  `buildRoot?` is retained only as the
+recipe used to register kernel-generated auxiliary names (notably recursors)
+when they are read back from the environment; consumers rewrite solely by
+looking up `entries`. -/
+structure AliasMap where
+  entries : Array (Name × Name) := #[]
+  buildRoot? : Option (Name × Name) := none
+  deriving Inhabited, Repr
+
+def AliasMap.empty : AliasMap := {}
+
+/-- The retry namespace for an exact declaration owner.  Appending the raw
+name below a public component keeps an embedded `_private` component from
+being stripped by `privateToUserName`. -/
+def retryRoot (owner : Name) : Name := `_modelgen_alias ++ owner
+
+/-- Relocate an exact source declaration for a retry.  Descendants retain
+their suffix; declarations outside the owner's namespace (raw private
+constructors are the important case) are embedded injectively below `_source`.
+-/
+opaque relocateSource (owner buildOwner source : Name) : Name :=
+  if owner == buildOwner then source
+  else if owner.isPrefixOf source then source.replacePrefix owner buildOwner
+  else (Name.str buildOwner "_source") ++ source
+
+def AliasMap.insert (aliases : AliasMap) (build exact : Name) : AliasMap :=
+  if build == exact || aliases.entries.any (fun p => p.1 == build) then aliases
+  else { aliases with entries := aliases.entries.push (build, exact) }
+
+def AliasMap.exact? (aliases : AliasMap) (build : Name) : Option Name :=
+  (aliases.entries.find? fun p => p.1 == build).map (·.2)
+
+def AliasMap.exact (aliases : AliasMap) (build : Name) : Name :=
+  aliases.exact? build |>.getD build
+
+/-- Register names discovered only after Lean elaborates an inductive block.
+This constructs explicit whole-name entries; it does not make prefix matching
+part of serialization. -/
+def AliasMap.register (aliases : AliasMap) (names : Array Name) : AliasMap :=
+  match aliases.buildRoot? with
+  | none => aliases
+  | some (buildRoot, exactRoot) =>
+    names.foldl (fun out build =>
+      if buildRoot.isPrefixOf build then
+        out.insert build (build.replacePrefix buildRoot exactRoot)
+      else out) aliases
+
+/-- Start a retry map and explicitly register the generated names known before
+serialization. -/
+def AliasMap.forRetry (buildRoot exactRoot : Name) (names : Array Name) : AliasMap :=
+  ({ buildRoot? := some (buildRoot, exactRoot) } : AliasMap).register names
+
 /-- The model declaration corresponding to the exact exported declaration `n`. -/
 def modelName (n : Name) : Name := Name.str n "_model"
 

@@ -2174,6 +2174,18 @@ partial def wTowerMk (w : Level) (xs : Array Expr) (i : Nat) (vals : Array Expr)
   let (ℓ, α, β) ← wTowerAt w xs i (vals.extract 0 i)
   return psigmaMk ℓ w α β vals[i]! (← wTowerMk w xs (i + 1) vals)
 
+/-- Complete the simple generator's explicit retry table. -/
+def primAliasMap (tname root model ern recN : Name) (exportCtors : Array (Name × Expr))
+    (ctorN iotaN : Nat → Name) (out : Array Declaration) : Naming.AliasMap := Id.run do
+  if root == tname then return .empty
+  let mut aliases := Naming.AliasMap.forRetry model (Naming.modelName tname)
+    (out.flatMap (·.getNames.toArray))
+  for j in [0:exportCtors.size] do
+    aliases := aliases.insert (ctorN j) (Naming.modelName exportCtors[j]!.1)
+    aliases := aliases.insert (iotaN j) (Naming.iotaName ern j)
+  aliases := aliases.insert recN (Naming.modelName ern)
+  return aliases
+
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
 recursor this restates is the one Lean minted for it, and the ι rules are
@@ -2194,11 +2206,11 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   let impl := Name.str model "_impl"
   let selfN := model
   let ctorN := fun (j : Nat) =>
-    Naming.modelName (Modelgen.renameRoot tname root exportCtors[j]!.1)
+    Naming.modelName (Naming.relocateSource tname root exportCtors[j]!.1)
   let ern := Name.str tname "rec"
-  let recN := Naming.modelName (Modelgen.renameRoot tname root ern)
+  let recN := Naming.modelName (Naming.relocateSource tname root ern)
   let iotaN := fun (j : Nat) =>
-    Naming.iotaName (Modelgen.renameRoot tname root ern) j
+    Naming.iotaName (Naming.relocateSource tname root ern) j
   let indN := Name.str impl "ind"
   -- Arm G's **internal** names, guarded exactly like the interface's — but
   -- only when the arm is taken, so a file that declares
@@ -2226,8 +2238,10 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   let taken1 : Name → GenM Unit := fun n => do
     if reserved.contains n || (← getEnv).constants.contains n then declineWith (.nameTaken n)
   let taken : Name → GenM Unit := fun n => do
-    taken1 (Modelgen.renameRoot root tname n)
-    if root != tname then taken1 n
+    let emitted :=
+      if model.isPrefixOf n then n.replacePrefix model (Naming.modelName tname) else n
+    taken1 emitted
+    if root != tname && n != emitted then taken1 n
   taken selfN
   taken recN
   for j in [0:nc] do
@@ -4449,9 +4463,10 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     out := out.push d
     iotas := iotas.push (0, cn, iotaN j)
 
+  let aliases := primAliasMap tname root model ern recN exportCtors ctorN iotaN out
   return { decls := out, levelParams := lparams, members := #[], selfNames := #[selfN]
            numAll := 1, ctors := ctorPairs, recs := #[recN], iotas, spliced
            requires := if armC then #[skelN] else requires
-           emitAs? := if root == tname then none else some (root, tname) }
+           aliases }
 
 end Modelgen

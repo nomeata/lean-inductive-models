@@ -1,4 +1,5 @@
 import Lean
+import Modelgen.Naming
 /-!
 # The Lean 4 export format, read and written
 
@@ -152,24 +153,7 @@ def toDeclaration (env : Environment) : EDecl → Option Declaration
     | [] => none
     | t :: _ => some <| .inductDecl t.levelParams t.numParams its t.isUnsafe
 
-/-! ## Renaming a generated declaration's root, on the way out
-
-`Iso.emitAs?`'s renaming, applied to the export records rather than to the
-`Declaration`s. Records rather than declarations because the *descent* has to
-be covered too: a model that splices an inductive of its own (arm C's index
-erasure) has that inductive modelled by a recursive `Modelgen.genPrim` call
-whose names are built off the alias root as well, and renaming the slice of
-output the whole call produced catches those without threading a substitution
-through the recursion.
-
-The substitution is a **name-prefix replacement of constants this run
-introduced**, so it is injective and cannot capture: `from` is a root
-containing a component no input name has, and every name under it was minted
-by this call. -/
-
-/-- `from.suffix ↦ to.suffix`, and the identity on everything else. -/
-def renameRoot (fr to : Name) (n : Name) : Name :=
-  if fr.isPrefixOf n then n.replacePrefix fr to else n
+/-! ## Renaming generated declarations by exact aliases -/
 
 /-- **Every constant an expression names, rewritten** — and there are two kinds
 of node that name one, not one.
@@ -190,21 +174,17 @@ partial def mapConstsE (f : Name → Option Name) (e : Expr) : Expr :=
     | .proj n i s => (f n).map (fun n' => Expr.proj n' i (mapConstsE f s))
     | _ => none
 
-/-- The prefix rename, inside an expression. -/
-def renameRootE (fr to : Name) (e : Expr) : Expr :=
-  mapConstsE (fun n => if fr.isPrefixOf n then some (n.replacePrefix fr to) else none) e
-
 /-- One export record with **every name it carries** rewritten — every name it
 introduces, every name it refers to, and every constant inside its expressions.
 `f` is applied to declaration names and `g` to expressions, and they are two
-arguments rather than one because the caller that renames a prefix wants a
-prefix test on names and a subterm walk on expressions.
+arguments so declaration fields and expression constants share one exhaustive
+record walk.
 
 **Every field that can hold a `Name` is listed**, because one missed field is a
 record that refers to a constant the output does not contain, and no oracle here
 would see it: the statement check reads the environment, which keeps the alias.
-This is the single place that enumerates them; both renamers below go through
-it, so a field added to a record is caught once. -/
+This is the single place that enumerates them, so a field added to a record is
+caught once. -/
 def EDecl.mapNames (f : Name → Name) (g : Expr → Expr) : EDecl → EDecl
   | .ax n lp t u => .ax (f n) lp (g t) u
   | .defn n lp t v h sf all => .defn (f n) lp (g t) (g v) h sf (all.map f)
@@ -220,9 +200,12 @@ def EDecl.mapNames (f : Name → Name) (g : Expr → Expr) : EDecl → EDecl
         name := f r.name, type := g r.type, all := r.all.map f,
         rules := r.rules.map fun u => { u with ctor := f u.ctor, rhs := g u.rhs } })
 
-/-- One export record with its root renamed. -/
-def EDecl.renameRoot (fr to : Name) : EDecl → EDecl :=
-  EDecl.mapNames (Modelgen.renameRoot fr to) (renameRootE fr to)
+/-- Rewrite one export record by an explicit whole-name alias table.  There is
+no namespace fallback: a name absent from the table is left byte-for-byte
+alone. -/
+def EDecl.renameAliases (aliases : Naming.AliasMap) : EDecl → EDecl :=
+  EDecl.mapNames aliases.exact
+    (mapConstsE fun n => aliases.exact? n)
 
 /-- A whole export: the `meta` line verbatim, then the declarations in order. -/
 structure Export where
