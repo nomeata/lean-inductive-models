@@ -196,7 +196,9 @@ the carrier with the model recursor, using the field result as its motive and
 returning field `j` from the corresponding minor premise. Two tight
 one-field models have specialized definitions: an exact-sort payload uses the
 payload itself as the carrier, while a proposition-valued payload uses
-`PULiftP`.
+`PULiftP`. The underlying Lean edge case—sort-polymorphic inductives whose
+primitive projections can be stronger than their generated recursors—is
+tracked as [lean4#7637](https://github.com/leanprover/lean4/issues/7637).
 
 For a `Prop`-valued `T`, Lean's kernel imposes two further conditions. The
 selected field must be a proposition. Moreover, if the remaining constructor
