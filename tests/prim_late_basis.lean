@@ -10,7 +10,7 @@
 
    **What this file adds is that the rule reaches the composition.** The queue
    belongs to `runFilter`, and [`Modelgen.primCompose`] — the third step, over
-   the `_model.tag` and `_model.aux` a mutual model just emitted — is called
+   the `_model._impl.tag` and `_model._impl.aux` a mutual model just emitted — is called
    from inside `genMutual` and from the nested arm, neither of which could
    reach it. So it passed `canWait := false` and every one of its models
    declined `prim model name taken (PSigma)` at a primitive that was merely
@@ -21,7 +21,7 @@
    The layout is the whole fixture:
 
    * `MA`/`MB`/`MC` is a plain **mutual** block, so `Modelgen/Mutual.lean`
-     emits `MA._model.tag` and `MA._model.aux` for it, and those two are what
+     emits `MA._model._impl.tag` and `MA._model._impl.aux` for it, and those two are what
      the third step then models. Three members and unequal constructor counts,
      for the reason `mutual_shapes.lean` gives: two members cannot distinguish
      an ordering.
@@ -31,7 +31,7 @@
      would be refused here rather than used.
    * `Nd` is a **nested** declaration, also before `PSigma`, because the third
      step has two callers and a repair at one of them would leave the other
-     declining. Its `_model.aux` is indexed and takes arm C.
+     declining. Its `_model._impl.aux` is indexed and takes arm C.
    * `Pre` is the control: a simple inductive **before** `PSigma` whose own
      model is an input declaration's, not the composition's. It waits on the
      queue that already existed, so a regression that broke *that* wait while

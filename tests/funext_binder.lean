@@ -1,6 +1,7 @@
 /- **A constructor field at a mimic under a binder, with a `funext` to prove it
    with.** Lean accepts the shape and the block types the field `∀ x⃗, Bₘ ι⃗`, so
-   `T._model.ctor_j` builds `fun x⃗ => pack (f x⃗)` and the round trips, the
+   the declaration-local constructor model builds `fun x⃗ => pack (f x⃗)` and
+   the round trips, the
    recursor's minor and the ι rules all have to transport along
    `(fun x⃗ => pack (unpack (f x⃗))) = f` — which is function extensionality.
    `infinitary.lean` is the same three declarations *without* one, and

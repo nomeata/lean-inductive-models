@@ -66,7 +66,7 @@
      cover on their own.
 
      *Permutation.* All three of `tri`'s children have model type
-     `Sm3._model.self n`, so a carve that permutes them builds a **well-typed
+     `Sm3._model n`, so a carve that permutes them builds a **well-typed
      constructor** — the skeleton constructor takes the three first components
      in the wrong order and the carve proof supplies the three `good` clauses
      in the matching wrong order, and the kernel accepts `ctor_1`. At `Br` and
@@ -74,7 +74,8 @@
      *different* indices and the swap is a type mismatch; only where the
      children are interchangeable does the constructor survive it. It is caught
      one declaration later, at `rec_0`: the recursor's minor concludes at
-     `motive ι⃗ (T._model.ctor_j f⃗)`, so the model constructor's own value has
+     the motive applied to the declaration-local constructor model, so that
+     constructor's own value has
      to reduce to the skeleton term the index transport's motive was written
      against, and a permuted one does not. Measured: `Br` and `Mx` red at
      `ctor_1`, `Sm3` red at `rec_0`, and every single-slot occupant above
@@ -114,8 +115,8 @@
      surgery and every binder of the field it crosses pushes the parameters one
      index further out; a treatment that erased the occurrence at the *field's*
      depth rather than at the depth under its own binders writes
-     `Cf._model.skel B A` and the kernel refuses it. Measured: `Cf` red at
-     `_model.skel` under that mutation and `Inf2` and `Bif` **both models**,
+     `Cf._model._impl.skel B A` and the kernel refuses it. Measured: `Cf` red at
+     `_model._impl.skel` under that mutation and `Inf2` and `Bif` **both models**,
      because a parameter-free declaration's `skel` has no bound variable for
      the shift to move.
 
@@ -133,8 +134,8 @@
    whole-domain replacement the bare case does) is rejected at `_model.good`,
    as is the same omission in [`Modelgen.spineSwap`]; appending the branch's
    binders after the induction hypothesis's own arguments rather than before is
-   rejected at `_model.rec_0`; and taking the constructor's field without
-   applying it to the branch is rejected at `_model.ctor_1`.
+   rejected at the recursor model; and taking the constructor's field without
+   applying it to the branch is rejected at the constructor model.
 
    **The erasure guard now has no occupant in this file, and that is not an
    oversight.** What is left of it — a mention βζ discards, a binder only βζ
@@ -158,7 +159,7 @@
      recursive with **no base constructor**.
 
    `NoBase` is worth a second sentence, because arm C is how the shape came to
-   light. `NoBase._model.skel` is `S | mk : N → S → S` — an *uninhabited*
+   light. `NoBase._model._impl.skel` is `S | mk : N → S → S` — an *uninhabited*
    linearly recursive inductive, which Lean accepts and the tuple tower does
    not model: its spine's zero fibre is a chain of no fields and the plan
    gives it no pad. That is a gap in the **Type route** and not in arm C, it

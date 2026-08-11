@@ -1,16 +1,11 @@
-/- **A file that has already taken a name the model wants.**
+/- **A file that has taken a legacy-looking model name.**
 
-   §1 fixes the model's names, so a consumer keys on them — and a file is free
-   to declare one of them itself. `mini/tests/fixtures/nested_keying.lean` is
-   this for the nested construction and this is it for the mutual one:
-   `KB._model.self` is declared *after* the block, so a guard that looked only
-   at the environment as it stands would generate a second one and emit an
-   export with a duplicate declaration. The guard scans the whole input file.
+   `KB._model.self` is declared *after* the block. It used to collide with a
+   carrier spelling, but is not a declaration-local contract name now. The
+   exact-role guard must ignore it and generate both mutual models.
 
-   `KB` and not `KA`, deliberately: the model's namespace is the **first**
-   member's (`KA._model`) but the carriers are one per member
-   (`KA._model.self`, `KB._model.self`), so a guard that only checked names
-   under the namespace it writes into would miss this one.
+   `KB` and not `KA`, deliberately: this preserves the harder historical
+   spelling and catches any accidental return to suffix-based keying.
 
    `GA`/`GB` in the same file is the atom that says the guard is not simply
    refusing everything. -/
@@ -47,8 +42,7 @@ inductive GB : Type where
   | back : GA → GB
 end
 
-/-- The name the model wants for `KB`'s carrier, declared by the file itself
-    and **after** the block. -/
+/-- An obsolete carrier spelling, declared **after** the block and ignored. -/
 def KB._model.self : Type := N
 
 def kaOf (b : KB) : KA := KA.mk b

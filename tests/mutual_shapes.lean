@@ -8,7 +8,7 @@
    Every block here has **three** members, deliberately. Two cannot distinguish
    an ordering from a permutation of it, and the encoding has three orderings
    to get right at once: which member is which tag constructor, whose
-   constructors come first in the flattened `T._model.ctor_j`, and which ι
+   constructors come first in the flattened implementation block, and which ι
    theorem belongs to which recursor.
 
    * `A`/`B`/`C` — a three-way cycle with **2, 1 and 3 constructors**. Equal

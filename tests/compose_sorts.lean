@@ -34,7 +34,7 @@
    reproduce it, kept so that the next person does not spend the same three
    builds, and they are also the control that says a repair which simply
    stopped checking would be indistinguishable. Under a mutation that puts `==`
-   back, **`PS._model.0` declines and the other three still model** — which is
+   back, **`PS._model._impl.0` declines and the other three still model** — which is
    what makes this file pin the repair rather than merely exercise it. -/
 prelude
 
@@ -82,7 +82,7 @@ inductive PT (α : Type u) (β : Type v) : Type (max u v) where
   | mk : Cont α (PT α β) → PT α β
 
 /-- **The shape.** `PrefixTreeNode` as Lean declares it, at two level
-    parameters: the specialised block is `PF._model.0 : Sort ((max u v)+1)`
+    parameters: the specialised block is `PF._model._impl.0 : Sort ((max u v)+1)`
     beside the mimic of `RB α (fun _ => PF α β)` at
     `Sort (max (u+1) ((max u v)+1))`. -/
 inductive PF (α : Type u) (β : Type v) : Type (max u v) where

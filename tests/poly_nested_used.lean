@@ -12,7 +12,7 @@
    emitted once per *something else that happens to come in pairs*.
 
    What this file is for is the question `modelgen`'s model raises and
-   `poly_nested` cannot ask: the model's declarations — `PTree._model.0`, its
+   `poly_nested` cannot ask: the model's declarations — `PTree._model._impl.0`, its
    `pack_i`/`unpack_i`, its `rec_k` and `iota_k_j` — are **referenced by
    nothing**. `mini` finds them by the naming convention, not by a use site. So
    `monomorph`'s backward sweep sees no demand on the model's groups and takes

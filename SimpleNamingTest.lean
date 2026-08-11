@@ -120,9 +120,9 @@ def main : IO UInt32 := do
   let composed ← runFixture "tests/prim_late_basis.ndjson"
     { noGeneration with mutualModels := true, simple := true }
   state := state.check "an original _model component composes"
-    (composed.hasName `MA._model.tag._model &&
-      composed.hasName `MA._model.tag.rec._model &&
-      !composed.hasName `MA._model.tag._model.self)
+    (composed.hasName `MA._model._impl.tag._model &&
+      composed.hasName `MA._model._impl.tag.rec._model &&
+      !composed.hasName `MA._model._impl.tag._model.self)
 
   IO.println s!"simple naming: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

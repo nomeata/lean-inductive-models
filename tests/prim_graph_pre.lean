@@ -22,7 +22,7 @@
    at the point the model is generated, and `lean4export` emits `Ac.rec` before
    this file's own `funext` — nothing in `Ac` mentions it, so nothing orders it
    earlier. So the report's one splice line for `Ac` reads
-   `Ac._model.funext` and names nothing else. That a *declared* `funext`
+   `Ac._model._impl.funext` and names nothing else. That a *declared* `funext`
    ahead of the model is used instead is `funext_binder.lean`'s claim, on the
    same [`Modelgen.ensureFunext`]; what this file measures is `PSigma`,
    `Nonempty` and `Classical.choice`, all three of which the replay does reach

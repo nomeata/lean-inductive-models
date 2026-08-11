@@ -6,7 +6,7 @@
    the *auxiliary* inductive: the encoding replaces `r` members by **one**
    inductive, and one `Prop`-valued inductive may support large elimination
    where the block it came from could not. So the level list handed to
-   `T._model.aux.rec` is read off that recursor rather than off the block's, and
+   `T._model._impl.aux.rec` is read off that recursor rather than off the block's, and
    these three blocks are what makes the two answers differ.
 
    * `Even`/`Odd` — the ordinary indexed `Prop` family. `Even.rec` and

@@ -11,22 +11,18 @@ Two nested declarations of the *same* shape stand side by side:
 * `Tree` — nothing else in the file mentions the names its model wants, so
   `nested_ev::iso` builds one, `nested_splice::splice` puts it in the run and
   keys `⟦Tree⟧`, `⟦Tree.leaf⟧`, `⟦Tree.node⟧` to it. Its two `def`s certify.
-* `UTree` — the file itself declares `UTree._model.self`, at a type that has
-  nothing whatever to do with `UTree`. `iso` answers `NameTaken`, no entry is
-  keyed, and `⟦UTree⟧` must **decline**, naming that shape.
+* `UTree` — the file itself declares the legacy-looking name
+  `UTree._model.self`, at a type that has nothing whatever to do with `UTree`.
+  Exact declaration-local keying ignores it, and `UTree` must model normally.
 
-The second is the whole point. A keying spelled as a name rule — take the
-declaration's name, append `_model.self`, look it up — answers `⟦UTree⟧ = ⟦N⟧`
-here, silently, and every counter in the file reads as if the model worked.
-That is the `_auxCarrier` failure at one level up, and this file is the input
-that tells the two implementations apart: under the table, `utreeTy` and
-`utreeNode` wait on `ind-spec(UTree: nested model name taken)`; under the name
-rule they certify, against a model nobody built.
+The second is the whole point. A compatibility guard that still reserves the
+old carrier spelling silently declines a valid model. The public type-former
+model is now `UTree._model`, and the implementation block is rooted at
+`UTree._model._impl.0`; this unrelated declaration must affect neither.
 
 `UTree._model.self := N` is deliberately a *type* and deliberately inhabited,
-so that a wrong keying produces a well-formed store entry rather than a crash —
-a distinguishing input that only distinguishes by failing to typecheck would
-not be measuring the keying.
+so the test distinguishes exact-role keying from legacy suffix heuristics,
+not merely well-formedness.
 
 The declarations are otherwise as small as a nested inductive gets: one
 container, depth one, no parameters. `nested_shapes.lean` and
@@ -65,14 +61,13 @@ inductive Tree : Type where
   | leaf : Tree
   | node : List Tree → Tree
 
-/-- Nested, and **not** modelled: the name its carrier would take is already
-    spoken for, immediately below. -/
+/-- Nested, and modelled despite the unrelated legacy-looking name below. -/
 inductive UTree : Type where
   | uleaf : UTree
   | unode : List UTree → UTree
 
-/-- The squatter. Nothing about `UTree`; a perfectly ordinary definition that
-    happens to have the name the model would have minted. -/
+/-- The legacy squatter. Nothing about `UTree`; it is deliberately not one of
+    the declaration-local contract names minted today. -/
 def UTree._model.self : Type := N
 
 def treeTy : Type := Tree

@@ -88,20 +88,20 @@ def main : IO UInt32 := do
   state := state.check "simple without basic keeps the arm-C parent"
     ((generatedNames carveSimple).contains `Bif)
   state := state.check "simple without basic leaves the required skeleton unmodelled"
-    (!(generatedNames carveSimple).contains `Bif._model.skel &&
-      carveSimple.spliced.any fun (_, names) => names.contains `Bif._model.skel)
+    (!(generatedNames carveSimple).contains `Bif._model._impl.skel &&
+      carveSimple.spliced.any fun (_, names) => names.contains `Bif._model._impl.skel)
 
   -- Nested, mutual and simple are separate stages. A later stage cannot fire
   -- when the stage producing its input is disabled.
   let nestedOnly ← runFixture "tests/nested_iota.ndjson" { noGeneration with nested := true }
   state := state.check "nested models the input" ((generatedNames nestedOnly).contains `Tree)
   state := state.check "nested alone does not model its mutual output"
-    (!hasGeneratedSuffix nestedOnly "._model.0")
+    (!hasGeneratedSuffix nestedOnly "._model._impl.0")
 
   let nestedMutual ← runFixture "tests/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true }
   state := state.check "mutual models the nested model"
-    (hasGeneratedSuffix nestedMutual "._model.0")
+    (hasGeneratedSuffix nestedMutual "._model._impl.0")
   state := state.check "mutual without simple leaves tag and aux unmodelled"
     (!hasGeneratedSuffix nestedMutual "._model._impl.tag" &&
       !hasGeneratedSuffix nestedMutual "._model._impl.aux")
@@ -211,8 +211,9 @@ def main : IO UInt32 := do
   let (composedDecls, _) ← runFixtureOutput "tests/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true }
   let composedNames := outputNames composedDecls
-  let nested0 := (`Tree._model).mkNum 0
-  let nested1 := (`Tree._model).mkNum 1
+  let nestedImpl := `Tree._model._impl
+  let nested0 := nestedImpl.mkNum 0
+  let nested1 := nestedImpl.mkNum 1
   let nested0Rec := Name.str nested0 "rec"
   let nested1Rec := Name.str nested1 "rec"
   let nested0Model := Naming.modelName nested0

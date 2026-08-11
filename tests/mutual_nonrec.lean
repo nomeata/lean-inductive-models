@@ -13,13 +13,13 @@
      `mini/tests/fixtures/mutual_one_recursive.lean` is the same shape.
    * `EA`/`EB`/`EC` — a member with **no constructors at all**. The tag then has
      a constructor no `aux` constructor ever mentions, `EB.rec` has no rules,
-     and `EB._model.self` is the carrier of an empty type. A generator that
+     and `EB._model` is the carrier of an empty type. A generator that
      indexed the ι theorems off the flattened constructor list rather than off
      each recursor's *own* rules gets the wrong ones here.
    * `Ka`/`Kb` — `Ka : Prop | mk : Ka` is the shape Lean gives a **K-rule** to
      when it stands alone; being in a block is the only reason it does not get
      one. The auxiliary inductive does not get one either, and for a different
-     reason: `T._model.aux` always carries the tag as an *index*, and an indexed
+     reason: `T._model._impl.aux` always carries the tag as an *index*, and an indexed
      inductive is never K-like. So a generator that copied the block's `k` flag
      onto the aux recursor would be wrong here and nowhere else in the tree.
 

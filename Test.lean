@@ -8,7 +8,8 @@ Run from the repository root: `lake exe test [ROOT]`.
 
 Four axes, and each one has an occupant that would pass the other three:
 
-1. **The counts.** One declaration for the block, one for the carrier, four per
+1. **The counts.** One declaration for the implementation block, one for each
+   public type-former model, four per
    mimic, one per constructor, one per recursor, one congruence per mimic and
    **one ι theorem per rule of every recursor**. A generator that quietly
    emitted fewer — dropping a round trip, or a mimic, or one constructor's rule
@@ -16,18 +17,18 @@ Four axes, and each one has an occupant that would pass the other three:
 2. **The kernel.** Every generated declaration goes through
    `Environment.addDeclCore` with checking on, inside the tool. An `ok` here is
    Lean's answer and not the generator's.
-3. **The statements.** Each recursor and each ι theorem is rebuilt from the rule
-   the **installed** `T.rec_k` carries and compared syntactically
+3. **The statements.** Each declaration-local recursor model and ι theorem is
+   rebuilt from the rule the **installed** recursor carries and compared syntactically
    ([`Modelgen.checkModel`]). Well-typedness is not the claim: a generator that
    stated a different well-typed equation — the rule of the wrong member, the
-   hypothesis at `T.rec` where the export says `T.rec_1` — would satisfy axis 2.
+   hypothesis at one recursor where the export names another — would satisfy axis 2.
 4. **The round trip.** `parse (render (parse t)) = parse t`, structurally, and
    a file with no nested inductive comes out byte for byte.
 
 ## The ordering axis, and why `Lean.Syntax` is the test for it
 
 Two atoms cannot distinguish an ordering. The mimic discovery order decides
-which generated `rec_k` states which of the export's rules, and the five shapes
+which generated recursor model states which of the export's rules, and the five shapes
 `mini/tests/fixtures` shares with this directory have at most **two** mimics —
 reversing the order there swaps two things and axis 3 catches it only if the
 two differ in shape.
@@ -52,7 +53,7 @@ onward.** That commit made `mini` a consumer of this tool and recommitted the
 five nested fixtures **already filtered**, which is what `mini` needs — its
 Rust suite passes `--no-modelgen` and must run on a machine with no Lean. But
 the filter is idempotent: on its own output the generator declines `nested
-model name taken (Tree._model.0)` and axes 1, 2 and 3 measure **nothing**.
+model name taken (Tree._model._impl.0)` and axes 1, 2 and 3 measure **nothing**.
 Ten checks were failing and five shapes had stopped being covered.
 
 Re-baselining them to the declines would have pinned the loss as if it were
@@ -69,20 +70,20 @@ in what the generator emits, are both a failure here rather than a silent
 divergence between two directories. -/
 def expectedShared : List Row :=
   [ ("nested_iota",
-      [("Tree", 15), ("Tree._model.0", 14), ("BTree", 24),
-       ("BTree._model.0", 20), ("PT", 15), ("PT._model.0", 14)], [])
-  , ("nested_deep", [("DTree", 23), ("DTree._model.0", 20)], [])
+      [("Tree", 15), ("Tree._model._impl.0", 14), ("BTree", 24),
+       ("BTree._model._impl.0", 20), ("PT", 15), ("PT._model._impl.0", 14)], [])
+  , ("nested_deep", [("DTree", 23), ("DTree._model._impl.0", 20)], [])
   , ("nested_shapes",
-      [("Tree", 15), ("Tree._model.0", 14), ("PTree", 14),
-       ("PTree._model.0", 12), ("DTree", 23), ("DTree._model.0", 20),
-       ("BTree", 14), ("BTree._model.0", 12)], [])
-  , ("nested_iota_arm", [("Tree", 15), ("Tree._model.0", 14)], [])
-    -- `nested_keying.lean` declares `UTree._model.self` itself, *after*
-    -- `UTree`, so that a consumer keying on the convention is not fooled by it.
-    -- The guard therefore has to scan the whole file and not just the prefix;
-    -- `Tree` in the same file is the atom that says the guard is not simply
-    -- refusing everything.
-  , ("nested_keying", [("Tree", 15), ("Tree._model.0", 14)], [("UTree", "nested model name taken (UTree._model.self)")])
+      [("Tree", 15), ("Tree._model._impl.0", 14), ("PTree", 14),
+       ("PTree._model._impl.0", 12), ("DTree", 23), ("DTree._model._impl.0", 20),
+       ("BTree", 14), ("BTree._model._impl.0", 12)], [])
+  , ("nested_iota_arm", [("Tree", 15), ("Tree._model._impl.0", 14)], [])
+    -- `nested_keying.lean` deliberately declares the legacy-looking name
+    -- `UTree._model.self`. Exact declaration-local keying must ignore it:
+    -- both nested declarations and their implementation blocks model.
+  , ("nested_keying",
+      [("Tree", 15), ("Tree._model._impl.0", 14), ("UTree", 15),
+       ("UTree._model._impl.0", 14)], [])
   ]
 
 /-- **The refusal paths, each with a fixture that reaches it.** The generator
@@ -127,7 +128,7 @@ the polarity they pin has flipped, not gone:
   file's name is now about what it *lacks* rather than what it gets. 15
   declarations plus one for the `Eq`.
 * `infinitary` — the input declares no `funext`, so `HTree` splices the
-  quotient, `Quot.sound` and `HTree._model.funext` (three declarations on top
+  quotient, `Quot.sound` and `HTree._model._impl.funext` (three declarations on top
   of its 15, the quotient counting once) and `RTree` and `OTree` splice only
   their own `funext`, the quotient being installed by then. This is the file
   that says a splice happens **once**: three declarations need `funext` and
@@ -184,8 +185,8 @@ one motive vector carries three distinct arities; each member has a recursive
 field whose index differs from its result's, and both members nest. -/
 def expectedOwn : List Row :=
   [ ("poly_nested",
-      [("PTree", 15), ("PTree._model.0", 14), ("QTree", 22),
-       ("QTree._model.0", 18)], [])
+      [("PTree", 15), ("PTree._model._impl.0", 14), ("QTree", 22),
+       ("QTree._model._impl.0", 18)], [])
     -- **`poly_nested` with use sites**, because `poly_nested` has none: nothing
     -- in it instantiates `PTree.{u}` or `QTree.{u,v}`, so `monomorph`
     -- downstream gives every group in it exactly one copy and the pipeline's
@@ -193,19 +194,19 @@ def expectedOwn : List Row :=
     -- 0, 1 and 2. For `modelgen` alone it is one more polymorphic nested shape;
     -- what it exists for is `MONOMORPH.md` §1.3, which measures on it that a
     -- model does **not** survive monomorphization.
-  , ("poly_nested_used", [("PTree", 15), ("PTree._model.0", 14)], [])
+  , ("poly_nested_used", [("PTree", 15), ("PTree._model._impl.0", 14)], [])
   , ("indexed_decl",
-      [("ITree", 15), ("ITree._model.0", 14), ("I2", 15), ("I2._model.0", 14),
-       ("I3", 15), ("I3._model.0", 14)], [])
+      [("ITree", 15), ("ITree._model._impl.0", 14), ("I2", 15), ("I2._model._impl.0", 14),
+       ("I3", 15), ("I3._model._impl.0", 14)], [])
   , ("indexed_container",
-      [("VTree", 15), ("VTree._model.0", 14), ("WTree", 17),
-       ("WTree._model.0", 16), ("UTree", 16), ("UTree._model.0", 16)], [])
+      [("VTree", 15), ("VTree._model._impl.0", 14), ("WTree", 17),
+       ("WTree._model._impl.0", 16), ("UTree", 16), ("UTree._model._impl.0", 16)], [])
   , ("nest_index_cross",
-      [("ITr", 15), ("ITr._model.0", 14), ("CTree", 15), ("CTree._model.0", 14),
-       ("PA", 29), ("PA._model.0", 26), ("XT", 21), ("XT._model.0", 18)], [])
+      [("ITr", 15), ("ITr._model._impl.0", 14), ("CTree", 15), ("CTree._model._impl.0", 14),
+       ("PA", 29), ("PA._model._impl.0", 26), ("XT", 21), ("XT._model._impl.0", 18)], [])
   , ("dependent_fields",
-      [("DTree", 15), ("DTree._model.0", 14), ("ETree", 15),
-       ("ETree._model.0", 14), ("KTree", 15), ("KTree._model.0", 14)], [])
+      [("DTree", 15), ("DTree._model._impl.0", 14), ("ETree", 15),
+       ("ETree._model._impl.0", 14), ("KTree", 15), ("KTree._model._impl.0", 14)], [])
     -- **The three places a binder can sit relative to the nesting, without a
     -- `funext` in the export.** All three are shapes Lean accepts and all
     -- three are models in `funext_binder.lean`, which is the same three with
@@ -219,10 +220,10 @@ def expectedOwn : List Row :=
     -- the second, so these three numbers pin the "once" as well as the
     -- derivation.
   , ("infinitary",
-      [("FTree", 17), ("FTree._model.0", 16), ("GTree", 15),
-       ("GTree._model.0", 14), ("ZTree", 22), ("ZTree._model.0", 18),
-       ("HTree", 18), ("HTree._model.0", 14), ("RTree", 14),
-       ("RTree._model.0", 12), ("OTree", 20), ("OTree._model.0", 14)], [])
+      [("FTree", 17), ("FTree._model._impl.0", 16), ("GTree", 15),
+       ("GTree._model._impl.0", 14), ("ZTree", 22), ("ZTree._model._impl.0", 18),
+       ("HTree", 18), ("HTree._model._impl.0", 14), ("RTree", 14),
+       ("RTree._model._impl.0", 12), ("OTree", 20), ("OTree._model._impl.0", 14)], [])
     -- **A field at a mimic under a binder, with a `funext` to prove it with.**
     -- The three positions again — the root (`HTree`), the container's own
     -- recursive field (`RTree`), a container's field at another mimic
@@ -232,9 +233,9 @@ def expectedOwn : List Row :=
     -- position with a binder beside one without in the *same* constructor,
     -- where the fold builds the two congruences differently.
   , ("funext_binder",
-      [("HTree", 15), ("HTree._model.0", 14), ("RTree", 13),
-       ("RTree._model.0", 12), ("OTree", 19), ("OTree._model.0", 14),
-       ("H2", 15), ("H2._model.0", 14), ("H3", 15), ("H3._model.0", 14)], [])
+      [("HTree", 15), ("HTree._model._impl.0", 14), ("RTree", 13),
+       ("RTree._model._impl.0", 12), ("OTree", 19), ("OTree._model._impl.0", 14),
+       ("H2", 15), ("H2._model._impl.0", 14), ("H3", 15), ("H3._model._impl.0", 14)], [])
     -- **That shape crossed with the rest**, because nothing about it on its
     -- own says it survives them — and the cycle in particular does not come
     -- for free: `packFamMinor`/`retractFamilyValue` are a second copy of the
@@ -243,9 +244,9 @@ def expectedOwn : List Row :=
     -- telescope, `IdxB` puts the binder at an indexed container, `MutB`/`MutC`
     -- inside a mutual block, `CycB` inside a cyclic group of mimics.
   , ("nest_binder_cross",
-      [("Tr", 15), ("Tr._model.0", 14), ("DTel", 13), ("DTel._model.0", 12),
-       ("IdxB", 13), ("IdxB._model.0", 12), ("MutB", 24), ("MutB._model.0", 20),
-       ("CycB", 21), ("CycB._model.0", 18)], [])
+      [("Tr", 15), ("Tr._model._impl.0", 14), ("DTel", 13), ("DTel._model._impl.0", 12),
+       ("IdxB", 13), ("IdxB._model._impl.0", 12), ("MutB", 24), ("MutB._model._impl.0", 20),
+       ("CycB", 21), ("CycB._model._impl.0", 18)], [])
     -- **The sort the block lands in.** `PTree : Prop` eliminates only into
     -- `Prop`, so `PTree.rec` and the container's `PL.rec` have **no motive
     -- universe at all**; every recursor's level list is read off the recursor
@@ -255,8 +256,8 @@ def expectedOwn : List Row :=
     -- `Prop`-valued and *does* have a motive universe. `STree` nests through a
     -- container polymorphic over `Sort` rather than `Type`.
   , ("nest_sorts",
-      [("PTree", 13), ("PTree._model.0", 12), ("STree", 13),
-       ("STree._model.0", 12)], [])
+      [("PTree", 13), ("PTree._model._impl.0", 12), ("STree", 13),
+       ("STree._model._impl.0", 12)], [])
     -- **The sweep.** A claim that there is no shape Lean accepts and this
     -- refuses is worth what was swept for it, so these were written by asking
     -- what else `inductive` allows rather than by a failure arriving. A
@@ -268,31 +269,31 @@ def expectedOwn : List Row :=
     -- parameter and an index nesting through an indexed container and through
     -- `List`, one of them under a binder — every axis at once.
   , ("nest_odd_shapes",
-      [("EmpT", 11), ("EmpT._model.0", 8), ("ImpT", 12), ("ImpT._model.0", 10),
-       ("LetT", 20), ("LetT._model.0", 16), ("FunP", 13), ("FunP._model.0", 12),
-       ("Deep3", 29), ("Deep3._model.0", 24), ("EvT", 29), ("EvT._model.0", 26)], [])
+      [("EmpT", 11), ("EmpT._model._impl.0", 8), ("ImpT", 12), ("ImpT._model._impl.0", 10),
+       ("LetT", 20), ("LetT._model._impl.0", 16), ("FunP", 13), ("FunP._model._impl.0", 12),
+       ("Deep3", 29), ("Deep3._model._impl.0", 24), ("EvT", 29), ("EvT._model._impl.0", 26)], [])
     -- **No `Eq` in the input at all**, which used to be a refusal and is now a
     -- splice: 15 declarations plus Lean's own `Eq`. The file is still named
     -- for what it does *not* declare.
-  , ("decline_no_eq", [("Tree", 16), ("Tree._model.0", 14)], [])
-  , ("nest_through_mutual", [("A", 19), ("A._model.0", 18)], [])
-  , ("nest_mutual_both", [("A", 28), ("A._model.0", 24)], [])
-  , ("nest_through_nested", [("Tree", 15), ("Tree._model.0", 14), ("T", 23), ("T._model.0", 20)], [])
+  , ("decline_no_eq", [("Tree", 16), ("Tree._model._impl.0", 14)], [])
+  , ("nest_through_mutual", [("A", 19), ("A._model._impl.0", 18)], [])
+  , ("nest_mutual_both", [("A", 28), ("A._model._impl.0", 24)], [])
+  , ("nest_through_nested", [("Tree", 15), ("Tree._model._impl.0", 14), ("T", 23), ("T._model._impl.0", 20)], [])
   , ("nest_cycle_group",
-      [("Tree", 15), ("Tree._model.0", 14), ("U", 23), ("U._model.0", 20),
-       ("V", 30), ("V._model.0", 24)], [])
+      [("Tree", 15), ("Tree._model._impl.0", 14), ("U", 23), ("U._model._impl.0", 20),
+       ("V", 30), ("V._model._impl.0", 24)], [])
   , ("nest_mutual_cycle",
-      [("Tree", 15), ("Tree._model.0", 14), ("P", 37), ("P._model.0", 32),
-       ("R", 21), ("R._model.0", 20)], [])
+      [("Tree", 15), ("Tree._model._impl.0", 14), ("P", 37), ("P._model._impl.0", 32),
+       ("R", 21), ("R._model._impl.0", 20)], [])
     -- **`C`/`D` is a plain mutual block** — the pair of containers `X` cycles
     -- through — so the *second* construction (`Modelgen/Mutual.lean`) models
     -- it, and it heads this row because the export declares it first. Two
     -- members and four constructors: the tag, the carrier, two type formers,
     -- four constructors, two recursors and four ι theorems is 14.
   , ("nest_family_edges",
-      [("C", 14), ("A1", 34), ("A1._model.0", 30), ("X", 23),
-       ("X._model.0", 20)], [])
-  , ("nest_mutual_index", [("MA", 32), ("MA._model.0", 28)], [])
+      [("C", 14), ("A1", 34), ("A1._model._impl.0", 30), ("X", 23),
+       ("X._model._impl.0", 20)], [])
+  , ("nest_mutual_index", [("MA", 32), ("MA._model._impl.0", 28)], [])
     -- **`nest_fam_arg` is §5.1's sweep and it has moved to `expectedPrim`**,
     -- because the redex it exists for reaches layer 3 as well and that is
     -- where it now has to be measured. The row there asserts everything this
@@ -334,12 +335,10 @@ def expectedOwn : List Row :=
     -- parameter (so the tag's sort is `max 1 (u+1)` and not a numeral), and a
     -- parameter that is a function type.
   , ("mutual_odd_shapes", [("LA", 16), ("IA", 16), ("WA", 12), ("QA", 12), ("FA", 12)], [])
-    -- The name guard, at a name that is **not** under the namespace the model
-    -- writes into: the carriers are one per member, so `KB._model.self` is a
-    -- name the model of `KA`'s block wants. `GA` beside it says the guard is
-    -- not refusing everything.
-  , ("mutual_keying", [("GA", 12)],
-      [("KA", "mutual model name taken (KB._model.self)")])
+    -- `KB._model.self` is intentionally a legacy-looking squatter. Under the
+    -- declaration-local contract it is irrelevant, so both mutual blocks
+    -- model; this preserves the regression test that a legacy name is ignored.
+  , ("mutual_keying", [("KA", 12), ("GA", 12)], [])
     -- ── the two composed (§1.7) ────────────────────────────────────────────
     --
     -- **The axis only the composition reaches.** Lean's nested specialisation
@@ -348,10 +347,10 @@ def expectedOwn : List Row :=
     -- `inductive` *declares* could find it, because it is a shape the
     -- elaborator forbids and the kernel writes. `PS` is it; `PT` and `PF` are
     -- the two guesses that did not reproduce it and `Q` is the control.
-    -- Put `==` back where `isLevelDefEq` is and `PS._model.0` declines alone.
+    -- Put `==` back where `isLevelDefEq` is and `PS._model._impl.0` declines alone.
   , ("compose_sorts",
-      [("PT", 13), ("PT._model.0", 12), ("PF", 13), ("PF._model.0", 12),
-       ("PS", 13), ("PS._model.0", 12), ("Q", 12), ("Q._model.0", 10)], [])
+      [("PT", 13), ("PT._model._impl.0", 12), ("PF", 13), ("PF._model._impl.0", 12),
+       ("PS", 13), ("PS._model._impl.0", 12), ("Q", 12), ("Q._model._impl.0", 10)], [])
   ]
 
 /-- **The third construction's rows** (`--prim-models`), run with the flag on.
@@ -442,7 +441,7 @@ def expectedPrim : List Row :=
        ("_wcore.PProd", 4), ("MixI", 4), ("Inf.below", 12), ("Binder", 12),
        ("SvIx", 4)],
       [ ("Eq", "prim model: a basis primitive")
-      , ("BoxF", "prim model shape: [BoxF._model.self] rejected by the kernel")])
+      , ("BoxF", "prim model shape: [BoxF._model] rejected by the kernel")])
   -- **The index axis**, as a grid rather than as the shapes the corpus
   -- happens to have (`MODELGEN.md` §8.17, `tests/prim_idx.lean`'s header).
   -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
@@ -457,7 +456,8 @@ def expectedPrim : List Row :=
   -- `Nonempty`, `Classical.choice`, the quotient and a derived `funext`);
   -- `Inf` behind it is 12, arm G's twelve declarations with nothing left to
   -- splice; `N` is 9 for the `Type` route's own basis. Every arm-F cell is 4 —
-  -- `self`, `ctor_0`, `rec_0`, `iota_0_0` — including `Fall3`, whose carrier
+  -- the type former, constructor, recursor and recursor-local ι theorem —
+  -- including `Fall3`, whose carrier
   -- packs nothing and whose recursor builds no `Eq.rec`. The **13**s are the
   -- twelve plus the `funext` `Graph.unique`'s congruence needs when a
   -- recursive field carries binders, exactly as in `prim_graph`; `Inf`, `Rxh`
@@ -533,7 +533,7 @@ def expectedPrim : List Row :=
       , ("Eq", "prim model: a basis primitive")])
   -- **Arm C** (`MODELGEN.md` §8.15), at one and at many recursive slots, and
   -- the three rows below the models are the arm's boundaries.
-  -- Every `X._model.skel` beside an `X` is the spliced index erasure being
+  -- Every `X._model._impl.skel` beside an `X` is the spliced index erasure being
   -- modelled in turn (§8.13's splice-and-model), so a row here going missing
   -- is arm C emitting a skeleton it did not model — the thing `Iso.requires`
   -- exists to make impossible.
@@ -545,12 +545,12 @@ def expectedPrim : List Row :=
   -- own, the erasure replaces each occurrence and keeps those binders, and the
   -- spliced skeleton that comes out **branches and is infinitary** — so it is
   -- arm W that models it, and the first skeleton to be reached carries the
-  -- splice. That is `Bif._model.skel` at 215 here, and the eighteen `_wcore`
+  -- splice. That is `Bif._model._impl.skel` at 215 here, and the eighteen `_wcore`
   -- rows after it are the fragment being modelled in turn (`Iso.requires`'
-  -- rule). Every other `_model.skel` is its own dozen, because by then the
+  -- rule). Every other `_model._impl.skel` is its own dozen, because by then the
   -- fragment is in.
   --
-  -- **`Bif._model.skel`'s 215 is an ordering fact, not a fact about `Bif`**, in
+  -- **`Bif._model._impl.skel`'s 215 is an ordering fact, not a fact about `Bif`**, in
   -- exactly the sense the arm W row below records for `Tree`: the fixture's
   -- declaration order decides which skeleton pays for the splice.
   --
@@ -566,26 +566,26 @@ def expectedPrim : List Row :=
   -- are the live occupants of the same guard, at layer 3, and the row below
   -- asserts them.
   , ("prim_carve",
-      [("N", 9), ("P", 6), ("Bif", 8), ("Bif._model.skel", 215),
+      [("N", 9), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
        ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
        ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4),
-       ("Cf", 8), ("Cf._model.skel", 12), ("Inf2", 8), ("Inf2._model.skel", 12),
-       ("Vec", 8), ("Vec._model.skel", 6), ("Bl", 10),
-       ("Bl._model.skel", 8), ("Vc", 8), ("Vc._model.skel", 6),
-       ("Mx", 8), ("Mx._model.skel", 12),
-       ("Two2", 8), ("Two2._model.skel", 6), ("Fn", 8), ("Fn._model.skel", 6),
-       ("Sm3", 8), ("Sm3._model.skel", 12), ("Br", 8), ("Br._model.skel", 12),
-       ("Tri3", 8), ("Tri3._model.skel", 6)],
+       ("Cf", 8), ("Cf._model._impl.skel", 12), ("Inf2", 8), ("Inf2._model._impl.skel", 12),
+       ("Vec", 8), ("Vec._model._impl.skel", 6), ("Bl", 10),
+       ("Bl._model._impl.skel", 8), ("Vc", 8), ("Vc._model._impl.skel", 6),
+       ("Mx", 8), ("Mx._model._impl.skel", 12),
+       ("Two2", 8), ("Two2._model._impl.skel", 6), ("Fn", 8), ("Fn._model._impl.skel", 6),
+       ("Sm3", 8), ("Sm3._model._impl.skel", 12), ("Br", 8), ("Br._model._impl.skel", 12),
+       ("Tri3", 8), ("Tri3._model._impl.skel", 6)],
       [ ("Eq", "prim model: a basis primitive")
       -- withdrawn: the erasure is bare and still does not model, and the
       -- reason carried is the *skeleton's* own rather than "it did not model"
-      , ("IBox", "prim model shape: the spliced inductive IBox._model.skel did \
+      , ("IBox", "prim model shape: the spliced inductive IBox._model._impl.skel did \
           not model")
-      , ("NoBase", "prim model shape: the spliced inductive NoBase._model.skel did \
+      , ("NoBase", "prim model shape: the spliced inductive NoBase._model._impl.skel did \
           not model")])
   -- **Arm W** (`MODELGEN.md` §8.16), and this row is three claims at once.
   --
@@ -630,11 +630,11 @@ def expectedPrim : List Row :=
   -- `β k` as the redex `(fun _ => B₀) k` in the block — and the block is
   -- exactly what the composition hands layer 3, so the redex arrives *here*
   -- too. `JT` and `PT` are `Lean.Json` and `Lean.PrefixTreeNode` at that
-  -- shape, and their `_model.aux` families were the two declarations the
+  -- shape, and their `_model._impl.aux` families were the two declarations the
   -- Mathlib run reported as **infinitary** until the guards in
   -- `Modelgen/Simple.lean` started reading a field's head through
   -- [`Modelgen.headNorm`], the same function §5.1 put in front of layer 1's
-  -- three readers. Nine `_model.aux` rows here are that repair; `Zeta`'s is
+  -- three readers. Nine `_model._impl.aux` rows here are that repair; `Zeta`'s is
   -- the one that needs ζ and not β alone.
   --
   -- The row asserts everything the old non-prim `nest_fam_arg` row did — the
@@ -668,7 +668,7 @@ def expectedPrim : List Row :=
   --   the same inner reason as `prim_carve`'s `NoBase`, reached here by a
   --   container with no recursive field of its own.
   , ("nest_fam_arg",
-      [("N", 9), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model.skel", 6),
+      [("N", 9), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model._impl.skel", 6),
        ("RB", 215),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
@@ -677,42 +677,42 @@ def expectedPrim : List Row :=
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
        ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4),
        ("RB2", 6), ("Ctr", 4),
-       ("OK", 13), ("OK._model.0", 12), ("OK._model.0._model.tag", 6),
-       ("JT", 15), ("JT._model.0", 14), ("JT._model.0._model.tag", 6),
-       ("JT._model.0._model.aux", 12),
-       ("JT._model.0._model.aux._model.skel", 16),
-       ("PT", 13), ("PT._model.0", 12), ("PT._model.0._model.tag", 6),
-       ("PT._model.0._model.aux", 10),
-       ("PT._model.0._model.aux._model.skel", 14),
-       ("PTP", 13), ("PTP._model.0", 12), ("PTP._model.0._model.tag", 6),
-       ("PTP._model.0._model.aux", 10),
-       ("PTP._model.0._model.aux._model.skel", 14),
-       ("Deep", 21), ("Deep._model.0", 18), ("Deep._model.0._model.tag", 8),
-       ("Deep._model.0._model.aux", 14),
-       ("Deep._model.0._model.aux._model.skel", 18),
-       ("Idx", 21), ("Idx._model.0", 18), ("Idx._model.0._model.tag", 8),
-       ("Idx._model.0._model.aux", 14),
-       ("Idx._model.0._model.aux._model.skel", 18),
-       ("Both", 13), ("Both._model.0", 12), ("Both._model.0._model.tag", 6),
-       ("Both._model.0._model.aux", 10),
-       ("Both._model.0._model.aux._model.skel", 14),
-       ("Two", 13), ("Two._model.0", 12), ("Two._model.0._model.tag", 6),
-       ("Two._model.0._model.aux", 10),
-       ("Two._model.0._model.aux._model.skel", 14),
-       ("Flat", 12), ("Flat._model.0", 10), ("Flat._model.0._model.tag", 6),
-       ("Key", 21), ("Key._model.0", 18), ("Key._model.0._model.tag", 8),
-       ("Zeta", 21), ("Zeta._model.0", 18), ("Zeta._model.0._model.tag", 8),
-       ("Zeta._model.0._model.aux", 14),
-       ("Zeta._model.0._model.aux._model.skel", 18),
-       ("Ix", 15), ("Ix._model.0", 14), ("Ix._model.0._model.tag", 6),
-       ("Ix._model.0._model.aux", 12),
-       ("Ix._model.0._model.aux._model.skel", 16)],
+       ("OK", 13), ("OK._model._impl.0", 12), ("OK._model._impl.0._model._impl.tag", 6),
+       ("JT", 15), ("JT._model._impl.0", 14), ("JT._model._impl.0._model._impl.tag", 6),
+       ("JT._model._impl.0._model._impl.aux", 12),
+       ("JT._model._impl.0._model._impl.aux._model._impl.skel", 16),
+       ("PT", 13), ("PT._model._impl.0", 12), ("PT._model._impl.0._model._impl.tag", 6),
+       ("PT._model._impl.0._model._impl.aux", 10),
+       ("PT._model._impl.0._model._impl.aux._model._impl.skel", 14),
+       ("PTP", 13), ("PTP._model._impl.0", 12), ("PTP._model._impl.0._model._impl.tag", 6),
+       ("PTP._model._impl.0._model._impl.aux", 10),
+       ("PTP._model._impl.0._model._impl.aux._model._impl.skel", 14),
+       ("Deep", 21), ("Deep._model._impl.0", 18), ("Deep._model._impl.0._model._impl.tag", 8),
+       ("Deep._model._impl.0._model._impl.aux", 14),
+       ("Deep._model._impl.0._model._impl.aux._model._impl.skel", 18),
+       ("Idx", 21), ("Idx._model._impl.0", 18), ("Idx._model._impl.0._model._impl.tag", 8),
+       ("Idx._model._impl.0._model._impl.aux", 14),
+       ("Idx._model._impl.0._model._impl.aux._model._impl.skel", 18),
+       ("Both", 13), ("Both._model._impl.0", 12), ("Both._model._impl.0._model._impl.tag", 6),
+       ("Both._model._impl.0._model._impl.aux", 10),
+       ("Both._model._impl.0._model._impl.aux._model._impl.skel", 14),
+       ("Two", 13), ("Two._model._impl.0", 12), ("Two._model._impl.0._model._impl.tag", 6),
+       ("Two._model._impl.0._model._impl.aux", 10),
+       ("Two._model._impl.0._model._impl.aux._model._impl.skel", 14),
+       ("Flat", 12), ("Flat._model._impl.0", 10), ("Flat._model._impl.0._model._impl.tag", 6),
+       ("Key", 21), ("Key._model._impl.0", 18), ("Key._model._impl.0._model._impl.tag", 8),
+       ("Zeta", 21), ("Zeta._model._impl.0", 18), ("Zeta._model._impl.0._model._impl.tag", 8),
+       ("Zeta._model._impl.0._model._impl.aux", 14),
+       ("Zeta._model._impl.0._model._impl.aux._model._impl.skel", 18),
+       ("Ix", 15), ("Ix._model._impl.0", 14), ("Ix._model._impl.0._model._impl.tag", 6),
+       ("Ix._model._impl.0._model._impl.aux", 12),
+       ("Ix._model._impl.0._model._impl.aux._model._impl.skel", 16)],
       [ ("Eq", "prim model: a basis primitive")
-      , ("OK._model.0._model.aux", "prim model shape: an indexed family at a \
+      , ("OK._model._impl.0._model._impl.aux", "prim model shape: an indexed family at a \
           never-zero sort whose index erasure is not bare")
-      , ("Flat._model.0._model.aux", "prim model shape: the spliced inductive \
-          Flat._model.0._model.aux._model.skel did not model")
-      , ("Key._model.0._model.aux", "prim model shape: an indexed family at a \
+      , ("Flat._model._impl.0._model._impl.aux", "prim model shape: the spliced inductive \
+          Flat._model._impl.0._model._impl.aux._model._impl.skel did not model")
+      , ("Key._model._impl.0._model._impl.aux", "prim model shape: an indexed family at a \
           never-zero sort whose index erasure is not bare")])
   -- **A basis primitive the input declares after the block whose model needs
   -- it.** `runFilter`'s `waitingPrim` has always held an *input* declaration's
@@ -724,7 +724,7 @@ def expectedPrim : List Row :=
   -- of the eleven declines the full run reported (`MODELGEN.md` §8.16.5).
   --
   -- **The order in this row is the claim.** `MA` (the mutual model) and
-  -- `Nd`/`Nd._model.0` (nested, then its mutual) are generated at their own
+  -- `Nd`/`Nd._model._impl.0` (nested, then its mutual) are generated at their own
   -- declarations, because layers 1 and 2 need only `Eq`. Everything from `N`
   -- on is the drain at the input's own `PSigma`, in queue order: the three
   -- input declarations that were already waiting, then the four the
@@ -737,12 +737,12 @@ def expectedPrim : List Row :=
   -- `Nat` and not `PSigma`: a primitive the input does *not* declare is
   -- spliced and never waited for.
   , ("prim_late_basis",
-      [("MA", 20), ("Nd", 15), ("Nd._model.0", 14),
+      [("MA", 20), ("Nd", 15), ("Nd._model._impl.0", 14),
        ("N", 8), ("L", 6), ("Pre", 6),
-       ("MA._model.tag", 8), ("MA._model.aux", 16),
-       ("MA._model.aux._model.skel", 14),
-       ("Nd._model.0._model.tag", 6), ("Nd._model.0._model.aux", 12),
-       ("Nd._model.0._model.aux._model.skel", 219),
+       ("MA._model._impl.tag", 8), ("MA._model._impl.aux", 16),
+       ("MA._model._impl.aux._model._impl.skel", 14),
+       ("Nd._model._impl.0._model._impl.tag", 6), ("Nd._model._impl.0._model._impl.aux", 12),
+       ("Nd._model._impl.0._model._impl.aux._model._impl.skel", 219),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
@@ -836,11 +836,11 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures")
         s!"{name}: the filter generated a model on its own output: \
            {r3.generated.toList.map fun (n, k) => (n.toString, k)}"
       -- **Both constructions' name guards, because the output carries both.**
-      -- A filtered nested declaration leaves a `T._model.0 …` block behind and
+      -- A filtered nested declaration leaves a `T._model._impl.0 …` block behind and
       -- the composition (`MODELGEN.md` §1.7) models *that* too, so re-filtering
       -- declines twice per nested declaration: once at `mutual model name taken
-      -- (T._model.0._model.tag)` for the block, once at `nested model name
-      -- taken (T._model.0)` for the declaration. Either prefix is the guard
+      -- (T._model._impl.0._model._impl.tag)` for the block, once at `nested model name
+      -- taken (T._model._impl.0)` for the declaration. Either prefix is the guard
       -- doing its job; anything else is not.
       a := check a (r3.declined.all fun (_, w) =>
           "nested model name taken".isPrefixOf w || "mutual model name taken".isPrefixOf w)
@@ -1040,8 +1040,8 @@ uses, applied here to manufacture the problem rather than to solve it.
 Three checks, and the third is the one that would catch a half-done renaming:
 
 1. **both model.** Before the retry the second lost its carrier and declined.
-2. **the output carries the contract names.** `_private.M.0.Sv._model.self` and
-   not the alias, so `modelgen/README.md`'s four names still mean what they say
+2. **the output carries the contract names.** `_private.M.0.Sv._model` and
+   not the alias, so the declaration-local role names still mean what they say
    and no consumer sees the difference.
 3. **the alias root appears nowhere in the output at all** — not as a
    declaration name, not in an `all` list, not as a constant inside any type or
@@ -1073,9 +1073,9 @@ def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
   a := check a (gen.contains priv)
     s!"alias: the private copy did not model — the normalized-name collision is not \
        escaped; it declined as {rep.declined.filter (·.1 == priv) |>.map (·.2)}"
-  let selfN := Name.str (Name.str priv "_model") "self"
-  a := check a (outD.any (·.names.contains selfN))
-    s!"alias: the output does not carry {selfN}, so the four-name contract moved"
+  let modelN := Naming.modelName priv
+  a := check a (outD.any (·.names.contains modelN))
+    s!"alias: the output does not carry {modelN}, so the declaration-local contract moved"
   let leaked := outD.flatMap edeclNames |>.filter fun n =>
     n.components.any (· == `_mgalt)
   a := check a leaked.isEmpty
@@ -1223,7 +1223,7 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
   a := check a ((r.stderr.splitOn "prelude spliced").length == 4)
     s!"CLI: stderr does not carry the three splice lines: {r.stderr}"
   a := check a ((r.stderr.splitOn "HTree: prelude spliced — Quot, Quot.mk, Quot.lift, \
-      Quot.ind, Quot.sound, HTree._model.funext").length == 2)
+      Quot.ind, Quot.sound, HTree._model._impl.funext").length == 2)
     s!"CLI: the splice line does not name what was spliced: {r.stderr}"
   a := check a ((r.stdout.splitOn "prelude spliced").length == 1)
     "CLI: a report line reached stdout"
@@ -1275,7 +1275,7 @@ def runSyntax (root : String) (a : TAcc) : IO TAcc := do
       (Lean.Meta.MetaM.run' (runFilter x true (legacyGenerationConfig false))) ctx { env }
   let mut a := a
   let got := rep.generated.toList.map fun (n, k) => (n.toString, k)
-  a := check a (got == [("Lean.Syntax", 26), ("Lean.Syntax._model.0", 22)])
+  a := check a (got == [("Lean.Syntax", 26), ("Lean.Syntax._model._impl.0", 22)])
     s!"Lean.Syntax: models are {got}"
   a := check a rep.stmtErrors.isEmpty s!"Lean.Syntax: {rep.stmtErrors}"
   -- The nested model: three members, three recursors, seven ι rules — 10
@@ -1324,8 +1324,8 @@ def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
     a := check a rep.refused.isNone s!"compose[{tag}]: refused: {rep.refused}"
     a := check a (rep.rejected == 0) s!"compose[{tag}]: the kernel rejected {rep.rejected}"
     -- **Not vacuous, and this is the row that says so.** Three universes, so
-    -- `PTree`'s group is at three copies — and so, now, is every one of the 29
-    -- groups its model is made of. The six at one copy are `Eq` and `List`
+    -- `PTree`'s group is at three copies — and so, now, are all 30 groups in
+    -- the composed output. The six at one copy are `Eq` and `List`
     -- (carried), `N`, and the three `atK` that do the using. A composition
     -- measured on a file whose every group lands at one instantiation is
     -- measuring the defaults agreeing with themselves.
@@ -1334,14 +1334,18 @@ def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
     -- defaulted to a single copy beside it (`MONOMORPH.md` §1.3 item 1).
     a := check a (rep.hist == #[(1, 6), (3, 30)])
       s!"compose[{tag}]: copies per group {rep.hist}, expected #[(1, 6), (3, 30)]"
-    a := check a (rep.modelGroups == 29)
-      s!"compose[{tag}]: {rep.modelGroups} model groups keyed, expected 29"
+    -- Exact-role counting keys the 21 public declaration-local model roles
+    -- plus one structurally proved model-of-model helper bridge. Other `_impl`
+    -- helpers are copied by actual dependency demand, not by nominal `_model`
+    -- ancestry, hence 22 keyed groups although the histogram has 30 triples.
+    a := check a (rep.modelGroups == 22)
+      s!"compose[{tag}]: {rep.modelGroups} model groups keyed, expected 22"
     a := check a (rep.modelDeclined == 0)
       s!"compose[{tag}]: the keying declined {rep.modelDeclined} model groups"
     -- **One model per copy of `PTree`, and the same model under each.** Every
     -- name is split at §1.1's marker; a name whose remainder has a `_model`
     -- component is a model's, and it is filed under the marker it carries.
-    -- `T._model.funext` is excluded: a spliced prelude theorem (`MODELGEN.md`
+    -- `T._model._impl.funext` is excluded: a spliced prelude theorem (`MODELGEN.md`
     -- §1.5) is polymorphic in universes that are nobody's motive, nothing
     -- derives its name, and it is not one of the nine families.
     --
@@ -1349,7 +1353,7 @@ def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
     -- layer of the composed naming. The marker set the model's names use must
     -- be exactly the marker set `PTree` itself uses — three, not one, and not
     -- four. And the **suffixes** filed under each marker must be the same set:
-    -- `PTree._model.0._model.self` is a suffix like any other, so a copy that
+    -- `PTree._model._impl.0._model` is a suffix like any other, so a copy that
     -- got the outer model and not the inner one fails here by name.
     -- §1.2 property 3's inversion: the trailing `._elim.⟨w⟩` comes off first.
     -- Mode B folds the *motive's* universe into it, and that numeral is a
