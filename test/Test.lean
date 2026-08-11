@@ -379,7 +379,10 @@ message moved from `fields reach Sort imax` to `rejected by the kernel`,
 demonstrating that a planner-side procedure alone cannot get `BoxF` past the
 kernel. -/
 def expectedPrim : List Row :=
-  [ ("prim_shapes",
+  [ ("degenerate_graph", [("I", 10)],
+      [("DG", "prim model shape: an indexed subsingleton: the packed-index-equation model \
+        (the degenerate graph case) is not implemented")])
+  , ("prim_shapes",
       [("Tri", 11), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
        ("Conj3", 10), ("PU", 6), ("Sv", 5), ("PE", 2), ("MNm", 8), ("IdxS", 5),

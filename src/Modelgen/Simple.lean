@@ -4424,7 +4424,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
       let flds ← withParams fun ps => do classifyCtor tname nfj (← instForall cty ps)
       let val ← withParams fun ps => do
         let rtele ← instForall ty ps
-        forallBoundedTelescope rtele (some nfj) fun fs _ => do
+        forallBoundedTelescope rtele (some nfj) fun fs res => do
           let fold ← churchAt ps fun C ks _ => do
             let args ← (Array.range nfj).mapM fun i => do
               match flds[i]!.rec? with
@@ -4439,8 +4439,11 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
           match lift? with
           | none => mkLambdaFVars (ps ++ fs) fold
           | some ℓ =>
-            forallBoundedTelescope (← idxTeleAt ps) (some ni) fun is _ => do
-              mkLambdaFVars (ps ++ fs) (puliftUp ℓ (← churchPropAt ps is) fold)
+            let args := res.getAppArgs
+            unless res.getAppFn.isConstOf selfN && args.size == np + ni do
+              badShape s!"{ctorN j}'s result is not {selfN} at {np} parameters and {ni} indices"
+            let is := args.extract np args.size
+            mkLambdaFVars (ps ++ fs) (puliftUp ℓ (← churchPropAt ps is) fold)
       let d := Declaration.defnDecl
         { name := ctorN j, levelParams := lparams, type := ty, value := val
           hints := ← hintsFor val, safety := .safe }
