@@ -624,7 +624,7 @@ private partial def inferExactType? (x : Export) (declarations : DeclarationType
         (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
       let _ := name
       let _ := info
-      return .sort (.imax domainLevel bodyLevel)
+      return .sort (Level.imax domainLevel bodyLevel).normalize
   | .letE _ _ value body _ =>
       inferExactType? x declarations locals (body.instantiate1 value)
   | .mdata _ body => inferExactType? x declarations locals body
@@ -703,8 +703,6 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
     ((`_check.intrinsicProjectionCtor).append projection.name) mappedConstructorType
   unless constructorBinders.size == constructor.numParams + constructor.numFields do
     return #[.declarationType projection.owner projection.name]
-  let some selectedBinder := constructorBinders[constructor.numParams + projection.fieldIndex]?
-    | return #[.declarationType projection.owner projection.name]
   let constructorArgs := constructorBinders.map fun (binder : OpenBinder) => binder.value
   let params := constructorArgs.extract 0 constructor.numParams
   let fields := constructorArgs.extract constructor.numParams constructorArgs.size
@@ -719,14 +717,22 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
   unless ownerBinders.size == ownerArity do
     return #[.declarationType projection.owner projection.name]
   let ownerArgs := ownerBinders.map fun (binder : OpenBinder) => binder.value
+  let ownerParams := ownerArgs.extract 0 ownerType.numParams
+  let some projectionFieldsType := instantiateForallsExact mappedConstructorType ownerParams
+    | return #[.declarationType projection.owner projection.name]
+  let (projectionFieldBinders, _) : Array OpenBinder × Expr := openForalls
+    ((`_check.intrinsicProjectionFields).append projection.name) projectionFieldsType
+  let some selectedBinder := projectionFieldBinders[projection.fieldIndex]?
+    | return #[.declarationType projection.owner projection.name]
   let selfValue := mkFVar (FVarId.mk
     ((`_check.intrinsicProjectionSelf).append projection.name))
   let selfBinder : OpenBinder :=
     { name := `self, type := mkAppN (.const typePair.model levels) ownerArgs,
       info := .default, value := selfValue }
+  let projectionFieldArgs := projectionFieldBinders.map fun (binder : OpenBinder) => binder.value
   let mut projectionResult := selectedBinder.type
   for earlier in [:projection.fieldIndex] do
-    let earlierField := fields[earlier]!
+    let earlierField := projectionFieldArgs[earlier]!
     let earlierProjection := mkAppN
       (.const (Naming.projectionName projection.owner earlier) levels) (ownerArgs.push selfValue)
     projectionResult := projectionResult.replace fun subexpression =>

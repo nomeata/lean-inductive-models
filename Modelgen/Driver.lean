@@ -249,7 +249,7 @@ motive sort, and every unrelated minor returns its lifted reflexivity.  This is 
 for structure metadata (projections and eta): it permits selecting one member
 without assuming an inhabitant of any sibling's codomain. -/
 def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
-    (modelRecursor : Name) (motiveIndex minorIndex : Nat)
+    (modelRecursor targetConstructor : Name) (motiveIndex constructorNumParams : Nat)
     (params : Array Expr) (carrier major targetMotive : Expr) (targetFieldIndex : Nat)
     (motiveLevel : Level) (recLevels : List Level) : GenM (Array Expr) := do
   let modelRecursorInfo ← constInfo modelRecursor
@@ -275,23 +275,44 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
       else constantMotive domain fillerType
     arguments := arguments.push value
     current := body.instantiate1 value
-  for minor in [0:sourceRecursor.numMinors] do
+  let rec findConstructorApp? (expression : Expr) : Option Expr :=
+    if expression.getAppFn.isConstOf targetConstructor then some expression
+    else match expression with
+      | .app fn argument => findConstructorApp? fn <|> findConstructorApp? argument
+      | .lam _ type body _ | .forallE _ type body _ =>
+        findConstructorApp? type <|> findConstructorApp? body
+      | .letE _ type value body _ =>
+        findConstructorApp? type <|> findConstructorApp? value <|> findConstructorApp? body
+      | .mdata _ body => findConstructorApp? body
+      | .proj _ _ struct => findConstructorApp? struct
+      | _ => none
+  let mut selectedMinors := 0
+  for _ in [0:sourceRecursor.numMinors] do
     let .forallE _ domain body _ := current
       | badShape s!"{modelRecursor} has too few minor binders"
-    let value ← if minor == minorIndex then
-      forallTelescope domain fun binders _ => do
-        let some field := binders[targetFieldIndex]?
-          | badShape s!"{modelRecursor}'s selected minor has no field {targetFieldIndex}"
-        mkLambdaFVars binders field
-      else forallTelescope domain fun binders _ => mkLambdaFVars binders fillerValue
+    let selected ← forallTelescope domain fun binders result => do
+      let result ← whnf result
+      let some constructorApp := findConstructorApp? result | return none
+      let some field := constructorApp.getAppArgs[constructorNumParams + targetFieldIndex]?
+        | badShape s!"{targetConstructor}'s selected minor has no field {targetFieldIndex}"
+      return some (← mkLambdaFVars binders field)
+    let value ← match selected with
+      | some value => selectedMinors := selectedMinors + 1; pure value
+      | none => forallTelescope domain fun binders _ => mkLambdaFVars binders fillerValue
     arguments := arguments.push value
     current := body.instantiate1 value
+  unless selectedMinors == 1 do
+    badShape s!"{modelRecursor} has {selectedMinors} minors for {targetConstructor}, expected one"
   return arguments
 
 private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : Nat)
     (current : Expr) : MetaM Bool := do
   let current ← whnf current
   let .forallE name fieldType body info := current | return false
+  unless ownerIsProp do
+    if fieldIndex == 0 then return true
+    return ← withLocalDecl name info fieldType fun value =>
+      projectionFieldEligibleM false (fieldIndex - 1) (body.instantiate1 value)
   let fieldIsProp ← isProp fieldType
   if fieldIndex == 0 then return !ownerIsProp || fieldIsProp
   if ownerIsProp && body.hasLooseBVars && !fieldIsProp then return false
@@ -344,7 +365,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
   -- Unselected mutual motives must still inhabit the selected projection's
   -- result sort.  `PULiftP` is the primitive basis operation which lifts the
   -- reflexive equality filler to that exact, possibly variable universe.
-  let puliftDecls ← if types.size > 1 then ensurePULiftP reserved else pure #[]
+  let puliftDecls ← if recursors.any (·.numMotives > 1) then ensurePULiftP reserved else pure #[]
 
   let env ← getEnv
   let eqi ← match EqInfo.check env with
@@ -376,12 +397,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     let some recursor := recursors.find? fun recursor =>
         recursor.rules.any (·.ctor == constructorName)
       | badShape s!"{type.name} has no corresponding exported recursor rule"
-    let minorIndex ← recursorMinorIndex constructors recursors recursor constructorName
     let some motiveIndex := recursor.all.idxOf? type.name
       | badShape s!"{recursor.name} has no motive for {type.name}"
-    unless recursor.numMotives == recursor.all.length &&
-        recursor.numMinors == constructors.size do
-      badShape s!"{recursor.name} has an unexpected mutual telescope"
     unless fieldIndex < constructor.numFields do
       badShape s!"{type.name}'s field {fieldIndex} is outside {constructorName}'s telescope"
 
@@ -443,8 +460,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         else
           badShape s!"{modelRecursor} carries unexpected universe parameters"
       let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-        motiveIndex minorIndex params (carrier (params ++ indices)) self targetMotive fieldIndex
-        resultLevel recLevels
+        modelConstructor motiveIndex constructor.numParams params (carrier (params ++ indices))
+        self targetMotive fieldIndex resultLevel recLevels
       let value ← mkLambdaFVars arguments
         (mkAppN (.const modelRecursor recLevels) (pre ++ indices ++ #[self]))
       return Declaration.defnDecl
@@ -482,8 +499,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         else
           badShape s!"{modelRecursor} carries unexpected universe parameters"
       let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-        motiveIndex minorIndex params (carrier (params ++ indices)) major targetMotive fieldIndex
-        fieldLevel recLevels
+        modelConstructor motiveIndex constructor.numParams params (carrier (params ++ indices))
+        major targetMotive fieldIndex fieldLevel recLevels
       let proof := mkAppN (.const iotaTheorem recLevels) (pre ++ fields)
       let type ← mkForallFVars arguments (eqi.mk' fieldLevel alpha lhs rhs)
       let value ← mkLambdaFVars arguments proof

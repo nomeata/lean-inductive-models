@@ -209,14 +209,14 @@ def main : IO UInt32 := do
     intrinsicFieldsFor wcore `Iff == #[0, 1]
   state := state.check "Prop-valued Nonempty cannot expose its data field" <|
     (intrinsicFieldsFor wcore `Nonempty).isEmpty
-  let indexedProjections := (Array.range 2).flatMap fun fieldIndex =>
+  let indexedProjections := (Array.range 1).flatMap fun fieldIndex =>
     #[Naming.projectionName `Indexed fieldIndex,
       Naming.projectionIotaName `Indexed fieldIndex]
   let recursiveProjections := (Array.range 2).flatMap fun fieldIndex =>
     #[Naming.projectionName `Recursive fieldIndex,
       Naming.projectionIotaName `Recursive fieldIndex]
   state := state.check "indexed one-constructor fields are intrinsic projections" <|
-    intrinsicFieldsFor raw `Indexed == #[0, 1] && indexedProjections.all names.contains &&
+    intrinsicFieldsFor raw `Indexed == #[0] && indexedProjections.all names.contains &&
       (Check.check generated).all (·.familyOwner != `Indexed)
   state := state.check "recursive one-constructor fields are intrinsic projections" <|
     intrinsicFieldsFor raw `Recursive == #[0, 1] && recursiveProjections.all names.contains &&
@@ -342,4 +342,15 @@ def main : IO UInt32 := do
 
   IO.println s!"structure projections: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
+  unless state.failed.isEmpty do
+    IO.eprintln s!"projection declines: {report.declined}"
+    IO.eprintln s!"Indexed fields: {intrinsicFieldsFor raw `Indexed}"
+    IO.eprintln s!"Recursive fields: {intrinsicFieldsFor raw `Recursive}"
+    IO.eprintln s!"Iff fields: {intrinsicFieldsFor wcore `Iff}"
+    for violation in Check.check generated do
+      if #[`Dep, `SortFields, `Indexed, `Recursive].contains violation.familyOwner then
+        IO.eprintln s!"projection check violation: {repr violation}"
+    for violation in Check.check mutualGenerated do
+      if #[`MLeft, `MRight].contains violation.familyOwner then
+        IO.eprintln s!"mutual projection check violation: {repr violation}"
   return if state.failed.isEmpty then 0 else 1

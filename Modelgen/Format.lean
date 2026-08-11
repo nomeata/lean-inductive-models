@@ -410,7 +410,7 @@ private partial def inferExactType? (x : Export) (declarations : ExactDeclaratio
       let value := mkFVar (FVarId.mk ((`_format.exactPi).mkNum locals.size))
       let bodyLevel ← inferExactSortLevel? x declarations
         (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
-      return .sort (.imax domainLevel bodyLevel)
+      return .sort (Level.imax domainLevel bodyLevel).normalize
   | .letE _ _ value body _ => inferExactType? x declarations locals (body.instantiate1 value)
   | .mdata _ body => inferExactType? x declarations locals body
   | .proj owner fieldIndex struct => do

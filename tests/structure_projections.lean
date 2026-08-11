@@ -37,13 +37,22 @@ structure SortFields (α : Type u) : Type (max (u + 1) (v + 1)) where
   element : carrier
   letCarrier : (let X := Type v; X)
 
-/-- Raw kernel projections also support indexed one-constructor families. -/
-inductive Indexed (α : Type u) : α → Type u where
-  | mk (index payload : α) : Indexed α index
+/-- A constant, hence non-injective, index pins the true index path instead of
+Lean promoting the apparent index to a uniform parameter. -/
+inductive Ix : Type where
+  | here
+  | elsewhere
+
+inductive Indexed (α : Type u) : Ix → Type u where
+  | mk (payload : α) : Indexed α Ix.here
 
 /-- Raw kernel projections also support recursive one-constructor families. -/
+inductive Maybe (α : Type u) : Type u where
+  | none
+  | some (value : α)
+
 inductive Recursive (α : Type u) : Type u where
-  | roll (head : α) (tail : Recursive α) : Recursive α
+  | roll (head : α) (tail : Maybe (Recursive α)) : Recursive α
 
 /-- Neither field is kernel-projectable: the selected data field is not a
 proposition, and the later proof field depends on that data field. -/
@@ -70,4 +79,4 @@ def depWitness (α : Type u) (β : α → Type v) (x : Dep α β) :
 --#export Eq Dep Dep.key Dep.payload Dep.witness SortFields SortFields.carrier
 --#export SortFields.family SortFields.element SortFields.letCarrier
 --#export depKey depPayload depWitness
---#export Indexed Recursive PropDependent Multi
+--#export Ix Indexed Maybe Recursive PropDependent Multi
