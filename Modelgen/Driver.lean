@@ -1373,12 +1373,14 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                 let mut mutualResult ← (do
                   let is2 ← mutualIso is.members is.levelParams t.numParams
                     tys2 ctors2 reserved
+                  let is2 ← addInstalledStructureModels is.members #[] reserved is2
                   addInstalledUnitlikeTheorems is.members reserved is2).run
                 if let .error (.nameLost _) := mutualResult then
                   setEnv saved2
                   mutualResult ← (do
                     let is2 ← mutualIso is.members is.levelParams t.numParams
                       tys2 ctors2 reserved (some (Naming.retryRoot composedRoot))
+                    let is2 ← addInstalledStructureModels is.members #[] reserved is2
                     addInstalledUnitlikeTheorems is.members reserved is2).run
                 match mutualResult with
                 | .error dec =>
