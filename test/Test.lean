@@ -546,8 +546,8 @@ def expectedPrim : List Row :=
   -- **The erasure guard has no occupant left in this file** and the header
   -- says why: every shape it still refuses arrives from a specialisation and
   -- cannot be written in a `prelude` source. `nest_fam_arg`'s `OK` and `Key`
-  -- are the live occupants of the same guard, at layer 3, and the row below
-  -- asserts them.
+  -- are the positive layer-3 occupants for discarding a βζ-dead mention, and
+  -- the row below asserts their auxiliary models and erased skeletons.
   , ("prim_carve",
       [("N", 9), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
@@ -630,18 +630,15 @@ def expectedPrim : List Row :=
   -- `_wcore` rows after it are the fragment being modelled in turn
   -- (`Iso.requires`' rule). Both numbers are facts about *ordering*.
   --
-  -- **Two declines, both instances of the same erasure boundary.**
+  -- **Two formerly declining instances of the same erasure boundary.**
   --
   -- * `OK` and `Key` are the **vanishing mention**: the family parameter is
   --   `fun _ => N`, so the field is `(fun x : T … => N) k`, whose reduct is
   --   `N` and which is therefore not recursive at all — but the written
-  --   domain mentions `T` in the discarded binder, and that is the test
-  --   `eraseCtorTy` and `spineSwap` replace a whole domain on. Reading the
-  --   head through `headNorm` is not enough to model these; the erasure would
-  --   have to *normalise* the field rather than replace it. No declaration in
-  --   Mathlib is this shape, so it is recorded and named rather than built.
-  --   Their message must not say *infinitary* — there is no binder over an
-  --   occurrence, because there is no occurrence.
+  --   domain mentions `T` in the discarded binder. The internal skeleton
+  --   normalises exactly this domain rather than replacing it, so both aux
+  --   families and both skeletons model. Their public declarations retain the
+  --   literal redex; `VanishingErasureTest` checks that distinction directly.
   -- `Flat` is the positive control: its nested specialization reaches arm C
   -- through a skeleton with no base constructor, which arm E models as the
   -- exact empty carrier.
@@ -656,6 +653,8 @@ def expectedPrim : List Row :=
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4),
        ("RB2", 6), ("Ctr", 9),
        ("OK", 15), ("OK._model._impl.0", 14), ("OK._model._impl.0._model._impl.tag", 6),
+       ("OK._model._impl.0._model._impl.aux", 10),
+       ("OK._model._impl.0._model._impl.aux._model._impl.skel", 14),
        ("JT", 15), ("JT._model._impl.0", 14), ("JT._model._impl.0._model._impl.tag", 6),
        ("JT._model._impl.0._model._impl.aux", 12),
        ("JT._model._impl.0._model._impl.aux._model._impl.skel", 16),
@@ -681,17 +680,15 @@ def expectedPrim : List Row :=
        ("Flat._model._impl.0._model._impl.aux", 8),
        ("Flat._model._impl.0._model._impl.aux._model._impl.skel", 6),
        ("Key", 23), ("Key._model._impl.0", 20), ("Key._model._impl.0._model._impl.tag", 8),
+       ("Key._model._impl.0._model._impl.aux", 14),
+       ("Key._model._impl.0._model._impl.aux._model._impl.skel", 18),
        ("Zeta", 23), ("Zeta._model._impl.0", 20), ("Zeta._model._impl.0._model._impl.tag", 8),
        ("Zeta._model._impl.0._model._impl.aux", 14),
        ("Zeta._model._impl.0._model._impl.aux._model._impl.skel", 18),
        ("Ix", 15), ("Ix._model._impl.0", 14), ("Ix._model._impl.0._model._impl.tag", 6),
        ("Ix._model._impl.0._model._impl.aux", 12),
        ("Ix._model._impl.0._model._impl.aux._model._impl.skel", 16)],
-      [ ("Eq", "prim model: a basis primitive")
-      , ("OK._model._impl.0._model._impl.aux", "prim model shape: an indexed family at a \
-          never-zero sort whose index erasure is not bare")
-      , ("Key._model._impl.0._model._impl.aux", "prim model shape: an indexed family at a \
-          never-zero sort whose index erasure is not bare")])
+      [("Eq", "prim model: a basis primitive")])
   -- **A basis primitive the input declares after the block whose model needs
   -- it.** `runFilter`'s `waitingPrim` has always held an *input* declaration's
   -- prim model back until `primReady`; what this file pins is that the

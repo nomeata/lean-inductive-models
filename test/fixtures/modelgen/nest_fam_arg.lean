@@ -19,7 +19,7 @@
 
    | witness | the shape | what it is the only one of |
    | --- | --- | --- |
-   | `OK.mk : RB OK (fun _ => N) → OK` | a family parameter, the recursion in the **first** argument — `dependent_fields.lean`'s `Ctr KTree (fun _ => N)` at this container | the control. A model before the fix and after it, so the family parameter was never the obstruction |
+   | `OK.mk : RB OK (fun _ => N) → OK` | a family parameter, the recursion in the **first** argument — `dependent_fields.lean`'s `Ctr KTree (fun _ => N)` at this container | the control. Its outer model existed before and after the layer-1 fix; its specialised auxiliary now also checks the dead family-domain mention |
    | `JT.obj : RB N (fun _ => JT) → JT` | `Lean.Json`'s `obj (kvPairs : RBNode String (fun _ => Json))` with `String` shrunk to `N` | the Mathlib reproduction. `RB.node`'s minor binds `motive₂ a`, **`motive₁ a_1`**, `motive₂ a_2` — a root hypothesis **between** two of the container's, which two positions could not have shown |
    | `PT.node : N → RB N (fun _ => PT) → PT` | `Lean.PrefixTreeNode` with its parameters dropped | the second Mathlib decline, so the first is not about `JT`'s constructor arrangement |
    | `PTP.node : Opt β → RB α (fun _ => PTP α β) → PTP α β` | `Lean.PrefixTreeNode` **as it is declared**, parameters and all | the lambda body mentions the block's own **parameter telescope**, which `mimicFor` has to lower and rebuild |

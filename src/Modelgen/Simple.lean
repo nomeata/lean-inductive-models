@@ -152,10 +152,10 @@ nothing; and arm W applies the W core's propositional ι theorem.
   [`Modelgen.headNorm`]**, so a field written `(fun x => T p⃗ e⃗) k` — which is
   what Lean's nested specialisation leaves at a container's family parameter —
   is the bare occurrence it reduces to and not a binder; the same head
-  normalization is required at layer 1. A second and rarer refusal shares the
-  guard: a field whose type mentions `T` **only inside a binder βζ discards**
-  is not recursive at all, and the erasure would replace it anyway — the
-  message calls that a *vanishing mention* and never *infinitary*.
+  normalization is required at layer 1. A field whose type mentions `T`
+  **only inside a binder βζ discards** is not recursive at all; arm C uses the
+  reduct for that internal skeleton field while preserving the public
+  constructor type literally.
   An indexed family whose erasure is bare is no longer a refusal, **however
   many recursive fields its constructors have**: it is **arm C**
   ([`Modelgen.primIso`]'s `armC`), a skeleton-plus-`good` construction standing
@@ -2034,9 +2034,11 @@ inductive DirectFieldRoute | identity | propLift
 
 The skeleton arm C splices is the declaration with its indices dropped: the
 carrier loses its index telescope and every recursive field and every
-constructor's conclusion loses its index arguments. Nothing else moves — the
-field telescope is kept **exactly**, which is the whole reason this arm has no
-currying glue where the W route has one lemma per constructor.
+constructor's conclusion loses its index arguments. Nothing else moves except
+that a field whose only owner mention βζ-disappears is stored at its reduct;
+[`Modelgen.erasureFieldDomain`] is that one internal exception. Public types
+remain literal. This is the whole reason this arm has no currying glue where
+the W route has one lemma per constructor.
 
 Both functions below are **raw `Expr` surgery on de Bruijn indices and not a
 telescope walk**, and that is forced rather than stylistic: opening a telescope
@@ -2610,22 +2612,16 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
             return some s!"binder mention: a binder of {cn}'s recursive field mentions \
 {tname}, and the erasure keeps binder types verbatim"
           let d := headNorm core
-          -- **Two reasons, and they are not the same shape.** The field is
-          -- *recursive* exactly when the written domain mentions `tname`,
-          -- because that is the test [`Modelgen.eraseCtorTy`] and
-          -- [`Modelgen.spineSwap`] replace an occurrence on and the three
-          -- have to agree. But a mention can sit in a **binder that βζ
-          -- discards** — a container's family parameter at
-          -- `β := fun _ => N` leaves `(fun x : T p⃗ e⃗ => N) k`, whose reduct
-          -- is `N` and which is therefore not recursive at all. The erasure
-          -- would replace it anyway, with the skeleton's own carrier, so this
-          -- is a decline; but calling it *infinitary* would name a binder over
-          -- the occurrence that is not there. `nest_fam_arg`'s `OK` and `Key`
-          -- are the two committed occupants.
+          -- A mention which βζ discards was filtered by
+          -- [`Modelgen.erasureRecursive`] above, so every domain reaching this
+          -- point still contains the occurrence the skeleton will replace.
+          -- The two remaining specialisation shapes are deliberately kept
+          -- distinct below.
           -- **A binder βζ *reveals*, rather than one written.** The erasure
-          -- emits the domain as written and normalises nothing, so it would
-          -- keep no binder here and replace the whole redex — dropping the
-          -- branching. `withRecSlot` reads through `headNorm` and would open
+          -- retains this domain as written because the owner survives its
+          -- reduct, so it would keep no binder here and replace the whole
+          -- redex — dropping the branching. `withRecSlot` reads through
+          -- `headNorm` and would open
           -- the binder, so the two would disagree about the very same field.
           -- It is a decline rather than a silent divergence.
           if d matches .forallE .. then

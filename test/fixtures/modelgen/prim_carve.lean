@@ -135,14 +135,14 @@
    applying it to the branch is rejected at the constructor model.
 
    **The erasure guard now has no occupant in this file, and that is not an
-   oversight.** What is left of it — a mention βζ discards, a binder only βζ
-   reveals, a binder type naming the declaration, an occurrence that is not an
+   oversight.** What is left of it — a binder only βζ reveals, a binder type
+   naming the declaration, an occurrence that is not an
    application of the declaration — is unwritable in a `prelude` source: the
-   first three arrive only from a *specialisation* the elaborator performed,
-   and the fourth is a nested occurrence, which never reaches `primIso` because
+   first two arrive only from a *specialisation* the elaborator performed, and
+   the third is a nested occurrence, which never reaches `primIso` because
    layer 1 compiles it away first. `nest_fam_arg.lean`'s `OK` and `Key` are the
-   live occupants of the same guard, at layer 3, and they are where it is
-   exercised.
+   positive layer-3 cases where a dead mention is normalised only in the
+   internal erased field.
 
    * `IBox` — an indexed family whose erasure is `prim_declines`' `BoxF`.
      Recursive boxing models that skeleton, so arm C retains the parent and
