@@ -127,12 +127,12 @@ anyway, and everything else there small-eliminates, so the motive lands in
 right size — which is also why `PEmpty` models: `PULiftP ⊥` is *empty*, where
 every type the old basis reached at a bare sort was inhabited.
 
-**Every ι theorem is `Eq.refl`** on all three routes. On the Church routes
-with a `Prop`-valued motive that is free for a reason unrelated to reduction:
-both sides of every ι equation are proofs of one proposition. **The graph arm
-below is the one exception**: its recursor's value is a `Classical.choice`
-application, which reduces to nothing, so its ι is proved from the graph's
-single-valuedness and is propositional.
+The ordinary tuple and Church routes prove their ι theorems by `Eq.refl`.
+On a Church route with a `Prop`-valued motive that is free for a reason
+unrelated to reduction: both sides are proofs of one proposition.  Arm E
+instead eliminates the constructor's empty recursive field; the graph arm
+uses its single-valuedness because its `Classical.choice` recursor reduces to
+nothing; and arm W applies the W core's propositional ι theorem.
 
 ## What declines, and why
 
