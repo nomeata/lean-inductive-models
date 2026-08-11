@@ -392,7 +392,7 @@ def expectedPrim : List Row :=
        ("Conj3", 10), ("PU", 6), ("Sv", 5), ("PE", 2), ("MNm", 8), ("IdxS", 5),
        ("Dec", 6), ("Conj", 8), ("TagS2", 8), ("TagS", 6), ("PT", 8),
        ("Tor", 8), ("Hq", 5), ("Boxed", 9), ("PI", 7), ("Sub", 9),
-       ("UL", 7), ("Lst", 6), ("TrL", 7), ("Big", 7), ("PF", 4)],
+       ("UL", 7), ("Lst", 6), ("TrL", 7), ("Big", 7), ("PF", 7)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **`Branch` and `Binder` are on the other side of the boundary now**, and
   -- this row is where that is recorded: they are the two shapes this file was
