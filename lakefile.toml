@@ -39,3 +39,8 @@ root = "LevelFuzz"
 name = "clitest"
 root = "CliTest"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "generationflagstest"
+root = "GenerationFlagsTest"
+supportInterpreter = true

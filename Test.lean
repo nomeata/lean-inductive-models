@@ -782,7 +782,8 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures")
   let ctx : Core.Context :=
     { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
   let ((decls, rep), _) ←
-    Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter x true prim)) ctx { env }
+    Lean.Core.CoreM.toIO
+      (Lean.Meta.MetaM.run' (runFilter x true (legacyGenerationConfig prim))) ctx { env }
   let mut a := a
   -- axis 1: the counts, in order
   let got := rep.generated.toList.map fun (n, k) => (n.toString, k)
@@ -829,7 +830,8 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures")
       -- …and the filter is the identity on it, which is *why* `mini` may
       -- commit it and why this directory may not use it as input.
       let ((d3, r3), _) ←
-        Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter f false)) ctx { env }
+        Lean.Core.CoreM.toIO
+          (Lean.Meta.MetaM.run' (runFilter f false (legacyGenerationConfig prim))) ctx { env }
       a := check a r3.generated.isEmpty
         s!"{name}: the filter generated a model on its own output: \
            {r3.generated.toList.map fun (n, k) => (n.toString, k)}"
@@ -857,7 +859,8 @@ def runOne (root : String) (a : TAcc) (r : Row) (dir := "mini/tests/fixtures")
     let t ← IO.FS.readFile plainPath
     let .ok p := Modelgen.parse t | return check a false "nat_char_equations does not parse"
     let ((d2, r2), _) ←
-      Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter p false)) ctx { env }
+      Lean.Core.CoreM.toIO
+        (Lean.Meta.MetaM.run' (runFilter p false (legacyGenerationConfig false))) ctx { env }
     a := check a r2.generated.isEmpty "nat_char_equations should have no model"
     a := check a (d2 == p.decls) "nat_char_equations is not passed through unchanged"
   return a
@@ -1063,7 +1066,8 @@ def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
   let ctx : Core.Context :=
     { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
   let ((outD, rep), _) ← Lean.Core.CoreM.toIO
-    (Lean.Meta.MetaM.run' (runFilter { x with decls } true true)) ctx { env }
+    (Lean.Meta.MetaM.run'
+      (runFilter { x with decls } true (legacyGenerationConfig true))) ctx { env }
   let gen := rep.generated.map (·.1)
   a := check a (gen.contains tgt) "alias: the public Sv no longer models"
   a := check a (gen.contains priv)
@@ -1267,7 +1271,8 @@ def runSyntax (root : String) (a : TAcc) : IO TAcc := do
   let ctx : Core.Context :=
     { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
   let ((_, rep), _) ←
-    Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter x true)) ctx { env }
+    Lean.Core.CoreM.toIO
+      (Lean.Meta.MetaM.run' (runFilter x true (legacyGenerationConfig false))) ctx { env }
   let mut a := a
   let got := rep.generated.toList.map fun (n, k) => (n.toString, k)
   a := check a (got == [("Lean.Syntax", 26), ("Lean.Syntax._model.0", 22)])
@@ -1308,7 +1313,8 @@ def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
   let ctx : Core.Context :=
     { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
   let ((decls, _), _) ←
-    Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (runFilter x false)) ctx { env }
+    Lean.Core.CoreM.toIO
+      (Lean.Meta.MetaM.run' (runFilter x false (legacyGenerationConfig false))) ctx { env }
   let modelled : Export := { x with decls }
   let mut a := a
   for (tag, opts) in [("A", ({ check := true } : Mono.Opts)),

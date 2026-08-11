@@ -148,7 +148,9 @@ def run (o : Opts) : IO UInt32 := do
   -- from a bad input, since both used to exit 1.
   let res ← try
       let ((decls, rep), _) ←
-        (Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (Modelgen.runFilter x o.checkRecursors o.primModels)) ctx
+        (Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+          (Modelgen.runFilter x o.checkRecursors
+            (Modelgen.legacyGenerationConfig o.primModels))) ctx
           { env })
       pure (Except.ok (decls, rep))
     catch e => pure (Except.error (toString e))
