@@ -2212,6 +2212,79 @@ def primRuleK (eqi : EqInfo) (rv : RecursorVal)
   addChecked d
   return (out.push d, #[(ern, ruleKN)], some ruleKN)
 
+/-- Emit the field-preserving implementation of a tight one-field model.
+Kept outside [`Modelgen.primIso`] so the already-large route dispatcher does
+not pay to elaborate both the identity and proposition-lift implementations. -/
+def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
+    (lparams : List Name) (np : Nat) (memberTy constructorType modelConstructorType : Expr)
+    (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
+    (recursorType : Expr) (w v : Level) :
+    GenM (Array Declaration × (Name × Nat × Expr × Expr)) := do
+  let us := lparams.map Level.param
+  let withParams := fun {α : Type} (k : Array Expr → GenM α) =>
+    forallBoundedTelescope memberTy (some np) fun ps _ => k ps
+  let fieldTypeAt := fun (ps : Array Expr) => do
+    let tele ← instForall constructorType ps
+    let .forallE _ fieldType _ _ := tele
+      | badShape s!"{constructorN} is not a one-field constructor"
+    pure fieldType
+  let selfAt := fun (ps : Array Expr) => mkAppN (.const selfN us) ps
+  let mut declarations : Array Declaration := #[]
+
+  let selfValue ← withParams fun ps => do
+    let fieldType ← fieldTypeAt ps
+    mkLambdaFVars ps <| match route with
+      | .identity => fieldType
+      | .propLift => puliftT w fieldType
+  let selfDecl := Declaration.defnDecl
+    { name := selfN, levelParams := lparams, type := memberTy, value := selfValue
+      hints := ← hintsFor selfValue, safety := .safe }
+  addChecked selfDecl
+  declarations := declarations.push selfDecl
+
+  let constructorValue ← withParams fun ps => do
+    let tele ← instForall modelConstructorType ps
+    forallBoundedTelescope tele (some 1) fun fields _ => do
+      let field := fields[0]!
+      let value ← match route with
+        | .identity => pure field
+        | .propLift => do pure (puliftUp w (← inferType field) field)
+      mkLambdaFVars (ps ++ fields) value
+  let constructorDecl := Declaration.defnDecl
+    { name := constructorN, levelParams := lparams, type := modelConstructorType,
+      value := constructorValue, hints := ← hintsFor constructorValue, safety := .safe }
+  addChecked constructorDecl
+  declarations := declarations.push constructorDecl
+
+  let recursorValue ← forallBoundedTelescope recursorType (some (np + 3)) fun binders _ => do
+    let ps := binders.extract 0 np
+    let motive := binders[np]!
+    let minor := binders[np + 1]!
+    let self := binders[binders.size - 1]!
+    let value ← match route with
+      | .identity => pure (mkApp minor self)
+      | .propLift => do pure (puliftRec v w (← fieldTypeAt ps) motive minor self)
+    mkLambdaFVars binders value
+  let recursorDecl := Declaration.defnDecl
+    { name := recursorN, levelParams := recursorLevelParams, type := recursorType,
+      value := recursorValue, hints := ← hintsFor recursorValue, safety := .safe }
+  addChecked recursorDecl
+  declarations := declarations.push recursorDecl
+
+  let selector ← withParams fun ps => withLocalDeclD `self (selfAt ps) fun self => do
+    let value ← match route with
+      | .identity => pure self
+      | .propLift => do pure (puliftDown w (← fieldTypeAt ps) self)
+    mkLambdaFVars (ps.push self) value
+  let proof ← withParams fun ps => do
+    let tele ← instForall modelConstructorType ps
+    forallBoundedTelescope tele (some 1) fun fields _ => do
+      let field := fields[0]!
+      let fieldType ← inferType field
+      let fieldLevel ← ilevel fieldType
+      mkLambdaFVars (ps ++ fields) (eqi.refl' fieldLevel fieldType field)
+  return (declarations, (tname, 0, selector, proof))
+
 set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
@@ -3087,75 +3160,17 @@ data tower would have to hold a type the branch tower cannot see"
   if let some directFieldRoute := directFieldRoute? then
     let (_, cty0) := exportCtors[0]!
     let modelCtorTy := restore tbl cty0
-    let selfAt := fun (ps : Array Expr) => mkAppN (.const selfN us) ps
-    let fieldTypeAt := fun (ps : Array Expr) => do
-      let tele ← instForall cty0 ps
-      let .forallE _ fieldType _ _ := tele
-        | badShape s!"{exportCtors[0]!.1} is not a one-field constructor"
-      pure fieldType
 
     if directFieldRoute matches .propLift then
       for d in ← ensurePULiftP reserved do
         out := out.push d
         spliced := spliced ++ d.getNames
 
-    let selfVal ← withParams fun ps => do
-      let fieldType ← fieldTypeAt ps
-      mkLambdaFVars ps <| match directFieldRoute with
-        | .identity => fieldType
-        | .propLift => puliftT w fieldType
-    let dSelf := Declaration.defnDecl
-      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
-        hints := ← hintsFor selfVal, safety := .safe }
-    addChecked dSelf
-    out := out.push dSelf
-
-    let ctorVal ← withParams fun ps => do
-      let tele ← instForall modelCtorTy ps
-      forallBoundedTelescope tele (some 1) fun fs _ => do
-        let field := fs[0]!
-        let value ← match directFieldRoute with
-          | .identity => pure field
-          | .propLift => do pure (puliftUp w (← inferType field) field)
-        mkLambdaFVars (ps ++ fs) value
-    let dCtor := Declaration.defnDecl
-      { name := ctorN 0, levelParams := lparams, type := modelCtorTy, value := ctorVal
-        hints := ← hintsFor ctorVal, safety := .safe }
-    addChecked dCtor
-    out := out.push dCtor
-
     let recTy := restore tbl rv.type
-    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
-      let ps := bs.extract 0 np
-      let motive := bs[np]!
-      let minor := bs[np + 1]!
-      let self := bs[bs.size - 1]!
-      let value ← match directFieldRoute with
-        | .identity => pure (mkApp minor self)
-        | .propLift => do pure (puliftRec v w (← fieldTypeAt ps) motive minor self)
-      mkLambdaFVars bs value
-    let dRec := Declaration.defnDecl
-      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
-        hints := ← hintsFor recVal, safety := .safe }
-    addChecked dRec
-    out := out.push dRec
-
-    -- Route-specific selector bodies let the common driver retain ownership
-    -- of public names, types, collision checks and ordering without trying to
-    -- eliminate the small source recursor into a potentially positive sort.
-    let selector ← withParams fun ps => withLocalDeclD `self (selfAt ps) fun self => do
-      let value ← match directFieldRoute with
-        | .identity => pure self
-        | .propLift => do pure (puliftDown w (← fieldTypeAt ps) self)
-      mkLambdaFVars (ps.push self) value
-    let proof ← withParams fun ps => do
-      let tele ← instForall modelCtorTy ps
-      forallBoundedTelescope tele (some 1) fun fs _ => do
-        let field := fs[0]!
-        let fieldType ← inferType field
-        let fieldLevel ← ilevel fieldType
-        mkLambdaFVars (ps ++ fs) (eqi.refl' fieldLevel fieldType field)
-    projectionOverrides := projectionOverrides.push (tname, 0, selector, proof)
+    let (directDecls, projectionOverride) ← directFieldModel directFieldRoute eqi tname
+      lparams np memberTy cty0 modelCtorTy selfN (ctorN 0) recN rv.levelParams recTy w v
+    out := out ++ directDecls
+    projectionOverrides := projectionOverrides.push projectionOverride
   else if armF then
     -- ════ arm F: the indexed subsingleton, by one packed index equation ════
     --
