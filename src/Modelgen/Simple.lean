@@ -651,6 +651,21 @@ partial def levelHasIMax : Level → Bool
   | .succ a => levelHasIMax a
   | _ => false
 
+/-- The universe of [`Modelgen.boxTyOf`] without constructing its `PSigma`
+terms. The W arm asks its tower-level question before primitives are spliced,
+so this level-only mirror keeps that early, rollback-free guard while using the
+same recursive Π shape as the actual box. -/
+partial def boxLevelOf (t : Expr) : GenM Level := do
+  match ← whnf t with
+  | .forallE name domain body info =>
+    let domainLevel ← boxLevelOf domain
+    withLocalDecl name info domain fun x => do
+      let bodyLevel ← boxLevelOf (body.instantiate1 x)
+      return (mkLevelIMax domainLevel bodyLevel).normalize
+  | atomic =>
+    let level ← ilevel atomic
+    return (mkLevelMax' (.succ .zero) level).normalize
+
 mutual
 
   /-- The recursively boxed type.  Atomic leaves are paired with `D 1`; a Π
@@ -2225,17 +2240,28 @@ partial def natCascade (s : Level) (n : Nat) (motAt : Nat → GenM Expr)
       mkLambdaFVars #[t, ih] (← natCascade s n motAt armAt junkAt (k + 1) t)
   return natRec s mot base step sc
 
+/-- The W towers box exactly the components whose level retains an `imax`.
+The recursive box is the same one the tuple route uses: exposed Π domains and
+codomains are transformed all the way to atomic leaves, so a nested domain such
+as `((α → β) → β)` does not leave an `imax` hidden contravariantly. -/
+def wTowerBoxed (xs : Array Expr) : GenM (Array Bool) :=
+  xs.mapM fun x => return levelHasIMax (← ilevel (← ityp x)).normalize
+
 /-- **One tower's type**, over the fields `xs⟦i…⟧` and ending at the unit at
-`Sort w`. Every level is written with codomain level `w`, not with the tower's
-own `max`: the kernel checks the `β` against `Sort w` by conversion, and
-[`Modelgen.wTowerLevel`] is what says the conversion holds before anything is
-built. -/
-partial def wTowerTy (w : Level) (xs : Array Expr) (i : Nat) : GenM Expr := do
+`Sort w`. `pre` are the unboxed values of earlier components. A boxed binder is
+unboxed before it is substituted into later component types, preserving the
+original dependent telescope. -/
+partial def wTowerTy (w : Level) (xs : Array Expr) (boxed : Array Bool)
+    (i : Nat) (pre : Array Expr := #[]) : GenM Expr := do
   if i == xs.size then return unitAt w
-  let α ← ityp xs[i]!
-  let ℓ ← ilevel α
-  let β ← mkLambdaFVars #[xs[i]!] (← wTowerTy w xs (i + 1))
-  return psigmaT ℓ w α β
+  let sub := fun (e : Expr) => e.replaceFVars (xs.extract 0 pre.size) pre
+  let original := sub (← ityp xs[i]!)
+  let stored ← if boxed[i]! then boxTyOf original else pure original
+  let ℓ ← ilevel stored
+  withLocalDeclD (← xs[i]!.fvarId!.getUserName) stored fun x => do
+    let value ← if boxed[i]! then unboxValOf original x else pure x
+    let β ← mkLambdaFVars #[x] (← wTowerTy w xs boxed (i + 1) (pre.push value))
+    return psigmaT ℓ w stored β
 
 /-- **Is a tower over these fields at `Sort w`?** `max ℓᵢ w ≡ w` at every field,
 which is Lean's own constraint on the declaration re-asked as a conversion:
@@ -2243,9 +2269,10 @@ a field of an inductive at `Sort w` sits at some `Sort ℓ` with `max ℓ w = w`
 Asked before anything is spliced, so a declaration this refuses costs no
 splice, and asked of the *expression* rather than assumed — a field whose level
 keeps an `imax` is exactly the shape that fails it. -/
-def wTowerLevel (w : Level) (xs : Array Expr) : GenM (Option Level) := do
-  for x in xs do
-    let ℓ ← ilevel (← ityp x)
+def wTowerLevel (w : Level) (xs : Array Expr) (boxed : Array Bool) : GenM (Option Level) := do
+  for i in [0:xs.size] do
+    let original ← ityp xs[i]!
+    let ℓ ← if boxed[i]! then boxLevelOf original else ilevel original
     unless ← isLevelDefEq (mkLevelMax' ℓ w) w do return some ℓ
   return none
 
@@ -2261,34 +2288,51 @@ function rather than two lines at each call site: `β` is `fun (x : Xᵢ) => …
 longer in scope. A tower whose fields do not depend on each other never notices;
 `test/fixtures/modelgen/prim_w.lean`'s `Dep` is the occupant that does, and it found this as a
 kernel `declaration has free variables`. -/
-def wTowerAt (w : Level) (xs : Array Expr) (i : Nat) (pre : Array Expr) :
-    GenM (Level × Expr × Expr) := do
+def wTowerAt (w : Level) (xs : Array Expr) (boxed : Array Bool) (i : Nat)
+    (pre : Array Expr) : GenM (Level × Expr × Expr × Expr) := do
   let sub := fun (vs : Array Expr) (e : Expr) => e.replaceFVars (xs.extract 0 vs.size) vs
-  let α := sub pre (← ityp xs[i]!)
-  let ℓ ← ilevel α
-  let rest ← wTowerTy w xs (i + 1)
-  let β ← withLocalDeclD (← xs[i]!.fvarId!.getUserName) α fun x =>
-    mkLambdaFVars #[x] (sub (pre.push x) rest)
-  return (ℓ, α, β)
+  let original := sub pre (← ityp xs[i]!)
+  let stored ← if boxed[i]! then boxTyOf original else pure original
+  let ℓ ← ilevel stored
+  let β ← withLocalDeclD (← xs[i]!.fvarId!.getUserName) stored fun x => do
+    let value ← if boxed[i]! then unboxValOf original x else pure x
+    mkLambdaFVars #[x] (← wTowerTy w xs boxed (i + 1) (pre.push value))
+  return (ℓ, original, stored, β)
 
 /-- **The components of a tower, read back out of it.** At step `i` the earlier
 fields are already projections, so the `α` and `β` this rebuilds are the ones
 `wTowerTy` wrote with those substituted in — which is what makes the projection
 well-typed when a later field's type mentions an earlier one. -/
-partial def wTowerProjs (w : Level) (xs : Array Expr) (i : Nat) (d : Expr)
+partial def wTowerProjs (w : Level) (xs : Array Expr) (boxed : Array Bool)
+    (i : Nat) (d : Expr)
     (acc : Array Expr) : GenM (Array Expr) := do
   if i == xs.size then return acc
-  let (ℓ, α, β) ← wTowerAt w xs i acc
-  wTowerProjs w xs (i + 1) (psigmaSnd ℓ w α β d) (acc.push (psigmaFst ℓ w α β d))
+  let (ℓ, original, stored, β) ← wTowerAt w xs boxed i acc
+  let fst := psigmaFst ℓ w stored β d
+  let value ← if boxed[i]! then unboxValOf original fst else pure fst
+  wTowerProjs w xs boxed (i + 1) (psigmaSnd ℓ w stored β d) (acc.push value)
 
 /-- **A tower built from field values** — the same `α` and `β` as
 [`Modelgen.wTowerProjs`] rebuilds, so `⟨proj⃗ d⟩` and `d` are the same tower and
 structure eta closes the round trip with no transport. -/
-partial def wTowerMk (w : Level) (xs : Array Expr) (i : Nat) (vals : Array Expr) :
-    GenM Expr := do
+partial def wTowerMk (w : Level) (xs : Array Expr) (boxed : Array Bool)
+    (i : Nat) (vals : Array Expr) : GenM Expr := do
   if i == xs.size then return unitAtCanon w
-  let (ℓ, α, β) ← wTowerAt w xs i (vals.extract 0 i)
-  return psigmaMk ℓ w α β vals[i]! (← wTowerMk w xs (i + 1) vals)
+  let (ℓ, original, stored, β) ← wTowerAt w xs boxed i (vals.extract 0 i)
+  let value ← if boxed[i]! then boxValOf original vals[i]! else pure vals[i]!
+  return psigmaMk ℓ w stored β value (← wTowerMk w xs boxed (i + 1) vals)
+
+def wTowerTyOf (w : Level) (xs : Array Expr) : GenM Expr := do
+  wTowerTy w xs (← wTowerBoxed xs) 0
+
+def wTowerLevelOf (w : Level) (xs : Array Expr) : GenM (Option Level) := do
+  wTowerLevel w xs (← wTowerBoxed xs)
+
+def wTowerProjsOf (w : Level) (xs : Array Expr) (d : Expr) : GenM (Array Expr) := do
+  wTowerProjs w xs (← wTowerBoxed xs) 0 d #[]
+
+def wTowerMkOf (w : Level) (xs vals : Array Expr) : GenM Expr := do
+  wTowerMk w xs (← wTowerBoxed xs) 0 vals
 
 /-- Complete the simple generator's explicit retry table. -/
 def primAliasMap (tname root model ern recN : Name) (exportCtors : Array (Name × Expr))
@@ -3115,7 +3159,7 @@ data tower would have to hold a type the branch tower cannot see"
     let (nrs, _) ← wShapeOf k
     let tele ← instForall exportCtors[k]!.2 ps
     forallBoundedTelescope tele (some (numForalls tele)) fun fs _ =>
-      wTowerTy w (nrs.map (fs[·]!)) 0
+      wTowerTyOf w (nrs.map (fs[·]!))
   -- **The data tower's components, read out of a label's data** — the values
   -- the branch tower's binder types are written in terms of wherever only the
   -- label is in hand, which is everywhere but a constructor's own body.
@@ -3123,7 +3167,7 @@ data tower would have to hold a type the branch tower cannot see"
     let (nrs, _) ← wShapeOf k
     let tele ← instForall exportCtors[k]!.2 ps
     forallBoundedTelescope tele (some (numForalls tele)) fun fs _ =>
-      wTowerProjs w (nrs.map (fs[·]!)) 0 d #[]
+      wTowerProjsOf w (nrs.map (fs[·]!)) d
   -- **Constructor `k`'s recursive field `r`, at its own non-recursive fields
   -- replaced by `nrv`** — and this substitution is the untagged arm.
   --
@@ -3140,7 +3184,7 @@ data tower would have to hold a type the branch tower cannot see"
     forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
       return (← ityp fs[rcs[r]!]!).replaceFVars (nrs.map (fs[·]!)) nrv
   let wTelTy : Array Expr → Nat → Array Expr → Nat → GenM Expr := fun ps k nrv r => do
-    forallTelescope (← wRecDom ps k r nrv) fun zs _ => wTowerTy w zs 0
+    forallTelescope (← wRecDom ps k r nrv) fun zs _ => wTowerTyOf w zs
 
   -- **The dispatch cascade at tag `k`**, as a function of the branch index:
   -- `wDispAt ps k child sc : Tel p⃗ k sc → T._model.self p⃗`. `child r zs vs` is
@@ -3160,8 +3204,8 @@ data tower would have to hold a type the branch tower cannot see"
         mkLambdaFVars #[j] (.forallE `tel (dom (natSuccs r j)) selfTy .default)
     let armAt : Nat → GenM Expr := fun r => do
       forallTelescope (← wRecDom ps k r nrv) fun zs _ => do
-        withLocalDeclD `tel (← wTowerTy w zs 0) fun tel => do
-          mkLambdaFVars #[tel] (← child r zs (← wTowerProjs w zs 0 tel #[]))
+        withLocalDeclD `tel (← wTowerTyOf w zs) fun tel => do
+          mkLambdaFVars #[tel] (← child r zs (← wTowerProjsOf w zs tel))
     let junkAt : Expr → GenM Expr := fun t =>
       withLocalDeclD `tel (dom (natSuccs rcs.size t)) fun tel => do
         mkLambdaFVars #[tel] (← emptyAtElim eqi w w selfTy tel)
@@ -3192,7 +3236,7 @@ data tower would have to hold a type the branch tower cannot see"
     let selfTy := wSelfAt ps
     let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[key, jj])
     let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
-      return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMk w zs 0 vs))
+      return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMkOf w zs vs))
     let stmt : Expr → Expr → GenM Expr := fun jj tel => do
       let lhs := mkApp (← wDispAt ps k key nrv child jj) tel
       return eqi.mk' w selfTy lhs (mkApp f (← wBranch ps key jj tel))
@@ -3204,7 +3248,7 @@ data tower would have to hold a type the branch tower cannot see"
         mkLambdaFVars #[j] body
     let armAt : Nat → GenM Expr := fun r => do
       forallTelescope (← wRecDom ps k r nrv) fun zs _ => do
-        withLocalDeclD `tel (← wTowerTy w zs 0) fun tel => do
+        withLocalDeclD `tel (← wTowerTyOf w zs) fun tel => do
           mkLambdaFVars #[tel]
             (eqi.refl' w selfTy (mkApp f (← wBranch ps key (natNumeral r) tel)))
     let junkAt : Expr → GenM Expr := fun t => do
@@ -3227,7 +3271,7 @@ data tower would have to hold a type the branch tower cannot see"
     fun ps k fields => do
       let (nrs, rcs) ← wShapeOf k
       let nrv := nrs.map (fields[·]!)
-      let tower ← wTowerMk w nrv 0 nrv
+      let tower ← wTowerMkOf w nrv nrv
       let child : Nat → Array Expr → Array Expr → GenM Expr := fun r _ vs =>
         return (mkAppN fields[rcs[r]!]! vs).headBeta
       -- The branch tower is written at the constructor's **own** fields here
@@ -3277,7 +3321,7 @@ data tower would have to hold a type the branch tower cannot see"
         let projs ← wNrProjs ps kk d
         -- the children and their induction hypotheses, read off `f` and `ih`
         let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
-          return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMk w zs 0 vs))
+          return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMkOf w zs vs))
         let disp ← wDispLam ps kk key projs child
         let tele ← instForall exportCtors[kk]!.2 ps
         let nf := numForalls tele
@@ -3285,7 +3329,7 @@ data tower would have to hold a type the branch tower cannot see"
         let mut ihs : Array Expr := #[]
         for r in [0:rcs.size] do
           let (kd, ihv) ← forallTelescope (← wRecDom ps kk r projs) fun zs _ => do
-            let bv ← wBranch ps key (natNumeral r) (← wTowerMk w zs 0 zs)
+            let bv ← wBranch ps key (natNumeral r) (← wTowerMkOf w zs zs)
             return (← mkLambdaFVars zs (mkApp f bv), ← mkLambdaFVars zs (mkApp ih bv))
           kids := kids.push kd
           ihs := ihs.push ihv
@@ -4040,7 +4084,7 @@ data tower would have to hold a type the branch tower cannot see"
         let (nrs, rcs) ← wShapeOf k
         let tele ← instForall cty ps
         forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
-          if let some ℓ ← wTowerLevel w (nrs.map (fs[·]!)) then
+          if let some ℓ ← wTowerLevelOf w (nrs.map (fs[·]!)) then
             badShape s!"{cn} has a non-recursive field at Sort {ℓ} and the carrier is \
 Sort {w}, so the data tower does not land at the carrier's own sort"
           for i in rcs do
@@ -4048,7 +4092,7 @@ Sort {w}, so the data tower does not land at the carrier's own sort"
               unless res.getAppFn.isConstOf tname && res.getAppNumArgs == np do
                 badShape s!"{cn}'s recursive field {i} is not a bare {tname} at its own \
 parameters under its binders, so it is nested rather than infinitary"
-              if let some ℓ ← wTowerLevel w zs then
+              if let some ℓ ← wTowerLevelOf w zs then
                 badShape s!"{cn}'s recursive field {i} has a binder at Sort {ℓ} and the \
 carrier is Sort {w}, so the branch tower does not land at the carrier's own sort"
 
