@@ -963,9 +963,18 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
           if k < is.numAll then do
             let some (_, modelC) := is.ctors.find? (·.1 == key)
               | es := es.push s!"{key} has no model constructor"; continue
-            let some ci := env.constants.find? modelC
-              | es := es.push s!"{modelC} was not generated"; continue
-            pure (modelC, is.levelParams.map Level.param, ps, ← instantiateForall ci.type ps)
+            -- The statement oracle must inspect the declaration we emitted,
+            -- not the installed constant. The kernel may store a βζ-normalized
+            -- field domain, while literal correspondence deliberately retains
+            -- the exported constructor syntax in both the constructor and its
+            -- iota theorem.
+            let modelCTy? := is.decls.findSome? fun declaration => match declaration with
+              | .defnDecl value => if value.name == modelC then some value.type else none
+              | _ => none
+            let some modelCTy := modelCTy?
+              | es := es.push s!"{modelC} has no emitted constructor declaration"; continue
+            pure (modelC, is.levelParams.map Level.param, ps,
+              ← instantiateForall modelCTy ps)
           else do
             let .const _ cls := majorTy.getAppFn
               | es := es.push s!"{ern}'s major is not a type"; continue
