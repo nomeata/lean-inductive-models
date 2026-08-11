@@ -1,20 +1,21 @@
 import Modelgen.Format
+import Modelgen.Naming
 
 /-!
 # Structural checks for exported inductive models
 
 This module is the format-only foundation of the model checker.  It discovers
-public model families through a conventional public slot: a carrier
-`R._model.self` or a numbered root constructor `T._model.ctor_j`.  An arbitrary
-name containing `_model` is not enough, and the owner must be a public
-inductive type declared in the same export.
+public model families solely from the declarations in an original inductive
+record.  If that record declares type former `T`, constructor `C`, recursor `R`
+and rule `j`, their public names are respectively `T._model`, `C._model`,
+`R._model` and `R._model.iota_j`, constructed by [`Modelgen.Naming`].  No name
+is split at `_model`, so private names and originals which themselves contain
+an `_model` component retain their exact identity.
 
-Once a conventional slot establishes a family, every declaration record
-introducing a name under the same *innermost* `T._model` prefix belongs to that
-family.  This deliberately includes support declarations such as
-`T._model.funext`: helpers are part of the emitted model's dependency-ordered
-declaration slice, not independent model families.  A second-layer name such as
-`T._model.0._model.self` is instead keyed to `T._model.0`.
+Declaration records remain atomic for ordering.  A record which introduces at
+least one exact public name belongs to the corresponding family in its entirety;
+ordinary dependency edges order any non-contract implementation helpers on
+which it depends.
 
 The implemented invariants are:
 
@@ -22,34 +23,22 @@ The implemented invariants are:
   containing its owner; and
 * the complete owner inductive record does not refer to any name introduced by
   its model family;
-* there is exactly one public carrier and constructor declaration for every
-  corresponding owner declaration, and no extra numbered constructor slot;
-  and
-* carrier and constructor types are syntactically equal after the one public
+* there is exactly one public type-former and constructor declaration for every
+  corresponding original declaration; and
+* type-former and constructor types are syntactically equal after the one public
   constant substitution and positional alignment of declaration universes.
 
 The second walk covers both names held directly in export records and names in
 expressions.  In expressions it treats both `Expr.const` and the `typeName`
-field of `Expr.proj` as references.  It intentionally performs no recursor or
-reduction-rule comparison yet, and never unfolds or asks for definitional
+field of `Expr.proj` as references.  Recursor and reduction-rule names are part
+of discovery and correspondence, but this tranche intentionally does not
+validate their statements yet.  It never unfolds or asks for definitional
 equality.
 -/
 
 open Lean
 
 namespace Modelgen.Check
-
-/-- The innermost `_model` component in a name, including that component. -/
-def modelPrefix : Name → Option Name
-  | .anonymous => none
-  | n@(.str p s) => if s == "_model" then some n else modelPrefix p
-  | .num p _ => modelPrefix p
-
-/-- The name modeled by declarations under the innermost model prefix. -/
-def modelOwner (name : Name) : Option Name :=
-  match modelPrefix name with
-  | some (.str owner "_model") => some owner
-  | _ => none
 
 /-- One entry in the simultaneous public constant substitution. -/
 structure ConstantPair where
@@ -65,10 +54,22 @@ structure Correspondence where
   typeFormers : Array ConstantPair
   constructors : Array ConstantPair
   recursors : Array ConstantPair
+  iotas : Array Naming.Iota
   deriving Inhabited, Repr, BEq
 
 def Correspondence.entries (table : Correspondence) : Array ConstantPair :=
   table.typeFormers ++ table.constructors ++ table.recursors
+
+/-- Exact public declarations which can establish this correspondence in an
+export.  Recursors and iota theorems participate in discovery even though their
+statements are validated by a later checker tranche. -/
+def Correspondence.publicNames (table : Correspondence) : Array Name :=
+  table.entries.map (·.model) ++ table.iotas.map (·.name)
+
+/-- The exact original declaration owning one public name in the table. -/
+def Correspondence.originalOfPublic? (table : Correspondence) (name : Name) : Option Name :=
+  (table.entries.find? (·.model == name)).map (·.owner) <|>
+    (table.iotas.find? (·.name == name)).map (·.recursor)
 
 /-- Apply the table simultaneously.  Projection type-name fields are constants
 for this purpose just as they are for the backreference invariant. -/
@@ -89,22 +90,16 @@ of whether any model declarations are present. -/
 def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := do
   let .induct types ctors recursors ← x.decls[ownerDecl]?
     | none
-  let root ← types.head?.map (·.name)
-  let modelRoot := Name.str root "_model"
-  let typeFormers := types.toArray.filterMap fun type =>
-    if isPrivateName type.name then none else
-      some { owner := type.name, model := Name.str (Name.str type.name "_model") "self" }
-  let ctorArray := ctors.toArray
-  let constructors := (Array.range ctorArray.size).filterMap fun index =>
-    let ctor := ctorArray[index]!
-    if isPrivateName ctor.name then none else
-      some { owner := ctor.name, model := Name.str modelRoot s!"ctor_{index}" }
-  let recArray := recursors.toArray
-  let recursors := (Array.range recArray.size).filterMap fun index =>
-    let recursor := recArray[index]!
-    if isPrivateName recursor.name then none else
-      some { owner := recursor.name, model := Name.str modelRoot s!"rec_{index}" }
-  return { typeFormers, constructors, recursors }
+  let typeFormers := types.toArray.map fun type =>
+    { owner := type.name, model := Naming.modelName type.name }
+  let constructors := ctors.toArray.map fun ctor =>
+    { owner := ctor.name, model := Naming.modelName ctor.name }
+  let recursorRecords := recursors.toArray
+  let recursors := recursorRecords.map fun recursor =>
+    { owner := recursor.name, model := Naming.modelName recursor.name }
+  let iotas := recursorRecords.flatMap fun recursor =>
+    (Array.range recursor.rules.length).map (Naming.Iota.ofRecursor recursor.name)
+  return { typeFormers, constructors, recursors, iotas }
 
 /-- A public model family discovered in an export.
 
@@ -128,11 +123,12 @@ inductive Violation where
   | modelNotBefore (owner declaration : Name) (modelDecl ownerDecl : Nat)
   /-- The owner's inductive record refers back to a declaration of its model. -/
   | ownerBackreference (owner target : Name)
-  /-- An expected public carrier or constructor slot is absent. -/
+  /-- An expected public type-former or constructor declaration is absent. -/
   | missingPublic (owner expected : Name)
-  /-- A public carrier or constructor slot is declared more than once. -/
+  /-- A public type-former or constructor declaration occurs more than once. -/
   | duplicatePublic (owner expected : Name) (count : Nat)
-  /-- A numbered public constructor slot has no owner constructor. -/
+  /-- Legacy diagnostic retained for API compatibility.  Exact declaration-local
+  naming has no syntactic "extra constructor slot" class. -/
   | extraConstructor (owner declaration : Name)
   /-- The two declarations do not carry equally many positional universes. -/
   | universeArity (owner declaration : Name) (ownerArity modelArity : Nat)
@@ -143,69 +139,34 @@ inductive Violation where
 private def appendUnique (names : Array Name) (more : List Name) : Array Name :=
   more.foldl (fun out name => if out.contains name then out else out.push name) names
 
-/-- A direct `T._model.ctor_j` slot, with its root and index. -/
-def constructorSlot? : Name → Option (Name × Nat)
-  | .str (.str root "_model") suffix => do
-      unless suffix.startsWith "ctor_" do none
-      let index ← (suffix.drop 5).toNat?
-      return (root, index)
-  | _ => none
-
-/-- Discover public model families.  A conventional public slot and a public
-inductive owner in the same export are both required, so unrelated namespaces
-called `_model` are ignored.  One family covers the whole inductive record,
-including a mutual block's member-specific carrier roots. -/
+/-- Discover public model families from exact names computed from each original
+inductive record.  One family covers the whole atomic record, but every public
+slot in its correspondence remains attached to its exact original declaration.
+Names merely containing an `_model` component have no special meaning. -/
 def discover (x : Export) : Array Family := Id.run do
-  let mut owners : Std.HashMap Name Nat := {}
-  let mut roots : Std.HashMap Name Nat := {}
-  for i in [0 : x.decls.size] do
-    if let .induct types _ _ := x.decls[i]! then
-      if let root :: _ := types then
-        unless isPrivateName root.name do roots := roots.insert root.name i
-      for inductiveType in types do
-        unless isPrivateName inductiveType.name do
-          owners := owners.insert inductiveType.name i
-
-  let mut seeds : Array Nat := #[]
-  for declaration in x.decls do
-    for name in declaration.names do
-      let mut ownerDecl? : Option Nat := none
-      if let some owner := modelOwner name then
-        if name == Name.str (Name.str owner "_model") "self" then
-          ownerDecl? := owners[owner]?
-      if ownerDecl?.isNone then
-        if let some (root, _) := constructorSlot? name then ownerDecl? := roots[root]?
-      if let some ownerDecl := ownerDecl? then
-        unless seeds.contains ownerDecl do seeds := seeds.push ownerDecl
+  let mut declarations : Std.HashMap Name (Array Nat) := {}
+  for i in [0:x.decls.size] do
+    for name in x.decls[i]!.names do
+      declarations := declarations.insert name ((declarations.getD name #[]).push i)
 
   let mut families : Array Family := #[]
-  let mut familyOfOwner : Std.HashMap Name Nat := {}
-  for ownerDecl in seeds do
+  for ownerDecl in [0:x.decls.size] do
     let .induct types _ _ := x.decls[ownerDecl]! | continue
     let some root := types.head?.map (·.name) | continue
     let some correspondence := correspondenceAt? x ownerDecl | continue
-    let modelRoot := Name.str root "_model"
-    let carrier := Name.str modelRoot "self"
-    let familyIndex := families.size
-    for pair in correspondence.typeFormers do
-      familyOfOwner := familyOfOwner.insert pair.owner familyIndex
+    let publicNames := correspondence.publicNames
+    unless publicNames.any (fun name => !(declarations.getD name #[]).isEmpty) do continue
+    let mut modelDecls : Array Nat := #[]
+    for name in publicNames do
+      for i in declarations.getD name #[] do
+        unless modelDecls.contains i do modelDecls := modelDecls.push i
+    modelDecls := modelDecls.qsort (· < ·)
+    let modelNames := modelDecls.foldl
+      (fun names i => appendUnique names x.decls[i]!.names) #[]
+    let modelRoot := Naming.modelName root
     families := families.push
-      { owner := root, modelRoot, carrier, ownerDecl, correspondence, decls := #[], names := #[] }
-
-  -- Assign every declaration record once.  Looking at the innermost owner is
-  -- what keeps a model of `T._model.0` out of `T`'s own family.
-  for i in [0 : x.decls.size] do
-    let declaration := x.decls[i]!
-    let mut familyIndices : Array Nat := #[]
-    for name in declaration.names do
-      if let some owner := modelOwner name then
-        if let some familyIndex := familyOfOwner[owner]? then
-          unless familyIndices.contains familyIndex do
-            familyIndices := familyIndices.push familyIndex
-    for familyIndex in familyIndices do
-      let family := families[familyIndex]!
-      families := families.set! familyIndex
-        { family with decls := family.decls.push i, names := appendUnique family.names declaration.names }
+      { owner := root, modelRoot, carrier := modelRoot, ownerDecl, correspondence,
+        decls := modelDecls, names := modelNames }
   return families
 
 private partial def expressionReference? (targets : Std.HashSet Name) : Expr → Option Name
@@ -224,25 +185,25 @@ private partial def expressionReference? (targets : Std.HashSet Name) : Expr →
 private def nameReference? (targets : Std.HashSet Name) (names : List Name) : Option Name :=
   names.find? targets.contains
 
-private def typeReference? (targets : Std.HashSet Name) (type : EIndType) : Option Name :=
-  nameReference? targets type.all <|>
+private def typeReference? (targets : Std.HashSet Name) (type : EIndType) : Option (Name × Name) :=
+  (nameReference? targets type.all <|>
     nameReference? targets type.ctors <|>
-    expressionReference? targets type.type
+    expressionReference? targets type.type).map (type.name, ·)
 
-private def ctorReference? (targets : Std.HashSet Name) (ctor : ECtor) : Option Name :=
-  (if targets.contains ctor.induct then some ctor.induct else none) <|>
-    expressionReference? targets ctor.type
+private def ctorReference? (targets : Std.HashSet Name) (ctor : ECtor) : Option (Name × Name) :=
+  ((if targets.contains ctor.induct then some ctor.induct else none) <|>
+    expressionReference? targets ctor.type).map (ctor.name, ·)
 
 private def ruleReference? (targets : Std.HashSet Name) (rule : ERecRule) : Option Name :=
   (if targets.contains rule.ctor then some rule.ctor else none) <|>
     expressionReference? targets rule.rhs
 
-private def recReference? (targets : Std.HashSet Name) (recursor : ERec) : Option Name :=
-  nameReference? targets recursor.all <|>
+private def recReference? (targets : Std.HashSet Name) (recursor : ERec) : Option (Name × Name) :=
+  (nameReference? targets recursor.all <|>
     expressionReference? targets recursor.type <|>
-    recursor.rules.findSome? (ruleReference? targets)
+    recursor.rules.findSome? (ruleReference? targets)).map (recursor.name, ·)
 
-private def ownerReference? (targets : Std.HashSet Name) : EDecl → Option Name
+private def ownerReference? (targets : Std.HashSet Name) : EDecl → Option (Name × Name)
   | .induct types ctors recursors =>
       types.findSome? (typeReference? targets) <|>
         ctors.findSome? (ctorReference? targets) <|>
@@ -282,25 +243,25 @@ private def declarationTypes (x : Export) : DeclarationTypes := Id.run do
         ((declarations.getD info.name #[]).push info)
   return declarations
 
-private def checkPair (family : Family) (declarations : DeclarationTypes)
+private def checkPair (table : Correspondence) (declarations : DeclarationTypes)
     (pair : ConstantPair) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
   let models := declarations.getD pair.model #[]
   if models.isEmpty then
-    return #[.missingPublic family.owner pair.model]
+    return #[.missingPublic pair.owner pair.model]
   if models.size != 1 then
-    return #[.duplicatePublic family.owner pair.model models.size]
+    return #[.duplicatePublic pair.owner pair.model models.size]
   let some ownerDecl := (declarations.getD pair.owner #[])[0]?
-    | return #[.declarationType family.owner pair.model]
+    | return #[.declarationType pair.owner pair.model]
   let modelDecl := models[0]!
   if ownerDecl.levelParams.length != modelDecl.levelParams.length then
-    violations := violations.push (.universeArity family.owner pair.model
+    violations := violations.push (.universeArity pair.owner pair.model
       ownerDecl.levelParams.length modelDecl.levelParams.length)
   else
-    let expected := family.correspondence.expectedType
+    let expected := table.expectedType
       ownerDecl.levelParams modelDecl.levelParams ownerDecl.type
     unless expected == modelDecl.type do
-      violations := violations.push (.declarationType family.owner pair.model)
+      violations := violations.push (.declarationType pair.owner pair.model)
   return violations
 
 /-- The owner named by a diagnostic, for callers checking one family in a
@@ -312,8 +273,9 @@ def Violation.familyOwner : Violation → Name
       .declarationType owner .. => owner
 
 /-- Check the currently implemented part of the model contract.  An empty
-result establishes order, independence, and exact carrier/constructor slots
-and types.  It says nothing yet about recursor or reduction-rule slots. -/
+result establishes order, independence, and exact type-former/constructor slots
+and types.  Recursor and reduction-rule slots establish discovery and ordering,
+but their presence and statements are validated by a later tranche. -/
 def check (x : Export) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
   let declarations := declarationTypes x
@@ -321,21 +283,17 @@ def check (x : Export) : Array Violation := Id.run do
     for modelDecl in family.decls do
       unless modelDecl < family.ownerDecl do
         let declaration := x.decls[modelDecl]!
-        let name := declaration.names.head?.getD family.modelRoot
-        violations := violations.push
-          (.modelNotBefore family.owner name modelDecl family.ownerDecl)
+        for name in declaration.names do
+          if let some owner := family.correspondence.originalOfPublic? name then
+            violations := violations.push
+              (.modelNotBefore owner name modelDecl family.ownerDecl)
     let targets := family.names.foldl (fun set name => set.insert name) ({} : Std.HashSet Name)
-    if let some target := ownerReference? targets x.decls[family.ownerDecl]! then
-      violations := violations.push (.ownerBackreference family.owner target)
+    if let some (owner, target) := ownerReference? targets x.decls[family.ownerDecl]! then
+      violations := violations.push (.ownerBackreference owner target)
     for pair in family.correspondence.typeFormers do
-      violations := violations ++ checkPair family declarations pair
+      violations := violations ++ checkPair family.correspondence declarations pair
     for pair in family.correspondence.constructors do
-      violations := violations ++ checkPair family declarations pair
-    for name in family.names do
-      if let some (root, _) := constructorSlot? name then
-        if root == family.owner &&
-            !family.correspondence.constructors.any (·.model == name) then
-          violations := violations.push (.extraConstructor family.owner name)
+      violations := violations ++ checkPair family.correspondence declarations pair
   return violations
 
 end Modelgen.Check

@@ -103,21 +103,21 @@ def run (root : String) : IO UInt32 := do
   -- synthetic two-record form pins the same after-owner move without depending
   -- on any particular primitive construction.
   let simpleOwner := `Simple
-  let simpleCarrier := `Simple._model.self
+  let simpleCarrier := Naming.modelName simpleOwner
   let simple := exportOf #[inductiveRecord [simpleOwner], axDecl simpleCarrier]
   let simple' ← mustReorder "after-owner simple output" simple
   state := state.check "after-owner simple output reorders"
     (before simple' simpleCarrier simpleOwner && (Check.check simple').isEmpty)
 
   -- A mutual owner and its mutual model each remain one indivisible record.
-  -- Both public families key the same model record to the same owner record.
+  -- Declaration-local member names key one family to the atomic owner record.
   let mutualOwner := inductiveRecord [`MA, `MB]
-  let mutualModel := inductiveRecord [`MA._model.self, `MB._model.self]
+  let mutualModel := inductiveRecord [Naming.modelName `MA, Naming.modelName `MB]
   let mutualExport := exportOf #[mutualOwner, mutualModel]
   let mutual' ← mustReorder "atomic mutual records" mutualExport
   state := state.check "atomic mutual records reorder"
     (mutual'.decls == #[mutualModel, mutualOwner] &&
-      (Check.discover mutual').size == 2 && (Check.check mutual').isEmpty)
+      (Check.discover mutual').size == 1 && (Check.check mutual').isEmpty)
 
   -- `Expr.getUsedConstants` omits a projection's `typeName`.  This reference
   -- exists nowhere else, so only an explicit projection walk can order it.
@@ -144,7 +144,8 @@ def run (root : String) : IO UInt32 := do
 
   -- A model that refers to the owner produces owner→model from the ordinary
   -- dependency graph and model→owner from the ordering contract.
-  let cyclic := exportOf #[inductiveRecord [`Cycle], axDecl `Cycle._model.self (.const `Cycle [])]
+  let cyclic := exportOf #[inductiveRecord [`Cycle],
+    axDecl (Naming.modelName `Cycle) (.const `Cycle [])]
   state := state.check "model-owner backreference is an explicit cycle" <|
     match Order.recordOrder cyclic with
     | .error (.cycle records) => records == #[0, 1]
@@ -157,22 +158,28 @@ def run (root : String) : IO UInt32 := do
     | .error (.duplicateName name 0 1) => name == `Duplicate
     | _ => false
 
-  -- This is the real late-basis shape: simple input `Pre` and simple models of
-  -- the mutual model's generated tag/aux declarations are emitted only after
-  -- the input's later `PSigma`.  The reorder must repair every discovered
-  -- family simultaneously while retaining all ordinary dependencies.
-  let late ← generatedFixture s!"{root}/tests/prim_late_basis.ndjson" {}
-  let lateFamilies := Check.discover late
-  let isLate := fun (family : Check.Family) =>
-    family.decls.any (family.ownerDecl < ·)
-  state := state.check "late-basis output delays simple input model"
-    (lateFamilies.any fun family => family.owner == `Pre && isLate family)
-  state := state.check "late-basis output delays a mutual-output model"
-    (lateFamilies.any fun family => (`MA._model).isPrefixOf family.owner && isLate family)
-  let late' ← mustReorder "late-basis output" late
-  state := state.check "late-basis output reorders"
-    (familiesBeforeOwners late' && (Check.check late').isEmpty &&
-      dependenciesForward late' && late'.decls.size == late.decls.size)
+  -- This real mutual output has three members, unequal constructor counts,
+  -- parameters and levels. Discovery must use each declaration's exact name,
+  -- and a stable reorder must retain all ordinary implementation dependencies.
+  let generatedMutual ← generatedFixture s!"{root}/tests/mutual_shapes.ndjson"
+    { noGeneration with mutualModels := true }
+  let generatedMutualFamilies := Check.discover generatedMutual
+  state := state.check "generated mutual family has exact member names" <|
+    generatedMutualFamilies.any fun family =>
+      family.owner == `A && family.decls.all (· < family.ownerDecl) &&
+        family.correspondence.typeFormers.any (fun pair =>
+          pair.owner == `B && pair.model == Naming.modelName `B) &&
+        family.correspondence.constructors.any (fun pair =>
+          pair.owner == `C.cf && pair.model == Naming.modelName `C.cf) &&
+        family.correspondence.recursors.any (fun pair =>
+          pair.owner == `C.rec && pair.model == Naming.modelName `C.rec) &&
+        family.correspondence.iotas.any (fun rule =>
+          rule.recursor == `C.rec && rule.name == Naming.iotaName `C.rec 2)
+  let generatedMutual' ← mustReorder "generated mutual output" generatedMutual
+  state := state.check "generated mutual output reorders and checks"
+    (familiesBeforeOwners generatedMutual' && (Check.check generatedMutual').isEmpty &&
+      dependenciesForward generatedMutual' &&
+      generatedMutual'.decls.size == generatedMutual.decls.size)
 
   -- Nested-only generation already emits its family before the owner.  A
   -- stable pass is record-neutral when every dependency is already forward.

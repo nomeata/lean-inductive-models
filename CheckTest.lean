@@ -6,14 +6,15 @@ import Modelgen.Check
 Run from the repository root with `lake exe checktest [ROOT]`.
 
 The synthetic baseline starts from an actual lean4export fixture.  Exact public
-carrier and constructor axioms, plus a deliberately generic helper, are
+type-former and constructor axioms, plus a deliberately generic helper, are
 inserted before its `Tree` inductive record.  Their types are obtained by the
 same public correspondence operation the checker exposes, with fresh universe
 parameter names to exercise positional alignment.  The adversarial cases are
 mutations of that baseline, so each changes only the invariant named by it.
 
-The final checks read a real modelgen-filtered fixture and validate its public
-`Tree` family without manufacturing any declarations.
+Additional cases cover declaration names which contain `_model`, raw private
+names, and a multi-member mutual record whose public slots do not depend on the
+first member or export position.
 -/
 
 open Lean Modelgen Modelgen.Check
@@ -119,11 +120,6 @@ def isMissing (owner declaration : Name) : Violation → Bool
       gotOwner == owner && gotDeclaration == declaration
   | _ => false
 
-def isExtra (owner declaration : Name) : Violation → Bool
-  | .extraConstructor gotOwner gotDeclaration =>
-      gotOwner == owner && gotDeclaration == declaration
-  | _ => false
-
 def isTypeMismatch (owner declaration : Name) : Violation → Bool
   | .declarationType gotOwner gotDeclaration =>
       gotOwner == owner && gotDeclaration == declaration
@@ -138,9 +134,9 @@ def run (root : String) : IO UInt32 := do
       return 1
   | .ok raw =>
     let owner := `Tree
-    let modelRoot := `Tree._model
-    let carrier := `Tree._model.self
-    let helper := `Tree._model.helper
+    let modelRoot := Naming.modelName owner
+    let carrier := Naming.modelName owner
+    let helper := `Tree._model._impl.helper
     let some rawOwnerDecl := ownerIndex? raw owner | do
       IO.eprintln s!"checktest: {path} does not declare {owner}"
       return 1
@@ -159,12 +155,12 @@ def run (root : String) : IO UInt32 := do
         family.owner == owner && family.modelRoot == modelRoot &&
           family.carrier == carrier && family.ownerDecl == validOwnerDecl &&
           family.correspondence == table
-      state ← state.check "helper belongs to established family" <|
-        family.decls.size == models.size &&
-          family.names.contains helper && family.names.contains carrier
+      state ← state.check "only exact public records establish the family" <|
+        family.decls.size + 1 == models.size &&
+          !family.names.contains helper && family.names.contains carrier
     else
       state ← state.check "family key" false
-      state ← state.check "helper belongs to established family" false
+      state ← state.check "only exact public records establish the family" false
     state ← state.check "valid ordering and independence" (check valid).isEmpty
 
     let eqOwner := `Eq
@@ -191,19 +187,18 @@ def run (root : String) : IO UInt32 := do
 
     -- `Expr.getUsedConstants` does not include this name: it lives in the
     -- projection node's `typeName` field, so this pins the checker's explicit
-    -- projection traversal.  Referring to the helper also pins that helpers
-    -- belong to the established family's forbidden target set.
-    let projectionBackref :=
-      withOwnerType valid validOwnerDecl (.proj helper 0 (.bvar 0))
-    state ← state.check "projection type-name helper backreference is rejected" <|
-      (check projectionBackref).any (isBackreference owner helper)
-
+    -- projection traversal.
     let some firstCtor := table.constructors[0]? | do
       IO.eprintln "checktest: Tree has no constructor correspondence"
       return 1
+    let projectionBackref :=
+      withOwnerType valid validOwnerDecl (.proj firstCtor.model 0 (.bvar 0))
+    state ← state.check "projection type-name public backreference is rejected" <|
+      (check projectionBackref).any (isBackreference owner firstCtor.model)
+
     let missingCtor := withoutDeclaration valid firstCtor.model
     state ← state.check "missing constructor slot is rejected" <|
-      (check missingCtor).any (isMissing owner firstCtor.model)
+      (check missingCtor).any (isMissing firstCtor.owner firstCtor.model)
 
     -- Constructor slots still claim the family when the carrier is missing,
     -- so exactness cannot disappear with the declaration it must diagnose.
@@ -211,15 +206,15 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "missing carrier slot is rejected" <|
       (check missingCarrier).any (isMissing owner carrier)
 
-    let extraCtorName := Name.str modelRoot s!"ctor_{table.constructors.size}"
-    let extraCtor := insertBeforeOwner valid owner
-      (.ax extraCtorName [] (.sort (.succ .zero)) false)
-    state ← state.check "extra constructor slot is rejected" <|
-      (check extraCtor).any (isExtra owner extraCtorName)
+    let legacySlot := Name.str modelRoot "ctor_99"
+    let unrelatedLegacyName := insertBeforeOwner valid owner
+      (.ax legacySlot [] (.sort (.succ .zero)) false)
+    state ← state.check "legacy numbered name is not a public slot" <|
+      (discover unrelatedLegacyName).all fun family => !family.names.contains legacySlot
 
     -- `IdxP.at_a` and `IdxP.at_b` have the same binder shape and differ only
-    -- in their result indices.  The numeric model slots must follow export
-    -- order rather than being paired by a type-shape heuristic.
+    -- in their result indices.  Exact declaration-local names must prevent a
+    -- type-shape heuristic from pairing them interchangeably.
     let shapesPath := s!"{root}/tests/prim_shapes.ndjson"
     let shapesText ← IO.FS.readFile shapesPath
     match Modelgen.parse shapesText (analyse := false) with
@@ -244,8 +239,8 @@ def run (root : String) : IO UInt32 := do
               let swapped := withDeclarationType
                 (withDeclarationType idxValid first.model secondType) second.model firstType
               state ← state.check "swapped equal-looking constructors" <|
-                (check swapped).any (isTypeMismatch idxOwner first.model) &&
-                  (check swapped).any (isTypeMismatch idxOwner second.model)
+                (check swapped).any (isTypeMismatch first.owner first.model) &&
+                  (check swapped).any (isTypeMismatch second.owner second.model)
             | _, _ => state ← state.check "swapped equal-looking constructors" false
           | _, _ => state ← state.check "swapped equal-looking constructors" false
 
@@ -261,17 +256,75 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "definitionally equal carrier syntax is rejected" <|
       (check defeqCarrier).any (isTypeMismatch owner carrier)
 
-    let generatedPath := s!"{root}/tests/filtered/nested_iota_arm.ndjson"
-    let generatedText ← IO.FS.readFile generatedPath
-    match Modelgen.parse generatedText (analyse := false) with
+    let modelNamedOwner := `Tree._model
+    let modelNamedRaw :=
+      { raw with decls := raw.decls.map (EDecl.renameRoot owner modelNamedOwner) }
+    let some modelNamedOwnerDecl := ownerIndex? modelNamedRaw modelNamedOwner | do
+      IO.eprintln "checktest: renamed _model owner missing"
+      return 1
+    let some modelNamedTable := correspondenceAt? modelNamedRaw modelNamedOwnerDecl | do
+      IO.eprintln "checktest: renamed _model correspondence missing"
+      return 1
+    let modelNamedModels := modelDeclarations modelNamedRaw modelNamedTable
+      `Tree._model._model._impl.helper
+    let modelNamedValid := withValidModel modelNamedRaw modelNamedOwnerDecl modelNamedModels
+    state ← state.check "original _model component is preserved exactly" <|
+      modelNamedTable.typeFormers[0]?.map (·.model) == some `Tree._model._model &&
+        (discover modelNamedValid).any (·.owner == modelNamedOwner) &&
+        (check modelNamedValid).isEmpty
+
+    let privateOwner := (`_private.CheckTest).mkNum 0 |>.str "Tree"
+    let privateRaw :=
+      { raw with decls := raw.decls.map (EDecl.renameRoot owner privateOwner) }
+    let some privateOwnerDecl := ownerIndex? privateRaw privateOwner | do
+      IO.eprintln "checktest: private owner missing"
+      return 1
+    let some privateTable := correspondenceAt? privateRaw privateOwnerDecl | do
+      IO.eprintln "checktest: private correspondence missing"
+      return 1
+    let privateModels := modelDeclarations privateRaw privateTable
+      (Name.str (Naming.modelName privateOwner) "_impl")
+    let privateValid := withValidModel privateRaw privateOwnerDecl privateModels
+    state ← state.check "private originals retain raw correspondence names" <|
+      privateTable.typeFormers[0]?.map (·.model) == some (Naming.modelName privateOwner) &&
+        (discover privateValid).any (·.owner == privateOwner) &&
+        (check privateValid).isEmpty
+
+    let mutualPath := s!"{root}/tests/mutual_shapes.ndjson"
+    let mutualText ← IO.FS.readFile mutualPath
+    match Modelgen.parse mutualText (analyse := false) with
     | .error error =>
-        IO.eprintln s!"checktest: could not parse {generatedPath}: {error}"
-        state ← state.check "real generated family" false
-    | .ok generated =>
-        let treeFamilies := (discover generated).filter (·.owner == owner)
-        let treeViolations := (check generated).filter (·.familyOwner == owner)
-        state ← state.check "real generated family discovered" (treeFamilies.size == 1)
-        state ← state.check "real generated carrier and constructors match" treeViolations.isEmpty
+        IO.eprintln s!"checktest: could not parse {mutualPath}: {error}"
+        state ← state.check "valid exact mutual family" false
+    | .ok mutualExport =>
+      let some mutualOwnerDecl := ownerIndex? mutualExport `A | do
+        IO.eprintln "checktest: mutual owner missing"
+        return 1
+      let some mutualTable := correspondenceAt? mutualExport mutualOwnerDecl | do
+        IO.eprintln "checktest: mutual correspondence missing"
+        return 1
+      let mutualModels := modelDeclarations mutualExport mutualTable `A._model._impl.helper
+      let mutualValid := withValidModel mutualExport mutualOwnerDecl mutualModels
+      state ← state.check "mutual correspondence is declaration-local" <|
+        mutualTable.typeFormers.any (fun pair =>
+          pair.owner == `B && pair.model == Naming.modelName `B) &&
+        mutualTable.constructors.any (fun pair =>
+          pair.owner == `B.bC && pair.model == Naming.modelName `B.bC) &&
+        mutualTable.recursors.any (fun pair =>
+          pair.owner == `C.rec && pair.model == Naming.modelName `C.rec) &&
+        mutualTable.iotas.any (fun rule =>
+          rule.recursor == `C.rec && rule.ruleIndex == 2 &&
+            rule.name == Naming.iotaName `C.rec 2)
+      state ← state.check "valid exact mutual family" <|
+        (discover mutualValid).any (fun family =>
+          family.owner == `A && family.correspondence == mutualTable) &&
+        (check mutualValid).isEmpty
+      let some bCtor := mutualTable.constructors.find? (·.owner == `B.bC) | do
+        IO.eprintln "checktest: B.bC correspondence missing"
+        return 1
+      state ← state.check "mutual diagnostic belongs to exact constructor" <|
+        (check (withoutDeclaration mutualValid bCtor.model)).any
+          (isMissing bCtor.owner bCtor.model)
 
     if state.failed == 0 then
       IO.println s!"checktest: {state.passed} tests passed"
