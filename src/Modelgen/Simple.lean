@@ -174,9 +174,6 @@ nothing; and arm W applies the W core's propositional ι theorem.
   index terms are two proofs of one proposition and proof irrelevance closes
   it, which is what puts the `below` Lean mints beside every recursive `Prop`
   — `Acc.below` included — on the modelled side.
-* **a non-singleton indexed declaration, or any recursion, at a maybe-zero
-  sort** — only the large-eliminating nonrecursive singleton has its index
-  equation threaded through the lift.
 * **a level gap no recursive box closes** — exposed Π structure is boxed at
   every depth, so a nested domain such as `((α → β) → β)` is supported. A
   genuinely opaque atomic type whose declared sort itself contains an `imax`
@@ -1296,9 +1293,16 @@ use.
 The index expressions are taken from the export telescope as it is walked, not
 read back off the built types: `Pair` is a λ, so `Pair e⃗` is a β-redex and
 whether its arguments are still visible is a fact about whoever last touched
-the expression. This is the bug that cost the first two attempts. -/
+the expression. This is the bug that cost the first two attempts.
+
+At a maybe-zero sort, `Self` itself cannot instantiate the pair's `D : Prop`.
+`baseAt` is the Church proposition under `PULiftP`; extracting a recursive
+element instantiates at that proposition, maps the stored `Self` through
+`down`, and maps the result back through `up`. With no lift, `baseAt = Self`
+and these two boundary maps are identities. -/
 partial def pairArm (tname : Name) (np ni : Nat) (us : List Level)
     (selfAt : Array Expr → Expr) (pairAt : Array Expr → GenM Expr)
+    (baseAt : Array Expr → GenM Expr) (lift? : Option Level)
     (motive : Expr) (cN : Name) (minor : Expr) (ps : Array Expr)
     (nf : Nat) (tele : Expr) (elems ihs : Array Expr) : GenM Expr := do
   if nf == 0 then
@@ -1320,8 +1324,8 @@ partial def pairArm (tname : Name) (np ni : Nat) (us : List Level)
   let .forallE x d b bi := tele | badShape "telescope shorter than its field count"
   if !(mentionsAny #[tname] d) then
     return ← withLocalDecl x bi d fun xv => do
-      mkLambdaFVars #[xv] (← pairArm tname np ni us selfAt pairAt motive cN minor ps
-        (nf - 1) (b.instantiate1 xv) (elems.push xv) ihs)
+      mkLambdaFVars #[xv] (← pairArm tname np ni us selfAt pairAt baseAt lift?
+        motive cN minor ps (nf - 1) (b.instantiate1 xv) (elems.push xv) ihs)
   -- a recursive field `∀ z⃗, T p⃗ e⃗`: bind it at `∀ z⃗, Pair e⃗`
   let nb ← forallTelescope d fun zs _ => pure zs.size
   let dPair ← forallBoundedTelescope d (some nb) fun zs res => do
@@ -1332,18 +1336,24 @@ partial def pairArm (tname : Name) (np ni : Nat) (us : List Level)
       let a := res.getAppArgs
       let ris := a.extract np a.size
       let sf := selfAt ris
+      let baseTy ← baseAt ris
       let app := mkAppN pv zs
       let mkArm := fun (k : Expr → Expr → GenM Expr) =>
         withLocalDeclD `e sf fun e => do
           let qTy ← withLocalDeclD `h sf fun h =>
             mkForallFVars #[h] (mkAppN motive (ris.push h))
           withLocalDeclD `q qTy fun q => do mkLambdaFVars #[e, q] (← k e q)
-      let elArm ← mkArm fun e _ => pure e
-      let el := mkAppN app #[sf, elArm]
+      let elArm ← mkArm fun e _ => pure <| match lift? with
+        | none => e
+        | some ℓ => puliftDown ℓ baseTy e
+      let elBase := mkAppN app #[baseTy, elArm]
+      let el := match lift? with
+        | none => elBase
+        | some ℓ => puliftUp ℓ baseTy elBase
       let ihArm ← mkArm fun _ q => pure (mkApp q el)
       let ih := mkAppN app #[mkAppN motive (ris.push el), ihArm]
       return (← mkLambdaFVars zs el, ← mkLambdaFVars zs ih)
-    mkLambdaFVars #[pv] (← pairArm tname np ni us selfAt pairAt motive cN minor ps
+    mkLambdaFVars #[pv] (← pairArm tname np ni us selfAt pairAt baseAt lift? motive cN minor ps
       (nf - 1) (b.instantiate1 el) (elems.push el) (ihs.push ih))
 
 /-! ## Arm G: the recursive subsingleton, by the **graph** of the recursion
@@ -2599,10 +2609,10 @@ application of {tname}"
 
   -- What each route can carry. The Church routes gained indices and recursion
   -- (`churchSwapAt` and the strong-induction fold below); the `Nat`-tagged sum
-  -- has neither. At a maybe-zero sort, the lifted arm-F construction below
-  -- carries the one indexed shape that can large-eliminate: a nonrecursive
-  -- singleton. Other indexed shapes would need the lift threaded through the
-  -- small-elimination machinery too.
+  -- has neither. At a maybe-zero sort, small elimination uses the Church pair
+  -- with `down`/`up` at the carrier boundary, including for indices and
+  -- recursion. The lifted arm-F construction below carries the remaining
+  -- indexed shape: the large-eliminating nonrecursive singleton.
   match route with
   | PrimRoute.type =>
     if ni > 0 && !erasureBare then
@@ -2624,9 +2634,7 @@ application of {tname}"
     -- declines the shapes it cannot express — a branching constructor, or a
     -- recursive occurrence under a binder — by name, further down.
   | PrimRoute.bare =>
-    if isRec then
-      badShape s!"a recursive inductive at Sort {w}: the strong-induction fold is \
-        not threaded through the lift"
+    pure ()
   | PrimRoute.prop =>
     -- Every shape at `Sort 0` has an arm: the fold for small elimination, arm
     -- F for the non-recursive subsingleton, and **arm G** — the graph route,
@@ -4462,10 +4470,11 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     out := out.push dSelf
 
     -- ── the constructors ──
-    -- The binders come from the **restored** telescope, because a recursive
-    -- field's type there is `T._model.self p⃗ e⃗` — which δ-unfolds to the
-    -- encoding, so the fold `fun z⃗ => f z⃗ C k⃗` typechecks. Classification is
-    -- positional and read off the export's telescope.
+    -- The binders come from the **restored** telescope. At `Prop`, a recursive
+    -- field's `T._model.self p⃗ e⃗` δ-unfolds to the encoding; under a lift it
+    -- is first mapped through `down`. In either case the fold
+    -- `fun z⃗ => f z⃗ C k⃗` then typechecks. Classification is positional and
+    -- read off the export's telescope.
     for j in [0:nc] do
       let (_, cty) := exportCtors[j]!
       let ty := restore tbl cty
@@ -4478,12 +4487,21 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
             let args ← (Array.range nfj).mapM fun i => do
               match flds[i]!.rec? with
               | none => pure fs[i]!
-              | some 0 => pure (mkAppN fs[i]! (#[C] ++ ks))
               | some nb =>
                 -- exactly the field's OWN binders: `forallTelescope` would
                 -- whnf through `T._model.self` and open the encoding's Π too.
-                forallBoundedTelescope (← ityp fs[i]!) (some nb) fun zs _ =>
-                  mkLambdaFVars zs (mkAppN (mkAppN fs[i]! zs) (#[C] ++ ks))
+                forallBoundedTelescope (← ityp fs[i]!) (some nb) fun zs res => do
+                  let child := mkAppN fs[i]! zs
+                  let base ← match lift? with
+                    | none => pure child
+                    | some ℓ => do
+                      let args := res.getAppArgs
+                      unless res.getAppFn.isConstOf selfN && args.size == np + ni do
+                        badShape s!"a recursive field of {ctorN j} does not end in {selfN} \
+                          at {np} parameters and {ni} indices"
+                      let is := args.extract np args.size
+                      pure (puliftDown ℓ (← churchPropAt ps is) child)
+                  mkLambdaFVars zs (mkAppN base (#[C] ++ ks))
             mkLambdaFVars (#[C] ++ ks) (mkAppN ks[j]! args)
           match lift? with
           | none => mkLambdaFVars (ps ++ fs) fold
@@ -4569,10 +4587,14 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
                 mkForallFVars #[h] (mkAppN motive (is.push h))
               withLocalDeclD `q qTy fun q => mkForallFVars #[e, q] D
             mkForallFVars #[D] (.forallE `k armTy D .default)
+        let pairBaseAt := fun (is : Array Expr) => match lift? with
+          | none => pure (selfAt is)
+          | some _ => churchPropAt ps is
         let cs ← (Array.range nc).mapM fun j => do
           let (_, cty) := exportCtors[j]!
           let tele ← instForall cty ps
-          pairArm tname np ni us selfAt pairAt motive (ctorN j) minors[j]! ps
+          pairArm tname np ni us selfAt pairAt pairBaseAt lift?
+            motive (ctorN j) minors[j]! ps
             (numForalls tele) tele #[] #[]
         let cont ← withLocalDeclD `e (selfAt idxs) fun e => do
           let qTy ← withLocalDeclD `h (selfAt idxs) fun h =>

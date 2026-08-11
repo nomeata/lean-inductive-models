@@ -378,15 +378,19 @@ to `max`, and the forward and inverse maps are definitionally inverse.  The
 seven declarations recorded below include its intrinsic projection and eta;
 no level-normalizer relaxation or axiom is involved. -/
 def expectedPrim : List Row :=
-  [ ("maybe_zero_indexed", [("MI", 8)], [])
-  , ("maybe_zero_recursive", [],
-      [("MR", "prim model shape: a recursive inductive at Sort u: the strong-induction fold \
-        is not threaded through the lift")])
+  [ -- The two small-elimination seams under `PULiftP`. `MI` forces the pair
+    -- motive at two distinct result indices; `MR.step` forces a recursive
+    -- carrier through `down` in the constructor and through `down`/`up` in the
+    -- pair's element projection; `MRI` crosses both at a changing child fibre.
+    -- Each has six public declarations; the first model in each raw export also
+    -- pays for the `Eq` and `PULiftP` support records.
+    ("maybe_zero_indexed", [("MI", 8)], [])
+  , ("maybe_zero_recursive", [("MRI", 8), ("MR", 6)], [])
   -- Lifted arm F at its minimum: one proof field and one constant result
-    -- index. The latter forces the packed equation; the existing one-field
-    -- direct-carrier route is index-free. At positive `u`, forgetting the
-    -- `PULiftP` boundary is a kernel type error; at `u = 0`, the same declaration
-    -- checks the genuinely propositional end.
+  -- index. The latter forces the packed equation; the existing one-field
+  -- direct-carrier route is index-free. At positive `u`, forgetting the
+  -- `PULiftP` boundary is a kernel type error; at `u = 0`, the same declaration
+  -- checks the genuinely propositional end.
   , ("degenerate_graph", [("DG", 9)], [])
   , ("prim_shapes",
       [("Tri", 11), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
