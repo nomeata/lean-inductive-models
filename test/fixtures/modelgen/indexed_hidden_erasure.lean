@@ -26,4 +26,4 @@ inductive N : Type where
 
 inductive Hidden : N → Type where
   | leaf : Hidden N.z
-  | branch : ((fun _ : N => N → Hidden N.z) N.z) → Hidden N.z
+  | branch (n : N) : ((fun _ : N => N → Hidden n) N.z) → Hidden (N.s n)
