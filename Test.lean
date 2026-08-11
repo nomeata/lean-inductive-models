@@ -416,9 +416,9 @@ def expectedPrim : List Row :=
   [ ("prim_shapes",
       [("Tri", 11), ("TagS4", 4), ("TagS3", 4), ("Weave", 10), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
-       ("Conj3", 4), ("PU", 4), ("Sv", 4), ("PE", 2), ("MNm", 8), ("IdxS", 4),
+       ("Conj3", 4), ("PU", 5), ("Sv", 5), ("PE", 2), ("MNm", 8), ("IdxS", 5),
        ("Dec", 6), ("Conj", 4), ("TagS2", 4), ("TagS", 4), ("PT", 8),
-       ("Tor", 8), ("Hq", 4), ("Boxed", 4), ("PI", 4), ("Sub", 4),
+       ("Tor", 8), ("Hq", 5), ("Boxed", 4), ("PI", 4), ("Sub", 4),
        ("UL", 4), ("Lst", 6), ("TrL", 4), ("Big", 4), ("PF", 4)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **`Branch` and `Binder` are on the other side of the boundary now**, and
@@ -432,12 +432,12 @@ def expectedPrim : List Row :=
   -- `Nonempty` and `Classical.choice` itself since §8.16.6 widened it, so the
   -- graph arm splices neither wherever the core has already gone in.
   , ("prim_declines",
-      [("P", 9), ("Idx", 4), ("Inf", 14), ("Nonempty", 4), ("Branch", 213),
+      [("P", 9), ("Idx", 5), ("Inf", 14), ("Nonempty", 4), ("Branch", 213),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
-       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
-       ("_wcore.WellFounded", 4), ("_wcore.Bool", 6), ("_wcore.HEq", 4),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 5),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 4), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
        ("_wcore.PProd", 4), ("MixI", 4), ("Inf.below", 12), ("Binder", 12),
        ("SvIx", 4)],
       [ ("Eq", "prim model: a basis primitive")
@@ -479,8 +479,8 @@ def expectedPrim : List Row :=
   -- F's own refusal and is untouched.
   , ("prim_idx",
       [("N", 9), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 12),
-       ("Rxh", 12), ("Rxh.below", 12), ("Fam", 4), ("Inf.below", 12),
-       ("Fg", 4), ("Rv.below", 13), ("Fall3", 4), ("Fxh", 4), ("Fdep", 4),
+       ("Rxh", 12), ("Rxh.below", 12), ("Fam", 5), ("Inf.below", 12),
+       ("Fg", 5), ("Rv.below", 13), ("Fall3", 4), ("Fxh", 4), ("Fdep", 4),
        ("Rvx.below", 13), ("Fdup", 4)],
       [ ("Eq", "prim model: a basis primitive")
       , ("Rgd", "prim model shape: Rgd.mk's index 1 is not one of its own data fields")
@@ -526,9 +526,9 @@ def expectedPrim : List Row :=
   -- is where the difference shows.
   , ("w_core",
       [("Subtype", 6), ("List", 6), ("Sigma", 4), ("Option", 6), ("Exists", 4),
-       ("And", 4), ("False", 2), ("Decidable", 6), ("PUnit", 4), ("True", 4),
+       ("And", 4), ("False", 2), ("Decidable", 6), ("PUnit", 5), ("True", 6),
        ("Or", 6), ("Iff", 4), ("WellFounded", 4),
-       ("Bool", 6), ("HEq", 4), ("PProd", 4), ("Nonempty", 4), ("Acc", 12)],
+       ("Bool", 6), ("HEq", 5), ("PProd", 4), ("Nonempty", 4), ("Acc", 12)],
       [ ("Nat", "prim model: a basis primitive")
       , ("Eq", "prim model: a basis primitive")])
   -- **Arm C** (`MODELGEN.md` §8.15), at one and at many recursive slots, and
@@ -569,10 +569,10 @@ def expectedPrim : List Row :=
       [("N", 9), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
-       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 5),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 4), ("Nonempty", 4),
        ("Cf", 8), ("Cf._model._impl.skel", 12), ("Inf2", 8), ("Inf2._model._impl.skel", 12),
        ("Vec", 8), ("Vec._model._impl.skel", 6), ("Bl", 10),
        ("Bl._model._impl.skel", 8), ("Vc", 8), ("Vc._model._impl.skel", 6),
@@ -618,10 +618,10 @@ def expectedPrim : List Row :=
   , ("prim_w",
       [("Tree", 218), ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
-       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 5),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4), ("Wty", 10),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 4), ("Nonempty", 4), ("Wty", 10),
        ("P", 6), ("Q", 8), ("Wt", 20),
        ("Dep", 12), ("Bad", 12), ("Br", 12), ("Utd", 14)],
       [ ("Eq", "prim model: a basis primitive")])
@@ -672,10 +672,10 @@ def expectedPrim : List Row :=
        ("RB", 215),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
-       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 5),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 4), ("Nonempty", 4),
        ("RB2", 6), ("Ctr", 4),
        ("OK", 13), ("OK._model._impl.0", 12), ("OK._model._impl.0._model._impl.tag", 6),
        ("JT", 15), ("JT._model._impl.0", 14), ("JT._model._impl.0._model._impl.tag", 6),
@@ -745,10 +745,10 @@ def expectedPrim : List Row :=
        ("Nd._model._impl.0._model._impl.aux._model._impl.skel", 219),
        ("_wcore.Subtype", 4), ("_wcore.List", 6), ("_wcore.Sigma", 4),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 4),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 4),
-       ("_wcore.True", 4), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 5),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 4), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 4), ("_wcore.PProd", 4), ("Nonempty", 4)],
+       ("_wcore.HEq", 5), ("_wcore.PProd", 4), ("Nonempty", 4)],
       [ ("PSigma", "prim model: a basis primitive")
       , ("Eq", "prim model: a basis primitive")])
   ]
@@ -1214,8 +1214,10 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
   let input := s!"{root}/tests/infinitary.ndjson"
   let mg := fun (args : List String) => IO.Process.output { cmd := bin, args := args.toArray }
   let mut a := a
-  -- `-o -` is stdout, first class.
-  let r ← mg [input, "-o", "-"]
+  -- `-o -` is stdout, first class.  This older process-boundary test isolates
+  -- the nested/mutual stream and its three known splice reports; MainCliTest
+  -- separately exercises the all-branches default.
+  let r ← mg [input, "-o", "-", "--no-simple", "--no-basic"]
   a := check a (r.exitCode == 0) s!"CLI: `-o -` exited {r.exitCode}"
   -- The report is on stderr, all of it, and none of it is on stdout.
   a := check a ((r.stderr.splitOn "FTree: model of 17 declarations").length == 2)
@@ -1233,7 +1235,7 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
   -- …and stdout is the export, byte for byte what `-o FILE` writes.
   IO.FS.createDirAll s!"{root}/_tmp"
   let tmp := s!"{root}/_tmp/cli-test.ndjson"
-  let f ← mg [input, "-o", tmp, "--quiet"]
+  let f ← mg [input, "-o", tmp, "--quiet", "--no-simple", "--no-basic"]
   a := check a (f.exitCode == 0) s!"CLI: `-o FILE --quiet` exited {f.exitCode}"
   a := check a f.stderr.isEmpty s!"CLI: `--quiet` still wrote to stderr: {f.stderr}"
   if ← System.FilePath.pathExists tmp then
