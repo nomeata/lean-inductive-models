@@ -1,3 +1,5 @@
+prelude
+
 /-!
 Transparent aliases of a recursive owner are ordinary recursive occurrences,
 not nested occurrences.  Lean's positivity and recursor generation unfold
@@ -10,9 +12,9 @@ eliminating one-constructor Prop graph route, and `AliasC` the maybe-zero
 Church route.  Keeping the three shapes together distinguishes the shared
 owner-recognition seam from each representation's internal encoding.
 -/
-prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false
+set_option genSizeOf false
 
 universe u v
 
@@ -34,7 +36,7 @@ inductive AliasI : N → Type where
   | step (n : N) : At AliasI n → AliasI (N.s n)
 
 inductive AliasP (n : N) : Prop where
-  | intro : At AliasP n → AliasP n
+  | intro : As (AliasP n) → AliasP n
 
 inductive AliasC : Sort u where
   | leaf : AliasC
