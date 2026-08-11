@@ -4,11 +4,6 @@ import Lean
 # `Modelgen.LevelAlgebra` — a complete decision procedure for Lean's
 universe-level algebra, in Lean.
 
-This is a **port of `modelgen/interpose/level_algebra.c`**, transliterated
-case for case. That header carries the correctness argument and the meaning
-of `unknown`; read it first. What follows records only what is specific to
-the port.
-
 ## Why the planner wants this and the elaborator will not do
 
 `Lean.Meta.isLevelDefEq` compares levels by normalising and testing the
@@ -17,16 +12,14 @@ absorb an `imax` it dominates, so
 
     max 1 (imax (imax u v) v) (max 1 u v)   and   max 1 u v
 
-are equal at every assignment and Lean says no. `MODELGEN.md` §8.6 records
-that refusal and the lean4lean cross-check of it. `Modelgen.primIso`'s
+are equal at every assignment and Lean says no. `Modelgen.primIso`'s
 **planner** asks exactly this question when it decides whether a pad or a box
 closes a field's level gap, so the incompleteness shows up there as a
 *decline* — a model not attempted, rather than a model built wrong.
 
-## The one design decision that is not in the C
+## How the planner uses the procedure
 
-The C is used by the interposer, which *replaces* Lean's answer. Here the
-procedure is used to **widen** it, never to narrow it:
+The procedure is used to **widen** Lean's answer, never to narrow it:
 
     isLevelDefEqComplete u v  :=  laEquiv u v == .true  ||  isLevelDefEq u v
 
@@ -40,8 +33,7 @@ is safe to make in a planner:
   judgement call.
 * **`unknown` needs no special handling.** A cap hit (too many variables, too
   many nested case splits, arena exhaustion) is not `.true`, so it falls
-  through to the elaborator, which is exactly the "no opinion, fall back"
-  contract the C header asks of its callers.
+  through to the elaborator under the "no opinion, fall back" contract.
 * **Level metavariables are safe.** `laEquiv` has no way to *assign* one, and
   `isLevelDefEq` does; a level containing an `.mvar` converts to `none` here
   and is decided entirely by the elaborator, as before.
@@ -52,16 +44,11 @@ every declaration the generator produces goes through `addChecked`, which is
 proof the generator builds and the kernel rejects is a **decline**, never an
 emission.
 
-## Faithfulness to the C, and the fuzz
+## Fuzzing
 
-The C's numbers — 6,000,000 pairs, zero false accepts, zero `unknown`, at
-depths 3–8 over 3–6 variables — belong to the C and not to a translation of
-it. `Modelgen.LevelAlgebra.fuzz` below re-runs the same experiment against
-*this* port, generating pairs from the same grammar and refuting against the
-same bounded semantic oracle (`laEval`). `MODELGEN.md` §8.6 reports both.
-
-The caps are the C's, by value, so that a pair the C calls `unknown` is
-`unknown` here too.
+`LevelFuzz.lean` tests the procedure against a bounded semantic oracle over
+six million generated pairs. The caps below bound pathological inputs so the
+procedure returns `unknown` instead of hanging.
 -/
 
 namespace Modelgen.LevelAlgebra
@@ -80,8 +67,7 @@ def maxSplits : Nat := 10
 /-- The private AST: Lean's level algebra with variables numbered, and with
 no metavariables and no cached data. Working over this rather than over
 `Lean.Level` keeps the smart constructors (`mkLevelMax'` and friends, which
-simplify) from interfering with the algorithm's invariants, and makes the
-port a case-for-case transliteration of the C. -/
+simplify) from interfering with the algorithm's invariants. -/
 inductive LA where
   | zero
   | succ (a : LA)
@@ -264,8 +250,7 @@ def levelEquiv (u v : Level) : Verdict :=
   | none              => .unknown
   | some (nv, lu, lv) => laEquiv nv lu lv
 
-/-- `∀ ρ, ⟦u⟧ ≥ ⟦v⟧` for `Lean.Level`s. Not used by the planner today; it is
-the other half of the C's interface and is here so the port is complete. -/
+/-- `∀ ρ, ⟦u⟧ ≥ ⟦v⟧` for `Lean.Level`s. -/
 def levelGeq (u v : Level) : Verdict :=
   match ofLevels u v with
   | none              => .unknown
@@ -273,12 +258,9 @@ def levelGeq (u v : Level) : Verdict :=
 
 /-! ## The control and the census
 
-`interpose.c` carries a `MODELGEN_LEVELHACK=off` switch — load the library,
-patch nothing — precisely so that an A/B measurement is a property of one
-binary rather than of two builds. The same idea, for the same reason: the
-coverage delta this change is supposed to produce has to be measured against
-*something*, and the honest something is the identical binary with the
-widening turned off.
+The widening has a runtime control so an A/B measurement remains a property
+of one binary rather than two builds. The baseline is the identical binary
+with widening disabled.
 
 The census answers the prior question, which is whether the widening ever
 fires at all. An **escape** is a pair the complete procedure accepts and
@@ -291,9 +273,8 @@ answer exactly, widening disabled. -/
 initialize stockLevels : Bool ←
   return (← IO.getEnv "MODELGEN_PLANNER_STOCK_LEVELS") == some "1"
 
-/-- `MODELGEN_PLANNER_LEVEL_TRACE=1` prints every escaping pair, as
-`interpose.c`'s `MODELGEN_LEVELHACK_TRACE` does. An escape is rare enough
-that naming each one is the right granularity. -/
+/-- `MODELGEN_PLANNER_LEVEL_TRACE=1` prints every escaping pair. An escape is
+rare enough that naming each one is the right granularity. -/
 initialize traceLevels : Bool ←
   return (← IO.getEnv "MODELGEN_PLANNER_LEVEL_TRACE") == some "1"
 

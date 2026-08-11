@@ -186,10 +186,8 @@ single-valuedness and is propositional.
   case-split decision procedure wherever `isLevelDefEq` would otherwise
   refuse, so the pad is *planned*. What refuses instead is `addChecked` —
   Lean's **kernel**, whose `lean::is_equivalent` has the same
-  `max`-does-not-absorb-`imax` gap. So the shape still declines under a stock
-  kernel, one stage later and with the kernel's own message, and closing it
-  needs `modelgen --interpose-levels`. That now takes the *kernel* half
-  alone, where before §8.6.1 it took both layers.
+  `max`-does-not-absorb-`imax` gap. So the shape still declines, one stage
+  later and with the kernel's own message.
 * a field mentioning `T` other than as `∀ z⃗, T p⃗ e⃗` — a **nested**
   occurrence, which is layer 1's business.
 * the four **basis primitives themselves** — the exemption that makes the
@@ -3893,8 +3891,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
           -- either** — the kernel's `lean::is_equivalent` is a different
           -- function with the same `max`-does-not-absorb-`imax` gap. So a
           -- plan reached by the complete procedure is a plan `addChecked`
-          -- rejects, unless the kernel is repaired too
-          -- (`modelgen --interpose-levels`, `MODELGEN.md` §8.6.1).
+          -- rejects.
           --
           -- Asking completely *first* is therefore actively worse, and was
           -- measured so: `Trans` in `init-prelude` has a bare chain the

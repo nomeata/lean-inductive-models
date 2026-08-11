@@ -26,7 +26,7 @@ lake build
 
 ```console
 .lake/build/bin/modelgen IN.ndjson [-o OUT.ndjson|-] \
-  [--check-recursors] [--prim-models] [--interpose-levels SO] [--quiet]
+  [--check-recursors] [--prim-models] [--quiet]
 
 .lake/build/bin/monomorph IN.ndjson [-o OUT.ndjson] \
   [--mono-recursors] [--default N[,N...]] [--check] [--quiet]

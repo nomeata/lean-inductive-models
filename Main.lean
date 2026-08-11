@@ -1,5 +1,4 @@
 import Modelgen.Driver
-import Modelgen.Interpose
 
 /-!
 `modelgen IN.ndjson [-o OUT.ndjson|-] [--check-recursors] [--quiet]`
@@ -50,7 +49,7 @@ def exitInternal : UInt32 := 3
 
 def usage : String :=
   "usage: modelgen IN.ndjson [-o OUT.ndjson|-] [--check-recursors] [--prim-models] \
-[--interpose-levels SO] [--quiet]"
+[--quiet]"
 
 structure Opts where
   input : String := ""
@@ -60,14 +59,6 @@ structure Opts where
   /-- The third construction: model simple inductives from the five
   primitives (`Modelgen/Simple.lean`). Off by default. -/
   primModels : Bool := false
-  /-- **The kernel this run checks against is not Lean's.** Path to
-  `modelgen/interpose/levelhack.so`, which rewrites the call sites of
-  `lean::is_equivalent` and `lean::is_geq` in this process so that the kernel
-  gets a complete universe-level procedure (`Modelgen/Interpose.lean`,
-  `MODELGEN.md` §8.6). Off by default, and when it is on the run says so twice:
-  a banner at load and a census at exit splitting level comparisons into
-  *stock-accepted* and *accepted only under interposition*. -/
-  interposeLevels : Option String := none
   quiet : Bool := false
 
 def parseArgs : List String → Except String Opts
@@ -79,7 +70,6 @@ where
     | "-o" :: p :: rest, o => go rest { o with output := some p }
     | "--check-recursors" :: rest, o => go rest { o with checkRecursors := true }
     | "--prim-models" :: rest, o => go rest { o with primModels := true }
-    | "--interpose-levels" :: p :: rest, o => go rest { o with interposeLevels := some p }
     | "--quiet" :: rest, o => go rest { o with quiet := true }
     | a :: rest, o =>
       -- `-` alone is only ever the argument of `-o`, which the line above has
@@ -151,11 +141,6 @@ def run (o : Opts) : IO UInt32 := do
     | .ok x => pure x
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
-  -- **Before any declaration is checked**, and only when asked. `enable`
-  -- refuses to return unless the kernel's verdict on its witness actually
-  -- flipped, so a `--interpose-levels` that quietly did nothing cannot become
-  -- a green run (`Modelgen/Interpose.lean`).
-  if let some so := o.interposeLevels then Modelgen.Interpose.enable env so
   let ctx : Core.Context :=
     { fileName := "<modelgen>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
   -- An exception out of the filter is **this tool's** failure and says so, in

@@ -1,43 +1,26 @@
 import Modelgen.LevelAlgebra
 
 /-!
-# `LevelFuzz` — the §8.6 fuzz, re-run against the Lean port
+# `LevelFuzz` — semantic fuzzing for the level algebra
 
-`modelgen/interpose/level_algebra.c` was fuzz-measured at 6,000,000 pairs with
-zero false accepts and zero `unknown`. That number belongs to the C.
-`Modelgen/LevelAlgebra.lean` is a *port* of it, and a translation inherits no
-measurements, so this driver re-runs the same experiment against the port.
+Every generated pair is evaluated at every assignment in a bounded box and
+the decision procedure's verdict is scored against that oracle. A discovered
+counterexample is conclusive, so the `FALSE_ACCEPTS` count is exact; a
+"missed" equality remains only an upper bound because a bounded oracle cannot
+prove semantic equality.
 
-Two legs, and the second is the stronger one:
-
-1. **Against a bounded semantic oracle.** Every pair is evaluated at every
-   assignment in a box and the verdict scored. A counterexample found is a
-   counterexample, so the FALSE ACCEPTS line is exact; "missed" is an upper
-   bound only, because an oracle that finds nothing has proved nothing.
-
-2. **Against the C, pair for pair.** `interpose/fuzz_ref.c` drives the C
-   procedure over the *identical* pair stream — same xorshift64 seed, same
-   generator, same left-to-right sequencing — and prints an FNV-1a digest of
-   its verdict stream. Matching digests say the port and the C decide every
-   one of the pairs the same way, which is a far tighter statement than
-   agreeing on aggregate counts.
-
-Where the two are *allowed* to differ, and why the digest can still be
-compared: the C returns `unknown` on arena exhaustion, and the port has no
-arena. So the port may decide a pair the C declines to. Any such divergence
-is reported separately rather than being folded into the digest comparison;
-it is the resource cap talking, not the algorithm.
+The fixed seed and FNV-1a digest make runs deterministic and easy to compare
+across changes to the Lean implementation.
 
 Usage: `lake exe levelfuzz <pairs> <depth> <vars> <wide>`, or with no
-arguments the full sweep that MODELGEN.md §8.6 reports.
+arguments the full six-million-pair sweep.
 -/
 
 open Modelgen.LevelAlgebra
 
 namespace LevelFuzz
 
-/-- xorshift64, seeded exactly as `interpose.c`'s `lh_rng_s`. Returns the
-high 32 bits, as the C does. -/
+/-- A fixed-seed xorshift64 generator. Returns the high 32 bits. -/
 structure Rng where
   s : UInt64
   deriving Inhabited
@@ -51,8 +34,7 @@ def Rng.init : Rng := { s := 0x9E3779B97F4A7C15 }
   let s := s ^^^ (s <<< 17)
   ((s >>> 32).toUInt32, { s })
 
-/-- The generator, transliterated from `lh_gen`, with the two recursive calls
-sequenced left to right to match `fuzz_ref.c`. -/
+/-- Generate a level expression, sequencing recursive calls left to right. -/
 def gen (nvars : Nat) : Nat → Rng → LA × Rng
   | 0, g =>
     let (r, g) := g.next
@@ -71,8 +53,7 @@ def gen (nvars : Nat) : Nat → Rng → LA × Rng
            let (b, g) := gen nvars depth g
            (.imax a b, g)
 
-/-- FNV-1a, matching `fuzz_ref.c`'s `dig`. The verdict byte must use the C's
-numbering: `LA_FALSE = 0`, `LA_TRUE = 1`, `LA_UNKNOWN = 2`. -/
+/-- FNV-1a over verdict bytes. -/
 @[inline] def digest (d : UInt64) (b : UInt8) : UInt64 :=
   ((d ^^^ b.toUInt64) * 1099511628211)
 
@@ -192,8 +173,7 @@ def report (n depth nvars wide : Nat) (t : Tally) : String :=
   s!"lean digest={hex16 t.dig}"
 
 /-- The wide oracle's box edge, chosen so the point count stays around a
-couple of thousand per pair whatever the variable count is — the rule
-`interpose.c` states in prose and hard-codes for 3 variables. -/
+couple of thousand per pair whatever the variable count is. -/
 def wideFor : Nat → Nat
   | 3 => 12    -- 2197 points
   | 4 => 6     -- 2401
@@ -209,8 +189,8 @@ def main (args : List String) : IO Unit := do
     let n := n.toNat!; let d := d.toNat!; let v := v.toNat!; let w := w.toNat!
     IO.println (LevelFuzz.report n d v w (LevelFuzz.run n d v w))
   | _ =>
-    -- the sweep §8.6 reports: depths 3..8 over 3..6 variables, 6,000,000
-    -- pairs in total, spread evenly over the 24 configurations
+    -- Depths 3..8 over 3..6 variables, 6,000,000 pairs in total, spread
+    -- evenly over the 24 configurations.
     let per := 6000000 / 24
     let mut faEq := 0
     let mut faGe := 0

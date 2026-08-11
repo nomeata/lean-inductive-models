@@ -410,11 +410,9 @@ to**. The planner's level equality is complete now
 ([`Modelgen.LevelAlgebra`]), so `BoxF`'s pad is planned rather than refused —
 and then Lean's *kernel*, whose `lean::is_equivalent` has the same
 `max`-does-not-absorb-`imax` gap the elaborator had, rejects the model. The
-message moved from `fields reach Sort imax` to `rejected by the kernel`, and
-that move is the measurement `MODELGEN.md` §8.6.1 reports: the repair has to
-reach the kernel as well, and a planner-side procedure alone cannot get
-`BoxF` past a stock one. Under `--interpose-levels` this row becomes a model
-of 4 declarations. -/
+message moved from `fields reach Sort imax` to `rejected by the kernel`,
+demonstrating that a planner-side procedure alone cannot get `BoxF` past the
+kernel. -/
 def expectedPrim : List Row :=
   [ ("prim_shapes",
       [("Tri", 11), ("TagS4", 4), ("TagS3", 4), ("Weave", 10), ("Opt", 6),
