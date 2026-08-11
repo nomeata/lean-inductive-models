@@ -22,6 +22,9 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
 def axDecl (name : Name) (type : Expr := .sort (.succ .zero)) : EDecl :=
   .ax name [] type false
 
+def modelDef (name : Name) : EDecl :=
+  .defn name [] (.sort (.succ .zero)) (.sort .zero) .opaque "safe" []
+
 def inductiveRecord (names : List Name) : EDecl :=
   .induct (names.map fun name => {
     name, levelParams := [], type := .sort (.succ .zero), all := names, ctors := []
@@ -104,19 +107,22 @@ def run (root : String) : IO UInt32 := do
   -- on any particular primitive construction.
   let simpleOwner := `Simple
   let simpleCarrier := Naming.modelName simpleOwner
-  let simple := exportOf #[inductiveRecord [simpleOwner], axDecl simpleCarrier]
+  let simple := exportOf #[inductiveRecord [simpleOwner], modelDef simpleCarrier]
   let simple' ← mustReorder "after-owner simple output" simple
   state := state.check "after-owner simple output reorders"
     (before simple' simpleCarrier simpleOwner && (Check.check simple').isEmpty)
 
-  -- A mutual owner and its mutual model each remain one indivisible record.
-  -- Declaration-local member names key one family to the atomic owner record.
+  -- A mutual owner remains one indivisible record, while its public model
+  -- interface is declaration-local: one definition per member rather than a
+  -- second synthetic mutual group. Every interface record must move before
+  -- the one atomic owner record.
   let mutualOwner := inductiveRecord [`MA, `MB]
-  let mutualModel := inductiveRecord [Naming.modelName `MA, Naming.modelName `MB]
-  let mutualExport := exportOf #[mutualOwner, mutualModel]
+  let mutualModelA := modelDef (Naming.modelName `MA)
+  let mutualModelB := modelDef (Naming.modelName `MB)
+  let mutualExport := exportOf #[mutualOwner, mutualModelA, mutualModelB]
   let mutual' ← mustReorder "atomic mutual records" mutualExport
   state := state.check "atomic mutual records reorder"
-    (mutual'.decls == #[mutualModel, mutualOwner] &&
+    (mutual'.decls == #[mutualModelA, mutualModelB, mutualOwner] &&
       (Check.discover mutual').size == 1 && (Check.check mutual').isEmpty)
 
   -- `Expr.getUsedConstants` omits a projection's `typeName`.  This reference
