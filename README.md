@@ -241,7 +241,7 @@ only to display their types:
 axiom Pair._model.proj_0 (α β : Type) : Pair._model α β → α
 
 axiom Pair._model.proj_0.iota (α β : Type) (first : α) (second : β) :
-  Pair._model.proj_0 α β (Pair.mk._model α β first second) = first
+  Pair._model.proj_0 α β (@Pair.mk._model α β first second) = first
 ```
 
 The projection model and its reduction theorem occur before the atomic
@@ -293,8 +293,7 @@ For example, the `Pair` model above also contains:
 
 ```lean
 theorem Pair._model.eta (α β : Type) (x : Pair._model α β) :
-    x = Pair.mk._model
-      α β
+    x = @Pair.mk._model α β
       (Pair._model.proj_0 α β x)
       (Pair._model.proj_1 α β x)
 ```
