@@ -1955,6 +1955,11 @@ some instantiations, `Type` at others, `PUnit`'s and `PEmpty`'s shape — the
 same Church encoding under a [`Modelgen.puliftT`]. -/
 inductive PrimRoute | type | prop | bare
 
+/-- A field-preserving model for the one-field corner of the bare route.
+`identity` applies when the field already inhabits the carrier's exact sort;
+`propLift` lifts an exactly proposition-valued field to that sort. -/
+inductive DirectFieldRoute | identity | propLift
+
 /-! ## Arm C's index erasure
 
 The skeleton arm C splices is the declaration with its indices dropped: the
@@ -2671,14 +2676,30 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
       numAll := 1, ctors := ctorPairs, recs := #[recN], iotas := #[], spliced := #[] }
 
   -- A one-field singleton at a maybe-zero sort must retain its field.  The
-  -- Church/PULiftP route records only a proof of inhabitation; at a positive
-  -- instantiation two constructor payloads then become equal, so no intrinsic
-  -- projection can satisfy both constructor rules.  The field type itself is
-  -- the exact carrier at every universe instantiation, and identity supplies
-  -- the constructor, small recursor and intrinsic projection.
-  let directFieldIdentity :=
-    (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
-      numForalls exportCtors[0]!.2 - np == 1
+  -- ordinary Church/PULiftP route records only a proof of inhabitation; at a
+  -- positive instantiation two constructor payloads then become equal, so no
+  -- intrinsic projection can satisfy both constructor rules.
+  --
+  -- There are exactly two field-preserving cases using the existing basis.
+  -- If the field's sort is definitionally the carrier sort, the field itself
+  -- is the carrier (`PI`).  If the field is exactly a proposition, `PULiftP`
+  -- raises it to the carrier sort without forgetting its proof (`PF`).  Test
+  -- identity first: `PI.{0}` has a proposition-valued instantiation, but its
+  -- polymorphic field sort is the carrier's `u`, not the constant level zero.
+  let directFieldRoute? : Option DirectFieldRoute ←
+    if (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
+        numForalls exportCtors[0]!.2 - np == 1 then
+      withParams fun ps => do
+        let tele ← instForall exportCtors[0]!.2 ps
+        let .forallE _ fieldType _ _ := tele
+          | badShape s!"{exportCtors[0]!.1} is not a one-field constructor"
+        let fieldLevel ← ilevel fieldType
+        if ← isLevelDefEq fieldLevel w then return some .identity
+        if fieldLevel.normalize.isZero then return some .propLift
+        badShape s!"{exportCtors[0]!.1}'s only field inhabits Sort {fieldLevel}, but the \
+          carrier inhabits Sort {w}: neither identity nor PULiftP can retain it"
+    else
+      pure none
 
   -- The indexed subsingleton has a different carrier from the Church routes —
   -- a packed index equation, not a fold — so it branches before them.
@@ -3063,16 +3084,26 @@ data tower would have to hold a type the branch tower cannot see"
       let a2 := psigmaSnd (.succ .zero) w wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  if directFieldIdentity then
+  if let some directFieldRoute := directFieldRoute? then
     let (_, cty0) := exportCtors[0]!
     let modelCtorTy := restore tbl cty0
     let selfAt := fun (ps : Array Expr) => mkAppN (.const selfN us) ps
-
-    let selfVal ← withParams fun ps => do
+    let fieldTypeAt := fun (ps : Array Expr) => do
       let tele ← instForall cty0 ps
       let .forallE _ fieldType _ _ := tele
         | badShape s!"{exportCtors[0]!.1} is not a one-field constructor"
-      mkLambdaFVars ps fieldType
+      pure fieldType
+
+    if directFieldRoute matches .propLift then
+      for d in ← ensurePULiftP reserved do
+        out := out.push d
+        spliced := spliced ++ d.getNames
+
+    let selfVal ← withParams fun ps => do
+      let fieldType ← fieldTypeAt ps
+      mkLambdaFVars ps <| match directFieldRoute with
+        | .identity => fieldType
+        | .propLift => puliftT w fieldType
     let dSelf := Declaration.defnDecl
       { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
@@ -3081,8 +3112,12 @@ data tower would have to hold a type the branch tower cannot see"
 
     let ctorVal ← withParams fun ps => do
       let tele ← instForall modelCtorTy ps
-      forallBoundedTelescope tele (some 1) fun fs _ =>
-        mkLambdaFVars (ps ++ fs) fs[0]!
+      forallBoundedTelescope tele (some 1) fun fs _ => do
+        let field := fs[0]!
+        let value ← match directFieldRoute with
+          | .identity => pure field
+          | .propLift => do pure (puliftUp w (← inferType field) field)
+        mkLambdaFVars (ps ++ fs) value
     let dCtor := Declaration.defnDecl
       { name := ctorN 0, levelParams := lparams, type := modelCtorTy, value := ctorVal
         hints := ← hintsFor ctorVal, safety := .safe }
@@ -3091,9 +3126,14 @@ data tower would have to hold a type the branch tower cannot see"
 
     let recTy := restore tbl rv.type
     let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
+      let ps := bs.extract 0 np
+      let motive := bs[np]!
       let minor := bs[np + 1]!
       let self := bs[bs.size - 1]!
-      mkLambdaFVars bs (mkApp minor self)
+      let value ← match directFieldRoute with
+        | .identity => pure (mkApp minor self)
+        | .propLift => do pure (puliftRec v w (← fieldTypeAt ps) motive minor self)
+      mkLambdaFVars bs value
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
@@ -3103,8 +3143,11 @@ data tower would have to hold a type the branch tower cannot see"
     -- Route-specific selector bodies let the common driver retain ownership
     -- of public names, types, collision checks and ordering without trying to
     -- eliminate the small source recursor into a potentially positive sort.
-    let selector ← withParams fun ps => withLocalDeclD `self (selfAt ps) fun self =>
-      mkLambdaFVars (ps.push self) self
+    let selector ← withParams fun ps => withLocalDeclD `self (selfAt ps) fun self => do
+      let value ← match directFieldRoute with
+        | .identity => pure self
+        | .propLift => do pure (puliftDown w (← fieldTypeAt ps) self)
+      mkLambdaFVars (ps.push self) value
     let proof ← withParams fun ps => do
       let tele ← instForall modelCtorTy ps
       forallBoundedTelescope tele (some 1) fun fs _ => do
