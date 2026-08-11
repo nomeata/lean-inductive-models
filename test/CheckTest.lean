@@ -279,7 +279,7 @@ def isExtraUnitlike (owner declaration : Name) : Violation → Bool
   | _ => false
 
 def run (root : String) : IO UInt32 := do
-  let path := s!"{root}/tests/nested_iota_arm.ndjson"
+  let path := s!"{root}/test/fixtures/modelgen/nested_iota_arm.ndjson"
   let text ← IO.FS.readFile path
   match Modelgen.parse text (analyse := false) with
   | .error error =>
@@ -457,7 +457,7 @@ def run (root : String) : IO UInt32 := do
     -- `IdxP.at_a` and `IdxP.at_b` have the same binder shape and differ only
     -- in their result indices.  Exact declaration-local names must prevent a
     -- type-shape heuristic from pairing them interchangeably.
-    let shapesPath := s!"{root}/tests/prim_shapes.ndjson"
+    let shapesPath := s!"{root}/test/fixtures/modelgen/prim_shapes.ndjson"
     let shapesText ← IO.FS.readFile shapesPath
     match Modelgen.parse shapesText (analyse := false) with
     | .error error =>
@@ -530,7 +530,7 @@ def run (root : String) : IO UInt32 := do
         (discover privateValid).any (·.owner == privateOwner) &&
         (check privateValid).isEmpty
 
-    let mutualPath := s!"{root}/tests/mutual_shapes.ndjson"
+    let mutualPath := s!"{root}/test/fixtures/modelgen/mutual_shapes.ndjson"
     let mutualText ← IO.FS.readFile mutualPath
     match Modelgen.parse mutualText (analyse := false) with
     | .error error =>
@@ -574,7 +574,7 @@ def run (root : String) : IO UInt32 := do
         (check (withoutDeclaration mutualValid bCtor.model)).any
           (isMissing bCtor.owner bCtor.model)
 
-    let unitlikePath := s!"{root}/tests/unitlike.ndjson"
+    let unitlikePath := s!"{root}/test/fixtures/modelgen/unitlike.ndjson"
     let unitlikeText ← IO.FS.readFile unitlikePath
     match Modelgen.parse unitlikeText (analyse := false) with
     | .error error =>

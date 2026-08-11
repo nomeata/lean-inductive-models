@@ -470,31 +470,43 @@ mkdir -p _tmp/build-tmp
 TMPDIR="$PWD/_tmp/build-tmp" lake build modelgen
 ```
 
-Representative focused suites are:
+The correctness executables are:
 
 ```console
 TMPDIR="$PWD/_tmp/build-tmp" lake build \
-  test clitest generationflagstest checktest rulektest mainclitest
+  test monotest clitest generationflagstest checktest ordertest namingtest \
+  drivernamingtest privatealiastest simplenamingtest rulektest mainclitest \
+  projectiontest structureetatest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
+TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe clitest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe generationflagstest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe checktest "$PWD"
+TMPDIR="$PWD/_tmp/build-tmp" lake exe ordertest "$PWD"
+TMPDIR="$PWD/_tmp/build-tmp" lake exe namingtest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe drivernamingtest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe privatealiastest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe simplenamingtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe rulektest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe mainclitest "$PWD"
-TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
+TMPDIR="$PWD/_tmp/build-tmp" lake exe projectiontest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe structureetatest
+TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-a.sh
+TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-c.sh
 ```
 
-The optional universe-level suite is:
-
-```console
-TMPDIR="$PWD/_tmp/build-tmp" lake build modelgen monotest
-TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"
-```
+`mainclitest` executes the built `modelgen` binary and covers the complete
+`--mono-levels` process path. `monotest` exercises the underlying pass directly.
+The `envprobe` and `levelfuzz` targets live under `tools/`; they are diagnostics,
+not correctness suites.
 
 Human-readable Lean fixture sources and committed NDJSON exports live under
-[`tests/`](tests/). Regenerating a fixture requires the pinned exporter:
+[`test/fixtures/modelgen/`](test/fixtures/modelgen/) and
+[`test/fixtures/mono/`](test/fixtures/mono/). Regenerating a model-generator
+fixture requires the pinned exporter:
 
 ```console
-TMPDIR="$PWD/_tmp/build-tmp" tests/export.sh prim_shapes
+TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-modelgen.sh prim_shapes
 ```
 
 All scratch data is kept under the repository-local `_tmp/` directory.

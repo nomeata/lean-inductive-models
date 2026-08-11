@@ -142,7 +142,7 @@ def hasExtraProjectionViolation (owner declaration : Name) : Check.Violation →
 
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let wrapperRaw ← readExport "tests/structure_projections.ndjson"
+  let wrapperRaw ← readExport "test/fixtures/modelgen/structure_projections.ndjson"
   let raw := #[`Dep.key, `Dep.payload, `Dep.witness, `SortFields.carrier,
     `SortFields.family, `SortFields.element, `SortFields.letCarrier,
     `depKey, `depPayload, `depWitness].foldl withoutDeclaration wrapperRaw
@@ -166,7 +166,7 @@ def main : IO UInt32 := do
   -- that carrier forgets which payload constructed it, while the kernel's
   -- intrinsic projection retains the payload at positive instantiations.
   -- The field-preserving PSigma tower therefore has its own focused occupant.
-  let primRaw ← readExport "tests/prim_shapes.ndjson"
+  let primRaw ← readExport "test/fixtures/modelgen/prim_shapes.ndjson"
   let (primDeclarations, primReport) ← runExport primRaw
   let primGenerated := outputExport primRaw primDeclarations
   let piProjection := Naming.projectionName `PI 0
@@ -186,7 +186,7 @@ def main : IO UInt32 := do
   -- domain depends on an earlier data field therefore needs the canonical
   -- transport on the rule's right-hand side; the independent first field
   -- remains the literal, uncast rule.
-  let wRaw ← readExport "tests/prim_w.ndjson"
+  let wRaw ← readExport "test/fixtures/modelgen/prim_w.ndjson"
   let (wDeclarations, wReport) ← runExport wRaw
   let wGenerated := outputExport wRaw wDeclarations
   let wNames := wDeclarations.flatMap (·.names.toArray)
@@ -247,7 +247,7 @@ def main : IO UInt32 := do
     sortFieldProjections.all names.contains &&
       (Check.check generated |>.all (·.familyOwner != `SortFields))
 
-  let wcore ← readExport "tests/w_core.ndjson"
+  let wcore ← readExport "test/fixtures/modelgen/w_core.ndjson"
   state := state.check "Prop-valued Iff exposes its two proof fields" <|
     intrinsicFieldsFor wcore `Iff == #[0, 1]
   state := state.check "Prop-valued Nonempty cannot expose its data field" <|
@@ -337,7 +337,7 @@ def main : IO UInt32 := do
     legacyReport.generated.any (·.1 == `Dep) &&
       legacyDecls.any (·.names.contains payloadModel)
 
-  let mutualWrapperRaw ← readExport "tests/mutual_structure_projections.ndjson"
+  let mutualWrapperRaw ← readExport "test/fixtures/modelgen/mutual_structure_projections.ndjson"
   let mutualRaw := #[`MLeft.value, `MRight.key, `MRight.payload,
     `leftValue, `rightPayload].foldl withoutDeclaration mutualWrapperRaw
   let (mutualDecls, mutualReport) ← runExport mutualRaw

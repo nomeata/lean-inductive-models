@@ -2263,7 +2263,7 @@ that added 11 declarations still spliced the old 149. `Test.lean`'s
 `runWSpliceProbe` therefore compares this string against the file on disk, and
 that comparison is the only thing standing between a fragment change and a
 silently stale tool. -/
-def wCoreText : String := include_str "../tests/w_core.ndjson"
+def wCoreText : String := include_str "../../test/fixtures/modelgen/w_core.ndjson"
 
 /-- The prefix every fragment name gets, bar the shared ones below. The
 fragment's names are Lean core's, so splicing its `List` into an input that

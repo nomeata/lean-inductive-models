@@ -30,10 +30,10 @@ def main (args : List String) : IO UInt32 := do
 
   let scratch := s!"{root}/_tmp"
   IO.FS.createDirAll scratch
-  let nested := s!"{root}/tests/nested_iota.ndjson"
+  let nested := s!"{root}/test/fixtures/modelgen/nested_iota.ndjson"
   -- This fixture contains `Expr.proj`, so success also pins that the integrated
   -- path asked the reader for projection analysis.
-  let mono := s!"{root}/monotests/mono_proj.ndjson"
+  let mono := s!"{root}/test/fixtures/mono/mono_proj.ndjson"
   let mut state : TestState := {}
 
   -- All defaults are exercised here, including stdout output and both checks.
@@ -104,7 +104,7 @@ def main (args : List String) : IO UInt32 := do
   -- can model its result without asking Mono to infer instantiations for the
   -- generated bootstrap basis.  This fixture has distinct universe use sites
   -- and exercises the full default `--inductives --check` pipeline.
-  let poly := s!"{root}/tests/poly_nested_used.ndjson"
+  let poly := s!"{root}/test/fixtures/modelgen/poly_nested_used.ndjson"
   let monoModels ← runModelgen binary ["--mono-levels", "--quiet", poly]
   state := state.check "monomorphized generated models pass the final check"
     (monoModels.exitCode == 0 && !monoModels.stdout.isEmpty)

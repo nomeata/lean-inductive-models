@@ -161,7 +161,7 @@ def run (root : String) : IO UInt32 := do
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,
   -- and a stable reorder must retain all ordinary implementation dependencies.
-  let generatedMutual ← generatedFixture s!"{root}/tests/mutual_shapes.ndjson"
+  let generatedMutual ← generatedFixture s!"{root}/test/fixtures/modelgen/mutual_shapes.ndjson"
     { noGeneration with mutualModels := true }
   let generatedMutualFamilies := Check.discover generatedMutual
   state := state.check "generated mutual family has exact member names" <|
@@ -183,7 +183,7 @@ def run (root : String) : IO UInt32 := do
 
   -- Nested-only generation already emits its family before the owner.  A
   -- stable pass is record-neutral when every dependency is already forward.
-  let nested ← generatedFixture s!"{root}/tests/nested_iota.ndjson"
+  let nested ← generatedFixture s!"{root}/test/fixtures/modelgen/nested_iota.ndjson"
     { noGeneration with nested := true }
   let nested' ← mustReorder "already-before nested output" nested
   state := state.check "already-before nested output is unchanged"
@@ -197,7 +197,7 @@ def run (root : String) : IO UInt32 := do
         family.correspondence.iotas.any (fun rule =>
           rule.recursor == `Tree.rec && rule.name == Naming.iotaName `Tree.rec 1)
 
-  let simple ← generatedFixture s!"{root}/tests/prim_shapes.ndjson"
+  let simple ← generatedFixture s!"{root}/test/fixtures/modelgen/prim_shapes.ndjson"
     { noGeneration with simple := true }
   let simple' ← mustReorder "simple declaration-local output" simple
   let idxViolations := (Check.check simple').filter fun violation =>

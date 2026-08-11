@@ -2,8 +2,9 @@
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-root="$(cd "$here/.." && pwd)"
+root="$(cd "$here/../.." && pwd)"
 bin="${MODELGEN_BIN:-$root/.lake/build/bin/modelgen}"
+fixture="$root/test/fixtures/modelgen/hard_nested_mutual_index.ndjson"
 
 [[ -x "$bin" ]] || { echo "modelgen is not built: $bin" >&2; exit 2; }
 
@@ -12,7 +13,7 @@ work="$(mktemp -d "$root/_tmp/check-hard-nested-a.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
 ulimit -Sv "${MODELGEN_MEMORY_KB:-16777216}"
-TMPDIR="$work" "$bin" "$here/hard_nested_mutual_index.ndjson" \
+TMPDIR="$work" "$bin" "$fixture" \
   -o "$work/modelled.ndjson" --no-simple --no-basic 2>"$work/report"
 
 grep -q '^C: model of ' "$work/report"

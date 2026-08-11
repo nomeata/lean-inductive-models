@@ -70,16 +70,16 @@ def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
 
-  let safetyText ← IO.FS.readFile "tests/nested_iota_arm.ndjson"
+  let safetyText ← IO.FS.readFile "test/fixtures/modelgen/nested_iota_arm.ndjson"
   let .ok safetyInput := Modelgen.parse safetyText (analyse := false)
-    | throw <| IO.userError "cannot parse tests/nested_iota_arm.ndjson"
+    | throw <| IO.userError "cannot parse test/fixtures/modelgen/nested_iota_arm.ndjson"
   let some (wrongSafety, recursorName) := flipFirstRecursorSafety safetyInput
-    | throw <| IO.userError "no recursor to mutate in tests/nested_iota_arm.ndjson"
+    | throw <| IO.userError "no recursor to mutate in test/fixtures/modelgen/nested_iota_arm.ndjson"
   let safetyResult ← runExport "mutated recursor safety" wrongSafety true noGeneration
   state := state.check "kernel-regenerated recursor safety is checked"
     (safetyResult.report.recMismatch.contains recursorName)
 
-  let carve ← runFixture "tests/prim_carve.ndjson"
+  let carve ← runFixture "test/fixtures/modelgen/prim_carve.ndjson"
     { noGeneration with simple := true, basic := true }
   let skeleton := `Bif._model._impl.skel
   state := state.check "arm-C parent survives exact support closure"
@@ -88,14 +88,14 @@ def main : IO UInt32 := do
     (carve.generated skeleton && carve.hasExactCarrier skeleton &&
       !carve.hasLegacyCarrier skeleton)
 
-  let w ← runFixture "tests/prim_w.ndjson"
+  let w ← runFixture "test/fixtures/modelgen/prim_w.ndjson"
     { noGeneration with simple := true, basic := true }
   state := state.check "W parent survives exact support closure"
     (w.generated `Wt && !w.declined `Wt && w.hasExactCarrier `Wt)
   state := state.check "W support closure emits exact carriers"
     (generatedOwnersExact w)
 
-  let graph ← runFixture "tests/prim_graph.ndjson"
+  let graph ← runFixture "test/fixtures/modelgen/prim_graph.ndjson"
     { noGeneration with simple := true, basic := true }
   state := state.check "spliced Nonempty is modeled once at its exact carrier"
     (graph.generated `Nonempty && graph.hasExactCarrier `Nonempty &&
@@ -104,7 +104,7 @@ def main : IO UInt32 := do
   -- This mutual export deliberately orders its recursor records MC, MA, MB,
   -- rather than member order. Exact-name alignment must still match each model
   -- recursor with its own ordered rule list.
-  let mutualResult ← runFixture "tests/prim_late_basis.ndjson"
+  let mutualResult ← runFixture "test/fixtures/modelgen/prim_late_basis.ndjson"
     { noGeneration with mutualModels := true, simple := true }
   let tag := `MA._model._impl.tag
   state := state.check "export recursor order is aligned by exact name"
@@ -113,7 +113,7 @@ def main : IO UInt32 := do
     (mutualResult.generated tag && mutualResult.hasExactCarrier tag &&
       !mutualResult.hasLegacyCarrier tag)
 
-  let composed ← runFixture "tests/nested_iota.ndjson"
+  let composed ← runFixture "test/fixtures/modelgen/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true, simple := true }
   state := state.check "nested-mutual-simple composition reaches every stage"
     (composed.report.generated.size ≥ 3)

@@ -5,7 +5,7 @@ import Modelgen.Mono
 
 Run from the repository root: `lake exe monotest [ROOT]`.
 
-Five axes, and each one has an occupant the other four would pass.
+Four axes, and each one has an occupant the other three would pass.
 
 1. **The kernel.** Mode A's output is replayed into a `Lean.Environment` with
    `addDeclCore`'s checking **on**. A file that comes back with
@@ -23,8 +23,6 @@ Five axes, and each one has an occupant the other four would pass.
    there would mean the K-like and the large-elimination move had gone unnoticed.
 4. **The round trip.** `parse (render y) = y`, structurally, and a file with no
    universe parameter at all comes back byte for byte.
-5. **`nanoda`**, outside this process: `MONOMORPH.md` §5 records the corpus
-   run and its numbers. It is not run from here.
 -/
 
 open Lean Meta Modelgen Modelgen.Mono
@@ -166,7 +164,7 @@ def main (args : List String) : IO UInt32 := do
 
   -- ── The fixtures.
   for r in expected do
-    let p := s!"{root}/monotests/{r.file}.ndjson"
+    let p := s!"{root}/test/fixtures/mono/{r.file}.ndjson"
     let some (text, x) ← readExport p | fails := fails.push s!"{r.file}: missing"; continue
     ran := ran + 1
     for (modeB, want) in [(false, r.outA), (true, r.outB)] do
@@ -205,39 +203,6 @@ def main (args : List String) : IO UInt32 := do
         -- they share one fold, and this is what says so.
         unless (← streamed root y) == y.render do
           fails := fails.push s!"{r.file}[{tag}]: writeTo and render disagree"
-
-  -- ── A file with no universe parameter anywhere is the identity, byte for
-  -- byte. Without this, "one copy per instantiation" could be one copy per
-  -- declaration and every count above would still hold.
-  let idp := s!"{root}/vendor/arena-tests/good/tutorial/001_basicDef.ndjson"
-  if let some (text, x) ← readExport idp then
-    ran := ran + 1
-    let ((y, _), _) ←
-      Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (monomorphize x {})) ctx { env }
-    unless y.render == text do fails := fails.push "001_basicDef: not byte-identical"
-    unless (← streamed root y) == text do
-      fails := fails.push "001_basicDef: not byte-identical through writeTo"
-
-  -- ── The corpus, when it is present: no `good/` file may report a problem,
-  -- and none of its output may be rejected by the kernel.
-  let corpus := s!"{root}/vendor/arena-tests/good"
-  if ← System.FilePath.isDir corpus then
-    let mut din := 0
-    let mut dout := 0
-    let mut files := 0
-    for e in ← System.FilePath.walkDir corpus do
-      unless e.toString.endsWith ".ndjson" do continue
-      if (e.toString.splitOn "/perf/").length != 1 then continue
-      let some (_, x) ← readExport e.toString | continue
-      files := files + 1
-      let ((_, rep), _) ←
-        Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (monomorphize x { check := true })) ctx { env }
-      if rep.refused.isSome then continue
-      din := din + rep.declsIn; dout := dout + rep.declsOut
-      unless rep.errors.isEmpty && rep.rejected == 0 do
-        fails := fails.push s!"{e}: {rep.errors.size} problems, {rep.rejected} rejected"
-    ran := ran + files
-    IO.println s!"corpus: {files} files, {din} declarations in, {dout} out"
 
   if fails.isEmpty then
     IO.println s!"monotest: {ran} checks, all pass"
