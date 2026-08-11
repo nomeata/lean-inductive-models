@@ -2216,6 +2216,7 @@ def primRuleK (eqi : EqInfo) (rv : RecursorVal)
   addChecked d
   return (out.push d, #[(ern, ruleKN)], some ruleKN)
 
+set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
 recursor this restates is the one Lean minted for it, and the ι rules are
@@ -2344,6 +2345,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
     badShape s!"{ern} carries the level parameters {rv.levelParams}"
   let v := if large then Level.param rv.levelParams[0]! else Level.zero
   let recLs := if large then v :: us else us
+  let nonrecursiveOneConstructor := nc == 1 && !isRec
 
   let wn := w.normalize
   let route : PrimRoute ←
@@ -2513,7 +2515,7 @@ application of {tname}"
     -- declines the shapes it cannot express — a branching constructor, or a
     -- recursive occurrence under a binder — by name, further down.
   | PrimRoute.bare =>
-    if ni > 0 then
+    if ni > 0 && !nonrecursiveOneConstructor then
       badShape s!"an indexed family at Sort {w}: the lift carries the Church \
         encoding but the index machinery is not threaded through it"
     if isRec then
@@ -2667,6 +2669,7 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
   let mut out : Array Declaration := eqDecls
   let mut requires : Array Name := #[]
   let mut spliced : Array Name := eqDecls.flatMap (·.getNames.toArray)
+  let mut projectionOverrides : Array (Name × Nat × Expr × Expr) := #[]
 
   let withParams := fun {α : Type} (k : Array Expr → GenM α) =>
     forallBoundedTelescope memberTy (some np) fun ps _ => k ps
@@ -2675,6 +2678,15 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
   let tbl := modelTable (← getEnv) #[tname]
     { decls := #[], levelParams := lparams, members := #[], selfNames := #[selfN]
       numAll := 1, ctors := ctorPairs, recs := #[recN], iotas := #[], spliced := #[] }
+
+  -- A non-recursive singleton at a maybe-zero sort must retain its fields.
+  -- The Church/PULiftP route records only a proof of inhabitation; at a
+  -- positive instantiation two constructor payloads then become equal, so no
+  -- intrinsic projection can satisfy both constructor rules.  A dependent
+  -- PSigma tower lands at the same `Sort w`, including when `w = 0`, and its
+  -- projections reduce definitionally on the model constructor.
+  let directFieldTower :=
+    (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0
 
   -- The indexed subsingleton has a different carrier from the Church routes —
   -- a packed index equation, not a fold — so it branches before them.
@@ -3061,7 +3073,69 @@ data tower would have to hold a type the branch tower cannot see"
       let a2 := psigmaSnd (.succ .zero) w wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  if armF then
+  if directFieldTower then
+    for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+    let (_, cty0) := exportCtors[0]!
+    let modelCtorTy := restore tbl cty0
+    let selfAt := fun (ps : Array Expr) => mkAppN (.const selfN us) ps
+
+    let selfVal ← withParams fun ps => do
+      let tele ← instForall cty0 ps
+      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+        mkLambdaFVars ps (← wTowerTy w fs 0)
+    let dSelf := Declaration.defnDecl
+      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
+        hints := ← hintsFor selfVal, safety := .safe }
+    addChecked dSelf
+    out := out.push dSelf
+
+    let ctorVal ← withParams fun ps => do
+      let tele ← instForall modelCtorTy ps
+      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+        mkLambdaFVars (ps ++ fs) (← wTowerMk w fs 0 fs)
+    let dCtor := Declaration.defnDecl
+      { name := ctorN 0, levelParams := lparams, type := modelCtorTy, value := ctorVal
+        hints := ← hintsFor ctorVal, safety := .safe }
+    addChecked dCtor
+    out := out.push dCtor
+
+    let recTy := restore tbl rv.type
+    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
+      let ps := bs.extract 0 np
+      let minor := bs[np + 1]!
+      let self := bs[bs.size - 1]!
+      let tele ← instForall modelCtorTy ps
+      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+        let fields ← wTowerProjs w fs 0 self #[]
+        mkLambdaFVars bs (mkAppN minor fields)
+    let dRec := Declaration.defnDecl
+      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+        hints := ← hintsFor recVal, safety := .safe }
+    addChecked dRec
+    out := out.push dRec
+
+    -- Route-specific selector bodies let the common driver retain ownership
+    -- of public names, types, collision checks and ordering without trying to
+    -- eliminate the small source recursor into a potentially positive sort.
+    let fieldCount := numForalls cty0 - np
+    for fieldIndex in [0:fieldCount] do
+      let selector ← withParams fun ps => do
+        let tele ← instForall cty0 ps
+        forallBoundedTelescope tele (some fieldCount) fun fs _ => do
+          withLocalDeclD `self (selfAt ps) fun self => do
+            let fields ← wTowerProjs w fs 0 self #[]
+            mkLambdaFVars (ps.push self) fields[fieldIndex]!
+      let proof ← withParams fun ps => do
+        let tele ← instForall modelCtorTy ps
+        forallBoundedTelescope tele (some fieldCount) fun fs _ => do
+          let field := fs[fieldIndex]!
+          let fieldType ← inferType field
+          let fieldLevel ← ilevel fieldType
+          mkLambdaFVars (ps ++ fs) (eqi.refl' fieldLevel fieldType field)
+      projectionOverrides := projectionOverrides.push
+        (tname, fieldIndex, selector, proof)
+  else if armF then
     -- ════ arm F: the indexed subsingleton, by one packed index equation ════
     --
     -- Shape (thesis.txt:700–710): one constructor, every field a `Prop` or a
@@ -4500,6 +4574,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     ruleK? out2
   return { decls := out2, levelParams := lparams, members := #[], selfNames := #[selfN]
            numAll := 1, ctors := ctorPairs, recs := #[recN], iotas, ruleKs, spliced
+           projectionOverrides
            requires := if armC then #[skelN] else requires
            aliases }
 

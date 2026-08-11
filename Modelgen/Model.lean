@@ -2003,9 +2003,15 @@ structure Iso where
   whose literal kernel metadata has `k = true`. -/
   ruleKs : Array (Name × Name) := #[]
   /-- `(type former, zero-based field index, projection, reduction theorem)`.
-  Empty for non-structure-like models.  The generated names may temporarily
+  Empty when no intrinsic projection has yet been attached.  The generated names may temporarily
   use an alias build root until serialization. -/
   projections : Array (Name × Nat × Name × Name) := #[]
+  /-- Route-specific, closed implementations for intrinsic projections whose
+  model recursor cannot eliminate into the field sort.  Each entry stores the
+  source owner, zero-based field index, complete projection value and complete
+  reduction-proof value.  The common driver remains responsible for the
+  public types, names, collision checks and declaration ordering. -/
+  projectionOverrides : Array (Name × Nat × Expr × Expr) := #[]
   /-- **Prelude constants the input did not declare and this model spliced in**
   — a subset of `Eq`, `Eq.refl`, the four quotient names, `Quot.sound` and
   `T._model.funext`, in the order they were emitted, and **empty** for every

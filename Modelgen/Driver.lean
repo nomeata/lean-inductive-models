@@ -422,6 +422,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         (publicProjection, publicRule)
     if (← getEnv).constants.contains modelProjection then declineWith (.nameTaken publicProjection)
     if (← getEnv).constants.contains modelRule then declineWith (.nameTaken publicRule)
+    let override? := is.projectionOverrides.find? fun entry =>
+      entry.1 == type.name && entry.2.1 == fieldIndex
 
     let modelConstructorType := (← constInfo modelConstructor).type
     let modelTypeInfo ← constInfo modelType
@@ -451,28 +453,31 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           current := rest.instantiate1 selected
         badShape s!"{constructorName} has no field {fieldIndex}"
 
-    let definition ← forallBoundedTelescope projectionType (some (ownerArity + 1))
-        fun arguments result => do
-      let params := arguments.extract 0 type.numParams
-      let indices := arguments.extract type.numParams ownerArity
-      let self := arguments[ownerArity]!
-      let targetMotive ← mkLambdaFVars (indices.push self) result
-      let resultLevel ← ilevel result
-      let recLevels ←
-        if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
-          pure (resultLevel :: us)
-        else if modelRecursorInfo.levelParams.length == is.levelParams.length then
-          pure us
-        else
-          badShape s!"{modelRecursor} carries unexpected universe parameters"
-      let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-        modelConstructor motiveIndex params (carrier (params ++ indices))
-        self targetMotive fieldIndex resultLevel recLevels
-      let value ← mkLambdaFVars arguments
-        (mkAppN (.const modelRecursor recLevels) (pre ++ indices ++ #[self]))
-      return Declaration.defnDecl
-        { name := modelProjection, levelParams := is.levelParams, type := projectionType,
-          value, hints := .abbrev, safety := .safe }
+    let value ← match override? with
+      | some (_, _, value, _) => pure value
+      | none => do
+        forallBoundedTelescope projectionType (some (ownerArity + 1))
+            fun arguments result => do
+        let params := arguments.extract 0 type.numParams
+        let indices := arguments.extract type.numParams ownerArity
+        let self := arguments[ownerArity]!
+        let targetMotive ← mkLambdaFVars (indices.push self) result
+        let resultLevel ← ilevel result
+        let recLevels ←
+          if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
+            pure (resultLevel :: us)
+          else if modelRecursorInfo.levelParams.length == is.levelParams.length then
+            pure us
+          else
+            badShape s!"{modelRecursor} carries unexpected universe parameters"
+        let pre ← structureRecursorPreArguments eqi recursor modelRecursor
+          modelConstructor motiveIndex params (carrier (params ++ indices))
+          self targetMotive fieldIndex resultLevel recLevels
+        mkLambdaFVars arguments
+          (mkAppN (.const modelRecursor recLevels) (pre ++ indices ++ #[self]))
+    let definition := Declaration.defnDecl
+      { name := modelProjection, levelParams := is.levelParams, type := projectionType,
+        value, hints := .abbrev, safety := .safe }
     addChecked definition
     out := out.push definition
 
@@ -494,20 +499,23 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         | badShape s!"{type.name}'s field {fieldIndex} is absent"
       let alpha ← inferType lhs
       let fieldLevel ← ilevel alpha
-      let targetMotive ← forallBoundedTelescope
-          (← instantiateForall projectionType params) (some (type.numIndices + 1))
-          fun motiveArguments result => mkLambdaFVars motiveArguments result
-      let recLevels ←
-        if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
-          pure (fieldLevel :: us)
-        else if modelRecursorInfo.levelParams.length == is.levelParams.length then
-          pure us
-        else
-          badShape s!"{modelRecursor} carries unexpected universe parameters"
-      let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-        modelConstructor motiveIndex params (carrier (params ++ indices))
-        major targetMotive fieldIndex fieldLevel recLevels
-      let proof := mkAppN (.const iotaTheorem recLevels) (pre ++ fields)
+      let proof ← match override? with
+        | some (_, _, _, proof) => pure (proof.beta arguments)
+        | none => do
+          let targetMotive ← forallBoundedTelescope
+              (← instantiateForall projectionType params) (some (type.numIndices + 1))
+              fun motiveArguments result => mkLambdaFVars motiveArguments result
+          let recLevels ←
+            if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
+              pure (fieldLevel :: us)
+            else if modelRecursorInfo.levelParams.length == is.levelParams.length then
+              pure us
+            else
+              badShape s!"{modelRecursor} carries unexpected universe parameters"
+          let pre ← structureRecursorPreArguments eqi recursor modelRecursor
+            modelConstructor motiveIndex params (carrier (params ++ indices))
+            major targetMotive fieldIndex fieldLevel recLevels
+          pure (mkAppN (.const iotaTheorem recLevels) (pre ++ fields))
       let type ← mkForallFVars arguments (eqi.mk' fieldLevel alpha lhs rhs)
       let value ← mkLambdaFVars arguments proof
       return Declaration.thmDecl
