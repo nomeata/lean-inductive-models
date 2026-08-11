@@ -2330,6 +2330,47 @@ def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
       mkLambdaFVars (ps ++ fields) (eqi.refl' fieldLevel fieldType field)
   return (declarations, (tname, 0, selector, proof))
 
+/-- Arm F's dependent-pivot recursor body, kept outside [`Modelgen.primIso`]
+so the route dispatcher does not elaborate a second nested `Eq.rec` builder.
+
+The packed equation moves a *function over the pivot*, not the pivot and back:
+at the constructor endpoint the function accepts the constructor field type;
+at the caller endpoint it accepts the caller's type and is applied to the
+caller's field literally. -/
+def armFDependentPivotRec (eqi : EqInfo) (v ℓpk : Level) (lift? : Option Level)
+    (nnp : Nat) (nonPiv : Array Nat) (idxs es esBnd : Array Expr)
+    (fieldIndex position : Nat) (pk pkc pki heq motive minor : Expr)
+    (pivotTy : Expr → GenM Expr)
+    (minorTy : Array Expr → Expr → GenM Expr)
+    (encodedAt : Array Expr → GenM Expr)
+    (ctorIdx : Array Expr → GenM (Array Expr)) (ctorName : Name) : GenM Expr := do
+  let fam := fun (y : Expr) (h : Expr) => do
+    withLocalDeclD `pivot (← pivotTy y) fun pivot => do
+      let ys ← unpackChain nnp pk y
+      let mut full := idxs
+      for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
+      full := full.set! position pivot
+      let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
+        withLocalDeclD `k (← minorTy full r) fun kk =>
+          mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
+      let lifted ← match lift? with
+        | none => pure rebuilt
+        | some ℓ => pure (puliftUp ℓ (← encodedAt full) rebuilt)
+      mkForallFVars #[pivot] (mkAppN motive (full.push lifted))
+  let motiveE ← withLocalDeclD `y pk fun y => do
+    withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
+      mkLambdaFVars #[y, hy] (← fam y hy)
+  let base ← withLocalDeclD `pivot (← pivotTy pkc) fun pivot => do
+    let fields := es.set! fieldIndex pivot
+    let idxP ← ctorIdx fields
+    let pkP ← packChain nnp pk (nonPiv.map (idxP[·]!)) 0
+    unless ← isDefEq pkc pkP do
+      badShape s!"{ctorName}'s transported pivot changes its packed non-pivot endpoint"
+    mkLambdaFVars #[pivot] (mkAppN minor fields)
+  let pv := (mkLevelIMax (.succ .zero) v).normalize
+  let fn := eqi.recAt pv ℓpk pk pkc motiveE base pki heq
+  pure (mkApp fn idxs[position]!)
+
 set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
@@ -3462,33 +3503,14 @@ data tower would have to hold a type the branch tower cannot see"
           -- term.  Instead transport a *function over the pivot*.  At `pkc`
           -- its argument has the constructor field's type; at `pki` it has the
           -- caller's type and is applied to the caller's pivot literally.
-          let fam := fun (y : Expr) (h : Expr) => do
-            withLocalDeclD `pivot (← pivotTypeAt ps idxs pk y position) fun pivot => do
-              let ys ← unpackChain nnp pk y
-              let mut full := idxs
-              for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
-              full := full.set! position pivot
-              let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
-                withLocalDeclD `k (← minorTyAt ps full pk? r) fun kk =>
-                  mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
-              let lifted ← match lift? with
-                | none => pure rebuilt
-                | some ℓ => pure (puliftUp ℓ (← encodedAt ps full) rebuilt)
-              mkForallFVars #[pivot] (mkAppN motive (full.push lifted))
-          let motiveE ← withLocalDeclD `y pk fun y => do
-            withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
-              mkLambdaFVars #[y, hy] (← fam y hy)
-          let base ← withLocalDeclD `pivot
-              (← pivotTypeAt ps idxs pk pkc position) fun pivot => do
-            let fields := es.set! i pivot
-            let idxP ← idxOfRes tname (← instForall (← instForall cty0 ps) fields)
-            let pkP ← packChain nnp pk (nonPiv.map (idxP[·]!)) 0
-            unless ← isDefEq pkc pkP do
-              badShape s!"{cn0}'s transported pivot changes its packed non-pivot endpoint"
-            mkLambdaFVars #[pivot] (mkAppN minor fields)
-          let pv := (mkLevelIMax (.succ .zero) v).normalize
-          let fn := eqi.recAt pv ℓpk pk pkc motiveE base pki heq
-          mkLambdaFVars bs (mkApp fn idxs[position]!)
+          let body ← armFDependentPivotRec eqi v ℓpk lift? nnp nonPiv idxs es esBnd
+            i position pk pkc pki heq motive minor
+            (fun y => pivotTypeAt ps idxs pk y position)
+            (fun full r => minorTyAt ps full pk? r)
+            (fun full => encodedAt ps full)
+            (fun fields => do
+              idxOfRes tname (← instForall (← instForall cty0 ps) fields)) cn0
+          mkLambdaFVars bs body
         else
           let fam := fun (y : Expr) (h : Expr) => do
             let ys ← unpackChain nnp pk y
