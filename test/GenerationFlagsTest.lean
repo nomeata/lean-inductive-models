@@ -191,11 +191,19 @@ def main : IO UInt32 := do
 
   -- Private names stay raw: constructing a public model name never strips the
   -- private prefix or derives ownership from the head member's spelling.
+  let privateRoot : Name := `OA
   let privateOA := (`_private.MutualNaming).mkNum 0 |>.str "OA"
   let privateInput ← readFixture "test/fixtures/modelgen/mutual_nonrec.ndjson"
+  let privateAliases :=
+    privateInput.decls.foldl (init := Naming.AliasMap.empty) fun aliases declaration =>
+      declaration.names.foldl (init := aliases) fun aliases name =>
+        if privateRoot.isPrefixOf name then
+          aliases.insert name (name.replacePrefix privateRoot privateOA)
+        else
+          aliases
   let privateInput :=
     { privateInput with
-      decls := privateInput.decls.map (EDecl.renameRoot `OA privateOA) }
+      decls := privateInput.decls.map (EDecl.renameAliases privateAliases) }
   let (privateDecls, privateReport) ← runExport privateInput
     { noGeneration with mutualModels := true }
   let privateNames := outputNames privateDecls
