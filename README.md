@@ -240,6 +240,65 @@ declaration first, then the projection interface, then the modeled inductive
 record. Intrinsic projections are emitted in increasing field order so a
 dependent field can use earlier intrinsic projections.
 
+## Structure eta
+
+For every non-propositional member `T` to which Lean's kernel gives
+structure-like treatment, the generator adds:
+
+```text
+T._model.eta
+```
+
+The kernel predicate is per type former: `T` is non-recursive, has no indices,
+and has exactly one constructor `C` owned by `T`. The additional
+non-propositional condition reflects the kernel reduction path: proof
+irrelevance handles proposition-valued members before structure eta applies.
+A non-recursive mutual block may therefore have several independently
+qualifying members.
+
+The theorem preserves `T`'s complete parameter telescope and universe
+parameters. Its literal type is:
+
+```text
+∀ parameters (x : T._model parameters),
+  x = C._model parameters
+    (T._model.proj_0 parameters x)
+    …
+    (T._model.proj_n parameters x)
+```
+
+where the intrinsic projections occur in zero-based constructor-field order.
+For a dependent constructor telescope, each later projection has the result
+type obtained using the earlier intrinsic projections, exactly as specified
+in the preceding section. For a zero-field constructor the type specializes
+to:
+
+```text
+∀ parameters (x : T._model parameters), x = C._model parameters
+```
+
+For example, the `Pair` model above also contains:
+
+```lean
+theorem Pair._model.eta { α β : Type } (x : Pair._model α β) :
+    x = Pair.mk._model
+      (Pair._model.proj_0 x)
+      (Pair._model.proj_1 x)
+```
+
+The proof eliminates `x` with the modeled recursor. In the constructor case,
+the intrinsic projection definitions reduce the reconstruction to the same
+modeled constructor application.
+
+The checker requires `T._model.eta` exactly for members satisfying the kernel
+structure-like predicate and the non-propositional condition. It reconstructs
+the parameter telescope and proposition literally from the modeled type,
+constructor, and intrinsic `proj_j` slots. The declaration must have the exact
+name and universe arity, must be a theorem, and must have exactly that type.
+Missing, duplicate, renamed, differently typed, or non-theorem eta slots are
+rejected; an eta-looking declaration is also rejected for an ineligible
+member.
+
 ## Unit-like inductives
 
 For each member `T` with Lean's kernel unit-like treatment, the generator adds:
@@ -350,9 +409,10 @@ validates the complete model family:
 4. Every exported recursor rule has exactly one theorem at
    `R._model.iota_j`. A direct iota slot with a nonexistent or noncanonical
    index is rejected.
-5. Every required intrinsic projection-iota, unit-like, and rule-K theorem is present
-   exactly once. Unit-like and rule-K metadata names are also rejected when
-   the corresponding kernel feature is absent.
+5. Every required intrinsic projection-iota, structure-eta, unit-like, and
+   rule-K theorem is present exactly once. Structure-eta, unit-like, and
+   rule-K metadata names are also rejected when the corresponding kernel
+   feature is absent.
 6. Each model declaration has the same number of universe parameters as its
    original. Parameter names are aligned by position.
 7. After that universe alignment and the one simultaneous constant
@@ -367,7 +427,8 @@ validates the complete model family:
    eligibility, the selected constructor field, and its exact sort, then
    compares the complete `T._model.proj_j.iota` proposition literally. It rejects a changed `Eq`
    universe even when the changed proposition remains kernel-valid. The
-   unit-like and rule-K propositions are checked literally as well.
+   structure-eta, unit-like, and rule-K propositions are checked literally as
+   well.
 
 The outer equality in a generated theorem remains the export's `Eq`; modeling
 the `Eq` inductive does not turn the theorem relation itself into `Eq._model`.
