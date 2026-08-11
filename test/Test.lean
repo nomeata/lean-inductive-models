@@ -470,7 +470,9 @@ def expectedPrim : List Row :=
        ("Rvx.below", 13), ("Fdup", 4)],
       [ ("Eq", "prim model: a basis primitive")])
   , ("arm_f_zip",
-      [("FTwo", 5), ("FProof", 4), ("FChain", 4), ("FEndpoint", 4)], [])
+      [("FTwo", 5), ("FProof", 4), ("FChain", 4), ("FEndpoint", 4)],
+      [ ("Eq", "prim model: a basis primitive")
+      , ("Nat", "prim model: a basis primitive")])
   , ("prim_graph",
       [("G1", 17), ("Nonempty", 4), ("G4", 15), ("G4.below", 13), ("Ac", 13),
        ("N", 8), ("BadC", 14), ("BadC.below", 18), ("Ac.below", 13),
