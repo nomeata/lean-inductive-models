@@ -1234,6 +1234,48 @@ must be replaced, after exposing its βζ head and discarding dead mentions. -/
 def erasureRecursive (tname : Name) (dom : Expr) : Bool :=
   mentionsAny #[tname] (erasureFieldDomain tname dom)
 
+/-- Explain why the index erasure cannot replace every recursive occurrence
+by its bare skeleton owner.  This walk is monadic solely because a transparent
+former around the owner must be recognized by definitional reduction; its
+answer remains a diagnostic value and it emits no declaration.
+
+Keeping the early exits in a named `GenM` computation also makes their scope
+unambiguous: they return from this analysis, never from the surrounding model
+construction. -/
+def erasureBareFailure? (tname : Name) (np ni : Nat)
+    (exportCtors : Array (Name × Expr)) : GenM (Option String) := do
+  for (cn, cty) in exportCtors do
+    let mut t := cty
+    let mut short := false
+    for _ in [0:np] do
+      match t with
+      | .forallE _ _ b _ => t := b
+      | _ => short := true
+    if short then return some s!"{cn}'s telescope is shorter than {np} parameters"
+    while t matches .forallE .. do
+      let .forallE _ dom b _ := t | unreachable!
+      let dom := erasureFieldDomain tname dom
+      if mentionsAny #[tname] dom then
+        -- Peel the field's own binders after βζ head normalization. The
+        -- erasure retains those binder types, so an owner mention there would
+        -- refer to the wrong carrier after the field itself is retyped.
+        let mut core := dom
+        let mut inBinder := false
+        while core matches .forallE .. do
+          let .forallE _ z cb _ := core | unreachable!
+          if mentionsAny #[tname] z then inBinder := true
+          core := cb
+        if inBinder then
+          return some s!"binder mention: a binder of {cn}'s recursive field mentions \
+{tname}, and the erasure keeps binder types verbatim"
+        -- A transparent former around `T p⃗ e⃗` is bare. Reduction is confined
+        -- to this route/index analysis; the public model retains `dom`.
+        if (← ownerAppArgs? tname np ni core).isNone then
+          return some s!"nested: {cn} has a recursive occurrence that is not an \
+application of {tname}"
+      t := b
+  return none
+
 /-- Which field of a constructor is the recursive one, if any. Declines the
 shapes the tower cannot express, each by name. -/
 def recSlotOf (tname : Name) (np ni : Nat) (cn : Name) (nf : Nat) (tele : Expr)
@@ -2802,50 +2844,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- non-indexed declaration away from arm W and handed it to a tower that
   -- cannot express it, so the infinitary test is split out rather than
   -- deleted.
-  let erasureBareWhy : Option String ← do
-    for (cn, cty) in exportCtors do
-      let mut t := cty
-      let mut short := false
-      for _ in [0:np] do
-        match t with
-        | .forallE _ _ b _ => t := b
-        | _ => short := true
-      if short then return some s!"{cn}'s telescope is shorter than {np} parameters"
-      while t matches .forallE .. do
-        let .forallE _ dom b _ := t | unreachable!
-        let dom := erasureFieldDomain tname dom
-        if mentionsAny #[tname] dom then
-          -- **Peel the field's own binders after βζ head normalisation**, and
-          -- ask of the core.
-          -- The erasure keeps binder types from the head-normal form, so a
-          -- binder type mentioning `tname` would still name the field's own carrier after
-          -- the erasure has retyped it. Lean's positivity check makes that
-          -- unwritable directly — there is no function out of `T` before `T`
-          -- exists — but a specialisation can leave one behind, and the
-          -- skeleton would then be rejected by the kernel with nothing saying
-          -- why.
-          let mut core := dom
-          let mut inBinder := false
-          while core matches .forallE .. do
-            let .forallE _ z cb _ := core | unreachable!
-            if mentionsAny #[tname] z then inBinder := true
-            core := cb
-          if inBinder then
-            return some s!"binder mention: a binder of {cn}'s recursive field mentions \
-{tname}, and the erasure keeps binder types verbatim"
-          -- A mention which βζ discards was filtered by
-          -- [`Modelgen.erasureFieldDomain`] above, so every domain reaching this
-          -- point still contains the occurrence the skeleton will replace.
-          -- A binder βζ reveals has already been peeled above, so the only
-          -- remaining unsupported shape is a genuinely nested occurrence.
-          -- A transparent former around `T p⃗ e⃗` is still bare: inspect it by
-          -- definitional reduction here, without changing the literal type
-          -- which the public model and checker retain.
-          if (← ownerAppArgs? tname np ni core).isNone then
-            return some s!"nested: {cn} has a recursive occurrence that is not an \
-application of {tname}"
-        t := b
-    return none
+  let erasureBareWhy ← erasureBareFailure? tname np ni exportCtors
   -- **A recursive occurrence under a binder.** Not arm C's refusal any more —
   -- it is the *tuple tower's*, and this is what routes a non-indexed
   -- infinitary declaration to arm W.
