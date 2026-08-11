@@ -378,12 +378,18 @@ to `max`, and the forward and inverse maps are definitionally inverse.  The
 seven declarations recorded below include its intrinsic projection and eta;
 no level-normalizer relaxation or axiom is involved. -/
 def expectedPrim : List Row :=
-  [ -- Lifted arm F at its minimum: one proof field and one constant result
+  [ ("maybe_zero_indexed", [],
+      [("MI", "prim model shape: an indexed family at Sort u: the lift carries the Church \
+        encoding, and only the nonrecursive singleton has lifted index machinery")])
+  , ("maybe_zero_recursive", [],
+      [("MR", "prim model shape: a recursive inductive at Sort u: the strong-induction fold \
+        is not threaded through the lift")])
+  -- Lifted arm F at its minimum: one proof field and one constant result
     -- index. The latter forces the packed equation; the existing one-field
     -- direct-carrier route is index-free. At positive `u`, forgetting the
     -- `PULiftP` boundary is a kernel type error; at `u = 0`, the same declaration
     -- checks the genuinely propositional end.
-    ("degenerate_graph", [("DG", 9)], [])
+  , ("degenerate_graph", [("DG", 9)], [])
   , ("prim_shapes",
       [("Tri", 11), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
