@@ -69,3 +69,8 @@ supportInterpreter = true
 name = "projectiontest"
 root = "ProjectionTest"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "structureetatest"
+root = "Tests.StructureEta"
+supportInterpreter = true
