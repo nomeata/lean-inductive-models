@@ -34,3 +34,8 @@ supportInterpreter = true
 [[lean_exe]]
 name = "levelfuzz"
 root = "LevelFuzz"
+
+[[lean_exe]]
+name = "clitest"
+root = "CliTest"
+supportInterpreter = true
