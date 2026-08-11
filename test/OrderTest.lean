@@ -58,6 +58,17 @@ def exportOf (decls : Array EDecl) : Export := { metaLine := .null, decls }
 def declarationIndex? (x : Export) (name : Name) : Option Nat :=
   x.decls.findIdx? fun declaration => declaration.names.contains name
 
+def declarationType? (x : Export) (name : Name) : Option Expr := do
+  let declaration ← x.decls.find? (·.names.contains name)
+  match declaration with
+  | .ax got _ type _ | .quot got _ type _ => if got == name then some type else none
+  | .defn got _ type .. | .thm got _ type .. | .opaq got _ type .. =>
+      if got == name then some type else none
+  | .induct types constructors recursors =>
+      (types.find? (·.name == name)).map (·.type) <|>
+      (constructors.find? (·.name == name)).map (·.type) <|>
+      (recursors.find? (·.name == name)).map (·.type)
+
 def before (x : Export) (first second : Name) : Bool :=
   match declarationIndex? x first, declarationIndex? x second with
   | some i, some j => i < j
@@ -206,6 +217,12 @@ def run (root : String) : IO UInt32 := do
   let simple ← generatedFixture s!"{root}/test/fixtures/modelgen/prim_shapes.ndjson"
     { noGeneration with simple := true }
   let simple' ← mustReorder "simple declaration-local output" simple
+  state := state.check "complete simple output checks literally" <|
+    (Check.check simple').isEmpty
+  let svType := declarationType? simple' `Sv
+  let svModelType := declarationType? simple' (Naming.modelName `Sv)
+  state := state.check "Sv model preserves its literal declared type" <|
+    svModelType == svType && svModelType.any (fun type => type.getUsedConstants.contains `SvFam)
   let idxViolations := (Check.check simple').filter fun violation =>
     (`IdxP).isPrefixOf violation.familyOwner
   state := state.check "simple recursors and iotas check literally" <|
