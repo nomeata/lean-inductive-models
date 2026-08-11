@@ -324,7 +324,7 @@ inductive DeclarationKind where
   | quotient
   | induct
   | ctor
-  | rec
+  | recursor
   deriving Inhabited, Repr, BEq
 
 /-- A structural model-contract violation. -/
@@ -460,7 +460,7 @@ private def declTypes : EDecl → Array DeclType
           kind := .ctor }) ++
       recursors.toArray.map (fun recursor =>
         { name := recursor.name, levelParams := recursor.levelParams, type := recursor.type,
-          kind := .rec })
+          kind := .recursor })
 
 private abbrev DeclarationTypes := Std.HashMap Name (Array DeclType)
 
