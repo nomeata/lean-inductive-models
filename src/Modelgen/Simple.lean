@@ -365,9 +365,8 @@ def ensureNonempty (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
 own where it declares one at Lean's statement; Lean's, spliced in, where it
 does not. `funext` is *derived* from `Quot.sound` rather than asserted and
 this one cannot be — it is an axiom in Lean too — so the asymmetry is the
-subject matter's and not a shortcut. The owner's ruling stands behind it:
-axiom-freedom is not a goal of this construction and the standard axioms may
-be used. -/
+subject matter's and not a shortcut. Axiom-freedom is not a goal of this
+construction and the standard axioms may be used. -/
 def ensureChoice (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
   match (← getEnv).constants.find? `Classical.choice with
   | some ci =>
@@ -852,9 +851,9 @@ declaration's parameters are only ever context, never analysed.
 
 **Recursion.** A recursive field `f : ∀ z⃗, T p⃗ e⃗` becomes `∀ z⃗, C e⃗` in the
 minor's type and `fun z⃗ => f z⃗ C k⃗` in the fold. Strict positivity for a
-single non-nested inductive admits exactly that shape (thesis.txt:647–668), so
-a field that mentions `T` in any *other* position is a nested occurrence and
-is declined rather than mis-rewritten. -/
+single non-nested inductive admits exactly that shape, so a field that mentions
+`T` in any *other* position is a nested occurrence and is declined rather than
+mis-rewritten. -/
 
 /-- A field of a constructor, classified. `rec? = some nb` says the field is a
 recursive occurrence under `nb` binders — `nb = 0` for a bare `T p⃗ e⃗`. -/
@@ -2509,7 +2508,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
           -- would replace it anyway, with the skeleton's own carrier, so this
           -- is a decline; but calling it *infinitary* would name a binder over
           -- the occurrence that is not there. `nest_fam_arg`'s `OK` and `Key`
-          -- are the fixture's two occupants and the corpus has none.
+          -- are the two committed occupants.
           if !mentionsAny #[tname] d then
             return some s!"vanishing mention: {cn} has a field whose type mentions \
 {tname} only inside a binder that βζ-reduction discards, so the erasure would replace \
@@ -2519,8 +2518,7 @@ a domain that is not recursive"
           -- keep no binder here and replace the whole redex — dropping the
           -- branching. `withRecSlot` reads through `headNorm` and would open
           -- the binder, so the two would disagree about the very same field.
-          -- Nothing in the corpus reaches it; it is a decline rather than a
-          -- silent divergence.
+          -- It is a decline rather than a silent divergence.
           if d matches .forallE .. then
             return some s!"hidden binder: {cn} has a recursive occurrence under a binder \
 that only βζ-reduction reveals, and the erasure emits binders as written"
@@ -2693,9 +2691,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         -- `test/fixtures/modelgen/prim_idx.lean`'s
         -- `Fmid` is the occupant: `Fmid : (α : Type) → α → α → Prop` with
         -- `mk (x : N) : Fmid N x N.z`, whose pivot `x : N` sits at an index
-        -- whose declared type is the *ground* index before it. Both corpus
-        -- targets clear it — `IsHomLift`'s `φ : a ⟶ b` names only pivots and
-        -- `Acc.below`'s `a : α` only a parameter.
+        -- whose declared type is the *ground* index before it. By contrast,
+        -- `Acc.below`'s `a : α` depends only on a parameter.
         forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
           for j in [0:ni] do
             if piv[j]! then
@@ -2727,9 +2724,8 @@ without a transport the model does not build"
   -- proposition, the kernel identifies them by proof irrelevance, and every
   -- statement in the arm is already well-typed as written. It propagates, too
   -- — a later index type mentioning `j` is defeq at the two, so a whole
-  -- suffix of proof positions is free — and it is exactly the class the
-  -- corpus holds: `Acc.below`'s index 1 is `Acc r a`, and every `.below` Lean
-  -- mints beside a recursive `Prop` is that shape.
+  -- suffix of proof positions is free. `Acc.below`'s index 1 is `Acc r a`, and
+  -- every `.below` Lean mints beside a recursive `Prop` is that shape.
   --
   -- What is left is a non-pivot at a **data** position — `BadC`'s constant
   -- `N.z` — where the transport really is owed and really is not built.
@@ -3180,7 +3176,7 @@ data tower would have to hold a type the branch tower cannot see"
   else if armF then
     -- ════ arm F: the indexed subsingleton, by one packed index equation ════
     --
-    -- Shape (thesis.txt:700–710): one constructor, every field a `Prop` or a
+    -- Shape: one constructor, every field a `Prop` or a
     -- variable that literally *is* one of the output's indices. The kernel
     -- then grants a `Sort w` motive, and the model has to deliver it — the
     -- Church fold cannot, since it only eliminates into `Prop`.
@@ -4106,10 +4102,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     -- resulting non-fatal `panic!` returned a default `PCtor` whose chain has
     -- no fields, so the declaration declined with "a chain with no fields
     -- needs a pad" — a true refusal reached by an out-of-bounds read, and a
-    -- reason that named nothing. Nothing in the corpus has this shape, which
-    -- is why it went unseen; `test/fixtures/modelgen/prim_carve.lean`'s
-    -- `NoBase` is the
-    -- occupant that found it, through arm C's skeleton.
+    -- reason that named nothing. `test/fixtures/modelgen/prim_carve.lean`'s
+    -- `NoBase` is the occupant that exercises it through arm C's skeleton.
     if isRec && baseJ.isEmpty then
       badShape s!"{tname} is recursive with no base constructor, so it is uninhabited \
         and the tuple tower has no spine-zero fibre to build"

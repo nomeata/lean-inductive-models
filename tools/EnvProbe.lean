@@ -19,8 +19,8 @@ time and memory to obtain.
   nested inductive, which `Declaration.getNames` documents itself as omitting.
 * **`B`** — parse, then replay through
   `Kernel.Environment.addDeclWithoutChecking` and hand the result to
-  `Environment.ofKernelEnv`, which is `lean4checker`'s loading model. Counts how
-  many names survive into `Environment.find?`, which is the lookup `MetaM` uses.
+  `Environment.ofKernelEnv`. Counts how many names survive into
+  `Environment.find?`, which is the lookup `MetaM` uses.
 
 * **`C`** — parse, then replay through `Environment.addDeclCore` **with
   checking on**, and report how many declarations the kernel *rejected*, with

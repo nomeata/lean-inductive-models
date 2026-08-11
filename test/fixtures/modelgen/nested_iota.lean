@@ -1,14 +1,13 @@
 /-
 # The nested recursors, **made to compute**
 
-`nested_shapes.lean` measures the declaration side of nesting and
-`nested_roundtrip.lean` measures why the auxiliary encoding does not extend to
-it. Neither of them ever applies a nested recursor, so neither would notice a
+`nested_shapes.lean` measures the declaration side of nesting but does not
+apply a nested recursor, so it would not notice a
 treatment that installed `Tree.rec` and `Tree.rec_1` with the right *types* and
 rules that never fire. This file is that gap closed, and it is written the way
-`mutual_iota_reduction.lean` is: every claim is a theorem proved by `rfl`, so
-Lean's kernel checks it at export time and replay has to reduce the same redex
-or reject the file.
+that exposes computation directly: every claim is a theorem proved by `rfl`,
+so Lean's kernel checks it at export time and replay has to reduce the same
+redex or reject the file.
 
 # `Tree.rec_1` is the point
 
@@ -57,7 +56,7 @@ equations without reducing anything, and every rule below would hold whether or
 not it fired. `m1 : Tree → Type` and a payload of `N` is the cheapest motive
 that cannot be collapsed that way.
 
-`Nat` is avoided throughout, for the reason `infinitary_branching.lean` gives.
+The local `N` keeps the fixture independent of `Nat`'s literal machinery.
 -/
 prelude
 

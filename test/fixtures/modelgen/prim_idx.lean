@@ -1,6 +1,5 @@
-/- **The index axis of the one-constructor `Prop`** (`--prim-models`,
-   `src/Modelgen/Simple.lean`), as a grid rather than as a list of the shapes the
-   corpus happens to contain.
+/- **The index axis of the one-constructor `Prop`**
+   (`src/Modelgen/Simple.lean`), presented as an explicit grid.
 
    # What the axis is
 
@@ -23,11 +22,9 @@
      and arm G, where the position is at a `Prop`, by nothing at all: see
      below, it is where the two rows end in different places.
 
-   Read that way the two arms' old limits were **one** limit seen from its two
-   ends: arm F took only all-non-pivot index vectors and arm G only all-pivot
-   ones, and everything between them fell through the gap —
-   `CategoryTheory.Functor.IsHomLift` and `Acc.below`, the corpus's last two
-   non-exempt declines, one on each side.
+   The two arms meet at mixed pivot/non-pivot vectors: arm F supplies equations
+   for the non-pivots, while arm G can omit proof-valued non-pivots. The grid
+   makes those intermediate cases explicit.
 
    |            | ground | pivot | expr over data | expr over proof |
    |------------|--------|-------|----------------|-----------------|
@@ -48,12 +45,11 @@
    index type mentioning `j` is defeq at the two — so a whole *suffix* of
    proof positions is free.
 
-   That is the entire corpus class. `Acc.below`'s index 1 is `Acc r a`, and
-   every `.below` Lean mints beside a recursive `Prop` is that shape, which is
-   why `Inf.below`, `Rv.below`, `Rxh.below` and `Rvx.below` arrive here by
-   accident and why `prim_graph`'s whole `G*.below` column moved with them.
-   `Rxh` and `Rvx` are `Inf.below` and `Acc.below` written deliberately rather
-   than met by accident, and they are the two the arm was built for.
+   The recursive proof-index class is represented by `Acc.below`: its index 1
+   is `Acc r a`, and every `.below` Lean generates beside a recursive `Prop`
+   has that shape. Thus `Inf.below`, `Rv.below`, `Rxh.below`, `Rvx.below`, and
+   `prim_graph`'s `G*.below` column exercise the same boundary. `Rxh` and `Rvx`
+   isolate the two mixed cases deliberately.
 
    What is left is a non-pivot at a **data** position, where the transport
    really needs a transport that is not built: `BadC`
@@ -65,9 +61,8 @@
    field into a *parameter*, at which point the shape is not indexed at all:
    `inductive A : N → Prop | mk (x : N) : A x` arrives as `np=1, ni=0`. A pivot
    is therefore only reachable behind a position that cannot be promoted — a
-   constant, or a term. Every cell below is written that way, and that is a
-   fact about the corpus too: `MixI`'s header in `prim_declines.lean` said it
-   first.
+   constant, or a term. Every cell below is written that way; `MixI` in
+   `prim_declines.lean` independently pins the same promotion behavior.
 
    # The occupants and the mutations, red at one apiece
 
@@ -132,14 +127,12 @@
 
    # Four cells were built and dropped, and one finding is why
 
-   `Fxd` (a non-pivot expression over a data field beside its pivot,
-   `IsHomLift`'s core at one of each), `Fall` (two pivots rather than three)
-   and `Fperm` (`IsHomLift`'s **own** six-index pattern — expr, expr, pivot,
-   pivot, expr, pivot, three data fields on a 3-cycle) are each red only under
-   mutations that `Fdup`, `Fdep` or `Fall3` are also red under. No mutation in
-   the sweep separates them, so by this file's rule they measured nothing the
-   survivors do not, and they are gone. `IsHomLift` itself is not lost with
-   them: it is a **corpus** row, and it moves from decline to model there.
+   `Fxd` (a non-pivot expression over a data field beside its pivot), `Fall`
+   (two pivots rather than three), and `Fperm` (expr, expr, pivot, pivot, expr,
+   pivot, with three data fields on a 3-cycle) are each red only under mutations
+   that `Fdup`, `Fdep`, or `Fall3` are also red under. No mutation in the sweep
+   separates them, so by this file's rule they measured nothing the survivors
+   do not, and they are gone.
 
    `Fp` — an index that is **literally a proof field** — was dropped for a
    sharper reason, and it is worth keeping the sentence. The mutation built for
@@ -160,9 +153,8 @@
    field off the recursor's index argument, and there that argument's type is
    index 0 — an arbitrary `Type`, which only the equation says is `N` — so the
    field cannot be used without a transport this arm does not build. It is the
-   one place the two halves of the axis fail to compose, and **neither corpus
-   target is on the wrong side of it**: `IsHomLift`'s `φ : a ⟶ b` names only
-   pivots and `Acc.below`'s `a : α` only a parameter.
+   one place the two halves of the axis fail to compose. In contrast,
+   `Acc.below`'s `a : α` is a parameter rather than such an index.
 
    # Arm G's refusal, and it is one column and not a row
 

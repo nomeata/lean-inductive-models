@@ -15,8 +15,8 @@ land at `Type (max w u)`, which normalises to `Type u` at `w := 0` and at
 `DecidableEq K` each instantiation needs, and **the closure of the other four
 cannot reach either**, because all four take the instance as a *parameter*.
 
-* `instDecidableEqNat` is the tagged one's. `WGeneric.lean` settles why
-  `K := Nat` is the tag type — `Nat` is already shared with the input by the
+* `instDecidableEqNat` is the tagged one's. `K := Nat` is the tag type because
+  `Nat` is already shared with the input by the
   splice, so it costs no new fragment inductive. Without this root a generator
   would have to mint an enumeration inductive per declaration and prove its
   decidable equality, which `Iso.requires` would then oblige the run to model.
@@ -70,9 +70,8 @@ def nowhere : PTree K B' A := fun _ => none
 
 /-- One step of unfolding whose least fixpoint is "is a well-founded tree". The
 third clause — subtrees hanging off a *tag* other than the node's own are
-empty — is `WFromPaths.lean`'s one non-obvious ingredient, and it is the clause
-that makes `canon` provable. Here it quantifies over tags rather than labels,
-which is the whole difference. -/
+empty — is what makes `canon` provable. It quantifies over tags rather than
+labels. -/
 def Step (tg : A → K) (S : PTree K B' A → Prop) (t : PTree K B' A) : Prop :=
   ∃ a : A, t [] = some a ∧ (∀ b : B' (tg a), S (subt t ⟨tg a, b⟩)) ∧
     ∀ x : Edge K B', x.1 ≠ tg a → subt t x = nowhere
@@ -97,10 +96,9 @@ def W (B' : K → Type u) (tg : A → K) : Type (max w u) := {t : PTree K B' A /
 
 /-- The raw tree of a node labelled `a` with children `f`.
 
-**This is the whole difference from `WFromPaths.lean`.** There, the guard is
-`x.1 = a` at the label type and needs `Classical.propDecidable`; here it is
-`x.1 = tg a` at the tag type, and `DecidableEq K` discharges it. Everything
-downstream costs what it costs because of this one line. -/
+The guard is `x.1 = tg a` at the tag type, so `DecidableEq K` discharges it;
+guarding at the full label type would instead require a decision procedure
+there. Everything downstream costs what it costs because of this one line. -/
 def mk [DecidableEq K] (tg : A → K) (a : A) (f : B' (tg a) → PTree K B' A) :
     PTree K B' A
   | [] => some a

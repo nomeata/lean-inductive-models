@@ -1,4 +1,4 @@
-/- **The W arm** (`--prim-models`) — the shapes the tuple
+/- **The W arm of simple-model generation** — the shapes the tuple
    tower cannot express and the tagged W construction can.
 
    `Wt` has six constructors chosen so that every shape the emitted scheme has to handle
@@ -41,7 +41,7 @@
    * `Bad` — one label-dependent child (`PFam k → Bad`) beside a plain one, and
      a base constructor. It was this file's decline until the untagged arm
      landed.
-   * `Wty` — `WType` itself, which is what the corpus actually declines: a
+   * `Wty` — the general W-type shape: a
      **parameter family** `β : α → Type u` at a level parameter, so the branch
      tower's own universe is variable and the label's data is a `α` rather than
      a ground type.

@@ -56,22 +56,17 @@ def expectedShared : List Row :=
        ("UTree._model._impl.0", 14)], [])
   ]
 
-/-- **The refusal paths, each with a fixture that reaches it.** The generator
-seat reported that `nested_ev::Reason`'s guards "keep their arguments and gain
-no occupant" — no fixture in the tree reaches any refusal except `NameTaken`,
-so five guards were known only by inspection. These are written for exactly
-that hole under `test/fixtures/modelgen`; `test/scripts/export-modelgen.sh`
-builds them with the repository's exporter.
+/-- **The refusal paths, each with a fixture that reaches it.** These fixtures
+keep accepted input shapes attached to the exact generator guard that handles
+them. `test/scripts/export-modelgen.sh` rebuilds their exports.
 
 **A decline is compared by prefix**, so that a fixture may pin *which shape*
 stopped the generator without pinning the wording of a kernel diagnostic
 quoted inside it.
 
-These files were written as shapes **Lean accepts and this did not** — every
-`.lean` here is one Lean's own kernel loaded, and `--check-recursors` compares
-the recursors it minted against the export's on every run. They are named for
-the shape rather than for the refusal, because the refusal is what is meant to
-go away, and **every one of them has**: `poly_nested`, `dependent_fields`,
+Every `.lean` source here is accepted by Lean's kernel, and the fixture suite
+compares the recursors it minted against the export's on every run. Fixtures
+are named for the shape rather than a transient refusal: `poly_nested`, `dependent_fields`,
 `indexed_decl`, `indexed_container`, `nest_index_cross` and `funext_binder`
 are all models now.
 
@@ -108,10 +103,8 @@ the polarity they pin has flipped, not gone:
   no `funext` support is spliced — the input's own `funext` beats a derived
   one — while the same projection roles are still counted.
 
-**`nest_through_mutual` and `nest_mutual_both` are no longer refusals at all.**
-A mutual block whose members nest is a shape Lean has and nothing in the
-205-file corpus does, so it was neither covered nor known to decline; it is
-now generated. `nest_mutual_both` is the non-degenerate fixture for it — `A`
+**`nest_through_mutual` and `nest_mutual_both` cover mutual blocks whose members
+nest.** `nest_mutual_both` is the non-degenerate fixture for it — `A`
 nests at `List B` and `B` at `Box A`, four block members, two mimics at two
 distinct containers, and four recursors `A.rec`, `B.rec`, `A.rec_1`, `A.rec_2`
 over one shared motive and minor vector — because with only one member nesting
@@ -325,7 +318,7 @@ def expectedOwn : List Row :=
        ("PS", 15), ("PS._model._impl.0", 14), ("Q", 14), ("Q._model._impl.0", 14)], [])
   ]
 
-/-- **The third construction's rows** (`--prim-models`), run with the flag on.
+/-- **The simple-model construction's rows.**
 
 `prim_shapes` is one positive occupant per route variant — the counts pin the
 shape of each model (`self + ctors + rec + iotas`, its exact projection and
@@ -415,8 +408,8 @@ def expectedPrim : List Row :=
        ("SvIx", 4)],
       [ ("Eq", "prim model: a basis primitive")
       , ("BoxF", "prim model shape: [BoxF._model] rejected by the kernel")])
-  -- **The index axis**, as a grid rather than as the shapes the corpus
-  -- happens to have (`test/fixtures/modelgen/prim_idx.lean` documents the grid).
+  -- **The index axis**, as the explicit grid documented by
+  -- `test/fixtures/modelgen/prim_idx.lean`.
   -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
   -- two index positions, `Fdep` a non-pivot whose type mentions a pivot,
   -- `Fall3` every index a pivot and therefore no equation at all, `Fxh` an
@@ -534,9 +527,8 @@ def expectedPrim : List Row :=
   -- exactly the sense the arm W row below records for `Tree`: the fixture's
   -- declaration order decides which skeleton pays for the splice.
   --
-  -- **`Inf2` was this row's third decline and is now a model**, together with
-  -- `Cf` — `PFunctor.Approx.CofixA`'s own shape, which is the corpus
-  -- declaration the infinitary erasure was built for — and `Bif`. The source's
+  -- **`Inf2`, `Cf`, and `Bif` model successfully.** `Cf` is the infinitary
+  -- erasure shape. The source's
   -- header carries the six mutations behind them and says which occupant each
   -- is red at; two of the six are red at exactly one, `Cf` and `Bif`.
   --
@@ -569,8 +561,8 @@ def expectedPrim : List Row :=
           not model")])
   -- **Arm W**, and this row is three claims at once.
   --
-  -- The four models are the shapes the tuple tower cannot express: `Wt` is
-  -- `WEmitted.lean`'s six-constructor target, `Tree` the same branching at a
+  -- The four models are the shapes the tuple tower cannot express: `Wt` is a
+  -- six-constructor target, `Tree` the same branching at a
   -- parameter and a level parameter, `Br` an infinitary child whose binder is a
   -- parameter, and `Dep` a data tower whose second field depends on its first.
   --
@@ -590,9 +582,7 @@ def expectedPrim : List Row :=
   -- input, because downstream consumers key axioms on their exact names and
   -- statements.
   --
-  -- **`Bad`, `Wty` and `Utd` are the untagged instantiation** and
-  -- were this row's one decline until it landed. `Wty` is `WType`, which is
-  -- what the corpus actually declined. Nothing in this row's counts says which
+  -- **`Bad`, `Wty` and `Utd` are the untagged instantiation.** Nothing in this row's counts says which
   -- instantiation a target took — `#print axioms` does, and that is the report
   -- the section carries: these three at `[propext, Classical.choice,
   -- Quot.sound]` against every other target's `[propext, Quot.sound]`.
@@ -917,8 +907,8 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
       -- **The exclusion list, from the side that would hurt.** A `_wcore`
       -- copy of either axiom is a *non-standard* axiom downstream, and a `propext`
       -- under Lean's name whose statement is at `_wcore.Iff` and `_wcore.Eq`
-      -- is worse than that: it is the name `axiom.rs` trusts carrying a
-      -- statement that is not the one it means. Both are pinned, because the
+      -- is worse than that: consumers key the standard axiom by its name and
+      -- would attach the wrong statement. Both are pinned, because the
       -- rename is one list and either mistake is one entry in it.
       for n in [Modelgen.wCoreRoot ++ `propext, Modelgen.wCoreRoot ++ `Quot.sound,
                 Modelgen.wCoreRoot ++ `Eq, Modelgen.wCoreRoot ++ `Iff,
@@ -1102,8 +1092,8 @@ get wrong. Every claim here is a fact about *Lean* that this tool's
    contract name on the way out. It costs no contract change and no weakening
    of the kernel check — the declaration the kernel accepts and the
    declaration emitted differ by an injective renaming of constants this run
-   introduced. Nothing takes that route today; this pins that it is *open*, so
-   that the day it closes is a test failure with a name on it.
+   introduced. Model generation uses this retry for normalized-name collisions;
+   this probe pins the environment property it relies on.
 
 What is **not** an escape, all of it read off the pinned toolchain's
 `Lean/Environment.lean` rather than guessed: `addConstAsync` (`:1018`) and

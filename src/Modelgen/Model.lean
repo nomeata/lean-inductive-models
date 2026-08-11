@@ -52,8 +52,8 @@ rather than reconstructed.
   and their argument. Every index vector in this file, the declaration's and
   the container's alike, is read off a type in hand — [`Modelgen.Gen.idxOf`],
   [`Modelgen.Gen.occIdx?`], [`Modelgen.Gen.withOccIndices`] — and none is
-  rebuilt. The telescope is empty for every container in the corpus, which is
-  why nothing noticed its absence.
+  rebuilt. Indexed-container fixtures make this observable by giving the
+  container a nonempty index telescope.
 * **`congrCtor` cannot be a single named lemma** — each step of the fold
   abstracts a different position of the same constructor — so
   [`Modelgen.Gen.foldCongr`] builds it inline. `congrPack` per mimic *can* be a
@@ -89,8 +89,7 @@ inductive Decline where
   by the input, in the output, and in every one of the input's own terms — and
   Lean's `Environment` has no way to rebind a constant, so replacing it would
   mean replaying the whole file a second time. The message names the constant
-  and what is wrong with it. No file in the corpus or the fixture tree reaches
-  it. -/
+  and what is wrong with it. -/
   | notLeans (n : Name) (why : String)
   | nameTaken (n : Name)
   /-- **The kernel accepted the declaration and the environment then lost it.**
@@ -191,19 +190,16 @@ def EqInfo.recAt (e : EqInfo) (v u : Level) (α a motive base b h : Expr) : Expr
 Four constants are reached by the *proofs* this module writes and by none of the
 public signatures: `Eq` (with `Eq.refl` and the `Eq.rec` the kernel mints for it),
 and — only for a field at a mimic **under a binder** — `Quot`, `Quot.sound` and
-`funext`. An export is not obliged to declare any of them: `Eq` is in most of
-the corpus but `test/fixtures/modelgen/decline_no_eq.lean` is a file without
-one, and `funext` is in
-**1 of the 157 corpus files** and not in `init-prelude`.
+`funext`. An export is not obliged to declare any of them:
+`test/fixtures/modelgen/decline_no_eq.lean` omits `Eq`, while the paired
+`infinitary` and `funext_binder` fixtures exercise absent and present `funext`.
 
 **A prelude constant the input lacks is spliced, and a spliced constant is
 reported.** This is the one place `modelgen` writes a declaration that is not
 *about* the nested type, so three things hold it down:
 
 * **Only when a model is actually being spliced.** Every one of these is built
-  inside [`Modelgen.iso`], so a file with nothing to splice is untouched and
-  the identity property across the corpus and committed fixtures is not at
-  risk.
+  inside [`Modelgen.iso`], so a file with nothing to splice is untouched.
 * **Exactly what Lean's prelude declares**, taken from `Init/Prelude.lean`
   (`Eq`, `init_quot`) and `Init/Core.lean` (`Quot.sound`, `funext`), and
   `test/fixtures/modelgen/funext_binder.lean` is that development written as a
@@ -496,8 +492,8 @@ syntactic comparison would not be.
 
 `none` is *not* a decline. It means the model's proofs will use a `funext` of
 their own, derived and spliced — [`Modelgen.ensureFunext`]. This is asked
-**lazily**, because `funext` is in no public statement, only in the proofs one
-shape needs, and is in 1 of the 157 corpus files. -/
+**lazily**, because `funext` is in no public statement and only one proof shape
+needs it. -/
 def usableFunext? (eqi : EqInfo) : GenM (Option Name) := do
   let n := `funext
   let some ci := (← getEnv).constants.find? n | return none
@@ -617,8 +613,8 @@ def mimicOf (g : Gen) (k : Nat) : Nat := k - g.numAll
 parameters**, so `Vec T._model.self` and not a type. -/
 def occAt (g : Gen) (i : Nat) (ps : Array Expr) : Expr := g.occs[i]!.instantiateRev ps
 
-/-- **Mimic `i`'s index count**, which is the container's. Zero for every
-container in the corpus and not zero for `Vec α : N → Type`. -/
+/-- **Mimic `i`'s index count**, which is the container's. In particular it is
+not zero for `Vec α : N → Type`. -/
 def midx (g : Gen) (i : Nat) : Nat := g.nidx[i + g.numAll]!
 
 /-- Occurrence `i` **at an index vector** — the type `pack_i` takes and
@@ -739,9 +735,8 @@ def ihVector (g : Gen) (ftys : Array Expr) : GenM (Array (Option Nat) × Array (
 Lean supports `HTree.node : (N → List HTree) → HTree`, and the block types the
 field `∀ x⃗, Bₘ ι⃗`. Everything below is the machinery for a *packed position
 under a binder*: which fields are one, how to rebuild a value under the
-telescope, and how to close a pointwise equation with `funext`. `nb = 0` is
-every field in the corpus and every one of those paths writes no lambda and
-asks for no `funext`. -/
+telescope, and how to close a pointwise equation with `funext`. At `nb = 0`
+these paths write no lambda and ask for no `funext`. -/
 
 /-- **`funext` for a whole binder telescope**, innermost first: from `p : Eq a
 b` in the scope of `x⃗`, `Eq (fun x⃗ => a) (fun x⃗ => b)`. Each step η-reduces
@@ -791,8 +786,7 @@ def occOfUnder? (g : Gen) (ps : Array Expr) (t : Expr) : GenM (Option (Nat × Na
   return none
 
 /-- **Rebuild a field under its binder telescope**: `fun x⃗ => k resTy (f x⃗)`.
-`nb = 0` applies `k` to the field itself and writes no lambda, which is every
-field in the corpus. -/
+`nb = 0` applies `k` to the field itself and writes no lambda. -/
 def underBinders (nb : Nat) (ty f : Expr)
     (k : Array Expr → Expr → Expr → GenM Expr) : GenM Expr := do
   if nb == 0 then k #[] ty f
@@ -1801,8 +1795,8 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
   for x in [0:r.n] do
     let f := r.fields[x]!
     match r.packed[x]! with
-    -- **A packed position, with or without a binder.** `nb = 0` is every field
-    -- in the corpus and everything below writes no lambda for it.
+    -- **A packed position, with or without a binder.** At `nb = 0` everything
+    -- below writes no lambda for it.
     | some (m, nb) =>
       let (y, w, h) ← r.packedAt x m nb blk
       srcVals := srcVals.push y; srcIhs := srcIhs.push w
@@ -2146,8 +2140,7 @@ one; Lean's, spliced in, if it does not.
 An `Eq` the input *does* declare and that is not Lean's is the one case a
 splice cannot reach — the name is already bound in the output and in the
 input's own terms, and Lean's `Environment` cannot rebind a constant — so it
-declines and says which part of the shape is wrong. Nothing in the corpus or
-the fixture tree reaches that. -/
+declines and says which part of the shape is wrong. -/
 def ensureEq (reserved : Std.HashSet Name) : GenM (EqInfo × Array Declaration) := do
   if (← getEnv).constants.contains `Eq then
     match EqInfo.check (← getEnv) with
@@ -2168,10 +2161,10 @@ def ensureEq (reserved : Std.HashSet Name) : GenM (EqInfo × Array Declaration) 
 whatever it takes to have one.
 
 The input's own is used when it declares a `funext` at Lean's statement. When
-it does not — 156 of the 157 corpus files — this derives one: `Quot` (the
-kernel's quotient, four names), `Quot.sound` (Lean's axiom, at Lean's
-statement), and then `T._model.funext` proved from them, each checked by the
-kernel as it is added. Only the ones the input is missing are emitted.
+it does not, this derives one from `Quot` (the kernel's quotient, four names)
+and `Quot.sound` (Lean's axiom, at Lean's statement), with every added
+declaration checked by the kernel. Only the declarations the input is missing
+are emitted.
 
 `T._model.funext` is namespaced and the quotient names are not, and that
 asymmetry is forced rather than chosen: standard-axiom recognition selects the

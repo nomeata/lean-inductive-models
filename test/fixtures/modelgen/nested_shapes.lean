@@ -2,12 +2,9 @@
 # Nested inductives, on the axes they can be degenerate on
 
 This file measures the declaration side of nested-inductive generation.
-`nested_roundtrip.lean` separately exercises why the mutual encoding does not
-extend directly to these declarations.
 
-Four declarations, chosen so that no single property is shared by all of them.
-The last three rounds of this thread each lost a mutation to "the only fixture
-exercising this had a degenerate shape", so the axes are separated on purpose:
+Four declarations are chosen so that no single property is shared by all of
+them and the axes remain independently observable:
 
 | declaration | nesting depth | container parameterised | specialised copy recursive | container also used un-nested |
 | --- | --- | --- | --- | --- |
@@ -20,9 +17,8 @@ exercising this had a degenerate shape", so the axes are separated on purpose:
   copies — `List` at `DTree` and `List` at that copy — so a compiler that
   specialises one level and stops is wrong here and right on `Tree`.
 * **A non-recursive container.** `Pair`'s specialised copy has no recursive
-  field of its own; it is in the block only because it mentions `PTree`. A
-  block member with no self-recursion is the shape `mutual_one_recursive.lean`
-  covers for mutual, and it is reachable here without writing a `mutual`.
+  field of its own; it is in the block only because it mentions `PTree`, so it
+  tests that a specialized block member need not recurse into itself.
 * **The container used un-nested in the same file.** `listOfN : List N` and
   `pairOfN : Pair N` exist so that the *real* `List` and `Pair` have their own
   scheduled instantiations beside the nested ones. A treatment that quietly
@@ -32,7 +28,7 @@ exercising this had a degenerate shape", so the axes are separated on purpose:
   per occurrence" are different answers.
 
 `Nat` is avoided throughout: `N` is the same inductive without the literal
-machinery, for the reason `infinitary_branching.lean` gives.
+machinery.
 
 No constructor has a function-typed recursive argument, and nothing here is
 indexed. The specialised block of an unindexed nested declaration is itself an

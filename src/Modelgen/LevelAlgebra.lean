@@ -265,8 +265,8 @@ with widening disabled.
 The census answers the prior question, which is whether the widening ever
 fires at all. An **escape** is a pair the complete procedure accepts and
 `Lean.Meta.isLevelDefEq` rejects — the only pairs at which this change can
-possibly alter behaviour. Zero escapes on a corpus means the change is a
-measured null there, and that is a result, not a failure. -/
+possibly alter behaviour. Zero escapes on representative exports means the
+change is a measured null there, and that is a result, not a failure. -/
 
 /-- The control: `MODELGEN_PLANNER_STOCK_LEVELS=1` restores the elaborator's
 answer exactly, widening disabled. -/

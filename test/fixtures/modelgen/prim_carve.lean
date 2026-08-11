@@ -13,8 +13,7 @@
      by their index (`N.z` versus `N.s n`), so a model that lost the
      constructor tag entirely could still pass `Vc`'s pins; `Two2.l n` and
      `Two2.r n _` both live at `n`, so the recursor has to tell them apart on
-     its own. This is `CarveOverSkeleton.lean`'s `Two` and it is here for the
-     same reason.
+     its own.
 
    * `Bl` — an index **telescope of length two**, packed into one `PSigma`.
      Two indices are not enough on their own: `bin` moves the first and leaves
@@ -160,10 +159,8 @@
    light. `NoBase._model._impl.skel` is `S | mk : N → S → S` — an *uninhabited*
    linearly recursive inductive, which Lean accepts and the tuple tower does
    not model: its spine's zero fibre is a chain of no fields and the plan
-   gives it no pad. That is a gap in the **Type route** and not in arm C, it
-   predates this arm, and nothing in the corpus had reached it because every
-   linearly recursive occupant there has a base constructor. It is recorded
-   rather than fixed. -/
+   gives it no pad. That is a gap in the **Type route** and not in arm C. It is
+   recorded rather than fixed. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false

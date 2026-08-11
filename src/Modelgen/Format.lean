@@ -9,8 +9,8 @@ import Modelgen.Naming
 
 The parser here is the whole of the tool's trust boundary and it does **no
 checking**: an export is read into `Lean.Name` / `Lean.Level` / `Lean.Expr`
-verbatim, because the owner's instruction is to trust the input and that is
-where the speed comes from. Nothing below runs a typechecker.
+verbatim. Input validation is deliberately separate from parsing, and nothing
+below runs a typechecker.
 
 Two properties the rest of the tool depends on:
 

@@ -33,8 +33,8 @@ here, one on each side of the split.
 Everything is stated at **variable** motives, minors and majors: a closed major
 reduces one constructor at a time whatever the rule says. The motives land in
 `Type` and not in `Prop` for `nested_iota.lean`'s reason — proof irrelevance
-would close every equation below without reducing anything — and `N` rather
-than `Nat` is the payload for `infinitary_branching.lean`'s.
+would close every equation below without reducing anything — and the local `N`
+keeps the fixture independent of `Nat`'s literal machinery.
 -/
 prelude
 

@@ -38,7 +38,7 @@ round trips are equations, and the generator refuses to fabricate an `Eq` the
 export never wrote. That refusal is what `nested_shapes` measures; this file
 measures what happens past it.
 
-`Nat` is avoided for the reason `infinitary_branching.lean` gives.
+The local `N` keeps the fixture independent of `Nat`'s literal machinery.
 -/
 prelude
 

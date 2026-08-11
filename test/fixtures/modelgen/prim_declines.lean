@@ -1,4 +1,4 @@
-/- **The third construction's refusals** (`--prim-models`), one fixture per
+/- **The simple-model construction's refusals**, one fixture per
    decline path of `src/Modelgen/Simple.lean`, each asserting the refusal and
    its printed reason:
 
@@ -42,9 +42,7 @@
      compose. It is kept for that: the unfolding and the pivot analysis are two
      different passes and this is the only occupant that runs the second on the
      first's output. Before the unfolding it declined as "does not land in a
-     sort", which named the wrong obstruction; eighteen Mathlib declarations at
-     the 30M prefix (`CategoryTheory.Presieve.ofArrows` and its kin) sat behind
-     that wrong reason.
+     sort", which named the wrong obstruction rather than the composed shape.
    * `Idx` — an **indexed family** (`P` beside it is its index's type, and
      models — the guard is not refusing everything).
    * `BoxF` — a field whose level keeps an `imax` even boxed: the imax
@@ -63,11 +61,10 @@
    `PE`, `PM`, `PF`, `PT` and `PI`. `False` is no longer a refusal either;
    it is derived, and models.
 
-   The basis-primitive **exemption** and the name guard have their fixtures in
-   the corpus run (`Eq` and `Nat` are exempt on `init-prelude`) and in
-   `mutual_keying`'s pattern respectively. The exemption is reported on its own
-   row now and is not counted a decline: it is what makes the construction
-   well-founded rather than a shape it cannot reach.
+   The basis-primitive **exemption** and the name guard are exercised by the
+   aggregate fixture suite and `mutual_keying` respectively. The exemption is
+   reported on its own row and is not counted a decline: it is what makes the
+   construction well-founded rather than a shape it cannot reach.
 
    **Two of this file's refusals became models in the tranche that split the
    index axis** — `MixI` and `SvIx` above — and the paragraph each carries says

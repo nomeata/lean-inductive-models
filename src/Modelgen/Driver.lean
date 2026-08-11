@@ -7,10 +7,9 @@ import Modelgen.Projection
 # The filter
 
 `.ndjson` in, `.ndjson` out. The input is **trusted**: every declaration is
-replayed into a `Lean.Environment` with checking off, because the owner's
-instruction is to trust the export and that is where the speed comes from. Only
-the declarations this tool *generates* are checked, and they are checked by the
-kernel, one at a time.
+replayed into a `Lean.Environment` with checking off. Only the declarations
+this tool *generates* are checked, and they are checked by the kernel, one at a
+time.
 
 Beside each nested inductive and each plain mutual block the output carries that
 declaration's model — before it for the first and, when the input's own `Eq`
@@ -1489,10 +1488,9 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     else
       return (st, #[])
 
-/-- Generation settings matching the legacy `primModels` switch: nested and
-mutual models are always enabled, while simple models and their bootstrap
-closure move together. This is the compatibility adapter for callers that have
-not adopted [`Modelgen.Cli.parseArgs`] yet. -/
+/-- Generation settings used by the aggregate fixture suite: nested and mutual
+models remain enabled, while simple models and their bootstrap closure move
+together. -/
 def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
   { simple := primModels, basic := primModels }
 
@@ -1687,10 +1685,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           -- **The model may have to wait for the input's own basis.** Its ι
           -- theorems need `Eq`; projection fillers additionally need
           -- `PULiftP`. An export's dependency order
-          -- routinely puts `Eq` *after* a block that does not itself use it —
-          -- `mutual_iota_reduction`, `mutual_parameters` and
-          -- `mutual_index_sorts` all do, and rule theorems must be held back
-          -- for the same reason. A file
+          -- routinely puts `Eq` *after* a block that does not itself use it,
+          -- and rule theorems must be held back for the same reason. A file
           -- that declares no `Eq` at all does not wait: the prelude splice adds one.
           if ← mutualReady needsPULift reserved then
             let (st3, jobs) ← genMutual all t.levelParams t.numParams tys ctors

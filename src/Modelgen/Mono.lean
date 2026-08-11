@@ -572,8 +572,7 @@ def builtinSeed : Array Name :=
      `Eq, `Eq.refl,
      -- The standard axioms.
      `propext, `Classical.choice, `Quot.sound,
-     -- Everything a kernel mints when it expands a literal
-     -- (`checker/src/util.rs`'s `mk_name_cache`, name for name).
+     -- Everything the kernel mints when it expands a literal, name for name.
      `eagerReduce, `Nat, `Nat.zero, `Nat.succ, `Nat.add, `Nat.sub, `Nat.mul,
      `Nat.pow, `Nat.mod, `Nat.div, `Nat.beq, `Nat.ble, `Nat.gcd, `Nat.xor,
      `Nat.land, `Nat.lor, `Nat.shiftLeft, `Nat.shiftRight,
@@ -1701,7 +1700,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
         for (p, v) in g.levelParams.zip σ.toList do env := env.insert p v
       -- This copy's substitution, by **global** parameter index and sorted, so
       -- that it means the same thing in every declaration that reaches the same
-      -- node. §"The memo's key" is why that is the property that matters.
+      -- node. The memo key is why that is the property that matters.
       let binding : Array (Nat × Nat) :=
         (env.toArray.filterMap (fun (n, v) => (pidx[n]?).map (·, v))).qsort (·.1 < ·.1)
       let lpMask := binding.foldl (fun m (j, _) => m ||| carrierBit j) 0
