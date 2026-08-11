@@ -148,10 +148,16 @@ private def iotaPropositionWith? (x : Export) (constructors : Constructors)
   let constructor ← constructors[rule.ctor]?
   unless constructor.numFields == rule.nfields do none
   let nb := recursor.numParams + recursor.numMotives + recursor.numMinors
-  let (recBinders, _) := openForalls ((`_check.rec).append recursorName) recursor.type
+  let (recBinders, recResult) :=
+    openForalls ((`_check.rec).append recursorName) recursor.type
   unless recBinders.size >= nb + recursor.numIndices + 1 do none
   let preBinders := recBinders.extract 0 nb
   let pre := preBinders.map (·.value)
+  -- Nested declarations can contribute several motives whose minor premises
+  -- use the same container constructor (for example two distinct `Vec.cons`
+  -- premises).  The recursor result identifies which motive this particular
+  -- recursor eliminates; constructor spelling alone cannot select its minor.
+  let targetMotive := recResult.getAppFn
   let minorBinders := recBinders.extract
     (recursor.numParams + recursor.numMotives) nb
 
@@ -159,6 +165,7 @@ private def iotaPropositionWith? (x : Export) (constructors : Constructors)
   for minor in minorBinders do
     let (fieldsAndIhs, motiveResult) :=
       openForalls ((`_check.minor).append rule.ctor) minor.type
+    unless motiveResult.getAppFn == targetMotive do continue
     let motiveArgs := motiveResult.getAppArgs
     let some major := motiveArgs.back? | continue
     let .const ctorName _ := major.getAppFn | continue
