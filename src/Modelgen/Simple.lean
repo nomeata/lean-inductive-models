@@ -120,9 +120,11 @@ Three recursors:
   the recursor says every field is a proposition, so extract each by
   instantiating the encoding at the field's own type, sequentially, with
   proof irrelevance closing the motive. With indices, arm F stores the proof
-  fields together with one packed equation for the non-pivot indices; at a
-  maybe-zero sort, that proposition is carried under `PULiftP` and the same
-  recursor uses `down` before extraction and `up` in its motive.
+  fields together with a packed index equation.  A pivot whose type moves is
+  recovered by prefix equations in a left-to-right zipper before the final
+  full-telescope equation; otherwise only the non-pivot subsequence is packed.
+  At a maybe-zero sort, that proposition is carried under `PULiftP` and the
+  same recursor uses `down` before extraction and `up` in its motive.
 
 **Why the maybe-zero collapse is a model and not a cheat.** At a maybe-zero
 sort the contract never forces two provably distinct elements: zero
@@ -2459,7 +2461,7 @@ from the caller's index telescope.  Before each moving pivot, a packed equality
 of the complete earlier index prefix transports the caller's pivot back to the
 constructor field type.  Proof fields are then bound at the already recovered
 constructor prefix. -/
-partial def armFZipPrefix (eqi : EqInfo) (memberTy ctorTy : Expr) (np ni : Nat)
+partial def armFZipPrefix (eqi : EqInfo) (memberTy ctorTy : Expr) (ni : Nat)
     (isData : Array Bool) (idxPos : Array Nat) (transports : Array (Nat × Nat))
     (ps is : Array Expr) (ctorIdx : Expr → GenM (Array Expr))
     (bind : Nat → Name → Expr → (Expr → GenM Expr) → GenM Expr)
@@ -2512,13 +2514,13 @@ partial def armFZipPrefix (eqi : EqInfo) (memberTy ctorTy : Expr) (np ni : Nat)
           go (i + 1) (slot + 1) (fields.push field) (bound.push field)
     go 0 0 #[] #[]
 
-def armFZipMinor (eqi : EqInfo) (memberTy ctorTy : Expr) (np ni : Nat)
+def armFZipMinor (eqi : EqInfo) (memberTy ctorTy : Expr) (ni : Nat)
     (isData : Array Bool) (idxPos : Array Nat) (transports : Array (Nat × Nat))
     (ps is : Array Expr) (pk : Expr) (ℓpk : Level)
     (ctorIdx : Expr → GenM (Array Expr)) (mk : Array Expr → Expr → GenM Expr)
     (k : Array Expr → Expr → GenM Expr) : GenM Expr := do
   let sel := Array.range ni
-  armFZipPrefix eqi memberTy ctorTy np ni isData idxPos transports ps is ctorIdx
+  armFZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps is ctorIdx
     (fun _ name ty cont => withLocalDeclD name ty cont)
     fun fs bnd idx => do
       let lhs ← packChain ni pk (sel.map (idx[·]!)) 0
@@ -2557,7 +2559,7 @@ def armFZipRec (eqi : EqInfo) (ℓpk : Level) (lift? : Option Level)
     (zipAll : Array Expr → (Array Expr → Array Expr → GenM Expr) → GenM Expr)
     (minorTy : Array Expr → Expr → GenM Expr)
     (encodedAt : Array Expr → GenM Expr) (extracted : Array Expr) : GenM Expr := do
-  let fam := fun (y : Expr) (h : Expr) => do
+  let fam := fun (y : Expr) (_h : Expr) => do
     let full ← unpackChain idxs.size pk y
     zipAll full fun _ args => do
       let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
@@ -2580,21 +2582,21 @@ def armFZipRec (eqi : EqInfo) (ℓpk : Level) (lift? : Option Level)
 full-index equality recursor.  Kept out of [`Modelgen.primIso`] so the route
 dispatcher remains below the default elaboration heartbeat budget. -/
 def armFZipModelRec (eqi : EqInfo) (lift? : Option Level)
-    (memberTy ctorTy : Expr) (np ni : Nat) (isData : Array Bool) (idxPos : Array Nat)
+    (memberTy ctorTy : Expr) (ni : Nat) (isData : Array Bool) (idxPos : Array Nat)
     (transports : Array (Nat × Nat)) (ps idxs : Array Expr) (base pk motive minor : Expr)
     (ℓpk : Level) (ctorIdx : Expr → GenM (Array Expr))
     (minorTy : Array Expr → Expr → GenM Expr)
     (encodedAt : Array Expr → GenM Expr) : GenM Expr := do
   let packSel := Array.range ni
   let project := fun (slot : Nat) => do
-    armFZipPrefix eqi memberTy ctorTy np ni isData idxPos transports ps idxs ctorIdx
+    armFZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps idxs ctorIdx
       (fun _ name ty cont => withLocalDeclD name ty cont)
       fun _ bnd idx => do
         let lhs ← packChain ni pk (packSel.map (idx[·]!)) 0
         let rhs ← packChain ni pk (packSel.map (idxs[·]!)) 0
         withLocalDeclD `heq (eqi.mk' ℓpk pk lhs rhs) fun h => do
           mkLambdaFVars (bnd.push h) (if slot == bnd.size then h else bnd[slot]!)
-  armFZipPrefix eqi memberTy ctorTy np ni isData idxPos transports ps idxs ctorIdx
+  armFZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps idxs ctorIdx
     (fun slot _ ty cont => do
       let value := mkAppN base #[ty, ← project slot]
       cont value)
@@ -2605,7 +2607,7 @@ def armFZipModelRec (eqi : EqInfo) (lift? : Option Level)
       let heq := mkAppN base #[eqTy, ← project args.size]
       armFZipRec eqi ℓpk lift? pk pkc pki heq motive minor idxs
         (fun full kk =>
-          armFZipPrefix eqi memberTy ctorTy np ni isData idxPos transports ps full ctorIdx
+          armFZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps full ctorIdx
             (fun _ name ty cont => withLocalDeclD name ty cont)
             fun fs bnd idx => do
               let lhs ← packChain ni pk (packSel.map (idx[·]!)) 0
@@ -2996,16 +2998,13 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
             isD := isD.push true
             pos := pos.push k
             piv := piv.set! k true
-        -- **A pivot's own type may mention a non-pivot index.** The model then
-        -- cannot pass the caller's pivot directly to the constructor minor:
-        -- its type moves along the packed non-pivot equation.  Arm F handles
-        -- the exact one-data-field shape by transporting a *function over the
-        -- pivot*, so the caller's field is applied literally at the target
-        -- endpoint rather than cast there and back. `test/fixtures/modelgen/prim_idx.lean`'s
-        -- `Fmid` is the occupant: `Fmid : (α : Type) → α → α → Prop` with
-        -- `mk (x : N) : Fmid N x N.z`, whose pivot `x : N` sits at an index
-        -- whose declared type is the *ground* index before it.  Other shapes
-        -- retain a precise guard here rather than receiving a partial cast.
+        -- **A pivot's own type may mention an earlier non-pivot index.** Arm
+        -- F records every such field.  Its carrier zipper inserts an equality
+        -- for the complete earlier index prefix, transports the caller's pivot
+        -- back to the constructor field type, and only then binds later proof
+        -- fields or recovers another pivot.  `prim_idx`'s `Fmid` and `FChain`
+        -- pin the one-pivot cases; `arm_f_zip` adds two pivots, a later proof,
+        -- and a final endpoint mentioning the recovered pivot.
         forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
           let mut pivotTransports : Array (Nat × Nat) := #[]
           for j in [0:ni] do
@@ -3500,7 +3499,7 @@ data tower would have to hold a type the branch tower cannot see"
     -- then grants a `Sort w` motive, and the model has to deliver it — the
     -- Church fold cannot, since it only eliminates into `Prop`.
     --
-    -- **The index vector splits in two** (the analysis above): the *pivot*
+    -- **Ordinarily the index vector splits in two** (the analysis above): the *pivot*
     -- positions, each literally one of the constructor's data fields, and the
     -- rest. The model **substitutes** at the pivots — that is the only way a
     -- data field can come back at all, since a `Prop`'s proof yields nothing
@@ -3514,6 +3513,17 @@ data tower would have to hold a type the branch tower cannot see"
     --     T' p⃗ ι⃗ := ∀ r : Prop,
     --                 (∀ h⃗[d⃗ := ι⃗_piv],
     --                    Eq Pk (pack ι⃗_ctor|np) (pack ι⃗|np) → r) → r
+    --
+    -- If a pivot's declared type moves with an earlier index, direct
+    -- substitution is ill-typed.  The zipper variant instead packs each full
+    -- prefix before a moving pivot, binds an equality from the constructor
+    -- prefix to the caller prefix, transports the pivot back, and continues.
+    -- Proof fields are bound at that recovered telescope; one last equation
+    -- packs the complete index vector.  The recursor transports a function
+    -- over all these premises and applies the extracted premises at the caller
+    -- endpoint.  Hence every equation is `refl` at a constructor and the iota
+    -- theorem remains definitionally `refl`, including with multiple pivots,
+    -- a later proof field, or a later endpoint depending on a pivot.
     --
     -- At **no** pivots this is exactly what the arm was before — the
     -- subsequence is the whole telescope and `h⃗` is every field — which is
@@ -3542,7 +3552,6 @@ data tower would have to hold a type the branch tower cannot see"
     for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
     let (cn0, cty0) := exportCtors[0]!
     let nonPiv := gNonPiv
-    let nnp := nonPiv.size
     let zipRoute := !gPivotTransports.isEmpty
     let packSel := if zipRoute then Array.range ni else nonPiv
     let npack := packSel.size
@@ -3582,7 +3591,7 @@ data tower would have to hold a type the branch tower cannot see"
         (k : Array Expr → Option Expr → GenM Expr) =>
       if zipRoute then
         let (pk, ℓpk) := pk?.get!
-        armFZipMinor eqi memberTy cty0 np ni gIsData gIdxPos gPivotTransports
+        armFZipMinor eqi memberTy cty0 ni gIsData gIdxPos gPivotTransports
           ps is pk ℓpk (idxOfRes tname) mk fun fs h => k fs (some h)
       else
         fieldsAt ps is fun fs bnd res => do
@@ -3662,7 +3671,7 @@ data tower would have to hold a type the branch tower cannot see"
       let nf := numForalls tele
       if zipRoute then
         let (pk, ℓpk) := pk?.get!
-        let body ← armFZipModelRec eqi lift? memberTy cty0 np ni gIsData gIdxPos
+        let body ← armFZipModelRec eqi lift? memberTy cty0 ni gIsData gIdxPos
           gPivotTransports ps idxs base pk motive minor ℓpk (idxOfRes tname)
           (fun full r => minorTyAt ps full (some (pk, ℓpk)) r)
           (fun full => encodedAt ps full)

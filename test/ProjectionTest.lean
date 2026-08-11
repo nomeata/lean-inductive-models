@@ -272,26 +272,43 @@ def main : IO UInt32 := do
     (definitionValue? noBaseGenerated (Naming.modelName (Name.str noBaseSkel "rec"))).any
       (containsConst `PULiftP.rec)
 
-  -- Arm F's packed equation can change the declared type of a pivot.  Fmid's
-  -- recursor transports a function over that pivot, so the target endpoint is
-  -- applied to the caller's field literally and the exact syntactic interface
-  -- still passes the public checker.
+  -- `Fmid` and the original `FChain` keep the one-pivot path pinned in the
+  -- broad index-axis fixture.
   let fmidRaw ← readExport "test/fixtures/modelgen/prim_idx.ndjson"
   let (fmidDeclarations, fmidReport) ← runExport fmidRaw
   let fmidGenerated := outputExport fmidRaw fmidDeclarations
   let fmidOrdered ← match Order.reorder fmidGenerated with
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order dependent-pivot fixture: {repr error}"
-  state := state.check "dependent arm-F pivot models" <|
-    fmidReport.generated.contains (`Fmid, 4) &&
-      fmidReport.generated.contains (`FChain, 4) &&
-      !fmidReport.declined.any fun (owner, _) => owner == `Fmid || owner == `FChain
-  state := state.check "dependent arm-F pivot satisfies the exact public checker" <|
-    (Check.check fmidOrdered).all fun violation =>
-      violation.familyOwner != `Fmid && violation.familyOwner != `FChain
-  state := state.check "dependent arm-F recursor performs equality transport" <|
-    #[`Fmid.rec, `FChain.rec].all fun recursor =>
-      (definitionValue? fmidGenerated (Naming.modelName recursor)).any (containsConst ``Eq.rec)
+  let fmidOwners := #[`Fmid, `FChain]
+  state := state.check "one-pivot arm-F owners retain their exact interfaces" <|
+    #[(`Fmid, 4), (`FChain, 4)].all fmidReport.generated.contains &&
+      !fmidReport.declined.any fun (owner, _) => fmidOwners.contains owner &&
+      (Check.check fmidOrdered).all fun violation => !fmidOwners.contains violation.familyOwner
+
+  -- The focused zipper fixture adds two pivots, a proof after a pivot, and a
+  -- final non-pivot endpoint depending on the recovered value.
+  let zipRaw ← readExport "test/fixtures/modelgen/arm_f_zip.ndjson"
+  let (zipDeclarations, zipReport) ← runExport zipRaw
+  let zipGenerated := outputExport zipRaw zipDeclarations
+  let zipOrdered ← match Order.reorder zipGenerated with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot order arm-F zipper fixture: {repr error}"
+  let zipOwners := #[`FTwo, `FProof, `FChain, `FEndpoint]
+  state := state.check "arm-F zipper owners model at exact interface sizes" <|
+    #[(`FTwo, 5), (`FProof, 4), (`FChain, 4), (`FEndpoint, 4)].all
+      zipReport.generated.contains &&
+      !zipReport.declined.any fun (owner, _) => zipOwners.contains owner
+  state := state.check "arm-F zipper input satisfies the exact public checker" <|
+    (Check.check zipRaw).all fun violation => !zipOwners.contains violation.familyOwner
+  state := state.check "arm-F zipper output satisfies the exact public checker" <|
+    (Check.check zipOrdered).all fun violation => !zipOwners.contains violation.familyOwner
+  state := state.check "arm-F zipper emits every checked iota slot" <|
+    zipOwners.all fun owner =>
+      (declaration? zipGenerated (Naming.iotaName (Name.str owner "rec") 0)).isSome
+  state := state.check "arm-F zipper recursors perform equality transport" <|
+    #[`FTwo.rec, `FProof.rec, `FChain.rec, `FEndpoint.rec].all fun recursor =>
+      (definitionValue? zipGenerated (Naming.modelName recursor)).any (containsConst ``Eq.rec)
 
   -- The parameter-dependent proposition field takes the same route.  Its
   -- source owner precedes the input's own lift declaration, so generation has
