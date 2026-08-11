@@ -1642,16 +1642,17 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
     -- its argument with the transported constructor proof, so applying it to
     -- the caller's `t` needs no second equality.
     let transportStep := fun (is : Array Expr) (t : Expr) (ctorIs : Array Expr)
-        (major value heq : Expr) => do
+        (value heq : Expr) => do
       if nnp == 0 then return value
       let (pk, ℓ, lhs, rhs, _) ← indexEqAt is ctorIs
       let motiveE ← withLocalDeclD `y pk fun y => do
-        let ys ← unpackChain nnp pk y
-        let mut full := is
-        for k in [0:nnp] do full := full.set! c.nonPiv[k]! ys[k]!
-        withLocalDeclD `s (selfAt full) fun s => do
-          let body ← mkForallFVars #[s] (motAt full s)
-          mkLambdaFVars #[y] body
+        withLocalDeclD `hy (c.eqi.mk' ℓ pk lhs y) fun hy => do
+          let ys ← unpackChain nnp pk y
+          let mut full := is
+          for k in [0:nnp] do full := full.set! c.nonPiv[k]! ys[k]!
+          withLocalDeclD `s (selfAt full) fun s => do
+            let body ← mkForallFVars #[s] (motAt full s)
+            mkLambdaFVars #[y, hy] body
       let base ← withLocalDeclD `s (selfAt ctorIs) fun s =>
         mkLambdaFVars #[s] value
       pure (mkApp (c.eqi.recAt c.v ℓ pk lhs motiveE base rhs heq) t)
@@ -1762,26 +1763,14 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
           else
             let (_, _, _, _, idxEq) ← indexEqAt is ctorIs
             withLocalDeclD `hidx idxEq fun hidx => do
-              let rhs ← transportStep is t ctorIs (ctorAt fs) (mkAppN step (fs ++ gs)) hidx
+              let rhs ← transportStep is t ctorIs (mkAppN step (fs ++ gs)) hidx
               let eq := c.eqi.mk' c.v (motAt is t) val rhs
               mkForallFVars (gs ++ hs ++ #[hidx]) (.forallE `he eq D .default)
     let grInvVal ← forallBoundedTelescope idxTele (some ni) fun is _ =>
       withLocalDeclD `t (selfAt is) fun t =>
         withLocalDeclD `val (motAt is t) fun val => do
           let body ← fields (some is) fun fs bnd res => do
-            -- With the data fields supplied as the index variables the
-            -- constructor's own index expressions have to **be** `ι⃗`, and
-            -- that is what makes the equation below statable at an arbitrary
-            -- index. At a pivot they are it on the nose; at a non-pivot whose
-            -- type is a `Prop` they are two proofs of one proposition, so the
-            -- test is *definitional* and not syntactic. It is the whole of
-            -- arm G's half of the index axis, and the reason no transport is
-            -- built: nothing here is out of place to begin with.
             let e ← idxOfRes res
-            for j in [0:ni] do
-              unless ← isDefEq e[j]! is[j]! do
-                badShape s!"{c.tname}'s constructor does not present its index {j} as \
-its own data field"
             withLocalDeclD `D (.sort .zero) fun D => do
               mkForallFVars (bnd ++ #[D])
                 (.forallE `k (← invArmTyAt is t val fs e D) D .default)
@@ -1907,38 +1896,46 @@ its own data field"
                             -- already fixed by the point `GraphInv` is at.
                             let pf := (Array.range nf).filterMap fun i =>
                               if c.isData[i]! then none else some fs[i]!
+                            let withIdxEq := fun (k : Array Expr → GenM Expr) => do
+                              if nnp == 0 then k #[]
+                              else
+                                let (_, _, _, _, eqTy) ← indexEqAt e e
+                                withLocalDeclD `hidx eqTy fun hidx => k #[hidx]
                             let contA ←
                               withLocalsD (← gTysAt fs) 0 #[] fun gA => do
                                 withLocalsD (← hTysAt fs gA) 0 #[] fun hA =>
-                                  withLocalDeclD `ea
-                                    (c.eqi.mk' c.v α x (mkAppN step (fs ++ gA))) fun eA => do
-                                    let contB ←
-                                      withLocalsD (← gTysAt fs) 0 #[] fun gB => do
-                                        withLocalsD (← hTysAt fs gB) 0 #[] fun hB =>
-                                          withLocalDeclD `eb
-                                            (c.eqi.mk' c.v α y (mkAppN step (fs ++ gB)))
-                                            fun eB => do
-                                            let pfs ← (Array.range nr).mapM fun j => do
-                                              let i := rs[j]!
-                                              recAt fs[i]! c.recNb[i]!.get! fun zs _ => do
-                                                let pt := mkAppN (mkAppN ihs[j]! zs)
-                                                  #[mkAppN gA[j]! zs, mkAppN gB[j]! zs,
-                                                    mkAppN hA[j]! zs, mkAppN hB[j]! zs]
-                                                funextUp c.fx? zs zs.size gA[j]! gB[j]! pt
-                                            let cong ← congrChain c.eqi c.v α
-                                              (fun gv => mkAppN step (fs ++ gv)) gA gB pfs
-                                            let sb ← symmOf c.eqi c.v α y
-                                              (mkAppN step (fs ++ gB)) eB
-                                            let t2 ← transOf c.eqi c.v α
-                                              (mkAppN step (fs ++ gA)) (mkAppN step (fs ++ gB))
-                                              y cong sb
-                                            let whole ← transOf c.eqi c.v α x
-                                              (mkAppN step (fs ++ gA)) y eA t2
-                                            mkLambdaFVars (gB ++ hB ++ #[eB]) whole
-                                    let invB := mkAppN (.const c.grInvN c.recLs)
-                                      (pre ++ e ++ #[major, y, gy])
-                                    mkLambdaFVars (gA ++ hA ++ #[eA])
-                                      (mkAppN invB (pf ++ #[goal, contB]))
+                                  withIdxEq fun hidxA =>
+                                    withLocalDeclD `ea
+                                      (c.eqi.mk' c.v α x (mkAppN step (fs ++ gA))) fun eA => do
+                                      let contB ←
+                                        withLocalsD (← gTysAt fs) 0 #[] fun gB => do
+                                          withLocalsD (← hTysAt fs gB) 0 #[] fun hB =>
+                                            withIdxEq fun hidxB =>
+                                              withLocalDeclD `eb
+                                                (c.eqi.mk' c.v α y (mkAppN step (fs ++ gB)))
+                                                fun eB => do
+                                                let pfs ← (Array.range nr).mapM fun j => do
+                                                  let i := rs[j]!
+                                                  recAt fs[i]! c.recNb[i]!.get! fun zs _ => do
+                                                    let pt := mkAppN (mkAppN ihs[j]! zs)
+                                                      #[mkAppN gA[j]! zs, mkAppN gB[j]! zs,
+                                                        mkAppN hA[j]! zs, mkAppN hB[j]! zs]
+                                                    funextUp c.fx? zs zs.size gA[j]! gB[j]! pt
+                                                let cong ← congrChain c.eqi c.v α
+                                                  (fun gv => mkAppN step (fs ++ gv)) gA gB pfs
+                                                let sb ← symmOf c.eqi c.v α y
+                                                  (mkAppN step (fs ++ gB)) eB
+                                                let t2 ← transOf c.eqi c.v α
+                                                  (mkAppN step (fs ++ gA))
+                                                  (mkAppN step (fs ++ gB)) y cong sb
+                                                let whole ← transOf c.eqi c.v α x
+                                                  (mkAppN step (fs ++ gA)) y eA t2
+                                                mkLambdaFVars
+                                                  (gB ++ hB ++ hidxB ++ #[eB]) whole
+                                      let invB := mkAppN (.const c.grInvN c.recLs)
+                                        (pre ++ e ++ #[major, y, gy])
+                                      mkLambdaFVars (gA ++ hA ++ hidxA ++ #[eA])
+                                        (mkAppN invB (pf ++ #[goal, contB]))
                             let invA := mkAppN (.const c.grInvN c.recLs)
                               (pre ++ e ++ #[major, x, gx])
                             mkLambdaFVars (bnd ++ ihs ++ #[x, y, gx, gy])
@@ -2804,14 +2801,11 @@ application of {tname}"
   -- depends on an earlier non-pivot.  The focused shape has one data field
   -- and no proof fields; see the guard in the analysis below.
   let mut gPivotTransport? : Option (Nat × Nat) := none
-  -- The index positions that are **not** pivots, in telescope order, and the
-  -- subsequence of those whose own *type* is not a `Prop` — see the arm-G
-  -- guard below for why the two are different questions.
+  -- The index positions that are **not** pivots, in telescope order.
   let mut gNonPiv : Array Nat := #[]
-  let mut gNonPivData : Array Nat := #[]
   if armGRec || armFNonRec then
     if armGRec then for n in graphNames do taken n
-    let (a, b, cc, npv, npd, pt) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
+    let (a, b, cc, npv, pt) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
       let (cn, cty) := exportCtors[0]!
       let tele ← instForall cty ps
       let nfg := numForalls tele
@@ -2871,17 +2865,10 @@ arm-F transport applies to one data field and no proof fields"
                   | some ij =>
                     unless ij == (i, j) do
                       badShape s!"{cn} has more than one data field needing a pivot transport"
-          -- A non-pivot position whose declared type is a `Prop` is a **proof
-          -- position**, and the two arms treat it differently; the arm-G guard
-          -- below is what the distinction is for.
-          let mut npd : Array Nat := #[]
-          for j in [0:ni] do
-            if !piv[j]! && !(← ilevel (← ityp is[j]!)).normalize.isZero then
-              npd := npd.push j
           return (isD, pos, flds.map (·.rec?), (Array.range ni).filter (!piv[·]!),
-            npd, pivotTransport?)
+            pivotTransport?)
     gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size; gNonPiv := npv
-    gNonPivData := npd; gPivotTransport? := pt
+    gPivotTransport? := pt
 
   -- **Arm G's half of the index axis.** `GraphInv ι⃗ t val` carries one
   -- equality at the dependent tuple of non-pivot indices.  Its continuation
