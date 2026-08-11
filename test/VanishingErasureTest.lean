@@ -58,6 +58,17 @@ partial def hasVanishingDomain (owner : Name) : Expr → Bool
         hasVanishingDomain owner body
   | _ => false
 
+partial def hasHiddenBinderDomain (owner : Name) : Expr → Bool
+  | .forallE _ domain body _ =>
+      (containsConst owner domain && domain != headNorm domain &&
+        (headNorm domain matches .forallE ..)) || hasHiddenBinderDomain owner body
+  | _ => false
+
+def inductiveMetadata? (input : Export) (owner : Name) : Option EIndType :=
+  input.decls.findSome? fun declaration => match declaration with
+    | .induct types _ _ => types.find? (·.name == owner)
+    | _ => none
+
 def constructorTypes (input : Export) (owner : Name) : Array Expr :=
   input.decls.foldl (init := #[]) fun result declaration =>
     match declaration with
@@ -104,6 +115,10 @@ def main : IO UInt32 := do
     #[okAux, keyAux, okSkeleton, keySkeleton].all (ownerPasses generated)
   state := state.check "all generated recursor statements stay literal" <|
     report.stmtChecked == 443 && report.stmtErrors.isEmpty
+  state := state.check "a genuine indexed nested source is routed before Simple" <|
+    (inductiveMetadata? raw `Ix).any (·.numNested > 0) &&
+      generatedExactly report `Ix 15 &&
+      !report.declined.any fun (owner, _) => owner == `Ix
 
   -- The same syntax at the ordinary non-indexed Type route.  `Dead.step` has
   -- one genuine recursive child followed by a field whose annotation mentions
@@ -120,6 +135,26 @@ def main : IO UInt32 := do
     ownerPasses nonindexedGenerated `Dead && nonindexedReport.stmtChecked == 6 &&
       nonindexedReport.stmtErrors.isEmpty
 
+  -- An indexed Type-family whose recursive field is infinitary only after β
+  -- reduction. This is a simple (numNested = 0) kernel declaration, so arm C
+  -- must expose the binder in its private skeleton while retaining the public
+  -- constructor and recursor expressions literally.
+  let hiddenRaw ← readExport "test/fixtures/modelgen/indexed_hidden_erasure.ndjson"
+  let (hiddenGenerated, hiddenReport) ← runExport hiddenRaw
+  let hiddenSkeleton := `Hidden._model._impl.skel
+  state := state.check "the raw indexed constructor retains its hidden binder" <|
+    (inductiveMetadata? hiddenRaw `Hidden).any (·.numNested == 0) &&
+      (constructorTypes hiddenRaw `Hidden).any (hasHiddenBinderDomain `Hidden)
+  state := state.check "the hidden-binder family and its skeleton both model" <|
+    hiddenReport.generated.any (·.1 == `Hidden) &&
+      hiddenReport.generated.any (·.1 == hiddenSkeleton) &&
+      !hiddenReport.declined.any fun (owner, _) => owner == `Hidden || owner == hiddenSkeleton
+  state := state.check "the public hidden-binder constructor stays literal" <|
+    (constructorTypes hiddenGenerated `Hidden).any (hasHiddenBinderDomain `Hidden)
+  state := state.check "the hidden-binder output passes exact model checking" <|
+    ownerPasses hiddenGenerated `Hidden && ownerPasses hiddenGenerated hiddenSkeleton &&
+      hiddenReport.stmtErrors.isEmpty
+
   -- Unit-level boundary controls.  These expressions need not elaborate: the
   -- erasure helper is intentionally raw syntax surgery over exported Exprs.
   let owner := `Boundary.Owner
@@ -133,11 +168,11 @@ def main : IO UInt32 := do
   let nested := Expr.app (Expr.lam `x natT nestedBody .default) zero
   state := state.check "only a βζ-dead owner mention is normalized" <|
     erasureFieldDomain owner dead == natT && !erasureRecursive owner dead
-  state := state.check "a βζ-revealed binder remains on the hidden-binder path" <|
-    erasureFieldDomain owner hidden == hidden && erasureRecursive owner hidden &&
+  state := state.check "a βζ-revealed binder is exposed for the internal erasure" <|
+    erasureFieldDomain owner hidden == headNorm hidden && erasureRecursive owner hidden &&
       (headNorm hidden matches .forallE ..)
   state := state.check "a surviving nested occurrence remains on the nested path" <|
-    erasureFieldDomain owner nested == nested && erasureRecursive owner nested &&
+    erasureFieldDomain owner nested == headNorm nested && erasureRecursive owner nested &&
       !(headNorm nested).getAppFn.isConstOf owner
 
   IO.println s!"vanishing erasure: {state.passed} passed, {state.failed.size} failed"
