@@ -528,6 +528,22 @@ def instCtor (cn : Name) (ls : List Level) (qs : Array Expr) : GenM Expr := do
 def withFields (ty : Expr) (k : Array Expr → Array Expr → GenM α) : GenM α := do
   forallTelescope ty fun fs _ => do k fs (← fs.mapM ftyp)
 
+/-- A constructor's field types, with its binders instantiated left-to-right
+by another constructor's corresponding fields. This keeps dependencies on an
+earlier field in the caller's local context instead of returning types that
+mention the temporary free variables introduced by [`withFields`]. -/
+def fieldTypesAt (ty : Expr) (fields : Array Expr) : GenM (Array Expr) := do
+  let mut cur := ty
+  let mut tys := #[]
+  for field in fields do
+    match cur with
+    | .forallE _ dom body _ =>
+      tys := tys.push dom
+      cur := body.instantiate1 field
+    | _ => badShape "the constructors have different field counts"
+  if cur.isForall then badShape "the constructors have different field counts"
+  return tys
+
 /-- **The dependency the congruence fold cannot survive, and only that one.**
 
 The fold replaces one *packed* position of a constructor application at a time,
@@ -2375,15 +2391,6 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
       let motives := pre.extract g.np (g.np + sh.nm)
       let minors := pre.extract (g.np + sh.nm) pre.size
       let bcn := cs[j]!
-      let blkTys ← withFields (← instCtor bcn g.us ps) fun _ tys => pure tys
-      let mem := blkTys.map g.memberOf
-      let packed ← blkTys.mapM g.mimicUnder?
-      -- **The hypothesis vector, in the minor's own order.** `Bₖ.rec` gives a
-      -- field of type `∀ x⃗, Bₘ …` an induction hypothesis too — Lean supports
-      -- infinitary constructors and `FTree.branch : (N → FTree) → FTree` is
-      -- one — so the vector has an entry for it and the right-hand side below
-      -- writes `fun x⃗ => T._model.rec_m … (f x⃗)` there.
-      let (ihAt, _) ← g.ihVector blkTys
       let key : Name × Name × List Level × Array Expr × Expr ←
         if g.isReal sh.k then do
           let (exportC, modelC, mty) := ctorTys[ctorBase + j]!
@@ -2394,8 +2401,23 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
           pure (real, real, cls, qs, ← instCtor real cls qs)
       let (exportKey, head, hls, hpre, ectorTy) := key
       withFields ectorTy fun fields extTys => do
+        -- Open the block constructor at the **same field variables** as the
+        -- export constructor. Opening it independently and returning its
+        -- field types leaks temporary binders whenever a later field type
+        -- depends on an earlier one (`C.step`'s nested field is indexed by its
+        -- preceding `j`). Those leaked variables made the generated iota
+        -- theorem fail the kernel's closedness check.
+        let blkTys ← fieldTypesAt (← instCtor bcn g.us ps) fields
         if fields.size != blkTys.size then
           badShape s!"{bcn}: the export binds {fields.size} fields, the block {blkTys.size}"
+        let mem := blkTys.map g.memberOf
+        let packed ← blkTys.mapM g.mimicUnder?
+        -- **The hypothesis vector, in the minor's own order.** `Bₖ.rec` gives a
+        -- field of type `∀ x⃗, Bₘ …` an induction hypothesis too — Lean supports
+        -- infinitary constructors and `FTree.branch : (N → FTree) → FTree` is
+        -- one — so the vector has an entry for it and the right-hand side below
+        -- writes `fun x⃗ => T._model.rec_m … (f x⃗)` there.
+        let (ihAt, _) ← g.ihVector blkTys
         let moving := (Array.range blkTys.size).filter fun x => packed[x]!.isSome
         -- **The hypothesis types, read off the minor and not rebuilt.** The
         -- minor binds the export-side fields, so instantiating it at `fields`
