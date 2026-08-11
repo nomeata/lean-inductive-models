@@ -2682,6 +2682,10 @@ application of {tname}"
   let mut gIdxPos : Array Nat := #[]
   let mut gRecNb : Array (Option Nat) := #[]
   let mut gNf := 0
+  -- Arm F's one canonical pivot transport, when a data field's index type
+  -- depends on an earlier non-pivot.  The focused shape has one data field
+  -- and no proof fields; see the guard in the analysis below.
+  let mut gPivotTransport? : Option (Nat × Nat) := none
   -- The index positions that are **not** pivots, in telescope order, and the
   -- subsequence of those whose own *type* is not a `Prop` — see the arm-G
   -- guard below for why the two are different questions.
@@ -2689,7 +2693,7 @@ application of {tname}"
   let mut gNonPivData : Array Nat := #[]
   if armGRec || armFNonRec then
     if armGRec then for n in graphNames do taken n
-    let (a, b, cc, npv, npd) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
+    let (a, b, cc, npv, npd, pt) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
       let (cn, cty) := exportCtors[0]!
       let tele ← instForall cty ps
       let nfg := numForalls tele
@@ -2722,29 +2726,29 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
             isD := isD.push true
             pos := pos.push k
             piv := piv.set! k true
-        -- **A pivot's own type may not mention a non-pivot index**, and this
-        -- is the one place the two halves fail to compose. The model reads a
-        -- data field off the recursor's index argument, so that argument has
-        -- to *have* the field's type — and at index position `j` it has index
-        -- `j`'s declared type at the caller's earlier indices. Where those are
-        -- pivots, the substitution has already made them the field's own; where
-        -- one is a non-pivot, the caller's index is an arbitrary term and only
-        -- the equation says it is the constructor's, so the field would have to
-        -- be transported before it could be used.
-        -- `test/fixtures/modelgen/prim_idx.lean`'s
+        -- **A pivot's own type may mention a non-pivot index.** The model then
+        -- cannot pass the caller's pivot directly to the constructor minor:
+        -- its type moves along the packed non-pivot equation.  Arm F handles
+        -- the exact one-data-field shape by transporting a *function over the
+        -- pivot*, so the caller's field is applied literally at the target
+        -- endpoint rather than cast there and back. `test/fixtures/modelgen/prim_idx.lean`'s
         -- `Fmid` is the occupant: `Fmid : (α : Type) → α → α → Prop` with
         -- `mk (x : N) : Fmid N x N.z`, whose pivot `x : N` sits at an index
-        -- whose declared type is the *ground* index before it. By contrast,
-        -- `Acc.below`'s `a : α` depends only on a parameter.
+        -- whose declared type is the *ground* index before it.  Other shapes
+        -- retain a precise guard here rather than receiving a partial cast.
         forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
+          let mut pivotTransport? : Option (Nat × Nat) := none
           for j in [0:ni] do
             if piv[j]! then
               let jt ← ityp is[j]!
               for m in [0:ni] do
                 if !piv[m]! && jt.containsFVar is[m]!.fvarId! then
-                  badShape s!"{cn}'s index {j} is one of its own data fields but its \
-type mentions index {m}, which is not — so the field cannot be read off the index \
-without a transport the model does not build"
+                  let some i := (Array.range nfg).find? fun i => isD[i]! && pos[i]! == j
+                    | badShape s!"{cn}'s pivot index {j} has no constructor data field"
+                  if pivotTransport?.isSome || isD.any (!·) then
+                    badShape s!"{cn}'s index {j} needs a pivot transport, but the exact \
+arm-F transport applies to one data field and no proof fields"
+                  pivotTransport? := some (i, j)
           -- A non-pivot position whose declared type is a `Prop` is a **proof
           -- position**, and the two arms treat it differently; the arm-G guard
           -- below is what the distinction is for.
@@ -2752,9 +2756,10 @@ without a transport the model does not build"
           for j in [0:ni] do
             if !piv[j]! && !(← ilevel (← ityp is[j]!)).normalize.isZero then
               npd := npd.push j
-          return (isD, pos, flds.map (·.rec?), (Array.range ni).filter (!piv[·]!), npd)
+          return (isD, pos, flds.map (·.rec?), (Array.range ni).filter (!piv[·]!),
+            npd, pivotTransport?)
     gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size; gNonPiv := npv
-    gNonPivData := npd
+    gNonPivData := npd; gPivotTransport? := pt
 
   -- **Arm G's half of the index axis.** The graph route's `GraphInv ι⃗ t val`
   -- concludes
@@ -3318,6 +3323,17 @@ data tower would have to hold a type the branch tower cannot see"
         let (pkT, ℓ) ← packTyAt is nonPiv 0
         pure (some (pkT.replaceFVars is vs, ℓ))
 
+    -- The declared type of pivot `position`, with the non-pivot subsequence
+    -- read from `y : Pk`.  Other indices stay at the recursor caller's vector;
+    -- for the focused arm-F shape there is exactly one data field, so the
+    -- pivot's type can depend only on the non-pivots replaced here.
+    let pivotTypeAt := fun (ps anchor : Array Expr) (pk y : Expr) (position : Nat) => do
+      forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
+        let ys ← unpackChain nnp pk y
+        let mut full := anchor
+        for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
+        pure ((← ityp is[position]!).replaceFVars is full)
+
     -- `∀ h⃗, Eq Pk (pack ι⃗_ctor|np) (pack ι⃗|np) → …`, the encoding's one
     -- minor, as a binder-introducing continuation so that the equation is
     -- built at the *bound* proof fields rather than at a stand-in.
@@ -3395,9 +3411,10 @@ data tower would have to hold a type the branch tower cannot see"
       let base := match lift? with | none => t | some ℓ => puliftDown ℓ encoded t
       let tele ← instForall cty0 ps
       let nf := numForalls tele
-      -- **Recover the fields.** A data field is the recursor's own index
-      -- argument at that field's pivot position — nothing is extracted,
-      -- because nothing could be. A proof field is extracted, sequentially: a
+      -- **Recover the fields.** Ordinarily a data field is the recursor's own
+      -- index argument at that field's pivot position.  When its declared type
+      -- depends on a non-pivot, the packed equation canonically transports it
+      -- below before it reaches the minor. A proof field is extracted sequentially: a
       -- later field's type is instantiated at the earlier recoveries, and the
       -- projector is written at the carrier's own minor telescope so that a
       -- field whose type mentions a *data* field is asked for at the index and
@@ -3434,21 +3451,56 @@ data tower would have to hold a type the branch tower cannot see"
         -- Only the **non-pivot** slots move with `y`; the pivots are the
         -- recursor's own index arguments throughout, which is why no transport
         -- is needed on the fields.
-        let fam := fun (y : Expr) (h : Expr) => do
-          let ys ← unpackChain nnp pk y
-          let mut full := idxs
-          for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
-          let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
-            withLocalDeclD `k (← minorTyAt ps full pk? r) fun kk =>
-              mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
-          let lifted ← match lift? with
-            | none => pure rebuilt
-            | some ℓ => pure (puliftUp ℓ (← encodedAt ps full) rebuilt)
-          pure (mkAppN motive (full.push lifted))
-        let motiveE ← withLocalDeclD `y pk fun y => do
-          withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
-            mkLambdaFVars #[y, hy] (← fam y hy)
-        mkLambdaFVars bs (eqi.recAt v ℓpk pk pkc motiveE (mkAppN minor es) pki heq)
+        if let some (i, position) := gPivotTransport? then
+          -- Do not cast the caller's pivot to the constructor endpoint and
+          -- back: that round trip is propositionally, but not definitionally,
+          -- the original field, so the final motive would mention the wrong
+          -- term.  Instead transport a *function over the pivot*.  At `pkc`
+          -- its argument has the constructor field's type; at `pki` it has the
+          -- caller's type and is applied to the caller's pivot literally.
+          let fam := fun (y : Expr) (h : Expr) => do
+            withLocalDeclD `pivot (← pivotTypeAt ps idxs pk y position) fun pivot => do
+              let ys ← unpackChain nnp pk y
+              let mut full := idxs
+              for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
+              full := full.set! position pivot
+              let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
+                withLocalDeclD `k (← minorTyAt ps full pk? r) fun kk =>
+                  mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
+              let lifted ← match lift? with
+                | none => pure rebuilt
+                | some ℓ => pure (puliftUp ℓ (← encodedAt ps full) rebuilt)
+              mkForallFVars #[pivot] (mkAppN motive (full.push lifted))
+          let motiveE ← withLocalDeclD `y pk fun y => do
+            withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
+              mkLambdaFVars #[y, hy] (← fam y hy)
+          let base ← withLocalDeclD `pivot
+              (← pivotTypeAt ps idxs pk pkc position) fun pivot => do
+            let fields := es.set! i pivot
+            let idxP ← idxOfRes tname (← instForall (← instForall cty0 ps) fields)
+            let pkP ← packChain nnp pk (nonPiv.map (idxP[·]!)) 0
+            unless ← isDefEq pkc pkP do
+              badShape s!"{cn0}'s transported pivot changes its packed non-pivot endpoint"
+            mkLambdaFVars #[pivot] (mkAppN minor fields)
+          let pv := (mkLevelIMax (.succ .zero) v).normalize
+          let fn := eqi.recAt pv ℓpk pk pkc motiveE base pki heq
+          mkLambdaFVars bs (mkApp fn idxs[position]!)
+        else
+          let fam := fun (y : Expr) (h : Expr) => do
+            let ys ← unpackChain nnp pk y
+            let mut full := idxs
+            for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
+            let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
+              withLocalDeclD `k (← minorTyAt ps full pk? r) fun kk =>
+                mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
+            let lifted ← match lift? with
+              | none => pure rebuilt
+              | some ℓ => pure (puliftUp ℓ (← encodedAt ps full) rebuilt)
+            pure (mkAppN motive (full.push lifted))
+          let motiveE ← withLocalDeclD `y pk fun y => do
+            withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
+              mkLambdaFVars #[y, hy] (← fam y hy)
+          mkLambdaFVars bs (eqi.recAt v ℓpk pk pkc motiveE (mkAppN minor es) pki heq)
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
