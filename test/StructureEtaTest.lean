@@ -88,6 +88,40 @@ def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
 
+  let focusedRaw ← readExport "test/fixtures/modelgen/structure_eta.ndjson"
+  let (focusedOutput, focusedReport) ← runExport focusedRaw
+  let focusedNames := focusedOutput.decls.flatMap (·.names.toArray)
+  let focusedOwners :=
+    #[`EtaZero, `EtaDependent, `EtaBare, `EtaMutualLeft, `EtaMutualRight,
+      `EtaProposition, `EtaIndexed, `EtaRecursive, `EtaTwo]
+  let positiveEtas :=
+    [`EtaZero, `EtaDependent, `EtaBare, `EtaMutualLeft, `EtaMutualRight].map
+      Naming.etaName
+  state := state.check "focused kernel-positive shapes get eta" <|
+    positiveEtas.all focusedNames.contains
+  state := state.check "focused dependent eta uses every intrinsic projection" <|
+    (declarationType? focusedOutput (Naming.etaName `EtaDependent)).any fun type =>
+      containsConst (Naming.projectionName `EtaDependent 0) type &&
+      containsConst (Naming.projectionName `EtaDependent 1) type &&
+      containsConst (Naming.projectionName `EtaDependent 2) type &&
+      !containsConst `EtaDependent.key type &&
+      !containsConst `EtaDependent.payload type &&
+      !containsConst `EtaDependent.witness type
+  state := state.check "unnamed inductive fields get intrinsic eta projections" <|
+    (declarationType? focusedOutput (Naming.etaName `EtaBare)).any fun type =>
+      containsConst (Naming.projectionName `EtaBare 0) type &&
+      containsConst (Naming.projectionName `EtaBare 1) type
+  state := state.check "mutual eta remains per member" <|
+    focusedReport.generated.any (·.1 == `EtaMutualLeft) &&
+      focusedNames.contains (Naming.etaName `EtaMutualLeft) &&
+      focusedNames.contains (Naming.etaName `EtaMutualRight)
+  state := state.check "focused source families pass the checker" <|
+    Check.check focusedOutput |>.all fun violation =>
+      !focusedOwners.contains violation.familyOwner
+  for negative in [`EtaProposition, `EtaIndexed, `EtaRecursive, `EtaTwo] do
+    state := state.check s!"focused miss {negative} has no eta" <|
+      !focusedNames.contains (Naming.etaName negative)
+
   let projectionRaw ← readExport "test/fixtures/modelgen/structure_projections.ndjson"
   let (projectionOutput, projectionReport) ← runExport projectionRaw
   let depEta := Naming.etaName `Dep
