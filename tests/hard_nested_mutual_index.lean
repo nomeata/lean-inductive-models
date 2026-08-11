@@ -10,11 +10,9 @@
    neither the outer result indices nor the nested occurrence arguments can
    be recovered injectively from the result type.
 
-   **Expected current result:** Lean accepts this declaration and exports 25
-   recursors, all of which `modelgen --check-recursors` matches. The inner
-   `C`/`D` block models successfully. The outer block exposes a separate bug:
-   its generated recursor and iota statements do not match the export, so the
-   statement oracle rejects the run and no output is written. -/
+   **Expected result:** Lean accepts this declaration and exports 25
+   recursors. Both nested blocks model successfully, and the generated
+   recursor and iota statements syntactically match all of Lean's own rules. -/
 prelude
 
 universe u

@@ -32,10 +32,12 @@ implementation a bug:
 The declared block may itself be **mutual**, and then every member is
 specialised into the same block: `mutual inductive A | mk : List B → A …;
 inductive B | mk : Box A → B … end` becomes the four-member block `A`, `B`,
-`List B`, `Box A`. The sweep is over the members in the export's `all` order
-and then breadth first over the mimics, which is Lean's own motive order —
-measured against `modelgen/tests/nest_mutual_both.ndjson`, whose four
-recursors `A.rec`, `B.rec`, `A.rec_1`, `A.rec_2` all carry that vector.
+`List B`, `Box A`. A nested container may be mutual too: discovering `C α`
+adds every member of `C`'s mutual block at `α` immediately, in `all` order.
+The sweep is over the declared members and then breadth first over those mimic
+families, which is Lean's own motive order — measured against
+`modelgen/tests/nest_mutual_both.ndjson` and the mutual-container closure in
+`modelgen/tests/hard_nested_mutual_index.ndjson`.
 -/
 
 open Lean
@@ -147,15 +149,41 @@ private def mimicFor (occ : Expr) (c : Name) (ls : List Level) (d : Nat) : SpM N
   let occ := occ.lowerLooseBVars k k
   let st ← get
   if let some m := st.mimics.find? (fun m => m.occ == occ) then return m.name
-  let idx := st.mimics.size + 1
-  let name := Name.num (Name.str ctx.root "_nested") idx
-  if ctx.env.constants.contains name then throw s!"{name} is already declared"
   let some (.inductInfo v) := ctx.env.constants.find? c | throw s!"unknown container {c}"
   let occArgs := occ.getAppArgs
-  let cs := v.ctors.toArray.map fun cn =>
-    (Name.str name (lastStr cn), mkAppN (.const cn ls) occArgs)
-  set (σ := SpState) { members := st.members.push name, mimics := st.mimics.push ⟨name, occ, cs⟩ }
-  return name
+  -- Lean closes a nested occurrence over the container's whole mutual block.
+  -- Seeing `C α` where `C` and `D` are mutual therefore introduces the
+  -- motives for both `C α` and `D α`, in the block's `all` order, before
+  -- discovery continues. Adding only the member syntactically present delays
+  -- the companion until one of the container constructors happens to expose
+  -- it; every motive and minor after that point then has the wrong position.
+  --
+  -- Mutual members share their parameter telescope, so the occurrence's
+  -- parameter arguments and levels instantiate each companion directly. A
+  -- companion may already have been discovered through another field; retain
+  -- it rather than minting a second copy.
+  let mut answer? : Option Name := none
+  for family in v.all do
+    let some (.inductInfo fv) := ctx.env.constants.find? family
+      | throw s!"unknown mutual container member {family}"
+    unless fv.numParams == v.numParams do
+      throw s!"mutual container members {c} and {family} have different parameter counts"
+    let familyOcc := mkAppN (.const family ls) occArgs
+    let cur ← get
+    let name ← match cur.mimics.find? (fun m => m.occ == familyOcc) with
+      | some m => pure m.name
+      | none => do
+        let idx := cur.mimics.size + 1
+        let name := Name.num (Name.str ctx.root "_nested") idx
+        if ctx.env.constants.contains name then throw s!"{name} is already declared"
+        let cs := fv.ctors.toArray.map fun cn =>
+          (Name.str name (lastStr cn), mkAppN (.const cn ls) occArgs)
+        set (σ := SpState)
+          { members := cur.members.push name, mimics := cur.mimics.push ⟨name, familyOcc, cs⟩ }
+        pure name
+    if family == c then answer? := some name
+  let some answer := answer? | throw s!"{c} is absent from its own mutual block"
+  return answer
 
 /-- Specialise one expression at binder depth `d`, which counts *all* binders
 opened so far, of which the outermost `numParams` are the block's. -/

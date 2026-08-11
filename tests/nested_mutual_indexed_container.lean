@@ -7,9 +7,8 @@
 
    `C` and `D` also exchange their indices in `D.step`, while their recursive
    occurrences under `Vec` sit at fixed indices. This is the inner container
-   block used by `decline_hard_nested_mutual_index.lean`, isolated so its model
-   remains a positive regression even while that fixture's outer block exposes
-   a separate statement-keying bug. -/
+   block used by `hard_nested_mutual_index.lean`, isolated so a dependent-field
+   regression stays small and identifies the inner block directly. -/
 prelude
 
 universe u
