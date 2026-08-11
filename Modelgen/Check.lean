@@ -1,5 +1,6 @@
 import Modelgen.Format
 import Modelgen.Naming
+import Modelgen.Projection
 
 /-!
 # Structural checks for exported inductive models
@@ -751,8 +752,6 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
   let some alpha := instantiateForallsExact expectedProjectionType
       (params ++ constructorIndices ++ #[major])
     | return violations.push (.declarationType projection.owner projection.iota)
-  let some rhs := fields[projection.fieldIndex]?
-    | return violations.push (.declarationType projection.owner projection.iota)
   let lhs := mkAppN (.const projection.name levels) (params ++ constructorIndices ++ #[major])
 
   let sourceConstructorType := constructor.type
@@ -762,6 +761,31 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
     | return violations.push (.declarationType projection.owner projection.iota)
   let sourceLocals := sourceBinders.map fun (binder : OpenBinder) =>
     (binder.value.fvarId!, binder.type)
+  let mut normalizedFields : Array ProjectionField := #[]
+  for index in [:fields.size] do
+    let some mappedField := constructorBinders[constructor.numParams + index]?
+      | return violations.push (.declarationType projection.owner projection.iota)
+    let some sourceFieldAtIndex := sourceBinders[constructor.numParams + index]?
+      | return violations.push (.declarationType projection.owner projection.iota)
+    let some sourceLevel := inferExactSortLevel? x declarations sourceLocals
+        sourceFieldAtIndex.type
+      | return violations.push (.declarationType projection.owner projection.iota)
+    let level := sourceLevel.instantiateParams constructor.levelParams
+      (model.levelParams.map Level.param)
+    let projected := mkAppN
+      (.const (Naming.projectionName projection.owner index) levels)
+      (params ++ constructorIndices ++ #[major])
+    let iota? := if index < projection.fieldIndex then
+      some (mkAppN (.const (Naming.projectionIotaName projection.owner index) levels)
+        constructorArgs)
+    else none
+    normalizedFields := normalizedFields.push
+      { name := Name.mkSimple s!"field_{index}", info := .default,
+        value := fields[index]!, type := mappedField.type, level, projected, iota? }
+  let eqi : EqInfo := { eqN := ``Eq, reflN := ``Eq.refl, recN := ``Eq.rec }
+  let .ok rhs := ProjectionField.normalizeProjectionField eqi projection.name
+      normalizedFields projection.fieldIndex
+    | return violations.push (.declarationType projection.owner projection.iota)
   let some sourceEqLevel := inferExactSortLevel? x declarations sourceLocals sourceField.type
     | return violations.push (.declarationType projection.owner projection.iota)
   let eqLevel := sourceEqLevel.instantiateParams constructor.levelParams

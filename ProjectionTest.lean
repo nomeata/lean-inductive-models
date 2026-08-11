@@ -182,6 +182,29 @@ def main : IO UInt32 := do
     (definitionValue? primGenerated piProjection).any fun value =>
       !containsConst `PI.rec._model value
 
+  -- Arm W's recursor iota is propositional.  A later recursive field whose
+  -- domain depends on an earlier data field therefore needs the canonical
+  -- transport on the rule's right-hand side; the independent first field
+  -- remains the literal, uncast rule.
+  let wRaw ← readExport "tests/prim_w.ndjson"
+  let (wDeclarations, wReport) ← runExport wRaw
+  let wGenerated := outputExport wRaw wDeclarations
+  let wNames := wDeclarations.flatMap (·.names.toArray)
+  let wtyProjection0 := Naming.projectionName `Wty 0
+  let wtyProjection1 := Naming.projectionName `Wty 1
+  let wtyRule0 := Naming.projectionIotaName `Wty 0
+  let wtyRule1 := Naming.projectionIotaName `Wty 1
+  state := state.check "dependent recursive singleton emits every intrinsic field" <|
+    wReport.generated.any (·.1 == `Wty) && !wReport.declined.any (·.1 == `Wty) &&
+      #[wtyProjection0, wtyProjection1, wtyRule0, wtyRule1].all wNames.contains
+  state := state.check "dependent recursive singleton projection interface is exact" <|
+    (Check.check wGenerated).all fun violation =>
+      violation.familyOwner != `Wty || violation matches .modelNotBefore ..
+  state := state.check "independent recursive field retains the literal rule" <|
+    (declarationType? wGenerated wtyRule0).any fun type => !containsConst ``Eq.rec type
+  state := state.check "dependent recursive field has the canonical transport" <|
+    (declarationType? wGenerated wtyRule1).any (containsConst ``Eq.rec)
+
   let (wrapperDeclarations, wrapperReport) ← runExport wrapperRaw
   let wrapperGenerated := outputExport wrapperRaw wrapperDeclarations
   let wrapperNames := wrapperDeclarations.flatMap (·.names.toArray)
@@ -364,6 +387,11 @@ def main : IO UInt32 := do
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   unless state.failed.isEmpty do
     IO.eprintln s!"projection declines: {report.declined}"
+    for error in report.stmtErrors do IO.eprintln s!"projection statement error: {error}"
+    for error in wrapperReport.stmtErrors do IO.eprintln s!"wrapper statement error: {error}"
+    for error in mutualReport.stmtErrors do IO.eprintln s!"mutual statement error: {error}"
+    for name in projectionNames do
+      IO.eprintln s!"wrapper type equal {name}: {declarationType? wrapperGenerated name == declarationType? generated name}"
     IO.eprintln s!"Indexed fields: {intrinsicFieldsFor raw `Indexed}"
     IO.eprintln s!"Recursive fields: {intrinsicFieldsFor raw `Recursive}"
     IO.eprintln s!"generated owners: {report.generated}"
@@ -376,4 +404,7 @@ def main : IO UInt32 := do
     for violation in Check.check mutualGenerated do
       if #[`MLeft, `MRight].contains violation.familyOwner then
         IO.eprintln s!"mutual projection check violation: {repr violation}"
+    for violation in Check.check wGenerated do
+      if violation.familyOwner == `Wty then
+        IO.eprintln s!"Wty projection check violation: {repr violation}"
   return if state.failed.isEmpty then 0 else 1

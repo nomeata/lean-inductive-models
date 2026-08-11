@@ -1,6 +1,7 @@
 import Modelgen.Simple
 import Modelgen.Cli
 import Modelgen.Naming
+import Modelgen.Projection
 
 /-!
 # The filter
@@ -251,7 +252,10 @@ without assuming an inhabitant of any sibling's codomain. -/
 def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
     (modelRecursor targetConstructor : Name) (motiveIndex : Nat)
     (params : Array Expr) (carrier major targetMotive : Expr) (targetFieldIndex : Nat)
-    (motiveLevel : Level) (recLevels : List Level) : GenM (Array Expr) := do
+    (numConstructorFields : Nat)
+    (motiveLevel : Level) (recLevels modelLevels : List Level)
+    (projectionModels : Array (Name × Nat × Name × Name)) (owner : Name) :
+    GenM (Array Expr) := do
   let modelRecursorInfo ← constInfo modelRecursor
   let recType := modelRecursorInfo.type.instantiateLevelParams
     modelRecursorInfo.levelParams recLevels
@@ -302,10 +306,37 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
     let .forallE _ domain body _ := current
       | badShape s!"{modelRecursor} has too few minor binders"
     let value ← if minorIndex == selectedMinorIndex then
-      forallTelescope domain fun binders _ => do
-        let some field := binders[targetFieldIndex]?
-          | badShape s!"{targetConstructor}'s selected minor has no field {targetFieldIndex}"
-        mkLambdaFVars binders field
+      forallTelescope domain fun binders conclusion => do
+        let some constructorApp := findConstructorApp? conclusion
+          | badShape s!"{targetConstructor}'s selected minor has no constructor conclusion"
+        let constructorArgs := constructorApp.getAppArgs
+        unless constructorArgs.size >= params.size + numConstructorFields do
+          badShape s!"{targetConstructor}'s selected minor has a short constructor application"
+        let fields := constructorArgs.extract params.size (params.size + numConstructorFields)
+        let majorType ← inferType constructorApp
+        let ownerArguments := majorType.getAppArgs
+        let indices := ownerArguments.extract params.size ownerArguments.size
+        let mut normalizedFields : Array ProjectionField := #[]
+        for fieldIndex in [:fields.size] do
+          let value := fields[fieldIndex]!
+          let type ← inferType value
+          let level ← ilevel type
+          let prior? := projectionModels.find? fun entry =>
+            entry.1 == owner && entry.2.1 == fieldIndex
+          let projected := match prior? with
+            | some (_, _, projection, _) =>
+              mkAppN (.const projection modelLevels) (params ++ indices ++ #[constructorApp])
+            | none => value
+          let iota? := prior?.map fun (_, _, _, iota) =>
+            mkAppN (.const iota modelLevels) constructorArgs
+          normalizedFields := normalizedFields.push
+            { name := Name.mkSimple s!"field_{fieldIndex}", info := .default,
+              value, type, level, projected, iota? }
+        let normalized ← match ProjectionField.normalizeProjectionField eqi
+            (Naming.projectionName owner targetFieldIndex) normalizedFields targetFieldIndex with
+          | .ok value => pure value
+          | .error message => badShape message
+        mkLambdaFVars binders normalized
       else forallTelescope domain fun binders _ => mkLambdaFVars binders fillerValue
     arguments := arguments.push value
     current := body.instantiate1 value
@@ -472,7 +503,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
             badShape s!"{modelRecursor} carries unexpected universe parameters"
         let pre ← structureRecursorPreArguments eqi recursor modelRecursor
           modelConstructor motiveIndex params (carrier (params ++ indices))
-          self targetMotive fieldIndex resultLevel recLevels
+          self targetMotive fieldIndex constructor.numFields resultLevel recLevels us
+          projectionModels type.name
         mkLambdaFVars arguments
           (mkAppN (.const modelRecursor recLevels) (pre ++ indices ++ #[self]))
     let definition := Declaration.defnDecl
@@ -495,8 +527,26 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         badShape s!"{modelConstructor}'s result has {majorArguments.size} arguments, expected {ownerArity}"
       let indices := majorArguments.extract type.numParams ownerArity
       let lhs := mkAppN (.const modelProjection us) (params ++ indices ++ #[major])
-      let some rhs := fields[fieldIndex]?
-        | badShape s!"{type.name}'s field {fieldIndex} is absent"
+      let mut normalizedFields : Array ProjectionField := #[]
+      for index in [:fields.size] do
+        let value := fields[index]!
+        let fieldType ← inferType value
+        let level ← getLevel fieldType
+        let prior? := projectionModels.find? fun entry =>
+          entry.1 == type.name && entry.2.1 == index
+        let projected := if index == fieldIndex then lhs else match prior? with
+          | some (_, _, projection, _) =>
+            mkAppN (.const projection us) (params ++ indices ++ #[major])
+          | none => value
+        let iota? := prior?.map fun (_, _, _, iota) =>
+          mkAppN (.const iota us) arguments
+        normalizedFields := normalizedFields.push
+          { name := Name.mkSimple s!"field_{index}", info := .default,
+            value, type := fieldType, level, projected, iota? }
+      let rhs ← match ProjectionField.normalizeProjectionField eqi
+          publicProjection normalizedFields fieldIndex with
+        | .ok value => pure value
+        | .error message => badShape message
       let alpha ← inferType lhs
       let fieldLevel ← ilevel alpha
       let proof ← match override? with
@@ -514,7 +564,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
               badShape s!"{modelRecursor} carries unexpected universe parameters"
           let pre ← structureRecursorPreArguments eqi recursor modelRecursor
             modelConstructor motiveIndex params (carrier (params ++ indices))
-            major targetMotive fieldIndex fieldLevel recLevels
+            major targetMotive fieldIndex constructor.numFields fieldLevel recLevels us
+            projectionModels type.name
           pure (mkAppN (.const iotaTheorem recLevels) (pre ++ fields))
       let type ← mkForallFVars arguments (eqi.mk' fieldLevel alpha lhs rhs)
       let value ← mkLambdaFVars arguments proof
@@ -808,6 +859,9 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
   -- Intrinsic projection interfaces are derived solely from the modeled
   -- constructor telescope.  This deliberately does not consult ordinary
   -- export declarations whose values happen to contain `Expr.proj`.
+  let projectionEqInfo ← match EqInfo.check env with
+    | .ok eqi => pure eqi
+    | .error message => throwError message
   for (owner, fieldIndex, modelProjection, modelRule) in is.projections do
     let some projectionInfo := env.constants.find? modelProjection
       | errs := errs.push s!"{modelProjection} was not generated"; continue
@@ -859,8 +913,27 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
         constructorArgs
       let lhs := mkAppN (.const modelProjection (is.levelParams.map Level.param))
         (params ++ indices ++ #[major])
-      let some rhs := fields[fieldIndex]?
-        | return none
+      let mut normalizedFields : Array ProjectionField := #[]
+      for index in [:fields.size] do
+        let value := fields[index]!
+        let fieldType ← inferType value
+        let level ← getLevel fieldType
+        let prior? := is.projections.find? fun entry =>
+          entry.1 == owner && entry.2.1 == index
+        let projected := match prior? with
+          | some (_, _, projection, _) =>
+            mkAppN (.const projection us) (params ++ indices ++ #[major])
+          | none => value
+        let iota? := if index < fieldIndex then prior?.map fun (_, _, _, iota) =>
+          mkAppN (.const iota us) constructorArgs
+        else none
+        normalizedFields := normalizedFields.push
+          { name := Name.mkSimple s!"field_{index}", info := .default,
+            value, type := fieldType, level, projected, iota? }
+      let rhs ← match ProjectionField.normalizeProjectionField projectionEqInfo
+          (Naming.projectionName owner fieldIndex) normalizedFields fieldIndex with
+        | .ok value => pure value
+        | .error _ => return none
       let alpha ← inferType lhs
       let level ← getLevel alpha
       return some (← mkForallFVars constructorArgs (mkAppN (.const `Eq [level]) #[alpha, lhs, rhs]))
