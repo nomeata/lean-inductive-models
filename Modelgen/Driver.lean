@@ -1136,9 +1136,9 @@ the unrelated motives at the selected field's universe.  If the input owns
 that basis declaration later in dependency order, wait for it exactly as the
 existing mutual queue waits for the input's `Eq`; if it owns none, generation
 may splice Lean's basis shape. -/
-def mutualReady (needsProjections : Bool) (reserved : Std.HashSet Name) : MetaM Bool := do
+def mutualReady (needsPULift : Bool) (reserved : Std.HashSet Name) : MetaM Bool := do
   unless ← eqReady reserved do return false
-  unless needsProjections do return true
+  unless needsPULift do return true
   let env ← getEnv
   if env.constants.contains `PULiftP then return true
   return !(reserved.contains `PULiftP || reserved.contains `PULiftP.up)
@@ -1148,10 +1148,10 @@ private def hasIntrinsicProjectionFields (x : Export) (types : List EIndType)
   types.any fun type =>
     !(x.intrinsicProjectionFieldsFor type constructors).isEmpty
 
-private def isMutualBasisRecord (needsProjections : Bool) (declaration : EDecl) : Bool :=
+private def isMutualBasisRecord (needsPULift : Bool) (declaration : EDecl) : Bool :=
   declaration.names.any fun name =>
     name == `Eq || name == `Eq.refl ||
-      (needsProjections && (name == `PULiftP || name == `PULiftP.up))
+      (needsPULift && (name == `PULiftP || name == `PULiftP.up))
 
 /-- **Can a prim model be written here?** — [`Modelgen.eqReady`]'s question,
 asked of every basis constant a prim model may splice: each must be already
@@ -1515,7 +1515,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   -- statements can be compared against the recursors it then mints.
   let mut pending : Array PendingModel := #[]
   -- Plain mutual blocks whose model is waiting for the input's own `Eq`, or
-  -- (when it has projection metadata) the input's own `PULiftP`.
+  -- (when projections or eta need unrelated motives) its own `PULiftP`.
   let mut waiting : Array (Array Name × List Name × Nat × Array Expr ×
     Array (Array (Name × Expr)) × Array ERec × Bool) := #[]
   -- Simple inductives waiting for the input's own basis
@@ -1687,10 +1687,14 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           let ctors := all.map fun n =>
             (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
           let tys := ts.toArray.map (·.type)
-          let needsProjections := hasIntrinsicProjectionFields x ts cs
+          let mut needsPULift := hasIntrinsicProjectionFields x ts cs
+          unless needsPULift do
+            for type in ts do
+              if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then
+                needsPULift := true
           let job :=
             (all, t.levelParams, t.numParams, tys, ctors, inputRecursors.toArray,
-              needsProjections)
+              needsPULift)
           -- **The model may have to wait for the input's own basis.** Its ι
           -- theorems need `Eq`; projection fillers additionally need
           -- `PULiftP`. An export's dependency order
@@ -1699,7 +1703,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           -- `mutual_index_sorts` all do, and `mini/src/mutual_aux.rs`'s
           -- `expand` holds its rule theorems back for the same reason. A file
           -- that declares no `Eq` at all does not wait: §1.5 splices one.
-          if ← mutualReady needsProjections reserved then
+          if ← mutualReady needsPULift reserved then
             let (st3, jobs) ← genMutual all t.levelParams t.numParams tys ctors
               inputRecursors.toArray #[] reserved
               generation.simple generation.basic true (out, rep, pending)
@@ -1732,8 +1736,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     -- Drain each block whose exact basis requirements have now arrived.
     if !waiting.isEmpty then
       let mut keep := #[]
-      for (all, lp, np, tys, ctors, recursors, needsProjections) in waiting do
-        if ← mutualReady needsProjections reserved then
+      for (all, lp, np, tys, ctors, recursors, needsPULift) in waiting do
+        if ← mutualReady needsPULift reserved then
           -- The interface must precede its owner even when a basis primitive
           -- was declared later. Move only those independent basis records in
           -- front, generate the model there, then restore the owner and every
@@ -1742,8 +1746,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
             | throwError "waiting mutual owner {all[0]!} disappeared from the output"
           let beforeOwner := out.extract 0 ownerIndex
           let delayed := out.extract ownerIndex out.size
-          let basis := delayed.filter (isMutualBasisRecord needsProjections)
-          let source := delayed.filter (!isMutualBasisRecord needsProjections ·)
+          let basis := delayed.filter (isMutualBasisRecord needsPULift)
+          let source := delayed.filter (!isMutualBasisRecord needsPULift ·)
           let (st3, jobs) ← genMutual all lp np tys ctors recursors #[] reserved
             generation.simple
             generation.basic true
@@ -1754,7 +1758,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           pending := generatedPending
           waitingPrim := waitingPrim ++ jobs
         else
-          keep := keep.push (all, lp, np, tys, ctors, recursors, needsProjections)
+          keep := keep.push (all, lp, np, tys, ctors, recursors, needsPULift)
       waiting := keep
     -- A prim model may also splice `False`, `Nat` and `PSigma`, so it waits
     -- for whichever of those the input declares later, not only for `Eq` —
