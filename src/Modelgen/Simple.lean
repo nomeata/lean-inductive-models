@@ -2749,6 +2749,26 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
     { decls := #[], levelParams := lparams, members := #[], selfNames := #[selfN]
       numAll := 1, ctors := ctorPairs, recs := #[recN], iotas := #[], spliced := #[] }
 
+  -- **Arm E**: a linearly recursive, non-indexed `Type` with no base
+  -- constructor is empty.  The tuple tower below deliberately starts from a
+  -- base-constructor fibre, so this shape is not a degenerate tower: its exact
+  -- model is the empty carrier already provided by `PULiftP False`.  Every
+  -- constructor has one direct recursive field (linearity plus the absence of
+  -- a base constructor), hence maps to that field; the recursor and its iota
+  -- rules eliminate the same empty value.  Compute the slots here so the
+  -- route branches before the tuple tower asks for its nonexistent fibre.
+  let emptySlots : Array (Option Nat) ←
+    if (route matches PrimRoute.type) && ni == 0 && isRec && erasureLinear then
+      withParams fun ps =>
+        exportCtors.mapM fun (cn, cty) => do
+          let tele ← instForall cty ps
+          recSlotOf tname np cn (numForalls tele) tele
+            (tagFactored tname np exportCtors)
+            w.normalize.dec.isSome (labelFactored tname np exportCtors)
+    else
+      pure #[]
+  let armE := emptySlots.size == nc && nc > 0 && emptySlots.all Option.isSome
+
   -- A one-field singleton at a maybe-zero sort must retain its field.  The
   -- ordinary Church/PULiftP route records only a proof of inhabitation; at a
   -- positive instantiation two constructor payloads then become equal, so no
@@ -3767,6 +3787,51 @@ data tower would have to hold a type the branch tower cannot see"
         hints := ← hintsFor recVal, safety := .safe }
     addChecked dRec
     out := out.push dRec
+  else if armE then
+    -- ════ arm E: an exact empty model for recursion without a base ════
+    unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
+    for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+
+    -- The carrier is empty at exactly the inductive's universe.
+    let selfVal ← withParams fun ps =>
+      mkLambdaFVars ps (emptyAt w)
+    let dSelf := Declaration.defnDecl
+      { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
+        hints := ← hintsFor selfVal, safety := .safe }
+    addChecked dSelf
+    out := out.push dSelf
+
+    -- A constructor cannot manufacture an element: its direct recursive
+    -- field already inhabits the empty carrier, so return it.
+    for j in [0:nc] do
+      let (_, cty) := exportCtors[j]!
+      let ty := restore tbl cty
+      let nfj ← withParams fun ps => do pure (numForalls (← instForall cty ps))
+      let val ← withParams fun ps => do
+        let rtele ← instForall ty ps
+        forallBoundedTelescope rtele (some nfj) fun fs _ => do
+          let some k := emptySlots[j]!
+            | badShape s!"{exportCtors[j]!.1} has no recursive field in the empty route"
+          mkLambdaFVars (ps ++ fs) fs[k]!
+      let d := Declaration.defnDecl
+        { name := ctorN j, levelParams := lparams, type := ty, value := val
+          hints := ← hintsFor val, safety := .safe }
+      addChecked d
+      out := out.push d
+
+    -- The major premise is an inhabitant of the empty carrier.  Eliminating
+    -- it gives the recursor's motive at any result universe.
+    let recTy := restore tbl rv.type
+    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
+      let motive := bs[np]!
+      let major := bs[bs.size - 1]!
+      mkLambdaFVars bs (← emptyAtElim eqi v w (mkApp motive major) major)
+    let dRec := Declaration.defnDecl
+      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+        hints := ← hintsFor recVal, safety := .safe }
+    addChecked dRec
+    out := out.push dRec
   else if armW then
     -- ════ arm W: branching and infinitary, out of the spliced W core ════
     --
@@ -4094,19 +4159,11 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
           w.normalize.dec.isSome (labelFactored tname np exportCtors)
     let baseJ := (Array.range nc).filter fun j => slots[j]!.isNone
     let stepJ := (Array.range nc).filter fun j => slots[j]!.isSome
-    -- **A recursive declaration with no base constructor**, which Lean accepts
-    -- and which is uninhabited. The spine tower cannot express it: spine 0 is
-    -- the tower over the *base* constructors, and with none there is no fibre
-    -- for [`Modelgen.stepTower`] to destruct at — it would read `cs[0]` of an
-    -- empty array. It reached that read before this guard existed, and the
-    -- resulting non-fatal `panic!` returned a default `PCtor` whose chain has
-    -- no fields, so the declaration declined with "a chain with no fields
-    -- needs a pad" — a true refusal reached by an out-of-bounds read, and a
-    -- reason that named nothing. `test/fixtures/modelgen/prim_carve.lean`'s
-    -- `NoBase` is the occupant that exercises it through arm C's skeleton.
+    -- Arm E has already taken every recursive declaration without a base
+    -- constructor.  Keep this assertion beside the sole `baseJ[0]` consumer:
+    -- reaching it would be an internal route-classification error.
     if isRec && baseJ.isEmpty then
-      badShape s!"{tname} is recursive with no base constructor, so it is uninhabited \
-        and the tuple tower has no spine-zero fibre to build"
+      badShape s!"internal: {tname}'s empty recursive shape missed the empty route"
     -- export constructor index ↦ its tag *within its own tower*
     let tagOf : Array Nat := (Array.range nc).map fun j =>
       let tower := if slots[j]!.isNone then baseJ else stepJ
@@ -4556,7 +4613,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
         let α := mkAppN motive (isj.push major)
         let tel := pre ++ fields
-        -- **Every ι theorem is `Eq.refl` except arm G's and arm W's.**
+        -- **Every ι theorem is `Eq.refl` except arms E, G and W.**
         --
         -- Arm G's value is a `Classical.choice` application, which reduces to
         -- nothing, so the rule is proved instead: both sides are graph points
@@ -4579,6 +4636,10 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
             pure (mkAppN (.const wCoreIota [uL, v, wKL])
               #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, motive,
                 mkAppN (.const wFN recLs) pre, a, disp])
+          else if armE then do
+            let some k := emptySlots[j]!
+              | badShape s!"{cn} has no recursive field in the empty route"
+            emptyAtElim eqi .zero w (eqi.mk' v α lhs rhs) fields[k]!
           else if !armG then pure (eqi.refl' v α lhs) else do
             let rsI := (Array.range gNf).filter fun i => gRecNb[i]!.isSome
             let atSlot := fun (nm : Name) => rsI.mapM fun i => do
