@@ -58,7 +58,7 @@ jobs:
               lake build \
                 clitest generationflagstest checktest ordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
-                projectiontest structureetatest
+                projectiontest structureetatest deepimaxboxtest
               lake exe clitest
               lake exe generationflagstest
               lake exe checktest "$GITHUB_WORKSPACE"
@@ -70,7 +70,8 @@ jobs:
               lake exe rulektest
               lake exe projectiontest
               lake exe structureetatest
-              count=11
+              lake exe deepimaxboxtest
+              count=12
               ;;
             mono)
               lake build modelgen monotest mainclitest
