@@ -3146,14 +3146,22 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --   `tagFactored` picks the column: the tagged instantiation takes
   --   `instDecidableEqNat` and stays at `[propext, Quot.sound]`, the untagged
   --   one takes `WT.decEqAll` and pays `Classical.choice`.
-  -- * **the carrier is `Type u`.** `WT.W.{u,w}` fixes `A` and `B'` at `Type u`;
-  --   a never-zero `w` that is not a successor has no such `u`. The untagged
-  --   instantiation needs it twice over, since `K := A` is then at `Type u` too.
+  -- * **the internal carrier is `Type u`.** `WT.W.{u,w}` fixes `A` and `B'`
+  --   at `Type u`. Ordinarily the public carrier already has that shape. At a
+  --   never-zero carrier with no syntactic predecessor, the fallback runs the
+  --   core at `Type` and stores that low carrier in a `PSigma` whose second
+  --   component is `PULiftP.{w} True`. The `PSigma` itself lands at the exact
+  --   public `Sort w`; no cumulative definition conversion is assumed.
   -- * **`isRec`.** A non-recursive declaration has no branching to be stopped
   --   by, so it never reaches here.
   let wTagged := tagFactored tname np exportCtors
-  let armW := (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear
-    && labelFactored tname np exportCtors && w.normalize.dec.isSome
+  let wShapeEligible := (route matches PrimRoute.type) && ni == 0 && isRec &&
+    !erasureLinear && labelFactored tname np exportCtors
+  let wLifted ← if wShapeEligible && w.normalize.dec.isNone then
+      isLevelDefEq (mkLevelMax' (.succ .zero) w) w
+    else pure false
+  let armW := wShapeEligible && (w.normalize.dec.isSome || wLifted)
+  let wW := if wLifted then Level.succ .zero else w
   -- Arm W's **internal** names, guarded exactly like arm C's and arm G's, and
   -- only when the arm is taken.
   let wDN := Name.str impl "wD"
@@ -3185,9 +3193,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- that never calls it, and every one of these declines rather than returning
   -- a wrong answer when it is called at a shape arm W does not reach.
   let wNatT : Expr := .const `Nat []
-  -- `Type u` for the `Sort w` the carrier is at. Meaningless — and unused —
-  -- unless `armW`, which is where `w.normalize.dec` is checked.
-  let uL := w.normalize.dec.getD .zero
+  -- `Type u` for the internal `Sort wW` carrier. Meaningless — and unused —
+  -- unless `armW`, whose carrier plan proved `wW` successor-shaped.
+  let uL := wW.normalize.dec.getD .zero
   -- **The core's `K` level**, and the one place the two instantiations differ
   -- in the level lists rather than in a term: `K = Nat : Type 0` tagged and
   -- `K = A p⃗ : Type u` untagged. The core's own binders are
@@ -3243,7 +3251,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- needs it at a variable index. `A` is `Σ' t : Nat, D p⃗ t` in **both**
   -- instantiations: what the untagged one changes is `K`, not the label.
   let wLabel : Array Expr → Expr → Expr → Expr := fun ps t d =>
-    psigmaMk (.succ .zero) w wNatT (wDAt ps) t d
+    psigmaMk (.succ .zero) wW wNatT (wDAt ps) t d
   -- **The core's `K`, and the value in it a constructor's branch type is taken
   -- at.** Tagged: `Nat`, and the value is the tag. Untagged: the label type
   -- itself, and the value is that constructor's whole label — which is why
@@ -3256,7 +3264,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     withLocalDeclD `j wNatT fun j =>
       mkLambdaFVars #[j] (mkAppN (.const wTelN us) (ps ++ #[key, j]))
   let wBAt : Array Expr → Expr → GenM Expr := fun ps key =>
-    return psigmaT (.succ .zero) w wNatT (← wTelFn ps key)
+    return psigmaT (.succ .zero) wW wNatT (← wTelFn ps key)
   let wBFn : Array Expr → Expr := fun ps => mkAppN (.const wBN us) ps
   let wTgAt : Array Expr → Expr := fun ps => mkAppN (.const wTgN us) ps
   -- **`DecidableEq K`, and the whole of the second bill.** One declaration,
@@ -3264,22 +3272,44 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- `[propext, Classical.choice, Quot.sound]` on the right.
   let wDecEq : Array Expr → Expr := fun ps =>
     if wTagged then .const wCoreDecEqNat []
-    else mkApp (.const wCoreDecEqAll [w]) (wAAt ps)
+    else mkApp (.const wCoreDecEqAll [wW]) (wAAt ps)
   let wSup : Array Expr → Expr → Expr → Expr := fun ps a f =>
     mkAppN (.const wCoreSup [uL, wKL])
       #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, a, f]
+  let wLowSelfAt : Array Expr → Expr := fun ps =>
+    mkAppN (.const wCoreSelf [uL, wKL]) #[wKTy ps, wAAt ps, wBFn ps, wTgAt ps]
+  -- At the constrained-lift instantiation the low W lives in `Type` while the
+  -- public carrier must live in the literal `Sort w`. `PSigma` supplies that
+  -- exact result sort; the second field is a canonical inhabitant of
+  -- `PULiftP.{w} True`, so wrapping and unwrapping reduce by the structure
+  -- projection and eta rules and add no axiom.
+  let wLiftFam : Array Expr → Expr := fun ps =>
+    .lam `low (wLowSelfAt ps) (puliftT w trueP) .default
+  let wPublicCarrier : Array Expr → Expr := fun ps =>
+    if wLifted then psigmaT wW w (wLowSelfAt ps) (wLiftFam ps)
+    else wLowSelfAt ps
+  let wWrap : Array Expr → Expr → Expr := fun ps low =>
+    if wLifted then
+      psigmaMk wW w (wLowSelfAt ps) (wLiftFam ps) low (unitAtCanon w)
+    else low
+  let wUnwrap : Array Expr → Expr → Expr := fun ps value =>
+    if wLifted then psigmaFst wW w (wLowSelfAt ps) (wLiftFam ps) value else value
+  let wCoreMotive : Array Expr → Expr → GenM Expr := fun ps motive =>
+    if wLifted then
+      withLocalDeclD `low (wLowSelfAt ps) fun low =>
+        mkLambdaFVars #[low] (mkApp motive (wWrap ps low))
+    else pure motive
   -- `⟨j, tel⟩ : B' p⃗ key`, with the branch index as an expression for the same
   -- reason.
   let wBranch : Array Expr → Expr → Expr → Expr → GenM Expr := fun ps key j tel =>
-    return psigmaMk (.succ .zero) w wNatT (← wTelFn ps key) j tel
-  let wSelfAt : Array Expr → Expr := fun ps => mkAppN (.const selfN us) ps
+    return psigmaMk (.succ .zero) wW wNatT (← wTelFn ps key) j tel
 
   -- The two towers, at a parameter scope.
   let wDataTy : Array Expr → Nat → GenM Expr := fun ps k => do
     let (nrs, _) ← wShapeOf k
     let tele ← instForall exportCtors[k]!.2 ps
     forallBoundedTelescope tele (some (numForalls tele)) fun fs _ =>
-      wTowerTyOf w (nrs.map (fs[·]!))
+      wTowerTyOf wW (nrs.map (fs[·]!))
   -- **The data tower's components, read out of a label's data** — the values
   -- the branch tower's binder types are written in terms of wherever only the
   -- label is in hand, which is everywhere but a constructor's own body.
@@ -3287,7 +3317,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     let (nrs, _) ← wShapeOf k
     let tele ← instForall exportCtors[k]!.2 ps
     forallBoundedTelescope tele (some (numForalls tele)) fun fs _ =>
-      wTowerProjsOf w (nrs.map (fs[·]!)) d
+      wTowerProjsOf wW (nrs.map (fs[·]!)) d
   -- **Constructor `k`'s recursive field `r`, at its own non-recursive fields
   -- replaced by `nrv`** — and this substitution is the untagged arm.
   --
@@ -3304,7 +3334,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
       return (← ityp fs[rcs[r]!]!).replaceFVars (nrs.map (fs[·]!)) nrv
   let wTelTy : Array Expr → Nat → Array Expr → Nat → GenM Expr := fun ps k nrv r => do
-    forallTelescope (← wRecDom ps k r nrv) fun zs _ => wTowerTyOf w zs
+    forallTelescope (← wRecDom ps k r nrv) fun zs _ => wTowerTyOf wW zs
 
   -- **The dispatch cascade at tag `k`**, as a function of the branch index:
   -- `wDispAt ps k child sc : Tel p⃗ k sc → T._model.self p⃗`. `child r zs vs` is
@@ -3316,7 +3346,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       (Nat → Array Expr → Array Expr → GenM Expr) → Expr → GenM Expr :=
     fun ps k key nrv child sc => do
     let (_, rcs) ← wShapeOf k
-    let selfTy := wSelfAt ps
+    let selfTy := wLowSelfAt ps
     let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[key, jj])
     let s ← ilevel (.forallE `tel (dom (natNumeral 0)) selfTy .default)
     let motAt : Nat → GenM Expr := fun r =>
@@ -3324,11 +3354,11 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         mkLambdaFVars #[j] (.forallE `tel (dom (natSuccs r j)) selfTy .default)
     let armAt : Nat → GenM Expr := fun r => do
       forallTelescope (← wRecDom ps k r nrv) fun zs _ => do
-        withLocalDeclD `tel (← wTowerTyOf w zs) fun tel => do
-          mkLambdaFVars #[tel] (← child r zs (← wTowerProjsOf w zs tel))
+        withLocalDeclD `tel (← wTowerTyOf wW zs) fun tel => do
+          mkLambdaFVars #[tel] (← child r zs (← wTowerProjsOf wW zs tel))
     let junkAt : Expr → GenM Expr := fun t =>
       withLocalDeclD `tel (dom (natSuccs rcs.size t)) fun tel => do
-        mkLambdaFVars #[tel] (← emptyAtElim eqi w w selfTy tel)
+        mkLambdaFVars #[tel] (← emptyAtElim eqi wW wW selfTy tel)
     natCascade s rcs.size motAt armAt junkAt 0 sc
   -- The same, packaged as `fun b : B' p⃗ key => …`. The eta lemma below is
   -- stated against **these** `b.1` and `b.2`, so the two must be built here.
@@ -3337,8 +3367,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     fun ps k key nrv child => do
     let β ← wTelFn ps key
     withLocalDeclD `b (← wBAt ps key) fun b => do
-      let b1 := psigmaFst (.succ .zero) w wNatT β b
-      let b2 := psigmaSnd (.succ .zero) w wNatT β b
+      let b1 := psigmaFst (.succ .zero) wW wNatT β b
+      let b2 := psigmaSnd (.succ .zero) wW wNatT β b
       mkLambdaFVars #[b] (mkApp (← wDispAt ps k key nrv child b1) b2)
 
   -- **The eta lemma** — `dispatch = f`, and the whole of the per-constructor
@@ -3353,13 +3383,13 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   let wEtaAt : Array Expr → Nat → Expr → Array Expr → Expr → GenM Expr :=
     fun ps k key nrv f => do
     let (_, rcs) ← wShapeOf k
-    let selfTy := wSelfAt ps
+    let selfTy := wLowSelfAt ps
     let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[key, jj])
     let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
-      return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMkOf w zs vs))
+      return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs vs))
     let stmt : Expr → Expr → GenM Expr := fun jj tel => do
       let lhs := mkApp (← wDispAt ps k key nrv child jj) tel
-      return eqi.mk' w selfTy lhs (mkApp f (← wBranch ps key jj tel))
+      return eqi.mk' wW selfTy lhs (mkApp f (← wBranch ps key jj tel))
     let motAt : Nat → GenM Expr := fun r =>
       withLocalDeclD `j wNatT fun j => do
         let jj := natSuccs r j
@@ -3368,21 +3398,21 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         mkLambdaFVars #[j] body
     let armAt : Nat → GenM Expr := fun r => do
       forallTelescope (← wRecDom ps k r nrv) fun zs _ => do
-        withLocalDeclD `tel (← wTowerTyOf w zs) fun tel => do
+        withLocalDeclD `tel (← wTowerTyOf wW zs) fun tel => do
           mkLambdaFVars #[tel]
-            (eqi.refl' w selfTy (mkApp f (← wBranch ps key (natNumeral r) tel)))
+            (eqi.refl' wW selfTy (mkApp f (← wBranch ps key (natNumeral r) tel)))
     let junkAt : Expr → GenM Expr := fun t => do
       let jj := natSuccs rcs.size t
       withLocalDeclD `tel (dom jj) fun tel => do
-        mkLambdaFVars #[tel] (← emptyAtElim eqi .zero w (← stmt jj tel) tel)
+        mkLambdaFVars #[tel] (← emptyAtElim eqi .zero wW (← stmt jj tel) tel)
     let β ← wTelFn ps key
     let bTy ← wBAt ps key
     let pointwise ← withLocalDeclD `b bTy fun b => do
-      let b1 := psigmaFst (.succ .zero) w wNatT β b
-      let b2 := psigmaSnd (.succ .zero) w wNatT β b
+      let b1 := psigmaFst (.succ .zero) wW wNatT β b
+      let b2 := psigmaSnd (.succ .zero) wW wNatT β b
       mkLambdaFVars #[b] (mkApp (← natCascade .zero rcs.size motAt armAt junkAt 0 b1) b2)
     let cod ← withLocalDeclD `x bTy fun x => mkLambdaFVars #[x] selfTy
-    return mkAppN (.const wCoreFunext [w, w])
+    return mkAppN (.const wCoreFunext [wW, wW])
       #[bTy, cod, ← wDispLam ps k key nrv child, f, pointwise]
 
   -- **One constructor's label and dispatch, from its own field vector** — the
@@ -3391,9 +3421,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     fun ps k fields => do
       let (nrs, rcs) ← wShapeOf k
       let nrv := nrs.map (fields[·]!)
-      let tower ← wTowerMkOf w nrv nrv
+      let tower ← wTowerMkOf wW nrv nrv
       let child : Nat → Array Expr → Array Expr → GenM Expr := fun r _ vs =>
-        return (mkAppN fields[rcs[r]!]! vs).headBeta
+        return wUnwrap ps (mkAppN fields[rcs[r]!]! vs).headBeta
       -- The branch tower is written at the constructor's **own** fields here
       -- rather than at projections of the tower it just built: the two are
       -- definitionally equal by `PSigma`'s ι rule, and the fields are what the
@@ -3406,7 +3436,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- transport inside each arm, and the junk arm discharged from the emptiness
   -- of `D`. This is the term whose construction validates the emitted shape.
   let wMkF : Array Expr → Expr → Array Expr → GenM Expr := fun ps motive minors => do
-    let selfTy := wSelfAt ps
+    let selfTy := wLowSelfAt ps
+    let coreMotive ← wCoreMotive ps motive
     -- The frame every arm and the motive share: `(d : D p⃗ t)
     -- (f : B' p⃗ key → self) (ih : (b : B' p⃗ key) → C (f b))`, and the label
     -- `⟨t, d⟩` built from `d`.
@@ -3423,11 +3454,11 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
           let bt ← wBAt ps key
           withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
             let ihT ← withLocalDeclD `b bt fun b =>
-              mkForallFVars #[b] (mkApp motive (mkApp f b))
+              mkForallFVars #[b] (mkApp coreMotive (mkApp f b))
             withLocalDeclD `ih ihT fun ih => k d f ih a key
     let motBody : Nat → Expr → GenM Expr := fun kk t =>
       frame (natSuccs kk t) fun d f ih a _ =>
-        mkForallFVars #[d, f, ih] (mkApp motive (wSup ps a f))
+        mkForallFVars #[d, f, ih] (mkApp coreMotive (wSup ps a f))
     let s ← withLocalDeclD `t wNatT fun t => do ilevel (← motBody 0 t)
     let motAt : Nat → GenM Expr := fun kk =>
       withLocalDeclD `t wNatT fun t => do mkLambdaFVars #[t] (← motBody kk t)
@@ -3441,7 +3472,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         let projs ← wNrProjs ps kk d
         -- the children and their induction hypotheses, read off `f` and `ih`
         let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
-          return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMkOf w zs vs))
+          return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs vs))
         let disp ← wDispLam ps kk key projs child
         let tele ← instForall exportCtors[kk]!.2 ps
         let nf := numForalls tele
@@ -3449,8 +3480,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         let mut ihs : Array Expr := #[]
         for r in [0:rcs.size] do
           let (kd, ihv) ← forallTelescope (← wRecDom ps kk r projs) fun zs _ => do
-            let bv ← wBranch ps key (natNumeral r) (← wTowerMkOf w zs zs)
-            return (← mkLambdaFVars zs (mkApp f bv), ← mkLambdaFVars zs (mkApp ih bv))
+            let bv ← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs zs)
+            return (← mkLambdaFVars zs (wWrap ps (mkApp f bv)),
+              ← mkLambdaFVars zs (mkApp ih bv))
           kids := kids.push kd
           ihs := ihs.push ihv
         -- Lean's minor takes the fields in declaration order and then the
@@ -3473,14 +3505,16 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         let h ← wEtaAt ps kk key projs f
         let αf := Expr.forallE `b (← wBAt ps key) selfTy .default
         mkLambdaFVars #[d, f, ih]
-          (← transportAlong eqi v w αf disp f h base fun z => pure (mkApp motive (wSup ps a z)))
+          (← transportAlong eqi v wW αf disp f h base fun z =>
+            pure (mkApp coreMotive (wSup ps a z)))
     let junkAt : Expr → GenM Expr := fun t => do
       let tag := natSuccs nc t
       frame tag fun d f ih a _ => do
-        mkLambdaFVars #[d, f, ih] (← emptyAtElim eqi v w (mkApp motive (wSup ps a f)) d)
+        mkLambdaFVars #[d, f, ih]
+          (← emptyAtElim eqi v wW (mkApp coreMotive (wSup ps a f)) d)
     withLocalDeclD `a (wAAt ps) fun a => do
-      let a1 := psigmaFst (.succ .zero) w wNatT (wDAt ps) a
-      let a2 := psigmaSnd (.succ .zero) w wNatT (wDAt ps) a
+      let a1 := psigmaFst (.succ .zero) wW wNatT (wDAt ps) a
+      let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
   if let some directFieldRoute := directFieldRoute? then
@@ -4184,7 +4218,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- The tagged W construction and its untagged instantiation. Six
     -- definitions, the constructors, one `Nat.rec` cascade for `rec_0` and one
     -- `WT.Wrec_iota` per rule. Junk uninhabited in both directions and both
-    -- towers ending at exactly `Sort w`, at either instantiation.
+    -- towers ending at exactly the planned `Sort wW`, at either instantiation.
     --
     -- **The two differ in four declarations and nowhere else**:
     -- `Tel`'s and `B'`'s domain (the tag, or the whole label), `tg` (the first
@@ -4194,9 +4228,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     for n in [wDN, wTelN, wBN, wAN, wTgN, wFN] do taken n
 
     -- **The level question, before anything is spliced.** Both towers are
-    -- written with codomain level `w`, so every field and every recursive
-    -- field's binder must satisfy `max ℓ w ≡ w` — Lean's own constraint on the
-    -- declaration, re-asked as a conversion. Exposed `imax` components are
+    -- written with codomain level `wW`, so every field and every recursive
+    -- field's binder must satisfy `max ℓ wW ≡ wW`. Exposed `imax` components are
     -- measured after the same recursive boxing the towers will use; anything
     -- still too large fails here rather than 528 KB later.
     withParams fun ps => do
@@ -4205,9 +4238,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         let (nrs, rcs) ← wShapeOf k
         let tele ← instForall cty ps
         forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
-          if let some ℓ ← wTowerLevelOf w (nrs.map (fs[·]!)) then
+          if let some ℓ ← wTowerLevelOf wW (nrs.map (fs[·]!)) then
             badShape s!"{cn} has a non-recursive field at Sort {ℓ} and the carrier is \
-Sort {w}, so the data tower does not land at the carrier's own sort"
+Sort {wW}, so the data tower does not land at the W core's sort"
           for i in rcs do
             forallTelescope (← ityp fs[i]!) fun zs res => do
               -- Lean's recursive-argument test reduces transparent aliases.
@@ -4221,9 +4254,9 @@ Sort {w}, so the data tower does not land at the carrier's own sort"
               unless ← isDefEq res self do
                 badShape s!"{cn}'s recursive field {i} does not reduce to {tname} at its \
 own parameters under its binders, so it is nested rather than infinitary"
-              if let some ℓ ← wTowerLevelOf w zs then
+              if let some ℓ ← wTowerLevelOf wW zs then
                 badShape s!"{cn}'s recursive field {i} has a binder at Sort {ℓ} and the \
-carrier is Sort {w}, so the branch tower does not land at the carrier's own sort"
+carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
 
     for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
@@ -4244,15 +4277,15 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         (types.map (·.name)).toArray.filter (!primBasis.contains ·)
       | _ => #[]
 
-    let unitMot : Expr := .lam `x wNatT (.sort w) .default
-    let junkTy : Expr → GenM Expr := fun _ => pure (emptyAt w)
+    let unitMot : Expr := .lam `x wNatT (.sort wW) .default
+    let junkTy : Expr → GenM Expr := fun _ => pure (emptyAt wW)
 
     -- ── `D` — tag ↦ that constructor's non-recursive fields ──
     let dTy ← withParams fun ps =>
-      mkForallFVars ps (.forallE `t wNatT (.sort w) .default)
+      mkForallFVars ps (.forallE `t wNatT (.sort wW) .default)
     let dVal ← withParams fun ps => withLocalDeclD `t wNatT fun t => do
       mkLambdaFVars (ps.push t)
-        (← natCascade (.succ w) nc (fun _ => pure unitMot) (wDataTy ps) junkTy 0 t)
+        (← natCascade (.succ wW) nc (fun _ => pure unitMot) (wDataTy ps) junkTy 0 t)
     let dD := Declaration.defnDecl
       { name := wDN, levelParams := lparams, type := dTy, value := dVal
         hints := ← hintsFor dVal, safety := .safe }
@@ -4264,9 +4297,9 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     -- `Tel` and `B'` are indexed by the label rather than by the tag and would
     -- name a constant that is not yet in the environment. At the tagged one it
     -- keeps its old place, so nothing about that emission moves.
-    let aTyD ← withParams fun ps => mkForallFVars ps (.sort w)
+    let aTyD ← withParams fun ps => mkForallFVars ps (.sort wW)
     let aVal ← withParams fun ps =>
-      mkLambdaFVars ps (psigmaT (.succ .zero) w wNatT (wDAt ps))
+      mkLambdaFVars ps (psigmaT (.succ .zero) wW wNatT (wDAt ps))
     let dA := Declaration.defnDecl
       { name := wAN, levelParams := lparams, type := aTyD, value := aVal
         hints := ← hintsFor aVal, safety := .safe }
@@ -4287,28 +4320,28 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     -- projects the fields its children's binders mention out of it.
     let telKey : Name := if wTagged then `t else `a
     let telTyD ← withParams fun ps => mkForallFVars ps
-      (.forallE telKey (wKTy ps) (.forallE `j wNatT (.sort w) .default) .default)
+      (.forallE telKey (wKTy ps) (.forallE `j wNatT (.sort wW) .default) .default)
     let telVal ← withParams fun ps =>
       withLocalDeclD telKey (wKTy ps) fun a => withLocalDeclD `j wNatT fun j => do
         if wTagged then
           let arm : Nat → GenM Expr := fun k => do
-            natCascade (.succ w) (← wRecCount k) (fun _ => pure unitMot)
+            natCascade (.succ wW) (← wRecCount k) (fun _ => pure unitMot)
               (wTelTy ps k #[]) junkTy 0 j
           mkLambdaFVars (ps ++ #[a, j])
-            (← natCascade (.succ w) nc (fun _ => pure unitMot) arm junkTy 0 a)
+            (← natCascade (.succ wW) nc (fun _ => pure unitMot) arm junkTy 0 a)
         else
           let dAt : Expr → Expr := fun t => mkAppN (.const wDN us) (ps ++ #[t])
-          -- `fun t => D p⃗ (succ^kk t) → Nat → Sort w`, which lands in `Sort w+1`
+          -- `fun t => D p⃗ (succ^kk t) → Nat → Sort wW`, which lands in `Sort wW+1`
           -- exactly as the tagged motive does.
           let motAt : Nat → GenM Expr := fun kk =>
             withLocalDeclD `t wNatT fun t => mkLambdaFVars #[t]
               (.forallE `d (dAt (natSuccs kk t))
-                (.forallE `j wNatT (.sort w) .default) .default)
+                (.forallE `j wNatT (.sort wW) .default) .default)
           let armAt : Nat → GenM Expr := fun k =>
             withLocalDeclD `d (dAt (natNumeral k)) fun d =>
               withLocalDeclD `jj wNatT fun jj => do
                 mkLambdaFVars #[d, jj]
-                  (← natCascade (.succ w) (← wRecCount k) (fun _ => pure unitMot)
+                  (← natCascade (.succ wW) (← wRecCount k) (fun _ => pure unitMot)
                     (wTelTy ps k (← wNrProjs ps k d)) junkTy 0 jj)
           -- **The junk tag's arm is a constant and need not be empty**:
           -- `A = Σ' t, D t` and `D`'s own junk arm
@@ -4318,11 +4351,11 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
           -- `junkTy`.
           let junkAt : Expr → GenM Expr := fun t =>
             withLocalDeclD `d (dAt (natSuccs nc t)) fun d =>
-              withLocalDeclD `jj wNatT fun jj => mkLambdaFVars #[d, jj] (emptyAt w)
-          let a1 := psigmaFst (.succ .zero) w wNatT (wDAt ps) a
-          let a2 := psigmaSnd (.succ .zero) w wNatT (wDAt ps) a
+              withLocalDeclD `jj wNatT fun jj => mkLambdaFVars #[d, jj] (emptyAt wW)
+          let a1 := psigmaFst (.succ .zero) wW wNatT (wDAt ps) a
+          let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
           mkLambdaFVars (ps ++ #[a, j])
-            (mkApp (mkApp (← natCascade (.succ w) nc motAt armAt junkAt 0 a1) a2) j)
+            (mkApp (mkApp (← natCascade (.succ wW) nc motAt armAt junkAt 0 a1) a2) j)
     let dTel := Declaration.defnDecl
       { name := wTelN, levelParams := lparams, type := telTyD, value := telVal
         hints := ← hintsFor telVal, safety := .safe }
@@ -4331,7 +4364,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
 
     -- ── `B'` and `tg` ──
     let bTyD ← withParams fun ps =>
-      mkForallFVars ps (.forallE telKey (wKTy ps) (.sort w) .default)
+      mkForallFVars ps (.forallE telKey (wKTy ps) (.sort wW) .default)
     let bVal ← withParams fun ps => withLocalDeclD telKey (wKTy ps) fun t => do
       mkLambdaFVars (ps.push t) (← wBAt ps t)
     let dB := Declaration.defnDecl
@@ -4351,7 +4384,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
       mkForallFVars ps (.forallE `a (wAAt ps) (wKTy ps) .default)
     let tgVal ← withParams fun ps => withLocalDeclD `a (wAAt ps) fun a => do
       mkLambdaFVars (ps.push a)
-        (if wTagged then psigmaFst (.succ .zero) w wNatT (wDAt ps) a else a)
+        (if wTagged then psigmaFst (.succ .zero) wW wNatT (wDAt ps) a else a)
     let dTg := Declaration.defnDecl
       { name := wTgN, levelParams := lparams, type := tgTyD, value := tgVal
         hints := ← hintsFor tgVal, safety := .safe }
@@ -4360,7 +4393,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
 
     -- ── the carrier ──
     let selfVal ← withParams fun ps => mkLambdaFVars ps
-      (mkAppN (.const wCoreSelf [uL, wKL]) #[wKTy ps, wAAt ps, wBFn ps, wTgAt ps])
+      (wPublicCarrier ps)
     let dSelf := Declaration.defnDecl
       { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
@@ -4374,7 +4407,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         let rtele ← instForall ty ps
         forallBoundedTelescope rtele (some (numForalls rtele)) fun fs _ => do
           let (a, disp) ← wCtorParts ps j fs
-          mkLambdaFVars (ps ++ fs) (wSup ps a disp)
+          mkLambdaFVars (ps ++ fs) (wWrap ps (wSup ps a disp))
       let d := Declaration.defnDecl
         { name := ctorN j, levelParams := lparams, type := ty, value := val
           hints := ← hintsFor val, safety := .safe }
@@ -4392,14 +4425,15 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     let fTy ← forallBoundedTelescope recTy (some (np + 1 + nc)) fun pre _ => do
       let ps := pre.extract 0 np
       let motive := pre[np]!
-      let selfTy := mkAppN (.const selfN us) ps
+      let selfTy := wLowSelfAt ps
+      let coreMotive ← wCoreMotive ps motive
       withLocalDeclD `a (wAAt ps) fun a => do
         let bt ← wBAt ps (mkApp (wTgAt ps) a)
         withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
           let ihT ← withLocalDeclD `b bt fun b =>
-            mkForallFVars #[b] (mkApp motive (mkApp f b))
+            mkForallFVars #[b] (mkApp coreMotive (mkApp f b))
           withLocalDeclD `ih ihT fun ih =>
-            mkForallFVars (pre ++ #[a, f, ih]) (mkApp motive (wSup ps a f))
+            mkForallFVars (pre ++ #[a, f, ih]) (mkApp coreMotive (wSup ps a f))
     let fVal ← forallBoundedTelescope recTy (some (np + 1 + nc)) fun pre _ => do
       mkLambdaFVars pre
         (← wMkF (pre.extract 0 np) pre[np]! (pre.extract (np + 1) (np + 1 + nc)))
@@ -4413,9 +4447,10 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let major := bs[bs.size - 1]!
+      let coreMotive ← wCoreMotive ps bs[np]!
       mkLambdaFVars bs (mkAppN (.const wCoreRec [uL, v, wKL])
-        #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, bs[np]!,
-          mkAppN (.const wFN recLs) (bs.extract 0 (np + 1 + nc)), major])
+        #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, coreMotive,
+          mkAppN (.const wFN recLs) (bs.extract 0 (np + 1 + nc)), wUnwrap ps major])
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
@@ -5010,8 +5045,9 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         let proof ←
           if armW then do
             let (a, disp) ← wCtorParts ps j fields
+            let coreMotive ← wCoreMotive ps motive
             pure (mkAppN (.const wCoreIota [uL, v, wKL])
-              #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, motive,
+              #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, coreMotive,
                 mkAppN (.const wFN recLs) pre, a, disp])
           else if armE then do
             let some k := emptySlots[j]!
