@@ -249,7 +249,7 @@ motive sort, and every unrelated minor returns its lifted reflexivity.  This is 
 for structure metadata (projections and eta): it permits selecting one member
 without assuming an inhabitant of any sibling's codomain. -/
 def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
-    (modelRecursor targetConstructor : Name) (motiveIndex constructorNumParams : Nat)
+    (modelRecursor targetConstructor : Name) (motiveIndex : Nat)
     (params : Array Expr) (carrier major targetMotive : Expr) (targetFieldIndex : Nat)
     (motiveLevel : Level) (recLevels : List Level) : GenM (Array Expr) := do
   let modelRecursorInfo ← constInfo modelRecursor
@@ -268,13 +268,6 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
     (eqi.refl' carrierLevel carrier major)
   let constantMotive := fun (domain proposition : Expr) =>
     forallTelescope domain fun binders _ => mkLambdaFVars binders proposition
-  for motive in [0:sourceRecursor.numMotives] do
-    let .forallE _ domain body _ := current
-      | badShape s!"{modelRecursor} has too few motive binders"
-    let value ← if motive == motiveIndex then pure targetMotive
-      else constantMotive domain fillerType
-    arguments := arguments.push value
-    current := body.instantiate1 value
   let rec findConstructorApp? (expression : Expr) : Option Expr :=
     if expression.getAppFn.isConstOf targetConstructor then some expression
     else match expression with
@@ -286,23 +279,36 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
       | .mdata _ body => findConstructorApp? body
       | .proj _ _ struct => findConstructorApp? struct
       | _ => none
-  let mut selectedMinors := 0
-  for _ in [0:sourceRecursor.numMinors] do
+  let selectedMinorIndex ← forallBoundedTelescope current (some sourceRecursor.numMotives)
+      fun _ afterMotives =>
+    forallBoundedTelescope afterMotives (some sourceRecursor.numMinors) fun minors _ => do
+      let mut selected : Option Nat := none
+      for i in [:minors.size] do
+        if (findConstructorApp? (← inferType minors[i]!)).isSome then
+          if selected.isSome then
+            badShape s!"{modelRecursor} has several minors for {targetConstructor}"
+          selected := some i
+      let some index := selected
+        | badShape s!"{modelRecursor} has no minor for {targetConstructor}"
+      return index
+  for motive in [0:sourceRecursor.numMotives] do
     let .forallE _ domain body _ := current
-      | badShape s!"{modelRecursor} has too few minor binders"
-    let selected ← forallTelescope domain fun binders result => do
-      let result ← whnf result
-      let some constructorApp := findConstructorApp? result | return none
-      let some field := constructorApp.getAppArgs[constructorNumParams + targetFieldIndex]?
-        | badShape s!"{targetConstructor}'s selected minor has no field {targetFieldIndex}"
-      return some (← mkLambdaFVars binders field)
-    let value ← match selected with
-      | some value => selectedMinors := selectedMinors + 1; pure value
-      | none => forallTelescope domain fun binders _ => mkLambdaFVars binders fillerValue
+      | badShape s!"{modelRecursor} has too few motive binders"
+    let value ← if motive == motiveIndex then pure targetMotive
+      else constantMotive domain fillerType
     arguments := arguments.push value
     current := body.instantiate1 value
-  unless selectedMinors == 1 do
-    badShape s!"{modelRecursor} has {selectedMinors} minors for {targetConstructor}, expected one"
+  for minorIndex in [0:sourceRecursor.numMinors] do
+    let .forallE _ domain body _ := current
+      | badShape s!"{modelRecursor} has too few minor binders"
+    let value ← if minorIndex == selectedMinorIndex then
+      forallTelescope domain fun binders _ => do
+        let some field := binders[targetFieldIndex]?
+          | badShape s!"{targetConstructor}'s selected minor has no field {targetFieldIndex}"
+        mkLambdaFVars binders field
+      else forallTelescope domain fun binders _ => mkLambdaFVars binders fillerValue
+    arguments := arguments.push value
+    current := body.instantiate1 value
   return arguments
 
 private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : Nat)
@@ -460,7 +466,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         else
           badShape s!"{modelRecursor} carries unexpected universe parameters"
       let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-        modelConstructor motiveIndex constructor.numParams params (carrier (params ++ indices))
+        modelConstructor motiveIndex params (carrier (params ++ indices))
         self targetMotive fieldIndex resultLevel recLevels
       let value ← mkLambdaFVars arguments
         (mkAppN (.const modelRecursor recLevels) (pre ++ indices ++ #[self]))
@@ -499,7 +505,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         else
           badShape s!"{modelRecursor} carries unexpected universe parameters"
       let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-        modelConstructor motiveIndex constructor.numParams params (carrier (params ++ indices))
+        modelConstructor motiveIndex params (carrier (params ++ indices))
         major targetMotive fieldIndex fieldLevel recLevels
       let proof := mkAppN (.const iotaTheorem recLevels) (pre ++ fields)
       let type ← mkForallFVars arguments (eqi.mk' fieldLevel alpha lhs rhs)

@@ -13,7 +13,7 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else { state with failed := state.failed.push label }
 
 def projectionGeneration : Cli.Config :=
-  { nested := false, mutualModels := true, simple := true, basic := true }
+  { nested := true, mutualModels := true, simple := true, basic := true }
 
 def readExport (path : String) : IO Export := do
   let .ok x := parse (← IO.FS.readFile path) (analyse := false)
@@ -346,6 +346,9 @@ def main : IO UInt32 := do
     IO.eprintln s!"projection declines: {report.declined}"
     IO.eprintln s!"Indexed fields: {intrinsicFieldsFor raw `Indexed}"
     IO.eprintln s!"Recursive fields: {intrinsicFieldsFor raw `Recursive}"
+    IO.eprintln s!"generated owners: {report.generated}"
+    for name in recursiveProjections do
+      IO.eprintln s!"recursive slot {name}: {names.contains name}"
     IO.eprintln s!"Iff fields: {intrinsicFieldsFor wcore `Iff}"
     for violation in Check.check generated do
       if #[`Dep, `SortFields, `Indexed, `Recursive].contains violation.familyOwner then

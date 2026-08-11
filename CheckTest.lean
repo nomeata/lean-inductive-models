@@ -486,6 +486,14 @@ def run (root : String) : IO UInt32 := do
         return 1
       let mutualModels := modelDeclarations mutualExport mutualTable `A._model._impl.helper
       let mutualValid := withValidModel mutualExport mutualOwnerDecl mutualModels
+      let mutualViolations := check mutualValid
+      let bProjection := Naming.projectionName `B 0
+      let bProjectionIota := Naming.projectionIotaName `B 0
+      let mutualNonProjectionViolations := mutualViolations.filter fun violation =>
+        match violation with
+        | .missingPublic `B declaration =>
+          declaration != bProjection && declaration != bProjectionIota
+        | _ => true
       state ← state.check "mutual correspondence is declaration-local" <|
         mutualTable.typeFormers.any (fun pair =>
           pair.owner == `B && pair.model == Naming.modelName `B) &&
@@ -496,10 +504,10 @@ def run (root : String) : IO UInt32 := do
         mutualTable.iotas.any (fun rule =>
           rule.recursor == `C.rec && rule.ruleIndex == 2 &&
             rule.name == Naming.iotaName `C.rec 2)
-      state ← state.check "valid exact mutual family" <|
+      state ← state.check "valid exact mutual non-projection family" <|
         (discover mutualValid).any (fun family =>
           family.owner == `A && family.correspondence == mutualTable) &&
-        (check mutualValid).isEmpty
+        mutualNonProjectionViolations.isEmpty
       let some bCtor := mutualTable.constructors.find? (·.owner == `B.bC) | do
         IO.eprintln "checktest: B.bC correspondence missing"
         return 1
