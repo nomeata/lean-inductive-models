@@ -118,17 +118,6 @@ private partial def openForalls (tag : Name) (expression : Expr) : Array OpenBin
     | body => (binders, body)
   loop expression #[]
 
-private partial def applyLambdasAux (arguments : Array Expr) (expression : Expr)
-    (index : Nat) : Option Expr :=
-  match arguments[index]? with
-  | none => some expression
-  | some argument => match expression with
-    | .lam _ _ body _ => applyLambdasAux arguments (body.instantiate1 argument) (index + 1)
-    | _ => none
-
-private def applyLambdas (expression : Expr) (arguments : Array Expr) : Option Expr :=
-  applyLambdasAux arguments expression 0
-
 private def closeForalls (binders : Array OpenBinder) (body : Expr) : Expr :=
   binders.reverse.foldl (fun body binder =>
     .forallE binder.name binder.type (body.abstract #[binder.value]) binder.info) body
@@ -186,7 +175,12 @@ private def iotaPropositionWith? (x : Export) (constructors : Constructors)
     break
   let some (fieldBinders, motiveResult, indices) := selected? | none
   let fields := fieldBinders.map (·.value)
-  let rhs ← applyLambdas rule.rhs (pre ++ fields)
+  -- Use the same beta-reduction operation as the generator's statement
+  -- oracle.  Merely peeling the outer lambdas leaves internal redexes in the
+  -- auxiliary recursors which Lean exports for nested occurrences, so a
+  -- syntactically correct theorem was previously reported as different on the
+  -- hard nested/mutual fixtures.
+  let rhs := rule.rhs.beta (pre ++ fields)
   let majorArgs := motiveResult.getAppArgs
   let some major := majorArgs.back? | none
   let recLevels := recursor.levelParams.map Level.param

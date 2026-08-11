@@ -93,25 +93,24 @@ def main (args : List String) : IO UInt32 := do
     nestedOnly.exitCode == 0 && nestedOnly.stdout != stdoutRun.stdout
 
   -- The integrated switch is mode A: it keeps recursor elimination levels,
-  -- runs after generation/check-output, and performs Mono's kernel replay.
+  -- runs before inductive generation, and performs Mono's kernel replay.
   let monoRun ← runModelgen binary
     ["--no-inductives", "--mono-levels", "--quiet", mono]
   state := state.check "mono-levels mode A succeeds" (monoRun.exitCode == 0)
   state := state.check "mono-levels writes marker-renamed declarations" <|
     (monoRun.stdout.splitOn "_at").length > 1
 
-  -- The final-output check also covers models after monomorphization.  This
-  -- fixture has nested/mutual models at distinct universe instantiations.  The
-  -- simple/bootstrap composition is a separate Mono capability, so keep this
-  -- assertion on the established polymorphic nested/mutual route.
+  -- Monomorphization runs before generation, so the default inductive branches
+  -- can model its result without asking Mono to infer instantiations for the
+  -- generated bootstrap basis.  This fixture has distinct universe use sites
+  -- and exercises the full default `--inductives --check` pipeline.
   let poly := s!"{root}/tests/poly_nested_used.ndjson"
-  let monoModels ← runModelgen binary
-    ["--mono-levels", "--no-simple", "--no-basic", "--quiet", poly]
+  let monoModels ← runModelgen binary ["--mono-levels", "--quiet", poly]
   state := state.check "monomorphized generated models pass the final check"
     (monoModels.exitCode == 0 && !monoModels.stdout.isEmpty)
 
-  -- Check the serialized bytes again.  This pins both the post-Mono ordering
-  -- pass and the stdout writer: an in-memory result cannot make this second
+  -- Check the serialized bytes again.  This pins both ordering passes and the
+  -- stdout writer: an in-memory result cannot make this second
   -- input check green if serialization changes the declaration order.
   let monoModeledPath := s!"{scratch}/main-cli-mono-modeled.ndjson"
   IO.FS.writeFile monoModeledPath monoModels.stdout

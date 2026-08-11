@@ -12,11 +12,12 @@ passes:
 
 1. parse the input export;
 2. structurally check model families already in the input;
-3. generate the selected inductive models;
-4. put declaration records in dependency and model-before-owner order;
-5. optionally run universe-level monomorphization;
-6. structurally check the final in-memory export; and
-7. emit it, unless output was disabled.
+3. optionally monomorphize the input's universe levels;
+4. put the resulting records in dependency and model-before-owner order;
+5. generate the selected inductive models;
+6. order the generated records;
+7. structurally check the final in-memory export; and
+8. emit it, unless output was disabled.
 
 The export is the only stream written to stdout.  Reports and errors go to
 stderr, and `--quiet` suppresses successful pass reports without hiding fatal
@@ -102,62 +103,6 @@ def reportViolations (input stage : String)
   for violation in violations do
     IO.eprintln s!"{input}: {stage} check failed: {violationMessage violation}"
 
-/-! ## Extending projection analysis after generation
-
-The NDJSON reader computes `Export.projNodes` in arena order without retaining
-a visited set for every expression in the input.  Generation reuses all input
-records verbatim and inserts new records between them.  For mode A we therefore
-walk only those inserted records, memoizing their reachable nodes, and extend
-the reader's set.  This avoids a second whole-export expression census on large
-inputs while ensuring that a projection introduced by generation is visible to
-`Mono.monomorphize`.
--/
-
-abbrev ProjectionState := Std.HashMap Expr Bool × Std.HashSet Expr
-
-partial def analyseProjectionExpr (known : Std.HashSet Expr) (expr : Expr) :
-    StateM ProjectionState Bool := do
-  if known.contains expr then return true
-  let (memo, _) ← get
-  if let some result := memo[expr]? then return result
-  let result ← match expr with
-    | .proj _ _ struct => analyseProjectionExpr known struct *> pure true
-    | .app fn arg => return (← analyseProjectionExpr known fn) ||
-        (← analyseProjectionExpr known arg)
-    | .lam _ type body _ | .forallE _ type body _ =>
-        return (← analyseProjectionExpr known type) ||
-          (← analyseProjectionExpr known body)
-    | .letE _ type value body _ =>
-        return (← analyseProjectionExpr known type) ||
-          (← analyseProjectionExpr known value) ||
-          (← analyseProjectionExpr known body)
-    | .mdata _ body => analyseProjectionExpr known body
-    | _ => return false
-  modify fun (memo, nodes) =>
-    (memo.insert expr result, if result then nodes.insert expr else nodes)
-  return result
-
-def insertedDecls (input output : Array EDecl) : Array EDecl := Id.run do
-  let mut inputIndex := 0
-  let mut inserted : Array EDecl := #[]
-  for declaration in output do
-    if inputIndex < input.size && declaration == input[inputIndex]! then
-      inputIndex := inputIndex + 1
-    else
-      inserted := inserted.push declaration
-  -- `runFilter` preserves every input record in order.  Falling back to all
-  -- records keeps this helper sound if that contract ever changes.
-  return if inputIndex == input.size then inserted else output
-
-def extendProjectionAnalysis (input transformed : Export) : Export :=
-  let generated := insertedDecls input.decls transformed.decls
-  let roots := generated.flatMap Modelgen.Mono.rootsOf
-  let initial : ProjectionState := ({}, input.projNodes)
-  let action : StateM ProjectionState Unit := do
-    for root in roots do discard <| analyseProjectionExpr input.projNodes root
-  let (_, (_, nodes)) := action.run initial
-  { transformed with projNodes := nodes }
-
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   let input := config.input.getD ""
   let text? ← try
@@ -183,44 +128,16 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   let context : Core.Context :=
     { fileName := "<modelgen>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
-  let generated ← try
-      let ((decls, report), _) ← Lean.Core.CoreM.toIO
-        (Lean.Meta.MetaM.run' (Modelgen.runFilter parsed false config)) context { env }
-      pure (Except.ok (decls, report))
-    catch error =>
-      pure (Except.error (toString error))
-  let (decls, generationReport) ← match generated with
-    | .error message =>
-        IO.eprintln s!"{input}: internal error: {message}"
-        return exitInternal
-    | .ok result => pure result
 
-  reportGeneration config generationReport
-  unless generationReport.stmtErrors.isEmpty do
-    IO.eprintln s!"{input}: internal error: {generationReport.stmtErrors.size} generated \
-      statements differ from the installed recursors' rules; no output written"
-    for error in generationReport.stmtErrors do IO.eprintln s!"  ! {error}"
-    return exitInternal
-
-  let transformed : Export := { parsed with decls }
-  -- Projection analysis must inspect generated records before ordering: the
-  -- input records are still a subsequence here, which lets the incremental
-  -- walk distinguish them without retaining a second Mathlib-sized set.
-  let transformed := if config.monoLevels then
-      extendProjectionAnalysis parsed transformed
-    else
-      transformed
-  let ordered ← match Modelgen.Order.reorder transformed with
-    | .error error =>
-        IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
-        return exitInternal
-    | .ok output => pure output
-
-  let finalExport ← if config.monoLevels then do
+  -- Monomorphize before generation.  Generated simple/bootstrap support is
+  -- already monomorphic at this point; feeding that support back through Mono
+  -- would instead ask the optional pass to infer instantiations for its
+  -- carried primitive basis, which has no such instantiation relation.
+  let generationInput ← if config.monoLevels then do
       let result ← try
           let ((output, report), _) ← Lean.Core.CoreM.toIO
             (Lean.Meta.MetaM.run'
-              (Modelgen.Mono.monomorphize ordered { check := true })) context { env }
+              (Modelgen.Mono.monomorphize parsed { check := true })) context { env }
           pure (Except.ok (output, report))
         catch error =>
           pure (Except.error (toString error))
@@ -239,12 +156,38 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
           reportMono config report
           match Modelgen.Order.reorder output with
           | .error error =>
-              IO.eprintln s!"{input}: cannot order monomorphized output: \
+              IO.eprintln s!"{input}: cannot order monomorphized input: \
                 {orderErrorMessage error}"
               return exitInternal
           | .ok orderedOutput => pure orderedOutput
     else
-      pure ordered
+      pure parsed
+
+  let generated ← try
+      let ((decls, report), _) ← Lean.Core.CoreM.toIO
+        (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config)) context { env }
+      pure (Except.ok (decls, report))
+    catch error =>
+      pure (Except.error (toString error))
+  let (decls, generationReport) ← match generated with
+    | .error message =>
+        IO.eprintln s!"{input}: internal error: {message}"
+        return exitInternal
+    | .ok result => pure result
+
+  reportGeneration config generationReport
+  unless generationReport.stmtErrors.isEmpty do
+    IO.eprintln s!"{input}: internal error: {generationReport.stmtErrors.size} generated \
+      statements differ from the installed recursors' rules; no output written"
+    for error in generationReport.stmtErrors do IO.eprintln s!"  ! {error}"
+    return exitInternal
+
+  let transformed : Export := { generationInput with decls }
+  let finalExport ← match Modelgen.Order.reorder transformed with
+    | .error error =>
+        IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
+        return exitInternal
+    | .ok output => pure output
 
   if config.checkOutput then
     let violations := Modelgen.Check.check finalExport
