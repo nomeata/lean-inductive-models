@@ -1066,12 +1066,15 @@ question whose answer is invariant under β and ζ:
 * **what binders does a recursive field have** — [`Modelgen.tagFactored`],
   which has none to peel until the redex is gone.
 
-and **nowhere else**. `mentionsAny` — *is* this field recursive — stays on the
-written domain, because [`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`]
-replace a recursive field's occurrence and the two must agree about which
-fields those are. No emitted type is normalised. A declaration whose
-constructor types are already βζ-normal — every one that modelled before this
-— therefore takes exactly the path it took before, byte for byte.
+and, for the indexed erasure, at one deliberately narrower boundary:
+[`Modelgen.erasureFieldDomain`] normalises an internal skeleton field only when
+head normalisation makes a written mention of the erased owner disappear.
+Such a field was never recursive; retaining its redex would make the erasure
+mistake a dead binder annotation for an occurrence.  No public declaration
+type is normalised. A field whose reduct still mentions the owner — including
+a hidden binder or a genuinely nested occurrence — is kept as written, and a
+declaration whose constructor types are already βζ-normal therefore takes
+exactly the path it took before, byte for byte.
 
 **That last invariant is why a binder βζ *reveals* is a decline.** The two
 readers disagree about it: the erasure emits the domain as written and so keeps
@@ -1231,6 +1234,28 @@ not recursive{bill}"
     cur := b
   return slot
 
+/-- The domain stored in an index-erasure skeleton.
+
+Usually this is the exported field domain byte for byte.  The one exception is
+a specialised redex which mentions the owner only in an annotation that βζ
+reduction discards, such as `(fun _ : T i => N) k`.  Its normal form `N` is the
+actual non-recursive field type, so the internal skeleton stores that form
+instead of replacing the whole domain by its carrier.
+
+The test on the reduct is load-bearing: if the owner survives, this returns the
+written domain.  In particular, normalisation does not erase or rearrange a
+hidden binder or a nested occurrence. -/
+def erasureFieldDomain (tname : Name) (dom : Expr) : Expr :=
+  if mentionsAny #[tname] dom then
+    let reduced := headNorm dom
+    if mentionsAny #[tname] reduced then dom else reduced
+  else dom
+
+/-- Whether a skeleton field contains an occurrence which the index erasure
+must replace, after discarding only βζ-dead owner mentions. -/
+def erasureRecursive (tname : Name) (dom : Expr) : Bool :=
+  mentionsAny #[tname] (erasureFieldDomain tname dom)
+
 /-- A recursive field's domain with the **occurrence** replaced by `Vn` and the
 binders it sits under kept verbatim: `T p⃗ e⃗` becomes `Vn` and `∀ z⃗, T p⃗ e⃗`
 becomes `∀ z⃗, Vn`.
@@ -1259,6 +1284,7 @@ partial def spineSwap (tname : Name) (Vn : Expr) (nf : Nat) (tele : Expr) :
     GenM Expr := do
   if nf == 0 then return tele
   let .forallE x d b bi := tele | badShape "field telescope shorter than its field count"
+  let d := erasureFieldDomain tname d
   let d' ← if mentionsAny #[tname] d then swapOcc Vn d else pure d
   withLocalDecl x bi d' fun xv => do
     mkForallFVars #[xv] (← spineSwap tname Vn (nf - 1) (b.instantiate1 xv))
@@ -2052,6 +2078,7 @@ partial def eraseCtorTy (tname skelN : Name) (us : List Level) (np : Nat) (e : E
   let rec fields (i : Nat) (t : Expr) : Expr :=
     match t with
     | .forallE x dom b bi =>
+      let dom := erasureFieldDomain tname dom
       .forallE x (if mentionsAny #[tname] dom then eraseOcc i dom else dom) (fields (i + 1) b) bi
     | _ => skelAt i
   let rec params (k : Nat) (t : Expr) : Expr :=
@@ -2564,7 +2591,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
       if short then return some s!"{cn}'s telescope is shorter than {np} parameters"
       while t matches .forallE .. do
         let .forallE _ dom b _ := t | unreachable!
-        if mentionsAny #[tname] dom then
+        if erasureRecursive tname dom then
           -- **Peel the field's own binders, as written**, and ask of the core.
           -- The erasure keeps the binder types verbatim, so a binder type that
           -- mentions `tname` would still name the field's own carrier after
@@ -2595,10 +2622,6 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
           -- is a decline; but calling it *infinitary* would name a binder over
           -- the occurrence that is not there. `nest_fam_arg`'s `OK` and `Key`
           -- are the two committed occupants.
-          if !mentionsAny #[tname] d then
-            return some s!"vanishing mention: {cn} has a field whose type mentions \
-{tname} only inside a binder that βζ-reduction discards, so the erasure would replace \
-a domain that is not recursive"
           -- **A binder βζ *reveals*, rather than one written.** The erasure
           -- emits the domain as written and normalises nothing, so it would
           -- keep no binder here and replace the whole redex — dropping the
@@ -2625,7 +2648,7 @@ application of {tname}"
         | _ => pure ()
       while t matches .forallE .. do
         let .forallE _ dom b _ := t | unreachable!
-        if mentionsAny #[tname] dom && (headNorm dom) matches .forallE .. then
+        if erasureRecursive tname dom && (headNorm dom) matches .forallE .. then
           return some s!"infinitary: {cn} has a recursive occurrence under a binder"
         t := b
     return none
@@ -2639,7 +2662,7 @@ application of {tname}"
       let mut nrec := 0
       while t matches .forallE .. do
         let .forallE _ dom b _ := t | unreachable!
-        if mentionsAny #[tname] dom then nrec := nrec + 1
+        if erasureRecursive tname dom then nrec := nrec + 1
         t := b
       if nrec > 1 then return some s!"branching: {cn} has {nrec} recursive fields"
     return none
@@ -3660,7 +3683,7 @@ data tower would have to hold a type the branch tower cannot see"
           -- occurrence on; the reading through `headNorm` happens in
           -- [`Modelgen.withRecSlot`], where the consumer opens the slot.
           let ft0 ← ityp fs[i]!
-          if mentionsAny #[tname] ft0 then
+          if erasureRecursive tname ft0 then
             slots := slots.push (i, ft0.replaceFVars fs gs)
         pure (idx, slots)
 
