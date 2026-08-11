@@ -2,7 +2,7 @@ import Modelgen.Format
 import Modelgen.Naming
 
 /-!
-# `monomorph` — universe levels, removed from an export
+# Universe-level monomorphization
 
 The pass duplicates each declaration once per **ground instantiation** it is
 used at, substitutes numerals for its universe parameters, and rewrites every

@@ -188,7 +188,7 @@ def expectedOwn : List Row :=
       [("PTree", 15), ("PTree._model._impl.0", 14), ("QTree", 22),
        ("QTree._model._impl.0", 18)], [])
     -- **`poly_nested` with use sites**, because `poly_nested` has none: nothing
-    -- in it instantiates `PTree.{u}` or `QTree.{u,v}`, so `monomorph`
+    -- in it instantiates `PTree.{u}` or `QTree.{u,v}`, so the monomorphization pass
     -- downstream gives every group in it exactly one copy and the pipeline's
     -- per-instantiation behaviour is unobservable. Here `PTree.{u}` is used at
     -- 0, 1 and 2. For `modelgen` alone it is one more polymorphic nested shape;
@@ -1295,9 +1295,9 @@ def runSyntax (root : String) (a : TAcc) : IO TAcc := do
   a := check a rep.recMismatch.isEmpty s!"Lean.Syntax: recursors differ: {rep.recMismatch}"
   return a
 
-/-! ## The composition: `modelgen`, then `monomorph`
+/-! ## The composition: model generation, then universe monomorphization
 
-This is the only place the two tools meet inside one process, and it is here
+This is the only place the two passes meet inside one process, and it is here
 because the two properties it pins are invisible to everything else in either
 suite. **One is about the marker**: it encodes `|σ|`, so if the nine families of
 a model do not agree on their level-parameter arity, one model comes out under

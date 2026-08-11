@@ -388,8 +388,9 @@ and no output is written.
 - A checker consuming the models as an inductive front end must implement the
   four basis inductives and admit the standard axioms `Classical.choice`,
   `propext`, and `Quot.sound` when a generated development uses them.
-- Universe monomorphization is optional, off by default, and has a separate
-  `monomorph` executable and test suite.
+- Universe monomorphization is optional, off by default, and is exposed only
+  through `modelgen --mono-levels`. Its library-level correctness suite is
+  `monotest`.
 
 ## Build and test
 
@@ -416,7 +417,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
 The optional universe-level suite is:
 
 ```console
-TMPDIR="$PWD/_tmp/build-tmp" lake build monomorph monotest
+TMPDIR="$PWD/_tmp/build-tmp" lake build modelgen monotest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"
 ```
 

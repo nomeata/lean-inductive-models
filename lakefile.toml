@@ -17,11 +17,6 @@ root = "Test"
 supportInterpreter = true
 
 [[lean_exe]]
-name = "monomorph"
-root = "Monomorph"
-supportInterpreter = true
-
-[[lean_exe]]
 name = "monotest"
 root = "MonoTest"
 supportInterpreter = true

@@ -123,20 +123,16 @@
 #
 #     --#monomorph
 #
-# on which the export is additionally passed through `monomorph`
-# (`MONOMORPH.md`), after the `modelgen` filter and before it is written.
+# on which the export is additionally passed through `modelgen --mono-levels`.
 # `mini/tests/fixtures/mono_prefix.lean` is the only one that does.
 #
 # It is there because the shape it measures **cannot be written in Lean**.
-# `monomorph` names the copy of a declaration at σ by prepending
+# The monomorphization pass names the copy of a declaration at σ by prepending
 # `_at.⟨|σ|⟩.⟨σ₀⟩…` at the root, and a name whose root component is `_at`
 # followed by `Name.num` components is not something a `.lean` source can
 # declare. The alternative — a unit test that hands `direct::clause_for` a
 # hand-built `_at.1.0.Acc` — measures the table and not the pipeline, and the
 # pipeline is what `MONOMORPH.md` §4.3 found the defect in.
-#
-# `MONOMORPH_BIN` overrides the binary, which is built beside `modelgen` from
-# the same package.
 #
 # Set `LEAN4EXPORT_DIR` to reuse an existing clone; the default is a scratch
 # checkout under the repository-local `_tmp/`, which is gitignored.
@@ -163,14 +159,16 @@ printf '%s\n' "$TOOLCHAIN" > "$EXPORT_DIR/lean-toolchain"
 ( cd "$EXPORT_DIR" && lake build >&2 )
 BIN="$EXPORT_DIR/.lake/build/bin/lean4export"
 MODELGEN_BIN="${MODELGEN_BIN:-$ROOT/.lake/build/bin/modelgen}"
-MONOMORPH_BIN="${MONOMORPH_BIN:-$ROOT/.lake/build/bin/monomorph}"
-if ((FILTER)); then
+
+ensure_modelgen() {
   if [[ ! -x "$MODELGEN_BIN" ]]; then
     echo "building modelgen" >&2
     ( cd "$ROOT" && lake build >&2 )
   fi
   [[ -x "$MODELGEN_BIN" ]] || { echo "no modelgen at $MODELGEN_BIN" >&2; exit 2; }
-fi
+}
+
+if ((FILTER)); then ensure_modelgen; fi
 EXPORT_LEAN_PATH="$(cd "$EXPORT_DIR" && lake env printenv LEAN_PATH)"
 
 declare -a SOURCES=()
@@ -200,31 +198,26 @@ for src in "${SOURCES[@]}"; do
     LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$BIN" "$mod" > "$OUT/$base.ndjson"
   fi
   unset ONLY
-  # The model of every nested inductive, spliced in — see the header. The
-  # filter writes to a scratch file inside `$WORK` and the result is moved into
-  # place, so a failed pass leaves the previous fixture untouched rather than
-  # half a file.
+  # The model of every nested inductive, spliced in — see the header. A source
+  # marked `--#monomorph` additionally enables the integrated universe pass;
+  # `modelgen` runs that pass before generation, matching its public pipeline.
+  # With filtering disabled, the marker invokes only universe
+  # monomorphization. The output is written to a scratch file inside `$WORK`
+  # and moved into place, so a failed pass leaves the previous fixture
+  # untouched rather than half a file.
   # (`>&2` used to be needed here because the report was on stdout; it is on
   # stderr now — `MODELGEN.md` §1.4 — so the report arrives there by itself.)
-  if ((FILTER)); then
-    "$MODELGEN_BIN" "$OUT/$base.ndjson" -o "$WORK/$base.filtered.ndjson"
-    mv "$WORK/$base.filtered.ndjson" "$OUT/$base.ndjson"
-  fi
-  # `--#monomorph`: universe levels removed, one copy per instantiation, every
-  # name carrying the root prefix. After the `modelgen` filter, because that is
-  # the order the pipeline runs them in and `MONOMORPH.md` §1.1's prefix is
-  # shape-free precisely so it composes onto `T._model.*`. Same move-into-place
-  # discipline as above.
   MONO=0
   grep -q '^--#monomorph *$' "$src" && MONO=1
-  if ((MONO)); then
-    if [[ ! -x "$MONOMORPH_BIN" ]]; then
-      echo "building monomorph" >&2
-      ( cd "$ROOT" && lake build monomorph >&2 )
-    fi
-    [[ -x "$MONOMORPH_BIN" ]] || { echo "no monomorph at $MONOMORPH_BIN" >&2; exit 2; }
-    "$MONOMORPH_BIN" "$OUT/$base.ndjson" -o "$WORK/$base.mono.ndjson"
-    mv "$WORK/$base.mono.ndjson" "$OUT/$base.ndjson"
+  if ((FILTER || MONO)); then
+    ensure_modelgen
+    declare -a MODELGEN_ARGS=()
+    ((MONO)) && MODELGEN_ARGS+=(--mono-levels)
+    ((!FILTER)) && MODELGEN_ARGS+=(--no-inductives)
+    "$MODELGEN_BIN" "${MODELGEN_ARGS[@]}" \
+      "$OUT/$base.ndjson" -o "$WORK/$base.filtered.ndjson"
+    mv "$WORK/$base.filtered.ndjson" "$OUT/$base.ndjson"
+    unset MODELGEN_ARGS
   fi
   echo "$base.ndjson: $(wc -l < "$OUT/$base.ndjson") lines$( ((FILTER)) || echo ' (unfiltered)')$( ((MONO)) && echo ' (monomorphized)')" >&2
 done

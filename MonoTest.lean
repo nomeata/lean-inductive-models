@@ -1,7 +1,7 @@
 import Modelgen.Mono
 
 /-!
-# `monomorph`'s own oracles, as a test
+# Universe-level monomorphization oracles
 
 Run from the repository root: `lake exe monotest [ROOT]`.
 
@@ -72,8 +72,8 @@ def readExport (p : String) : IO (Option (String × Export)) := do
   | .error e => throw (IO.userError s!"{p}: {e}")
   | .ok x => return some (t, x)
 
-/-- What `monomorph -o` would put in the file: [`Export.writeTo`] through a
-project-local temporary, read back. -/
+/-- What `modelgen --mono-levels` writes through its output path:
+[`Export.writeTo`] through a project-local temporary, read back. -/
 def streamed (root : String) (y : Export) : IO String := do
   let dir := s!"{root}/_tmp"
   IO.FS.createDirAll dir
