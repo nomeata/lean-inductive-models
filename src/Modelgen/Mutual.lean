@@ -465,7 +465,11 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
         badShape s!"{ern}'s rule {j} is for {rule.ctor}, not {cn}"
       let nm := iotaN k j
       taken nm
-      let modelCTy := (← constInfo modelC).type
+      -- As in the simple route, the theorem telescope is part of the literal
+      -- exported interface. The installed definition may have a βζ-normalized
+      -- type, so walk the restored export constructor rather than reading the
+      -- model constructor back from the environment.
+      let modelCTy := restore tbl exportCtors[k]![j]!.2
       let d ← forallBoundedTelescope ty (some (np + r + rv.numMinors)) fun pre _ => do
         let ps := pre.extract 0 np
         let motiveK := pre[np + k]!
