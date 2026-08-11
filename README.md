@@ -305,6 +305,5 @@ claim that the full job passes.
 
 ## Copyright and license
 
-Copyright information is in [`NOTICE`](NOTICE). This repository currently
-contains no license grant. Until a license is added, the copyright holder
-retains the rights that would otherwise need to be granted explicitly.
+This project is licensed under the Apache License, Version 2.0
+([`Apache-2.0`](LICENSE)). Copyright information is in [`NOTICE`](NOTICE).
