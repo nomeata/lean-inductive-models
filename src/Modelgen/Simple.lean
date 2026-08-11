@@ -4792,10 +4792,9 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
                   let base ← match lift? with
                     | none => pure child
                     | some ℓ => do
-                      let args := res.getAppArgs
-                      unless res.getAppFn.isConstOf selfN && args.size == np + ni do
-                        badShape s!"a recursive field of {ctorN j} does not end in {selfN} \
-                          at {np} parameters and {ni} indices"
+                      let some args ← ownerAppArgs? selfN np ni res
+                        | badShape s!"a recursive field of {ctorN j} does not end in {selfN} \
+                            at {np} parameters and {ni} indices"
                       let is := args.extract np args.size
                       pure (puliftDown ℓ (← churchPropAt ps is) child)
                   mkLambdaFVars zs (mkAppN base (#[C] ++ ks))
@@ -4803,9 +4802,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
           match lift? with
           | none => mkLambdaFVars (ps ++ fs) fold
           | some ℓ =>
-            let args := res.getAppArgs
-            unless res.getAppFn.isConstOf selfN && args.size == np + ni do
-              badShape s!"{ctorN j}'s result is not {selfN} at {np} parameters and {ni} indices"
+            let some args ← ownerAppArgs? selfN np ni res
+              | badShape s!"{ctorN j}'s result is not {selfN} at {np} parameters and {ni} indices"
             let is := args.extract np args.size
             mkLambdaFVars (ps ++ fs) (puliftUp ℓ (← churchPropAt ps is) fold)
       let d := Declaration.defnDecl
@@ -4981,9 +4979,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         -- The constructor's own index expressions, read off its result type
         -- `T._model.self p⃗ ι⃗_j`. The recursor takes them between the minors
         -- and the major, and the motive takes them before it.
-        let args := res.getAppArgs
-        unless res.getAppFn.isConstOf selfN && args.size == np + ni do
-          badShape s!"{modelC}'s result is not {selfN} at {np} parameters and {ni} indices"
+        let some args ← ownerAppArgs? selfN np ni res
+          | badShape s!"{modelC}'s result is not {selfN} at {np} parameters and {ni} indices"
         let isj := args.extract np args.size
         let lhs := mkAppN (.const recN recLs) (pre ++ isj ++ #[major])
         let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
