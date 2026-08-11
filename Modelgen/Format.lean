@@ -162,6 +162,12 @@ def safetyOf : String → DefinitionSafety
   | "partial" => .partial
   | _ => .safe
 
+/-- The exact lean4export spelling of a kernel definition-safety annotation. -/
+def safetyTo : DefinitionSafety → String
+  | .unsafe => "unsafe"
+  | .partial => "partial"
+  | .safe => "safe"
+
 /-- An export record as a kernel declaration. `none` for the three `quot`
 records that `Declaration.quotDecl` already covers. -/
 def toDeclaration (env : Environment) : EDecl → Option Declaration

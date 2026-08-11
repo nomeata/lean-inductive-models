@@ -513,7 +513,9 @@ def recursorsOfNames (names : Array Name) : MetaM (Array ERec) := do
 
 /-- A generated declaration as an export record. -/
 def toEDecl : Declaration → MetaM EDecl
-  | .defnDecl v => return .defn v.name v.levelParams v.type v.value (hintsOf v.hints) "safe" [v.name]
+  | .defnDecl v =>
+      return .defn v.name v.levelParams v.type v.value (hintsOf v.hints)
+        (safetyTo v.safety) [v.name]
   | .thmDecl v => return .thm v.name v.levelParams v.type v.value [v.name]
   | .axiomDecl v => return .ax v.name v.levelParams v.type v.isUnsafe
   | .opaqueDecl v => return .opaq v.name v.levelParams v.type v.value v.isUnsafe [v.name]
@@ -576,7 +578,7 @@ def checkRecs (rs : List ERec) : MetaM (Nat × Array Name) := do
       (rv.rules.zip r.rules).all fun (a, b) => a.ctor == b.ctor && a.rhs == b.rhs
     unless rv.type == r.type && rv.numMotives == r.numMotives && rv.numMinors == r.numMinors
         && rv.numParams == r.numParams && rv.numIndices == r.numIndices && rv.k == r.k
-        && sameRules do
+        && rv.isUnsafe == r.isUnsafe && sameRules do
       bad := bad.push r.name
   return (n, bad)
 

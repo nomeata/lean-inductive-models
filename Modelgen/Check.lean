@@ -315,6 +315,18 @@ structure Family where
   names : Array Name
   deriving Inhabited, Repr, BEq
 
+/-- The export-level declaration kind relevant to the public model contract. -/
+inductive DeclarationKind where
+  | axiom
+  | definition
+  | theorem
+  | opaque
+  | quotient
+  | inductive
+  | constructor
+  | recursor
+  deriving Inhabited, Repr, BEq
+
 /-- A structural model-contract violation. -/
 inductive Violation where
   /-- A model declaration is at or after its owner's inductive record. -/
@@ -337,6 +349,10 @@ inductive Violation where
   | universeArity (owner declaration : Name) (ownerArity modelArity : Nat)
   /-- The exported declaration types differ after the exact permitted rewrite. -/
   | declarationType (owner declaration : Name)
+  /-- A public model slot uses the wrong export-level declaration kind. -/
+  | declarationKind (owner declaration : Name) (expected actual : DeclarationKind)
+  /-- A public implementation definition is not marked exactly `safe`. -/
+  | declarationSafety (owner declaration : Name) (actual : String)
   deriving Repr, BEq
 
 private def appendUnique (names : Array Name) (more : List Name) : Array Name :=
@@ -420,21 +436,31 @@ private structure DeclType where
   name : Name
   levelParams : List Name
   type : Expr
+  kind : DeclarationKind
+  safety? : Option String := none
   deriving Inhabited
 
 private def declTypes : EDecl → Array DeclType
-  | .ax name levelParams type _ | .quot name levelParams type _ =>
-      #[{ name, levelParams, type }]
-  | .defn name levelParams type .. | .thm name levelParams type .. |
-      .opaq name levelParams type .. =>
-      #[{ name, levelParams, type }]
+  | .ax name levelParams type _ =>
+      #[{ name, levelParams, type, kind := .axiom }]
+  | .defn name levelParams type _ _ safety _ =>
+      #[{ name, levelParams, type, kind := .definition, safety? := some safety }]
+  | .thm name levelParams type .. =>
+      #[{ name, levelParams, type, kind := .theorem }]
+  | .opaq name levelParams type .. =>
+      #[{ name, levelParams, type, kind := .opaque }]
+  | .quot name levelParams type _ =>
+      #[{ name, levelParams, type, kind := .quotient }]
   | .induct types ctors recursors =>
       types.toArray.map (fun type =>
-        { name := type.name, levelParams := type.levelParams, type := type.type }) ++
+        { name := type.name, levelParams := type.levelParams, type := type.type,
+          kind := .inductive }) ++
       ctors.toArray.map (fun ctor =>
-        { name := ctor.name, levelParams := ctor.levelParams, type := ctor.type }) ++
+        { name := ctor.name, levelParams := ctor.levelParams, type := ctor.type,
+          kind := .constructor }) ++
       recursors.toArray.map (fun recursor =>
-        { name := recursor.name, levelParams := recursor.levelParams, type := recursor.type })
+        { name := recursor.name, levelParams := recursor.levelParams, type := recursor.type,
+          kind := .recursor })
 
 private abbrev DeclarationTypes := Std.HashMap Name (Array DeclType)
 
@@ -445,6 +471,18 @@ private def declarationTypes (x : Export) : DeclarationTypes := Id.run do
       declarations := declarations.insert info.name
         ((declarations.getD info.name #[]).push info)
   return declarations
+
+private def checkImplementationDecl (owner : Name) (declaration : DeclType) : Array Violation :=
+  if declaration.kind != .definition then
+    #[.declarationKind owner declaration.name .definition declaration.kind]
+  else if declaration.safety? != some "safe" then
+    #[.declarationSafety owner declaration.name (declaration.safety?.getD "<missing>")]
+  else
+    #[]
+
+private def checkTheoremDecl (owner : Name) (declaration : DeclType) : Array Violation :=
+  if declaration.kind == .theorem then #[]
+  else #[.declarationKind owner declaration.name .theorem declaration.kind]
 
 private def checkPair (table : Correspondence) (declarations : DeclarationTypes)
     (pair : ConstantPair) : Array Violation := Id.run do
@@ -457,6 +495,7 @@ private def checkPair (table : Correspondence) (declarations : DeclarationTypes)
   let some ownerDecl := (declarations.getD pair.owner #[])[0]?
     | return #[.declarationType pair.owner pair.model]
   let modelDecl := models[0]!
+  violations := violations ++ checkImplementationDecl pair.owner modelDecl
   if ownerDecl.levelParams.length != modelDecl.levelParams.length then
     violations := violations.push (.universeArity pair.owner pair.model
       ownerDecl.levelParams.length modelDecl.levelParams.length)
@@ -478,10 +517,14 @@ private def checkIota (x : Export) (constructors : Constructors) (family : Famil
       iotaPropositionWith? x constructors family.ownerDecl iota.recursor iota.ruleIndex
     | return #[.declarationType iota.recursor iota.name]
   let model := models[0]!
+  let mut violations := checkTheoremDecl iota.recursor model
   if ownerParams.length != model.levelParams.length then
-    return #[.universeArity iota.recursor iota.name ownerParams.length model.levelParams.length]
+    return violations.push
+      (.universeArity iota.recursor iota.name ownerParams.length model.levelParams.length)
   let expected := family.correspondence.expectedIotaType ownerParams model.levelParams ownerType
-  if model.type == expected then #[] else #[.declarationType iota.recursor iota.name]
+  if model.type != expected then
+    violations := violations.push (.declarationType iota.recursor iota.name)
+  return violations
 
 private def checkUnitlike (x : Export) (family : Family)
     (declarations : DeclarationTypes) (metadata : Naming.Metadata) : Array Violation := Id.run do
@@ -493,12 +536,15 @@ private def checkUnitlike (x : Export) (family : Family)
       unitlikeProposition? x family.ownerDecl metadata.owner
     | return #[.declarationType metadata.owner metadata.name]
   let model := models[0]!
+  let mut violations := checkTheoremDecl metadata.owner model
   if ownerParams.length != model.levelParams.length then
-    return #[.universeArity metadata.owner metadata.name
-      ownerParams.length model.levelParams.length]
+    return violations.push (.universeArity metadata.owner metadata.name
+      ownerParams.length model.levelParams.length)
   let expected := family.correspondence.expectedIotaType
     ownerParams model.levelParams ownerType
-  if model.type == expected then #[] else #[.declarationType metadata.owner metadata.name]
+  if model.type != expected then
+    violations := violations.push (.declarationType metadata.owner metadata.name)
+  return violations
 
 private def checkRuleK (x : Export) (family : Family) (declarations : DeclarationTypes)
     (metadata : Naming.Metadata) : Array Violation := Id.run do
@@ -509,10 +555,14 @@ private def checkRuleK (x : Export) (family : Family) (declarations : Declaratio
   let some (ownerParams, ownerType) := ruleKProposition? x family.ownerDecl metadata.owner
     | return #[.declarationType metadata.owner metadata.name]
   let model := models[0]!
+  let mut violations := checkTheoremDecl metadata.owner model
   if ownerParams.length != model.levelParams.length then
-    return #[.universeArity metadata.owner metadata.name ownerParams.length model.levelParams.length]
+    return violations.push (.universeArity metadata.owner metadata.name
+      ownerParams.length model.levelParams.length)
   let expected := family.correspondence.expectedIotaType ownerParams model.levelParams ownerType
-  if model.type == expected then #[] else #[.declarationType metadata.owner metadata.name]
+  if model.type != expected then
+    violations := violations.push (.declarationType metadata.owner metadata.name)
+  return violations
 
 private partial def instantiateForallsExact (expression : Expr) (arguments : Array Expr)
     (index : Nat := 0) : Option Expr :=
@@ -610,9 +660,10 @@ private def checkProjectionIota (x : Export) (family : Family) (declarations : D
       (·.owner == constructor.name)
     | return #[.declarationType metadata.owner metadata.name]
   let model := models[0]!
+  let mut violations := checkTheoremDecl metadata.owner model
   if projection.levelParams.length != model.levelParams.length then
-    return #[.universeArity metadata.owner metadata.name
-      projection.levelParams.length model.levelParams.length]
+    return violations.push (.universeArity metadata.owner metadata.name
+      projection.levelParams.length model.levelParams.length)
   let mappedConstructorType := family.correspondence.expectedType
     constructor.levelParams model.levelParams constructor.type
   let (constructorBinders, _) := openForalls
@@ -645,7 +696,9 @@ private def checkProjectionIota (x : Export) (family : Family) (declarations : D
     (model.levelParams.map Level.param)
   let expectedBody := mkAppN (.const ``Eq [eqLevel]) #[alpha, lhs, rhs]
   let expected := closeForalls constructorBinders expectedBody
-  if model.type == expected then #[] else #[.declarationType metadata.owner metadata.name]
+  if model.type != expected then
+    violations := violations.push (.declarationType metadata.owner metadata.name)
+  return violations
 
 private def iotaSlot? (name : Name) : Option (Name × Nat) := do
   let .str parent suffix := name | none
@@ -669,7 +722,8 @@ def Violation.familyOwner : Violation → Name
       .missingPublic owner .. | .duplicatePublic owner .. |
       .extraConstructor owner .. | .extraRule owner .. | .extraMetadata owner .. |
       .universeArity owner .. |
-      .declarationType owner .. => owner
+      .declarationType owner .. | .declarationKind owner .. |
+      .declarationSafety owner .. => owner
 
 /-- Check order, independence, and every exact public declaration and statement.
 All comparisons are literal after positional universe alignment and the one

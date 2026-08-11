@@ -90,6 +90,10 @@ def violationMessage : Modelgen.Check.Violation → String
       s!"{declaration}, modeling {owner}, has {modelArity} universe parameters; expected {ownerArity}"
   | .declarationType owner declaration =>
       s!"type of {declaration} does not literally model the type of {owner}"
+  | .declarationKind owner declaration expected actual =>
+      s!"{declaration}, modeling {owner}, is a {repr actual}; expected a {repr expected}"
+  | .declarationSafety owner declaration actual =>
+      s!"{declaration}, modeling {owner}, has safety {actual}; expected safe"
 
 def orderErrorMessage : Modelgen.Order.Error → String
   | .duplicateName name first second =>
