@@ -82,6 +82,8 @@ def violationMessage : Modelgen.Check.Violation → String
       s!"model of {owner} declares {expected} {count} times"
   | .extraConstructor owner declaration =>
       s!"model of {owner} has an unexpected constructor declaration {declaration}"
+  | .extraProjection owner declaration =>
+      s!"model of {owner} has an unexpected intrinsic projection declaration {declaration}"
   | .extraRule owner declaration =>
       s!"model recursor {owner} has an unexpected reduction theorem {declaration}"
   | .extraMetadata owner declaration kind =>
