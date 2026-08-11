@@ -1223,6 +1223,10 @@ def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr))
       let n := Naming.ruleKName recursor
       if env.constants.contains n then return some n
   if let some (.inductInfo info) := env.constants.find? tname then
+    if !info.isRec && info.numIndices == 0 && info.ctors.length == 1 &&
+        !(← isPropFormerType info.type) then
+      let n := Naming.etaName tname
+      if env.constants.contains n then return some n
     if ctors.size == 1 then
       let ctorName := ctors[0]!.1
       let some (.ctorInfo ctorInfo) := env.constants.find? ctorName | return none

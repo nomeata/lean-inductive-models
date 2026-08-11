@@ -270,6 +270,50 @@ def ruleKProposition? (x : Export) (ownerDecl : Nat) (recursorName : Name) :
     { name := `major, type := majorType, info := .default, value := arbitrary }
   return (levelParams, closeForalls (pre.push majorBinder) result)
 
+/- Reduce only transparent exported former aliases.  This is the syntactic
+counterpart of the kernel's Prop test on a structure-like member. -/
+private partial def formerWhnf (x : Export) (expression : Expr)
+    (seen : Std.HashSet Name := {}) : Expr :=
+  match expression with
+  | .mdata _ body => formerWhnf x body seen
+  | .letE _ _ value body _ => formerWhnf x (body.instantiate1 value) seen
+  | .app .. =>
+    let reduced := expression.headBeta
+    if reduced != expression then formerWhnf x reduced seen
+    else match expression.getAppFn with
+      | .const name levels =>
+        if seen.contains name then expression
+        else
+          let value? := x.decls.findSome? fun declaration => match declaration with
+            | .defn n levelParams _ value .. =>
+              if n == name && levelParams.length == levels.length then
+                some (value.instantiateLevelParams levelParams levels)
+              else none
+            | _ => none
+          match value? with
+          | some value => formerWhnf x (mkAppN value expression.getAppArgs) (seen.insert name)
+          | none => expression
+      | _ => expression
+  | .const name levels =>
+    if seen.contains name then expression
+    else
+      let value? := x.decls.findSome? fun declaration => match declaration with
+        | .defn n levelParams _ value .. =>
+          if n == name && levelParams.length == levels.length then
+            some (value.instantiateLevelParams levelParams levels)
+          else none
+        | _ => none
+      match value? with
+      | some value => formerWhnf x value (seen.insert name)
+      | none => expression
+  | _ => expression
+
+private partial def isPropositionFormer (x : Export) (type : Expr) : Bool :=
+  match formerWhnf x type with
+  | .forallE _ _ body _ => isPropositionFormer x body
+  | .sort .zero => true
+  | _ => false
+
 /-- The correspondence table determined by an inductive record, independent
 of whether any model declarations are present. -/
 def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := do
@@ -289,11 +333,15 @@ def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := 
     else none
   let ruleKMetadata := recursorRecords.filterMap fun recursor =>
     if recursor.k then some (Naming.Metadata.ofOwner .ruleK recursor.name) else none
+  let etaMetadata := types.toArray.filterMap fun type =>
+    if type.isKernelStructureLike ctors && !isPropositionFormer x type.type then
+      some (Naming.Metadata.ofOwner .eta type.name)
+    else none
   let mut projections : Array Naming.Projection := #[]
   for type in types do
     for fieldIndex in x.intrinsicProjectionFieldsFor type ctors do
       projections := projections.push (.ofField type.name fieldIndex)
-  let metadata := unitlikeMetadata ++ ruleKMetadata
+  let metadata := unitlikeMetadata ++ etaMetadata ++ ruleKMetadata
   return { typeFormers, constructors, recursors, projections, iotas, metadata }
 
 /-- A public model family discovered in an export.

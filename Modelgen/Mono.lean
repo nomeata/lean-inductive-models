@@ -130,6 +130,7 @@ inductive ModelRole where
   | recursor
   | iota
   | unitlike
+  | eta
   | ruleK
   | projection
   | projectionIota
@@ -221,6 +222,9 @@ def modelTable (x : Export) : ModelTable := Id.run do
       if t.isKernelUnitlike cs then
         (table, ambiguous) := add table ambiguous (Naming.unitlikeName t.name) .theorem
           (entry .unitlike)
+      if t.isKernelStructureLike cs then
+        (table, ambiguous) := add table ambiguous (Naming.etaName t.name) .theorem
+          (entry .eta)
       for fieldIndex in x.intrinsicProjectionFieldsFor t cs do
         (table, ambiguous) := add table ambiguous
           (Naming.projectionName t.name fieldIndex) .value (entry .projection)
