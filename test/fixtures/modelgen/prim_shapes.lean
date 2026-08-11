@@ -109,9 +109,9 @@
      count would still pass; two is where the count has to come from the
      unfolding. From there it is an ordinary indexed subsingleton and arm F
      models it. `prim_declines.lean`'s `SvIx` is the same hidden telescope
-     with *field-dependent* indices, which unfolds the same way and is then
-     refused by arm F for its own reason — the pair is what says the
-     unfolding and the refusal are two different things.
+     with *field-dependent* indices: after the same unfolding, arm F's
+     pivot/non-pivot transport models it. The pair verifies that telescope
+     unfolding composes with the dependent index analysis.
 
    The file declares `Eq` and nothing else of the basis, so one run splices
    `Nat`, `PSigma` and `PULiftP` and the report names them. Nothing here

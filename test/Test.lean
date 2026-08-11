@@ -56,9 +56,9 @@ def expectedShared : List Row :=
        ("UTree._model._impl.0", 14)], [])
   ]
 
-/-- **The refusal paths, each with a fixture that reaches it.** These fixtures
-keep accepted input shapes attached to the exact generator guard that handles
-them. `test/scripts/export-modelgen.sh` rebuilds their exports.
+/-- **Accepted routing boundaries, each with a fixture that reaches it.** These
+fixtures keep accepted input shapes attached to the exact generator guard that
+handles them. `test/scripts/export-modelgen.sh` rebuilds their exports.
 
 **A decline is compared by prefix**, so that a fixture may pin *which shape*
 stopped the generator without pinning the wording of a kernel diagnostic
@@ -325,11 +325,13 @@ shape of each model (`self + ctors + rec + iotas`, its exact projection and
 metadata roles, plus spliced basis declarations on the first model that needs
 them). **No model splices a
 `funext` or a `Quot.sound` any more**: `PU` cost both while its carrier was
-the `False`-Π singleton, and the `PULiftP` carrier's eta is a recursor call.
+the `False`-Π singleton. The `PULiftP` carrier's structure eta is definitional;
+only equality between two opaque lifted inhabitants uses a recursor and proof
+irrelevance in the internal uniqueness helper.
 The role histogram distinguishes those support declarations from the
 unit-like, structure-eta, rule-K, and projection declarations now emitted.
-`prim_declines` pins every refusal path and its printed reason; `P` inside it
-is the control that says the guard is not refusing everything. `Eq` is
+`prim_declines` pins former refusal boundaries as positive routing regressions;
+`P` inside it is the ordinary indexed control. `Eq` is
 **exempt** in all four, because all four declare it — its own row in the
 report and not a decline, which is why the expected list
 below reads `exempt ++ declined` and why one extra check per row says nothing

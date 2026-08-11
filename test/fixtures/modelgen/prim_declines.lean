@@ -20,10 +20,11 @@
      first W target in the file, so it is the one that carries the spliced W
      core and the eighteen models of the fragment's own inductives that follow
      it; `Binder` behind it is its own dozen declarations.
-     `test/fixtures/modelgen/prim_w.lean` is the arm's own fixture and carries the shapes these
-     two do not — data on both sides of a child, a dependent data tower, a
-     parameter and a level parameter, and the arm's own boundary (`Bad`, whose
-     branch type does not factor through the tag).
+     `test/fixtures/modelgen/prim_w.lean` is the arm's own fixture and carries
+     the shapes these two do not — data on both sides of a child, a dependent
+     data tower, a parameter and a level parameter, and the untagged `Bad`
+     case whose branch type factors through the complete label rather than its
+     constructor tag.
    * `Inf.below` — the `below` Lean mints for the recursive proposition beside
      it. It is a recursive subsingleton too and reaches **arm G**. Graph
      inversion now carries and transports the packed non-pivot index equality,
