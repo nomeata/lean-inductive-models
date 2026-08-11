@@ -951,15 +951,21 @@ def Violation.familyOwner : Violation → Name
       .declarationType owner .. | .declarationKind owner .. |
       .declarationSafety owner .. => owner
 
-/-- Check order, independence, and every exact public declaration and statement.
-All comparisons are literal after positional universe alignment and the one
-simultaneous declaration-name substitution. -/
-def check (x : Export) : Array Violation := Id.run do
+/-- The observable result of one complete structural check.  `familiesChecked`
+counts the exact public model families discovered in the checked export; it is
+reported separately from violations so successful command-line checks can
+show that they inspected a nonempty serialized model interface. -/
+structure Report where
+  familiesChecked : Nat
+  violations : Array Violation
+  deriving Inhabited, Repr, BEq
+
+private def checkFamilies (x : Export) (families : Array Family) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
   let declarations := declarationTypes x
   let constructors := constructorRecords x
   let ruleSlots := iotaSlots x
-  for family in discover x do
+  for family in families do
     for modelDecl in family.decls do
       unless modelDecl < family.ownerDecl do
         let declaration := x.decls[modelDecl]!
@@ -1020,5 +1026,18 @@ def check (x : Export) : Array Violation := Id.run do
         unless (declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata recursor.name name .ruleK)
   return violations
+
+/-- Check order, independence, and every exact public declaration and statement,
+and report the exact number of model families inspected.  All comparisons are
+literal after positional universe alignment and the one simultaneous
+declaration-name substitution. -/
+def checkReport (x : Export) : Report :=
+  let families := discover x
+  { familiesChecked := families.size, violations := checkFamilies x families }
+
+/-- Compatibility view of [`checkReport`] for callers interested only in
+violations. -/
+def check (x : Export) : Array Violation :=
+  (checkReport x).violations
 
 end Modelgen.Check

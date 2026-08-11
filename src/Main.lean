@@ -109,6 +109,13 @@ def reportViolations (input stage : String)
   for violation in violations do
     IO.eprintln s!"{input}: {stage} check failed: {violationMessage violation}"
 
+/-- Report a successful structural pass with its exact amount of model-facing
+work.  Failed passes retain their existing per-violation diagnostics. -/
+def reportCheckSuccess (config : Modelgen.Cli.Config) (stage : String)
+    (report : Modelgen.Check.Report) : IO Unit := do
+  unless config.quiet do
+    IO.eprintln s!"{stage} check: {report.familiesChecked} model families checked"
+
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   let input := config.input.getD ""
   let text? ← try
@@ -124,10 +131,11 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
     | .ok parsedExport => pure parsedExport
 
   if config.checkInput then
-    let violations := Modelgen.Check.check parsed
-    unless violations.isEmpty do
-      reportViolations input "input" violations
+    let report := Modelgen.Check.checkReport parsed
+    unless report.violations.isEmpty do
+      reportViolations input "input" report.violations
       return exitInput
+    reportCheckSuccess config "input" report
 
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
@@ -196,10 +204,11 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
     | .ok output => pure output
 
   if config.checkOutput then
-    let violations := Modelgen.Check.check finalExport
-    unless violations.isEmpty do
-      reportViolations input "output" violations
+    let report := Modelgen.Check.checkReport finalExport
+    unless report.violations.isEmpty do
+      reportViolations input "output" report.violations
       return exitInternal
+    reportCheckSuccess config "output" report
 
   if config.output then
     let unchanged := !config.monoLevels && finalExport.decls == parsed.decls

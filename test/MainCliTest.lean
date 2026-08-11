@@ -1,4 +1,4 @@
-import Lean
+import Modelgen.Check
 
 /-!
 End-to-end tests for the public `modelgen` process boundary.
@@ -20,6 +20,13 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
 
 def runModelgen (binary : String) (args : List String) : IO IO.Process.Output :=
   IO.Process.output { cmd := binary, args := args.toArray }
+
+def hasDiagnostic (stderr diagnostic : String) : Bool :=
+  (stderr.splitOn "\n").contains diagnostic
+
+def familyCount? (text : String) : Option Nat := do
+  let parsed ← (Modelgen.parse text (analyse := false)).toOption
+  return (Modelgen.Check.discover parsed).size
 
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
@@ -44,6 +51,14 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "defaults write an export to stdout" (!defaults.stdout.isEmpty)
   state := state.check "diagnostics stay off stdout"
     ((defaults.stdout.splitOn "model of").length == 1)
+  let some defaultOutputFamilies := familyCount? defaults.stdout | do
+    IO.eprintln "mainclitest: generated default output did not parse"
+    return 1
+  state := state.check "default input check reports its exact empty family count" <|
+    hasDiagnostic defaults.stderr "input check: 0 model families checked"
+  state := state.check "default output check reports its exact nonempty family count" <|
+    defaultOutputFamilies > 0 && hasDiagnostic defaults.stderr
+      s!"output check: {defaultOutputFamilies} model families checked"
 
   -- Feed the generated result back through the default checker.  This is an
   -- actual input-side model family, rather than the vacuous check of an
@@ -53,6 +68,9 @@ def main (args : List String) : IO UInt32 := do
   let checkedAgain ← runModelgen binary ["--no-output", modeledPath]
   state := state.check "default input check accepts generated models"
     (checkedAgain.exitCode == 0 && checkedAgain.stdout.isEmpty)
+  state := state.check "input check reports its exact nonempty family count" <|
+    hasDiagnostic checkedAgain.stderr
+      s!"input check: {defaultOutputFamilies} model families checked"
   IO.FS.removeFile modeledPath
 
   let checkOnly ← runModelgen binary
@@ -91,6 +109,9 @@ def main (args : List String) : IO UInt32 := do
     ["--no-inductives", "--nested", "--check", "--quiet", nested]
   state := state.check "later nested restores the nested stage" <|
     nestedOnly.exitCode == 0 && nestedOnly.stdout != stdoutRun.stdout
+  state := state.check "quiet suppresses successful check diagnostics" <|
+    (nestedOnly.stderr.splitOn "input check:").length == 1 &&
+      (nestedOnly.stderr.splitOn "output check:").length == 1
 
   -- The integrated switch is mode A: it keeps recursor elimination levels,
   -- runs before inductive generation, and performs Mono's kernel replay.
@@ -119,6 +140,14 @@ def main (args : List String) : IO UInt32 := do
     monoModeledPath]
   state := state.check "serialized monomorphized models remain ordered and check"
     (monoCheckedAgain.exitCode == 0 && monoCheckedAgain.stdout.isEmpty)
+  let some monoFamilies := familyCount? monoModels.stdout | do
+    IO.eprintln "mainclitest: monomorphized model output did not parse"
+    return 1
+  state := state.check "serialized input-only check reports its exact family count" <|
+    monoFamilies > 0 && hasDiagnostic monoCheckedAgain.stderr
+      s!"input check: {monoFamilies} model families checked"
+  state := state.check "disabled output check emits no success diagnostic" <|
+    (monoCheckedAgain.stderr.splitOn "output check:").length == 1
   IO.FS.removeFile monoModeledPath
 
   IO.println s!"main CLI: {state.passed} passed, {state.failed.size} failed"

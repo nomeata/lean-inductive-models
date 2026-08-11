@@ -34,7 +34,10 @@ models in both the input and final output, and writes the transformed export to
 standard output. Equivalently, its model-generation and checking defaults are
 `--inductives --check`; output is enabled and `--mono-levels` is disabled.
 
-Diagnostics go to standard error.
+Diagnostics go to standard error. Every enabled successful structural check
+reports its exact number of discovered model families as, for example,
+`input check: 37 model families checked`; `--quiet` suppresses these success
+lines together with the other successful-pass diagnostics.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
