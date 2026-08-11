@@ -90,13 +90,17 @@ def unitlikeName (typeFormer : Name) : Name :=
 def etaName (typeFormer : Name) : Name :=
   Name.str (modelName typeFormer) "eta"
 
-/-- The model of a structure projection is named like every other modeled
-declaration.  This alias makes projection call sites state their intent. -/
-def projectionName (projection : Name) : Name := modelName projection
+/-- The intrinsic projection of zero-based constructor field `fieldIndex`.
 
-/-- The projection-reduction theorem for a structure projection. -/
-def projectionIotaName (projection : Name) : Name :=
-  Name.str (projectionName projection) "iota"
+Unlike constructors and recursors, this declaration does not model a source
+constant.  Its public name is determined solely by the modeled type former and
+the field's position in its unique constructor telescope. -/
+def projectionName (typeFormer : Name) (fieldIndex : Nat) : Name :=
+  Name.str (modelName typeFormer) s!"proj_{fieldIndex}"
+
+/-- The constructor-reduction theorem for an intrinsic structure projection. -/
+def projectionIotaName (typeFormer : Name) (fieldIndex : Nat) : Name :=
+  Name.str (projectionName typeFormer fieldIndex) "iota"
 
 /-- The rule-K reduction theorem belonging to a recursor. -/
 def ruleKName (recursor : Name) : Name :=
@@ -107,7 +111,6 @@ inductive DeclarationKind where
   | typeFormer
   | constructor
   | recursor
-  | projection
   deriving BEq, DecidableEq, Inhabited, Repr
 
 /-- An exact original declaration and its declaration-local model name. -/
@@ -136,7 +139,6 @@ def Iota.ofRecursor (recursor : Name) (ruleIndex : Nat) : Iota :=
 inductive MetadataKind where
   | unitlike
   | eta
-  | projectionIota
   | ruleK
   deriving BEq, DecidableEq, Inhabited, Repr
 
@@ -152,9 +154,21 @@ def Metadata.ofOwner (kind : MetadataKind) (owner : Name) : Metadata :=
   let name := match kind with
     | .unitlike => unitlikeName owner
     | .eta => etaName owner
-    | .projectionIota => projectionIotaName owner
     | .ruleK => ruleKName owner
   { kind, owner, name }
+
+/-- One intrinsic structure field projection and its reduction theorem. -/
+structure Projection where
+  owner : Name
+  fieldIndex : Nat
+  name : Name
+  iota : Name
+  deriving BEq, DecidableEq, Inhabited, Repr
+
+/-- Construct the public projection slots for `owner`'s zero-based field. -/
+def Projection.ofField (owner : Name) (fieldIndex : Nat) : Projection :=
+  { owner, fieldIndex, name := projectionName owner fieldIndex,
+    iota := projectionIotaName owner fieldIndex }
 
 /-- The declaration-local public-name requirements for any collection of
 inductive groups.  The table does not infer ownership from generated names;
@@ -162,6 +176,7 @@ the exact originals remain attached to every entry. -/
 structure Table where
   declarations : Array Declaration := #[]
   iotas : Array Iota := #[]
+  projections : Array Projection := #[]
   metadata : Array Metadata := #[]
   deriving BEq, Inhabited, Repr
 
@@ -183,9 +198,9 @@ def Table.addRecursor (table : Table) (recursor : Name) (numRules : Nat) : Table
 def Table.addMetadata (table : Table) (kind : MetadataKind) (owner : Name) : Table :=
   { table with metadata := table.metadata.push (.ofOwner kind owner) }
 
-/-- Add a projection model and its reduction theorem together. -/
-def Table.addProjection (table : Table) (projection : Name) : Table :=
-  (table.addDeclaration .projection projection).addMetadata .projectionIota projection
+/-- Add an intrinsic projection and its reduction theorem together. -/
+def Table.addProjection (table : Table) (owner : Name) (fieldIndex : Nat) : Table :=
+  { table with projections := table.projections.push (.ofField owner fieldIndex) }
 
 /-- Look up a model by exact original name and declaration role. -/
 def Table.modelName? (table : Table) (kind : DeclarationKind) (original : Name) : Option Name :=
@@ -203,7 +218,9 @@ def Table.originalName? (table : Table) (kind : DeclarationKind) (model : Name) 
 duplicates.  Keeping duplicates lets the collision census diagnose a malformed
 table instead of silently accepting it. -/
 def Table.requiredNames (table : Table) : Array Name :=
-  table.declarations.map (·.model) ++ table.iotas.map (·.name) ++ table.metadata.map (·.name)
+  table.declarations.map (·.model) ++ table.iotas.map (·.name) ++
+    table.projections.flatMap (fun projection => #[projection.name, projection.iota]) ++
+    table.metadata.map (·.name)
 
 private def pushUnique (names : Array Name) (name : Name) : Array Name :=
   if names.contains name then names else names.push name
