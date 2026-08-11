@@ -56,6 +56,14 @@ def definitionValue? (x : Export) (name : Name) : Option Expr := do
   let .defn got _ _ value .. ← declaration? x name | none
   if got == name then some value else none
 
+def ownerAndRecursor? (x : Export) (owner : Name) : Option (EIndType × ERec) :=
+  x.decls.findSome? fun declaration => match declaration with
+    | .induct types _ recursors => do
+      let type ← types.find? (·.name == owner)
+      let recursor ← recursors.find? (·.name == Name.str owner "rec")
+      return (type, recursor)
+    | _ => none
+
 partial def containsConst (target : Name) : Expr → Bool
   | .const name _ => name == target
   | .proj _ _ struct => containsConst target struct
@@ -285,6 +293,37 @@ def main : IO UInt32 := do
     #[(`Fmid, 4), (`FChain, 4)].all fmidReport.generated.contains &&
       !fmidReport.declined.any fun (owner, _) => fmidOwners.contains owner &&
       (Check.check fmidOrdered).all fun violation => !fmidOwners.contains violation.familyOwner
+
+  -- The two apparent guards at the dependent-pivot classifier have different
+  -- status. `LostData` is accepted by the kernel, but because its `Nat`
+  -- payload is absent from the conclusion index the kernel gives it only a
+  -- small recursor: route selection stops before arm F. `MovingPivot` has a
+  -- large recursor and reaches the dependent-pivot scan. Its pivot and the
+  -- supplying constructor field are one recorded classifier entry, so the
+  -- old "pivot has no data field" state is unrepresentable.
+  let guardRaw ← readExport "test/fixtures/modelgen/arm_f_guards.ndjson"
+  let (guardDeclarations, guardReport) ← runExport guardRaw
+  let guardGenerated := outputExport guardRaw guardDeclarations
+  let guardOrdered ← match Order.reorder guardGenerated with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot order arm-F guard fixture: {repr error}"
+  let guardOwners := #[`LostData, `MovingPivot]
+  let lostRoute := ownerAndRecursor? guardRaw `LostData
+  let movingRoute := ownerAndRecursor? guardRaw `MovingPivot
+  state := state.check "unrecoverable data receives a small recursor before arm F" <|
+    lostRoute.any fun (type, recursor) =>
+      recursor.levelParams.length == type.levelParams.length
+  state := state.check "a dependent pivot receives the large arm-F recursor" <|
+    movingRoute.any fun (type, recursor) =>
+      recursor.levelParams.length == type.levelParams.length + 1
+  state := state.check "arm-F guard boundaries model at exact interface sizes" <|
+    #[(`LostData, 5), (`MovingPivot, 5)].all guardReport.generated.contains &&
+      !guardReport.declined.any fun (owner, _) => guardOwners.contains owner
+  state := state.check "arm-F guard boundary output satisfies the exact checker" <|
+    (Check.check guardOrdered).all fun violation => !guardOwners.contains violation.familyOwner
+  state := state.check "the dependent-pivot boundary takes the zipper transport" <|
+    (definitionValue? guardGenerated (Naming.modelName `MovingPivot.rec)).any
+      (containsConst ``Eq.rec)
 
   -- The focused zipper fixture adds two pivots, a proof after a pivot, and a
   -- final non-pivot endpoint depending on the recovered value.
