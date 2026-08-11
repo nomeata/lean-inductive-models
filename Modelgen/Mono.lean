@@ -130,6 +130,7 @@ inductive ModelRole where
   | recursor
   | iota
   | unitlike
+  | ruleK
   deriving BEq, Inhabited
 
 /-- A generated public declaration and the original inductive record that owns
@@ -165,8 +166,9 @@ private def siteKind : EDecl → SiteKind
 /-- Build the model relation from exact original roles.
 
 The declaration-local contract is generated from each inductive record:
-`T._model`, `C._model`, `R._model`, `R._model.iota_j`, and (exactly when the
-export metadata has the kernel feature) `T._model.unitlike`. A candidate counts
+`T._model`, `C._model`, `R._model`, `R._model.iota_j`, and, exactly when the
+export metadata has the corresponding kernel feature, `T._model.unitlike` and
+`R._model.ruleK`. A candidate counts
 only when the export contains a declaration of the generated role's kind. That
 condition distinguishes an original inductive literally named `Foo._model`
 from the definition serving as the carrier model of `Foo`; its own model is, exactly,
@@ -209,6 +211,9 @@ def modelTable (x : Export) : ModelTable := Id.run do
       for j in [:r.rules.length] do
         (table, ambiguous) := add table ambiguous (Naming.iotaName r.name j) .theorem
           (entry .iota)
+      if r.k then
+        (table, ambiguous) := add table ambiguous (Naming.ruleKName r.name) .theorem
+          (entry .ruleK)
     for t in ts do
       if t.isKernelUnitlike cs then
         (table, ambiguous) := add table ambiguous (Naming.unitlikeName t.name) .theorem
@@ -331,7 +336,7 @@ def buildGroups (x : Export) (models : ModelTable) :
     | .induct .. => pure ()
     | _ =>
       if let some mi := models[(d.names[0]!)]? then
-        if mi.role == .recursor || mi.role == .iota then
+        if mi.role == .recursor || mi.role == .iota || mi.role == .ruleK then
           let blockLp := mi.ownerLevelParams
           let extra := lp.filter (fun p => !blockLp.contains p)
           -- One extra parameter, and it is the head — the same two conditions

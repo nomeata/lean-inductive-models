@@ -178,20 +178,24 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     Naming.modelName (Naming.relocateSource root buildRoot exportRecs[k]!)
   let iotaN := fun (k j : Nat) =>
     Naming.iotaName (Naming.relocateSource root buildRoot exportRecs[k]!) j
+  let ruleKN := fun (k : Nat) =>
+    Naming.ruleKName (Naming.relocateSource root buildRoot exportRecs[k]!)
 
   -- Public collisions are an atomic property of the declaration-local naming
   -- table.  Census the whole table before emitting even implementation
   -- support, including every recursor rule rather than discovering an occupied
   -- iota name halfway through generation.
-  let recRuleCounts ← exportRecs.mapM fun recursor => do
+  let recRuleInfo ← exportRecs.mapM fun recursor => do
     let .recInfo info ← constInfo recursor | badShape s!"{recursor} is not a recursor"
-    return info.rules.length
+    return (info.rules.length, info.k)
   let publicTable := Id.run do
     let mut table := Naming.Table.empty
     for member in all do table := table.addDeclaration .typeFormer member
     for ctors in exportCtors do
       for (ctor, _) in ctors do table := table.addDeclaration .constructor ctor
-    for k in [0:r] do table := table.addRecursor exportRecs[k]! recRuleCounts[k]!
+    for k in [0:r] do
+      table := table.addRecursor exportRecs[k]! recRuleInfo[k]!.1
+      if recRuleInfo[k]!.2 then table := table.addMetadata .ruleK exportRecs[k]!
     return table
   let occupied := reserved.fold (fun names name => names.push name) #[]
   let census := publicTable.collisionCensus occupied
@@ -484,6 +488,24 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       out := out.push d
       iotas := iotas.push (k, cn, nm)
 
+  let mut ruleKs : Array (Name × Name) := #[]
+  for (k, _, rlp, _) in recInfos do
+    let ern := exportRecs[k]!
+    let .recInfo rv ← constInfo ern | badShape s!"{ern} is not a recursor"
+    if rv.k then
+      unless rv.rules.length == 1 do badShape s!"{ern} is K-like with {rv.rules.length} rules"
+      let nm := ruleKN k
+      taken nm
+      let iotaType? := out.findSome? fun declaration => match declaration with
+        | .thmDecl value => if value.name == iotaN k 0 then some value.type else none
+        | _ => none
+      let some iotaType := iotaType?
+        | badShape s!"the K-like recursor {ern} has no iota theorem"
+      let d ← ruleKDecl eqi rlp (rv.numParams + rv.numMotives + rv.numMinors) nm iotaType
+      addChecked d
+      out := out.push d
+      ruleKs := ruleKs.push (ern, nm)
+
   let mut aliases := Naming.AliasMap.empty
   if buildRoot != root then
     aliases := Naming.AliasMap.forRetry (Naming.modelName buildRoot) (Naming.modelName root)
@@ -491,11 +513,13 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     for k in [0:r] do
       aliases := aliases.insert selfNames[k]! (Naming.modelName all[k]!)
       aliases := aliases.insert (recN k) (Naming.modelName exportRecs[k]!)
+      if recRuleInfo[k]!.2 then
+        aliases := aliases.insert (ruleKN k) (Naming.ruleKName exportRecs[k]!)
       for j in [0:exportCtors[k]!.size] do
         let cn := exportCtors[k]![j]!.1
         aliases := aliases.insert (ctorN cn) (Naming.modelName cn)
         aliases := aliases.insert (iotaN k j) (Naming.iotaName exportRecs[k]! j)
   return { decls := out, levelParams := lparams, members := #[tagN, auxN], selfNames
-           numAll := r, ctors, recs, iotas, spliced, aliases }
+           numAll := r, ctors, recs, iotas, ruleKs, spliced, aliases }
 
 end Modelgen

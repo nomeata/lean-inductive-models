@@ -603,6 +603,8 @@ def recName (g : Gen) (k : Nat) : Name :=
 def congrPackName (g : Gen) (i : Nat) : Name := .str g.model s!"congrPack_{i}"
 def iotaName (g : Gen) (k j : Nat) : Name :=
   Naming.iotaName (Naming.relocateSource g.owner g.buildOwner g.exportRecs[k]!) j
+def ruleKName (g : Gen) (k : Nat) : Name :=
+  Naming.ruleKName (Naming.relocateSource g.owner g.buildOwner g.exportRecs[k]!)
 
 /-- Is block member `k` one of the export's own, rather than a mimic? -/
 def isReal (g : Gen) (k : Nat) : Bool := k < g.numAll
@@ -1997,6 +1999,9 @@ structure Iso where
   /-- `(member, theorem)` for the real members on which Lean's kernel enables
   its unit-like equality shortcut. -/
   unitlikes : Array (Nat × Name) := #[]
+  /-- `(source recursor, rule-K theorem)` for exactly those exported recursors
+  whose literal kernel metadata has `k = true`. -/
+  ruleKs : Array (Name × Name) := #[]
   /-- **Prelude constants the input did not declare and this model spliced in**
   — a subset of `Eq`, `Eq.refl`, the four quotient names, `Quot.sound` and
   `T._model.funext`, in the order they were emitted, and **empty** for every
@@ -2047,6 +2052,35 @@ def modelTable (env : Environment) (all : Array Name) (is : Iso) :
       | none => []
     t := t.insert ern (0, .const is.recs[k]! ls)
   return t
+
+/-- The extra reduction certified by a recursor's literal `k` flag.
+
+Unlike an iota theorem, the major is an arbitrary inhabitant of the unique
+constructor's result fiber. Lean's K reduction replaces it by that nullary
+constructor and then applies the sole ordinary rule.  Starting from the iota
+statement pins any indices to exactly that fiber without reconstructing them. -/
+def ruleKDecl (eqi : EqInfo) (recLevelParams : List Name) (numPre : Nat)
+    (theoremName : Name) (iotaType : Expr) : GenM Declaration := do
+  forallBoundedTelescope iotaType (some numPre) fun pre body => do
+    let .const eqName [v] := body.getAppFn
+      | badShape s!"{theoremName}'s source iota does not conclude at Eq"
+    unless eqName == eqi.eqN do badShape s!"{theoremName}'s source iota uses {eqName}"
+    let eqArgs := body.getAppArgs
+    unless eqArgs.size == 3 do badShape s!"{theoremName}'s source iota has malformed Eq"
+    let α := eqArgs[0]!
+    let lhs := eqArgs[1]!
+    let rhs := eqArgs[2]!
+    let some major := lhs.getAppArgs.back? | badShape s!"{theoremName}'s iota has no major"
+    let majorType ← inferType major
+    withLocalDeclD `major majorType fun arbitrary => do
+      let replaceMajor := fun expression => expression.replace fun sub =>
+        if sub == major then some arbitrary else none
+      let α := replaceMajor α
+      let lhs := replaceMajor lhs
+      let binders := pre.push arbitrary
+      let type := ← mkForallFVars binders (eqi.mk' v α lhs rhs)
+      let value := ← mkLambdaFVars binders (eqi.refl' v α lhs)
+      return .thmDecl { name := theoremName, levelParams := recLevelParams, type, value }
 
 def hintsFor (v : Expr) : GenM ReducibilityHints := do
   return .regular (getMaxHeight (← getEnv) v + 1)
@@ -2519,7 +2553,7 @@ def mimicGroups (pl : Plan) : Except Decline (Array (Array Nat)) := Id.run do
 The whole of the checker interaction is [`Modelgen.addChecked`], once per
 generated declaration. Nothing is emitted unchecked. -/
 def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
-    (exportCtors : Array (Array (Name × Expr))) (pl : Plan)
+    (exportCtors : Array (Array (Name × Expr))) (exportRecursors : Array ERec) (pl : Plan)
     (reserved : Std.HashSet Name) (buildRoot? : Option Name := none) : GenM Iso := do
   -- **The declaration's own level parameters are carried, not refused.** Every
   -- generated constant is declared at `lparams` and referenced at `us`; a
@@ -2582,6 +2616,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     publicNames := publicNames.addDeclaration .constructor name
   for k in [0:exportRecs.size] do
     publicNames := publicNames.addRecursor exportRecs[k]! pl.types[k]!.ctors.size
+    if (exportRecursors.find? (·.name == exportRecs[k]!)).any (·.k) then
+      publicNames := publicNames.addMetadata .ruleK exportRecs[k]!
   let mut helpers : Array Name := (Array.range pl.types.size).map b
   helpers := helpers ++ blockCtors.flatten
   for k in [0:pl.types.size] do helpers := helpers.push (Name.str (b k) "rec")
@@ -2859,6 +2895,30 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       out := out.push d
       iotas := iotas.push (k, key, nm)
 
+  -- ── 8. K-like reduction at the constructor's index fiber ──────────────
+  let mut ruleKs : Array (Name × Name) := #[]
+  for k in [0:shapes.size] do
+    let some exported := exportRecursors.find? (·.name == exportRecs[k]!)
+      | badShape s!"the export has no recursor record for {exportRecs[k]!}"
+    if exported.k then
+      let sh := shapes[k]!
+      let .recInfo rv ← constInfo sh.src | badShape s!"{sh.src} is not a recursor"
+      unless rv.k do badShape s!"{exported.name} is K-like but {sh.src} is not"
+      unless rv.rules.length == 1 do
+        badShape s!"{sh.src} is K-like with {rv.rules.length} rules"
+      let nm := g.ruleKName k
+      taken nm
+      let iotaType? := out.findSome? fun declaration => match declaration with
+        | .thmDecl value => if value.name == g.iotaName k 0 then some value.type else none
+        | _ => none
+      let some iotaType := iotaType?
+        | badShape s!"the K-like recursor {exported.name} has no iota theorem"
+      let d ← ruleKDecl eqi sh.lparams (rv.numParams + rv.numMotives + rv.numMinors)
+        nm iotaType
+      addChecked d
+      out := out.push d
+      ruleKs := ruleKs.push (exported.name, nm)
+
   let mut aliases := Naming.AliasMap.empty
   if buildRoot != root then
     aliases := Naming.AliasMap.forRetry primaryCarrier (Naming.modelName root)
@@ -2869,10 +2929,12 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       aliases := aliases.insert (g.ctorName j) (Naming.modelName exportCtorNames[j]!)
     for k in [0:exportRecs.size] do
       aliases := aliases.insert (g.recName k) (Naming.modelName exportRecs[k]!)
+      if (exportRecursors.find? (·.name == exportRecs[k]!)).any (·.k) then
+        aliases := aliases.insert (g.ruleKName k) (Naming.ruleKName exportRecs[k]!)
       for j in [0:pl.types[k]!.ctors.size] do
         aliases := aliases.insert (g.iotaName k j) (Naming.iotaName exportRecs[k]! j)
   return { decls := out, levelParams := lparams, members := g.members, selfNames
            numAll := r, ctors
-           recs := (Array.range pl.types.size).map g.recName, iotas, spliced, aliases }
+           recs := (Array.range pl.types.size).map g.recName, iotas, ruleKs, spliced, aliases }
 
 end Modelgen

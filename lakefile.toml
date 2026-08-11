@@ -59,3 +59,8 @@ supportInterpreter = true
 name = "namingtest"
 root = "NamingTest"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "rulektest"
+root = "RuleKTest"
+supportInterpreter = true

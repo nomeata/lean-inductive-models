@@ -106,11 +106,12 @@ def modelNameProbe : Array String := Id.run do
   let recD : ERec :=
     { name := recN, levelParams := [`w, `u], type := .sort (.param `u),
       all := [recN], numParams := 0, numIndices := 0, numMotives := 1,
-      numMinors := 1, rules := [rule], k := false, isUnsafe := false }
+      numMinors := 1, rules := [rule], k := true, isUnsafe := false }
   let defn := fun n => EDecl.defn n [`u] (.sort (.param `u)) (.sort (.param `u))
     EHints.abbrev "safe" [n]
   let iotaN := Naming.iotaName recN 0
   let unitlikeN := Naming.unitlikeName typeN
+  let ruleKN := Naming.ruleKName recN
   let helper := `Foo._model._impl.pack
   let outerTy : EIndType :=
     { name := outer, levelParams := [], type := .sort (.succ .zero),
@@ -122,6 +123,7 @@ def modelNameProbe : Array String := Id.run do
     defn (Naming.modelName recN),
     .thm iotaN [`w, `u] (.sort (.param `u)) (.sort (.param `u)) [iotaN],
     .thm unitlikeN [`u] (.sort (.param `u)) (.sort (.param `u)) [unitlikeN],
+    .thm ruleKN [`w, `u] (.sort (.param `u)) (.sort (.param `u)) [ruleKN],
     defn helper,
     .thm (Naming.unitlikeName outer) [] (.sort .zero) (.sort .zero)
       [Naming.unitlikeName outer],
@@ -141,6 +143,7 @@ def modelNameProbe : Array String := Id.run do
   errors := expect errors (Naming.modelName recN) typeN .recursor
   errors := expect errors iotaN typeN .iota
   errors := expect errors unitlikeN typeN .unitlike
+  errors := expect errors ruleKN typeN .ruleK
   if table.contains (Naming.modelName outer) then
     errors := errors.push "the original Foo._model inductive was parsed as Foo's carrier"
   if table.contains helper then

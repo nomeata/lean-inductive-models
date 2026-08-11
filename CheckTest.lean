@@ -77,11 +77,12 @@ def modelIotaAxiom (table : Correspondence) (x : Export) (ownerDecl : Nat)
 
 def modelMetadataAxiom (table : Correspondence) (x : Export) (ownerDecl : Nat)
     (metadata : Naming.Metadata) : Option EDecl := do
-  guard (metadata.kind == .unitlike)
-  let (ownerParams, ownerType) ← unitlikeProposition? x ownerDecl metadata.owner
+  let (ownerParams, ownerType) ← match metadata.kind with
+    | .unitlike => unitlikeProposition? x ownerDecl metadata.owner
+    | .ruleK => ruleKProposition? x ownerDecl metadata.owner
+    | _ => none
   let params := modelParams ownerParams
-  return .ax metadata.name params
-    (table.expectedIotaType ownerParams params ownerType) false
+  return .ax metadata.name params (table.expectedIotaType ownerParams params ownerType) false
 
 def modelDeclarations (x : Export) (table : Correspondence) (helper : Name) : Array EDecl :=
   let constants := (table.typeFormers ++ table.constructors ++ table.recursors).filterMap

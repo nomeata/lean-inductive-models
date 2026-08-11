@@ -8,9 +8,10 @@ This module is the format-only foundation of the model checker.  It discovers
 public model families solely from the declarations in an original inductive
 record.  If that record declares type former `T`, constructor `C`, recursor `R`
 and rule `j`, their public names are respectively `T._model`, `C._model`,
-`R._model` and `R._model.iota_j`, constructed by [`Modelgen.Naming`].  No name
-is split at `_model`, so private names and originals which themselves contain
-an `_model` component retain their exact identity.
+`R._model` and `R._model.iota_j`, constructed by [`Modelgen.Naming`].  A
+recursor whose literal `k` flag is true additionally owns `R._model.ruleK`.  No
+name is split at `_model`, so private names and originals which themselves
+contain an `_model` component retain their exact identity.
 
 Declaration records remain atomic for ordering.  A record which introduces at
 least one exact public name belongs to the corresponding family in its entirety;
@@ -25,8 +26,8 @@ The implemented invariants are:
   its model family;
 * there is exactly one public type-former, constructor and recursor declaration,
   and one theorem for every exported recursor rule; and
-* all declaration types, including the exact equality proposition synthesized
-  for each rule, are syntactically equal after the one public
+* all declaration types, including the exact equality propositions synthesized
+  for each ordinary rule and K reduction, are syntactically equal after the one public
   constant substitution and positional alignment of declaration universes.
 
 The second walk covers both names held directly in export records and names in
@@ -227,6 +228,41 @@ def unitlikeProposition? (x : Export) (ownerDecl : Nat) (owner : Name) :
     #[carrier, xBinder.value, yBinder.value]
   return (type.levelParams, closeForalls (allBinders ++ #[xBinder, yBinder]) equality)
 
+/-- The literal equality proposition for the K-like reduction of `recursorName`.
+It is the first iota proposition with its constructor major replaced by an
+arbitrary inhabitant of that constructor-result fiber.  Consequently indexed
+families retain the constructor's result indices rather than quantifying over
+arbitrary indices. -/
+def ruleKProposition? (x : Export) (ownerDecl : Nat) (recursorName : Name) :
+    Option (List Name × Expr) := do
+  let .induct _ _ recursors ← x.decls[ownerDecl]? | none
+  let recursor ← recursors.find? (·.name == recursorName)
+  unless recursor.k && recursor.rules.length == 1 do none
+  let rule := recursor.rules.head!
+  unless rule.nfields == 0 do none
+  let nb := recursor.numParams + recursor.numMotives + recursor.numMinors
+  let (levelParams, iotaType) ← iotaProposition? x ownerDecl recursorName 0
+  let (pre, body) := openForalls ((`_check.ruleK).append recursorName) iotaType
+  unless pre.size == nb do none
+  let eqArgs := body.getAppArgs
+  unless body.getAppFn.isConstOf `Eq && eqArgs.size == 3 do none
+  let lhs := eqArgs[1]!
+  let major ← lhs.getAppArgs.back?
+  let .const ctorName ctorLevels := major.getAppFn | none
+  let constructor ← (constructorRecords x)[ctorName]?
+  let mut majorType := constructor.type.instantiateLevelParams constructor.levelParams ctorLevels
+  for argument in major.getAppArgs do
+    let .forallE _ _ rest _ := majorType | none
+    majorType := rest.instantiate1 argument
+  let arbitrary := mkFVar (FVarId.mk ((`_check.ruleK.major).append recursorName))
+  let replaceMajor := fun expression => expression.replace fun sub =>
+    if sub == major then some arbitrary else none
+  let result := mkAppN body.getAppFn
+    #[replaceMajor eqArgs[0]!, replaceMajor lhs, eqArgs[2]!]
+  let majorBinder : OpenBinder :=
+    { name := `major, type := majorType, info := .default, value := arbitrary }
+  return (levelParams, closeForalls (pre.push majorBinder) result)
+
 /-- The correspondence table determined by an inductive record, independent
 of whether any model declarations are present. -/
 def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := do
@@ -241,9 +277,12 @@ def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := 
     { owner := recursor.name, model := Naming.modelName recursor.name }
   let iotas := recursorRecords.flatMap fun recursor =>
     (Array.range recursor.rules.length).map (Naming.Iota.ofRecursor recursor.name)
-  let metadata := types.toArray.filterMap fun type =>
+  let unitlikeMetadata := types.toArray.filterMap fun type =>
     if type.isKernelUnitlike ctors then some (Naming.Metadata.ofOwner .unitlike type.name)
     else none
+  let ruleKMetadata := recursorRecords.filterMap fun recursor =>
+    if recursor.k then some (Naming.Metadata.ofOwner .ruleK recursor.name) else none
+  let metadata := unitlikeMetadata ++ ruleKMetadata
   return { typeFormers, constructors, recursors, iotas, metadata }
 
 /-- A public model family discovered in an export.
@@ -447,6 +486,20 @@ private def checkUnitlike (x : Export) (family : Family)
     ownerParams model.levelParams ownerType
   if model.type == expected then #[] else #[.declarationType metadata.owner metadata.name]
 
+private def checkRuleK (x : Export) (family : Family) (declarations : DeclarationTypes)
+    (metadata : Naming.Metadata) : Array Violation := Id.run do
+  let models := declarations.getD metadata.name #[]
+  if models.isEmpty then return #[.missingPublic metadata.owner metadata.name]
+  if models.size != 1 then
+    return #[.duplicatePublic metadata.owner metadata.name models.size]
+  let some (ownerParams, ownerType) := ruleKProposition? x family.ownerDecl metadata.owner
+    | return #[.declarationType metadata.owner metadata.name]
+  let model := models[0]!
+  if ownerParams.length != model.levelParams.length then
+    return #[.universeArity metadata.owner metadata.name ownerParams.length model.levelParams.length]
+  let expected := family.correspondence.expectedIotaType ownerParams model.levelParams ownerType
+  if model.type == expected then #[] else #[.declarationType metadata.owner metadata.name]
+
 private def iotaSlot? (name : Name) : Option (Name × Nat) := do
   let .str parent suffix := name | none
   unless suffix.startsWith "iota_" do none
@@ -501,6 +554,8 @@ def check (x : Export) : Array Violation := Id.run do
     for metadata in family.correspondence.metadata do
       if metadata.kind == .unitlike then
         violations := violations ++ checkUnitlike x family declarations metadata
+      else if metadata.kind == .ruleK then
+        violations := violations ++ checkRuleK x family declarations metadata
     for pair in family.correspondence.recursors do
       let numRules := (family.correspondence.iotas.filter (·.recursor == pair.owner)).size
       for (name, ruleIndex) in ruleSlots.getD pair.model #[] do
@@ -510,12 +565,17 @@ def check (x : Export) : Array Violation := Id.run do
   -- other public slot exists to make the declaration a discoverable model
   -- family.  The exact owner record, not suffix parsing, determines the slot.
   for ownerDecl in [0:x.decls.size] do
-    let .induct types constructors _ := x.decls[ownerDecl]! | continue
+    let .induct types constructors recursors := x.decls[ownerDecl]! | continue
     for type in types do
       unless type.isKernelUnitlike constructors do
         let name := Naming.unitlikeName type.name
         unless (declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .unitlike)
+    for recursor in recursors do
+      unless recursor.k do
+        let name := Naming.ruleKName recursor.name
+        unless (declarations.getD name #[]).isEmpty do
+          violations := violations.push (.extraMetadata recursor.name name .ruleK)
   return violations
 
 end Modelgen.Check

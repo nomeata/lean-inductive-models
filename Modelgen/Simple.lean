@@ -2176,7 +2176,8 @@ partial def wTowerMk (w : Level) (xs : Array Expr) (i : Nat) (vals : Array Expr)
 
 /-- Complete the simple generator's explicit retry table. -/
 def primAliasMap (tname root model ern recN : Name) (exportCtors : Array (Name × Expr))
-    (ctorN iotaN : Nat → Name) (out : Array Declaration) : Naming.AliasMap := Id.run do
+    (ctorN iotaN : Nat → Name) (ruleK? : Option Name)
+    (out : Array Declaration) : Naming.AliasMap := Id.run do
   if root == tname then return .empty
   let mut aliases := Naming.AliasMap.forRetry model (Naming.modelName tname)
     (out.flatMap (·.getNames.toArray))
@@ -2184,7 +2185,38 @@ def primAliasMap (tname root model ern recN : Name) (exportCtors : Array (Name �
     aliases := aliases.insert (ctorN j) (Naming.modelName exportCtors[j]!.1)
     aliases := aliases.insert (iotaN j) (Naming.iotaName ern j)
   aliases := aliases.insert recN (Naming.modelName ern)
+  if let some name := ruleK? then
+    aliases := aliases.insert name (Naming.ruleKName ern)
   return aliases
+
+/-- Emit the simple route's K theorem without adding another large branch to
+`primIso`, which is already close to Lean's elaboration recursion limit. -/
+def primRuleK (eqi : EqInfo) (rv : RecursorVal)
+    (tname root model ern : Name) (reserved : Std.HashSet Name)
+    (iotaName : Name)
+    (out : Array Declaration) :
+    GenM (Array Declaration × Array (Name × Name) × Option Name) := do
+  unless rv.k do return (out, #[], none)
+  let ruleKN := Naming.ruleKName (Naming.relocateSource tname root ern)
+  let emitted :=
+    if model.isPrefixOf ruleKN then
+      ruleKN.replacePrefix model (Naming.modelName tname)
+    else ruleKN
+  if reserved.contains emitted || (← getEnv).constants.contains emitted then
+    declineWith (.nameTaken emitted)
+  if root != tname && ruleKN != emitted &&
+      (reserved.contains ruleKN || (← getEnv).constants.contains ruleKN) then
+    declineWith (.nameTaken ruleKN)
+  unless rv.rules.length == 1 do badShape s!"{ern} is K-like with {rv.rules.length} rules"
+  let iotaType? := out.findSome? fun declaration => match declaration with
+    | .thmDecl value => if value.name == iotaName then some value.type else none
+    | _ => none
+  let some iotaType := iotaType?
+    | badShape s!"the K-like recursor {ern} has no iota theorem"
+  let d ← ruleKDecl eqi rv.levelParams (rv.numParams + rv.numMotives + rv.numMinors)
+    ruleKN iotaType
+  addChecked d
+  return (out.push d, #[(ern, ruleKN)], some ruleKN)
 
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
@@ -4463,9 +4495,13 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     out := out.push d
     iotas := iotas.push (0, cn, iotaN j)
 
-  let aliases := primAliasMap tname root model ern recN exportCtors ctorN iotaN out
-  return { decls := out, levelParams := lparams, members := #[], selfNames := #[selfN]
-           numAll := 1, ctors := ctorPairs, recs := #[recN], iotas, spliced
+  let (out2, ruleKs, ruleK?) ← primRuleK eqi rv tname root model ern reserved
+    (iotaN 0) out
+
+  let aliases := primAliasMap tname root model ern recN exportCtors ctorN iotaN
+    ruleK? out2
+  return { decls := out2, levelParams := lparams, members := #[], selfNames := #[selfN]
+           numAll := 1, ctors := ctorPairs, recs := #[recN], iotas, ruleKs, spliced
            requires := if armC then #[skelN] else requires
            aliases }
 

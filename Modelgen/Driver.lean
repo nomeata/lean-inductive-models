@@ -299,7 +299,10 @@ def serialiseIso (is : Iso) : MetaM (Array EDecl × Iso) := do
   let spliced := is.spliced.map fun name => aliases.exact name
   let unitlikes := is.unitlikes.map fun (member, theoremName) =>
     (member, aliases.exact theoremName)
-  return (renamed, { is with aliases := aliases, spliced := spliced, unitlikes := unitlikes })
+  let ruleKs := is.ruleKs.map fun (recursor, theoremName) =>
+    (recursor, aliases.exact theoremName)
+  return (renamed,
+    { is with aliases := aliases, spliced := spliced, unitlikes := unitlikes, ruleKs := ruleKs })
 
 /-- Compare the export's own recursors against the ones the kernel just
 regenerated. Returns the names that differ. -/
@@ -362,6 +365,35 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
       errs := errs.push s!"{is.recs[k]!} is not {ern} at the model"
     n := n + 1
     let mine := is.iotas.filter (·.1 == k)
+    let kTheorems := is.ruleKs.filter (·.1 == ern)
+    if rv.k then
+      unless kTheorems.size == 1 do
+        errs := errs.push s!"{is.recs[k]!} has {kTheorems.size} rule-K theorems"
+      if let some (_, theoremName) := kTheorems[0]? then
+        match EqInfo.check env with
+        | .error why => errs := errs.push s!"cannot check {theoremName}: Eq {why}"
+        | .ok eqi =>
+          unless rv.rules.length == 1 do
+            errs := errs.push s!"{ern} is K-like with {rv.rules.length} rules"
+          if rv.rules[0]?.isSome then
+            let some (_, _, iotaName) := mine[0]?
+              | errs := errs.push s!"{ern} has no generated first ι theorem"; continue
+            let some iotaInfo := env.constants.find? iotaName
+              | errs := errs.push s!"{iotaName} was not generated"; continue
+            match ← (ruleKDecl eqi rv.levelParams
+                (rv.numParams + rv.numMotives + rv.numMinors) theoremName
+                iotaInfo.type).run with
+            | .error dec => errs := errs.push s!"cannot state {theoremName}: {dec.label}"
+            | .ok (.thmDecl expected) =>
+              match env.constants.find? theoremName with
+              | some actual =>
+                unless actual.levelParams == expected.levelParams && actual.type == expected.type do
+                  errs := errs.push s!"{theoremName} is not {ern}'s K reduction"
+              | none => errs := errs.push s!"{theoremName} was not generated"
+            | .ok _ => errs := errs.push s!"{theoremName} is not a theorem"
+          n := n + 1
+    else unless kTheorems.isEmpty do
+      errs := errs.push s!"{ern} is not K-like but has a rule-K theorem"
     unless mine.size == rv.rules.length do
       errs := errs.push s!"{is.recs[k]!} has {mine.size} ι theorems against {ern}'s \
         {rv.rules.length} rules"
@@ -537,6 +569,10 @@ def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr)) : MetaM (O
   for j in [0:ctors.size] do
     let n := Naming.iotaName recursor j
     if env.constants.contains n then return some n
+  if let some (.recInfo info) := env.constants.find? recursor then
+    if info.k then
+      let n := Naming.ruleKName recursor
+      if env.constants.contains n then return some n
   return none
 
 /-- One simple inductive's model from the primitives, generated and
@@ -835,12 +871,13 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
             let saved ← getEnv
             let ctors := all.map ctorsOfMember
             let mut result ← (do
-              let is ← iso all t.levelParams t.numParams ctors pl reserved
+              let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray
+                pl reserved
               addUnitlikeTheorems ts.toArray cs.toArray inputRecursors.toArray reserved is).run
             if let .error (.nameLost _) := result then
               setEnv saved
               result ← (do
-                let is ← iso all t.levelParams t.numParams ctors pl reserved
+                let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray pl reserved
                   (some (Naming.retryRoot t.name))
                 addUnitlikeTheorems ts.toArray cs.toArray inputRecursors.toArray reserved is).run
             match result with
