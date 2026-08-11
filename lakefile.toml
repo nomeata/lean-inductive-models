@@ -69,3 +69,8 @@ supportInterpreter = true
 name = "mainclitest"
 root = "MainCliTest"
 supportInterpreter = true
+
+[[lean_exe]]
+name = "projectiontest"
+root = "ProjectionTest"
+supportInterpreter = true

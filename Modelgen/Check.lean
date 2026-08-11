@@ -54,12 +54,13 @@ structure Correspondence where
   typeFormers : Array ConstantPair
   constructors : Array ConstantPair
   recursors : Array ConstantPair
+  projections : Array ConstantPair
   iotas : Array Naming.Iota
   metadata : Array Naming.Metadata
   deriving Inhabited, Repr, BEq
 
 def Correspondence.entries (table : Correspondence) : Array ConstantPair :=
-  table.typeFormers ++ table.constructors ++ table.recursors
+  table.typeFormers ++ table.constructors ++ table.recursors ++ table.projections
 
 /-- Exact public declarations which can establish this correspondence in an
 export.  Recursors and iota theorems participate in discovery even though their
@@ -283,8 +284,20 @@ def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := 
     else none
   let ruleKMetadata := recursorRecords.filterMap fun recursor =>
     if recursor.k then some (Naming.Metadata.ofOwner .ruleK recursor.name) else none
-  let metadata := unitlikeMetadata ++ ruleKMetadata
-  return { typeFormers, constructors, recursors, iotas, metadata }
+  -- `Lean.isStructureLike` after replay is exactly this kernel shape.  The
+  -- elaborator's structure/projection extensions are not part of the export,
+  -- so exact projection declarations come from the whole-export primitive
+  -- projection prepass.
+  let mut projectionRecords : Array EProjection := #[]
+  for type in types do
+    if type.isKernelStructureLike ctors then
+      projectionRecords := projectionRecords ++ x.projectionsFor type.name
+  let projections := projectionRecords.map fun projection =>
+    { owner := projection.name, model := Naming.projectionName projection.name }
+  let projectionIotas := projectionRecords.map fun projection =>
+    Naming.Metadata.ofOwner .projectionIota projection.name
+  let metadata := unitlikeMetadata ++ ruleKMetadata ++ projectionIotas
+  return { typeFormers, constructors, recursors, projections, iotas, metadata }
 
 /-- A public model family discovered in an export.
 
@@ -501,6 +514,139 @@ private def checkRuleK (x : Export) (family : Family) (declarations : Declaratio
   let expected := family.correspondence.expectedIotaType ownerParams model.levelParams ownerType
   if model.type == expected then #[] else #[.declarationType metadata.owner metadata.name]
 
+private partial def instantiateForallsExact (expression : Expr) (arguments : Array Expr)
+    (index : Nat := 0) : Option Expr :=
+  match arguments[index]? with
+  | none => some expression
+  | some argument => match expression with
+    | .forallE _ _ body _ => instantiateForallsExact (body.instantiate1 argument) arguments (index + 1)
+    | _ => none
+
+private abbrev ExactLocals := Array (FVarId × Expr)
+
+private def ExactLocals.typeOf? (locals : ExactLocals) (id : FVarId) : Option Expr :=
+  (locals.find? (·.1 == id)).map (·.2)
+
+private partial def exactWhnf : Expr → Expr
+  | .mdata _ body => exactWhnf body
+  | .letE _ _ value body _ => exactWhnf (body.instantiate1 value)
+  | expression => expression
+
+mutual
+
+/-- A deliberately small, exact type synthesizer for the result of an
+exported projection declaration.  It never unfolds a definition: declaration
+types and local binder types suffice to expose the result sort, while the
+projection case follows the exact recovered primitive projection interface. -/
+private partial def inferExactType? (x : Export) (declarations : DeclarationTypes)
+    (locals : ExactLocals) : Expr → Option Expr
+  | .sort level => some (.sort (.succ level))
+  | .fvar id => locals.typeOf? id
+  | .const name levels => do
+      let declaration ← (declarations.getD name #[])[0]?
+      if declaration.levelParams.length != levels.length then none
+      return declaration.type.instantiateLevelParams declaration.levelParams levels
+  | .app function argument => do
+      let functionType := exactWhnf (← inferExactType? x declarations locals function)
+      let .forallE _ _ body _ := functionType | none
+      return body.instantiate1 argument
+  | .lam name domain body info => do
+      let value := mkFVar (FVarId.mk ((`_check.exactLam).mkNum locals.size))
+      let bodyType ← inferExactType? x declarations
+        (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
+      return .forallE name domain (bodyType.abstract #[value]) info
+  | .forallE name domain body info => do
+      let domainLevel ← inferExactSortLevel? x declarations locals domain
+      let value := mkFVar (FVarId.mk ((`_check.exactPi).mkNum locals.size))
+      let bodyLevel ← inferExactSortLevel? x declarations
+        (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
+      let _ := name
+      let _ := info
+      return .sort (.imax domainLevel bodyLevel)
+  | .letE _ _ value body _ =>
+      inferExactType? x declarations locals (body.instantiate1 value)
+  | .mdata _ body => inferExactType? x declarations locals body
+  | .proj owner fieldIndex struct => do
+      let structType := exactWhnf (← inferExactType? x declarations locals struct)
+      let .const structOwner levels := structType.getAppFn | none
+      unless structOwner == owner do none
+      let projection ← x.projections.find? fun projection =>
+        projection.owner == owner && projection.fieldIndex == fieldIndex
+      unless projection.levelParams.length == levels.length do none
+      let projectionType := projection.type.instantiateLevelParams projection.levelParams levels
+      let numParams := projection.numArguments - 1
+      let ownerArguments := structType.getAppArgs
+      unless numParams <= ownerArguments.size do none
+      instantiateForallsExact projectionType
+        ((ownerArguments.extract 0 numParams).push struct)
+  | .lit (.natVal _) => some (.const ``Nat [])
+  | .lit (.strVal _) => some (.const ``String [])
+  | .bvar _ | .mvar _ => none
+
+private partial def inferExactSortLevel? (x : Export) (declarations : DeclarationTypes)
+    (locals : ExactLocals) (expression : Expr) : Option Level := do
+  let .sort level := exactWhnf (← inferExactType? x declarations locals expression) | none
+  return level
+
+end
+
+/-- Check one projection rule literally.  The export carries no source theorem
+to rewrite, so its proposition is synthesized from the exact projection,
+constructor and field index records.  The equality universe is synthesized by
+exact type inference on the original projection result, never copied from the
+candidate theorem. -/
+private def checkProjectionIota (x : Export) (family : Family) (declarations : DeclarationTypes)
+    (metadata : Naming.Metadata) : Array Violation := Id.run do
+  let models := declarations.getD metadata.name #[]
+  if models.isEmpty then return #[.missingPublic metadata.owner metadata.name]
+  if models.size != 1 then return #[.duplicatePublic metadata.owner metadata.name models.size]
+  let some projection := x.projections.find? (·.name == metadata.owner)
+    | return #[.declarationType metadata.owner metadata.name]
+  let .induct _ ownerConstructors _ := x.decls[family.ownerDecl]!
+    | return #[.declarationType metadata.owner metadata.name]
+  let some constructor := ownerConstructors.find? (·.induct == projection.owner)
+    | return #[.declarationType metadata.owner metadata.name]
+  let some constructorPair := family.correspondence.constructors.find?
+      (·.owner == constructor.name)
+    | return #[.declarationType metadata.owner metadata.name]
+  let model := models[0]!
+  if projection.levelParams.length != model.levelParams.length then
+    return #[.universeArity metadata.owner metadata.name
+      projection.levelParams.length model.levelParams.length]
+  let mappedConstructorType := family.correspondence.expectedType
+    constructor.levelParams model.levelParams constructor.type
+  let (constructorBinders, _) := openForalls
+    ((`_check.projectionCtor).append projection.name) mappedConstructorType
+  unless constructorBinders.size == constructor.numParams + constructor.numFields do
+    return #[.declarationType metadata.owner metadata.name]
+  let constructorArgs := constructorBinders.map (·.value)
+  let params := constructorArgs.extract 0 constructor.numParams
+  let fields := constructorArgs.extract constructor.numParams constructorArgs.size
+  let levels := model.levelParams.map Level.param
+  let major := mkAppN (.const constructorPair.model levels) constructorArgs
+  let projectionPair := family.correspondence.projections.find? (·.owner == projection.name)
+  let some projectionPair := projectionPair
+    | return #[.declarationType metadata.owner metadata.name]
+  let mappedProjectionType := family.correspondence.expectedType
+    projection.levelParams model.levelParams projection.type
+  let some alpha := instantiateForallsExact mappedProjectionType (params.push major)
+    | return #[.declarationType metadata.owner metadata.name]
+  let some rhs := fields[projection.fieldIndex]?
+    | return #[.declarationType metadata.owner metadata.name]
+  let lhs := mkAppN (.const projectionPair.model levels) (params.push major)
+  let (sourceBinders, sourceResult) := openForalls
+    ((`_check.projectionResult).append projection.name) projection.type
+  unless sourceBinders.size == projection.numArguments do
+    return #[.declarationType metadata.owner metadata.name]
+  let sourceLocals := sourceBinders.map fun binder => (binder.value.fvarId!, binder.type)
+  let some sourceEqLevel := inferExactSortLevel? x declarations sourceLocals sourceResult
+    | return #[.declarationType metadata.owner metadata.name]
+  let eqLevel := sourceEqLevel.instantiateParams projection.levelParams
+    (model.levelParams.map Level.param)
+  let expectedBody := mkAppN (.const ``Eq [eqLevel]) #[alpha, lhs, rhs]
+  let expected := closeForalls constructorBinders expectedBody
+  if model.type == expected then #[] else #[.declarationType metadata.owner metadata.name]
+
 private def iotaSlot? (name : Name) : Option (Name × Nat) := do
   let .str parent suffix := name | none
   unless suffix.startsWith "iota_" do none
@@ -550,6 +696,8 @@ def check (x : Export) : Array Violation := Id.run do
       violations := violations ++ checkPair family.correspondence declarations pair
     for pair in family.correspondence.recursors do
       violations := violations ++ checkPair family.correspondence declarations pair
+    for pair in family.correspondence.projections do
+      violations := violations ++ checkPair family.correspondence declarations pair
     for iota in family.correspondence.iotas do
       violations := violations ++ checkIota x constructors family declarations iota
     for metadata in family.correspondence.metadata do
@@ -557,6 +705,8 @@ def check (x : Export) : Array Violation := Id.run do
         violations := violations ++ checkUnitlike x family declarations metadata
       else if metadata.kind == .ruleK then
         violations := violations ++ checkRuleK x family declarations metadata
+      else if metadata.kind == .projectionIota then
+        violations := violations ++ checkProjectionIota x family declarations metadata
     for pair in family.correspondence.recursors do
       let numRules := (family.correspondence.iotas.filter (·.recursor == pair.owner)).size
       for (name, ruleIndex) in ruleSlots.getD pair.model #[] do

@@ -524,10 +524,15 @@ def expectedPrim : List Row :=
   -- is lost, and [`Modelgen.lateSpliceNames`] is what holds the model back
   -- until the input has caught up. Without that it is a decline, and this row
   -- is where the difference shows.
+  --
+  -- `Subtype`, `Sigma` and `Iff` are also kernel structure-like. Their larger
+  -- counts include the exact model definition and literal reduction theorem
+  -- for each primitive projection: four extra declarations for the two-field
+  -- `Subtype`, and four each for the two projections of `Sigma` and `Iff`.
   , ("w_core",
-      [("Subtype", 6), ("List", 6), ("Sigma", 4), ("Option", 6), ("Exists", 4),
+      [("Subtype", 10), ("List", 6), ("Sigma", 8), ("Option", 6), ("Exists", 4),
        ("And", 4), ("False", 2), ("Decidable", 6), ("PUnit", 5), ("True", 6),
-       ("Or", 6), ("Iff", 4), ("WellFounded", 4),
+       ("Or", 6), ("Iff", 8), ("WellFounded", 4),
        ("Bool", 6), ("HEq", 5), ("PProd", 4), ("Nonempty", 4), ("Acc", 12)],
       [ ("Nat", "prim model: a basis primitive")
       , ("Eq", "prim model: a basis primitive")])

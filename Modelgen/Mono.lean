@@ -131,6 +131,8 @@ inductive ModelRole where
   | iota
   | unitlike
   | ruleK
+  | projection
+  | projectionIota
   deriving BEq, Inhabited
 
 /-- A generated public declaration and the original inductive record that owns
@@ -168,7 +170,8 @@ private def siteKind : EDecl → SiteKind
 The declaration-local contract is generated from each inductive record:
 `T._model`, `C._model`, `R._model`, `R._model.iota_j`, and, exactly when the
 export metadata has the corresponding kernel feature, `T._model.unitlike` and
-`R._model.ruleK`. A candidate counts
+`R._model.ruleK`; a kernel structure-like owner additionally has
+`P._model`/`P._model.iota` for each recovered primitive projection. A candidate counts
 only when the export contains a declaration of the generated role's kind. That
 condition distinguishes an original inductive literally named `Foo._model`
 from the definition serving as the carrier model of `Foo`; its own model is, exactly,
@@ -218,6 +221,12 @@ def modelTable (x : Export) : ModelTable := Id.run do
       if t.isKernelUnitlike cs then
         (table, ambiguous) := add table ambiguous (Naming.unitlikeName t.name) .theorem
           (entry .unitlike)
+      if t.isKernelStructureLike cs then
+        for projection in x.projectionsFor t.name do
+          (table, ambiguous) := add table ambiguous
+            (Naming.projectionName projection.name) .value (entry .projection)
+          (table, ambiguous) := add table ambiguous
+            (Naming.projectionIotaName projection.name) .theorem (entry .projectionIota)
   return table
 
 /-- One node of the declaration DAG. -/

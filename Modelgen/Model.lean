@@ -2002,6 +2002,11 @@ structure Iso where
   /-- `(source recursor, rule-K theorem)` for exactly those exported recursors
   whose literal kernel metadata has `k = true`. -/
   ruleKs : Array (Name × Name) := #[]
+  /-- `(the export's primitive projection, its model, its reduction theorem)`.
+  Empty for non-structure models.  The first component is always the exact raw
+  export name; the generated components may temporarily use an alias build
+  root until serialization. -/
+  projections : Array (Name × Name × Name) := #[]
   /-- **Prelude constants the input did not declare and this model spliced in**
   — a subset of `Eq`, `Eq.refl`, the four quotient names, `Quot.sound` and
   `T._model.funext`, in the order they were emitted, and **empty** for every
@@ -2051,6 +2056,11 @@ def modelTable (env : Environment) (all : Array Name) (is : Iso) :
       | some ci => ci.levelParams.map Level.param
       | none => []
     t := t.insert ern (0, .const is.recs[k]! ls)
+  for (exportProjection, modelProjection, _) in is.projections do
+    let ls := match env.constants.find? exportProjection with
+      | some ci => ci.levelParams.map Level.param
+      | none => is.levelParams.map Level.param
+    t := t.insert exportProjection (0, .const modelProjection ls)
   return t
 
 /-- The extra reduction certified by a recursor's literal `k` flag.

@@ -83,6 +83,32 @@ structure PendingModel where
   this pass, [`Modelgen.recursorsOfNames`] reads back the exact records that
   this driver just emitted. -/
   recursors : Array ERec
+  /-- Whole-export projection records associated with this structure owner.
+  They may occur later in the input and need not yet be installed. -/
+  projections : Array EProjection := #[]
+
+/-- The unique minor-premise position belonging to `constructorName` in a
+mutual recursor telescope.  Each exported recursor record carries only its
+own member's rules, while the installed mutual recursor consumes every
+member's minors.  Reconstruct that order from `recursor.all`, retaining the
+literal per-member rule order and ignoring the export's recursor-array order. -/
+def recursorMinorIndex (constructors : Array ECtor) (recursors : Array ERec)
+    (recursor : ERec) (constructorName : Name) : GenM Nat := do
+  let mut rules : Array Name := #[]
+  for member in recursor.all do
+    for candidate in recursors do
+      if candidate.all == recursor.all then
+        for rule in candidate.rules do
+          if constructors.any fun constructor =>
+              constructor.name == rule.ctor && constructor.induct == member then
+            rules := rules.push rule.ctor
+  unless rules.size == recursor.numMinors do
+    badShape s!"{recursor.name}'s mutual rule order has {rules.size} entries, expected {recursor.numMinors}"
+  unless (rules.filter (· == constructorName)).size == 1 do
+    badShape s!"{recursor.name} does not have exactly one rule for {constructorName}"
+  let some index := rules.findIdx? (· == constructorName)
+    | badShape s!"{recursor.name}'s mutual telescope has no rule for {constructorName}"
+  return index
 
 /-- Add the equality theorem for every member on which Lean's kernel enables
 its unit-like shortcut.  The proof does not appeal to that shortcut: it runs
@@ -118,10 +144,13 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
     let type := types[k]!
     let [constructorName] := type.ctors
       | badShape s!"{type.name} changed shape while generating its unit-like theorem"
-    let some constructorIndex := constructors.findIdx? (·.name == constructorName)
-      | badShape s!"{constructorName} has no constructor record"
-    let some recursor := recursors[k]?
-      | badShape s!"{type.name} has no corresponding exported recursor"
+    unless constructors.any fun constructor =>
+        constructor.name == constructorName && constructor.induct == type.name do
+      badShape s!"{constructorName} has no constructor record"
+    let some recursor := recursors.find? fun recursor =>
+        recursor.rules.any (·.ctor == constructorName)
+      | badShape s!"{type.name} has no corresponding exported recursor rule"
+    let minorIndex ← recursorMinorIndex constructors recursors recursor constructorName
     let some motiveIndex := recursor.all.idxOf? type.name
       | badShape s!"{recursor.name} has no motive for {type.name}"
     unless recursor.numIndices == 0 do
@@ -131,7 +160,8 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
       badShape s!"{recursor.name} has an unexpected mutual telescope"
 
     let modelType := is.selfNames[k]!
-    let modelConstructor := is.ctors[constructorIndex]!.2
+    let some (_, modelConstructor) := is.ctors.find? (·.1 == constructorName)
+      | badShape s!"{constructorName} has no model constructor"
     let modelRecursor := is.recs[k]!
     let theoremName := Name.str modelType "unitlike"
     if env.constants.contains theoremName then declineWith (.nameTaken theoremName)
@@ -174,7 +204,7 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
         for minor in [0:recursor.numMinors] do
           let .forallE _ domain body _ := current
             | badShape s!"{modelRecursor} has too few minor binders"
-          let value ← if minor == constructorIndex then pure targetMinor
+          let value ← if minor == minorIndex then pure targetMinor
             else forallTelescope domain fun binders _ => mkLambdaFVars binders refl
           args := args.push value
           current := body.instantiate1 value
@@ -206,6 +236,225 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
     out := out.push declaration
     unitlikes := unitlikes.push (k, theoremName)
   return { is with decls := out, unitlikes }
+
+/-- Build the parameter/motive/minor prefix for one selected member of a
+mutual model recursor.
+
+The selected motive and minor are supplied by the caller.  Every unrelated
+motive is the constant inhabited lift of `major = major` into the recursor's
+motive sort, and every unrelated minor returns its lifted reflexivity.  This is the common elimination adapter
+for structure metadata (projections and eta): it permits selecting one member
+without assuming an inhabitant of any sibling's codomain. -/
+def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
+    (modelRecursor : Name) (motiveIndex minorIndex : Nat)
+    (params : Array Expr) (carrier major targetMotive targetMinor : Expr)
+    (motiveLevel : Level) (recLevels : List Level) : GenM (Array Expr) := do
+  let modelRecursorInfo ← constInfo modelRecursor
+  let recType := modelRecursorInfo.type.instantiateLevelParams
+    modelRecursorInfo.levelParams recLevels
+  let mut current ← instForall recType params
+  let mut arguments := params
+  let carrierLevel ← ilevel carrier
+  let fillerProposition := eqi.mk' carrierLevel carrier major major
+  -- Every motive of one mutual recursor lands in the same `Sort motiveLevel`.
+  -- A bare equality inhabits `Prop`, which is not syntactically a term of
+  -- `Type u` at a variable `u`; lift it through the primitive basis so the
+  -- unrelated motives and minors have exactly the recursor's required sort.
+  let fillerType := puliftT motiveLevel fillerProposition
+  let fillerValue := puliftUp motiveLevel fillerProposition
+    (eqi.refl' carrierLevel carrier major)
+  let constantMotive := fun (domain proposition : Expr) =>
+    forallTelescope domain fun binders _ => mkLambdaFVars binders proposition
+  for motive in [0:sourceRecursor.numMotives] do
+    let .forallE _ domain body _ := current
+      | badShape s!"{modelRecursor} has too few motive binders"
+    let value ← if motive == motiveIndex then pure targetMotive
+      else constantMotive domain fillerType
+    arguments := arguments.push value
+    current := body.instantiate1 value
+  for minor in [0:sourceRecursor.numMinors] do
+    let .forallE _ domain body _ := current
+      | badShape s!"{modelRecursor} has too few minor binders"
+    let value ← if minor == minorIndex then pure targetMinor
+      else forallTelescope domain fun binders _ => mkLambdaFVars binders fillerValue
+    arguments := arguments.push value
+    current := body.instantiate1 value
+  return arguments
+
+/-- Add modeled primitive projections and their literal constructor rules for
+every kernel structure-like member in a generated block.
+
+This is a post-generator operation, not a simple-inductive special case.  A
+non-recursive mutual block can have several structure-like members, and the
+kernel predicate is per member.  For the selected member the recursor motive
+is the projection codomain and its constructor minor selects the field.  Every
+unrelated mutual motive is the inhabited constant lift of `self = self` into
+the shared motive sort; thus no arbitrary inhabitant of an unrelated field
+codomain is assumed. -/
+def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
+    (recursors : Array ERec) (projections : Array EProjection)
+    (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+  let projections := projections.filter fun projection =>
+    types.any fun type =>
+      type.name == projection.owner && type.isKernelStructureLike constructors.toList
+  if projections.isEmpty then return is
+  unless types.size == is.numAll && is.selfNames.size == is.numAll do
+    badShape "the structure-member table does not match the generated model"
+
+  let publicTable := projections.foldl (fun table projection =>
+    table.addProjection projection.name) Naming.Table.empty
+  let occupied := reserved.fold (fun names name => names.push name) #[]
+  let census := publicTable.collisionCensus occupied
+  if let some name := census.taken[0]? <|> census.duplicateRequirements[0]? then
+    declineWith (.nameTaken name)
+
+  -- Unselected mutual motives must still inhabit the selected projection's
+  -- result sort.  `PULiftP` is the primitive basis operation which lifts the
+  -- reflexive equality filler to that exact, possibly variable universe.
+  let puliftDecls ← if types.size > 1 then ensurePULiftP reserved else pure #[]
+
+  let env ← getEnv
+  let eqi ← match EqInfo.check env with
+    | .ok eqi => pure eqi
+    | .error message => badShape message
+  let all := types.map (·.name)
+  let us := is.levelParams.map Level.param
+  let mut out := is.decls
+  let mut spliced := is.spliced
+  for declaration in puliftDecls do
+    out := out.push declaration
+    spliced := spliced ++ declaration.getNames.toArray
+  let mut projectionModels := is.projections
+  let mut aliases := is.aliases
+
+  for projection in projections do
+    let some memberIndex := types.findIdx? (·.name == projection.owner)
+      | badShape s!"{projection.name} has no structure member {projection.owner}"
+    let type := types[memberIndex]!
+    unless type.isKernelStructureLike constructors.toList do
+      badShape s!"{projection.owner} is not kernel structure-like"
+    let [constructorName] := type.ctors
+      | badShape s!"{projection.owner} does not have exactly one constructor"
+    let some constructorIndex := constructors.findIdx? fun constructor =>
+        constructor.name == constructorName && constructor.induct == type.name
+      | badShape s!"{constructorName} has no constructor record"
+    let constructor := constructors[constructorIndex]!
+    -- Exported recursors are not required to follow the type array's order:
+    -- Lean emits a wholly non-recursive mutual structure fixture's recursors
+    -- in reverse member order.  The unique constructor rule is the exact,
+    -- order-independent association.
+    let some recursor := recursors.find? fun recursor =>
+        recursor.rules.any (·.ctor == constructorName)
+      | badShape s!"{type.name} has no corresponding exported recursor rule"
+    let minorIndex ← recursorMinorIndex constructors recursors recursor constructorName
+    let some motiveIndex := recursor.all.idxOf? type.name
+      | badShape s!"{recursor.name} has no motive for {type.name}"
+    unless recursor.numIndices == 0 do
+      badShape s!"structure recursor {recursor.name} unexpectedly has indices"
+    unless recursor.numMotives == recursor.all.length &&
+        recursor.numMinors == constructors.size do
+      badShape s!"{recursor.name} has an unexpected mutual telescope"
+    unless projection.levelParams == type.levelParams do
+      badShape s!"{projection.name} has level parameters {projection.levelParams}, not {type.levelParams}"
+    unless projection.numArguments == type.numParams + 1 do
+      badShape s!"{projection.name} has {projection.numArguments} value arguments, expected {type.numParams + 1}"
+    unless projection.fieldIndex < constructor.numFields do
+      badShape s!"{projection.name} projects field {projection.fieldIndex}, but {constructorName} has {constructor.numFields} fields"
+
+    let modelType := is.selfNames[memberIndex]!
+    let some (_, modelConstructor) := is.ctors.find? (·.1 == constructorName)
+      | badShape s!"{constructorName} has no model constructor"
+    let modelRecursor := is.recs[memberIndex]!
+    let publicProjection := Naming.projectionName projection.name
+    let publicRule := Naming.projectionIotaName projection.name
+    let (modelProjection, modelRule) :=
+      if aliases.buildRoot?.isSome then
+        let base := (Name.str (Name.str modelType "_impl") "projection").mkNum projection.declIndex
+        (Name.str base "value", Name.str base "iota")
+      else
+        (publicProjection, publicRule)
+    if (← getEnv).constants.contains modelProjection then declineWith (.nameTaken publicProjection)
+    if (← getEnv).constants.contains modelRule then declineWith (.nameTaken publicRule)
+
+    let currentIso := { is with decls := out, projections := projectionModels, aliases := aliases }
+    let table := modelTable (← getEnv) all currentIso
+    let projectionType := restore table projection.type
+    let modelConstructorType := (← constInfo modelConstructor).type
+    let modelRecursorInfo ← constInfo modelRecursor
+    let carrier := fun (params : Array Expr) => mkAppN (.const modelType us) params
+
+    let definition ← forallBoundedTelescope projectionType (some (type.numParams + 1))
+        fun arguments result => do
+      let params := arguments.extract 0 type.numParams
+      let self := arguments[type.numParams]!
+      let targetMotive ← mkLambdaFVars #[self] result
+      let targetMinor ← forallBoundedTelescope
+          (← instantiateForall modelConstructorType params) (some constructor.numFields)
+          fun fields _ => do
+        let some field := fields[projection.fieldIndex]?
+          | badShape s!"{projection.name}'s field {projection.fieldIndex} is absent"
+        mkLambdaFVars fields field
+      let resultLevel ← ilevel result
+      let recLevels ←
+        if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
+          pure (resultLevel :: us)
+        else if modelRecursorInfo.levelParams.length == is.levelParams.length then
+          pure us
+        else
+          badShape s!"{modelRecursor} carries unexpected universe parameters"
+      let pre ← structureRecursorPreArguments eqi recursor modelRecursor
+        motiveIndex minorIndex params (carrier params) self targetMotive targetMinor resultLevel recLevels
+      let value ← mkLambdaFVars arguments
+        (mkAppN (.const modelRecursor recLevels) (pre.push self))
+      return Declaration.defnDecl
+        { name := modelProjection, levelParams := is.levelParams, type := projectionType,
+          value, hints := .abbrev, safety := .safe }
+    addChecked definition
+    out := out.push definition
+
+    let some (_, _, iotaTheorem) := is.iotas.find? fun (index, key, _) =>
+        index == memberIndex && key == constructorName
+      | badShape s!"{modelRecursor} has no iota theorem for {constructorName}"
+    let rule ← forallBoundedTelescope modelConstructorType
+        (some (type.numParams + constructor.numFields)) fun arguments _ => do
+      let params := arguments.extract 0 type.numParams
+      let fields := arguments.extract type.numParams arguments.size
+      let major := mkAppN (.const modelConstructor us) arguments
+      let lhs := mkAppN (.const modelProjection us) (params.push major)
+      let some rhs := fields[projection.fieldIndex]?
+        | badShape s!"{projection.name}'s field {projection.fieldIndex} is absent"
+      let alpha ← inferType lhs
+      let fieldLevel ← ilevel alpha
+      let targetMotive ← forallBoundedTelescope
+          (← instantiateForall projectionType params) (some 1) fun self result =>
+        mkLambdaFVars self result
+      let targetMinor ← forallBoundedTelescope
+          (← instantiateForall modelConstructorType params) (some constructor.numFields)
+          fun minorFields _ => do
+        let some field := minorFields[projection.fieldIndex]?
+          | badShape s!"{projection.name}'s field {projection.fieldIndex} is absent"
+        mkLambdaFVars minorFields field
+      let recLevels ←
+        if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
+          pure (fieldLevel :: us)
+        else if modelRecursorInfo.levelParams.length == is.levelParams.length then
+          pure us
+        else
+          badShape s!"{modelRecursor} carries unexpected universe parameters"
+      let pre ← structureRecursorPreArguments eqi recursor modelRecursor
+        motiveIndex minorIndex params (carrier params) major targetMotive targetMinor fieldLevel recLevels
+      let proof := mkAppN (.const iotaTheorem recLevels) (pre ++ fields)
+      let type ← mkForallFVars arguments (eqi.mk' fieldLevel alpha lhs rhs)
+      let value ← mkLambdaFVars arguments proof
+      return Declaration.thmDecl
+        { name := modelRule, levelParams := is.levelParams, type, value }
+    addChecked rule
+    out := out.push rule
+    projectionModels := projectionModels.push (projection.name, modelProjection, modelRule)
+    aliases := aliases.insert modelProjection publicProjection
+    aliases := aliases.insert modelRule publicRule
+
+  return { is with decls := out, projections := projectionModels, spliced, aliases := aliases }
 
 private abbrev FilterState := Array EDecl × Report × Array PendingModel
 
@@ -245,6 +494,15 @@ def addInstalledUnitlikeTheorems (names : Array Name) (reserved : Std.HashSet Na
     (is : Iso) : GenM Iso := do
   let .induct types constructors recursors ← indEDecl names
     | badShape s!"{names} did not read back as an inductive block"
+  addUnitlikeTheorems types.toArray constructors.toArray recursors.toArray reserved is
+
+/-- Installed-block adapter for all per-member structure metadata. -/
+def addInstalledStructureModels (names : Array Name) (projections : Array EProjection)
+    (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+  let .induct types constructors recursors ← indEDecl names
+    | badShape s!"{names} did not read back as an inductive block"
+  let is ← addProjectionModels types.toArray constructors.toArray recursors.toArray
+    projections reserved is
   addUnitlikeTheorems types.toArray constructors.toArray recursors.toArray reserved is
 
 /-- Read the exact recursor records of a block generated inside this pass. -/
@@ -296,12 +554,13 @@ def serialiseIso (is : Iso) : MetaM (Array EDecl × Iso) := do
   let aliases := is.aliases.register names
   let renamed := records.map (·.renameAliases aliases)
   let spliced := is.spliced.map fun name => aliases.exact name
-  let unitlikes := is.unitlikes.map fun (member, theoremName) =>
-    (member, aliases.exact theoremName)
-  let ruleKs := is.ruleKs.map fun (recursor, theoremName) =>
-    (recursor, aliases.exact theoremName)
-  return (renamed,
-    { is with aliases := aliases, spliced := spliced, unitlikes := unitlikes, ruleKs := ruleKs })
+  -- `Iso` continues to name the declarations installed in the environment.
+  -- Only serialized records take exact aliases.  This is the contract of
+  -- `recs`, `ctors`, `selfNames`, unit-like/rule-K theorem names and
+  -- projections: the delayed statement checker must keep using the alias
+  -- declarations actually installed in the environment.  Spliced names are
+  -- different: they are output/report identities and are serialized exactly.
+  return (renamed, { is with aliases := aliases, spliced := spliced })
 
 /-- Compare the export's own recursors against the ones the kernel just
 regenerated. Returns the names that differ. -/
@@ -333,7 +592,8 @@ own major type rather than off the plan, and compared syntactically.
 
 This is `mini/tests/nested.rs`'s `check_recursors` and `check_iotas`, ported. It
 is what forced a real bug out of the Rust — recursors rewritten at no levels. -/
-def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec) :
+def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
+    (projections : Array EProjection := #[]) :
     MetaM (Nat × Array String) := do
   let env ← getEnv
   let mut tbl := modelTable env all is
@@ -471,6 +731,52 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
       return (es, cnt)
     n := n + extra
     errs := errs ++ es
+  -- Structure projection definitions and rules use the same simultaneous
+  -- original→model table as the inductive interface.  Compare their literal
+  -- types while the exact export records are in hand; the source projection
+  -- declarations themselves normally have not been replayed yet.
+  for projection in projections do
+    let some (_, modelProjection, modelRule) :=
+        is.projections.find? (fun entry => entry.1 == projection.name)
+      | errs := errs.push s!"{projection.name} has no generated projection model"; continue
+    let some projectionInfo := env.constants.find? modelProjection
+      | errs := errs.push s!"{modelProjection} was not generated"; continue
+    let wantProjectionType := restore tbl projection.type
+    unless projectionInfo.levelParams == projection.levelParams &&
+        projectionInfo.type == wantProjectionType do
+      errs := errs.push s!"{modelProjection} is not {projection.name} at the model"
+    n := n + 1
+    let some (.inductInfo ownerInfo) := env.constants.find? projection.owner
+      | errs := errs.push s!"{projection.name}'s owner {projection.owner} was not installed";
+        continue
+    let [sourceConstructor] := ownerInfo.ctors
+      | errs := errs.push s!"{projection.name}'s owner does not have exactly one constructor";
+        continue
+    let some (_, modelConstructor) := is.ctors.find? (·.1 == sourceConstructor)
+      | errs := errs.push s!"{sourceConstructor} has no model constructor"; continue
+    let some constructorInfo := env.constants.find? modelConstructor
+      | errs := errs.push s!"{modelConstructor} was not generated"; continue
+    let numFields := numForalls constructorInfo.type - np
+    let expected ← forallBoundedTelescope constructorInfo.type (some (np + numFields))
+        fun constructorArgs _ => do
+      let params := constructorArgs.extract 0 np
+      let fields := constructorArgs.extract np constructorArgs.size
+      let major := mkAppN (.const modelConstructor (is.levelParams.map Level.param))
+        constructorArgs
+      let lhs := mkAppN (.const modelProjection (is.levelParams.map Level.param))
+        (params.push major)
+      let some rhs := fields[projection.fieldIndex]?
+        | return none
+      let alpha ← inferType lhs
+      let level ← getLevel alpha
+      return some (← mkForallFVars constructorArgs (mkAppN (.const `Eq [level]) #[alpha, lhs, rhs]))
+    let some expected := expected
+      | errs := errs.push s!"{modelRule} has no field {projection.fieldIndex}"; continue
+    let some ruleInfo := env.constants.find? modelRule
+      | errs := errs.push s!"{modelRule} was not generated"; continue
+    unless ruleInfo.levelParams == is.levelParams && ruleInfo.type == expected do
+      errs := errs.push s!"{modelRule} is not {projection.name}'s literal projection rule"
+    n := n + 1
   return (n, errs)
 
 /-- **One installed inductive block, read back out of the environment** as the
@@ -503,6 +809,23 @@ is refused by the name guard and would be wrong anyway. -/
 def eqReady (reserved : Std.HashSet Name) : MetaM Bool := do
   if (← getEnv).constants.contains `Eq then return true
   return !(reserved.contains `Eq || reserved.contains `Eq.refl)
+
+/-- A plain mutual projection model additionally needs `PULiftP` to inhabit
+the unrelated motives at the selected field's universe.  If the input owns
+that basis declaration later in dependency order, wait for it exactly as the
+existing mutual queue waits for the input's `Eq`; if it owns none, generation
+may splice Lean's basis shape. -/
+def mutualReady (projections : Array EProjection) (reserved : Std.HashSet Name) : MetaM Bool := do
+  unless ← eqReady reserved do return false
+  if projections.isEmpty then return true
+  let env ← getEnv
+  if env.constants.contains `PULiftP then return true
+  return !(reserved.contains `PULiftP || reserved.contains `PULiftP.up)
+
+private def isMutualBasisRecord (projections : Array EProjection) (declaration : EDecl) : Bool :=
+  declaration.names.any fun name =>
+    name == `Eq || name == `Eq.refl ||
+      (!projections.isEmpty && (name == `PULiftP || name == `PULiftP.up))
 
 /-- **Can a prim model be written here?** — [`Modelgen.eqReady`]'s question,
 asked of every basis constant a prim model may splice: each must be already
@@ -557,7 +880,8 @@ def Decline.isLateWait : Decline → Bool
 /-- An exact public name generated by an earlier composed step is not part of
 the input's `reserved` set.  Check those spellings before a collision-safe
 retry so aliasing can never weaken `nameTaken`. -/
-def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr)) : MetaM (Option Name) := do
+def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr))
+    (projections : Array EProjection) : MetaM (Option Name) := do
   let env ← getEnv
   let recursor := Name.str tname "rec"
   for n in #[Naming.modelName tname, Naming.modelName recursor] do
@@ -571,6 +895,10 @@ def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr)) : MetaM (O
   if let some (.recInfo info) := env.constants.find? recursor then
     if info.k then
       let n := Naming.ruleKName recursor
+      if env.constants.contains n then return some n
+  for projection in projections do
+    for n in #[Naming.projectionName projection.name,
+        Naming.projectionIotaName projection.name] do
       if env.constants.contains n then return some n
   return none
 
@@ -604,6 +932,7 @@ model that needed it, and its own model is appended after; the export only
 requires a declaration to precede its uses. -/
 partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (ctors : Array (Name × Expr)) (recursors : Array ERec)
+    (projections : Array EProjection)
     (reserved : Std.HashSet Name) (basicModels : Bool)
     (canWait : Bool)
     (st : FilterState) : MetaM (FilterState × Bool) := do
@@ -620,19 +949,19 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
   -- user name, because `_private` is no longer the leading component.
   let aliasRoot : Name := Naming.retryRoot tname
   let mut root := tname
-  let exactTaken ← exactPrimNameTaken? tname ctors
+  let exactTaken ← exactPrimNameTaken? tname ctors projections
   let initial ← match exactTaken with
     | some n => pure (.error (.nameTaken n))
     | none => (do
         let is ← primIso tname root lparams np ty ctors reserved
-        addInstalledUnitlikeTheorems #[tname] reserved is).run
+        addInstalledStructureModels #[tname] projections reserved is).run
   let mut res := initial
   if let .error (.nameLost _) := res then
     setEnv saved
     root := aliasRoot
     res ← (do
       let is ← primIso tname root lparams np ty ctors reserved
-      addInstalledUnitlikeTheorems #[tname] reserved is).run
+      addInstalledStructureModels #[tname] projections reserved is).run
   match res with
   | .error dec =>
     setEnv saved
@@ -655,7 +984,8 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
     let mut st2 := (out, rep, pending.push
-      { all := #[tname], numParams := np, iso := is, recursors := recursors })
+      { all := #[tname], numParams := np, iso := is, recursors := recursors,
+        projections })
     if basicModels then
       for n in is.spliced do
         if primBasis.contains n then continue
@@ -669,7 +999,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
           if let some ci := (← getEnv).constants.find? cn then cts := cts.push (cn, ci.type)
         let supportRecursors ← recursorsOfNames #[n]
         st2 :=
-          (← genPrim n iv.levelParams iv.numParams iv.type cts supportRecursors reserved
+          (← genPrim n iv.levelParams iv.numParams iv.type cts supportRecursors #[] reserved
             basicModels false st2).1
     -- **A model may not leave an inductive it introduced unmodelled.** Arm C
     -- (`MODELGEN.md` §8.15) splices the index erasure of the family it is
@@ -714,8 +1044,16 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
 [`Modelgen.primCompose`] now returns entries for it. The leading `Bool` says
 *which* wait: `false` for the basis ([`Modelgen.primReady`]) and `true` for the
 quotient behind `funext` ([`Modelgen.primLateReady`]). -/
-abbrev PrimJob :=
-  Bool × Name × List Name × Nat × Expr × Array (Name × Expr) × Array ERec
+structure PrimJob where
+  needsLate : Bool
+  name : Name
+  levelParams : List Name
+  numParams : Nat
+  type : Expr
+  constructors : Array (Name × Expr)
+  recursors : Array ERec
+  projections : Array EProjection := #[]
+  deriving Inhabited
 
 /-- **The composition's third step**: the implementation inductives a mutual
 model just emitted — `T._model._impl.tag` and `T._model._impl.aux` — are
@@ -765,9 +1103,11 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
       -- The type and the constructor types are read **here**, at the block,
       -- because that is where the member is known to be installed; the drain
       -- only needs to call `genPrim` with them.
-      wait := wait.push (false, n, lparams, np, iv.type, cts, recursors)
+      wait := wait.push
+        { needsLate := false, name := n, levelParams := lparams, numParams := np,
+          type := iv.type, constructors := cts, recursors }
     else
-      st := (← genPrim n lparams np iv.type cts recursors reserved basicModels false st).1
+      st := (← genPrim n lparams np iv.type cts recursors #[] reserved basicModels false st).1
   return (st, wait)
 
 /-- One plain mutual block's model, generated and accounted for.
@@ -782,19 +1122,20 @@ and the basis is late. The basic layer is passed separately and controls the
 support closure of each generated implementation tag and auxiliary model. -/
 def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (tys : Array Expr) (ctors : Array (Array (Name × Expr))) (recursors : Array ERec)
+    (projections : Array EProjection)
     (reserved : Std.HashSet Name) (simpleModels basicModels canWait : Bool)
     (st : FilterState) : MetaM (FilterState × Array PrimJob) := do
   let (out, rep, pending) := st
   let saved ← getEnv
   let mut result ← (do
     let is ← mutualIso all lparams np tys ctors reserved
-    addInstalledUnitlikeTheorems all reserved is).run
+    addInstalledStructureModels all projections reserved is).run
   if let .error (.nameLost _) := result then
     setEnv saved
     result ← (do
       let is ← mutualIso all lparams np tys ctors reserved
         (some (Naming.retryRoot all[0]!))
-      addInstalledUnitlikeTheorems all reserved is).run
+      addInstalledStructureModels all projections reserved is).run
   match result with
   | .error dec =>
     setEnv saved
@@ -808,7 +1149,7 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
     let st := (out, rep, pending.push
-      { all := all, numParams := np, iso := is, recursors := recursors })
+      { all := all, numParams := np, iso := is, recursors := recursors, projections })
     if simpleModels then
       primCompose is.members is.levelParams np reserved basicModels canWait st
     else
@@ -829,9 +1170,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   -- Held back until the export's own declaration is installed, so the
   -- statements can be compared against the recursors it then mints.
   let mut pending : Array PendingModel := #[]
-  -- Plain mutual blocks whose model is waiting for the input's own `Eq`.
+  -- Plain mutual blocks whose model is waiting for the input's own `Eq`, or
+  -- (when it has projection metadata) the input's own `PULiftP`.
   let mut waiting : Array (Array Name × List Name × Nat × Array Expr ×
-    Array (Array (Name × Expr)) × Array ERec) := #[]
+    Array (Array (Name × Expr)) × Array ERec × Array EProjection) := #[]
   -- Simple inductives waiting for the input's own basis
   -- declarations. The leading `Bool` says *which* wait: `false` for the basis
   -- ([`Modelgen.primReady`]) and `true` for the quotient behind `funext`
@@ -846,6 +1188,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   -- with one the file itself introduces *later*.
   let reserved : Std.HashSet Name :=
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
+  -- Projection declarations normally occur after their owner.  Recover them
+  -- once from the whole export so their model definitions and rules can still
+  -- be emitted before the owner inductive record.
+  let exportedProjections := x.projections
   for d in x.decls do
     -- The model, if this is a nested declaration. Generated **before** the
     -- declaration is added, which is where `mini/src/nested.rs` also stands:
@@ -869,15 +1215,21 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           | .ok (some pl) =>
             let saved ← getEnv
             let ctors := all.map ctorsOfMember
+            let projections := exportedProjections.filter fun projection =>
+              ts.any (·.name == projection.owner)
             let mut result ← (do
               let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray
                 pl reserved
+              let is ← addProjectionModels ts.toArray cs.toArray inputRecursors.toArray
+                projections reserved is
               addUnitlikeTheorems ts.toArray cs.toArray inputRecursors.toArray reserved is).run
             if let .error (.nameLost _) := result then
               setEnv saved
               result ← (do
                 let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray pl reserved
                   (some (Naming.retryRoot t.name))
+                let is ← addProjectionModels ts.toArray cs.toArray inputRecursors.toArray
+                  projections reserved is
                 addUnitlikeTheorems ts.toArray cs.toArray inputRecursors.toArray reserved is).run
             match result with
             | .error dec =>
@@ -891,7 +1243,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                 rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
               pending := pending.push
                 { all, numParams := t.numParams, iso := is,
-                  recursors := inputRecursors.toArray }
+                  recursors := inputRecursors.toArray, projections }
               -- ── the model of the model (§1.7) ─────────────────────────────
               --
               -- **What has just been emitted is a `mutual … end` block**, and
@@ -999,17 +1351,21 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           let ctors := all.map fun n =>
             (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
           let tys := ts.toArray.map (·.type)
-          let job := (all, t.levelParams, t.numParams, tys, ctors, inputRecursors.toArray)
-          -- **The model may have to wait for the input's own `Eq`.** Its ι
-          -- theorems are stated at one, and an export's dependency order
+          let projections := exportedProjections.filter fun projection =>
+            ts.any (·.name == projection.owner)
+          let job :=
+            (all, t.levelParams, t.numParams, tys, ctors, inputRecursors.toArray, projections)
+          -- **The model may have to wait for the input's own basis.** Its ι
+          -- theorems need `Eq`; projection fillers additionally need
+          -- `PULiftP`. An export's dependency order
           -- routinely puts `Eq` *after* a block that does not itself use it —
           -- `mutual_iota_reduction`, `mutual_parameters` and
           -- `mutual_index_sorts` all do, and `mini/src/mutual_aux.rs`'s
           -- `expand` holds its rule theorems back for the same reason. A file
           -- that declares no `Eq` at all does not wait: §1.5 splices one.
-          if ← eqReady reserved then
+          if ← mutualReady projections reserved then
             let (st3, jobs) ← genMutual all t.levelParams t.numParams tys ctors
-              inputRecursors.toArray reserved
+              inputRecursors.toArray projections reserved
               generation.simple generation.basic true (out, rep, pending)
             (out, rep, pending) ← pure st3
             waitingPrim := waitingPrim ++ jobs
@@ -1021,31 +1377,54 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         -- restored, and there is nothing else to read them off.
         if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 then
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
+          let projections :=
+            if !t.isRec && t.numIndices == 0 && ctors.size == 1 then
+              exportedProjections.filter (·.owner == t.name)
+            else
+              #[]
           if ← primReady reserved then
             let (st, lateWait) ← genPrim t.name t.levelParams t.numParams t.type ctors
-              inputRecursors.toArray reserved generation.basic true (out, rep, pending)
+              inputRecursors.toArray projections reserved generation.basic true (out, rep, pending)
             if lateWait then
-              waitingPrim := waitingPrim.push
-                (true, t.name, t.levelParams, t.numParams, t.type, ctors,
-                  inputRecursors.toArray)
+              waitingPrim := waitingPrim.push {
+                needsLate := true, name := t.name, levelParams := t.levelParams,
+                numParams := t.numParams, type := t.type, constructors := ctors,
+                recursors := inputRecursors.toArray, projections }
             else
               (out, rep, pending) ← pure st
           else
-            waitingPrim := waitingPrim.push
-              (false, t.name, t.levelParams, t.numParams, t.type, ctors,
-                inputRecursors.toArray)
+            waitingPrim := waitingPrim.push {
+              needsLate := false, name := t.name, levelParams := t.levelParams,
+              numParams := t.numParams, type := t.type, constructors := ctors,
+              recursors := inputRecursors.toArray, projections }
     out := out.push d
-    -- The input's own `Eq` has just arrived: every block that was waiting for
-    -- it gets its model here, **after** the `Eq` record, which is where
-    -- dependency order puts it.
-    if !waiting.isEmpty && (← eqReady reserved) then
-      for (all, lp, np, tys, ctors, recursors) in waiting do
-        let (st3, jobs) ← genMutual all lp np tys ctors recursors reserved generation.simple
-          generation.basic true
-          (out, rep, pending)
-        (out, rep, pending) ← pure st3
-        waitingPrim := waitingPrim ++ jobs
-      waiting := #[]
+    -- Drain each block whose exact basis requirements have now arrived.
+    if !waiting.isEmpty then
+      let mut keep := #[]
+      for (all, lp, np, tys, ctors, recursors, projections) in waiting do
+        if ← mutualReady projections reserved then
+          -- The interface must precede its owner even when a basis primitive
+          -- was declared later. Move only those independent basis records in
+          -- front, generate the model there, then restore the owner and every
+          -- intervening source record in their original order.
+          let some ownerIndex := out.findIdx? (·.names.contains all[0]!)
+            | throwError "waiting mutual owner {all[0]!} disappeared from the output"
+          let beforeOwner := out.extract 0 ownerIndex
+          let delayed := out.extract ownerIndex out.size
+          let basis := delayed.filter (isMutualBasisRecord projections)
+          let source := delayed.filter (!isMutualBasisRecord projections ·)
+          let (st3, jobs) ← genMutual all lp np tys ctors recursors projections reserved
+            generation.simple
+            generation.basic true
+            (beforeOwner ++ basis, rep, pending)
+          let (generatedOut, generatedReport, generatedPending) := st3
+          out := generatedOut ++ source
+          rep := generatedReport
+          pending := generatedPending
+          waitingPrim := waitingPrim ++ jobs
+        else
+          keep := keep.push (all, lp, np, tys, ctors, recursors, projections)
+      waiting := keep
     -- A prim model may also splice `False`, `Nat` and `PSigma`, so it waits
     -- for whichever of those the input declares later, not only for `Eq` —
     -- and one whose proofs need `funext` waits for the input's own quotient
@@ -1057,13 +1436,13 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       if basisOk || lateOk then
         let mut keep : Array PrimJob := #[]
         for job in waitingPrim do
-          let (needsLate, n, lp, np, ty, ctors, recursors) := job
-          if (if needsLate then lateOk else basisOk) then
-            let (st, lateWait) ← genPrim n lp np ty ctors recursors reserved
+          if (if job.needsLate then lateOk else basisOk) then
+            let (st, lateWait) ← genPrim job.name job.levelParams job.numParams job.type
+              job.constructors job.recursors job.projections reserved
               generation.basic true
               (out, rep, pending)
             if lateWait then
-              keep := keep.push (true, n, lp, np, ty, ctors, recursors)
+              keep := keep.push { job with needsLate := true }
             else
               (out, rep, pending) ← pure st
           else
@@ -1071,30 +1450,34 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         waitingPrim := keep
     for model in pending do
       let (m, errs) ← checkModel model.all model.numParams model.iso model.recursors
+        model.projections
       rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
     pending := #[]
     if checkRecursors then
       if let .induct _ _ rs := d then
         let (n, b) ← checkRecs rs
         rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
-  -- A block still waiting at the end of the file declared an `Eq` the replay
-  -- never reached — so the name is taken and no splice may use it, and this
+  -- A block still waiting at the end of the file declared an `Eq` or
+  -- projection-basis `PULiftP` the replay never reached — so the name is taken and no splice may use it, and this
   -- pass **declines with that reason** rather than dropping the block without
   -- saying anything. Nothing in the tree reaches it: over all 230 files the
   -- decline list gains nothing at all against the run before §1.6 existed, and
   -- a block left waiting would have put a `mutual model name taken (Eq)` in it.
-  for (all, lp, np, tys, ctors, recursors) in waiting do
-    let (st3, jobs) ← genMutual all lp np tys ctors recursors reserved generation.simple
+  for (all, lp, np, tys, ctors, recursors, projections) in waiting do
+    let (st3, jobs) ← genMutual all lp np tys ctors recursors projections reserved
+      generation.simple
       generation.basic false
       (out, rep, pending)
     (out, rep, pending) ← pure st3
     waitingPrim := waitingPrim ++ jobs
-  for (_, n, lp, np, ty, ctors, recursors) in waitingPrim do
+  for job in waitingPrim do
     (out, rep, pending) ← pure
-      (← genPrim n lp np ty ctors recursors reserved generation.basic false
+      (← genPrim job.name job.levelParams job.numParams job.type job.constructors
+        job.recursors job.projections reserved generation.basic false
         (out, rep, pending)).1
   for model in pending do
     let (m, errs) ← checkModel model.all model.numParams model.iso model.recursors
+      model.projections
     rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
   return (out, rep)
 
