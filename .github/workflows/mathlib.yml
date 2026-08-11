@@ -1,0 +1,58 @@
+name: Full Mathlib
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: full-mathlib
+  cancel-in-progress: true
+
+jobs:
+  mathlib:
+    name: Full Mathlib (>=48 GB self-hosted runner)
+    runs-on: [self-hosted, linux, x64, lean-high-memory-48gb]
+    timeout-minutes: 120
+    env:
+      TMPDIR: ${{ github.workspace }}/_tmp/tmp
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare project-local temporary directories
+        run: mkdir -p _tmp/tmp _tmp/logs _tmp/perf
+
+      - name: Set up Lean
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          build: false
+          test: false
+          use-github-cache: false
+          use-mathlib-cache: false
+
+      - name: Export and check full Mathlib
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v systemd-run >/dev/null
+          systemctl --user show-environment >/dev/null
+
+          unit="inductive-models-mathlib-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          systemd-run --user --wait --collect --pipe --quiet \
+            --service-type=exec \
+            --unit="$unit" \
+            --property=MemoryMax=40G \
+            --property=MemorySwapMax=0 \
+            --property=WorkingDirectory="$GITHUB_WORKSPACE" \
+            --setenv="HOME=$HOME" \
+            --setenv="PATH=$PATH" \
+            --setenv="GITHUB_WORKSPACE=$GITHUB_WORKSPACE" \
+            --setenv="TMPDIR=$TMPDIR" \
+            "$BASH" scripts/ci-mathlib.sh
