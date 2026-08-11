@@ -145,6 +145,36 @@ def main : IO UInt32 := do
       axioms.contains `propext && axioms.contains `Quot.sound &&
         !axioms.contains `Classical.choice && axioms.size == 2
 
+  -- Recursive-result recognition may unfold a transparent former, but the
+  -- model interface may not. `AliasW.lim` is accepted as infinitary because
+  -- `As AliasW` is definitionally `AliasW`; its exported spelling remains in
+  -- the model constructor and is checked once in memory and once after the
+  -- same NDJSON serialization the public CLI uses.
+  let aliasRaw ← readExport "test/fixtures/modelgen/w_alias.ndjson"
+  let (aliasGenerated, aliasReport, _) ← runExport aliasRaw
+  let aliasNames := aliasGenerated.decls.flatMap (·.names.toArray)
+  let aliasModel := Naming.modelName `AliasW
+  let aliasCtors := #[Naming.modelName `AliasW.leaf, Naming.modelName `AliasW.lim]
+  let aliasRec := Naming.modelName `AliasW.rec
+  let aliasIotas := #[Naming.iotaName `AliasW.rec 0, Naming.iotaName `AliasW.rec 1]
+  state := state.check "transparent W result aliases generate as infinitary children" <|
+    aliasReport.generated.any (·.1 == `AliasW) &&
+      !aliasReport.declined.any (·.1 == `AliasW)
+  state := state.check "transparent W result alias has the complete public interface" <|
+    (#[aliasModel, aliasRec] ++ aliasCtors ++ aliasIotas).all aliasNames.contains
+  state := state.check "transparent W result spelling remains literal in the model" <|
+    (declarationType? aliasGenerated aliasCtors[1]!).any (containsConst `As)
+  let outputCheck := Check.checkReport aliasGenerated
+  let aliasSerialized ← match parse aliasGenerated.render (analyse := false) with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot parse serialized W alias output: {error}"
+  let inputCheck := Check.checkReport aliasSerialized
+  state := state.check "transparent W alias passes output and serialized input Check" <|
+    outputCheck.violations.isEmpty && inputCheck.violations.isEmpty &&
+      outputCheck.familiesChecked == inputCheck.familiesChecked
+  state := state.check "transparent W alias recursor statements remain literal" <|
+    aliasReport.stmtChecked > 0 && aliasReport.stmtErrors.isEmpty
+
   IO.println s!"deep imax box: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   unless state.failed.isEmpty do
