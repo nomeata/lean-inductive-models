@@ -1,4 +1,5 @@
 import Modelgen.Mutual
+import Modelgen.Naming
 
 /-!
 # The model of a **simple inductive from four primitives**, generated
@@ -2186,28 +2187,34 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- collision, where [`Modelgen.genPrim`] retries under an alias root and
   -- renames the export records back (`MODELGEN.md` §8.14). So every *guard*
   -- below is about `tname`'s names — those are what reach the output and what
-  -- must not collide with the input — while every name *built* is `root`'s.
-  let model := Name.str root "_model"
-  let emitModel := Name.str tname "_model"
-  let selfN := Name.str model "self"
-  let ctorN := fun (j : Nat) => Name.str model s!"ctor_{j}"
-  let recN := Name.str model "rec_0"
-  let iotaN := fun (j : Nat) => Name.str model s!"iota_0_{j}"
-  let indN := Name.str model "ind"
+  -- must not collide with the input — while descendants of `tname` are built
+  -- under `root`. An exact raw private constructor need not be a descendant of
+  -- its public type name, and then its model name remains raw and exact.
+  let model := Naming.modelName root
+  let impl := Name.str model "_impl"
+  let selfN := model
+  let ctorN := fun (j : Nat) =>
+    Naming.modelName (Modelgen.renameRoot tname root exportCtors[j]!.1)
+  let ern := Name.str tname "rec"
+  let recN := Naming.modelName (Modelgen.renameRoot tname root ern)
+  let iotaN := fun (j : Nat) =>
+    Naming.iotaName (Modelgen.renameRoot tname root ern) j
+  let indN := Name.str impl "ind"
   -- Arm G's **internal** names, guarded exactly like the interface's — but
-  -- only when the arm is taken, so a file that declares `T._model.graph` of
-  -- its own costs nothing to a declaration this arm never sees.
+  -- only when the arm is taken, so a file that declares
+  -- `T._model._impl.graph` of its own costs nothing to a declaration this arm
+  -- never sees.
   let graphNames : List Name :=
-    [indN, Name.str model "graph", Name.str model "graph_mk",
-     Name.str model "graph_inv_ty", Name.str model "graph_inv",
-     Name.str model "graph_unique", Name.str model "graph_exists",
-     Name.str model "rec_graph"]
+    [indN, Name.str impl "graph", Name.str impl "graph_mk",
+     Name.str impl "graph_inv_ty", Name.str impl "graph_inv",
+     Name.str impl "graph_unique", Name.str impl "graph_exists",
+     Name.str impl "rec_graph"]
   -- Arm C's **internal** names. `skel` is the index erasure, spliced as an
   -- ordinary inductive so that the kernel mints its recursor and its ι is
   -- definitional (`MODELGEN.md` §8.10's rule: use the real type); `good` is
   -- the carving predicate. Guarded like arm G's, and only when the arm fires.
-  let skelN := Name.str model "skel"
-  let goodN := Name.str model "good"
+  let skelN := Name.str impl "skel"
+  let goodN := Name.str impl "good"
   let skelCtorN := fun (j : Nat) => Name.str skelN s!"c_{j}"
   let nc := exportCtors.size
 
@@ -2219,8 +2226,8 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   let taken1 : Name → GenM Unit := fun n => do
     if reserved.contains n || (← getEnv).constants.contains n then declineWith (.nameTaken n)
   let taken : Name → GenM Unit := fun n => do
-    taken1 (Modelgen.renameRoot model emitModel n)
-    if model != emitModel then taken1 n
+    taken1 (Modelgen.renameRoot root tname n)
+    if root != tname then taken1 n
   taken selfN
   taken recN
   for j in [0:nc] do
@@ -2285,7 +2292,6 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
     return r
 
   -- The installed recursor: the statements below are its own, restored.
-  let ern := Name.str tname "rec"
   let .recInfo rv ← constInfo ern | badShape s!"{ern} is not a recursor"
   unless rv.numMotives == 1 && rv.numMinors == nc && rv.numIndices == ni do
     badShape s!"{ern} does not have 1 motive, {nc} minors and {ni} indices"
@@ -2687,12 +2693,12 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
     && labelFactored tname np exportCtors && w.normalize.dec.isSome
   -- Arm W's **internal** names, guarded exactly like arm C's and arm G's, and
   -- only when the arm is taken.
-  let wDN := Name.str model "wD"
-  let wTelN := Name.str model "wTel"
-  let wBN := Name.str model "wB"
-  let wAN := Name.str model "wA"
-  let wTgN := Name.str model "wtg"
-  let wFN := Name.str model "wF"
+  let wDN := Name.str impl "wD"
+  let wTelN := Name.str impl "wTel"
+  let wBN := Name.str impl "wB"
+  let wAN := Name.str impl "wA"
+  let wTgN := Name.str impl "wtg"
+  let wFN := Name.str impl "wF"
 
   -- ── the kit arm C needs: Church conjunction's two projections and its
   -- introduction, built here because [`Modelgen.andCOf`] gives the type only.
@@ -4171,7 +4177,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
       for d in ← ensureNonempty reserved do out := out.push d; spliced := spliced ++ d.getNames
       for d in ← ensureChoice reserved do out := out.push d; spliced := spliced ++ d.getNames
       if (Array.range gNf).any (fun i => (gRecNb[i]!.getD 0) > 0) then
-        let (fxN, fxDecls) ← ensureFunext model eqi reserved
+        let (fxN, fxDecls) ← ensureFunext impl eqi reserved
         for d in fxDecls do out := out.push d; spliced := spliced ++ d.getNames
         gFx? := some fxN
 
@@ -4354,10 +4360,10 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
       let ctx : GraphCtx :=
         { tname, np, ni, nf := gNf, us, recLs, lparams, recLevels := rv.levelParams, v
           selfN, ctorN0 := ctorN 0, recN, indN
-          grN := Name.str model "graph", grMkN := Name.str model "graph_mk"
-          grInvTN := Name.str model "graph_inv_ty", grInvN := Name.str model "graph_inv"
-          grUniqN := Name.str model "graph_unique", grExN := Name.str model "graph_exists"
-          recGrN := Name.str model "rec_graph"
+          grN := Name.str impl "graph", grMkN := Name.str impl "graph_mk"
+          grInvTN := Name.str impl "graph_inv_ty", grInvN := Name.str impl "graph_inv"
+          grUniqN := Name.str impl "graph_unique", grExN := Name.str impl "graph_exists"
+          recGrN := Name.str impl "rec_graph"
           memberTy, ctorTy := restore tbl exportCtors[0]!.2
           isData := gIsData, idxPos := gIdxPos, recNb := gRecNb, eqi, fx? := gFx? }
       for d in ← graphArm ctx recTy do out := out.push d
@@ -4428,12 +4434,12 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
                 mkLambdaFVars zs (mkAppN (.const nm recLs)
                   (pre ++ a2.extract np a2.size ++ #[mkAppN fields[i]! zs]))
             let ghat ← atSlot recN
-            let hhat ← atSlot (Name.str model "rec_graph")
-            let gv := mkAppN (.const (Name.str model "rec_graph") recLs)
+            let hhat ← atSlot (Name.str impl "rec_graph")
+            let gv := mkAppN (.const (Name.str impl "rec_graph") recLs)
               (pre ++ isj ++ #[major])
-            let gw := mkAppN (.const (Name.str model "graph_mk") recLs)
+            let gw := mkAppN (.const (Name.str impl "graph_mk") recLs)
               (pre ++ fields ++ ghat ++ hhat)
-            pure (mkAppN (.const (Name.str model "graph_unique") recLs)
+            pure (mkAppN (.const (Name.str impl "graph_unique") recLs)
               (pre ++ isj ++ #[major, lhs, rhs, gv, gw]))
         return Declaration.thmDecl
           { name := iotaN j, levelParams := rv.levelParams
