@@ -1,0 +1,6 @@
+name = "leveldemo"
+defaultTargets = ["leveldemo"]
+
+[[lean_exe]]
+name = "leveldemo"
+root = "Demo"

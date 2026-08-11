@@ -1,0 +1,36 @@
+name = "modelgen"
+defaultTargets = ["modelgen", "envprobe"]
+testDriver = "test"
+
+[[lean_lib]]
+name = "Modelgen"
+globs = ["Modelgen.+"]
+
+[[lean_exe]]
+name = "modelgen"
+root = "Main"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "test"
+root = "Test"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "monomorph"
+root = "Monomorph"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "monotest"
+root = "MonoTest"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "envprobe"
+root = "EnvProbe"
+supportInterpreter = true
+
+[[lean_exe]]
+name = "levelfuzz"
+root = "LevelFuzz"
