@@ -3332,14 +3332,6 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- exact result sort; the second field is a canonical inhabitant of
   -- `PULiftP.{w} True`, so wrapping and unwrapping reduce by the structure
   -- projection and eta rules and add no axiom.
-  let wPublicCarrier : Array Expr → Expr := fun ps =>
-    wPlan.carrier (wLowSelfAt ps)
-  let wWrap : Array Expr → Expr → Expr := fun ps low =>
-    wPlan.wrap (wLowSelfAt ps) low
-  let wUnwrap : Array Expr → Expr → Expr := fun ps value =>
-    wPlan.unwrap (wLowSelfAt ps) value
-  let wCoreMotive : Array Expr → Expr → GenM Expr := fun ps motive =>
-    wPlan.motive (wLowSelfAt ps) motive
   -- `⟨j, tel⟩ : B' p⃗ key`, with the branch index as an expression for the same
   -- reason.
   let wBranch : Array Expr → Expr → Expr → Expr → GenM Expr := fun ps key j tel =>
@@ -3464,7 +3456,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       let nrv := nrs.map (fields[·]!)
       let tower ← wTowerMkOf wW nrv nrv
       let child : Nat → Array Expr → Array Expr → GenM Expr := fun r _ vs =>
-        return wUnwrap ps (mkAppN fields[rcs[r]!]! vs).headBeta
+        return wPlan.unwrap (wLowSelfAt ps) (mkAppN fields[rcs[r]!]! vs).headBeta
       -- The branch tower is written at the constructor's **own** fields here
       -- rather than at projections of the tower it just built: the two are
       -- definitionally equal by `PSigma`'s ι rule, and the fields are what the
@@ -3478,7 +3470,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- of `D`. This is the term whose construction validates the emitted shape.
   let wMkF : Array Expr → Expr → Array Expr → GenM Expr := fun ps motive minors => do
     let selfTy := wLowSelfAt ps
-    let coreMotive ← wCoreMotive ps motive
+    let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
     -- The frame every arm and the motive share: `(d : D p⃗ t)
     -- (f : B' p⃗ key → self) (ih : (b : B' p⃗ key) → C (f b))`, and the label
     -- `⟨t, d⟩` built from `d`.
@@ -3522,7 +3514,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         for r in [0:rcs.size] do
           let (kd, ihv) ← forallTelescope (← wRecDom ps kk r projs) fun zs _ => do
             let bv ← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs zs)
-            return (← mkLambdaFVars zs (wWrap ps (mkApp f bv)),
+            return (← mkLambdaFVars zs (wPlan.wrap (wLowSelfAt ps) (mkApp f bv)),
               ← mkLambdaFVars zs (mkApp ih bv))
           kids := kids.push kd
           ihs := ihs.push ihv
@@ -4434,7 +4426,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
 
     -- ── the carrier ──
     let selfVal ← withParams fun ps => mkLambdaFVars ps
-      (wPublicCarrier ps)
+      (wPlan.carrier (wLowSelfAt ps))
     let dSelf := Declaration.defnDecl
       { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
@@ -4448,7 +4440,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
         let rtele ← instForall ty ps
         forallBoundedTelescope rtele (some (numForalls rtele)) fun fs _ => do
           let (a, disp) ← wCtorParts ps j fs
-          mkLambdaFVars (ps ++ fs) (wWrap ps (wSup ps a disp))
+          mkLambdaFVars (ps ++ fs) (wPlan.wrap (wLowSelfAt ps) (wSup ps a disp))
       let d := Declaration.defnDecl
         { name := ctorN j, levelParams := lparams, type := ty, value := val
           hints := ← hintsFor val, safety := .safe }
@@ -4467,7 +4459,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
       let ps := pre.extract 0 np
       let motive := pre[np]!
       let selfTy := wLowSelfAt ps
-      let coreMotive ← wCoreMotive ps motive
+      let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
       withLocalDeclD `a (wAAt ps) fun a => do
         let bt ← wBAt ps (mkApp (wTgAt ps) a)
         withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
@@ -4488,10 +4480,11 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let major := bs[bs.size - 1]!
-      let coreMotive ← wCoreMotive ps bs[np]!
+      let coreMotive ← wPlan.motive (wLowSelfAt ps) bs[np]!
       mkLambdaFVars bs (mkAppN (.const wCoreRec [uL, v, wKL])
         #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, coreMotive,
-          mkAppN (.const wFN recLs) (bs.extract 0 (np + 1 + nc)), wUnwrap ps major])
+          mkAppN (.const wFN recLs) (bs.extract 0 (np + 1 + nc)),
+          wPlan.unwrap (wLowSelfAt ps) major])
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
@@ -5086,7 +5079,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
         let proof ←
           if armW then do
             let (a, disp) ← wCtorParts ps j fields
-            let coreMotive ← wCoreMotive ps motive
+            let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
             pure (mkAppN (.const wCoreIota [uL, v, wKL])
               #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, coreMotive,
                 mkAppN (.const wFN recLs) pre, a, disp])
