@@ -75,13 +75,24 @@ def modelIotaAxiom (table : Correspondence) (x : Export) (ownerDecl : Nat)
   let params := modelParams ownerParams
   return .ax iota.name params (table.expectedIotaType ownerParams params ownerType) false
 
+def modelMetadataAxiom (table : Correspondence) (x : Export) (ownerDecl : Nat)
+    (metadata : Naming.Metadata) : Option EDecl := do
+  guard (metadata.kind == .unitlike)
+  let (ownerParams, ownerType) ← unitlikeProposition? x ownerDecl metadata.owner
+  let params := modelParams ownerParams
+  return .ax metadata.name params
+    (table.expectedIotaType ownerParams params ownerType) false
+
 def modelDeclarations (x : Export) (table : Correspondence) (helper : Name) : Array EDecl :=
   let constants := (table.typeFormers ++ table.constructors ++ table.recursors).filterMap
     (modelAxiom table x)
   let iotas := match table.typeFormers[0]?.bind (ownerIndex? x ·.owner) with
     | some ownerDecl => table.iotas.filterMap (modelIotaAxiom table x ownerDecl)
     | none => #[]
-  #[EDecl.ax helper [] (.sort (.succ .zero)) false] ++ constants ++ iotas
+  let metadata := match table.typeFormers[0]?.bind (ownerIndex? x ·.owner) with
+    | some ownerDecl => table.metadata.filterMap (modelMetadataAxiom table x ownerDecl)
+    | none => #[]
+  #[EDecl.ax helper [] (.sort (.succ .zero)) false] ++ constants ++ iotas ++ metadata
 
 def withValidModel (x : Export) (ownerDecl : Nat) (models : Array EDecl) : Export :=
   { x with decls := x.decls.extract 0 ownerDecl ++ models ++
@@ -127,6 +138,11 @@ def insertBeforeOwner (x : Export) (owner : Name) (declaration : EDecl) : Export
       { x with decls := x.decls.extract 0 index ++ #[declaration] ++
           x.decls.extract index x.decls.size }
 
+def renameExportRoot (x : Export) (owner renamed : Name) : Export :=
+  let names := x.decls.flatMap fun declaration => declaration.names.toArray
+  let aliases := Naming.AliasMap.forRetry owner renamed names
+  { x with decls := x.decls.map (·.renameAliases aliases) }
+
 def isLateCarrier (owner carrier : Name) : Violation → Bool
   | .modelNotBefore gotOwner declaration _ _ => gotOwner == owner && declaration == carrier
   | _ => false
@@ -152,6 +168,11 @@ def isDuplicate (owner declaration : Name) : Violation → Bool
 
 def isExtraRule (owner declaration : Name) : Violation → Bool
   | .extraRule gotOwner gotDeclaration =>
+      gotOwner == owner && gotDeclaration == declaration
+  | _ => false
+
+def isExtraUnitlike (owner declaration : Name) : Violation → Bool
+  | .extraMetadata gotOwner gotDeclaration .unitlike =>
       gotOwner == owner && gotDeclaration == declaration
   | _ => false
 
@@ -362,8 +383,7 @@ def run (root : String) : IO UInt32 := do
       (check defeqCarrier).any (isTypeMismatch owner carrier)
 
     let modelNamedOwner := `Tree._model
-    let modelNamedRaw :=
-      { raw with decls := raw.decls.map (EDecl.renameRoot owner modelNamedOwner) }
+    let modelNamedRaw := renameExportRoot raw owner modelNamedOwner
     let some modelNamedOwnerDecl := ownerIndex? modelNamedRaw modelNamedOwner | do
       IO.eprintln "checktest: renamed _model owner missing"
       return 1
@@ -379,8 +399,7 @@ def run (root : String) : IO UInt32 := do
         (check modelNamedValid).isEmpty
 
     let privateOwner := (`_private.CheckTest).mkNum 0 |>.str "Tree"
-    let privateRaw :=
-      { raw with decls := raw.decls.map (EDecl.renameRoot owner privateOwner) }
+    let privateRaw := renameExportRoot raw owner privateOwner
     let some privateOwnerDecl := ownerIndex? privateRaw privateOwner | do
       IO.eprintln "checktest: private owner missing"
       return 1
@@ -430,6 +449,59 @@ def run (root : String) : IO UInt32 := do
       state ← state.check "mutual diagnostic belongs to exact constructor" <|
         (check (withoutDeclaration mutualValid bCtor.model)).any
           (isMissing bCtor.owner bCtor.model)
+
+    let unitlikePath := s!"{root}/tests/unitlike.ndjson"
+    let unitlikeText ← IO.FS.readFile unitlikePath
+    match Modelgen.parse unitlikeText (analyse := false) with
+    | .error error =>
+        IO.eprintln s!"checktest: could not parse {unitlikePath}: {error}"
+        state ← state.check "unit-like metadata fixture" false
+    | .ok unitlikeExport =>
+      for owner in [`UnitType, `UnitProp, `MU] do
+        let some ownerDecl := ownerIndex? unitlikeExport owner | do
+          IO.eprintln s!"checktest: unit-like owner {owner} missing"
+          return 1
+        let some ownerTable := correspondenceAt? unitlikeExport ownerDecl | do
+          IO.eprintln s!"checktest: unit-like correspondence for {owner} missing"
+          return 1
+        let ownerModels := modelDeclarations unitlikeExport ownerTable
+          (Name.str (Naming.modelName owner) "helper")
+        let ownerValid := withValidModel unitlikeExport ownerDecl ownerModels
+        state ← state.check s!"valid unit-like family {owner}" <|
+          !ownerTable.metadata.isEmpty && (check ownerValid).isEmpty
+      let some mutualDecl := ownerIndex? unitlikeExport `MU | do return 1
+      let some mutualUnitlike := correspondenceAt? unitlikeExport mutualDecl | do return 1
+      state ← state.check "unit-like is per mutual member" <|
+        mutualUnitlike.metadata.map (·.owner) == #[`MU, `MV]
+
+      let some positiveDecl := ownerIndex? unitlikeExport `UnitType | do return 1
+      let some positiveTable := correspondenceAt? unitlikeExport positiveDecl | do return 1
+      let positiveModels := modelDeclarations unitlikeExport positiveTable `UnitType._model.helper
+      let positiveValid := withValidModel unitlikeExport positiveDecl positiveModels
+      let positiveTheorem := Naming.unitlikeName `UnitType
+      state ← state.check "missing unit-like theorem is rejected" <|
+        (check (withoutDeclaration positiveValid positiveTheorem)).any
+          (isMissing `UnitType positiveTheorem)
+      state ← state.check "malformed unit-like theorem is rejected" <|
+        (check (withDeclarationType positiveValid positiveTheorem (.sort .zero))).any
+          (isTypeMismatch `UnitType positiveTheorem)
+
+      for owner in [`WithField, `Indexed, `Recursive, `TwoCtor, `MR] do
+        let some nearDecl := ownerIndex? unitlikeExport owner | do return 1
+        let some nearTable := correspondenceAt? unitlikeExport nearDecl | do return 1
+        state ← state.check s!"near miss has no unit-like slot {owner}" nearTable.metadata.isEmpty
+        let nearModels := modelDeclarations unitlikeExport nearTable
+          (Name.str (Naming.modelName owner) "helper")
+        let extraName := Naming.unitlikeName owner
+        let extra := withValidModel unitlikeExport nearDecl
+          (nearModels.push (.ax extraName [] (.sort .zero) false))
+        state ← state.check s!"extra unit-like theorem rejected {owner}" <|
+          (check extra).any (isExtraUnitlike owner extraName)
+        if owner == `WithField then
+          let bareExtra := insertBeforeOwner unitlikeExport owner
+            (.ax extraName [] (.sort .zero) false)
+          state ← state.check "bare extra unit-like theorem is rejected" <|
+            (check bareExtra).any (isExtraUnitlike owner extraName)
 
     if state.failed == 0 then
       IO.println s!"checktest: {state.passed} tests passed"

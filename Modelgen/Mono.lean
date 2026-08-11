@@ -129,6 +129,7 @@ inductive ModelRole where
   | constructor
   | recursor
   | iota
+  | unitlike
   deriving BEq, Inhabited
 
 /-- A generated public declaration and the original inductive record that owns
@@ -164,7 +165,8 @@ private def siteKind : EDecl → SiteKind
 /-- Build the model relation from exact original roles.
 
 The declaration-local contract is generated from each inductive record:
-`T._model`, `C._model`, `R._model`, and `R._model.iota_j`. A candidate counts
+`T._model`, `C._model`, `R._model`, `R._model.iota_j`, and (exactly when the
+export metadata has the kernel feature) `T._model.unitlike`. A candidate counts
 only when the export contains a declaration of the generated role's kind. That
 condition distinguishes an original inductive literally named `Foo._model`
 from the definition serving as the carrier model of `Foo`; its own model is, exactly,
@@ -207,6 +209,10 @@ def modelTable (x : Export) : ModelTable := Id.run do
       for j in [:r.rules.length] do
         (table, ambiguous) := add table ambiguous (Naming.iotaName r.name j) .theorem
           (entry .iota)
+    for t in ts do
+      if t.isKernelUnitlike cs then
+        (table, ambiguous) := add table ambiguous (Naming.unitlikeName t.name) .theorem
+          (entry .unitlike)
   return table
 
 /-- One node of the declaration DAG. -/

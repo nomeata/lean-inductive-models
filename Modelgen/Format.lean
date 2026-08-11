@@ -78,6 +78,21 @@ structure EIndType where
   isUnsafe : Bool
   deriving Inhabited, BEq
 
+/-- Whether this member has Lean's kernel-level unit-like treatment.
+
+This is the export-metadata spelling of `Lean.isStructureLike` followed by the
+zero-field test in the kernel's `is_def_eq_unit_like`: the member is
+non-recursive, has no indices and exactly one constructor, and that constructor
+has no fields.  The test is deliberately per member; a non-recursive mutual
+block may have more than one such member. -/
+def EIndType.isKernelUnitlike (type : EIndType) (constructors : List ECtor) : Bool :=
+  !type.isRec && type.numIndices == 0 && match type.ctors with
+  | [constructorName] =>
+      constructors.any fun constructor =>
+        constructor.name == constructorName && constructor.induct == type.name &&
+          constructor.numFields == 0
+  | _ => false
+
 /-- A definition's reducibility hint, kept verbatim so a round trip is exact. -/
 inductive EHints where
   | abbrev

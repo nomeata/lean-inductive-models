@@ -99,7 +99,7 @@ def modelNameProbe : Array String := Id.run do
   let ty : EIndType :=
     { name := typeN, levelParams := [`u], type := .sort (.param `u),
       all := [typeN], ctors := [ctorN], numParams := 0, numIndices := 0,
-      numNested := 1, isRec := true, isReflexive := false, isUnsafe := false }
+      numNested := 0, isRec := false, isReflexive := false, isUnsafe := false }
   let ctor : ECtor :=
     { name := ctorN, levelParams := [`u], type := .sort (.param `u), cidx := 0,
       numParams := 0, numFields := 0, induct := typeN, isUnsafe := false }
@@ -110,6 +110,7 @@ def modelNameProbe : Array String := Id.run do
   let defn := fun n => EDecl.defn n [`u] (.sort (.param `u)) (.sort (.param `u))
     EHints.abbrev "safe" [n]
   let iotaN := Naming.iotaName recN 0
+  let unitlikeN := Naming.unitlikeName typeN
   let helper := `Foo._model._impl.pack
   let outerTy : EIndType :=
     { name := outer, levelParams := [], type := .sort (.succ .zero),
@@ -120,7 +121,10 @@ def modelNameProbe : Array String := Id.run do
     defn (Naming.modelName ctorN),
     defn (Naming.modelName recN),
     .thm iotaN [`w, `u] (.sort (.param `u)) (.sort (.param `u)) [iotaN],
+    .thm unitlikeN [`u] (.sort (.param `u)) (.sort (.param `u)) [unitlikeN],
     defn helper,
+    .thm (Naming.unitlikeName outer) [] (.sort .zero) (.sort .zero)
+      [Naming.unitlikeName outer],
     .induct [ty] [ctor] [recD],
     .induct [outerTy] [] []
   ] }
@@ -136,10 +140,13 @@ def modelNameProbe : Array String := Id.run do
   errors := expect errors (Naming.modelName ctorN) typeN .constructor
   errors := expect errors (Naming.modelName recN) typeN .recursor
   errors := expect errors iotaN typeN .iota
+  errors := expect errors unitlikeN typeN .unitlike
   if table.contains (Naming.modelName outer) then
     errors := errors.push "the original Foo._model inductive was parsed as Foo's carrier"
   if table.contains helper then
     errors := errors.push "an _impl helper was parsed as a public model declaration"
+  if table.contains (Naming.unitlikeName outer) then
+    errors := errors.push "an extra unitlike suffix was inferred without kernel metadata"
   return errors
 
 def main (args : List String) : IO UInt32 := do

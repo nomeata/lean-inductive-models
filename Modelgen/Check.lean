@@ -54,6 +54,7 @@ structure Correspondence where
   constructors : Array ConstantPair
   recursors : Array ConstantPair
   iotas : Array Naming.Iota
+  metadata : Array Naming.Metadata
   deriving Inhabited, Repr, BEq
 
 def Correspondence.entries (table : Correspondence) : Array ConstantPair :=
@@ -63,12 +64,13 @@ def Correspondence.entries (table : Correspondence) : Array ConstantPair :=
 export.  Recursors and iota theorems participate in discovery even though their
 statements are validated by a later checker tranche. -/
 def Correspondence.publicNames (table : Correspondence) : Array Name :=
-  table.entries.map (·.model) ++ table.iotas.map (·.name)
+  table.entries.map (·.model) ++ table.iotas.map (·.name) ++ table.metadata.map (·.name)
 
 /-- The exact original declaration owning one public name in the table. -/
 def Correspondence.originalOfPublic? (table : Correspondence) (name : Name) : Option Name :=
   (table.entries.find? (·.model == name)).map (·.owner) <|>
-    (table.iotas.find? (·.name == name)).map (·.recursor)
+    (table.iotas.find? (·.name == name)).map (·.recursor) <|>
+    (table.metadata.find? (·.name == name)).map (·.owner)
 
 /-- Apply the table simultaneously.  Projection type-name fields are constants
 for this purpose just as they are for the backreference invariant. -/
@@ -200,6 +202,31 @@ def iotaProposition? (x : Export) (ownerDecl : Nat) (recursorName : Name)
     (ruleIndex : Nat) : Option (List Name × Expr) :=
   iotaPropositionWith? x (constructorRecords x) ownerDecl recursorName ruleIndex
 
+/-- The literal unit-like proposition for one exported member.  The carrier is
+still named by the original here; [`Correspondence.expectedIotaType`] performs
+the same simultaneous, ambient-`Eq`-preserving rewrite as it does for recursor
+rules. -/
+def unitlikeProposition? (x : Export) (ownerDecl : Nat) (owner : Name) :
+    Option (List Name × Expr) := do
+  let .induct types constructors _ ← x.decls[ownerDecl]? | none
+  let type ← types.find? (·.name == owner)
+  unless type.isKernelUnitlike constructors do none
+  let (allBinders, result) := openForalls ((`_check.unitlike).append owner) type.type
+  unless allBinders.size == type.numParams do none
+  let .sort _ := result | none
+  let params := allBinders.map (·.value)
+  let carrier := mkAppN (.const owner (type.levelParams.map Level.param)) params
+  let xBinder : OpenBinder :=
+    { name := `x, type := carrier, info := .default
+      value := mkFVar (FVarId.mk ((`_check.unitlike.x).append owner)) }
+  let yBinder : OpenBinder :=
+    { name := `y, type := carrier, info := .default
+      value := mkFVar (FVarId.mk ((`_check.unitlike.y).append owner)) }
+  let level := match result with | .sort level => level | _ => .zero
+  let equality := mkAppN (.const ``Eq [level])
+    #[carrier, xBinder.value, yBinder.value]
+  return (type.levelParams, closeForalls (allBinders ++ #[xBinder, yBinder]) equality)
+
 /-- The correspondence table determined by an inductive record, independent
 of whether any model declarations are present. -/
 def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := do
@@ -214,7 +241,10 @@ def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := 
     { owner := recursor.name, model := Naming.modelName recursor.name }
   let iotas := recursorRecords.flatMap fun recursor =>
     (Array.range recursor.rules.length).map (Naming.Iota.ofRecursor recursor.name)
-  return { typeFormers, constructors, recursors, iotas }
+  let metadata := types.toArray.filterMap fun type =>
+    if type.isKernelUnitlike ctors then some (Naming.Metadata.ofOwner .unitlike type.name)
+    else none
+  return { typeFormers, constructors, recursors, iotas, metadata }
 
 /-- A public model family discovered in an export.
 
@@ -247,6 +277,9 @@ inductive Violation where
   | extraConstructor (owner declaration : Name)
   /-- A direct `R._model.iota_j` theorem has no exported rule `j` of `R`. -/
   | extraRule (owner declaration : Name)
+  /-- A direct metadata theorem is present although its owner lacks the kernel
+  feature named by the theorem slot. -/
+  | extraMetadata (owner declaration : Name) (kind : Naming.MetadataKind)
   /-- The two declarations do not carry equally many positional universes. -/
   | universeArity (owner declaration : Name) (ownerArity modelArity : Nat)
   /-- The exported declaration types differ after the exact permitted rewrite. -/
@@ -397,6 +430,23 @@ private def checkIota (x : Export) (constructors : Constructors) (family : Famil
   let expected := family.correspondence.expectedIotaType ownerParams model.levelParams ownerType
   if model.type == expected then #[] else #[.declarationType iota.recursor iota.name]
 
+private def checkUnitlike (x : Export) (family : Family)
+    (declarations : DeclarationTypes) (metadata : Naming.Metadata) : Array Violation := Id.run do
+  let models := declarations.getD metadata.name #[]
+  if models.isEmpty then return #[.missingPublic metadata.owner metadata.name]
+  if models.size != 1 then
+    return #[.duplicatePublic metadata.owner metadata.name models.size]
+  let some (ownerParams, ownerType) :=
+      unitlikeProposition? x family.ownerDecl metadata.owner
+    | return #[.declarationType metadata.owner metadata.name]
+  let model := models[0]!
+  if ownerParams.length != model.levelParams.length then
+    return #[.universeArity metadata.owner metadata.name
+      ownerParams.length model.levelParams.length]
+  let expected := family.correspondence.expectedIotaType
+    ownerParams model.levelParams ownerType
+  if model.type == expected then #[] else #[.declarationType metadata.owner metadata.name]
+
 private def iotaSlot? (name : Name) : Option (Name × Nat) := do
   let .str parent suffix := name | none
   unless suffix.startsWith "iota_" do none
@@ -417,7 +467,8 @@ larger export. -/
 def Violation.familyOwner : Violation → Name
   | .modelNotBefore owner .. | .ownerBackreference owner .. |
       .missingPublic owner .. | .duplicatePublic owner .. |
-      .extraConstructor owner .. | .extraRule owner .. | .universeArity owner .. |
+      .extraConstructor owner .. | .extraRule owner .. | .extraMetadata owner .. |
+      .universeArity owner .. |
       .declarationType owner .. => owner
 
 /-- Check order, independence, and every exact public declaration and statement.
@@ -447,11 +498,24 @@ def check (x : Export) : Array Violation := Id.run do
       violations := violations ++ checkPair family.correspondence declarations pair
     for iota in family.correspondence.iotas do
       violations := violations ++ checkIota x constructors family declarations iota
+    for metadata in family.correspondence.metadata do
+      if metadata.kind == .unitlike then
+        violations := violations ++ checkUnitlike x family declarations metadata
     for pair in family.correspondence.recursors do
       let numRules := (family.correspondence.iotas.filter (·.recursor == pair.owner)).size
       for (name, ruleIndex) in ruleSlots.getD pair.model #[] do
         if ruleIndex >= numRules || name != Naming.iotaName pair.owner ruleIndex then
           violations := violations.push (.extraRule pair.owner name)
+  -- An extra metadata-looking theorem is invalid even when no carrier or
+  -- other public slot exists to make the declaration a discoverable model
+  -- family.  The exact owner record, not suffix parsing, determines the slot.
+  for ownerDecl in [0:x.decls.size] do
+    let .induct types constructors _ := x.decls[ownerDecl]! | continue
+    for type in types do
+      unless type.isKernelUnitlike constructors do
+        let name := Naming.unitlikeName type.name
+        unless (declarations.getD name #[]).isEmpty do
+          violations := violations.push (.extraMetadata type.name name .unitlike)
   return violations
 
 end Modelgen.Check

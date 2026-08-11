@@ -85,6 +85,129 @@ structure PendingModel where
   this driver just emitted. -/
   recursors : Array ERec
 
+/-- Add the equality theorem for every member on which Lean's kernel enables
+its unit-like shortcut.  The proof does not appeal to that shortcut: it runs
+the model recursor twice, once for each side of the equality.  Constant
+equality motives discharge the unrelated arms of a mutual/nested recursor. -/
+def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
+    (recursors : Array ERec) (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+  let eligible := (Array.range types.size).filter fun k =>
+    types[k]!.isKernelUnitlike constructors.toList
+  if eligible.isEmpty then return is
+  unless types.size == is.numAll && is.selfNames.size == is.numAll do
+    badShape "the unit-like member table does not match the generated model"
+
+  -- Collisions are tested at the emitted names.  A simple model built under an
+  -- alias is renamed only when serialized, so its environment-local theorem
+  -- name is derived separately from `selfNames` below.
+  let publicTable := eligible.foldl (fun table k =>
+    table.addMetadata .unitlike types[k]!.name) Naming.Table.empty
+  let occupied := reserved.fold (fun names name => names.push name) #[]
+  let census := publicTable.collisionCensus occupied
+  if let some name := census.taken[0]? <|> census.duplicateRequirements[0]? then
+    declineWith (.nameTaken name)
+
+  let env ← getEnv
+  let eqi ← match EqInfo.check env with
+    | .ok eqi => pure eqi
+    | .error message => badShape message
+  let us := is.levelParams.map Level.param
+  let mut out := is.decls
+  let mut unitlikes := is.unitlikes
+
+  for k in eligible do
+    let type := types[k]!
+    let [constructorName] := type.ctors
+      | badShape s!"{type.name} changed shape while generating its unit-like theorem"
+    let some constructorIndex := constructors.findIdx? (·.name == constructorName)
+      | badShape s!"{constructorName} has no constructor record"
+    let some recursor := recursors[k]?
+      | badShape s!"{type.name} has no corresponding exported recursor"
+    let some motiveIndex := recursor.all.idxOf? type.name
+      | badShape s!"{recursor.name} has no motive for {type.name}"
+    unless recursor.numIndices == 0 do
+      badShape s!"unit-like recursor {recursor.name} unexpectedly has indices"
+    unless recursor.numMotives == recursor.all.length &&
+        recursor.numMinors == constructors.size do
+      badShape s!"{recursor.name} has an unexpected mutual telescope"
+
+    let modelType := is.selfNames[k]!
+    let modelConstructor := is.ctors[constructorIndex]!.2
+    let modelRecursor := is.recs[k]!
+    let theoremName := Name.str modelType "unitlike"
+    if env.constants.contains theoremName then declineWith (.nameTaken theoremName)
+    let typeInfo ← constInfo modelType
+    let recInfo ← constInfo modelRecursor
+    let recLevels ←
+      if recInfo.levelParams.length == is.levelParams.length + 1 then
+        pure (.zero :: us)
+      else if recInfo.levelParams.length == is.levelParams.length then
+        pure us
+      else
+        badShape s!"{modelRecursor} carries unexpected universe parameters"
+    let recType := recInfo.type.instantiateLevelParams recInfo.levelParams recLevels
+    let ctorInfo ← constInfo modelConstructor
+    let ctorType := ctorInfo.type.instantiateLevelParams ctorInfo.levelParams us
+
+    let declaration ← forallBoundedTelescope typeInfo.type (some type.numParams) fun ps _ => do
+      let carrier := mkAppN (.const modelType us) ps
+      let constructor ← do
+        let ctorTail ← instForall ctorType ps
+        unless numForalls ctorTail == 0 do
+          badShape s!"unit-like constructor {modelConstructor} has fields"
+        pure (mkAppN (.const modelConstructor us) ps)
+      let eqcc := eqi.mk' (← ilevel carrier) carrier constructor constructor
+      let refl := eqi.refl' (← ilevel carrier) carrier constructor
+      let carrierLevel ← ilevel carrier
+
+      let constantMotive := fun (domain proposition : Expr) =>
+        forallTelescope domain fun binders _ => mkLambdaFVars binders proposition
+      let applyRec := fun (targetMotive targetMinor major : Expr) => do
+        let mut current ← instForall recType ps
+        let mut args := ps
+        for motive in [0:recursor.numMotives] do
+          let .forallE _ domain body _ := current
+            | badShape s!"{modelRecursor} has too few motive binders"
+          let value ← if motive == motiveIndex then pure targetMotive
+            else constantMotive domain eqcc
+          args := args.push value
+          current := body.instantiate1 value
+        for minor in [0:recursor.numMinors] do
+          let .forallE _ domain body _ := current
+            | badShape s!"{modelRecursor} has too few minor binders"
+          let value ← if minor == constructorIndex then pure targetMinor
+            else forallTelescope domain fun binders _ => mkLambdaFVars binders refl
+          args := args.push value
+          current := body.instantiate1 value
+        let .forallE _ majorType _ _ := current
+          | badShape s!"{modelRecursor} has no major premise"
+        unless ← isDefEq majorType carrier do
+          badShape s!"{modelRecursor}'s major premise is not {modelType}"
+        pure (mkAppN (.const modelRecursor recLevels) (args.push major))
+
+      let innerMotive ← withLocalDeclD `y carrier fun y =>
+        mkLambdaFVars #[y] (eqi.mk' carrierLevel carrier constructor y)
+      let innerMinor := refl
+      let outerMinor ← withLocalDeclD `y carrier fun y => do
+        mkLambdaFVars #[y] (← applyRec innerMotive innerMinor y)
+      let outerMotive ← withLocalDeclD `x carrier fun x => do
+        let body ← withLocalDeclD `y carrier fun y =>
+          mkForallFVars #[y] (eqi.mk' carrierLevel carrier x y)
+        mkLambdaFVars #[x] body
+
+      let theoremType ← withLocalDeclD `x carrier fun x =>
+        withLocalDeclD `y carrier fun y =>
+          mkForallFVars (ps ++ #[x, y]) (eqi.mk' carrierLevel carrier x y)
+      let theoremValue ← withLocalDeclD `x carrier fun x => do
+        mkLambdaFVars (ps.push x) (← applyRec outerMotive outerMinor x)
+      pure <| Declaration.thmDecl
+        { name := theoremName, levelParams := is.levelParams
+          type := theoremType, value := theoremValue }
+    addChecked declaration
+    out := out.push declaration
+    unitlikes := unitlikes.push (k, theoremName)
+  return { is with decls := out, unitlikes }
+
 private abbrev FilterState := Array EDecl × Report × Array PendingModel
 
 /-- Read one inductive block back out of the environment, including the
@@ -116,6 +239,14 @@ def indEDecl (names : Array Name) : MetaM EDecl := do
           rules := rv.rules.map fun r =>
             { ctor := r.ctor, nfields := r.nfields, rhs := r.rhs } }
   return .induct ts.toList cs.toList rs.toList
+
+/-- Installed-block adapter for the two generation routes which run after the
+original inductive has been replayed. -/
+def addInstalledUnitlikeTheorems (names : Array Name) (reserved : Std.HashSet Name)
+    (is : Iso) : GenM Iso := do
+  let .induct types constructors recursors ← indEDecl names
+    | badShape s!"{names} did not read back as an inductive block"
+  addUnitlikeTheorems types.toArray constructors.toArray recursors.toArray reserved is
 
 /-- Read the exact recursor records of a block generated inside this pass. -/
 def recursorsOfNames (names : Array Name) : MetaM (Array ERec) := do
@@ -165,7 +296,10 @@ def serialiseIso (is : Iso) : MetaM (Array EDecl × Iso) := do
   let names := records.flatMap fun record => record.names.toArray
   let aliases := is.aliases.register names
   let renamed := records.map (·.renameAliases aliases)
-  return (renamed, { is with aliases, spliced := is.spliced.map aliases.exact })
+  let spliced := is.spliced.map fun name => aliases.exact name
+  let unitlikes := is.unitlikes.map fun (member, theoremName) =>
+    (member, aliases.exact theoremName)
+  return (renamed, { is with aliases := aliases, spliced := spliced, unitlikes := unitlikes })
 
 /-- Compare the export's own recursors against the ones the kernel just
 regenerated. Returns the names that differ. -/
@@ -454,12 +588,16 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
   let exactTaken ← exactPrimNameTaken? tname ctors
   let initial ← match exactTaken with
     | some n => pure (.error (.nameTaken n))
-    | none => (primIso tname root lparams np ty ctors reserved).run
+    | none => (do
+        let is ← primIso tname root lparams np ty ctors reserved
+        addInstalledUnitlikeTheorems #[tname] reserved is).run
   let mut res := initial
   if let .error (.nameLost _) := res then
     setEnv saved
     root := aliasRoot
-    res ← (primIso tname root lparams np ty ctors reserved).run
+    res ← (do
+      let is ← primIso tname root lparams np ty ctors reserved
+      addInstalledUnitlikeTheorems #[tname] reserved is).run
   match res with
   | .error dec =>
     setEnv saved
@@ -613,11 +751,15 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (st : FilterState) : MetaM (FilterState × Array PrimJob) := do
   let (out, rep, pending) := st
   let saved ← getEnv
-  let mut result ← (mutualIso all lparams np tys ctors reserved).run
+  let mut result ← (do
+    let is ← mutualIso all lparams np tys ctors reserved
+    addInstalledUnitlikeTheorems all reserved is).run
   if let .error (.nameLost _) := result then
     setEnv saved
-    result ← (mutualIso all lparams np tys ctors reserved
-      (some (Naming.retryRoot all[0]!))).run
+    result ← (do
+      let is ← mutualIso all lparams np tys ctors reserved
+        (some (Naming.retryRoot all[0]!))
+      addInstalledUnitlikeTheorems all reserved is).run
   match result with
   | .error dec =>
     setEnv saved
@@ -692,11 +834,15 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           | .ok (some pl) =>
             let saved ← getEnv
             let ctors := all.map ctorsOfMember
-            let mut result ← (iso all t.levelParams t.numParams ctors pl reserved).run
+            let mut result ← (do
+              let is ← iso all t.levelParams t.numParams ctors pl reserved
+              addUnitlikeTheorems ts.toArray cs.toArray inputRecursors.toArray reserved is).run
             if let .error (.nameLost _) := result then
               setEnv saved
-              result ← (iso all t.levelParams t.numParams ctors pl reserved
-                (some (Naming.retryRoot t.name))).run
+              result ← (do
+                let is ← iso all t.levelParams t.numParams ctors pl reserved
+                  (some (Naming.retryRoot t.name))
+                addUnitlikeTheorems ts.toArray cs.toArray inputRecursors.toArray reserved is).run
             match result with
             | .error dec =>
               setEnv saved
@@ -737,12 +883,16 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                 let saved2 ← getEnv
                 let (tys2, ctors2) ← blockOf is.members
                 let composedRoot := is.members[0]!
-                let mut mutualResult ← (mutualIso is.members is.levelParams t.numParams
-                  tys2 ctors2 reserved).run
+                let mut mutualResult ← (do
+                  let is2 ← mutualIso is.members is.levelParams t.numParams
+                    tys2 ctors2 reserved
+                  addInstalledUnitlikeTheorems is.members reserved is2).run
                 if let .error (.nameLost _) := mutualResult then
                   setEnv saved2
-                  mutualResult ← (mutualIso is.members is.levelParams t.numParams
-                    tys2 ctors2 reserved (some (Naming.retryRoot composedRoot))).run
+                  mutualResult ← (do
+                    let is2 ← mutualIso is.members is.levelParams t.numParams
+                      tys2 ctors2 reserved (some (Naming.retryRoot composedRoot))
+                    addInstalledUnitlikeTheorems is.members reserved is2).run
                 match mutualResult with
                 | .error dec =>
                   setEnv saved2

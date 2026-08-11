@@ -1994,6 +1994,9 @@ structure Iso where
   recs : Array Name
   /-- `(member, the rule's constructor as the export names it, the theorem)`. -/
   iotas : Array (Nat × Name × Name)
+  /-- `(member, theorem)` for the real members on which Lean's kernel enables
+  its unit-like equality shortcut. -/
+  unitlikes : Array (Nat × Name) := #[]
   /-- **Prelude constants the input did not declare and this model spliced in**
   — a subset of `Eq`, `Eq.refl`, the four quotient names, `Quot.sound` and
   `T._model.funext`, in the order they were emitted, and **empty** for every
