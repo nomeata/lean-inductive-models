@@ -290,11 +290,8 @@ def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := 
     if recursor.k then some (Naming.Metadata.ofOwner .ruleK recursor.name) else none
   let mut projections : Array Naming.Projection := #[]
   for type in types do
-    if type.isKernelStructureLike ctors then
-      if let some constructor := ctors.find? fun constructor =>
-          constructor.induct == type.name && type.ctors.contains constructor.name then
-        for fieldIndex in [:constructor.numFields] do
-          projections := projections.push (.ofField type.name fieldIndex)
+    for fieldIndex in x.intrinsicProjectionFieldsFor type ctors do
+      projections := projections.push (.ofField type.name fieldIndex)
   let metadata := unitlikeMetadata ++ ruleKMetadata
   return { typeFormers, constructors, recursors, projections, iotas, metadata }
 
@@ -638,6 +635,7 @@ private partial def inferExactType? (x : Export) (declarations : DeclarationType
       let constructor ← constructors.find? fun constructor =>
         constructor.name == constructorName && constructor.induct == owner
       unless type.isKernelStructureLike constructors do none
+      unless (x.intrinsicProjectionFieldsFor type constructors).contains fieldIndex do none
       unless constructor.levelParams.length == levels.length do none
       let ownerArguments := structType.getAppArgs
       unless type.numParams <= ownerArguments.size do none
@@ -684,9 +682,10 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
   let some constructorPair := family.correspondence.constructors.find?
       (·.owner == constructor.name)
     | return #[.declarationType projection.owner projection.name]
-  let some ownerType := (match x.decls[family.ownerDecl]! with
-      | .induct types _ _ => types.find? (·.name == projection.owner)
-      | _ => none)
+  let ownerTypes : List EIndType := match x.decls[family.ownerDecl]! with
+    | .induct types _ _ => types
+    | _ => []
+  let some ownerType := ownerTypes.find? (fun (type : EIndType) => type.name == projection.owner)
     | return #[.declarationType projection.owner projection.name]
   let model := projectionModels[0]!
   let ruleModel := ruleModels[0]!
@@ -698,13 +697,13 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
       ownerType.levelParams.length ruleModel.levelParams.length]
   let mappedConstructorType := family.correspondence.expectedType
     constructor.levelParams model.levelParams constructor.type
-  let (constructorBinders, constructorResult) := openForalls
+  let (constructorBinders, constructorResult) : Array OpenBinder × Expr := openForalls
     ((`_check.intrinsicProjectionCtor).append projection.name) mappedConstructorType
   unless constructorBinders.size == constructor.numParams + constructor.numFields do
     return #[.declarationType projection.owner projection.name]
   let some selectedBinder := constructorBinders[constructor.numParams + projection.fieldIndex]?
     | return #[.declarationType projection.owner projection.name]
-  let constructorArgs := constructorBinders.map (·.value)
+  let constructorArgs := constructorBinders.map fun (binder : OpenBinder) => binder.value
   let params := constructorArgs.extract 0 constructor.numParams
   let fields := constructorArgs.extract constructor.numParams constructorArgs.size
   let levels := model.levelParams.map Level.param
@@ -734,11 +733,12 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
   let lhs := mkAppN (.const projection.name levels) (params.push major)
 
   let sourceConstructorType := constructor.type
-  let (sourceBinders, _) := openForalls
+  let (sourceBinders, _) : Array OpenBinder × Expr := openForalls
     ((`_check.intrinsicProjectionSource).append projection.name) sourceConstructorType
   let some sourceField := sourceBinders[constructor.numParams + projection.fieldIndex]?
     | return violations.push (.declarationType projection.owner projection.iota)
-  let sourceLocals := sourceBinders.map fun binder => (binder.value.fvarId!, binder.type)
+  let sourceLocals := sourceBinders.map fun (binder : OpenBinder) =>
+    (binder.value.fvarId!, binder.type)
   let some sourceEqLevel := inferExactSortLevel? x declarations sourceLocals sourceField.type
     | return violations.push (.declarationType projection.owner projection.iota)
   let eqLevel := sourceEqLevel.instantiateParams constructor.levelParams

@@ -221,14 +221,11 @@ def modelTable (x : Export) : ModelTable := Id.run do
       if t.isKernelUnitlike cs then
         (table, ambiguous) := add table ambiguous (Naming.unitlikeName t.name) .theorem
           (entry .unitlike)
-      if t.isKernelStructureLike cs then
-        if let some constructor := cs.find? fun constructor =>
-            constructor.induct == t.name && t.ctors.contains constructor.name then
-          for fieldIndex in [:constructor.numFields] do
-            (table, ambiguous) := add table ambiguous
-              (Naming.projectionName t.name fieldIndex) .value (entry .projection)
-            (table, ambiguous) := add table ambiguous
-              (Naming.projectionIotaName t.name fieldIndex) .theorem (entry .projectionIota)
+      for fieldIndex in x.intrinsicProjectionFieldsFor t cs do
+        (table, ambiguous) := add table ambiguous
+          (Naming.projectionName t.name fieldIndex) .value (entry .projection)
+        (table, ambiguous) := add table ambiguous
+          (Naming.projectionIotaName t.name fieldIndex) .theorem (entry .projectionIota)
   return table
 
 /-- One node of the declaration DAG. -/

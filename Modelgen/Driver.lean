@@ -281,6 +281,28 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
     current := body.instantiate1 value
   return arguments
 
+private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : Nat)
+    (current : Expr) : MetaM Bool := do
+  let current ← whnf current
+  let .forallE name fieldType body info := current | return false
+  let fieldIsProp ← isProp fieldType
+  if fieldIndex == 0 then return !ownerIsProp || fieldIsProp
+  if ownerIsProp && body.hasLooseBVars && !fieldIsProp then return false
+  withLocalDecl name info fieldType fun value =>
+    projectionFieldEligibleM ownerIsProp (fieldIndex - 1) (body.instantiate1 value)
+
+/-- Mirror the kernel's `infer_proj` field walk.  A Prop-valued owner may only
+project proof fields, and may not cross an earlier data field on which the
+remaining constructor telescope depends. -/
+private def eligibleProjectionFieldsM (type : EIndType) (constructor : ECtor) : MetaM (Array Nat) := do
+  let ownerIsProp ← isPropFormerType type.type
+  forallBoundedTelescope constructor.type (some type.numParams) fun _ fieldsType => do
+    let mut result := #[]
+    for fieldIndex in [:constructor.numFields] do
+      if ← projectionFieldEligibleM ownerIsProp fieldIndex fieldsType then
+        result := result.push fieldIndex
+    return result
+
 /-- Add modeled primitive projections and their literal constructor rules for
 every kernel structure-like member in a generated block.
 
@@ -294,14 +316,13 @@ codomain is assumed. -/
 def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     (recursors : Array ERec) (_projections : Array EProjection)
     (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
-  let fields := types.flatMap fun type =>
+  let mut fields : Array (Name × Nat) := #[]
+  for type in types do
     if type.isKernelStructureLike constructors.toList then
-      match constructors.find? fun constructor =>
-          type.ctors.contains constructor.name && constructor.induct == type.name with
-      | some constructor => (Array.range constructor.numFields).map fun fieldIndex =>
-          (type.name, fieldIndex)
-      | none => #[]
-    else #[]
+      if let some constructor := constructors.find? fun constructor =>
+          type.ctors.contains constructor.name && constructor.induct == type.name then
+        for fieldIndex in ← eligibleProjectionFieldsM type constructor do
+          fields := fields.push (type.name, fieldIndex)
   if fields.isEmpty then return is
   unless types.size == is.numAll && is.selfNames.size == is.numAll do
     badShape "the structure-member table does not match the generated model"
@@ -854,12 +875,10 @@ def mutualReady (needsProjections : Bool) (reserved : Std.HashSet Name) : MetaM 
   if env.constants.contains `PULiftP then return true
   return !(reserved.contains `PULiftP || reserved.contains `PULiftP.up)
 
-private def hasIntrinsicProjectionFields (types : List EIndType)
+private def hasIntrinsicProjectionFields (x : Export) (types : List EIndType)
     (constructors : List ECtor) : Bool :=
   types.any fun type =>
-    type.isKernelStructureLike constructors && constructors.any fun constructor =>
-      constructor.induct == type.name && type.ctors.contains constructor.name &&
-        constructor.numFields > 0
+    !(x.intrinsicProjectionFieldsFor type constructors).isEmpty
 
 private def isMutualBasisRecord (needsProjections : Bool) (declaration : EDecl) : Bool :=
   declaration.names.any fun name =>
@@ -1387,7 +1406,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           let ctors := all.map fun n =>
             (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
           let tys := ts.toArray.map (·.type)
-          let needsProjections := hasIntrinsicProjectionFields ts cs
+          let needsProjections := hasIntrinsicProjectionFields x ts cs
           let job :=
             (all, t.levelParams, t.numParams, tys, ctors, inputRecursors.toArray,
               needsProjections)

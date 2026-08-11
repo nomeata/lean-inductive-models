@@ -333,6 +333,165 @@ def Export.projections (x : Export) : Array EProjection := Id.run do
 def Export.projectionsFor (x : Export) (owner : Name) : Array EProjection :=
   x.projections.filter (·.owner == owner)
 
+/-! ## Intrinsic projection eligibility
+
+An `Expr.proj T j self` is not valid for every field of every structure-like
+type.  In particular, when `T` is `Prop` the selected field must be a
+proposition; and each earlier non-proof field on which the remaining telescope
+depends also makes the projection invalid.  This is the literal field walk in
+the kernel's `infer_proj`, expressed over export records so generation,
+checking, and monomorphization enumerate the same slots without consulting a
+named projection wrapper. -/
+
+private structure ExactDeclType where
+  levelParams : List Name
+  type : Expr
+
+private abbrev ExactDeclarationTypes := Std.HashMap Name ExactDeclType
+private abbrev ExactLocals := Array (FVarId × Expr)
+
+private def exactDeclarationTypes (x : Export) : ExactDeclarationTypes := Id.run do
+  let mut result : ExactDeclarationTypes := {}
+  for declaration in x.decls do
+    match declaration with
+    | .ax name levelParams type _ | .quot name levelParams type _ |
+      .defn name levelParams type .. | .thm name levelParams type .. |
+      .opaq name levelParams type .. =>
+        unless result.contains name do result := result.insert name { levelParams, type }
+    | .induct types constructors recursors =>
+      for type in types do
+        unless result.contains type.name do
+          result := result.insert type.name { levelParams := type.levelParams, type := type.type }
+      for constructor in constructors do
+        unless result.contains constructor.name do
+          result := result.insert constructor.name
+            { levelParams := constructor.levelParams, type := constructor.type }
+      for recursor in recursors do
+        unless result.contains recursor.name do
+          result := result.insert recursor.name
+            { levelParams := recursor.levelParams, type := recursor.type }
+  return result
+
+private def ExactLocals.typeOf? (locals : ExactLocals) (id : FVarId) : Option Expr :=
+  (locals.find? (·.1 == id)).map (·.2)
+
+private partial def exactWhnf : Expr → Expr
+  | .mdata _ body => exactWhnf body
+  | .letE _ _ value body _ => exactWhnf (body.instantiate1 value)
+  | expression => expression
+
+private def structureOwner? (x : Export) (owner : Name) : Option (EIndType × List ECtor) :=
+  x.decls.findSome? fun declaration => match declaration with
+    | .induct types constructors _ =>
+      (types.find? (·.name == owner)).map fun type => (type, constructors)
+    | _ => none
+
+mutual
+
+private partial def inferExactType? (x : Export) (declarations : ExactDeclarationTypes)
+    (locals : ExactLocals) : Expr → Option Expr
+  | .sort level => some (.sort (.succ level))
+  | .fvar id => locals.typeOf? id
+  | .const name levels => do
+      let declaration ← declarations[name]?
+      unless declaration.levelParams.length == levels.length do none
+      return declaration.type.instantiateLevelParams declaration.levelParams levels
+  | .app function argument => do
+      let functionType := exactWhnf (← inferExactType? x declarations locals function)
+      let .forallE _ _ body _ := functionType | none
+      return body.instantiate1 argument
+  | .lam name domain body info => do
+      let value := mkFVar (FVarId.mk ((`_format.exactLam).mkNum locals.size))
+      let bodyType ← inferExactType? x declarations
+        (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
+      return .forallE name domain (bodyType.abstract #[value]) info
+  | .forallE _ domain body _ => do
+      let domainLevel ← inferExactSortLevel? x declarations locals domain
+      let value := mkFVar (FVarId.mk ((`_format.exactPi).mkNum locals.size))
+      let bodyLevel ← inferExactSortLevel? x declarations
+        (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
+      return .sort (.imax domainLevel bodyLevel)
+  | .letE _ _ value body _ => inferExactType? x declarations locals (body.instantiate1 value)
+  | .mdata _ body => inferExactType? x declarations locals body
+  | .proj owner fieldIndex struct => do
+      let structType := exactWhnf (← inferExactType? x declarations locals struct)
+      let .const structOwner levels := structType.getAppFn | none
+      unless structOwner == owner do none
+      let (type, constructors) ← structureOwner? x owner
+      let constructorName ← type.ctors.head?
+      let constructor ← constructors.find? fun constructor =>
+        constructor.name == constructorName && constructor.induct == owner
+      unless type.isKernelStructureLike constructors do none
+      let ownerArguments := structType.getAppArgs
+      unless type.numParams <= ownerArguments.size do none
+      let params := ownerArguments.extract 0 type.numParams
+      let mut current := constructor.type.instantiateLevelParams constructor.levelParams levels
+      for param in params do
+        let .forallE _ _ body _ := exactWhnf current | none
+        current := body.instantiate1 param
+      let ownerIsProp := match exactWhnf type.type with
+        | .forallE .. =>
+          let rec result : Expr → Expr
+            | .forallE _ _ body _ => result body
+            | expression => exactWhnf expression
+          result type.type == .sort .zero
+        | result => result == .sort .zero
+      for earlier in [0:fieldIndex + 1] do
+        let .forallE _ fieldType body _ := exactWhnf current | none
+        let fieldIsProp := inferExactSortLevel? x declarations locals fieldType == some .zero
+        if earlier == fieldIndex then
+          if ownerIsProp && !fieldIsProp then none else return fieldType
+        if ownerIsProp && body.hasLooseBVars && !fieldIsProp then none
+        current := body.instantiate1 (.proj owner earlier struct)
+      none
+  | .lit (.natVal _) => some (.const ``Nat [])
+  | .lit (.strVal _) => some (.const ``String [])
+  | .bvar _ | .mvar _ => none
+
+private partial def inferExactSortLevel? (x : Export) (declarations : ExactDeclarationTypes)
+    (locals : ExactLocals) (expression : Expr) : Option Level := do
+  let .sort level := exactWhnf (← inferExactType? x declarations locals expression) | none
+  return level
+
+end
+
+private partial def projectionFieldEligible? (x : Export)
+    (declarations : ExactDeclarationTypes) (ownerIsProp : Bool) (fieldIndex : Nat)
+    (current : Expr) (locals : ExactLocals) : Option Bool := do
+  let .forallE _ fieldType body _ := exactWhnf current | none
+  let fieldIsProp := inferExactSortLevel? x declarations locals fieldType == some .zero
+  if fieldIndex == 0 then return !ownerIsProp || fieldIsProp
+  if ownerIsProp && body.hasLooseBVars && !fieldIsProp then return false
+  let value := mkFVar (FVarId.mk ((`_format.projectionField).mkNum locals.size))
+  projectionFieldEligible? x declarations ownerIsProp (fieldIndex - 1)
+    (body.instantiate1 value) (locals.push (value.fvarId!, fieldType))
+
+/-- Zero-based constructor fields for which the kernel projection expression
+is well typed.  Empty also means that the member is not structure-like. -/
+def Export.intrinsicProjectionFieldsFor (x : Export) (type : EIndType)
+    (constructors : List ECtor) : Array Nat := Id.run do
+  unless type.isKernelStructureLike constructors do return #[]
+  let [constructorName] := type.ctors | return #[]
+  let some constructor := constructors.find? fun constructor =>
+      constructor.name == constructorName && constructor.induct == type.name
+    | return #[]
+  let declarations := exactDeclarationTypes x
+  let mut ownerType := type.type
+  while ownerType.isForall do ownerType := ownerType.bindingBody!
+  let ownerIsProp := exactWhnf ownerType == .sort .zero
+  let mut current := constructor.type
+  let mut locals : ExactLocals := #[]
+  for parameterIndex in [:type.numParams] do
+    let .forallE _ parameterType body _ := exactWhnf current | return #[]
+    let value := mkFVar (FVarId.mk ((`_format.projectionParam).mkNum parameterIndex))
+    locals := locals.push (value.fvarId!, parameterType)
+    current := body.instantiate1 value
+  let mut result := #[]
+  for fieldIndex in [:constructor.numFields] do
+    if projectionFieldEligible? x declarations ownerIsProp fieldIndex current locals == some true then
+      result := result.push fieldIndex
+  return result
+
 /-! ## Reading -/
 
 private def jField (j : Json) (k : String) : Except String Json :=
