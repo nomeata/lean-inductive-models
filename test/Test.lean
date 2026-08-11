@@ -378,9 +378,7 @@ to `max`, and the forward and inverse maps are definitionally inverse.  The
 seven declarations recorded below include its intrinsic projection and eta;
 no level-normalizer relaxation or axiom is involved. -/
 def expectedPrim : List Row :=
-  [ ("maybe_zero_indexed", [],
-      [("MI", "prim model shape: an indexed family at Sort u: the lift carries the Church \
-        encoding, and only the nonrecursive singleton has lifted index machinery")])
+  [ ("maybe_zero_indexed", [("MI", 8)], [])
   , ("maybe_zero_recursive", [],
       [("MR", "prim model shape: a recursive inductive at Sort u: the strong-induction fold \
         is not threaded through the lift")])

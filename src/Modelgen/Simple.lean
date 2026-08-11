@@ -2624,9 +2624,6 @@ application of {tname}"
     -- declines the shapes it cannot express — a branching constructor, or a
     -- recursive occurrence under a binder — by name, further down.
   | PrimRoute.bare =>
-    if ni > 0 && !nonrecursiveOneConstructor then
-      badShape s!"an indexed family at Sort {w}: the lift carries the Church \
-        encoding, and only the nonrecursive singleton has lifted index machinery"
     if isRec then
       badShape s!"a recursive inductive at Sort {w}: the strong-induction fold is \
         not threaded through the lift"
