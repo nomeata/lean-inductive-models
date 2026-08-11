@@ -4201,9 +4201,17 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
 Sort {w}, so the data tower does not land at the carrier's own sort"
           for i in rcs do
             forallTelescope (← ityp fs[i]!) fun zs res => do
-              unless res.getAppFn.isConstOf tname && res.getAppNumArgs == np do
-                badShape s!"{cn}'s recursive field {i} is not a bare {tname} at its own \
-parameters under its binders, so it is nested rather than infinitary"
+              -- Lean's recursive-argument test reduces transparent aliases.
+              -- Ask the same definitional question here, but use it only for
+              -- recognition: `wRecDom`, every public type restored below, and
+              -- the iota statement all retain the export's literal syntax.
+              -- `AliasW.lim : (N → As AliasW) → AliasW` is the witness: `As`
+              -- is not a nested container, and its result is definitionally
+              -- the owner at precisely these parameters.
+              let self := mkAppN (.const tname us) ps
+              unless ← isDefEq res self do
+                badShape s!"{cn}'s recursive field {i} does not reduce to {tname} at its \
+own parameters under its binders, so it is nested rather than infinitary"
               if let some ℓ ← wTowerLevelOf w zs then
                 badShape s!"{cn}'s recursive field {i} has a binder at Sort {ℓ} and the \
 carrier is Sort {w}, so the branch tower does not land at the carrier's own sort"
