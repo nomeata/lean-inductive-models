@@ -11,10 +11,5 @@ motive universe.
 
 universe u
 
-inductive I : Type where
-  | a : I
-
-inductive DG (P Q : Prop) : I → Sort u where
-  | mk (hP : P) (hQ : Q) : DG P Q I.a
-
-#check @DG.rec
+inductive DG (ι : Type) (i : ι) (P : Prop) : ι → Sort u where
+  | mk (h : P) : DG ι i P i

@@ -379,9 +379,12 @@ message moved from `fields reach Sort imax` to `rejected by the kernel`,
 demonstrating that a planner-side procedure alone cannot get `BoxF` past the
 kernel. -/
 def expectedPrim : List Row :=
-  [ ("degenerate_graph", [("I", 10)],
-      [("DG", "prim model shape: an indexed subsingleton: the packed-index-equation model \
-        (the degenerate graph case) is not implemented")])
+  [ -- Lifted arm F at its minimum: one proof field and one constant result
+    -- index. The latter forces the packed equation; the existing one-field
+    -- direct-carrier route is index-free. At positive `u`, forgetting the
+    -- `PULiftP` boundary is a kernel type error; at `u = 0`, the same declaration
+    -- checks the genuinely propositional end.
+    ("degenerate_graph", [("DG", 9)], [])
   , ("prim_shapes",
       [("Tri", 11), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),

@@ -117,7 +117,10 @@ Three recursors:
   eliminator. One constructor, no indices: the subsingleton rule that minted
   the recursor says every field is a proposition, so extract each by
   instantiating the encoding at the field's own type, sequentially, with
-  proof irrelevance closing the motive.
+  proof irrelevance closing the motive. With indices, arm F stores the proof
+  fields together with one packed equation for the non-pivot indices; at a
+  maybe-zero sort, that proposition is carried under `PULiftP` and the same
+  recursor uses `down` before extraction and `up` in its motive.
 
 **Why the maybe-zero collapse is a model and not a cheat.** At a maybe-zero
 sort the contract never forces two provably distinct elements: zero
@@ -169,8 +172,9 @@ nothing; and arm W applies the W core's propositional ι theorem.
   index terms are two proofs of one proposition and proof irrelevance closes
   it, which is what puts the `below` Lean mints beside every recursive `Prop`
   — `Acc.below` included — on the modelled side.
-* **indices or recursion at a maybe-zero sort** — neither is threaded
-  through the lift.
+* **a non-singleton indexed declaration, or any recursion, at a maybe-zero
+  sort** — only the large-eliminating nonrecursive singleton has its index
+  equation threaded through the lift.
 * **a level gap no pad or box closes** — an `imax` in a field's level that
   boxing does not collapse (an `imax`-leveled *domain* inside the field).
   This one is a **level-incompleteness** decline, not a type error: the
@@ -2566,8 +2570,10 @@ application of {tname}"
 
   -- What each route can carry. The Church routes gained indices and recursion
   -- (`churchSwapAt` and the strong-induction fold below); the `Nat`-tagged sum
-  -- has neither, and at a maybe-zero sort the lift would have to be threaded
-  -- through both, which is not done.
+  -- has neither. At a maybe-zero sort, the lifted arm-F construction below
+  -- carries the one indexed shape that can large-eliminate: a nonrecursive
+  -- singleton. Other indexed shapes would need the lift threaded through the
+  -- small-elimination machinery too.
   match route with
   | PrimRoute.type =>
     if ni > 0 && !erasureBare then
@@ -2591,7 +2597,7 @@ application of {tname}"
   | PrimRoute.bare =>
     if ni > 0 && !nonrecursiveOneConstructor then
       badShape s!"an indexed family at Sort {w}: the lift carries the Church \
-        encoding but the index machinery is not threaded through it"
+        encoding, and only the nonrecursive singleton has lifted index machinery"
     if isRec then
       badShape s!"a recursive inductive at Sort {w}: the strong-induction fold is \
         not threaded through the lift"
@@ -2636,7 +2642,8 @@ application of {tname}"
   -- `Acc.below` — fell through the gap between them.
   -- `test/fixtures/modelgen/prim_idx.lean` is the grid.
   let armGRec := (route matches PrimRoute.prop) && large && nc == 1 && isRec
-  let armFNonRec := (route matches PrimRoute.prop) && large && nc == 1 && ni > 0 && !isRec
+  let armFNonRec := ((route matches PrimRoute.prop) || (route matches PrimRoute.bare)) &&
+    large && nc == 1 && ni > 0 && !isRec
   let mut gIsData : Array Bool := #[]
   let mut gIdxPos : Array Nat := #[]
   let mut gRecNb : Array (Option Nat) := #[]
@@ -2798,7 +2805,10 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
       pure none
 
   -- The indexed subsingleton has a different carrier from the Church routes —
-  -- a packed index equation, not a fold — so it branches before them.
+  -- a packed index equation, not a fold — so it branches before them. At a
+  -- maybe-zero sort this proposition is wrapped in `PULiftP`, just like the
+  -- ordinary Church route; the construction below inserts the matching
+  -- `up`/`down` at its boundary.
   -- **Any number of fields.** The arm used to decline above one, because at
   -- zero fields (`HEq`) and one (`TagS`) there is nothing to order and no
   -- fixture could catch a threading bug. `prim_shapes`'s `TagS2`, `TagS3` and
@@ -3239,6 +3249,9 @@ data tower would have to hold a type the branch tower cannot see"
     -- all. ι is `Eq.refl`: at the constructor the stored equation *is*
     -- `Eq.refl`, the pivots are the constructor's own fields, and `Eq.rec`'s
     -- own ι rule fires.
+    let lift? : Option Level := if route matches PrimRoute.bare then some w else none
+    if lift?.isSome then
+      for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
     let (cn0, cty0) := exportCtors[0]!
     let nonPiv := gNonPiv
@@ -3290,14 +3303,17 @@ data tower would have to hold a type the branch tower cannot see"
     let lamF : Array Expr → Expr → GenM Expr := fun xs e => mkLambdaFVars xs e
     let minorTyAt := fun (ps is : Array Expr) (pk? : Option (Expr × Level)) (r : Expr) =>
       underMinor ps is pk? allTy (fun _ _ => pure r)
+    let encodedAt := fun (ps is : Array Expr) => do
+      let pk? ← pkAt ps is
+      withLocalDeclD `r (.sort .zero) fun r => do
+        mkForallFVars #[r] (.forallE `k (← minorTyAt ps is pk? r) r .default)
 
     -- ── the carrier ──
     let selfVal ← withParams fun ps => do
       forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
-        let pk? ← pkAt ps is
-        let body ← withLocalDeclD `r (.sort .zero) fun r => do
-          mkForallFVars #[r] (.forallE `k (← minorTyAt ps is pk? r) r .default)
-        mkLambdaFVars (ps ++ is) body
+        let encoded ← encodedAt ps is
+        mkLambdaFVars (ps ++ is)
+          (match lift? with | none => encoded | some ℓ => puliftT ℓ encoded)
     let dSelf := Declaration.defnDecl
       { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
@@ -3320,10 +3336,12 @@ data tower would have to hold a type the branch tower cannot see"
           | none => pure bnd
           | some (pk, ℓpk) => do
             pure (bnd.push (eqi.refl' ℓpk pk (← packChain nnp pk (nonPiv.map (idx[·]!)) 0)))
-        let body ← withLocalDeclD `r (.sort .zero) fun r => do
+        let encoded ← encodedAt ps idx
+        let proof ← withLocalDeclD `r (.sort .zero) fun r => do
           withLocalDeclD `k (← minorTyAt ps idx pk? r) fun kk =>
             mkLambdaFVars #[r, kk] (mkAppN kk args)
-        mkLambdaFVars (ps ++ fs) body
+        mkLambdaFVars (ps ++ fs)
+          (match lift? with | none => proof | some ℓ => puliftUp ℓ encoded proof)
     let dCtor := Declaration.defnDecl
       { name := ctorN 0, levelParams := lparams, type := ty, value := cval
         hints := ← hintsFor cval, safety := .safe }
@@ -3339,6 +3357,8 @@ data tower would have to hold a type the branch tower cannot see"
       let idxs := bs.extract (np + 1 + nc) (np + 1 + nc + ni)
       let t := bs[bs.size - 1]!
       let pk? ← pkAt ps idxs
+      let encoded ← encodedAt ps idxs
+      let base := match lift? with | none => t | some ℓ => puliftDown ℓ encoded t
       let tele ← instForall cty0 ps
       let nf := numForalls tele
       -- **Recover the fields.** A data field is the recursor's own index
@@ -3356,7 +3376,7 @@ data tower would have to hold a type the branch tower cannot see"
           if gIsData[i]! then pure idxs[gIdxPos[i]!]!
           else do
             let proj ← underMinor ps idxs pk? lamF fun fs _ => pure fs[i]!
-            pure (mkAppN t #[ft, proj])
+            pure (mkAppN base #[ft, proj])
         es := es.push v
         curT := rest.instantiate1 v
       -- the proof fields alone, in telescope order: what the carrier's minor
@@ -3373,7 +3393,7 @@ data tower would have to hold a type the branch tower cannot see"
         let pkc ← packChain nnp pk (nonPiv.map (idxE[·]!)) 0
         let pki ← packChain nnp pk (nonPiv.map (idxs[·]!)) 0
         let eqTy := eqi.mk' ℓpk pk pkc pki
-        let heq := mkAppN t #[eqTy, ← underMinor ps idxs pk? lamF
+        let heq := mkAppN base #[eqTy, ← underMinor ps idxs pk? lamF
           fun _ h? => pure h?.get!]
         -- one `Eq.rec` at the packed point: the motive rebuilds a carrier
         -- proof at each `y`, and `pack (unpack y) ≡ y` makes it typecheck.
@@ -3387,7 +3407,10 @@ data tower would have to hold a type the branch tower cannot see"
           let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
             withLocalDeclD `k (← minorTyAt ps full pk? r) fun kk =>
               mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
-          pure (mkAppN motive (full.push rebuilt))
+          let lifted ← match lift? with
+            | none => pure rebuilt
+            | some ℓ => pure (puliftUp ℓ (← encodedAt ps full) rebuilt)
+          pure (mkAppN motive (full.push lifted))
         let motiveE ← withLocalDeclD `y pk fun y => do
           withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
             mkLambdaFVars #[y, hy] (← fam y hy)
@@ -4544,9 +4567,6 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         -- extract each by instantiating the encoding at the field's type.
         unless nc == 1 do
           badShape s!"{ern} is large-eliminating with {nc} constructors"
-        if ni > 0 then
-          badShape s!"an indexed subsingleton: the packed-index-equation model \
-            (the degenerate graph case) is not implemented"
         let (_, cty) := exportCtors[0]!
         let tele ← instForall cty ps
         let nf := numForalls tele
