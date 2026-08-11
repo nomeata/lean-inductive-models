@@ -16,7 +16,15 @@
    A nested occurrence whose container parameter mentions a **constructor
    field** — `node : (n : N) → List (ITree n) → ITree (N.s n)` — is *not* in
    this file, because Lean rejects it too: "nested inductive datatypes
-   parameters cannot contain local variables". -/
+   parameters cannot contain local variables".
+
+   The same kernel gate covers the apparent residual W-label case. With an
+   indexed `Box (α : Type) : α → Type`, the smallest candidate
+   `U.node : (x : U) → Box U x → U` is rejected with that exact message: the
+   later field cannot observe the earlier child through a dependent container
+   while `U` is being declared. There is consequently no raw export of that
+   source shape for the simple W arm; hand-specialising it produces a mutual
+   block, which takes the mutual route instead. -/
 prelude
 
 universe u v

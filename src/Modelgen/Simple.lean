@@ -3196,6 +3196,18 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- recursive ones, and the two index *different* subsequences of one
   -- telescope: a generator that took "the fields before the first recursive
   -- one" as the data would silently lose every field that sits after a child.
+  --
+  -- There is deliberately no second guard for a later data field whose type
+  -- mentions an earlier child. A kernel-accepted plain inductive cannot
+  -- inspect a recursive value while the inductive is still being declared:
+  -- putting that value in a later field's type requires a foreign dependent
+  -- family/container application, which Lean classifies as nesting and rejects
+  -- when the occurrence depends on a constructor local (the exact rejected
+  -- shape documented in `indexed_decl.lean` and `nest_fam_arg.lean`). Nested
+  -- input does not reach `genPrim` in any case: `Driver` sends it through
+  -- `Plan.plan`, whose `mimicFor` repeats that constructor-local check before
+  -- specialising the block. The former `hasLooseBVar` refusal here was thus a
+  -- guard for metadata the replaying kernel cannot install, not a model shape.
   let wShapeOf : Nat → GenM (Array Nat × Array Nat) := fun k => do
     let (cn, cty) := exportCtors[k]!
     let mut t := cty
@@ -3210,15 +3222,6 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       let .forallE _ dom b _ := t | unreachable!
       if mentionsAny #[tname] dom then rcs := rcs.push i
       else
-        -- **A non-recursive field may not mention a recursive one.** Its type
-        -- would have to be built inside `D`, and `D` holds the fields the
-        -- *branch* type does not see; there is nowhere in the scheme to put it.
-        -- `tagFactored` is the same question asked of a recursive field's
-        -- binders and does not reach this one.
-        for m in rcs do
-          if dom.hasLooseBVar (i - 1 - m) then
-            badShape s!"{cn}'s field {i} mentions its own recursive field {m}, so the \
-data tower would have to hold a type the branch tower cannot see"
         nrs := nrs.push i
       t := b
       i := i + 1

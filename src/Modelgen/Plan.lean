@@ -143,6 +143,11 @@ depth `d`; the record keeps it at the parameter telescope's depth. -/
 private def mimicFor (occ : Expr) (c : Name) (ls : List Level) (d : Nat) : SpM Name := do
   let ctx ← read
   let k := d - ctx.numParams
+  -- Lean's nested-inductive check rejects the same shape before an export can
+  -- be produced (see `indexed_decl.lean` and `nest_fam_arg.lean`). Keep the
+  -- check here because `Plan` is a syntactic boundary and may also be called on
+  -- hand-built metadata; after this boundary `Simple.wShapeOf` need not defend
+  -- against a later field whose type observes an earlier recursive child.
   for i in [0:k] do
     if occ.hasLooseBVar i then
       throw s!"a nested occurrence in {ctx.root} depends on a constructor field"
