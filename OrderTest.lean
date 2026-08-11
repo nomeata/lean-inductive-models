@@ -188,7 +188,29 @@ def run (root : String) : IO UInt32 := do
   let nested' ← mustReorder "already-before nested output" nested
   state := state.check "already-before nested output is unchanged"
     (nested'.decls == nested.decls && familiesBeforeOwners nested' &&
-      dependenciesForward nested')
+      dependenciesForward nested' && (Check.check nested').isEmpty)
+  state := state.check "nested recursors and iotas use exact names" <|
+    (Check.discover nested').any fun family =>
+      family.owner == `Tree &&
+        family.correspondence.recursors.any (fun pair =>
+          pair.owner == `Tree.rec && pair.model == Naming.modelName `Tree.rec) &&
+        family.correspondence.iotas.any (fun rule =>
+          rule.recursor == `Tree.rec && rule.name == Naming.iotaName `Tree.rec 1)
+
+  let simple ← generatedFixture s!"{root}/tests/prim_shapes.ndjson"
+    { noGeneration with simple := true }
+  let simple' ← mustReorder "simple declaration-local output" simple
+  let idxViolations := (Check.check simple').filter fun violation =>
+    (`IdxP).isPrefixOf violation.familyOwner
+  state := state.check "simple recursors and iotas check literally" <|
+    familiesBeforeOwners simple' && dependenciesForward simple' &&
+      idxViolations.isEmpty &&
+      (Check.discover simple').any (fun family =>
+        family.owner == `IdxP &&
+          family.correspondence.recursors.any (fun pair =>
+            pair.owner == `IdxP.rec && pair.model == Naming.modelName `IdxP.rec) &&
+          family.correspondence.iotas.any (fun rule =>
+            rule.recursor == `IdxP.rec && rule.name == Naming.iotaName `IdxP.rec 1))
 
   IO.println s!"record order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

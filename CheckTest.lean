@@ -6,11 +6,13 @@ import Modelgen.Check
 Run from the repository root with `lake exe checktest [ROOT]`.
 
 The synthetic baseline starts from an actual lean4export fixture.  Exact public
-type-former and constructor axioms, plus a deliberately generic helper, are
-inserted before its `Tree` inductive record.  Their types are obtained by the
+type-former, constructor and recursor axioms and iota propositions, plus a
+generic helper, are inserted before its `Tree` inductive record.  Their types are obtained by the
 same public correspondence operation the checker exposes, with fresh universe
 parameter names to exercise positional alignment.  The adversarial cases are
 mutations of that baseline, so each changes only the invariant named by it.
+They include missing, duplicate, swapped and definitionally-but-not-syntactically
+equal recursor and rule declarations.
 
 Additional cases cover declaration names which contain `_model`, raw private
 names, and a multi-member mutual record whose public slots do not depend on the
@@ -51,17 +53,35 @@ def declarationType? (declaration : EDecl) (name : Name) : Option (List Name × 
 def exportDeclarationType? (x : Export) (name : Name) : Option (List Name × Expr) :=
   x.decls.findSome? (declarationType? · name)
 
+def exportDeclaration? (x : Export) (name : Name) : Option EDecl :=
+  x.decls.find? (·.names.contains name)
+
 def modelParams (params : List Name) : List Name :=
   (List.range params.length).map fun index => Name.str .anonymous s!"model_u_{index}"
+
+partial def forallBody : Expr → Expr
+  | .forallE _ _ body _ => forallBody body
+  | body => body
 
 def modelAxiom (table : Correspondence) (x : Export) (pair : ConstantPair) : Option EDecl := do
   let (ownerParams, ownerType) ← exportDeclarationType? x pair.owner
   let params := modelParams ownerParams
   return .ax pair.model params (table.expectedType ownerParams params ownerType) false
 
+def modelIotaAxiom (table : Correspondence) (x : Export) (ownerDecl : Nat)
+    (iota : Naming.Iota) : Option EDecl := do
+  let (ownerParams, ownerType) ←
+    iotaProposition? x ownerDecl iota.recursor iota.ruleIndex
+  let params := modelParams ownerParams
+  return .ax iota.name params (table.expectedIotaType ownerParams params ownerType) false
+
 def modelDeclarations (x : Export) (table : Correspondence) (helper : Name) : Array EDecl :=
-  #[EDecl.ax helper [] (.sort (.succ .zero)) false] ++
-    (table.typeFormers ++ table.constructors).filterMap (modelAxiom table x)
+  let constants := (table.typeFormers ++ table.constructors ++ table.recursors).filterMap
+    (modelAxiom table x)
+  let iotas := match table.typeFormers[0]?.bind (ownerIndex? x ·.owner) with
+    | some ownerDecl => table.iotas.filterMap (modelIotaAxiom table x ownerDecl)
+    | none => #[]
+  #[EDecl.ax helper [] (.sort (.succ .zero)) false] ++ constants ++ iotas
 
 def withValidModel (x : Export) (ownerDecl : Nat) (models : Array EDecl) : Export :=
   { x with decls := x.decls.extract 0 ownerDecl ++ models ++
@@ -125,6 +145,16 @@ def isTypeMismatch (owner declaration : Name) : Violation → Bool
       gotOwner == owner && gotDeclaration == declaration
   | _ => false
 
+def isDuplicate (owner declaration : Name) : Violation → Bool
+  | .duplicatePublic gotOwner gotDeclaration count =>
+      gotOwner == owner && gotDeclaration == declaration && count > 1
+  | _ => false
+
+def isExtraRule (owner declaration : Name) : Violation → Bool
+  | .extraRule gotOwner gotDeclaration =>
+      gotOwner == owner && gotDeclaration == declaration
+  | _ => false
+
 def run (root : String) : IO UInt32 := do
   let path := s!"{root}/tests/nested_iota_arm.ndjson"
   let text ← IO.FS.readFile path
@@ -175,6 +205,12 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "universe parameters align positionally" <|
       (discover validEq).any (·.owner == eqOwner) &&
         (check validEq).all (·.familyOwner != eqOwner)
+    state ← state.check "modeling Eq retains ambient equality" <|
+      eqTable.iotas[0]?.bind (fun rule =>
+        exportDeclarationType? validEq rule.name |>.map fun (_, type) =>
+          match (forallBody type).getAppFn with
+          | .const name _ => name == ``Eq
+          | _ => false) |>.getD false
 
     let late := withLateCarrier raw rawOwnerDecl models carrier
     let lateViolations := check late
@@ -205,6 +241,75 @@ def run (root : String) : IO UInt32 := do
     let missingCarrier := withoutDeclaration valid carrier
     state ← state.check "missing carrier slot is rejected" <|
       (check missingCarrier).any (isMissing owner carrier)
+
+    let some firstRec := table.recursors[0]? | do
+      IO.eprintln "checktest: Tree has no recursor correspondence"
+      return 1
+    let some secondRec := table.recursors[1]? | do
+      IO.eprintln "checktest: Tree has no second recursor correspondence"
+      return 1
+    state ← state.check "missing recursor is rejected" <|
+      (check (withoutDeclaration valid firstRec.model)).any
+        (isMissing firstRec.owner firstRec.model)
+    let some firstRecDecl := exportDeclaration? valid firstRec.model | do
+      IO.eprintln "checktest: modeled recursor declaration missing"
+      return 1
+    let duplicateRec := insertBeforeOwner valid owner firstRecDecl
+    state ← state.check "extra recursor occurrence is rejected" <|
+      (check duplicateRec).any (isDuplicate firstRec.owner firstRec.model)
+    let some (_, firstRecType) := exportDeclarationType? valid firstRec.model | do
+      IO.eprintln "checktest: modeled recursor type missing"
+      return 1
+    let some (_, secondRecType) := exportDeclarationType? valid secondRec.model | do
+      IO.eprintln "checktest: second modeled recursor type missing"
+      return 1
+    let swappedRecs := withDeclarationType
+      (withDeclarationType valid firstRec.model secondRecType) secondRec.model firstRecType
+    state ← state.check "swapped recursors are rejected" <|
+      (check swappedRecs).any (isTypeMismatch firstRec.owner firstRec.model) &&
+        (check swappedRecs).any (isTypeMismatch secondRec.owner secondRec.model)
+    let defeqRecType :=
+      .letE `recType (.sort (.succ (.succ .zero))) firstRecType (.bvar 0) false
+    state ← state.check "definitionally equal recursor syntax is rejected" <|
+      (check (withDeclarationType valid firstRec.model defeqRecType)).any
+        (isTypeMismatch firstRec.owner firstRec.model)
+
+    let firstRules := table.iotas.filter (·.recursor == firstRec.owner)
+    let some firstRule := firstRules[0]? | do
+      IO.eprintln "checktest: Tree recursor has no first rule"
+      return 1
+    let some secondRule := firstRules[1]? | do
+      IO.eprintln "checktest: Tree recursor has no second rule"
+      return 1
+    state ← state.check "missing iota theorem is rejected" <|
+      (check (withoutDeclaration valid firstRule.name)).any
+        (isMissing firstRule.recursor firstRule.name)
+    let some firstRuleDecl := exportDeclaration? valid firstRule.name | do
+      IO.eprintln "checktest: first iota declaration missing"
+      return 1
+    state ← state.check "extra iota occurrence is rejected" <|
+      (check (insertBeforeOwner valid owner firstRuleDecl)).any
+        (isDuplicate firstRule.recursor firstRule.name)
+    let extraRuleName := Naming.iotaName firstRec.owner firstRules.size
+    let extraRule := insertBeforeOwner valid owner
+      (.ax extraRuleName [] (.sort .zero) false)
+    state ← state.check "out-of-range iota theorem is rejected" <|
+      (check extraRule).any (isExtraRule firstRec.owner extraRuleName)
+    let some (_, firstRuleType) := exportDeclarationType? valid firstRule.name | do
+      IO.eprintln "checktest: first iota type missing"
+      return 1
+    let some (_, secondRuleType) := exportDeclarationType? valid secondRule.name | do
+      IO.eprintln "checktest: second iota type missing"
+      return 1
+    let swappedRules := withDeclarationType
+      (withDeclarationType valid firstRule.name secondRuleType) secondRule.name firstRuleType
+    state ← state.check "swapped iota statements are rejected" <|
+      (check swappedRules).any (isTypeMismatch firstRule.recursor firstRule.name) &&
+        (check swappedRules).any (isTypeMismatch secondRule.recursor secondRule.name)
+    let defeqRuleType := .letE `ruleType (.sort .zero) firstRuleType (.bvar 0) false
+    state ← state.check "definitionally equal iota syntax is rejected" <|
+      (check (withDeclarationType valid firstRule.name defeqRuleType)).any
+        (isTypeMismatch firstRule.recursor firstRule.name)
 
     let legacySlot := Name.str modelRoot "ctor_99"
     let unrelatedLegacyName := insertBeforeOwner valid owner
