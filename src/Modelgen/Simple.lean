@@ -638,13 +638,20 @@ A Π-typed field's level is an `imax` chain — `Trans.mk`'s field `(a b c : …
 r a b → s b c → t a c` reaches `Sort (imax u₁ (imax u₂ (imax u₃ (imax u
 (imax v w)))))` — and no pad absorbs an `imax`: level defeq is normal-form
 equality, and a `max` does not subsume an `imax` term even when both its sides
-are present. What does collapse it is making the *codomain* never-`Prop`:
-`imax a b = max a b` once `b` cannot be zero. So such a field is stored
-**boxed** — the same telescope, the codomain `S` wrapped as `Σ'(_ : S), D 1` —
-and its level normalizes to a plain `max`. The box pad is `D 1`, every element
-of which is *defeq* to canonical, so `unbox (box v) ≡ v` and `box (unbox y) ≡
-y` hold by βι, structure eta, proof irrelevance and function eta alone: no
-transport, and ι stays `Eq.refl`. -/
+are present. What collapses it is making every Π codomain never-`Prop`:
+`imax a b = max a b` once `b` cannot be zero.
+
+The boxing below is therefore recursive.  At an atomic type `S` it uses
+`Σ' (_ : S), D 1`; at `∀ x : A, B x` it stores a function from the recursively
+boxed `A` to the recursively boxed `B (unbox x)`.  The contravariant domain
+conversion is essential for a field such as `((α → β) → β)`: boxing only its
+outer codomain leaves the inner domain level `imax u v`, while recursive
+boxing produces `(Box α → Box β) → Box β` at the literal level `max 1 u v`.
+
+The box pad is `D 1`, every element of which is defeq to canonical.  By
+induction over the Π telescope, `unbox (box v) ≡ v` and `box (unbox y) ≡ y`
+hold by βι, `PSigma` structure eta, proof irrelevance and function eta alone:
+no transport, no axiom, and ι stays `Eq.refl`. -/
 
 /-- Is there an `imax` anywhere in the level? Asked of normal forms: a level
 the pads cannot absorb. -/
@@ -654,30 +661,57 @@ partial def levelHasIMax : Level → Bool
   | .succ a => levelHasIMax a
   | _ => false
 
-/-- The boxed type: the field's telescope unchanged, the codomain `S` wrapped
-as `Σ'(_ : S), D 1`. A field that is not a Π is the degenerate case `xs = []`.
--/
-def boxTyOf (t : Expr) : GenM Expr := forallTelescope t fun xs S => do
-  let ℓS ← ilevel S
-  let (d1, _) ← dsingAt (.succ .zero)
-  mkForallFVars xs (psigmaT ℓS (.succ .zero) S (.lam `x S d1 .default))
+mutual
 
-/-- `box`: eta-expand and pair each value of the codomain with the canonical
-`D 1`. -/
-def boxValOf (t v : Expr) : GenM Expr := forallTelescope t fun xs S => do
-  let ℓS ← ilevel S
-  let (d1, c1) ← dsingAt (.succ .zero)
-  mkLambdaFVars xs (psigmaMk ℓS (.succ .zero) S (.lam `x S d1 .default) (mkAppN v xs) c1)
+  /-- The recursively boxed type.  Atomic leaves are paired with `D 1`; a Π
+  recursively boxes its domain and codomain, substituting the unboxed domain
+  value into the dependent codomain. -/
+  partial def boxTyOf (t : Expr) : GenM Expr := do
+    match ← whnf t with
+    | .forallE name domain body info =>
+      let boxedDomain ← boxTyOf domain
+      withLocalDecl name info boxedDomain fun boxedValue => do
+        let value ← unboxValOf domain boxedValue
+        let boxedBody ← boxTyOf (body.instantiate1 value)
+        mkForallFVars #[boxedValue] boxedBody
+    | atomic =>
+      let level ← ilevel atomic
+      let (d1, _) ← dsingAt (.succ .zero)
+      return psigmaT level (.succ .zero) atomic (.lam `x atomic d1 .default)
 
-/-- `unbox`: first projection, pointwise, by `PSigma.rec` at the codomain's
-own universe. -/
-def unboxValOf (t v : Expr) : GenM Expr := forallTelescope t fun xs S => do
-  let ℓS ← ilevel S
-  let (d1, _) ← dsingAt (.succ .zero)
-  let β := Expr.lam `x S d1 .default
-  let motive := Expr.lam `p (psigmaT ℓS (.succ .zero) S β) S .default
-  let m := Expr.lam `fst S (.lam `snd d1 (.bvar 1) .default) .default
-  mkLambdaFVars xs (psigmaRec ℓS ℓS (.succ .zero) S β motive m (mkAppN v xs))
+  /-- Recursively box a value, contravariantly unboxing each Π argument before
+  applying the original function. -/
+  partial def boxValOf (t v : Expr) : GenM Expr := do
+    match ← whnf t with
+    | .forallE name domain body info =>
+      let boxedDomain ← boxTyOf domain
+      withLocalDecl name info boxedDomain fun boxedValue => do
+        let value ← unboxValOf domain boxedValue
+        let result ← boxValOf (body.instantiate1 value) (mkApp v value)
+        mkLambdaFVars #[boxedValue] result
+    | atomic =>
+      let level ← ilevel atomic
+      let (d1, c1) ← dsingAt (.succ .zero)
+      return psigmaMk level (.succ .zero) atomic (.lam `x atomic d1 .default) v c1
+
+  /-- Recursively unbox a value, boxing each original Π argument before
+  applying the stored function. -/
+  partial def unboxValOf (t v : Expr) : GenM Expr := do
+    match ← whnf t with
+    | .forallE name domain body info =>
+      withLocalDecl name info domain fun value => do
+        let boxedValue ← boxValOf domain value
+        let result ← unboxValOf (body.instantiate1 value) (mkApp v boxedValue)
+        mkLambdaFVars #[value] result
+    | atomic =>
+      let level ← ilevel atomic
+      let (d1, _) ← dsingAt (.succ .zero)
+      let β := Expr.lam `x atomic d1 .default
+      let motive := Expr.lam `p (psigmaT level (.succ .zero) atomic β) atomic .default
+      let minor := Expr.lam `fst atomic (.lam `snd d1 (.bvar 1) .default) .default
+      return psigmaRec level level (.succ .zero) atomic β motive minor v
+
+end
 
 /-! ## One constructor's chain
 
