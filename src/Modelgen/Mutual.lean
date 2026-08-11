@@ -484,9 +484,14 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
           let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
           let α := mkAppN motiveK (idxs.push major)
           let tel := pre ++ fields
+          let proposition := eqi.mk' v α lhs rhs
+          let some fieldsType := closeForallsExact? cty fields proposition
+            | badShape s!"{modelC}'s exported telescope has fewer fields than its installed type"
+          let some theoremType := closeForallsExact? ty pre fieldsType
+            | badShape s!"{ern}'s exported telescope is shorter than its recursor prefix"
           return Declaration.thmDecl
             { name := nm, levelParams := rlp
-              type := ← mkForallFVars tel (eqi.mk' v α lhs rhs)
+              type := theoremType
               value := ← mkLambdaFVars tel (eqi.refl' v α lhs) }
       addChecked d
       out := out.push d

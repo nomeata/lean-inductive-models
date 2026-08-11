@@ -386,6 +386,29 @@ partial def restore (heads : Std.HashMap Name (Nat × Expr)) (e : Expr) : Expr :
   | .proj tn i s => .proj tn i (restore heads s)
   | _ => e
 
+/-- Close `body` over the already-opened `values`, taking each binder's name,
+domain and binder info from the exact `telescope` rather than from the local
+context.  Meta may normalize a local declaration's type when a telescope is
+opened; rebuilding a public theorem type with `mkForallFVars` would then lose
+literal syntax which the export correspondence deliberately preserves.
+
+The telescope is instantiated left-to-right at the supplied locals, so a
+later exact domain may mention earlier locals.  Closing right-to-left then
+abstracts those locals through both the body and the exact inner domains. -/
+def closeForallsExact? (telescope : Expr) (values : Array Expr) (body : Expr) : Option Expr :=
+  Id.run do
+    let mut current := telescope
+    let mut binders : Array (Name × Expr × BinderInfo × Expr) := #[]
+    for value in values do
+      let .forallE name domain rest info := current | return none
+      binders := binders.push (name, domain, info, value)
+      current := rest.instantiate1 value
+    let mut result := body
+    for binder in binders.reverse do
+      let (name, domain, info, value) := binder
+      result := .forallE name domain (result.abstract #[value]) info
+    return some result
+
 /-! ## The generator -/
 
 /-- The generator's read-only context. -/
@@ -2488,7 +2511,11 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
             head, headLevels := hls, headPrefix := hpre
             fields, extTys, bcn, blkTys, mem, packed, ihAt, ihTys, moving }
         let tel := pre ++ fields
-        let ty ← mkForallFVars tel (← r.statement)
+        let statement ← r.statement
+        let some fieldsType := closeForallsExact? ectorTy fields statement
+          | badShape s!"{head}'s exported telescope has fewer fields than its installed type"
+        let some ty := closeForallsExact? sh.ty pre fieldsType
+          | badShape s!"{sh.src}'s exported telescope is shorter than its recursor prefix"
         let val ← mkLambdaFVars tel (← r.value)
         let nm := g.iotaName sh.k j
         return (exportKey, nm,

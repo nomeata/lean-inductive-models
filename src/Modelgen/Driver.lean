@@ -996,7 +996,10 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
           -- as `fun p⃗ M⃗ S⃗ f⃗ => …`, which is this telescope exactly.
           let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
           let body := mkAppN (.const `Eq [v]) #[mkAppN motiveK (idxs.push major), lhs, rhs]
-          let wantTy ← mkForallFVars (pre ++ fields) body
+          let some fieldsType := closeForallsExact? cty fields body
+            | return some s!"{headC}'s exported telescope has fewer fields than its installed type"
+          let some wantTy := closeForallsExact? want pre fieldsType
+            | return some s!"{ern}'s exported telescope is shorter than its recursor prefix"
           let some ti := env.constants.find? thm | return some s!"{thm} was not generated"
           if ti.levelParams != rv.levelParams then
             return some s!"{thm} is not at {ern}'s motive universe"

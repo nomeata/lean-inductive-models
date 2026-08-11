@@ -4961,6 +4961,11 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
         let α := mkAppN motive (isj.push major)
         let tel := pre ++ fields
+        let proposition := eqi.mk' v α lhs rhs
+        let some fieldsType := closeForallsExact? cty fields proposition
+          | badShape s!"{modelC}'s exported telescope has fewer fields than its installed type"
+        let some theoremType := closeForallsExact? recTy pre fieldsType
+          | badShape s!"{ern}'s exported telescope is shorter than its recursor prefix"
         -- **Every ι theorem is `Eq.refl` except arms E, G and W.**
         --
         -- Arm G's value is a `Classical.choice` application, which reduces to
@@ -5006,7 +5011,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
               (pre ++ isj ++ #[major, lhs, rhs, gv, gw]))
         return Declaration.thmDecl
           { name := iotaN j, levelParams := rv.levelParams
-            type := ← mkForallFVars tel (eqi.mk' v α lhs rhs)
+            type := theoremType
             value := ← mkLambdaFVars tel proof }
     addChecked d
     out := out.push d
