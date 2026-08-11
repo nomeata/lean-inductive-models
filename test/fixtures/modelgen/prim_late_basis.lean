@@ -1,8 +1,8 @@
 /- **A basis primitive the input declares *after* the block whose model needs
    it**, so the composition's third step has to wait for it.
 
-   `MODELGEN.md` §1.6 is the rule for a mutual model and the input's own `Eq`,
-   and [`Modelgen.runFilter`]'s `waitingPrim` is the same rule for the third
+   A mutual model must use the input's own `Eq`, and
+   [`Modelgen.runFilter`]'s `waitingPrim` applies the same rule to the third
    construction and the input's own `Eq`, `False`, `Nat` and `PSigma`: a model
    that would have to *splice* a constant the file itself declares later is
    held back and generated after that declaration, because a splice may not
@@ -16,11 +16,11 @@
    declined `prim model name taken (PSigma)` at a primitive that was merely
    *late*. `Lean.Syntax` is that shape in Mathlib — replayed at line 9,948 of
    the export against `PSigma` at line 95,424 — and it was two of the eleven
-   declines the full run reported. `MODELGEN.md` §8.16.5.
+   declines the full run reported.
 
    The layout is the whole fixture:
 
-   * `MA`/`MB`/`MC` is a plain **mutual** block, so `Modelgen/Mutual.lean`
+   * `MA`/`MB`/`MC` is a plain **mutual** block, so `src/Modelgen/Mutual.lean`
      emits `MA._model._impl.tag` and `MA._model._impl.aux` for it, and those two are what
      the third step then models. Three members and unequal constructor counts,
      for the reason `mutual_shapes.lean` gives: two members cannot distinguish

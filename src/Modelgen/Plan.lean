@@ -4,8 +4,8 @@ import Modelgen.Format
 /-!
 # Specialising a nested inductive into a mutual block
 
-A port of `mini/src/nested.rs`'s `plan`. `inductive Tree | leaf | node : List
-Tree → Tree` becomes the ordinary mutual block
+`inductive Tree | leaf | node : List Tree → Tree` becomes the ordinary mutual
+block
 
 ```text
 Tree            : Type          Tree._nested.1      : Type
@@ -16,8 +16,7 @@ Tree            : Type          Tree._nested.1      : Type
 with one **mimic** per distinct nested occurrence. This module is purely
 syntactic: it rewrites constructor types and never asks a checker anything.
 
-Two invariants carried over from the Rust, each of which cost that
-implementation a bug:
+Two invariants are particularly important:
 
 * An occurrence is stored **at the block's own parameter telescope depth** —
   its only loose bound variables are the block's parameters. Every use
@@ -36,8 +35,8 @@ inductive B | mk : Box A → B … end` becomes the four-member block `A`, `B`,
 adds every member of `C`'s mutual block at `α` immediately, in `all` order.
 The sweep is over the declared members and then breadth first over those mimic
 families, which is Lean's own motive order — measured against
-`modelgen/tests/nest_mutual_both.ndjson` and the mutual-container closure in
-`modelgen/tests/hard_nested_mutual_index.ndjson`.
+`test/fixtures/modelgen/nest_mutual_both.ndjson` and the mutual-container
+closure in `test/fixtures/modelgen/hard_nested_mutual_index.ndjson`.
 -/
 
 open Lean
@@ -71,7 +70,8 @@ structure PType where
 structure Plan where
   /-- Members `0 … numAll−1` are the declared block's own, in the export's `all`
   order; members `numAll …` are the mimics, in discovery order. **That is Lean's
-  own motive order**, measured on `modelgen/tests/nest_mutual_both.ndjson`:
+  own motive order**, measured on
+  `test/fixtures/modelgen/nest_mutual_both.ndjson`:
   `A`, `B`, `List B`, `Box A`. -/
   types : Array PType
   /-- How many of `types` are the export's own members. `1` unless the
@@ -212,7 +212,8 @@ private partial def spec (e : Expr) (d : Nat) : SpM Expr := do
     -- body is where the nesting is. `getAppFn` hands back the lambda, so a
     -- sweep over the arguments alone never enters it and an occurrence in
     -- there — `RB N (fun _ => L Deep)`, `RB N (fun k => Vec Idx k)`, both in
-    -- `modelgen/tests/nest_fam_arg.lean` — gets no mimic at all. Nothing else reaches here with a compound head: a
+    -- `test/fixtures/modelgen/nest_fam_arg.lean` — gets no mimic at all.
+    -- Nothing else reaches here with a compound head: a
     -- `bvar`/`fvar`/`sort` head falls through the catch-all unchanged.
     let h ← if h.isConst then pure h else spec h d
     return mkAppN h args

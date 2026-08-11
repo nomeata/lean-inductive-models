@@ -4,8 +4,8 @@
    `PU.{0}` is a proposition with one argument-free constructor, which the kernel
    marks **K-like**; `PU.{1}` is a `Type` and is not. So the export's own
    `k : false` is a lie about the copy at `0`, and substituting the recursor
-   rather than letting the kernel mint it produces a file `nanoda` refuses at
-   `assertion failed: old_r.aux_data_ck(new_r)`. `Ex.{u}` moves the other way:
+   rather than letting the kernel mint it produces an invalid derived recursor.
+   `Ex.{u}` moves the other way:
    it is small-eliminating polymorphically, and its copy at `0` is
    large-eliminating, so a reference at no levels becomes ill-formed.
 

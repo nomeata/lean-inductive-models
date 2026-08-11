@@ -4,8 +4,8 @@ transitive closure — which is what makes this a fragment of ~250 declarations
 rather than the whole of `Init`.
 
 **One construction, two instantiations.** The core below is generic in `K`,
-`B' : K → Type u` and `tg : A → K`, and `MODELGEN.md` §8.16.6 is the finding
-that the tagged and untagged W are that one core at `K := Nat, tg := PSigma.fst`
+`B' : K → Type u` and `tg : A → K`. The tagged and untagged W are that one
+core at `K := Nat, tg := PSigma.fst`
 and at `K := A, tg := id`. `K : Type w` and not `K : Type` for exactly that
 reason, and widening it cost no proof change at all: `Edge`, `PTree` and `W`
 land at `Type (max w u)`, which normalises to `Type u` at `w := 0` and at

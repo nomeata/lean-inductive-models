@@ -1,6 +1,6 @@
 /- **A plain mutual block, on every axis that is not about indices.**
 
-   `Modelgen/Mutual.lean` is a second construction and not a specialisation of
+   `src/Modelgen/Mutual.lean` implements a second construction rather than a specialisation of
    the nested one, so it needs its own coverage rather than a corner of
    somebody else's. This file is the axes that a *type*-valued block has;
    `mutual_index.lean` is the indices and `mutual_prop.lean` is `Prop`.
@@ -26,10 +26,8 @@
      its motive universe in front of them; the tag lives at `Sort 1` here
      regardless, because none of these blocks has an index.
 
-   **Every member of every block here recurses**, so that `nanoda_bin` can load
-   the result: a member that recurses into nothing trips an upstream `isRec`
-   assert that has nothing to do with this tool, and `mutual_nonrec.lean` is
-   that axis, held apart for exactly that reason. -/
+   **Every member of every block here recurses.** `mutual_nonrec.lean` covers
+   the separate axis where a block member recurses into nothing. -/
 prelude
 
 universe u v

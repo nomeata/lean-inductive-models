@@ -4,8 +4,7 @@
    *owner* prefix — a constructor's inductive, a recursor's block member — with
    that owner plus the marker. That is the identity whenever the owner is **not**
    a prefix of the name, and then every copy of the block is named the same
-   thing. Mathlib is full of the shape (`MONOMORPH.md` §9.2: 142 of 9299
-   constructors, and `AddMonCat.Hom.mk` is one), and no corpus file was.
+   thing. Private constructors provide the off-prefix shape directly.
 
    `Off.{u}` is a **public** inductive with a **private** constructor, so the
    constructor is `_private.MonoOffname.0.Off.mk` and `Off` is nowhere in it.
@@ -13,7 +12,7 @@
    the old scheme just as three do, but three also pin that the marker carries
    the instantiation rather than a serial number.
 
-   The recursor is the other half. Lean and `nanoda` both *derive* `Off.rec`
+   The recursor is the other half. Lean *derives* `Off.rec`
    from `Off`, so the copy's recursor has to be the copy's name plus `rec` —
    which is what a prefix renaming gives for free and a suffix renaming does
    not. `regen = 0` here says the kernel minted exactly what was emitted. -/

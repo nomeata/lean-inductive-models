@@ -10,7 +10,7 @@
      Two members cannot separate a per-member treatment from a shared one here,
      because with `OA`/`OB` the non-recursive member is also the only other
      member; `OC` is the third that makes "some members, not all" visible.
-     `mini/tests/fixtures/mutual_one_recursive.lean` is the same shape.
+     The third member makes "some members, not all" observable.
    * `EA`/`EB`/`EC` — a member with **no constructors at all**. The tag then has
      a constructor no `aux` constructor ever mentions, `EB.rec` has no rules,
      and `EB._model` is the carrier of an empty type. A generator that
@@ -23,15 +23,9 @@
      inductive is never K-like. So a generator that copied the block's `k` flag
      onto the aux recursor would be wrong here and nowhere else in the tree.
 
-   **`nanoda_bin` will not load this file, and that is upstream's and not this
-   tool's.** `checker/src/inductive.rs:30` recomputes `isRec` **per member** by
-   scanning that member's constructors for a binder type mentioning any name in
-   the block, where Lean sets it for the whole block — so `OB`, `EB`, `EC` and
-   `Ka` each make the assert fire. It fires on the **input** too, before this
-   tool has written anything: `MODELGEN.md` §4 names the four fixtures in
-   `mini/tests/fixtures` with the same property. This file is deliberately the
-   one that carries the shape, so that the three fixtures beside it stay
-   loadable. -/
+   A replay implementation that recomputes `isRec` **per member** disagrees
+   with Lean on this input: Lean records recursion for the whole block. This
+   file deliberately isolates that shape from the other mutual fixtures. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false

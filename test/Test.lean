@@ -58,8 +58,8 @@ def expectedShared : List Row :=
 seat reported that `nested_ev::Reason`'s guards "keep their arguments and gain
 no occupant" — no fixture in the tree reaches any refusal except `NameTaken`,
 so five guards were known only by inspection. These are written for exactly
-that hole, under `modelgen/tests/` rather than in `mini/tests/fixtures`, and
-`export.sh` builds them with the repository's own exporter.
+that hole under `test/fixtures/modelgen`; `test/scripts/export-modelgen.sh`
+builds them with the repository's exporter.
 
 **A decline is compared by prefix**, so that a fixture may pin *which shape*
 stopped the generator without pinning the wording of a kernel diagnostic
@@ -114,9 +114,9 @@ distinct containers, and four recursors `A.rec`, `B.rec`, `A.rec_1`, `A.rec_2`
 over one shared motive and minor vector — because with only one member nesting
 a single carrier and a per-member carrier family are the same object.
 **`nest_through_nested` and `nest_cycle_group` are no longer refusals either.**
-Nesting through a container that is *itself* a nested inductive refutes a
-load-bearing sentence in `mini/src/nested_ev.rs` — "nesting strictly decreases,
-so this is a topological order and a cycle cannot arise". `T` nests into `Tree
+Nesting through a container that is *itself* a nested inductive refutes the
+assumption that nesting strictly decreases and therefore has a topological
+order. `T` nests into `Tree
 T`; `Tree`'s own `node` field is `List (Tree T)`; *that* copy's `cons` head is
 `Tree T` again, so `pack₀` and `pack₁` are mutually recursive and no emission
 order exists. They are not two recursions but one, and Lean already generated
@@ -160,8 +160,7 @@ def expectedOwn : List Row :=
     -- downstream gives every group in it exactly one copy and the pipeline's
     -- per-instantiation behaviour is unobservable. Here `PTree.{u}` is used at
     -- 0, 1 and 2. For `modelgen` alone it is one more polymorphic nested shape;
-    -- what it exists for is `MONOMORPH.md` §1.3, which measures on it that a
-    -- model does **not** survive monomorphization.
+    -- it exists to verify that a model does **not** survive monomorphization.
   , ("poly_nested_used", [("PTree", 15), ("PTree._model._impl.0", 14)], [])
   , ("indexed_decl",
       [("ITree", 15), ("ITree._model._impl.0", 14), ("I2", 15), ("I2._model._impl.0", 14),
@@ -254,7 +253,7 @@ def expectedOwn : List Row :=
       [("Tree", 15), ("Tree._model._impl.0", 14), ("P", 37), ("P._model._impl.0", 32),
        ("R", 21), ("R._model._impl.0", 20)], [])
     -- **`C`/`D` is a plain mutual block** — the pair of containers `X` cycles
-    -- through — so the *second* construction (`Modelgen/Mutual.lean`) models
+    -- through — so the *second* construction (`src/Modelgen/Mutual.lean`) models
     -- it, and it heads this row because the export declares it first. Two
     -- members and four constructors: the tag, the carrier, two type formers,
     -- four constructors, two recursors and four ι theorems is 14.
@@ -262,14 +261,14 @@ def expectedOwn : List Row :=
       [("C", 14), ("A1", 34), ("A1._model._impl.0", 30), ("X", 23),
        ("X._model._impl.0", 20)], [])
   , ("nest_mutual_index", [("MA", 32), ("MA._model._impl.0", 28)], [])
-    -- **`nest_fam_arg` is §5.1's sweep and it has moved to `expectedPrim`**,
+    -- **`nest_fam_arg` is the head-normalization sweep and has moved to `expectedPrim`**,
     -- because the redex it exists for reaches layer 3 as well and that is
     -- where it now has to be measured. The row there asserts everything this
     -- one did — the nested and mutual counts, in the same order — and the
     -- composition's third step on top.
     -- ── the second construction: a plain mutual block ──────────────────────
     --
-    -- **`Modelgen/Mutual.lean`, and its coverage is its own.** A plain mutual
+    -- **`src/Modelgen/Mutual.lean`, and its coverage is its own.** A plain mutual
     -- block is not the nested construction at zero mimics — that is the
     -- identity — so none of the rows above says anything about it. The count is
     -- `2 + 2r + 2c` for `r` members and `c` constructors: the tag, the carrier,
@@ -293,10 +292,9 @@ def expectedOwn : List Row :=
     -- recursor and never off the sort.
   , ("mutual_prop", [("Even", 12), ("M0", 16), ("Sa", 12)], [])
     -- A member that recurses into nothing: only one member recursive, a member
-    -- with **no constructors**, and the K-rule shape. `nanoda_bin` will not
-    -- load this file *or its input*, for the upstream `isRec` reason
-    -- `MODELGEN.md` §4 names; it is one file so the five beside it stay
-    -- loadable.
+    -- with **no constructors**, and the K-rule shape. It is isolated because a
+    -- replay implementation that recomputes `isRec` per member disagrees with
+    -- Lean's block-level flag on both the input and generated output.
   , ("mutual_nonrec", [("OA", 18), ("EA", 14), ("Ka", 10)], [])
     -- The sweep: a `let` in a field's type, implicit binders and a
     -- `Sort`-valued field, a **dependent** index telescope, an index at a
@@ -307,7 +305,7 @@ def expectedOwn : List Row :=
     -- declaration-local contract it is irrelevant, so both mutual blocks
     -- model; this preserves the regression test that a legacy name is ignored.
   , ("mutual_keying", [("KA", 12), ("GA", 12)], [])
-    -- ── the two composed (§1.7) ────────────────────────────────────────────
+    -- ── the two composed constructions ────────────────────────────────────
     --
     -- **The axis only the composition reaches.** Lean's nested specialisation
     -- writes a block whose members' sorts agree without being the same term —
@@ -332,7 +330,7 @@ the `False`-Π singleton, and the `PULiftP` carrier's eta is a recursor call.
 `prim_declines` pins every refusal path and its printed reason; `P` inside it
 is the control that says the guard is not refusing everything. `Eq` is
 **exempt** in all four, because all four declare it — its own row in the
-report and not a decline (`MODELGEN.md` §8.17), which is why the expected list
+report and not a decline, which is why the expected list
 below reads `exempt ++ declined` and why one extra check per row says nothing
 but a basis primitive reaches the first of the two.
 
@@ -351,7 +349,7 @@ A version that asked for `funext` per *arm* rather than per *shape* would make
 `Nonempty` and `Classical.choice` itself: nothing of those is spliced, and
 `Nonempty`'s own model beside them is what says it is not a basis primitive.
 In `prim_graph` `Nonempty` is *spliced* rather than declared, and it is
-modelled there too — that row is the splice-and-model fix (§8.13), and it is
+modelled there too — that row checks the splice-and-model invariant, and it is
 the fixture that would go red if layer 3 went back to being unable to model
 what it introduces. It appears exactly once despite two shapes needing it,
 which is the re-modelling guard.
@@ -362,7 +360,7 @@ which is the re-modelling guard.
 `G*.below` column. Their index is `T.mk a`, which is not one of the
 constructor's own data fields but **is a proof**, and two proofs of one
 proposition are one term to the kernel: the inversion is statable at an
-arbitrary index with no transport at all (`MODELGEN.md` §8.17.1).
+arbitrary index with no transport at all by proof irrelevance.
 **What is left of that refusal is a non-pivot at a *data* position**, and
 `BadC` is it, reached deliberately. `Rgd` beside it in `prim_idx` is the cell
 that says the arm asks the question of **every** non-pivot rather than of the
@@ -370,8 +368,8 @@ first: a proof position standing in front of a data one.
 Arm F models its whole row of the same axis — a pivot anywhere in the
 telescope, an expression over a data or a proof field beside it — so `MixI`
 and `SvIx` in `prim_declines` moved from its declines to its models in the
-commit that added `prim_idx`. `prim_idx` is the grid; `MODELGEN.md` §8.17 is
-the derivation and the two arms' shared statement of the limit.
+commit that added `prim_idx`. `prim_idx` is the grid that records the two arms'
+shared limit.
 `BoxF` is still a decline and **declines for a different reason than it used
 to**. The planner's level equality is complete now
 ([`Modelgen.LevelAlgebra`]), so `BoxF`'s pad is planned rather than refused —
@@ -392,12 +390,12 @@ def expectedPrim : List Row :=
   -- **`Branch` and `Binder` are on the other side of the boundary now**, and
   -- this row is where that is recorded: they are the two shapes this file was
   -- built to refuse — a branching constructor and a recursive occurrence under
-  -- a binder — and arm W (`MODELGEN.md` §8.16) models both. `Branch` is 213
+  -- a binder — and arm W models both. `Branch` is 213
   -- declarations because it is the first W target in the file and so the one
   -- that carries the W core; `Binder` behind it is its own dozen.
   --
   -- `_wcore.Acc` is 13 at every one of these rows now: the fragment carries
-  -- `Nonempty` and `Classical.choice` itself since §8.16.6 widened it, so the
+  -- `Nonempty` and `Classical.choice` itself since the untagged core widened it, so the
   -- graph arm splices neither wherever the core has already gone in.
   , ("prim_declines",
       [("P", 9), ("Idx", 5), ("Inf", 14), ("Nonempty", 4), ("Branch", 213),
@@ -411,7 +409,7 @@ def expectedPrim : List Row :=
       [ ("Eq", "prim model: a basis primitive")
       , ("BoxF", "prim model shape: [BoxF._model] rejected by the kernel")])
   -- **The index axis**, as a grid rather than as the shapes the corpus
-  -- happens to have (`MODELGEN.md` §8.17, `tests/prim_idx.lean`'s header).
+  -- happens to have (`test/fixtures/modelgen/prim_idx.lean` documents the grid).
   -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
   -- two index positions, `Fdep` a non-pivot whose type mentions a pivot,
   -- `Fall3` every index a pivot and therefore no equation at all, `Fxh` an
@@ -474,7 +472,7 @@ def expectedPrim : List Row :=
   -- **The last two roots are why this row is worth re-reading rather than
   -- re-running.** `instDecidableEqNat` is the `DecidableEq Nat` the tagged
   -- instantiation needs and brought 11 declarations and **no** inductive;
-  -- `WT.decEqAll` is the untagged one's `DecidableEq A` (§8.16.6) and took the
+  -- `WT.decEqAll` is the untagged one's `DecidableEq A` and took the
   -- export from 163 records to 208, of which exactly **one** is an inductive,
   -- `Nonempty`. That one is why this row is a row: had nobody checked, the arm
   -- would be emitting an unmodelled inductive. This row is what says the plan
@@ -488,7 +486,7 @@ def expectedPrim : List Row :=
   -- instantiation; and it is **last in the list rather than in the middle**,
   -- because those two are declared *after* it here — `Acc` arrives through
   -- `WellFounded.fix` and `Nonempty` only through `Classical.propDecidable`.
-  -- That is §8.16.5's class, a primitive that is late rather than a name that
+  -- This is the late-primitive class rather than a name that
   -- is lost, and [`Modelgen.lateSpliceNames`] is what holds the model back
   -- until the input has caught up. Without that it is a decline, and this row
   -- is where the difference shows.
@@ -504,10 +502,10 @@ def expectedPrim : List Row :=
        ("Bool", 6), ("HEq", 5), ("PProd", 4), ("Nonempty", 4), ("Acc", 12)],
       [ ("Nat", "prim model: a basis primitive")
       , ("Eq", "prim model: a basis primitive")])
-  -- **Arm C** (`MODELGEN.md` §8.15), at one and at many recursive slots, and
+  -- **Arm C**, at one and at many recursive slots, and
   -- the three rows below the models are the arm's boundaries.
   -- Every `X._model._impl.skel` beside an `X` is the spliced index erasure being
-  -- modelled in turn (§8.13's splice-and-model), so a row here going missing
+  -- modelled in turn, so a row here going missing
   -- is arm C emitting a skeleton it did not model — the thing `Iso.requires`
   -- exists to make impossible.
   --
@@ -560,7 +558,7 @@ def expectedPrim : List Row :=
           not model")
       , ("NoBase", "prim model shape: the spliced inductive NoBase._model._impl.skel did \
           not model")])
-  -- **Arm W** (`MODELGEN.md` §8.16), and this row is three claims at once.
+  -- **Arm W**, and this row is three claims at once.
   --
   -- The four models are the shapes the tuple tower cannot express: `Wt` is
   -- `WEmitted.lean`'s six-constructor target, `Tree` the same branching at a
@@ -579,10 +577,10 @@ def expectedPrim : List Row :=
   -- row going missing here is arm W emitting an unmodelled inductive in front
   -- of a consumer. `Iff`, `Nonempty` and `Classical.choice` carry no prefix on
   -- purpose: they are among the twenty names the fragment shares with the
-  -- input, because `mini/src/axiom.rs` keys on an axiom's exact name and on the
-  -- exact statement under it.
+  -- input, because downstream consumers key axioms on their exact names and
+  -- statements.
   --
-  -- **`Bad`, `Wty` and `Utd` are the untagged instantiation** (§8.16.6) and
+  -- **`Bad`, `Wty` and `Utd` are the untagged instantiation** and
   -- were this row's one decline until it landed. `Wty` is `WType`, which is
   -- what the corpus actually declined. Nothing in this row's counts says which
   -- instantiation a target took — `#print axioms` does, and that is the report
@@ -598,25 +596,25 @@ def expectedPrim : List Row :=
        ("P", 6), ("Q", 8), ("Wt", 20),
        ("Dep", 12), ("Bad", 12), ("Br", 12), ("Utd", 14)],
       [ ("Eq", "prim model: a basis primitive")])
-  -- **§5.1's sweep, run through all three layers.** `RB α β`'s second
+  -- **The head-normalization sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
   -- `β k` as the redex `(fun _ => B₀) k` in the block — and the block is
   -- exactly what the composition hands layer 3, so the redex arrives *here*
   -- too. `JT` and `PT` are `Lean.Json` and `Lean.PrefixTreeNode` at that
   -- shape, and their `_model._impl.aux` families were the two declarations the
   -- Mathlib run reported as **infinitary** until the guards in
-  -- `Modelgen/Simple.lean` started reading a field's head through
-  -- [`Modelgen.headNorm`], the same function §5.1 put in front of layer 1's
+  -- `src/Modelgen/Simple.lean` started reading a field's head through
+  -- [`Modelgen.headNorm`], the same function used by layer 1's
   -- three readers. Nine `_model._impl.aux` rows here are that repair; `Zeta`'s is
   -- the one that needs ζ and not β alone.
   --
   -- The row asserts everything the old non-prim `nest_fam_arg` row did — the
   -- nested and mutual counts, in the same order — and the third step besides,
   -- so nothing moved to get here. **`OK` nests in the container's *first*
-  -- argument** and was a model at layer 1 before §5.1's fix and after it, so
+  -- argument** and was a model at layer 1 before and after the normalization fix, so
   -- the table lives in one file and a repair that passes the gap by breaking
   -- the shape beside it is caught; eleven of the twelve were red on the commit
-  -- that closed §5.1 and the twelfth is `OK`, and the source's table says
+  -- that closed the gap and the twelfth is `OK`, and the source's table says
   -- which mutation each one kills.
   --
   -- **`RB` is 170 because it is this file's first W target** and therefore the
@@ -637,7 +635,7 @@ def expectedPrim : List Row :=
   --   Mathlib is this shape, so it is recorded and named rather than built.
   --   Their message must not say *infinitary* — there is no binder over an
   --   occurrence, because there is no occurrence.
-  -- * `Flat` is §8.15's withdrawal at a skeleton with **no base constructor**,
+  -- * `Flat` is arm C's withdrawal at a skeleton with **no base constructor**,
   --   the same inner reason as `prim_carve`'s `NoBase`, reached here by a
   --   container with no recursive field of its own.
   , ("nest_fam_arg",
@@ -694,7 +692,7 @@ def expectedPrim : List Row :=
   -- inside `genMutual` and from the nested arm, neither of which could reach
   -- the queue, so it passed `canWait := false` and declined at a primitive
   -- that was merely late. That is `Lean.Syntax`'s shape in Mathlib and was two
-  -- of the eleven declines the full run reported (`MODELGEN.md` §8.16.5).
+  -- of the eleven declines the full run reported.
   --
   -- **The order in this row is the claim.** `MA` (the mutual model) and
   -- `Nd`/`Nd._model._impl.0` (nested, then its mutual) are generated at their own
@@ -754,7 +752,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
   let got := rep.generated.toList.map fun (n, k) => (n.toString, k)
   a := check a (got == want) s!"{name}: models are {got}, expected {want}"
   -- **Exempt then declined.** The basis primitives are their own row in the
-  -- report now (`MODELGEN.md` §8.17) and this list covers both, so a row that
+  -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a
   -- basis primitive ever lands in the exempt row.
   let gotD := (rep.exempt ++ rep.declined).toList.map fun (n, w) => (n.toString, w)
@@ -800,7 +798,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
            {r3.generated.toList.map fun (n, k) => (n.toString, k)}"
       -- **Both constructions' name guards, because the output carries both.**
       -- A filtered nested declaration leaves a `T._model._impl.0 …` block behind and
-      -- the composition (`MODELGEN.md` §1.7) models *that* too, so re-filtering
+      -- the composition models *that* too, so re-filtering
       -- declines twice per nested declaration: once at `mutual model name taken
       -- (T._model._impl.0._model._impl.tag)` for the block, once at `nested model name
       -- taken (T._model._impl.0)` for the declaration. Either prefix is the guard
@@ -813,7 +811,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
       -- declaration the filtered copy declines — so the name guard covers the
       -- whole of what was spliced and not a prefix of it.
       a := check a (r3.declined.size == rep.generated.size + rep.declined.size)
-        s!"{name}: mini's fixture declines {r3.declined.size}, expected \
+        s!"{name}: filtered fixture declines {r3.declined.size}, expected \
            {rep.generated.size + rep.declined.size}"
       a := check a (d3 == f.decls) s!"{name}: the filter is not the identity on its output"
   -- axis 4b: the identity on a file with nothing to splice
@@ -828,13 +826,13 @@ def runOne (root : String) (a : TAcc) (r : Row)
     a := check a (d2 == p.decls) "nat_char_equations is not passed through unchanged"
   return a
 
-/-- **What a replayed export is visible as**, which is `MODELGEN.md` §6.6 and
-§6.7 as two checks rather than two paragraphs.
+/-- **What a replayed export is visible as**, captured as two checks rather
+than prose alone.
 
-Both are facts about *Lean* and not about this tool, and both are load-bearing:
-§6.6's hazard analysis and §6.7's "the kernel-level API is not usable" both
-evaporate the day `Environment.find?` gains a fallback to the kernel constant
-map. This is here so that day is a test failure with a name on it.
+Both are facts about *Lean* and not about this tool. The visibility hazard and
+the conclusion that the kernel-level API is unusable both disappear if
+`Environment.find?` gains a fallback to the kernel constant map. This is here
+so that day is a test failure with a name on it.
 
 1. **`T.rec_1` is in the kernel map and not in `Environment.find?`.**
    `Declaration.getNames` says of itself that it omits *"auxiliary recursors
@@ -843,9 +841,9 @@ map. This is here so that day is a test failure with a name on it.
    in this repository is about is one `MetaM` cannot name. `Tree.rec` is the
    atom beside it: it **is** registered, so this is not "nothing is visible".
 2. **`ofKernelEnv` after a kernel replay shows nothing.** That is the whole of
-   why this tool is on `Environment.addDeclCore` and pays for §5.5's panic.
+   why this tool uses `Environment.addDeclCore` despite its collision panic.
 
-`modelgen/EnvProbe.lean` is the same two probes at Mathlib scale. -/
+`tools/EnvProbe.lean` runs the same two probes at larger scale. -/
 def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
   let path := s!"{root}/test/fixtures/modelgen/prim_carve.ndjson"
   let text ← IO.FS.readFile path
@@ -888,7 +886,7 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
       -- instantiation needs and that the other four's closure cannot reach,
       -- because all four take the instance as a parameter —
       -- `instDecidableEqNat` at `K := Nat` and `WT.decEqAll` at `K := A`
-      -- (`MODELGEN.md` §8.16.7).
+      -- because those names are parameters rather than dependencies.
       for k in [Modelgen.wCoreDecEqNat, Modelgen.wCoreDecEqAll] do
         cs := cs.push (((← getEnv).find? k).isSome,
           s!"{k} is missing after the splice — one of the two instantiations has \
@@ -903,8 +901,7 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
       | .ok ds2 => cs := cs.push (ds2.isEmpty,
           s!"the W core spliced a second time and added {ds2.size} records")
       -- **The exclusion list, from the side that would hurt.** A `_wcore`
-      -- copy of either axiom is a *non-standard* axiom downstream
-      -- (`mini/src/axiom.rs` keys the clause on the name), and a `propext`
+      -- copy of either axiom is a *non-standard* axiom downstream, and a `propext`
       -- under Lean's name whose statement is at `_wcore.Iff` and `_wcore.Eq`
       -- is worse than that: it is the name `axiom.rs` trusts carrying a
       -- statement that is not the one it means. Both are pinned, because the
@@ -915,16 +912,15 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
                 Modelgen.wCoreRoot ++ `Classical.choice,
                 Modelgen.wCoreRoot ++ `Nonempty] do
         cs := cs.push (((← getEnv).find? n).isNone,
-          s!"{n} exists — a shared name was renamed, and the eight roots are shared \
-             for a reason `MODELGEN.md` §8.16 and §8.16.7 spell out")
+          s!"{n} exists — a shared name was renamed even though the construction \
+             requires the eight roots to retain their standard names")
       for n in [`propext, `Quot.sound, `Eq, `Iff, `Nat, `Quot,
                 `Classical.choice, `Nonempty] do
         cs := cs.push (((← getEnv).find? n).isSome, s!"{n} is missing after the splice")
       -- The statements of the two axioms the whole exclusion list is about.
       -- `propext`'s must be at Lean's `Eq` and `Iff`, and `Classical.choice`'s
-      -- at Lean's `Nonempty` — the name is what `mini/src/axiom.rs` keys the
-      -- clause on, so a trusted name carrying a `_wcore` statement is worse
-      -- than a decline (§8.16.7).
+      -- at Lean's `Nonempty` — consumers key the clause on the name, so a
+      -- trusted name carrying a `_wcore` statement is worse than a decline.
       if let some ci := (← getEnv).find? `propext then
         let us := ci.type.getUsedConstants
         cs := cs.push (us.contains `Eq && us.contains `Iff,
@@ -952,9 +948,9 @@ def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
   let mut a := a
   a := check a ((kenv.find? `Tree.rec_1).isSome && (env.find? `Tree.rec_1).isNone)
     "Tree.rec_1 is no longer in the kernel map and absent from Environment.find? — \
-     MODELGEN.md §6.6's second half has changed"
+     the replay visibility invariant has changed"
   a := check a ((env.find? `Tree.rec).isSome)
-    "Tree.rec is not visible to Environment.find? either, so §6.6 measures nothing"
+    "Tree.rec is not visible to Environment.find? either, so the visibility control measures nothing"
   -- The kernel replay, and what `ofKernelEnv` lets `MetaM` see of it.
   let mut kenv2 := env0.toKernelEnv
   for d in x.decls do
@@ -963,7 +959,7 @@ def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
   let envB := Environment.ofKernelEnv kenv2
   a := check a ((kenv2.find? `Tree).isSome && (envB.find? `Tree).isNone)
     "Environment.ofKernelEnv now exposes a kernel-replayed constant to Environment.find? — \
-     MODELGEN.md §6.7's obstacle is gone and this tool can move to lean4checker's model"
+     the obstacle to using the kernel-level replay API is gone"
   return a
 
 /-- Every constant an export record introduces *or* refers to. A leaked alias
@@ -983,7 +979,7 @@ def edeclNames : Modelgen.EDecl → Array Name
        #[r.name] ++ r.all.toArray ++ r.type.getUsedConstants ++
        r.rules.toArray.flatMap fun u => #[u.ctor] ++ u.rhs.getUsedConstants)
 
-/-- **The normalized-name collision, closed** — `MODELGEN.md` §8.14.
+/-- **The normalized-name collision, closed.**
 
 An export is many modules flattened into one file, so it holds both
 `_private.M.0.X` and a public `X`. We model both, Lean's async constant map
@@ -1063,8 +1059,8 @@ private def probeNatDecl : Declaration :=
        ctors := [{ name := `Nat.zero, type := nat },
                  { name := `Nat.succ, type := .forallE `n nat nat .default }] }] false
 
-/-- **The normalized-name collision, measured rather than inherited** —
-`MODELGEN.md` §8.14's decline, and the three things about it that are easy to
+/-- **The normalized-name collision, measured rather than inherited**, including
+the three things about it that are easy to
 get wrong. Every claim here is a fact about *Lean* that this tool's
 `nameTaken` decline rests on, so each is a test rather than a paragraph.
 
@@ -1107,8 +1103,8 @@ cannot be rebuilt into stage 1 from outside that module.
 this.** `addDeclCore` (`:711`) adds to `asyncConstsMap.private`
 *unconditionally* and only the `.public` insertion sits behind the guard, so
 the private view collides whatever the guard does. A single colliding add
-prints the panic **twice**, once per view. `MODELGEN.md` §8.14 said the
-upstream bug was the cause; it is a real bug and it is not this one. -/
+prints the panic **twice**, once per view. The public-view guard therefore does
+not explain this collision. -/
 def runCollisionProbe (a : TAcc) : IO TAcc := do
   let env0 ← importModules #[] {}
   let mut a := a
@@ -1116,14 +1112,14 @@ def runCollisionProbe (a : TAcc) : IO TAcc := do
   a := check a (!env0.constants.stage₁)
     "the fresh environment's constant map is in SMap stage 1 — locally added constants would \
      now land in `map₁` and `Environment.find?`'s base probe would see them without the async \
-     map; MODELGEN.md §8.14's collision may no longer be structural"
+     map; the normalized-name collision may no longer be structural"
   let mut env := env0
   let some env1 := (env.addDeclCore 0 probeNatDecl none true).toOption
     | return check a false "the collision probe cannot install Nat"
   env := env1
   a := check a (env.constants.map₁.isEmpty)
     "a locally added constant reached `base.constants.map₁`, which is supposed to be the \
-     imported half only — `Environment.find?`'s base probe is live and §8.14 wants re-measuring"
+     imported half only — `Environment.find?`'s base probe is live and the collision needs re-measuring"
   -- (2) the collision, both orders. `X.foo` and `_private.M.0.X.foo` normalize alike.
   let publ : Name := `X.foo
   let priv : Name := (`_private.M).mkNum 0 |>.str "X" |>.str "foo"
@@ -1136,7 +1132,7 @@ def runCollisionProbe (a : TAcc) : IO TAcc := do
     return e2.constants.contains second && (e2.find? second).isNone && (e2.find? first).isSome
   a := check a (secondIsLost priv publ)
     "the public name added after the private one is now visible to `Environment.find?` — \
-     MODELGEN.md §8.14's collision is gone and the `name taken` declines can be retired"
+     the normalized-name collision is gone and the `name taken` declines can be retired"
   a := check a (secondIsLost publ priv)
     "the private name added after the public one is now visible to `Environment.find?` — \
      the collision has become order-dependent, so `Modelgen.addChecked`'s check-after-add \
@@ -1151,15 +1147,15 @@ def runCollisionProbe (a : TAcc) : IO TAcc := do
     return (e2.find? al).isSome && (e2.find? publ).isSome
   a := check a aliasWorks
     "a second declaration under a differently-normalizing root is no longer visible either — \
-     the generate-under-an-alias escape for §8.14's 10 declines has closed"
+     the generate-under-an-alias escape for the normalized-name declines has closed"
   return a
 
 /-- **The two streams and the four exit statuses**, against the built binary.
 
 Axes 1–4 call `runFilter` directly and so cannot see the process boundary at
-all — and the boundary is where the reasons were being lost: `mini` execs this
-binary and, while the report was on stdout, had to pass `--quiet` to keep the
-export clean and lost every decline reason doing it (`Main.lean`'s header).
+all — and the boundary is where reasons can be lost: a consumer that passes
+`--quiet` to keep stdout export-clean receives no decline report. The stream
+split is documented in `src/Main.lean`.
 
 So this runs the binary and **captures stdout and stderr separately**, which is
 the only way to observe the split. `infinitary` is the input that distinguishes
@@ -1186,8 +1182,8 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
   a := check a ((r.stderr.splitOn "FTree: model of 17 declarations").length == 2)
     s!"CLI: stderr does not carry the models: {r.stderr}"
   -- **A splice is reported.** `infinitary` declares no `funext`, so its report
-  -- has to say which declarations were not the input's — that is the one thing
-  -- permissiveness does not excuse (`MODELGEN.md` §1.5).
+  -- has to say which declarations were not the input's — permissive splicing
+  -- still has to be observable.
   a := check a ((r.stderr.splitOn "prelude spliced").length == 4)
     s!"CLI: stderr does not carry the three splice lines: {r.stderr}"
   a := check a ((r.stderr.splitOn "HTree: prelude spliced — Quot, Quot.mk, Quot.lift, \
@@ -1207,9 +1203,9 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
     IO.FS.removeFile tmp
   else
     a := check a false "CLI: `-o FILE` wrote no file"
-  -- **The exit statuses a consumer keys on** (`MODELGEN.md` §1.4): a decline
+  -- **The exit statuses a consumer keys on**: a decline
   -- has to be tellable from a malformed input and both from a usage error, and
-  -- until §1.4 was written all three of the failures were 1.
+  -- these cases once all used status 1, so each distinction is pinned here.
   --
   -- **`3` has no occupant here and cannot have one**: it is this tool failing,
   -- and no input in the tree reaches it — 450 statements compared with 0
@@ -1236,8 +1232,7 @@ two markers and a consumer that derives the family from the type's name finds
 part of it. **The other is about demand**: nothing in the file *references* a
 model, so left to the backward sweep every model group takes `--default` and
 `T`'s second and third copies have no model at all. No kernel sees either — the
-fixture's output replays with **0 rejected** in both states
-(`MONOMORPH.md` §1.3).
+fixture's output replays with **0 rejected** in both states.
 
 `poly_nested_used` is the fixture because it is the one where the composition
 can be measured at all: `PTree.{u}` is *used* at universes 0, 1 and 2, so thirty
@@ -1271,8 +1266,8 @@ def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
     -- measured on a file whose every group lands at one instantiation is
     -- measuring the defaults agreeing with themselves.
     --
-    -- It was `#[(1, 35), (3, 1)]`: one three-copy row, the type, and the model
-    -- defaulted to a single copy beside it (`MONOMORPH.md` §1.3 item 1).
+    -- It was `#[(1, 35), (3, 1)]`: one three-copy row, the type, while the model
+    -- incorrectly defaulted to a single copy beside it.
     a := check a (rep.hist == #[(1, 6), (3, 30)])
       s!"compose[{tag}]: copies per group {rep.hist}, expected #[(1, 6), (3, 30)]"
     -- Exact-role counting keys the 21 public declaration-local model roles
@@ -1284,10 +1279,10 @@ def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
     a := check a (rep.modelDeclined == 0)
       s!"compose[{tag}]: the keying declined {rep.modelDeclined} model groups"
     -- **One model per copy of `PTree`, and the same model under each.** Every
-    -- name is split at §1.1's marker; a name whose remainder has a `_model`
+    -- name is split at the `_at` marker; a name whose remainder has a `_model`
     -- component is a model's, and it is filed under the marker it carries.
-    -- `T._model._impl.funext` is excluded: a spliced prelude theorem (`MODELGEN.md`
-    -- §1.5) is polymorphic in universes that are nobody's motive, nothing
+    -- `T._model._impl.funext` is excluded: a spliced prelude theorem is
+    -- polymorphic in universes that are nobody's motive, nothing
     -- derives its name, and it is not one of the nine families.
     --
     -- Two things are then checked, and the second is what reaches the *second*
@@ -1296,7 +1291,7 @@ def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
     -- four. And the **suffixes** filed under each marker must be the same set:
     -- `PTree._model._impl.0._model` is a suffix like any other, so a copy that
     -- got the outer model and not the inner one fails here by name.
-    -- §1.2 property 3's inversion: the trailing `._elim.⟨w⟩` comes off first.
+    -- Naming inversion removes the trailing `._elim.⟨w⟩` first.
     -- Mode B folds the *motive's* universe into it, and that numeral is a
     -- property of the copy, so the suffix sets would differ by construction if
     -- it stayed on — `PTree._model.1.rec._elim.1` under one marker against

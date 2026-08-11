@@ -41,9 +41,8 @@ to a *declaration* that an emitted `def` does not inherit — and that grant is
 now derived rather than assumed: [`Modelgen.graphArm`] defines the recursion
 by its *graph* and extracts the value, packaged with its graph proof, with
 `Classical.choice`, which gives `Acc.rec`'s exact type with ι a theorem
-instead of `rfl`. `scripts/inductive-basis/AccFromChoice.lean` is the
-derivation and `AccArmShapes.lean` its uniformity; `MODELGEN.md` §8.7 is the
-arm. So `Acc` models like any other declaration now.
+instead of `rfl`. The derivation is uniform across the supported recursive
+shapes, so `Acc` models like any other declaration now.
 
 ## The three routes, by the carrier's sort
 
@@ -71,8 +70,8 @@ destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
   collapse, which is false as a conversion — nothing eta-expands a variable
   on speculation, so the kernel refuses `x ≡ y` for two variables even though
   `x = y` is provable without an axiom.
-  `scripts/inductive-basis/PULiftPEta.lean` pins both and the gap between
-  them. The `False`-Π singleton this replaced was not canonical in *either*
+  Direct kernel checks pin both claims and the gap between them. The `False`-Π
+  singleton this replaced was not canonical in *either*
   sense and cost a `funext`.
 * **A box** ([`Modelgen.boxTyOf`]) absorbs an `imax`: a Π-typed field's level
   is an `imax` chain (`Trans.mk`'s shape) and no pad subsumes an `imax` under
@@ -142,25 +141,23 @@ single-valuedness and is propositional.
   is the arm's remaining boundary. **The head is read through
   [`Modelgen.headNorm`]**, so a field written `(fun x => T p⃗ e⃗) k` — which is
   what Lean's nested specialisation leaves at a container's family parameter —
-  is the bare occurrence it reduces to and not a binder; `MODELGEN.md` §8.16.4,
-  and §5.1 is the same repair at layer 1. A second and rarer refusal shares the
+  is the bare occurrence it reduces to and not a binder; the same head
+  normalization is required at layer 1. A second and rarer refusal shares the
   guard: a field whose type mentions `T` **only inside a binder βζ discards**
   is not recursive at all, and the erasure would replace it anyway — the
   message calls that a *vanishing mention* and never *infinitary*.
   An indexed family whose erasure is bare is no longer a refusal, **however
   many recursive fields its constructors have**: it is **arm C**
-  ([`Modelgen.primIso`]'s `armC`), thesis §5.2's skeleton-plus-`good` standing
+  ([`Modelgen.primIso`]'s `armC`), a skeleton-plus-`good` construction standing
   on a spliced inductive rather than on a W-type — no axioms, no
   per-constructor currying glue, every ι rule `Eq.refl`.
   A *branching* erasure used to decline here, because the spliced skeleton
   branches too and nothing modelled a branching non-indexed inductive; arm W
   does, so the carve now carries every recursive slot and hands the skeleton
-  to W. `scripts/inductive-basis/CarveOverSkeleton.lean` is the prototype and
-  `MODELGEN.md` §8.15 the arm; `IndexedCarve.lean` is the older,
-  thesis-shaped sketch.
+  to W.
 * **a recursive declaration with no base constructor** — uninhabited, and the
-  tuple tower has no spine-zero fibre to build. Surfaced by arm C's skeleton
-  and named there (§8.15).
+  tuple tower has no spine-zero fibre to build. Surfaced and named by arm C's
+  skeleton.
 * **a recursive subsingleton with a non-pivot index at a *data* position** —
   the graph arm's own boundary, not the class: a *recursive subsingleton*
   models, by [`Modelgen.graphArm`]. What that arm cannot reach is an index it
@@ -169,19 +166,18 @@ single-valuedness and is propositional.
   data. At a position whose type is a **`Prop`** it needs nothing: the two
   index terms are two proofs of one proposition and proof irrelevance closes
   it, which is what puts the `below` Lean mints beside every recursive `Prop`
-  — `Acc.below` included — on the modelled side. `INDUCTIVE-BASIS.md` §3.2 is
-  the carrier, `MODELGEN.md` §8.7 the arm and §8.17.1 the index axis.
+  — `Acc.below` included — on the modelled side.
 * **indices or recursion at a maybe-zero sort** — neither is threaded
   through the lift.
 * **a level gap no pad or box closes** — an `imax` in a field's level that
   boxing does not collapse (an `imax`-leveled *domain* inside the field).
   This one is a **level-incompleteness** decline, not a type error: the
   padded chain equals the carrier's level at every instantiation and Lean's
-  normal-form level defeq does not see it. `MODELGEN.md` §8.6 has the
-  lean4lean cross-check.
+  normal-form level defeq does not see it; an independent kernel cross-check
+  confirms the gap.
 
   **The decline is no longer taken here.** The planner's level equality is
-  complete ([`Modelgen.LevelAlgebra`], §8.6.2): it falls back to the `imax`
+  complete ([`Modelgen.LevelAlgebra`]): it falls back to the `imax`
   case-split decision procedure wherever `isLevelDefEq` would otherwise
   refuse, so the pad is *planned*. What refuses instead is `addChecked` —
   Lean's **kernel**, whose `lean::is_equivalent` has the same
@@ -478,8 +474,8 @@ h`, but `x ≡ y` for two opaque inhabitants does **not** — the kernel refuses
 even when forced past the unifier with `@Eq.refl _ x`, because neither side
 gets expanded. It is refused as a *conversion* only: `x = y` is provable, with
 no axiom, by routing through `up (down ·)` where every step is a redex, so the
-conversion is simply not transitive at this shape.
-`scripts/inductive-basis/PULiftPEta.lean` pins all of it.
+conversion is simply not transitive at this shape. Direct kernel checks pin all
+of it.
 
 Two consequences the construction leans on, **both at a redex**. Every element
 of `PULiftP ⊤` is defeq to [`Modelgen.unitAtCanon`], which is a literal `up`,
@@ -558,7 +554,7 @@ no transport rides along. This is where the `False`-Π singleton cost a
 **Read "canonical" narrowly.** What holds is `t ≡ canon`, where one side is a
 constructor application and eta expands the other. What does *not* hold is
 `x ≡ y` for two opaque inhabitants: no side is a redex, so the kernel refuses
-it — see [`Modelgen.puliftEta`] and `scripts/inductive-basis/PULiftPEta.lean`.
+it — see [`Modelgen.puliftEta`].
 Every use below is of the first kind. -/
 
 /-- The singleton at exactly `Sort ℓ`: the lift of `⊤`. -/
@@ -907,7 +903,7 @@ partial def churchSwapAt (tname : Name) (np ni : Nat) (C : Expr) (nf : Nat) (t :
 
 /-! ## Packing an index telescope
 
-The subsingleton arm (INDUCTIVE-BASIS §3.2's degenerate `r := ⊥` case) states
+The subsingleton arm's degenerate `r := ⊥` case states
 its Henry-Ford equations as **one** `Eq` at the whole index telescope packed
 into a right-nested `PSigma`, rather than one `Eq` per index. It has to: a
 later index's type may mention an earlier one — `HEq`'s telescope is
@@ -929,7 +925,8 @@ component — so a one-element selection packs to that type alone, with no
 else: an unselected index stays free, which is exactly what the subsingleton
 arms need when some index positions are **pivots** — positions the model
 substitutes rather than equates — whose variables remain in scope while the
-rest are packed around them (`Fmid` in `tests/prim_idx.lean` is the shape that
+rest are packed around them (`Fmid` in
+`test/fixtures/modelgen/prim_idx.lean` is the shape that
 pins it: a pivot sitting *between* two dependent non-pivots, so the second
 selected type still mentions the first while the pivot between them is
 skipped).
@@ -980,8 +977,7 @@ partial def unpackChain (n : Nat) (R : Expr) (y : Expr) : GenM (Array Expr) := d
 
 /-! ## Linear recursion at a never-zero sort: the tuple tower
 
-`INDUCTIVE-BASIS.md` §3.4, compiled in `scripts/inductive-basis/LinearRec.lean`
-on three targets. A **linearly recursive** declaration is one whose every
+A **linearly recursive** declaration is one whose every
 constructor has at most one recursive field, with that field not under a
 binder. Constructors then split into *base* (no recursive field) and *step*
 (exactly one), and the carrier is a spine-indexed tower:
@@ -1021,8 +1017,8 @@ reduced.
 That is Lean's own nested specialisation and not a hypothetical. A container
 with a dependent value field — `Impl α β | inner : … → (k : α) → β k → …` —
 specialised at `β := fun _ => T` carries the field as `(fun x => T) k`, and a
-`let` in the family's body survives the same way. **`MODELGEN.md` §5.1 is this
-defect at layer 1**, where it cost `Lean.Json` and `Lean.PrefixTreeNode` their
+`let` in the family's body survives the same way. This same defect at layer 1
+cost `Lean.Json` and `Lean.PrefixTreeNode` their
 nested models until [`Modelgen.Gen.occIdx?`] and its two siblings started
 reading through [`Modelgen.headNorm`]. Layer 3 is the same two declarations
 one step further on: their `_model.aux` families are what the composition
@@ -1034,8 +1030,8 @@ question whose answer is invariant under β and ζ:
 
 * **is the occurrence bare** — [`Modelgen.recSlotOf`] and `erasureBareWhy`;
 * **what are its index arguments, and how many binders is it under** —
-  [`Modelgen.withRecSlot`], which is where arm C's `ctorIdxAt` used to ask the
-  first half (`MODELGEN.md` §8.16.8);
+  [`Modelgen.withRecSlot`], which is where arm C's `ctorIdxAt` used to inspect
+  only the unreduced head;
 * **what binders does a recursive field have** — [`Modelgen.tagFactored`],
   which has none to peel until the redex is gone.
 
@@ -1057,11 +1053,11 @@ carries it, and `prim_carve`'s `Inf2`, `Cf` and `Bif` are its fixtures. -/
 /-- **Does `B` factor through the constructor tag?** — the one question that
 decides whether a declaration W can model is *certifiable*.
 
-`scripts/inductive-basis/WFromPaths.lean` builds W with a path step carrying
-the whole label, so `mk` has to decide `x.1 = a` at the label type; that is
+The untagged W construction uses a path step carrying the whole label, so `mk`
+has to decide `x.1 = a` at the label type; that is
 `Classical.propDecidable`, and it costs `[propext, Classical.choice,
-Quot.sound]` on every constant. `WTagged.lean` builds the same W with a path
-step carrying only the **constructor tag**, so the test is `Fin k` equality and
+Quot.sound]` on every constant. The tagged construction uses the same W with a
+path step carrying only the **constructor tag**, so the test is `Fin k` equality and
 the bill drops to `[propext, Quot.sound]` — the covered set, since
 `Classical.choice` has been refuted as a term of the checker's language while
 the other two are certified or covered.
@@ -1113,8 +1109,8 @@ def tagFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) :
 [`Modelgen.tagFactored`], asked of the *untagged* instantiation of the same
 core, and the guard arm W actually runs on.
 
-`MODELGEN.md` §8.16.6: `WFromPaths.lean` is `WTagged.lean` at `K := A` and
-`tg := id`, so there is one construction and two bills. At `K := A` the branch
+The untagged form is the tagged construction at `K := A` and `tg := id`, so
+there is one construction and two bills. At `K := A` the branch
 type is `B' : A → Sort w` and `A` is the tag *paired with that constructor's
 non-recursive fields*, so a recursive field's binders may mention those fields
 freely — `Tel` reads them back out of the label's own data. What they still may
@@ -1170,7 +1166,7 @@ def recSlotOf (tname : Name) (np : Nat) (cn : Name) (nf : Nat) (tele : Expr)
     (tagged : Bool := true) (typeU : Bool := true) (labelled : Bool := true) :
     GenM (Option Nat) := do
   -- **The W arm's bill, printed at the decline that names W**, and it is two
-  -- questions since §8.16.7 because the arm runs the one core at two
+  -- questions because the arm runs the one core at two
   -- instantiations. `labelled` is [`Modelgen.labelFactored`] and is the one
   -- that decides *whether* W reaches the declaration; `tagged` is
   -- [`Modelgen.tagFactored`] and decides only *what it costs* — yes and the
@@ -1318,10 +1314,9 @@ partial def pairArm (tname : Name) (np ni : Nat) (us : List Level)
 
 /-! ## Arm G: the recursive subsingleton, by the **graph** of the recursion
 
-`INDUCTIVE-BASIS.md` §3.2's carrier, and the construction of
-`scripts/inductive-basis/AccFromChoice.lean` emitted for an arbitrary shape.
-This is the arm that takes **`Acc` out of the basis** rather than putting it
-to use.
+This is the arm that emits the graph-and-choice carrier for an arbitrary
+supported shape, taking **`Acc` out of the basis** rather than putting it to
+use.
 
 The shape: an inductive `Prop` with **one** constructor, each of whose fields
 is a proposition (possibly a recursive occurrence `∀ z⃗, T p⃗ e⃗`) or a piece of
@@ -1351,7 +1346,7 @@ iota            : both sides are graph points and the graph is single-valued
 **Do not** try `Classical.choice` at a bare `Nonempty (motive a t)` instead.
 That recursor typechecks and is provably *blind to its step function* — the
 two `Nonempty` proofs are definitionally equal — so its ι rule is not merely
-unproved but derives `False`. `AccFromChoice.lean` §4 compiles the refutation.
+unproved but derives `False`; expanding the construction gives the refutation.
 
 **ι is propositional here, not `Eq.refl`** — the value is a `Classical.choice`
 application, which reduces to nothing — and this is the only arm of the three
@@ -1361,8 +1356,7 @@ the kernel would have reduced.
 **Two lines of the recipe are shape-sensitive**, and both are mechanical:
 [`Modelgen.congrChain`]'s n-ary congruence, one factor per recursive field,
 and [`Modelgen.funextUp`]'s chain, one `funext` per binder of a recursive
-field. `scripts/inductive-basis/AccArmShapes.lean` carries the recipe through
-the three shapes that settle them.
+field. The recipe is checked across the three shapes that settle them.
 
 **The axiom cost is per shape, not per arm.** `rec_0` is `Classical.choice`
 uniformly; ι adds `funext` — hence the quotient and `Quot.sound` — only when
@@ -1402,10 +1396,8 @@ That substitution is what `GraphInv` is stated by: inversion at an arbitrary
 index `ι⃗` must conclude `val = step f⃗ g⃗`, whose right-hand side lands at the
 quantified fields' own index expressions, so those expressions have to *be*
 `ι⃗` — **definitionally**, which at a pivot means the same term and at an
-index position typed by a `Prop` means proof irrelevance (`MODELGEN.md`
-§8.17.1). Quantifying the data fields instead would need the index's
-injectivity, which is exactly the case `AccFromChoice.lean` records as not
-uniform.
+index position typed by a `Prop` means proof irrelevance. Quantifying the data
+fields instead would need the index's injectivity, which is not uniform.
 
 `k` receives the full field vector, the ones actually bound, and the
 telescope's result type. -/
@@ -1454,9 +1446,8 @@ with one `congrArg` per field:
 step f⃗ ga₁ ga₂ … = step f⃗ gb₁ ga₂ … = step f⃗ gb₁ gb₂ … = … = step f⃗ gb⃗
 ```
 
-`AccFromChoice`'s single `congrArg (step x h)` is the `n = 1` case of this and
-is insufficient at two recursive fields; `AccArmShapes.lean` §2 is the shape
-that measures it. Each `congrArg` is one `Eq.rec`, inlined here for the same
+The single `congrArg (step x h)` is the `n = 1` case of this and is
+insufficient at two recursive fields. Each `congrArg` is one `Eq.rec`, inlined here for the same
 reason [`Modelgen.funextDecl`] inlines its own. -/
 def congrChain (eqi : EqInfo) (v : Level) (α : Expr) (mkStep : Array Expr → Expr)
     (ga gb pfs : Array Expr) : GenM Expr := do
@@ -1837,7 +1828,7 @@ its own data field"
     -- the sub-values here, and single-valuedness above is what makes the
     -- choice harmless. The `Nonempty` is of the **PSigma of value and graph
     -- proof**, never of `motive ι⃗ t`: that is the whole difference from the
-    -- route `AccFromChoice.lean` §4 refutes.
+    -- route described above refutes.
     let neAt := fun (is : Array Expr) (t : Expr) => do
       let α := motAt is t
       let β ← withLocalDeclD `val α fun val => mkLambdaFVars #[val] (grAt is t val)
@@ -2054,8 +2045,8 @@ partial def withRecSlot [Inhabited α] (tname : Name) (np ni : Nat) (dom : Expr)
 
 /-! ## Arm W's kit
 
-`MODELGEN.md` §8.16 and `scripts/inductive-basis/WEmitted.lean`, which is the
-file this arm transcribes. The scheme, for a declaration at `Sort w = Type u`
+This arm directly emits the tagged W scheme. For a declaration at
+`Sort w = Type u`
 with constructors `c⃗`:
 
     D   p⃗ t   := Σ' (a : nrᵗ₁), … Σ' (a : nrᵗₖ), 𝟙        -- ⊥ off the end
@@ -2141,7 +2132,7 @@ function rather than two lines at each call site: `β` is `fun (x : Xᵢ) => …
 `Xᵢ` mentions the earlier fields, and abstracting the field variable closes the
 *body* over it while leaving the domain pointing at a variable that is no
 longer in scope. A tower whose fields do not depend on each other never notices;
-`tests/prim_w.lean`'s `Dep` is the occupant that does, and it found this as a
+`test/fixtures/modelgen/prim_w.lean`'s `Dep` is the occupant that does, and it found this as a
 kernel `declaration has free variables`. -/
 def wTowerAt (w : Level) (xs : Array Expr) (i : Nat) (pre : Array Expr) :
     GenM (Level × Expr × Expr) := do
@@ -2228,7 +2219,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- the former and `tname` the latter; they are the same name for every
   -- declaration but the handful whose model name is lost to a normalized-name
   -- collision, where [`Modelgen.genPrim`] retries under an alias root and
-  -- renames the export records back (`MODELGEN.md` §8.14). So every *guard*
+  -- renames the export records back. So every *guard*
   -- below is about `tname`'s names — those are what reach the output and what
   -- must not collide with the input — while descendants of `tname` are built
   -- under `root`. An exact raw private constructor need not be a descendant of
@@ -2254,7 +2245,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
      Name.str impl "rec_graph"]
   -- Arm C's **internal** names. `skel` is the index erasure, spliced as an
   -- ordinary inductive so that the kernel mints its recursor and its ι is
-  -- definitional (`MODELGEN.md` §8.10's rule: use the real type); `good` is
+  -- definitional (the construction uses the real type); `good` is
   -- the carving predicate. Guarded like arm G's, and only when the arm fires.
   let skelN := Name.str impl "skel"
   let goodN := Name.str impl "good"
@@ -2498,8 +2489,8 @@ application of {tname}"
   | PrimRoute.type =>
     if ni > 0 && !erasureBare then
       badShape s!"an indexed family at a never-zero sort whose index erasure is not \
-        bare (arm C splices the erasure and carves the family out of it — \
-        MODELGEN.md §8.15 — so its reach is bounded by whether that erasure \
+        bare (arm C splices the erasure and carves the family out of it, \
+        so its reach is bounded by whether that erasure \
         models, and an erasure that is not bare moves the erasure itself: a \
         mention βζ discards, a binder only βζ reveals, a binder type naming \
         the declaration, and an occurrence that is not an application of it \
@@ -2534,8 +2525,7 @@ application of {tname}"
   -- stated separately are one limit. A large-eliminating one-constructor
   -- `Prop` is exactly a declaration each of whose fields is either a *proof*
   -- or a piece of *data that is literally one of the conclusion's index
-  -- arguments* — that is the kernel's own subsingleton rule
-  -- (`vendor/nanoda_lib-upstream/src/inductive.rs`, `large_elim_test_aux`: the
+  -- arguments* — that is the kernel's own subsingleton rule: the
   -- non-`Prop` telescope elements must be a **subset** of the applied
   -- parameters and indices, by identity and not by occurrence), and it is what
   -- makes a model possible at all. A model of a `Prop` can extract its proof
@@ -2560,8 +2550,8 @@ application of {tname}"
   -- the two ends: arm F took only all-non-pivot index vectors and arm G took
   -- only all-pivot ones, and everything in between — `MixI`, `SvIx`,
   -- `IsHomLift`, every `.below` Lean mints beside a recursive `Prop`, and
-  -- `Acc.below` — fell through the gap between them. `tests/prim_idx.lean` is
-  -- the grid; `MODELGEN.md` §8.17 is the derivation.
+  -- `Acc.below` — fell through the gap between them.
+  -- `test/fixtures/modelgen/prim_idx.lean` is the grid.
   let armGRec := (route matches PrimRoute.prop) && large && nc == 1 && isRec
   let armFNonRec := (route matches PrimRoute.prop) && large && nc == 1 && ni > 0 && !isRec
   let mut gIsData : Array Bool := #[]
@@ -2616,7 +2606,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         -- pivots, the substitution has already made them the field's own; where
         -- one is a non-pivot, the caller's index is an arbitrary term and only
         -- the equation says it is the constructor's, so the field would have to
-        -- be transported before it could be used. `tests/prim_idx.lean`'s
+        -- be transported before it could be used.
+        -- `test/fixtures/modelgen/prim_idx.lean`'s
         -- `Fmid` is the occupant: `Fmid : (α : Type) → α → α → Prop` with
         -- `mk (x : N) : Fmid N x N.z`, whose pivot `x : N` sits at an index
         -- whose declared type is the *ground* index before it. Both corpus
@@ -2642,12 +2633,12 @@ without a transport the model does not build"
     gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size; gNonPiv := npv
     gNonPivData := npd
 
-  -- **Arm G's half of the index axis, and it is not the equation §8.17
-  -- planned.** The graph route's `GraphInv ι⃗ t val` concludes
+  -- **Arm G's half of the index axis.** The graph route's `GraphInv ι⃗ t val`
+  -- concludes
   -- `val = step f⃗ g⃗`, whose right-hand side lands at the constructor's own
   -- index expressions `ι⃗_ctor`; where those are not `ι⃗` the two sides sit at
-  -- different indices and the statement does not typecheck. §8.17 costed that
-  -- as a transport along arm F's packed equation, threaded through five
+  -- different indices and the statement does not typecheck. A transport along
+  -- arm F's packed equation would have to be threaded through five
   -- declarations. **At a non-pivot whose own type is a `Prop` no transport is
   -- needed at all**: `ι⃗_ctor[j]` and `ι⃗[j]` are then two proofs of one
   -- proposition, the kernel identifies them by proof irrelevance, and every
@@ -2707,8 +2698,7 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
   let armF := armFNonRec
 
   -- **Arm C**: an indexed family at a never-zero sort, carved out of its own
-  -- index erasure. `MODELGEN.md` §8.15 and
-  -- `scripts/inductive-basis/CarveOverSkeleton.lean`. Gated on the erasure being
+  -- index erasure. Gated on the erasure being
   -- **bare** — every recursive occurrence a `T p⃗ e⃗` whose whole domain the
   -- erasure can replace — and no longer on its being *linear*: the carve
   -- carries an arbitrary number of recursive slots per constructor, and the
@@ -2717,8 +2707,7 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
   -- `Iso.requires`' job and not this guard's.
   let armC := (route matches PrimRoute.type) && ni > 0 && erasureBare
 
-  -- **Arm W**: the tagged W construction, `MODELGEN.md` §8.16 and
-  -- `scripts/inductive-basis/WEmitted.lean`. It is the *fallback* for the
+  -- **Arm W**: the tagged W construction. It is the *fallback* for the
   -- non-indexed Type route and not its default, and that is deliberate: the
   -- tuple tower reaches every linear shape with no axiom and no fragment, so
   -- taking W wherever it applies would move six thousand models onto a heavier
@@ -2732,7 +2721,7 @@ packed non-pivot equation arm F carries is not threaded through the graph)"
   --
   -- * **`labelFactored`.** The core is generic in `K`, `B' : K → Type u` and
   --   `tg : A → K`, and the arm runs it at **two** instantiations of one
-  --   construction (`MODELGEN.md` §8.16.6). At `K := Nat`, `tg := PSigma.fst`
+  --   construction. At `K := Nat`, `tg := PSigma.fst`
   --   the branch type is a function of the *tag* and cannot see the label's
   --   data, which is [`Modelgen.tagFactored`]; at `K := A`, `tg := id` it sees
   --   all of it and only an earlier *recursive* field is out of reach, which is
@@ -2850,8 +2839,8 @@ data tower would have to hold a type the branch tower cannot see"
     return psigmaT (.succ .zero) w wNatT (← wTelFn ps key)
   let wBFn : Array Expr → Expr := fun ps => mkAppN (.const wBN us) ps
   let wTgAt : Array Expr → Expr := fun ps => mkAppN (.const wTgN us) ps
-  -- **`DecidableEq K`, and the whole of the second bill.** `MODELGEN.md`
-  -- §8.16.6: one declaration, `[propext, Quot.sound]` on the left of it and
+  -- **`DecidableEq K`, and the whole of the second bill.** One declaration,
+  -- `[propext, Quot.sound]` on the left of it and
   -- `[propext, Classical.choice, Quot.sound]` on the right.
   let wDecEq : Array Expr → Expr := fun ps =>
     if wTagged then .const wCoreDecEqNat []
@@ -2933,7 +2922,7 @@ data tower would have to hold a type the branch tower cannot see"
       mkLambdaFVars #[b] (mkApp (← wDispAt ps k key nrv child b1) b2)
 
   -- **The eta lemma** — `dispatch = f`, and the whole of the per-constructor
-  -- glue. `MODELGEN.md` §8.16 and `WEmitted.lean`'s middle section: it is
+  -- glue. It is
   -- enough to prove `∀ j tel, dispatch j tel = f ⟨j, tel⟩` and instantiate at
   -- `b.1, b.2`, because `⟨b.1, b.2⟩ ≡ b` is `PSigma`'s definitional eta — so
   -- **no `PSigma.rec` appears in the proof at all**. Every real branch is
@@ -2995,7 +2984,7 @@ data tower would have to hold a type the branch tower cannot see"
   -- **`F`, the minor the core's recursor takes** — one `Nat.rec` cascade over
   -- the tag whose motive must be well-typed at *every* tag, the eta lemma's
   -- transport inside each arm, and the junk arm discharged from the emptiness
-  -- of `D`. This is the term `WEmitted.lean` exists to have shown builds.
+  -- of `D`. This is the term whose construction validates the emitted shape.
   let wMkF : Array Expr → Expr → Array Expr → GenM Expr := fun ps motive minors => do
     let selfTy := wSelfAt ps
     -- The frame every arm and the motive share: `(d : D p⃗ t)
@@ -3150,7 +3139,8 @@ data tower would have to hold a type the branch tower cannot see"
     -- At **no** pivots this is exactly what the arm was before — the
     -- subsequence is the whole telescope and `h⃗` is every field — which is
     -- what makes the generalisation additive rather than a rewrite. At **no
-    -- non-pivots** (`Fall` in `tests/prim_idx.lean`) there is nothing left to
+    -- non-pivots** (`Fall` in `test/fixtures/modelgen/prim_idx.lean`) there is
+    -- nothing left to
     -- equate: the carrier is a bare Church conjunction, the recursor is the
     -- minor applied to the recovered fields, and no `Eq.rec` is built.
     --
@@ -3328,13 +3318,13 @@ data tower would have to hold a type the branch tower cannot see"
   else if armC then
     -- ════ arm C: an indexed family, carved out of its spliced erasure ════
     --
-    -- Thesis §5.2's skeleton-plus-`good`, but standing on a **real inductive**
-    -- rather than on a W-type. `MODELGEN.md` §8.10's rule is what picks the
+    -- A skeleton-plus-`good` construction standing on a **real inductive**
+    -- rather than on a W-type. The requirement to use the real type picks the
     -- shape: the thing the carve needs underneath it is a non-indexed
     -- inductive with the same constructor telescopes, and that is a
     -- declaration we can *splice* — so we splice it, the kernel mints its
     -- recursor, and everything below is written against the genuine article
-    -- with its definitional ι. §8.13's splice-and-model then models it like
+    -- with its definitional ι. The splice-and-model pass then models it like
     -- any other spliced inductive, and `Iso.requires` withdraws the whole
     -- model if it cannot.
     --
@@ -3352,8 +3342,8 @@ data tower would have to hold a type the branch tower cannot see"
     -- The skeleton that comes out **branches**, and arm W is what models it —
     -- which is why this could not be relaxed before arm W landed.
     --
-    -- What this buys over carving out of W, all of it measured in
-    -- `CarveOverSkeleton.lean`: **no per-constructor currying glue** (a
+    -- What this buys over carving out of W: **no per-constructor currying
+    -- glue** (a
     -- spliced skeleton keeps the field telescope, so the minor `skel.rec`
     -- wants is the minor `T.rec` wants — no `B a ≅ Fin k` iso, no eta lemma,
     -- no `funext`), **ι by `Eq.refl`** (the shared block below proves every
@@ -3433,7 +3423,8 @@ data tower would have to hold a type the branch tower cannot see"
     -- they are interchangeable it is **not**: the constructor is well typed and
     -- the kernel accepts it, and what catches the permutation is `rec_0`, whose
     -- index transport is written against the skeleton term the model
-    -- constructor is supposed to reduce to. `tests/prim_carve.lean`'s `Sm3` is
+    -- constructor is supposed to reduce to.
+    -- `test/fixtures/modelgen/prim_carve.lean`'s `Sm3` is
     -- that occupant and its header records the four mutations — including the
     -- association error that two recursive fields cannot see at all.
     let ctorIdxAt := fun (ps gs : Array Expr) (j : Nat) => do
@@ -3719,14 +3710,12 @@ data tower would have to hold a type the branch tower cannot see"
   else if armW then
     -- ════ arm W: branching and infinitary, out of the spliced W core ════
     --
-    -- `MODELGEN.md` §8.16, transcribed from
-    -- `scripts/inductive-basis/WEmitted.lean` and — for the untagged
-    -- instantiation — `scripts/inductive-basis/WUntagged.lean`. Six
+    -- The tagged W construction and its untagged instantiation. Six
     -- definitions, the constructors, one `Nat.rec` cascade for `rec_0` and one
     -- `WT.Wrec_iota` per rule. Junk uninhabited in both directions and both
     -- towers ending at exactly `Sort w`, at either instantiation.
     --
-    -- **The two differ in four declarations and nowhere else** (§8.16.6):
+    -- **The two differ in four declarations and nowhere else**:
     -- `Tel`'s and `B'`'s domain (the tag, or the whole label), `tg` (the first
     -- projection, or the identity) and `DecidableEq K`. `D` and `A` are
     -- literally the same term.
@@ -3759,7 +3748,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
-    -- **The core itself**, `MODELGEN.md` §8.16's fragment. `#[]` when it is
+    -- **The core itself.** `#[]` when it is
     -- already in, which is every W target after the first in a run.
     let core ← ensureWCore reserved
     for d in core do out := out.push d; spliced := spliced ++ d.getNames
@@ -3806,14 +3795,14 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
       out := out.push dA
 
     -- ── `Tel` — the branch type's telescope, at a key and a branch index ──
-    -- Two cascades, and the inner one is what `WGeneric.lean` has no analogue
-    -- of: a branch index past a constructor's recursive-field count must be as
+    -- Two cascades: a branch index past a constructor's recursive-field count
+    -- must be as
     -- empty as a tag past the constructor count, or `W` acquires children no
     -- constructor produces and the model is strictly bigger than the target.
     --
     -- **Untagged, the outer cascade's motive takes the data as an argument.**
-    -- That is `MODELGEN.md` §8.16.6's whole delta and the one thing the tag
-    -- scheme has no analogue of: the cascade is still on the tag — a `Nat`, so
+    -- This is the whole untagged delta and the one thing the tag scheme has no
+    -- analogue of: the cascade is still on the tag — a `Nat`, so
     -- still `Nat.rec` — but each arm receives that constructor's own `D t` and
     -- projects the fields its children's binders mention out of it.
     let telKey : Name := if wTagged then `t else `a
@@ -3841,8 +3830,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
                 mkLambdaFVars #[d, jj]
                   (← natCascade (.succ w) (← wRecCount k) (fun _ => pure unitMot)
                     (wTelTy ps k (← wNrProjs ps k d)) junkTy 0 jj)
-          -- **The junk tag's arm is a constant and need not be empty**, which
-          -- `WUntagged.lean` measured: `A = Σ' t, D t` and `D`'s own junk arm
+          -- **The junk tag's arm is a constant and need not be empty**:
+          -- `A = Σ' t, D t` and `D`'s own junk arm
           -- is already `PEmpty`, so `Tel` is never asked at a tag no
           -- constructor has. It is written empty anyway; the requirement that
           -- is load-bearing is the *branch index* one above, and that one is
@@ -3875,9 +3864,9 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
       addChecked dA
       out := out.push dA
 
-    -- `PSigma.fst` at the tag scheme and the identity at the label scheme —
-    -- `WFromPaths.lean` is `WTagged.lean` at `tg := id`, and this line is where
-    -- that reading is cashed.
+    -- `PSigma.fst` at the tag scheme and the identity at the label scheme. The
+    -- latter is the former at `tg := id`, and this line is where that reading
+    -- is cashed.
     let tgTyD ← withParams fun ps =>
       mkForallFVars ps (.forallE `a (wAAt ps) (wKTy ps) .default)
     let tgVal ← withParams fun ps => withLocalDeclD `a (wAAt ps) fun a => do
@@ -4054,7 +4043,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     -- no fields, so the declaration declined with "a chain with no fields
     -- needs a pad" — a true refusal reached by an out-of-bounds read, and a
     -- reason that named nothing. Nothing in the corpus has this shape, which
-    -- is why it went unseen; `tests/prim_carve.lean`'s `NoBase` is the
+    -- is why it went unseen; `test/fixtures/modelgen/prim_carve.lean`'s
+    -- `NoBase` is the
     -- occupant that found it, through arm C's skeleton.
     if isRec && baseJ.isEmpty then
       badShape s!"{tname} is recursive with no base constructor, so it is uninhabited \
@@ -4377,7 +4367,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         -- `up`s differ only in a proof of the encoding's own proposition.
         mkLambdaFVars bs (mkAppN body (#[goalAt] ++ minors))
       else if !large then
-        -- ── strong induction (INDUCTIVE-BASIS §3.1) ──
+        -- ── strong induction ──
         -- The plain fold cannot serve an indexed or recursive declaration: a
         -- minor premise wants `motive ι⃗_j (c_j f⃗)` and the fold only offers
         -- `C ι⃗_j`, which proof irrelevance no longer identifies with it once
@@ -4436,8 +4426,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
           badShape s!"{ern} is large-eliminating with {nc} constructors"
         if ni > 0 then
           badShape s!"an indexed subsingleton: the packed-index-equation model \
-            (INDUCTIVE-BASIS §3.2's degenerate case, compiled in \
-            scripts/inductive-basis/PropArms.lean as HEq') is not implemented"
+            (the degenerate graph case) is not implemented"
         let (_, cty) := exportCtors[0]!
         let tele ← instForall cty ps
         let nf := numForalls tele
@@ -4521,8 +4510,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         -- for a collapsed tag assignment**, which is the one wrong model no
         -- type error stops: two constructors of the same shape sharing a tag
         -- have minors of the same type, so the two model constructors simply
-        -- become the same term and every other check still passes. Measured in
-        -- `WEmitted.lean`, where it is the narrowest of seven mutations.
+        -- become the same term and every other check still passes. It is the
+        -- narrowest of seven checked mutations.
         --
         -- The *statement* is the shared one in all three cases, which is what
         -- keeps the oracle's syntactic comparison honest across the arms.

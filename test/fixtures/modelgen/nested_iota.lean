@@ -7,8 +7,8 @@ it. Neither of them ever applies a nested recursor, so neither would notice a
 treatment that installed `Tree.rec` and `Tree.rec_1` with the right *types* and
 rules that never fire. This file is that gap closed, and it is written the way
 `mutual_iota_reduction.lean` is: every claim is a theorem proved by `rfl`, so
-Lean's kernel checks it at export time and mini's kernel has to reduce the same
-redex or reject the file.
+Lean's kernel checks it at export time and replay has to reduce the same redex
+or reject the file.
 
 # `Tree.rec_1` is the point
 
@@ -52,7 +52,7 @@ constructor.
 
 # Why the motives land in `Type` and not in `Prop`
 
-A `Prop`-valued motive would let mini's own proof-irrelevance close the
+A `Prop`-valued motive would let proof irrelevance close the
 equations without reducing anything, and every rule below would hold whether or
 not it fired. `m1 : Tree → Type` and a payload of `N` is the cheapest motive
 that cannot be collapsed that way.

@@ -1,6 +1,5 @@
-/- A **mutual** block one of whose members nests. `mini/src/nested.rs` refuses
-   this outright ("both a mutual block and nested; mini takes one or the
-   other"); Lean accepts it. Nothing in the corpus has the shape. -/
+/- A **mutual** block one of whose members nests. Lean accepts this combination,
+   and the fixture ensures the generator handles the two features together. -/
 prelude
 
 universe u v

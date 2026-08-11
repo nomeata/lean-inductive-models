@@ -1,6 +1,6 @@
 /- **A nested polymorphic declaration, actually used at three instantiations.**
 
-   `modelgen/tests/poly_nested.ndjson` declares `PTree.{u}` and `QTree.{u,v}`
+   `test/fixtures/modelgen/poly_nested.ndjson` declares `PTree.{u}` and `QTree.{u,v}`
    and *uses* neither, so every group in it monomorphizes to exactly one copy
    (`copies per group: [(1, 42)]`). On that file "the model came out at the
    instantiation its declaration did" and "everything defaulted and the defaults
@@ -14,10 +14,10 @@
    What this file is for is the question `modelgen`'s model raises and
    `poly_nested` cannot ask: the model's declarations — `PTree._model._impl.0`, its
    `pack_i`/`unpack_i`, its `rec_k` and `iota_k_j` — are **referenced by
-   nothing**. `mini` finds them by the naming convention, not by a use site. So
+   nothing**. A consumer finds them by the naming convention, not by a use site. So
    `monomorph`'s backward sweep sees no demand on the model's groups and takes
    the default, while `PTree` itself gets one copy per use. Whether that is what
-   happens is the measurement; `MODELGEN.md` records it. -/
+   happens is the measurement captured by this fixture. -/
 prelude
 
 universe u w

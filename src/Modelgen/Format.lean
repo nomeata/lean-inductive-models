@@ -14,9 +14,8 @@ where the speed comes from. Nothing below runs a typechecker.
 
 Two properties the rest of the tool depends on:
 
-* **Back-references must be continuous.** `nanoda`'s parser — which `mini`
-  uses — rejects a record whose index is not the current count
-  (`vendor/nanoda_lib-upstream/src/parser.rs`'s `assert_ie`). So a model
+* **Back-references must be continuous.** The target parser rejects a record
+  whose index is not the current count. So a model
   cannot be *spliced* into an existing file with fresh high indices; the whole
   output has to be re-interned from scratch. [`Writer`] does that.
 * **Key order is alphabetical and there is no whitespace.** Matching it is
@@ -581,9 +580,8 @@ private def readHints (j : Json) : Except String EHints :=
 
 /-- Store `v` at index `i`, growing with `pad`. The exporter usually emits
 back-references densely and in order, but it is not required to:
-`vendor/arena-tests/good/sparse-name-index.ndjson` and
-`level-index-out-of-order.ndjson` are the fixtures that say so. The **writer**
-is continuous regardless, because `nanoda` requires that. -/
+Sparse-name-index and out-of-order-level-index fixtures exercise this. The
+**writer** is continuous regardless, because the target format requires that. -/
 def setAt (a : Array α) (i : Nat) (v pad : α) : Array α :=
   let a := if i < a.size then a else a ++ Array.replicate (i + 1 - a.size) pad
   a.set! i v
@@ -709,8 +707,8 @@ def parse (text : String) (analyse : Bool := true) : Except String Export := do
 /-- **The same parse, off a handle, a chunk at a time.**
 
 [`parse`] takes the file as one `String`, and on a large export that costs more
-than everything it builds. Measured on a 512 MiB prefix of the Mathlib export
-(`MONOMORPH.md` §9.9): `IO.FS.readFile` peaks at **2× the file** — the
+than everything it builds. Measured on a 512 MiB prefix of the Mathlib export,
+`IO.FS.readFile` peaks at **2× the file** — the
 `ByteArray` and the `String` `String.fromUTF8?` copies out of it are live
 together, and the `ByteArray` is one large block the small-object allocator
 cannot reuse afterwards — and `text.splitOn "\n"` then materialises **every line
@@ -807,7 +805,7 @@ exporter uses — so a file the tool does not change comes back byte-identical.
 drained after each; it is never the whole file. That is not a micro-optimisation
 but the difference between finishing and not: on Mathlib the pass emits ~110
 million lines, and an `Array String` of them intercalated into one ~6 GB
-`String` is what `MONOMORPH.md` §9.5 measured dying at 44.9 GB *after* the whole
+`String` was measured dying at 44.9 GB *after* the whole
 computation had succeeded.
 
 [`Export.stream`] is the one fold; [`Export.render`] and [`Export.writeTo`] are

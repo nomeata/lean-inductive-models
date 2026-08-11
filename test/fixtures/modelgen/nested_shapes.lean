@@ -1,10 +1,9 @@
 /-
 # Nested inductives, on the axes they can be degenerate on
 
-Mini declines a nested inductive at the parser, exit 2, and this file is the
-before-picture — the way `mutual_*.lean`'s decline pins were, before the mutual
-arc moved them. `nested_roundtrip.lean` is the measurement of *why* the mutual
-encoding does not extend here; this one measures the declaration side.
+This file measures the declaration side of nested-inductive generation.
+`nested_roundtrip.lean` separately exercises why the mutual encoding does not
+extend directly to these declarations.
 
 Four declarations, chosen so that no single property is shared by all of them.
 The last three rounds of this thread each lost a mutation to "the only fixture
@@ -36,9 +35,8 @@ exercising this had a degenerate shape", so the axes are separated on purpose:
 machinery, for the reason `infinitary_branching.lean` gives.
 
 No constructor has a function-typed recursive argument, and nothing here is
-indexed — which is itself a measurement, recorded in `mini/tests/mutual.rs`:
-the specialised block of an unindexed nested declaration is an unindexed mutual
-block, so `mutual_aux`'s index scope line is **not** what nesting is waiting on.
+indexed. The specialised block of an unindexed nested declaration is itself an
+unindexed mutual block, so index handling is not involved in these cases.
 -/
 prelude
 
@@ -54,8 +52,8 @@ universe u
 
 /-- Lean's own, restated: the file has no imports.
 
-    **It is here so that the four declarations reach `mini::nested_ev`.** The
-    nested model's two round trips are equations, and that module will not mint
+    **It is here so that the four declarations reach model generation.** The
+    nested model's two round trips are equations, and the generator will not mint
     an `Eq` the export never wrote — so without this every declaration below
     declined as `nested model without Eq` before any of the axes the file exists
     to separate was reached. Nothing else in the file uses it. -/

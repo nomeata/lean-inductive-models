@@ -15,28 +15,26 @@ M₁ ≅ List DTree             M₁.cons : D  → M₁ → M₁
 and `M₀.cons` is the point: **both** of its fields sit at a mimic, so the round
 trip moves two arguments of one constructor application at once, and so does the
 ι rule of `DTree.rec_1` on `List.cons`. Two positions is the first arity that can
-distinguish a fold from a single transport — the same reason
-`mini/tests/nested.rs` needs three elements to pin an order.
+distinguish a fold from a single transport.
 
 **This file is not the only such witness, and the difference between the two is
 the point of keeping both.** `nested_shapes.lean`'s
 `BTree.node : Pair BTree → Pair BTree → BTree` has two packed positions in a
-**root** constructor, and a root rule and a mimic rule are different arms of
-`nested_ev`'s transport fold: the root folds over `pack` at each position
-(`Gen::fold_value` plus `congrPack`), while a mimic transports the whole
-constructor application once and folds *inside* the proof
-(`Gen::fold_congr`). Mutating the fold to stop after the first position kills
+**root** constructor, and a root rule and a mimic rule use different transport
+paths: the root folds over `pack` at each position, while a mimic transports
+the whole constructor application once and folds *inside* the proof. Mutating
+the fold to stop after the first position kills
 `nested_deep/DTree`, `nested_shapes/DTree` **and** `nested_shapes/BTree`, and
 those are one arm and the other.
 
-This file was written when `nested_shapes.lean` declared no `Eq` and
-`mini::nested_ev` declined all four of its declarations before reaching the
+This file was written when `nested_shapes.lean` declared no `Eq` and model
+generation declined all four of its declarations before reaching the
 interesting part, so at the time it really was the only occupant. It stopped
 being the only one when that fixture grew an `Eq`, and this paragraph is that
 correction rather than an appendix to it.
 
 `Eq` is declared here for the reason `nested_shapes.lean` does not have it: the
-round trips are equations, and `nested_ev` refuses to fabricate an `Eq` the
+round trips are equations, and the generator refuses to fabricate an `Eq` the
 export never wrote. That refusal is what `nested_shapes` measures; this file
 measures what happens past it.
 

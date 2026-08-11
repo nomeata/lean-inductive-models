@@ -1,5 +1,5 @@
 /- **The third construction's refusals** (`--prim-models`), one fixture per
-   decline path of `Modelgen/Simple.lean`, each asserting the refusal and
+   decline path of `src/Modelgen/Simple.lean`, each asserting the refusal and
    its printed reason:
 
    * `MixI` — an indexed subsingleton with a **pivot**: a fresh constructor
@@ -7,7 +7,7 @@
      field whose type mentions it. **No longer a refusal.** The packed-equation
      model substitutes the recursor's own index argument for such a field and
      equates only at the positions that are not pivots, so `MixI` is a model
-     and `tests/prim_idx.lean` is the grid that whole axis is measured on. What
+     and `test/fixtures/modelgen/prim_idx.lean` is the grid that whole axis is measured on. What
      it still pins is the *promotion* fact its old header recorded: Lean's
      front end turns a leading bare-variable index into a parameter, so a pivot
      is only reachable behind a position that cannot be promoted, and here the
@@ -16,12 +16,12 @@
      and `Binder` — a recursive occurrence **under a binder** — are **no longer
      refusals**. They are the two shapes this file was built to refuse, the
      tuple tower's spine being one `Nat` and a constructor taking one
-     predecessor; **arm W** models both (`MODELGEN.md` §8.16), and they stay
+     predecessor; **arm W** models both, and they stay
      here as the positives at the boundary they used to mark. `Branch` is the
      first W target in the file, so it is the one that carries the spliced W
      core and the eighteen models of the fragment's own inductives that follow
      it; `Binder` behind it is its own dozen declarations.
-     `tests/prim_w.lean` is the arm's own fixture and carries the shapes these
+     `test/fixtures/modelgen/prim_w.lean` is the arm's own fixture and carries the shapes these
      two do not — data on both sides of a child, a dependent data tower, a
      parameter and a level parameter, and the arm's own boundary (`Bad`, whose
      branch type does not factor through the tag).
@@ -33,7 +33,7 @@
      refusal reached deliberately rather than by accident, and
      `prim_idx.lean`'s `Rxh` is this one written deliberately. **Arm F now
      models the same index shape and arm G does not**, which is the whole of
-     what is left of this tranche's boundary (`MODELGEN.md` §8.17).
+     what is left of this tranche's boundary.
    * `SvIx` — a carrier whose index telescope is **hidden behind a
      definition** *and* whose constructor's indices are its own fields.
      **Neither half is a refusal any more**: the shape check unfolds the
@@ -67,7 +67,7 @@
    the corpus run (`Eq` and `Nat` are exempt on `init-prelude`) and in
    `mutual_keying`'s pattern respectively. The exemption is reported on its own
    row now and is not counted a decline: it is what makes the construction
-   well-founded rather than a shape it cannot reach (`MODELGEN.md` §8.17).
+   well-founded rather than a shape it cannot reach.
 
    **Two of this file's refusals became models in the tranche that split the
    index axis** — `MixI` and `SvIx` above — and the paragraph each carries says

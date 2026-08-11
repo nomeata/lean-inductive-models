@@ -3,9 +3,8 @@
    `lean4export` dumps each declaration where its own dependencies are ready,
    and a `mutual partial def` block becomes one `opaque` per member with no
    shared companion — so the members can land arbitrarily far apart with other
-   declarations, including ones a *later* member uses, in between. Mathlib has
-   five such blocks (`MONOMORPH.md` §9.3); this is the same shape at five
-   records.
+   declarations, including ones a *later* member uses, in between. This fixture
+   captures that shape in five records.
 
    The export this produces has, in order:
 

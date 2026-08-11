@@ -20,8 +20,7 @@
    The other half of the property is a *hit*: `fwd.{0,1}` and `fwd.{0,2}` agree
    on `u` and differ on `v`, so the subterm `Sort u` — whose carrier is `{u}` —
    must key the same under both. That one is not observable in the output, by
-   construction; `MONO_STATS=1`'s entry count is where it is measured, and
-   `MONOMORPH.md` §9.8 has the number.
+   construction; `MONO_STATS=1`'s entry count is where it is measured.
 
    Two declarations would not distinguish this: it takes a shared node, two
    orders, and two instantiations that agree positionally. -/

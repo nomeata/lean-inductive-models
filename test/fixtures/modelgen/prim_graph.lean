@@ -1,8 +1,7 @@
-/- **Arm G's positive shapes** (`--prim-models`, `Modelgen/Simple.lean`'s
+/- **Arm G's positive shapes** (`--prim-models`, `src/Modelgen/Simple.lean`'s
    [`Modelgen.graphArm`]): the recursive subsingleton, modelled by the **graph**
    of its own recursion. This is the arm that took `Acc` out of the basis, and
-   these are `scripts/inductive-basis/AccFromChoice.lean`'s and
-   `AccArmShapes.lean`'s compiled shapes, exported.
+   these are the exported shapes for the choice-based and `PSigma`-based routes.
 
    Two lines of the recipe are shape-sensitive — the n-ary congruence in
    `Graph.unique` and the `funext` chain, which runs per **binder** of a

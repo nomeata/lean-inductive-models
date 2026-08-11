@@ -8,13 +8,12 @@ The pass duplicates each declaration once per **ground instantiation** it is
 used at, substitutes numerals for its universe parameters, and rewrites every
 constant occurrence to name the copy it means. The output's level parameters
 are gone: every `Sort` is `Sort n` for a numeral `n`, and every constant is
-used at no levels at all — with two exceptions, both named in `MONOMORPH.md`
-and both deliberate: mode A keeps the motive's universe — on a recursor, and on
+used at no levels at all — with two deliberate exceptions: mode A keeps the
+motive's universe — on a recursor, and on
 its declaration-local model recursor and iota theorems — and the built-ins are
 carried through untouched.
 
-The contract a consumer is written against is `MONOMORPH.md` §1. What is
-written here is the implementation of it.
+This file defines both the consumer-facing contract and its implementation.
 
 ## Why this is a single backward pass and not a fixpoint
 
@@ -41,7 +40,7 @@ the consumer builds `T._model` off `T` rather than finding it through a use site
 take the default: one model, however many copies of `T`. [`modelKeying`]
 supplies the edge and [`pushInst`] carries it, and because it runs against the
 file's order rather than along it, a cascade onto a group the sweep has already
-passed is *counted and named* rather than assumed away. `MONOMORPH.md` §2.3.
+passed is *counted and named* rather than assumed away.
 -/
 
 open Lean Meta
@@ -65,9 +64,7 @@ structure Opts where
   check : Bool := false
   deriving Inhabited
 
-/-! ## The naming scheme
-
-`MONOMORPH.md` §1 is the contract; this is the code it describes. -/
+/-! ## The naming scheme -/
 
 /-- `succ^n zero`. -/
 def natLevel : Nat → Level
@@ -88,7 +85,7 @@ def atPrefix (σ : Inst) : Name :=
 monomorphic declaration keeps its name exactly.
 
 **Why a prefix and not surgery.** The one thing that *must* survive is the
-relationship Lean and `nanoda` both derive rather than read: the recursor of an
+relationship Lean and the target checker both derive rather than read: the recursor of an
 inductive named `I` is `I ++ rec`. Prepending a fixed prefix to every name in
 the file preserves every such suffix relationship automatically — `I` becomes
 `p ++ I` and `I ++ rec` becomes `p ++ I ++ rec` — for *any* names, without the
@@ -280,7 +277,7 @@ where its own dependencies are ready, and a file in which one member mentioned a
 later one would not be topologically sorted at all — which [`checkOrder`] would
 then refuse, as it should.
 
-Mathlib is the measurement (`MONOMORPH.md` §9.3). It has 202 records whose `all`
+Mathlib provides the measurement. It has 202 records whose `all`
 names more than one declaration, and **97 of those blocks are not contiguous**;
 the widest spans 513,481 records. Grouping by `all` relocated the later members
 of all 97 to the position of the first, and in five of them that carried a
@@ -328,8 +325,8 @@ def buildGroups (x : Export) (models : ModelTable) :
           throw s!"{r.name}: an eliminating universe that is not the first level parameter"
     | _ => pure ()
     -- **A duplicate universe parameter is a lie monomorphization would erase.**
-    -- `vendor/arena-tests/bad/tutorial/016_tut06_bad01.ndjson` declares
-    -- `tut06_bad01.{u, u}`; nanoda's `no_dupes_all_params` rejects it, and the
+    -- A malformed fixture declaring `tut06_bad01.{u, u}` is rejected by the
+    -- target checker's duplicate-parameter check, while the
     -- copy at `σ` has no parameters at all and is perfectly well typed. The
     -- pass must not launder that, so it refuses the file.
     unless lp.eraseDups.length == lp.length do
@@ -369,11 +366,11 @@ def buildGroups (x : Export) (models : ModelTable) :
 /-! ## The models
 
 A `modelgen` model is the one thing in the file **nothing references**: a
-consumer finds `T._model` by constructing the name off `T`, not through a use site
-(`MODELGEN.md` §1). The backward sweep is driven entirely by references, so
+consumer finds `T._model` by constructing the name off `T`, not through a use
+site. The backward sweep is driven entirely by references, so
 left alone it sees no demand on a model at all and every model group takes the
-default — one model for however many copies `T` has. That is the defect
-`MONOMORPH.md` §1.3 item 1 names, and it is about *demand* and not about
+default — one model for however many copies `T` has. That defect is about
+*demand* and not about
 naming: the marker already commutes with the model.
 
 What closes it is an edge the sweep does not get from the file: **a model's
@@ -433,8 +430,8 @@ are normally one-name records, while the check also covers any future grouped
 emission without assuming that all of its names have the same owner.
 
 **The `σ` mapping is the identity**, which is a claim about `modelgen` and so is
-checked: the model's declarations carry exactly `ℓ⃗` (`MODELGEN.md` §1, property
-3), and [`buildGroups`] has already lifted the motive's universe out of model
+checked: the model's declarations carry exactly `ℓ⃗`, and [`buildGroups`]
+has already lifted the motive's universe out of model
 recursors and iota theorems, so what is left is the owner's own parameter list. A group whose
 arity does not match its owner's is `Keying.loose` — the tenth family — and is
 left to its own demand rather than truncated or padded onto a mapping that does
@@ -535,9 +532,8 @@ practice is that the whole chain is filled in one step, from the first `σ` to
 reach the root: `T` is the last of the lot in file order, so `T._model.…` and
 `T._model._impl.0._model.…` are both still ahead of the sweep when demand arrives at
 `T`, and every later push repeats a `σ` the chain already has and stops at the
-first line. **Measured at zero** over `modelgen/tests` (both modes),
-`modelgen/monotests`, `vendor/arena-tests` and Mathlib — `MONOMORPH.md` §2.3,
-which also has the one thing that was *not* zero and is why `elimD` is not
+first line. **Measured at zero** over the modelgen and monomorphization fixture
+suites (both modes) and Mathlib. The one nonzero case is why `elimD` is not
 cascaded. -/
 private partial def pushInst (models : Array (Array Nat)) (cutoff : Nat)
     (st : Array (Array Inst) × Array Nat) (gi : Nat) (σ : Inst) :
@@ -566,9 +562,7 @@ partial def substLevel (env : Std.HashMap Name Nat) : Level → Level
 def evalLevel (env : Std.HashMap Name Nat) (l : Level) : Option Nat :=
   (substLevel env l).normalize.toNat
 
-/-! ## The built-ins, carried through untouched
-
-`MONOMORPH.md` §3 is the list and the argument for it. -/
+/-! ## The built-ins, carried through untouched -/
 
 /-- The seed: names a kernel recognises and cannot be told about a copy of.
 `Quot` and its three companions are recognised **structurally**, by the export's
@@ -621,7 +615,7 @@ def rootsOf : EDecl → Array Expr
 /-! ## Instrumentation
 
 Three environment variables, inert unless set, and none of them changes what the
-pass emits. `MONOMORPH.md` §9.8 is what they measured.
+pass emits.
 
 * `MONO_PHASES=1` — a line on stderr at each phase boundary with the elapsed
   time and `/proc/self/status`'s `VmRSS`/`VmHWM`. The phase deltas are the only
@@ -630,7 +624,7 @@ pass emits. `MONOMORPH.md` §9.8 is what they measured.
 * `MONO_STATS=1` — [`shareStats`] over the input and the output. **This is the
   measurement that settles whether sharing is preserved**, and it is not an
   estimate: it counts nodes twice, once by pointer and once by structure.
-* `MONO_MEMO=<mode>` — which rewrite memo to run, so that §9.8's A/B table is
+* `MONO_MEMO=<mode>` — which rewrite memo to run, so that the A/B comparison is
   one binary and not seven. [`MemoMode`] is the list; the default is the row
   that won.
 -/
@@ -727,7 +721,7 @@ So the memo key is `(e, σ restricted to the parameters e mentions)`, and the
 restriction is the point rather than a refinement of it: under the *whole* `σ`, a
 subterm mentioning only `u` gets a different key for every value of every other
 parameter, and `Functor.comp` has six. `Functor.associator` reaches 118 copies
-on Mathlib (§9.4); pruned, everything in it that mentions only `u` is one entry.
+on Mathlib; pruned, everything in it that mentions only `u` is one entry.
 
 **The second component has to be canonical across declarations**, because the
 `Expr` is: the same node is reached from declarations whose `levelParams` lists
@@ -735,8 +729,8 @@ order the same names differently. A position in a declaration's own list is
 therefore *not* a key — bit 0 is `u` in one declaration and `v` in the next, and
 a memo keyed on it returns the wrong rewrite with no check anywhere that would
 catch it. Everything below indexes level parameters **by name, globally and
-injectively**, and `monotests/mono_share.ndjson` is the fixture that fails if
-that ever stops being true. -/
+injectively**, and `test/fixtures/mono/mono_share.ndjson` is the fixture that
+fails if that ever stops being true. -/
 
 /-- Every level parameter the file declares, numbered by name — **injectively,
 and once for the whole file**, so an index means the same thing in every
@@ -789,7 +783,7 @@ partial def carrierOf (idx : Std.HashMap Name Nat) (keep : Option (Std.HashSet E
     -- **Only where the answer will be kept.** Under a gating mode the memo only
     -- keys nodes the arena shares, so caching the rest here would build an
     -- 8.4-million-entry table to throw away — and that table, not emission, was
-    -- what set the peak (§9.8). Recomputing an unshared node is free in the
+    -- what set the measured peak. Recomputing an unshared node is free in the
     -- aggregate: it has exactly one parent, so it is still computed once.
     if keep.all (·.contains e) then cache.modify (·.insert e m)
     return m
@@ -814,7 +808,7 @@ and a constant used ten thousand times is *one* node in the arena, so dropping
 it from the memo rebuilds it ten thousand times. Excluding all six atom
 constructors here cut the gate tables 17 % on `init-prelude` and cost **+9.7 %
 peak RSS at ten million lines** (2,168,780 → 2,379,508 KB), which is the whole
-of §9.8's arithmetic running backwards: the entry is worth it exactly when the
+of the memory arithmetic running backwards: the entry is worth it exactly when the
 node it saves costs more than the entry. -/
 def sharedNodes (roots : Array Expr) : Std.HashSet Expr := Id.run do
   let mut seen : Std.HashSet Expr := Std.HashSet.emptyWithCapacity 1024
@@ -838,7 +832,7 @@ def sharedNodes (roots : Array Expr) : Std.HashSet Expr := Id.run do
     | _ => pure ()
   return shared
 
-/-- Which memo the pass runs, so that §9.8's rows are one binary. `MONO_MEMO`:
+/-- Which memo the pass runs, so that the comparison rows use one binary. `MONO_MEMO`:
 
 | | the memo across copies | the key | entries for |
 | --- | --- | --- | --- |
@@ -969,7 +963,7 @@ def RwCtx.maskId (c : RwCtx) (m : UInt64) : StateM RwState Nat := do
 
 /-- A constant occurrence, rewritten: which copy it names, and at which levels.
 
-Three outcomes, and they are the whole of §1.2. A **carried** target keeps its
+Three outcomes cover the full rewrite contract. A **carried** target keeps its
 name and takes numerals for its level arguments. An ordinary target becomes the
 copy at the instantiation the arguments evaluate to, at no levels. A
 target **with an eliminating universe** — a recursor, or its model recursor and
@@ -1410,8 +1404,8 @@ refusal and not a warning.
 
 It is stated over *groups* because groups are what the sweep visits, which is
 what made [`buildGroups`]' old `all`-based grouping visible here: five Mathlib
-blocks were reported as forward references that the grouping had itself created
-(`MONOMORPH.md` §9.3). The check was right and the grouping was wrong — and the
+blocks were reported as forward references that the grouping had itself
+created. The check was right and the grouping was wrong — and the
 check is what said so, which is the argument for keeping it. -/
 def checkOrder (n : Nat) (refs : Array (Array (Name × List Level)))
     (info : Std.HashMap Name Info) : Option String := Id.run do
@@ -1586,7 +1580,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
     -- **A model does not default.** Its `σ` set is the one the declaration it
     -- models takes, and the cascade below delivers it — from the owner's own
     -- demand, or from the owner's default at the owner's visit. Falling back to
-    -- `--default` here is exactly `MONOMORPH.md` §1.3 item 1: one model for
+    -- `--default` here would produce one model for
     -- however many copies of `T` the file wants.
     if !isCarried && !isModel && demand[gi]!.isEmpty then
       defaulted := defaulted + 1
@@ -1665,7 +1659,7 @@ def monomorphize (x : Export) (opts : Opts) : MetaM (Export × Report) := do
   let mut elimDefs : Std.HashSet Name := {}
   -- **The memo outlives the copy.** See [`RwState`]: the input's sharing is
   -- across declarations, so a memo that is per-declaration preserves none of
-  -- it, and `MONOMORPH.md` §9.8 counts what that costs — 2.26× the nodes at ten
+  -- it; the measured cost is 2.26× the nodes at ten
   -- million lines.
   let st ← IO.mkRef ({} : RwState)
   let pidx := paramIndex groups

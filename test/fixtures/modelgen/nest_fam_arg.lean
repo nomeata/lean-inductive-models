@@ -1,7 +1,8 @@
-/- **The nested occurrence is inside a lambda in a container argument**, which
-   was §5.1's one gap and is closed. `Lean.Json` and `Lean.PrefixTreeNode` are
+/- **The nested occurrence is inside a lambda in a container argument**, a
+   formerly missing head-normalization case that is now covered. `Lean.Json`
+   and `Lean.PrefixTreeNode` are
    this shape and were the only two of Mathlib's 41 nested declarations
-   `modelgen` refused (§6.3).
+   `modelgen` refused before that case was implemented.
 
    `RB α β`'s second parameter is a **family**, so specialising it leaves the
    constructor field `β k` as the redex `(fun _ => B₀) k` in the block. Three
@@ -34,7 +35,7 @@
    `nest_odd_shapes.lean` is the sweep over what `inductive` *declares*; this
    one is the sweep over how a container is **applied**, which is the axis that
    sweep could not see. Three shapes beside these were tried and Lean refuses
-   them too, so they are §5.2 and have no fixture: `Ctr N (fun x => Vec T x)`
+   them too, so they have no fixture: `Ctr N (fun x => Vec T x)`
    is "nested inductive datatypes parameters cannot contain local variables",
    and so is any lambda whose body indexes the occurrence by the lambda's own
    binder through a second container.

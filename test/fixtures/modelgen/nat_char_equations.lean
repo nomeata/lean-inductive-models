@@ -1,8 +1,8 @@
 /-
 # The characteristic equations of Lean's `Nat` operations, as `rfl`
 
-`NAT-REPRESENTATION.md` §10.1 recorded one thing as unsettled and load-bearing:
-*"whether `mini` can derive `Nat.add`'s two defining equations today"*. The
+This fixture pins whether the exported form of `Nat.add` exposes its two
+defining equations. The
 uniqueness bridge — *any function satisfying the primitive-recursion equations
 equals the efficient implementation* — has to be instantiated at
 `f := ⟦Nat.add⟧`, and that instantiation needs

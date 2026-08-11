@@ -1,11 +1,10 @@
-/- **The axis only the composition (§1.7) reaches: a block whose members' sorts
+/- **The axis only composed model generation reaches: a block whose members' sorts
    agree without being the same term.**
 
-   §1.6's construction declares its carrier at one sort `u`, read off the first
+   The mutual construction declares its carrier at one sort `u`, read off the first
    member, having checked that every member agrees. For a `mutual` block of the
    *input* that check is free: Lean's elaborator makes the members agree on the
-   nose, and a source block whose members disagree does not compile at all
-   (§5.2).
+   nose, and a source block whose members disagree does not compile at all.
 
    **Lean's own nested specialisation is not under that discipline.** A mimic's
    sort is the *container's* level expression instantiated at the occurrence,

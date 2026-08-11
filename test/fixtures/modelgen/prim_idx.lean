@@ -1,5 +1,5 @@
 /- **The index axis of the one-constructor `Prop`** (`--prim-models`,
-   `Modelgen/Simple.lean`), as a grid rather than as a list of the shapes the
+   `src/Modelgen/Simple.lean`), as a grid rather than as a list of the shapes the
    corpus happens to contain.
 
    # What the axis is
@@ -7,9 +7,8 @@
    The kernel grants a `Sort v` motive to a one-constructor `Prop` exactly when
    every constructor field is either a **proof** or a piece of **data that is
    literally one of the conclusion's index arguments** — by identity, not by
-   occurrence (`vendor/nanoda_lib-upstream/src/inductive.rs`,
-   `large_elim_test_aux`; `MODELGEN.md` §8.17 has the probe that measured it
-   against Lean's own kernel). That rule is not a technicality: a model of a
+   occurrence, as the kernel checks exercised below demonstrate. That rule is
+   not a technicality: a model of a
    `Prop` can extract its proof fields by small elimination and has *no way
    whatever* to extract data, so **the index vector is the only place data can
    come back from**, and the kernel's rule is what guarantees it is there.
@@ -57,7 +56,7 @@
    than met by accident, and they are the two the arm was built for.
 
    What is left is a non-pivot at a **data** position, where the transport
-   `MODELGEN.md` §8.17 costed really is owed and really is not built: `BadC`
+   really needs a transport that is not built: `BadC`
    in `prim_graph`, and `Rgd` here.
 
    # Why every cell needs a leading non-pivot
@@ -129,7 +128,7 @@
    **C and D cascade.** A decline moves a splice, so both take out the whole W
    core fragment in `prim_declines`, `prim_carve` and `prim_w`; the columns
    above are read off `prim_idx`, `prim_shapes` and `prim_graph`, where nothing
-   is spliced downstream. That caveat is `MODELGEN.md` §8.7's and it bit again.
+   is spliced downstream. The isolated fixture rows avoid that cascade.
 
    # Four cells were built and dropped, and one finding is why
 
@@ -172,8 +171,8 @@
    right-hand side lands at the constructor's index expressions, and with a
    **data** non-pivot among them the two sides sit at genuinely different
    indices, so the equation needs a transport along the very packed equation
-   arm F carries. `MODELGEN.md` §8.17 writes that construction out and §8.17.1
-   says why it is not owed for the proof column. It is not built, and these
+   arm F carries. Proof irrelevance is why it is not owed for the proof column.
+   It is not built, and these
    two are what go green when it is.
 
    `Inf` and `N` beside them are the controls that say the arms are not

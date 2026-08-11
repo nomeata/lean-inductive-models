@@ -11,7 +11,7 @@ The split it pins is not a split in the fixture. All four theorems below are
 `rfl` and Lean's own kernel checked all four; what differs is the **model's**
 proof of the corresponding rule:
 
-| rule | the model's proof | mini |
+| rule | the model's proof | replay |
 | --- | --- | --- |
 | `treeIotaLeaf`  (`Tree.rec` on `Tree.leaf`)    | `Eq.refl`  | certifies |
 | `treeIota1Nil`  (`Tree.rec_1` on `List.nil`)   | `Eq.refl`  | certifies |
@@ -19,9 +19,9 @@ proof of the corresponding rule:
 | `treeIota1Cons` (`Tree.rec_1` on `List.cons`)  | transport  | declines  |
 
 `Tree.node` and `List.cons` each carry a field at the specialised copy of
-`List`, so `nested_ev`'s rule has to move it along `unpackPack` — and a
-transport that must be *reduced* rather than compared is #90(b). The two rules
-that transport are therefore **not seeded** by `nested_splice` and have no
+`List`, so the generated rule has to move it along `unpackPack` — and a
+transport that must be *reduced* rather than compared is a distinct replay
+case. The two rules that transport are therefore **not seeded** and have no
 `model_iota` entry, and the arm has to say so by name rather than borrow
 `iota_dep`'s reason or fall through to it. That decline is half of what this
 file measures and it is the half a fixture with only the easy rules would miss.

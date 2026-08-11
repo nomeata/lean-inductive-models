@@ -1,8 +1,7 @@
-/- **The W arm** (`--prim-models`), `MODELGEN.md` §8.16 — the shapes the tuple
+/- **The W arm** (`--prim-models`) — the shapes the tuple
    tower cannot express and the tagged W construction can.
 
-   `Wt` is `scripts/inductive-basis/WEmitted.lean`'s target, transcribed: six
-   constructors chosen so that every shape the emitted scheme has to handle
+   `Wt` has six constructors chosen so that every shape the emitted scheme has to handle
    appears exactly once.
 
    * `leaf` — data, **no** children. The branch tower is empty at every index.
@@ -31,7 +30,7 @@
      beside a branching pair: the data tower is a dependent Σ-chain and this is
      what says so.
 
-   **The last three are the untagged instantiation** (`MODELGEN.md` §8.16.6):
+   **The last three are the untagged instantiation**:
    the same core at `K := A` and `tg := id`, where the branch type sees the
    whole label and a child's binders may therefore mention the constructor's
    own non-recursive fields. `Modelgen.tagFactored` is false for each of them

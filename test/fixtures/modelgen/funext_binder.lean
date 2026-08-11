@@ -5,7 +5,7 @@
    recursor's minor and the ι rules all have to transport along
    `(fun x⃗ => pack (unpack (f x⃗))) = f` — which is function extensionality.
    `infinitary.lean` is the same three declarations *without* one, and
-   `modelgen` derives one there and splices it in (`MODELGEN.md` §1.5); this
+   `modelgen` derives one there and splices it in; this
    file is them **with** one, and is the control that says an input's own
    `funext` beats a derived one — nothing is spliced here and the five counts
    below are unchanged from before the splice existed.

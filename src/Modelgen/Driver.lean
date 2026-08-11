@@ -14,20 +14,21 @@ kernel, one at a time.
 
 Beside each nested inductive and each plain mutual block the output carries that
 declaration's model — before it for the first and, when the input's own `Eq`
-gets in the way, just after the block for the second (`MODELGEN.md` §1.6). The
+gets in the way, just after the block for the second. The
 input's own records are otherwise unchanged, and a file with neither kind of
 declaration is copied **byte for byte** rather than re-serialised.
 
-There are **three** constructions and they are separate files. `Modelgen/
-Model.lean` specialises a nested declaration into a mutual block and proves the
-export's recursors over it; `Modelgen/Mutual.lean` packs a plain mutual block
-into an implementation tag and one auxiliary inductive; `Modelgen/Simple.lean`
+There are **three** constructions and they are separate files.
+`src/Modelgen/Model.lean` specialises a nested declaration into a mutual block
+and proves the export's recursors over it; `src/Modelgen/Mutual.lean` packs a
+plain mutual block into an implementation tag and one auxiliary inductive;
+`src/Modelgen/Simple.lean`
 models a single inductive from the primitive basis. None is a degenerate case
 of another, and this driver is the only thing that composes them.
 
 ## Why the whole file is re-interned when anything is spliced
 
-`nanoda`'s parser rejects a back-reference that is not the current count, so a
+The target parser rejects a back-reference that is not the current count, so a
 model cannot be inserted into an existing file with fresh high indices. When
 there is a model to write, [`Modelgen.Export.render`] re-interns from scratch.
 
@@ -48,10 +49,10 @@ namespace Modelgen
 structure Report where
   generated : Array (Name × Nat) := #[]
   declined : Array (Name × String) := #[]
-  /-- **The basis exemption, which is not a decline** ([`Modelgen.primBasis`],
-  `MODELGEN.md` §8.17). `Eq`, `Nat`, `PSigma` and `PULiftP` are the primitives
+  /-- **The basis exemption, which is not a decline** ([`Modelgen.primBasis`]).
+  `Eq`, `Nat`, `PSigma` and `PULiftP` are the primitives
   the third construction is written in, so a run leaves them unmodelled *by
-  definition*; counting them among the declines made every census in §8 report
+  definition*; counting them among the declines makes every coverage report
   a number it then had to walk back in the next sentence. Reported on their own
   lines and counted in their own row. -/
   exempt : Array (Name × String) := #[]
@@ -789,7 +790,7 @@ def toEDecl : Declaration → MetaM EDecl
 
 /-- The export's word for each of the four quotient records. Read off the
 `QuotKind` the kernel stamped on the constant, so the record is recognised
-**structurally** on the way back out exactly as `MONOMORPH.md`'s carried
+**structurally** on the way back out, just as the monomorphizer's carried
 built-ins recognise it on the way in. -/
 def quotKindStr : QuotKind → String
   | .type => "type" | .ctor => "ctor" | .lift => "lift" | .ind => "ind"
@@ -857,8 +858,8 @@ So every emitted statement is rebuilt here from the rule the **installed**
 `T.rec_k` carries, reading the constructor's field telescope off the recursor's
 own major type rather than off the plan, and compared syntactically.
 
-This is `mini/tests/nested.rs`'s `check_recursors` and `check_iotas`, ported. It
-is what forced a real bug out of the Rust — recursors rewritten at no levels. -/
+This check exposed a real bug in an earlier implementation: recursors rewritten
+at no levels. -/
 def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
     (_projections : Array EProjection := #[]) :
     MetaM (Nat × Array String) := do
@@ -1094,7 +1095,7 @@ member types and constructor lists [`Modelgen.mutualIso`] wants.
 The block a nested declaration's model *is* — `T._model.0 … T._model.{n−1}` —
 is not in the input, so there is no `EDecl` to take these off; it exists only in
 the environment the generator just put it in. This is how the composition
-(§1.7) hands the second construction its input. -/
+hands the second construction its input. -/
 def blockOf (names : Array Name) : MetaM (Array Expr × Array (Array (Name × Expr))) := do
   let env ← getEnv
   let mut tys : Array Expr := #[]
@@ -1112,7 +1113,7 @@ def blockOf (names : Array Name) : MetaM (Array Expr × Array (Array (Name × Ex
 /-- **Can a model be written here?** — which is only ever a question about `Eq`.
 
 `true` when the environment already has one, and when the input declares none
-anywhere, because then §1.5 splices Lean's own. `false` in the one remaining
+anywhere, because then the prelude splice supplies Lean's own. `false` in the one remaining
 case: the input declares an `Eq` the replay has not reached yet, where a splice
 is refused by the name guard and would be wrong anyway. -/
 def eqReady (reserved : Std.HashSet Name) : MetaM Bool := do
@@ -1161,12 +1162,12 @@ Two groups, and they are one list because the wait is the same wait:
   ([`Modelgen.ensureFunext`]). A prim model reaches them on the singleton route
   and wherever a pad at a level `dsingOk` cannot build is discharged by
   transport — `PUnit`'s and `PULift`'s shapes.
-* `Nonempty` and `Classical.choice`, which **arm G** splices
-  (`MODELGEN.md` §8.12) and which the W core's fragment now also carries. An
-  input that declares `Acc` before `Nonempty` — `modelgen/tests/w_core.ndjson`
+* `Nonempty` and `Classical.choice`, which **arm G** splices and which the W
+  core's fragment now also carries. An input that declares `Acc` before
+  `Nonempty` — `test/fixtures/modelgen/w_core.ndjson`
   is one, since the fragment's `Acc` comes in through `WellFounded.fix` and its
   `Nonempty` only through `Classical.propDecidable` — used to lose `Acc`'s model
-  to `prim model name taken (Nonempty)`. That is §8.16.5's class exactly: a
+  to `prim model name taken (Nonempty)`. This is exactly the class where a
   primitive that is **late**, not a name that is lost. -/
 def lateSpliceNames : List Name :=
   [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
@@ -1252,7 +1253,7 @@ The second half closes a structural hole rather than adding a convenience.
 the output, and nothing ever ran the third construction over it — so layer 3
 was **unable to model anything it introduced**, and no coverage figure could
 show it, because a spliced declaration was never a candidate to begin with.
-`MODELGEN.md` §8.13 records what the earlier figures were therefore measuring.
+Earlier coverage figures therefore measured only declarations from the input.
 
 Only *non-basis* splices are modelled: the four on
 [`Modelgen.primBasis`] are the exemption that makes the construction
@@ -1302,7 +1303,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     -- **Exempt is not declined.** A basis primitive is what the construction
     -- is written in, so its absence from the models is the thing that makes
     -- the construction well-founded rather than a shape it cannot reach; it
-    -- gets its own row and is out of the decline count (`MODELGEN.md` §8.17).
+    -- gets its own row and is out of the decline count.
     if dec matches .basisExempt then
       return ((out, { rep with exempt := rep.exempt.push (tname, dec.labelAs "prim") },
         pending), false)
@@ -1334,10 +1335,10 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
           (← genPrim n iv.levelParams iv.numParams iv.type cts supportRecursors #[] reserved
             basicModels false st2).1
     -- **A model may not leave an inductive it introduced unmodelled.** Arm C
-    -- (`MODELGEN.md` §8.15) splices the index erasure of the family it is
+    -- splices the index erasure of the family it is
     -- carving, so its output contains an inductive that was in nobody's
     -- input; if the descent above could not model it, emitting would put a
-    -- fifth inductive in front of a consumer, which is the hole §8.13 closed.
+    -- fifth inductive in front of a consumer, which splice closure prevents.
     -- So the whole model is withdrawn and the declaration declines.
     --
     -- Checked **after** the descent and not predicted before it. A cheap test
@@ -1361,12 +1362,12 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
           let inner := (st2.2.1.declined.find? fun (m, _) => m == n).map (·.2)
           -- **"spliced inductive", not "spliced index erasure".** Arm C's
           -- skeleton was the only occupant when this was written; arm W's
-          -- fragment (§8.16) is seventeen more, and none of them is an index
+          -- fragment is seventeen more, and none of them is an index
           -- erasure. A reason that misnames what stopped is the defect class
           -- this line already exists to avoid.
           let why := s!"prim model shape: the spliced inductive {n} did not model, so \
             emitting would leave an unmodelled inductive in front of a consumer \
-            (MODELGEN.md §8.15's rule) — {inner.getD "and the descent recorded no reason"}"
+            (the splice-closure rule) — {inner.getD "and the descent recorded no reason"}"
           return ((st.1, { st.2.1 with declined := st.2.1.declined.push (tname, why) },
             st.2.2), false)
     return (st2, false)
@@ -1522,8 +1523,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
   for d in x.decls do
     -- The model, if this is a nested declaration. Generated **before** the
-    -- declaration is added, which is where `mini/src/nested.rs` also stands:
-    -- nothing in the model mentions `T`.
+    -- declaration is added: nothing in the model mentions `T`.
     if let .induct ts cs inputRecursors := d then
       -- **A mutual block whose members nest is one block, not several.** Lean
       -- specialises the whole block at once — `nest_mutual_both`'s `A`/`B`
@@ -1568,7 +1568,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
               pending := pending.push
                 { all, numParams := t.numParams, iso := is,
                   recursors := inputRecursors.toArray, projections := #[] }
-              -- ── the model of the model (§1.7) ─────────────────────────────
+              -- ── the model of the model ────────────────────────────────────
               --
               -- **What has just been emitted is a `mutual … end` block**, and
               -- the second construction is the one that models exactly that.
@@ -1577,14 +1577,15 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
               -- the mutual model of `T`, and the *simple* model of that.
               --
               -- The block is still written — a model is emitted **beside** the
-              -- thing it models and never in place of it (§1) — so what this
+              -- thing it models and never in place of it — so what this
               -- buys is not that the output has no mutual block in it, but
               -- that **every** mutual block in the output has a model beside
               -- it, the ones this tool wrote included. A consumer that can add
               -- only a single inductive can now skip all of them.
               --
               -- **Here and not by re-running the filter.** The composition is
-              -- one pass by construction; §1.7 is the boundary and §1.5's
+              -- one pass by construction; this is the composition boundary,
+              -- and the prelude splice's
               -- idempotence is unaffected, because on an already-filtered
               -- input every name below is taken and the name guard declines.
               --
@@ -1638,12 +1639,11 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       -- through — reads the *imported* half of the constant map and then the
       -- **async** map, so a constant added at the kernel level is invisible to
       -- it and the generator cannot so much as name `List.rec`. The price is
-      -- one `panic!` from `AsyncConsts.add` on
-      -- `vendor/arena-tests/good/perf/grind-ring-5.ndjson`, where two private
+      -- one `panic!` from `AsyncConsts.add` on a large export where two private
       -- names from different modules normalise alike — normal in an export,
       -- which is many modules flattened into one file, and impossible during
       -- elaboration. It is not fatal: the entry is dropped from an index this
-      -- tool never reads, and that file's model is still accepted by `nanoda`.
+      -- tool never reads, so it does not affect model generation or checking.
       match (← getEnv).addDeclCore 0 dcl none false with
       | .ok e => setEnv e
       | .error ex =>
@@ -1657,7 +1657,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     -- the implementation auxiliary's recursor is not `R_k.rec` at any
     -- renaming. So `Modelgen.mutualIso` reads the recursors Lean minted for the
     -- input's own block, which exist only once it is installed
-    -- (`Modelgen/Mutual.lean`'s header).
+    -- (`src/Modelgen/Mutual.lean`'s header).
     --
     -- The **records** still go out ahead of the declaration's whenever they
     -- can, because `out` has not been pushed yet.
@@ -1668,7 +1668,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         -- an input record like any other and does reach this branch — and
         -- declines, because every name its model would want is already in the
         -- file and the name guard says so. Idempotence is carried by the same
-        -- mechanism that carries it for a nested declaration (§1.7), which is
+        -- mechanism that carries it for a nested declaration, which is
         -- one mechanism rather than two things to keep in step.
         if generation.mutualModels && ts.length > 1 && !ts.any (·.numNested > 0) then
           let all := ts.toArray.map (·.name)
@@ -1688,9 +1688,9 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           -- `PULiftP`. An export's dependency order
           -- routinely puts `Eq` *after* a block that does not itself use it —
           -- `mutual_iota_reduction`, `mutual_parameters` and
-          -- `mutual_index_sorts` all do, and `mini/src/mutual_aux.rs`'s
-          -- `expand` holds its rule theorems back for the same reason. A file
-          -- that declares no `Eq` at all does not wait: §1.5 splices one.
+          -- `mutual_index_sorts` all do, and rule theorems must be held back
+          -- for the same reason. A file
+          -- that declares no `Eq` at all does not wait: the prelude splice adds one.
           if ← mutualReady needsPULift reserved then
             let (st3, jobs) ← genMutual all t.levelParams t.numParams tys ctors
               inputRecursors.toArray #[] reserved
@@ -1784,7 +1784,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   -- projection-basis `PULiftP` the replay never reached — so the name is taken and no splice may use it, and this
   -- pass **declines with that reason** rather than dropping the block without
   -- saying anything. Nothing in the tree reaches it: over all 230 files the
-  -- decline list gains nothing at all against the run before §1.6 existed, and
+  -- decline list gains nothing against the run before this ordering was
+  -- introduced, and
   -- a block left waiting would have put a `mutual model name taken (Eq)` in it.
   for (all, lp, np, tys, ctors, recursors, _) in waiting do
     let (st3, jobs) ← genMutual all lp np tys ctors recursors #[] reserved

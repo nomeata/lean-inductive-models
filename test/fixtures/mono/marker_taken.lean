@@ -1,8 +1,8 @@
 /- **A file that already spells the marker.**
 
    The naming scheme inserts a `_at` component followed by one `Name.num` per
-   level, and `MONOMORPH.md` §1's inversion is a theorem only because no name in
-   the input has one. Lean accepts `_at` as an identifier component — it mints
+   level, and the naming inversion works only when no input name already has
+   one. Lean accepts `_at` as an identifier component — it mints
    such names itself for specialised code — so this is a **gap**: the pass
    refuses the whole file rather than emitting a name a consumer could not
    invert. -/

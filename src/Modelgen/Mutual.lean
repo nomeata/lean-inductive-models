@@ -5,18 +5,17 @@ import Modelgen.Naming
 /-!
 # The model of a **plain mutual block**, generated
 
-A port of `mini/src/mutual_aux.rs` to `MetaM`, and the second construction in
-this package. Given `mutual inductive A … ; inductive B … end` with **no
+This is the second construction in this package. Given
+`mutual inductive A … ; inductive B … end` with **no
 nesting**, this emits ordinary Lean declarations: one *tag* enumeration carrying
 each member's index telescope, one *single* inductive indexed by it, one carrier
 per member, the block's constructors, one recursor per member and every one of
 those recursors' ι rules as theorems. Every declaration goes through
 `Environment.addDeclCore` with checking on.
 
-`mini/tests/fixtures/mutual_aux_encoding.lean` is this development written by
-hand at a three-member block; it is the clearest statement of the target shape
-that exists, and it is where the load-bearing question — *are the ι rules
-definitional?* — was answered before any generator existed.
+The target shape can also be written by hand at a three-member block; doing so
+answers the load-bearing question — *are the ι rules definitional?* — before
+any generator is involved.
 
 ## Why this is not [`Modelgen.iso`] at zero mimics
 
@@ -26,8 +25,8 @@ Set `m = 0` and the specialised block is the declaration itself, renamed: the
 model is the identity, and a consumer that could not take a mutual block still
 cannot. The two constructions answer different questions — one removes
 *nesting* and keeps mutuality, this one removes **mutuality** — and they are
-related only through the interface they present (`MODELGEN.md` §1), which is
-deliberately the same one minus the rows that are about mimics.
+related only through the interface they present, which is deliberately the
+same one minus the rows that are about mimics.
 
 ## The encoding
 
@@ -45,7 +44,7 @@ def R_k.rec._model             : <R_k.rec's> := fun p⃗ M⃗ S⃗ ι⃗ₖ t =>
 theorem R_k.rec._model.iota_j  : <R_k.rec's rule j> := Eq.refl _
 ```
 
-Four things make it work, each of them `mutual_aux.rs`'s and each load-bearing:
+Four things make it work, and each is load-bearing:
 
 * **The tag is an *index* of `aux`, not a parameter.** It varies from
   constructor to constructor, which is what a parameter may not do.
@@ -85,22 +84,22 @@ a block with no indices gets `Sort 1` on the nose.
 The cheap guess is `W = 1` and it is right on every shape but one: a constructor
 that binds an index as a field forces `sⱼ ≤ u`, and a `Prop`-valued family's
 indices are usually `N`. The escape is a **`Prop`-valued family indexed by a
-large type**, which is `mini/tests/fixtures/mutual_index_sorts.lean`'s
-`SA`/`SB`/`SC` and `modelgen/tests/mutual_index_sorts.lean`'s copy of it.
+large type**, represented by `SA`/`SB`/`SC` in
+`test/fixtures/modelgen/mutual_index.lean`.
 
 ## Where the statements come from, and what that costs the oracle
 
 A nested declaration's model states its recursors by reading them off the
 **specialised block's** recursors, which Lean minted from a genuinely different
-inductive; `MODELGEN.md` §4's oracle 3 then compares those against the export's
-own and is a real check. A plain mutual block has no second inductive: `aux.rec`
+inductive; the recursor audit then compares those against the export's own and
+is a real check. A plain mutual block has no second inductive: `aux.rec`
 is not `R_k.rec` at any renaming. So the recursors and the ι rules here are the
 **export's own, restored** — read off the recursor Lean minted for the input's
 block, with the members, their constructors and their recursors rewritten to the
 model's names ([`Modelgen.modelTable`]) and nothing else.
 
-That makes oracle 3's *recursor type* comparison true by construction here, and
-`MODELGEN.md` §4 says so rather than letting the number imply otherwise. What is
+That makes the audit's *recursor type* comparison true by construction here.
+What is
 **not** vacuous, and is where this construction's correctness actually lives:
 
 * **oracle 1, the kernel.** `R_k._model` is checked *at the export's own
@@ -205,8 +204,9 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     if (← getEnv).constants.contains name then declineWith (.nameTaken name)
 
   -- **The whole file, not just the prefix replayed so far.** A model may not
-  -- take a name the input introduces later; `mini/tests/fixtures/nested_
-  -- keying.lean` is why the guard looks at `reserved` and not only at the
+  -- take a name the input introduces later;
+  -- `test/fixtures/modelgen/nested_keying.lean` is why the guard looks at
+  -- `reserved` and not only at the
   -- environment.
   let taken : Name → GenM Unit := fun n => do
     let exact := if buildCarrier.isPrefixOf n then n.replacePrefix buildCarrier exactCarrier else n
@@ -243,7 +243,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   let nidx := shapes.map (·.1)
   let u := shapes[0]!.2
   -- **Compared up to provable equality and not syntactically**, which is not a
-  -- nicety: the blocks §1.7 hands this are Lean's own nested specialisations,
+  -- nicety: the composition pass hands this Lean's own nested specialisations,
   -- and Lean writes a mimic's sort as the container's own level expression
   -- instantiated at the occurrence. Those agree with the declaration's without
   -- being the same term — `Lean.PrefixTreeNode`'s block has `(max u v)+1`

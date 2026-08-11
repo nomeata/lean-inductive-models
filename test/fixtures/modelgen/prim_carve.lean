@@ -1,8 +1,6 @@
 /- **Arm C**: an indexed family at a never-zero sort, modelled by carving it
-   out of its own **index erasure** — thesis §5.2's skeleton-plus-`good`,
-   standing on a spliced inductive rather than on a W-type. `MODELGEN.md`
-   §8.15 is the arm and `scripts/inductive-basis/CarveOverSkeleton.lean` the
-   prototype it was built from.
+   out of its own **index erasure** using a skeleton-plus-`good` construction,
+   standing on a spliced inductive rather than on a W-type.
 
    Every occupant here declined before the arm landed, all with the one
    reason "an indexed family at a never-zero sort". Each is chosen for a
@@ -149,8 +147,8 @@
 
    * `IBox` and `NoBase` — two indexed families whose erasure is bare and
      **still does not model**, so the skeleton is spliced, the prim pass
-     cannot model it, and the whole emission is **withdrawn**: §8.15's rule
-     that a family whose skeleton does not model produces no emission, so that
+     cannot model it, and the whole emission is **withdrawn**. A family whose
+     skeleton does not model produces no emission, so that
      nothing unmodelled ever reaches a consumer. Without them that rule would
      be a comment. They withdraw for *different* inner reasons, which is what
      pins that the decline carries the skeleton's own reason rather than only

@@ -46,7 +46,7 @@ emission.
 
 ## Fuzzing
 
-`LevelFuzz.lean` tests the procedure against a bounded semantic oracle over
+`tools/LevelFuzz.lean` tests the procedure against a bounded semantic oracle over
 six million generated pairs. The caps below bound pathological inputs so the
 procedure returns `unknown` instead of hanging.
 -/

@@ -63,7 +63,7 @@ def gen (nvars : Nat) : Nat → Rng → LA × Rng
   | .unknown => 2
 
 /-- Score one pair against the oracle over the box `[0, wide]^nvars`, and
-separately over `[0,4]^nvars` (the narrow oracle §8.6 recorded). Returns
+separately over `[0,4]^nvars` as a narrow independent oracle. Returns
 `(eq4, eq, ge)`. -/
 def oracle (nvars wide : Nat) (a b : LA) : Bool × Bool × Bool := Id.run do
   let mut rho : Array Nat := Array.replicate nvars 0
@@ -92,9 +92,9 @@ def oracle (nvars wide : Nat) (a b : LA) : Bool × Bool × Bool := Id.run do
 /-- `Lean.Level.isNeverZero`, transliterated onto the private AST.
 
 This is not part of the port. It is here because the planner's **route
-selector** (`Simple.lean:1956`) asks "is this carrier level never zero?" with
+selector** ([`Modelgen.classifyRoute`]) asks "is this carrier level never zero?" with
 this structural test, and routes to `.bare` when it says no — whose declines
-are `Simple.lean:2009` and `:2012`. That is a level question decided
+are the route classifier's `type` and `maybeZero` cases. That is a level question decided
 structurally, so it is a candidate for exactly the incompleteness this whole
 change is about, and a swap that fixed the four `isLevelDefEq` calls while
 leaving a second incomplete level test in the same planner would be the

@@ -7,14 +7,14 @@ import Modelgen.Plan
 
 **One of two constructions in this package**, and the one that keeps mutuality:
 the model of a nested declaration is a *mutual block* with one extra member per
-nested occurrence. `Modelgen/Mutual.lean` is the other, and it removes
-mutuality; the two are not one construction at two settings, and `MODELGEN.md`
-§1.6 says why. What they share is the interface, `Decline`, `EqInfo`, the
+nested occurrence. `src/Modelgen/Mutual.lean` is the other, and it removes
+mutuality; the two are not one construction at two settings. What they share
+is the interface, `Decline`, `EqInfo`, the
 prelude splice, [`Modelgen.Iso`], [`Modelgen.modelTable`] and
 [`Modelgen.addChecked`], all of which live here.
 
-A port of `mini/src/nested_ev.rs` to `MetaM`. Given a nested declaration and
-its specialisation ([`Modelgen.plan`]), this emits ordinary Lean declarations —
+Given a nested declaration and its specialisation ([`Modelgen.plan`]), this
+emits ordinary Lean declarations —
 the block under fresh names, a carrier, one `pack`/`unpack` pair per mimic with
 **both round trips as theorems**, the declared type's own constructors, one
 recursor per block member, one congruence per mimic, and **every one of those
@@ -22,15 +22,14 @@ recursors' ι rules, as theorems with proofs**. Every declaration goes through
 `Environment.addDeclCore` with checking on, so a proof this module builds and
 the kernel rejects is a decline, never an emission.
 
-`mini/tests/fixtures/nested_model.lean` is this development written by hand at
-`Tree`; it is the clearest statement of the target shape that exists.
+The construction can also be written by hand at `Tree`, which makes the target
+shape explicit independently of the generator.
 
 ## What the fvar telescope buys
 
-The Rust writes every term at an explicit de Bruijn depth, and its header says
-that "a term read at the wrong depth is the failure mode this project has paid
-for most often — three of the indexed row's five layers were exactly that".
-None of that arithmetic survives here: an occurrence is stored once, relative
+Earlier implementations wrote every term at an explicit de Bruijn depth, where
+reading a term at the wrong depth repeatedly caused failures. None of that
+arithmetic survives here: an occurrence is stored once, relative
 to the block's parameter telescope, and [`Modelgen.Gen.occAt`] instantiates it
 at whatever parameter `fvar`s are in scope. There is no shift in this file, and
 every minor's binder telescope is read off the recursor's **own** minor type
@@ -63,8 +62,8 @@ rather than reconstructed.
 
 ## `pack` is emitted by group and not by mimic
 
-`nested_ev.rs` says an order always exists — "nesting strictly decreases, so
-this is a topological order and a cycle cannot arise" — and it does not. When a
+It is tempting to assume nesting strictly decreases and therefore supplies a
+topological order, but it does not. When a
 container is **itself** a nested inductive, two mimics can each need the
 other's `pack`, and then no order over single mimics exists at all.
 [`Modelgen.mimicGroups`] therefore emits strongly connected components in the
@@ -91,7 +90,7 @@ inductive Decline where
   Lean's `Environment` has no way to rebind a constant, so replacing it would
   mean replaying the whole file a second time. The message names the constant
   and what is wrong with it. No file in the corpus or the fixture tree reaches
-  it (`MODELGEN.md` §5.2). -/
+  it. -/
   | notLeans (n : Name) (why : String)
   | nameTaken (n : Name)
   /-- **The kernel accepted the declaration and the environment then lost it.**
@@ -99,8 +98,8 @@ inductive Decline where
   holding the name, because the two want opposite responses. This one is
   Lean's `AsyncConsts.add` refusing a *normalized* duplicate — an export
   flattens many modules, so it holds both `_private.M.0.X` and a public `X`,
-  we model both, and `privateToUserName` makes the two model names one
-  (`MODELGEN.md` §8.14). The name is ours, nothing in the input is using it,
+  we model both, and `privateToUserName` makes the two model names one. The
+  name is ours, nothing in the input is using it,
   and the fix is therefore ours too: regenerate under exact collision-safe
   aliases and translate those names on the way out. The driver does exactly
   that for nested, mutual, and simple generation, and only on this constructor.
@@ -114,9 +113,8 @@ inductive Decline where
   in*; modelling one of them would either be circular or would put a second
   `Eq` in the output. Their absence from the models is what makes the
   construction well-founded, so it is not a gap and a census that counts it as
-  one is misleading — every table in `MODELGEN.md` §8 that reported "N
-  declines" had to say "of which three are closed by definition" in the next
-  breath. It is its own constructor so that the *report* can keep it in its own
+  one is misleading. It is its own constructor so that the *report* can keep it
+  in its own
   row ([`Modelgen.Report.exempt`]) and the decline count can mean what it
   says. -/
   | basisExempt
@@ -190,11 +188,12 @@ def EqInfo.recAt (e : EqInfo) (v u : Level) (α a motive base b h : Expr) : Expr
 
 /-! ## The prelude this construction depends on
 
-Four constants are reached by the *proofs* this module writes and by nothing in
-§1's signatures: `Eq` (with `Eq.refl` and the `Eq.rec` the kernel mints for it),
+Four constants are reached by the *proofs* this module writes and by none of the
+public signatures: `Eq` (with `Eq.refl` and the `Eq.rec` the kernel mints for it),
 and — only for a field at a mimic **under a binder** — `Quot`, `Quot.sound` and
 `funext`. An export is not obliged to declare any of them: `Eq` is in most of
-the corpus but `decline_no_eq.lean` is a file without one, and `funext` is in
+the corpus but `test/fixtures/modelgen/decline_no_eq.lean` is a file without
+one, and `funext` is in
 **1 of the 157 corpus files** and not in `init-prelude`.
 
 **A prelude constant the input lacks is spliced, and a spliced constant is
@@ -203,11 +202,11 @@ reported.** This is the one place `modelgen` writes a declaration that is not
 
 * **Only when a model is actually being spliced.** Every one of these is built
   inside [`Modelgen.iso`], so a file with nothing to splice is untouched and
-  the identity property — 73 corpus files and all 41 committed
-  `mini/tests/fixtures` copied byte for byte — is not at risk.
+  the identity property across the corpus and committed fixtures is not at
+  risk.
 * **Exactly what Lean's prelude declares**, taken from `Init/Prelude.lean`
   (`Eq`, `init_quot`) and `Init/Core.lean` (`Quot.sound`, `funext`), and
-  `modelgen/tests/funext_binder.lean` is that development written out as a
+  `test/fixtures/modelgen/funext_binder.lean` is that development written as a
   fixture. Each goes through [`Modelgen.addChecked`] like everything else here,
   so the kernel has agreed to it before it is emitted.
 * **Present beats spliced.** If the input declares one, the input's own is
@@ -217,19 +216,20 @@ reported.** This is the one place `modelgen` writes a declaration that is not
 theorem here: `congrArg` — inlined from `Eq.rec`, as
 [`Modelgen.Gen.congrFunFor`] already is — applied to the extensional
 application of a `Quot`, at `Quot.sound`. An axiom would have been worse than
-useless, because `mini` declines every non-standard axiom and would refuse a
-fabricated `funext` downstream.
+useless, because a standard-axiom policy would refuse a fabricated `funext`.
 
 **The names.** `Eq`, `Quot`, `Quot.mk`, `Quot.lift`, `Quot.ind` and
 `Quot.sound` are spliced under **Lean's own names**, because those names are
-load-bearing beyond this file: the ι theorems of §1 are stated at `Eq`, the
-kernel fixes the four quotient names, and `mini/src/axiom.rs` selects the
-`Quot.sound` clause by that exact name — a namespaced copy would be a
+load-bearing beyond this file: the ι theorems are stated at `Eq`, the
+kernel fixes the four quotient names, and standard-axiom recognition selects
+the `Quot.sound` clause by that exact name — a namespaced copy would be a
 *non-standard axiom* and declined. `funext` appears in **no** emitted
 statement, only inside proofs, so it is the one that can be namespaced and is:
-`T._model.funext`, per §1's convention, which is also where the collision risk
+`T._model.funext`, following the model naming convention, which is also where
+the collision risk
 was (a file may declare a `funext` of its own later, and
-`nested_keying.lean` exists because a file can declare a name the model wants).
+`test/fixtures/modelgen/nested_keying.lean` exists because a file can declare a
+name the model wants).
 -/
 
 /-- **Lean's `Eq`**, as `Init/Prelude.lean` declares it:
@@ -344,7 +344,8 @@ def funextDecl (eqi : EqInfo) (nm : Name) : MetaM Declaration := do
 /-- **The name the export gives block index `k`'s recursor**, for a block whose
 own members are `all`.
 
-Measured on Lean's own export of `modelgen/tests/nest_mutual_both.ndjson`,
+Measured on Lean's own export of
+`test/fixtures/modelgen/nest_mutual_both.ndjson`,
 where the mutual block `A`/`B` nesting at `List B` and `Box A` comes back with
 `A.rec`, `B.rec`, `A.rec_1` and `A.rec_2`: a **real** member's recursor is in
 that member's own namespace and a **mimic**'s is in the first member's,
@@ -495,7 +496,7 @@ syntactic comparison would not be.
 
 `none` is *not* a decline. It means the model's proofs will use a `funext` of
 their own, derived and spliced — [`Modelgen.ensureFunext`]. This is asked
-**lazily**, because `funext` is in no statement in §1, only in the proofs one
+**lazily**, because `funext` is in no public statement, only in the proofs one
 shape needs, and is in 1 of the 157 corpus files. -/
 def usableFunext? (eqi : EqInfo) : GenM (Option Name) := do
   let n := `funext
@@ -560,7 +561,7 @@ so a field whose type mentions an earlier packed field is ill-typed at every
 intermediate stage. A dependency on a field that does **not** move is never
 touched by the fold, and Lean supports it — `node : (n : N) → Vec N n → List
 DTree → DTree` and `node : List ETree → (n : N) → Vec N n → ETree` are both
-`dependent_fields.lean`, and both are models now.
+`test/fixtures/modelgen/dependent_fields.lean`, and both are models now.
 
 A dependency *on* a packed field is out of reach for a different reason: Lean
 does not support it either. `node : (l : List GTree) → Len l N.z → GTree` fails
@@ -635,8 +636,8 @@ surgery and `Expr.instantiate1` does not reduce. `getAppFn` then answers with a
 lambda and `getAppArgs` with the wrong vector: the head test says the field is
 at no member, and the index vector reads `k` where the type says `N.z`.
 
-`Lean.Json` and `Lean.PrefixTreeNode` are exactly that shape, and it is why
-`MODELGEN.md` §5.1 had a gap. The repair is at the three readers rather than at
+`Lean.Json` and `Lean.PrefixTreeNode` are exactly that shape. The repair is at
+the three readers rather than at
 their callers — [`Modelgen.Gen.occIdx?`], [`Modelgen.Gen.idxOf`],
 [`Modelgen.Gen.memberOf`] and the family's [`Modelgen.Gen.Family.memberAt?`]
 — because *every* question this module asks of a field's type goes through one
@@ -1509,7 +1510,7 @@ def recMinor (g : Gen) (j : Nat) (cn : Name) (mty sT : Expr) (ps motives : Array
       let rebuild := fun (a : Array Expr) => g.blockCtorAt j cn ps a
       -- `Mⱼ` at the indices this constructor's result carries. They cannot
       -- mention a moved field — Lean rejects a nested field a later type
-      -- depends on (§5.2), and it rejects a *result index* about one for the
+      -- depends on, and it rejects a *result index* about one for the
       -- same reason: `C α (llen l)` with `l : Lst α` nested fails Lean's own
       -- compilation with `application type mismatch: llen TT l ... has type
       -- _nested.Lst_2`. So they are constant across every fold in this file.
@@ -2024,11 +2025,11 @@ structure Iso where
   a splice is a decision on record and not a silent one. -/
   spliced : Array Name
   /-- **Spliced inductives this model is not allowed to leave unmodelled.**
-  Arm C (`MODELGEN.md` §8.15) splices the *index erasure* of the family it is
+  Arm C splices the *index erasure* of the family it is
   modelling and carves the family out of it, so its output contains an
   inductive declaration that was in nobody's input. If the prim pass then
   cannot model that skeleton, the emission would put a fifth inductive in
-  front of a consumer — exactly the hole §8.13 closed — so the whole model is
+  front of a consumer, so the whole model is
   withdrawn and the declaration declines instead.
 
   The check is **after** the splice-and-model descent rather than a prediction
@@ -2131,7 +2132,7 @@ def addChecked (d : Declaration) : GenM Unit := do
     -- **`find?`, not `constants`.** `Environment.constants` is the *kernel*
     -- map, which has the constant — the kernel accepted it. `Environment.find?`
     -- is the one that consults the async map, and it is the one `MetaM` goes
-    -- through, so it is the one that must see it. `Test.lean`'s `runEnvProbe`
+    -- through, so it is the one that must see it. The test suite's `runEnvProbe`
     -- pins the same distinction from the other side.
     for n in d.getNames do
       if ((← getEnv).find? n).isNone then
@@ -2146,7 +2147,7 @@ An `Eq` the input *does* declare and that is not Lean's is the one case a
 splice cannot reach — the name is already bound in the output and in the
 input's own terms, and Lean's `Environment` cannot rebind a constant — so it
 declines and says which part of the shape is wrong. Nothing in the corpus or
-the fixture tree reaches that (`MODELGEN.md` §5.2). -/
+the fixture tree reaches that. -/
 def ensureEq (reserved : Std.HashSet Name) : GenM (EqInfo × Array Declaration) := do
   if (← getEnv).constants.contains `Eq then
     match EqInfo.check (← getEnv) with
@@ -2154,8 +2155,8 @@ def ensureEq (reserved : Std.HashSet Name) : GenM (EqInfo × Array Declaration) 
     | .error why => declineWith (.notLeans `Eq why)
   -- **A name the file itself introduces later is not ours to write.** The
   -- guard is the same one the model's own names go through, and
-  -- `mini/tests/fixtures/nested_keying.lean` is why it looks at the whole file
-  -- rather than the prefix replayed so far.
+  -- `test/fixtures/modelgen/nested_keying.lean` is why it looks at the whole
+  -- file rather than the prefix replayed so far.
   for n in [`Eq, `Eq.refl] do
     if reserved.contains n then declineWith (.nameTaken n)
   addChecked eqDecl
@@ -2173,7 +2174,7 @@ statement), and then `T._model.funext` proved from them, each checked by the
 kernel as it is added. Only the ones the input is missing are emitted.
 
 `T._model.funext` is namespaced and the quotient names are not, and that
-asymmetry is forced rather than chosen: `mini/src/axiom.rs` selects the
+asymmetry is forced rather than chosen: standard-axiom recognition selects the
 `Quot.sound` clause by that exact name, and the kernel fixes `Quot`,
 `Quot.mk`, `Quot.lift` and `Quot.ind`, so a namespaced copy of either would be
 refused downstream. `funext` is in no emitted statement at all, so it is free
@@ -2184,7 +2185,7 @@ def ensureFunext (model : Name) (eqi : EqInfo) (reserved : Std.HashSet Name) :
   let mut out : Array Declaration := #[]
   -- ── the quotient ──
   -- Recognised **structurally**, by the record kind the kernel gives it, and
-  -- not by name: that is how `MONOMORPH.md`'s carried built-ins identify it.
+  -- not by name, just like the monomorphizer's carried built-ins.
   match (← getEnv).constants.find? `Quot with
   | some (.quotInfo _) => pure ()
   | some _ => declineWith (.notLeans `Quot "it is declared and is not the kernel's quotient type")
@@ -2218,8 +2219,7 @@ def ensureFunext (model : Name) (eqi : EqInfo) (reserved : Std.HashSet Name) :
 
 /-! ## The W core, spliced
 
-The tagged W construction of `scripts/inductive-basis/WTagged.lean`
-(`MODELGEN.md` §8.16) is the only thing this tool generates that it does not
+The tagged W construction is the only thing this tool generates that it does not
 *build*: `Wrec`'s well-founded recursion, `canon`, `sub_wf` and `Wrec_key` are
 thirty-line tactic proofs over `List`, `Option`, `Sigma`, `Subtype`, `Acc` and
 `WellFounded`, and writing them as `Expr` builders is not a bigger version of
@@ -2234,20 +2234,20 @@ alternative — would have put 206 of *our own* constants on the trusted side,
 unchecked and absent from the report. -/
 
 /-- The fragment: what `lean4export` emits for `WT.W WT.sup WT.Wrec
-WT.Wrec_iota instDecidableEqNat` over `WTagged.lean`'s core. 528 KB, 163
+WT.Wrec_iota instDecidableEqNat` over the W core. 528 KB, 163
 records over 206 names — 19 inductive blocks, 78 definitions, 60 theorems, 4
 quotient records and 2 axioms. It splices as **160** `Declaration`s, three
 fewer than the record count, because the four quotient records are one
 `Declaration.quotDecl`.
 
-**The fifth root is the tag scheme's one demand on the fragment.**
-`scripts/inductive-basis/WGeneric.lean` fixes `K := Nat` for every declaration
-rather than minting an enumeration inductive per declaration, and the core's
+**The fifth root is the tag scheme's one demand on the fragment.** The generic
+construction fixes `K := Nat` for every declaration rather than minting an
+enumeration inductive per declaration, and the core's
 `DecidableEq K` is then `instDecidableEqNat`. The closure of the other four
 roots cannot reach it — all four take the instance as a *parameter* — so it has
 to be named. It costs 11 ordinary declarations (`Nat.decEq`, `Nat.beq`'s two
 soundness lemmas, the two `noConfusion` pairs and their match auxiliaries) and
-**no new inductive**, which is what keeps `Test.lean`'s `w_core` row unchanged:
+**no new inductive**, which is what keeps the `w_core` test row unchanged:
 the arm still leaves nothing unmodelled in front of a consumer.
 
 `include_str` rather than a file read: it costs nothing at run time (the string
@@ -2255,11 +2255,12 @@ is in the binary's data), and the alternative — locating the `.ndjson` relativ
 to `IO.appPath` — would make the binary depend on its own build layout.
 
 **And `include_str` is not in Lake's trace for this module.** Re-exporting
-`tests/w_core.ndjson` and rebuilding leaves the binary carrying the *previous*
+`test/fixtures/modelgen/w_core.ndjson` and rebuilding leaves the binary carrying
+the *previous*
 fragment, with no diagnostic: `lake build` reports success, and neither a
 `touch` nor a changed mtime forces the issue, because Lake hashes content and
 the content it hashes is `Model.lean`'s. Measured, not inferred — a re-export
-that added 11 declarations still spliced the old 149. `Test.lean`'s
+that added 11 declarations still spliced the old 149. The test suite's
 `runWSpliceProbe` therefore compares this string against the file on disk, and
 that comparison is the only thing standing between a fragment change and a
 silently stale tool. -/
@@ -2275,10 +2276,10 @@ def wCoreRoot : Name := `_wcore
 and the list is exactly these because of what the three axioms' statements
 mention.**
 
-`MODELGEN.md` §8.16 sized this list at six: the four quotient names, which the
-kernel special-cases, and `Quot.sound` and `propext`, which `mini/src/axiom.rs`
-selects **by that exact name**, so a namespaced copy is a non-standard axiom
-and is declined downstream. That much is right and unchanged.
+The first version of this list had six names: the four quotient names, which
+the kernel special-cases, and `Quot.sound` and `propext`, which standard-axiom
+recognition selects **by exact name**. A namespaced copy is therefore a
+non-standard axiom. That much is right and unchanged.
 
 What the sizing missed is that an axiom's *statement* is renamed too. The
 fragment's `Quot.sound` mentions `Eq`, `Quot` and `Quot.mk`; its `propext`
@@ -2293,13 +2294,13 @@ Quot.sound : ∀ {α r a b}, r a b → _wcore.Eq (Quot.mk r a) (Quot.mk r b)
 — two axioms **under Lean's exact names whose statements are not Lean's**. On
 an input that declares `propext` (which is every real one) that is a kernel
 rejection and the arm reaches nothing; on an input that does not, it is worse
-than a decline, because the name is what `axiom.rs` keys on and it would take
+than a decline, because the name is what recognition keys on and it would take
 a statement that is not `propext`'s as the standard `propext` clause. So `Eq`
 and `Iff` are shared for the same reason the axioms are, one level down.
 
-Sharing `Eq` also *removes* work rather than adding it: §8.16 costed one
-`_wcore.Eq → Eq` conversion per ι rule against the recommendation to rename
-it, and at the shared `Eq` the fragment's `Wrec_iota` and the contract's ι
+Sharing `Eq` also *removes* work rather than adding it: a renamed `Eq` would
+cost one `_wcore.Eq → Eq` conversion per ι rule. At the shared `Eq`, the
+fragment's `Wrec_iota` and the contract's ι
 theorems are already the same equality.
 
 **`Nat` is the fourth shared root, and the kernel forces that one outright.**
@@ -2320,10 +2321,10 @@ sub-namespaces: the fragment carries `Eq.symm`, `Eq.mpr`, `Eq.subst`,
 prefixes.
 
 **`Classical.choice` is the third axiom and `Nonempty` is its `Iff`.** The
-untagged instantiation of the W core (§8.16.6) decides equality at the label
+untagged instantiation of the W core decides equality at the label
 with `Classical.propDecidable`, so the fragment's closure now reaches
-`Classical.choice` — and `mini/src/axiom.rs`'s [`clause_for`] selects it by that
-exact name, one `NameView::Str` comparison against `Classical` and `choice`, so
+`Classical.choice` — and standard-axiom recognition selects it by that exact
+name, so
 a `_wcore.Classical.choice` is a non-standard axiom and is declined downstream.
 Its *statement* is `∀ {α : Sort u}, Nonempty α → α`, and the same argument one
 level down puts `Nonempty` and its two names here beside `Iff`'s: a
@@ -2366,7 +2367,7 @@ instance is not a name anything downstream keys on, unlike the axioms, and a
 `_wcore` copy of it cannot collide with an input that has its own. -/
 def wCoreDecEqNat : Name := wCoreRoot ++ `instDecidableEqNat
 /-- **`DecidableEq` at any type at all** — `Classical.propDecidable` behind one
-name, and the untagged instantiation's entire price (`MODELGEN.md` §8.16.6).
+name, and the untagged instantiation's entire price.
 Prefixed for the same reason `instDecidableEqNat` is; what may *not* be
 prefixed is the `Classical.choice` underneath it, which is why that name is on
 [`Modelgen.wCoreShared`]. -/
@@ -2503,9 +2504,8 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
 /-- **The mimics, grouped into strongly connected components and put in an
 order that emits a group's dependencies before it.**
 
-`mini/src/nested_ev.rs` asserts there is nothing to do here — "nesting strictly
-decreases, so this is a topological order and a cycle cannot arise" — and that
-is false. It is false in two different ways, and the second is the one that
+Assuming that nesting strictly decreases would imply a topological order, but
+that is false in two different ways, and the second is the one that
 matters:
 
 * **A backward edge without a cycle.** Discovery is breadth first, so a mimic
@@ -2573,7 +2573,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- **The declaration's own level parameters are carried, not refused.** Every
   -- generated constant is declared at `lparams` and referenced at `us`; a
   -- recursor is declared at its motive universe *followed by* `lparams`, which
-  -- is the order Lean itself writes. `poly_nested.lean` is the fixture, and it
+  -- is the order Lean itself writes.
+  -- `test/fixtures/modelgen/poly_nested.lean` is the fixture, and it
   -- is arranged so that a generator writing a container's *declared* parameter
   -- where the occurrence's instantiation belongs cannot pass.
   let us := lparams.map Level.param
@@ -2662,7 +2663,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   for n in selfNames do taken n
   -- **The `Eq` first, because everything downstream is written at it** — and
   -- spliced in when the input has none, which is the whole of what
-  -- `decline_no_eq.lean` used to refuse. It goes at the head of `out`, ahead
+  -- `test/fixtures/modelgen/decline_no_eq.lean` used to refuse. It goes at the
+  -- head of `out`, ahead
   -- of the block, so that it precedes its first use in the round trips no
   -- matter how the rest of the emission is ordered.
   let (eqi, eqDecls) ← ensureEq reserved
@@ -2723,12 +2725,13 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- shape whose proofs need `funext`: the block types such a field `∀ x⃗, Bₘ ι⃗`
   -- and the round trips, the recursor's minor and the ι rules all transport
   -- along `(fun x⃗ => pack (unpack (f x⃗))) = f`. `funext` is read from the
-  -- export **only when a declaration has such a field** — it is in no §1
+  -- export **only when a declaration has such a field** — it is in no public
   -- statement, only in these proofs, so requiring it of every export would
-  -- decline everything that works today (§5.1). Lean accepts all three places
+  -- decline every otherwise-supported declaration. Lean accepts all three places
   -- the binder can sit: the root (`HTree`), the container's own recursive
   -- field (`RTree` over `Rose`) and a container's field into another mimic
-  -- (`OTree` over `Outer`), and `infinitary.lean` has all three.
+  -- (`OTree` over `Outer`), and `test/fixtures/modelgen/infinitary.lean` has all
+  -- three.
   let anyUnderBinder ← withParams fun ps => do
     let mut any := false
     for k in [0:pl.types.size] do

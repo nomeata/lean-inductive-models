@@ -4,12 +4,11 @@ import Modelgen.Driver
 `envprobe IN.ndjson [P|A|B|C]` — **what a replayed export is visible as, and
 whether Lean's kernel takes it.**
 
-`MODELGEN.md` §6.6 and §6.7 rest on three facts about Lean's environment that
-nothing else in this repository can produce a number for, and this is the
-program that produced them. It is not a test: `Test.lean`'s `runEnvProbe` pins
-the same two properties on a fixture so a toolchain bump cannot make this
-document stale silently. What this adds is *scale* — the counts in §6.6 are
-Mathlib's and take twenty minutes and 24 GB to obtain.
+This program measures three facts about Lean's environment that nothing else in
+this repository can quantify. It is not a test: the test suite's `runEnvProbe`
+pins the same two properties on a fixture so a toolchain bump cannot change
+them silently. What this adds is *scale*: the Mathlib counts take substantial
+time and memory to obtain.
 
 * **`P`** — parse and stop. Says how much of the pass's peak is the parsed
   export rather than the environment built from it.
