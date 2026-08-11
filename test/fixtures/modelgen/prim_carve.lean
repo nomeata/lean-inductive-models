@@ -144,12 +144,10 @@
    live occupants of the same guard, at layer 3, and they are where it is
    exercised.
 
-   * `IBox` — an indexed family whose erasure is bare but whose skeleton still
-     does not model, so the skeleton is spliced, the prim pass cannot model
-     it, and the whole emission is **withdrawn**. A family whose skeleton does
-     not model produces no emission, so that nothing unmodelled ever reaches
-     a consumer. `IBox`'s erasure is `prim_declines`' `BoxF`, whose field keeps
-     an `imax` even boxed.
+   * `IBox` — an indexed family whose erasure is `prim_declines`' `BoxF`.
+     Recursive boxing models that skeleton, so arm C retains the parent and
+     both interfaces reach the output.  This is the positive composition test
+     for deep-imax storage followed by skeleton carving.
 
    `NoBase` is the opposite control. `NoBase._model._impl.skel` is
    `S | mk : N → S → S`: an uninhabited, linearly recursive inductive with

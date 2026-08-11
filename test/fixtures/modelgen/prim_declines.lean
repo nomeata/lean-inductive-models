@@ -45,9 +45,9 @@
      sort", which named the wrong obstruction rather than the composed shape.
    * `Idx` — an **indexed family** (`P` beside it is its index's type, and
      models — the guard is not refusing everything).
-   * `BoxF` — a field whose level keeps an `imax` even boxed: the imax
-     sits on a *domain* of the field's own telescope, where wrapping the
-     codomain does not reach.
+   * `BoxF` — a field whose `imax` sits recursively inside a domain of its own
+     telescope.  Recursive boxing reaches that inner Π, so the field now has
+     an exact `max 1 u v` representation and models with projection and eta.
 
    `Inf` itself — `inductive Inf : Prop | mk : Inf → Inf` — is **no longer a
    refusal**: it is the degenerate shape of arm G, the graph route, and models

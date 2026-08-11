@@ -370,14 +370,13 @@ telescope, an expression over a data or a proof field beside it — so `MixI`
 and `SvIx` in `prim_declines` moved from its declines to its models in the
 commit that added `prim_idx`. `prim_idx` is the grid that records the two arms'
 shared limit.
-`BoxF` is still a decline and **declines for a different reason than it used
-to**. The planner's level equality is complete now
-([`Modelgen.LevelAlgebra`]), so `BoxF`'s pad is planned rather than refused —
-and then Lean's *kernel*, whose `lean::is_equivalent` has the same
-`max`-does-not-absorb-`imax` gap the elaborator had, rejects the model. The
-message moved from `fields reach Sort imax` to `rejected by the kernel`,
-demonstrating that a planner-side procedure alone cannot get `BoxF` past the
-kernel. -/
+`BoxF` is no longer the level-incompleteness decline.  Its field
+`((α → β) → β)` keeps an `imax` inside the outer domain after a shallow
+codomain box, but recursive boxing transforms the whole Π tree.  Every atomic
+leaf gains a never-`Prop` `PSigma` codomain, every `imax` therefore normalizes
+to `max`, and the forward and inverse maps are definitionally inverse.  The
+seven declarations recorded below include its intrinsic projection and eta;
+no level-normalizer relaxation or axiom is involved. -/
 def expectedPrim : List Row :=
   [ -- Lifted arm F at its minimum: one proof field and one constant result
     -- index. The latter forces the packed equation; the existing one-field
@@ -411,9 +410,8 @@ def expectedPrim : List Row :=
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
        ("_wcore.PProd", 9), ("MixI", 4), ("Inf.below", 18), ("Binder", 12),
-       ("SvIx", 4)],
-      [ ("Eq", "prim model: a basis primitive")
-      , ("BoxF", "prim model shape: [BoxF._model] rejected by the kernel")])
+       ("BoxF", 7), ("SvIx", 4)],
+      [ ("Eq", "prim model: a basis primitive")])
   -- **The index axis**, as the explicit grid documented by
   -- `test/fixtures/modelgen/prim_idx.lean`.
   -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
@@ -553,17 +551,14 @@ def expectedPrim : List Row :=
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4),
        ("Cf", 8), ("Cf._model._impl.skel", 12), ("Inf2", 8), ("Inf2._model._impl.skel", 12),
        ("Vec", 8), ("Vec._model._impl.skel", 6), ("Bl", 10),
-       ("Bl._model._impl.skel", 8), ("Vc", 8), ("Vc._model._impl.skel", 6),
+       ("Bl._model._impl.skel", 8), ("IBox", 8), ("IBox._model._impl.skel", 7),
+       ("Vc", 8), ("Vc._model._impl.skel", 6),
        ("Mx", 8), ("Mx._model._impl.skel", 12),
        ("Two2", 8), ("Two2._model._impl.skel", 6), ("Fn", 8), ("Fn._model._impl.skel", 6),
        ("Sm3", 8), ("Sm3._model._impl.skel", 12), ("Br", 8), ("Br._model._impl.skel", 12),
        ("NoBase", 10), ("NoBase._model._impl.skel", 8),
        ("Tri3", 8), ("Tri3._model._impl.skel", 6)],
-      [ ("Eq", "prim model: a basis primitive")
-      -- withdrawn: the erasure is bare and its `imax` skeleton still does not
-      -- model. `NoBase` beside it is the empty-skeleton positive control.
-      , ("IBox", "prim model shape: the spliced inductive IBox._model._impl.skel did \
-          not model")])
+      [ ("Eq", "prim model: a basis primitive")])
   -- **Arm W**, and this row is three claims at once.
   --
   -- The four models are the shapes the tuple tower cannot express: `Wt` is a

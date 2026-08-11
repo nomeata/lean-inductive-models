@@ -95,9 +95,9 @@
      half the shapes, so three is the first arity at which a pack/unpack
      ordering bug has to show.
    * `TrL` — `Trans`'s shape: a Π-typed field at an **imax** level, stored
-     **boxed** (codomain wrapped `Σ'(_ : S), D 1`) so the level collapses
-     to the carrier's never-zero `max`; the recursor unboxes by projection
-     and needs no transport at all.
+     **recursively boxed** (atomic leaves wrapped as `Σ'(_ : S), D 1`) so the
+     level collapses to the carrier's never-zero `max`; the recursor unboxes
+     by projection and needs no transport at all.
 
    * `Sv` — a carrier whose **index telescope is hidden behind a
      definition**: `Sv (x : Tri) : SvFam x` where `SvFam x := Tri → Tri →

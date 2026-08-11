@@ -78,12 +78,14 @@ eliminate that empty value.  This is arm E below.
   Direct kernel checks pin both claims and the gap between them. The `False`-Π
   singleton this replaced was not canonical in *either*
   sense and cost a `funext`.
-* **A box** ([`Modelgen.boxTyOf`]) absorbs an `imax`: a Π-typed field's level
-  is an `imax` chain (`Trans.mk`'s shape) and no pad subsumes an `imax` under
-  a `max` — what collapses it is a never-`Prop` codomain, so the field is
-  stored with its codomain wrapped as `Σ'(_ : S), D 1` and unboxed by
-  projection wherever the minor consumes it; `unbox (box v) ≡ v` by βι,
-  structure eta, proof irrelevance and function eta, no transport.
+* **A recursive box** ([`Modelgen.boxTyOf`]) absorbs an `imax`: a Π-typed
+  field's level is an `imax` chain (`Trans.mk`'s shape), and no pad subsumes
+  an `imax` under a `max`.  Every exposed Π domain and codomain is recursively
+  boxed, with each atomic leaf stored as `Σ'(_ : S), D 1`; all transformed
+  codomains are therefore never `Prop`, so every `imax` normalizes to `max`.
+  The minor receives the recursively unboxed value, and
+  `unbox (box v) ≡ v` by βι, structure eta, proof irrelevance and function
+  eta, with no transport.
 
 **Church routes** — carrier sort literally `0`, or **maybe-zero**. One
 construction serves both. The carrier is the impredicative Church encoding
@@ -175,20 +177,13 @@ nothing; and arm W applies the W core's propositional ι theorem.
 * **a non-singleton indexed declaration, or any recursion, at a maybe-zero
   sort** — only the large-eliminating nonrecursive singleton has its index
   equation threaded through the lift.
-* **a level gap no pad or box closes** — an `imax` in a field's level that
-  boxing does not collapse (an `imax`-leveled *domain* inside the field).
-  This one is a **level-incompleteness** decline, not a type error: the
-  padded chain equals the carrier's level at every instantiation and Lean's
-  normal-form level defeq does not see it; an independent kernel cross-check
-  confirms the gap.
-
-  **The decline is no longer taken here.** The planner's level equality is
-  complete ([`Modelgen.LevelAlgebra`]): it falls back to the `imax`
-  case-split decision procedure wherever `isLevelDefEq` would otherwise
-  refuse, so the pad is *planned*. What refuses instead is `addChecked` —
-  Lean's **kernel**, whose `lean::is_equivalent` has the same
-  `max`-does-not-absorb-`imax` gap. So the shape still declines, one stage
-  later and with the kernel's own message.
+* **a level gap no recursive box closes** — exposed Π structure is boxed at
+  every depth, so a nested domain such as `((α → β) → β)` is supported. A
+  genuinely opaque atomic type whose declared sort itself contains an `imax`
+  can still leave no structure for boxing to transform. The complete planner
+  may prove its padded level extensionally equal to the carrier, but the
+  kernel's normal-form conversion can still reject that equality; this remains
+  a checked decline rather than a level-normalizer relaxation.
 * a field mentioning `T` other than as `∀ z⃗, T p⃗ e⃗` — a **nested**
   occurrence, which is layer 1's business.
 * the four **basis primitives themselves** — the exemption that makes the
@@ -4139,8 +4134,8 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     -- `1` closes most gaps and `w` itself covers a deliberately-raised
     -- carrier — at *any* `w` now, since `PULiftP` exists at every level.
     -- What no pad absorbs is an `imax` in a field's level: those fields are
-    -- boxed ([`Modelgen.boxTyOf`]) and the plan is retried on the boxed
-    -- levels, which are never-zero `max`es.
+    -- recursively boxed ([`Modelgen.boxTyOf`]) and the plan is retried on the
+    -- boxed levels, whose exposed Π codomains are never-zero `max`es.
     let plans : Array CPlan ← withParams fun ps =>
       exportCtors.mapM fun (cn, cty) => do
         let tele ← instForall cty ps
@@ -4194,7 +4189,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
             return p
           let raw := if nf == 1 then ℓs[0]! else (ℓs.foldl mkLevelMax' (.succ .zero)).normalize
           badShape s!"{cn}'s fields reach Sort {raw} and the carrier is Sort {w}: no \
-            pad or codomain box closes the gap"
+            pad or recursive box closes the gap"
 
     -- A pad at a level `dsingOk` cannot build is discharged by transport
     -- along the lift's eta ([`Modelgen.unitAtUniq`]) — a recursor call and
