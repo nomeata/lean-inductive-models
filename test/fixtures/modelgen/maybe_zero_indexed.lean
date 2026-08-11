@@ -12,4 +12,3 @@ universe u
 inductive MI (ι : Type) (i j : ι) : ι → Sort u where
   | left : MI ι i j i
   | right : MI ι i j j
-
