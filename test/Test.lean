@@ -568,6 +568,20 @@ def expectedPrim : List Row :=
        ("NoBase", 10), ("NoBase._model._impl.skel", 8),
        ("Tri3", 8), ("Tri3._model._impl.skel", 6)],
       [ ("Eq", "prim model: a basis primitive")])
+  -- Arm W's two recursive-boxing seams. `WData` stores a non-recursive
+  -- `((α → β) → β)` in the label tower; `WBind` stores the same type
+  -- as an infinitary child's binder in the branch tower. The former is first
+  -- and therefore carries the W fragment, while the latter is the arm's own
+  -- twelve declarations. Both remain on the tagged W instantiation.
+  , ("w_imax",
+      [("WData", 218), ("_wcore.Subtype", 9), ("_wcore.List", 6),
+       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+       ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
+       ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6),
+       ("Iff", 8), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
+       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9),
+       ("Nonempty", 4), ("WBind", 12)],
+      [("Eq", "prim model: a basis primitive")])
   -- **Arm W**, and this row is three claims at once.
   --
   -- The four models are the shapes the tuple tower cannot express: `Wt` is a

@@ -2267,8 +2267,10 @@ partial def wTowerTy (w : Level) (xs : Array Expr) (boxed : Array Bool)
 which is Lean's own constraint on the declaration re-asked as a conversion:
 a field of an inductive at `Sort w` sits at some `Sort ℓ` with `max ℓ w = w`.
 Asked before anything is spliced, so a declaration this refuses costs no
-splice, and asked of the *expression* rather than assumed — a field whose level
-keeps an `imax` is exactly the shape that fails it. -/
+splice, and asked of the *expression* rather than assumed. Components with an
+exposed `imax` are measured after recursive boxing; this still refuses an
+opaque atomic type whose level contains an `imax`, because no available box can
+inspect that type far enough to normalize its level. -/
 def wTowerLevel (w : Level) (xs : Array Expr) (boxed : Array Bool) : GenM (Option Level) := do
   for i in [0:xs.size] do
     let original ← ityp xs[i]!
@@ -4076,8 +4078,9 @@ data tower would have to hold a type the branch tower cannot see"
     -- **The level question, before anything is spliced.** Both towers are
     -- written with codomain level `w`, so every field and every recursive
     -- field's binder must satisfy `max ℓ w ≡ w` — Lean's own constraint on the
-    -- declaration, re-asked as a conversion. A field whose level keeps an
-    -- `imax` is what fails it, and it fails here rather than 528 KB later.
+    -- declaration, re-asked as a conversion. Exposed `imax` components are
+    -- measured after the same recursive boxing the towers will use; anything
+    -- still too large fails here rather than 528 KB later.
     withParams fun ps => do
       for k in [0:nc] do
         let (cn, cty) := exportCtors[k]!

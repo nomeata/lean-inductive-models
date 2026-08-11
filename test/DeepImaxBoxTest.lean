@@ -1,6 +1,7 @@
 import Modelgen.Driver
 import Modelgen.Check
 import Modelgen.Order
+import Lean.Util.CollectAxioms
 
 open Lean Meta Modelgen
 
@@ -17,19 +18,19 @@ def readExport (path : String) : IO Export := do
     | throw <| IO.userError s!"cannot parse {path}"
   return result
 
-def runExport (input : Export) : IO (Export × Report) := do
+def runExport (input : Export) : IO (Export × Report × Environment) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<deep-imax-box-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
-  let ((declarations, report), _) ← Core.CoreM.toIO
+  let ((declarations, report), state) ← Core.CoreM.toIO
     (MetaM.run' (runFilter input false {})) context { env }
   let output := { input with decls := declarations }
   let ordered ← match Order.reorder output with
     | .ok result => pure result
     | .error failure =>
       throw <| IO.userError s!"cannot order deep-imax output: {repr failure}"
-  return (ordered, report)
+  return (ordered, report, state.env)
 
 def declarationValue? (input : Export) (name : Name) : Option Expr := do
   let .defn got _ _ value .. ← input.decls.find? (·.names.contains name) | none
@@ -60,10 +61,17 @@ partial def containsConst (target : Name) : Expr → Bool
 def ownerPasses (input : Export) (owner : Name) : Bool :=
   (Check.check input).all (·.familyOwner != owner)
 
+def axiomsOf (environment : Environment) (name : Name) : IO (Array Name) := do
+  let context : Core.Context :=
+    { fileName := "<deep-imax-axioms>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (axioms, _) ← Core.CoreM.toIO (collectAxioms name) context { env := environment }
+  return axioms
+
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let raw ← readExport "test/fixtures/modelgen/imax_box.ndjson"
-  let (generated, report) ← runExport raw
+  let (generated, report, _) ← runExport raw
   let names := generated.decls.flatMap (·.names.toArray)
   let boxModel := Naming.modelName `BoxF
   let boxCtor := Naming.modelName `BoxF.mk
@@ -106,6 +114,36 @@ def main : IO UInt32 := do
   state := state.check "literal correspondence accepts all affected families" <|
     ownerPasses generated `BoxF && ownerPasses generated `IBox &&
       ownerPasses generated skeleton
+
+  let wRaw ← readExport "test/fixtures/modelgen/w_imax.ndjson"
+  let (wGenerated, wReport, wEnvironment) ← runExport wRaw
+  let wNames := wGenerated.decls.flatMap (·.names.toArray)
+  let dataModel := Naming.modelName `WData
+  let dataCtors := #[Naming.modelName `WData.leaf, Naming.modelName `WData.fork]
+  let dataRec := Naming.modelName `WData.rec
+  let dataIotas := #[Naming.iotaName `WData.rec 0, Naming.iotaName `WData.rec 1]
+  let bindModel := Naming.modelName `WBind
+  let bindCtors := #[Naming.modelName `WBind.leaf, Naming.modelName `WBind.lim]
+  let bindRec := Naming.modelName `WBind.rec
+  let bindIotas := #[Naming.iotaName `WBind.rec 0, Naming.iotaName `WBind.rec 1]
+  state := state.check "W data and binder imax shapes generate" <|
+    #[`WData, `WBind].all fun owner =>
+      wReport.generated.any (·.1 == owner) && !wReport.declined.any (·.1 == owner)
+  state := state.check "W imax shapes have constructors, recursors, and both iotas" <|
+    (#[dataModel, dataRec, bindModel, bindRec] ++ dataCtors ++ dataIotas ++
+      bindCtors ++ bindIotas).all wNames.contains
+  state := state.check "W data and binder towers use recursive PSigma boxing" <|
+    [`WData._model._impl.wD, `WData._model._impl.wF,
+      `WBind._model._impl.wTel, `WBind._model._impl.wF].all fun name =>
+        (declarationValue? wGenerated name).any (containsConst `PSigma)
+  state := state.check "literal correspondence accepts both W imax families" <|
+    ownerPasses wGenerated `WData && ownerPasses wGenerated `WBind
+  let dataAxioms ← axiomsOf wEnvironment dataRec
+  let bindAxioms ← axiomsOf wEnvironment bindRec
+  state := state.check "W recursive boxing preserves the tagged axiom boundary" <|
+    #[dataAxioms, bindAxioms].all fun axioms =>
+      axioms.contains `propext && axioms.contains `Quot.sound &&
+        !axioms.contains `Classical.choice && axioms.size == 2
 
   IO.println s!"deep imax box: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
