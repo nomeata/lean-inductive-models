@@ -2383,6 +2383,52 @@ def wTowerProjsOf (w : Level) (xs : Array Expr) (d : Expr) : GenM (Array Expr) :
 def wTowerMkOf (w : Level) (xs vals : Array Expr) : GenM Expr := do
   wTowerMk w xs (← wTowerBoxed xs) 0 vals
 
+/-- The two universe levels at which arm W exposes and builds its carrier.
+
+Most declarations expose the W core directly, so both levels are the public
+carrier level.  A predecessor-free, provably positive public level instead
+uses a small `Type` core and stores it in the exact-sort `PSigma` described by
+[`WCarrierPlan.carrier`].  Keeping this plan and its term builders outside
+`primIso` is also important: that definition is already close to Lean's
+default elaboration budget. -/
+structure WCarrierPlan where
+  public : Level
+  core : Level
+  lifted : Bool
+
+/-- Choose the constrained lift exactly when `w` has no syntactic predecessor
+but `max 1 w` is definitionally `w`. -/
+def wCarrierPlan (eligible : Bool) (w : Level) : GenM WCarrierPlan := do
+  let lifted ← if eligible && w.normalize.dec.isNone then
+      isLevelDefEq (mkLevelMax' (.succ .zero) w) w
+    else pure false
+  return { public := w, core := if lifted then .succ .zero else w, lifted }
+
+def WCarrierPlan.liftFam (p : WCarrierPlan) (lowTy : Expr) : Expr :=
+  .lam `low lowTy (puliftT p.public trueP) .default
+
+/-- Expose `lowTy : Sort core` at the plan's exact public carrier sort. -/
+def WCarrierPlan.carrier (p : WCarrierPlan) (lowTy : Expr) : Expr :=
+  if p.lifted then psigmaT p.core p.public lowTy (p.liftFam lowTy) else lowTy
+
+/-- Insert the canonical proof carried only to make the constrained lift land
+at the exact public sort. -/
+def WCarrierPlan.wrap (p : WCarrierPlan) (lowTy low : Expr) : Expr :=
+  if p.lifted then
+    psigmaMk p.core p.public lowTy (p.liftFam lowTy) low (unitAtCanon p.public)
+  else low
+
+def WCarrierPlan.unwrap (p : WCarrierPlan) (lowTy value : Expr) : Expr :=
+  if p.lifted then psigmaFst p.core p.public lowTy (p.liftFam lowTy) value else value
+
+/-- Pull a public motive back along `wrap`, for the low W recursor. -/
+def WCarrierPlan.motive (p : WCarrierPlan) (lowTy motive : Expr) : GenM Expr := do
+  if p.lifted then
+    withLocalDeclD `low lowTy fun low =>
+      mkLambdaFVars #[low] (mkApp motive (p.wrap lowTy low))
+  else
+    pure motive
+
 /-- Complete the simple generator's explicit retry table. -/
 def primAliasMap (tname root model ern recN : Name) (exportCtors : Array (Name × Expr))
     (ctorN iotaN : Nat → Name) (ruleK? : Option Name)
@@ -3157,11 +3203,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   let wTagged := tagFactored tname np exportCtors
   let wShapeEligible := (route matches PrimRoute.type) && ni == 0 && isRec &&
     !erasureLinear && labelFactored tname np exportCtors
-  let wLifted ← if wShapeEligible && w.normalize.dec.isNone then
-      isLevelDefEq (mkLevelMax' (.succ .zero) w) w
-    else pure false
-  let armW := wShapeEligible && (w.normalize.dec.isSome || wLifted)
-  let wW := if wLifted then Level.succ .zero else w
+  let wPlan ← wCarrierPlan wShapeEligible w
+  let armW := wShapeEligible && (w.normalize.dec.isSome || wPlan.lifted)
+  let wW := wPlan.core
   -- Arm W's **internal** names, guarded exactly like arm C's and arm G's, and
   -- only when the arm is taken.
   let wDN := Name.str impl "wD"
@@ -3283,22 +3327,14 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- exact result sort; the second field is a canonical inhabitant of
   -- `PULiftP.{w} True`, so wrapping and unwrapping reduce by the structure
   -- projection and eta rules and add no axiom.
-  let wLiftFam : Array Expr → Expr := fun ps =>
-    .lam `low (wLowSelfAt ps) (puliftT w trueP) .default
   let wPublicCarrier : Array Expr → Expr := fun ps =>
-    if wLifted then psigmaT wW w (wLowSelfAt ps) (wLiftFam ps)
-    else wLowSelfAt ps
+    wPlan.carrier (wLowSelfAt ps)
   let wWrap : Array Expr → Expr → Expr := fun ps low =>
-    if wLifted then
-      psigmaMk wW w (wLowSelfAt ps) (wLiftFam ps) low (unitAtCanon w)
-    else low
+    wPlan.wrap (wLowSelfAt ps) low
   let wUnwrap : Array Expr → Expr → Expr := fun ps value =>
-    if wLifted then psigmaFst wW w (wLowSelfAt ps) (wLiftFam ps) value else value
+    wPlan.unwrap (wLowSelfAt ps) value
   let wCoreMotive : Array Expr → Expr → GenM Expr := fun ps motive =>
-    if wLifted then
-      withLocalDeclD `low (wLowSelfAt ps) fun low =>
-        mkLambdaFVars #[low] (mkApp motive (wWrap ps low))
-    else pure motive
+    wPlan.motive (wLowSelfAt ps) motive
   -- `⟨j, tel⟩ : B' p⃗ key`, with the branch index as an expression for the same
   -- reason.
   let wBranch : Array Expr → Expr → Expr → Expr → GenM Expr := fun ps key j tel =>
