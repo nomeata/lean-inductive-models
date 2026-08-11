@@ -34,9 +34,9 @@ def main : IO UInt32 := do
   state ← state.check "eta metadata"
     (etaName `Pair == `Pair._model.eta)
   state ← state.check "projection model"
-    (projectionName `Pair.left == `Pair.left._model)
+    (projectionName `Pair 0 == `Pair._model.proj_0)
   state ← state.check "projection iota metadata"
-    (projectionIotaName `Pair.left == `Pair.left._model.iota)
+    (projectionIotaName `Pair 2 == `Pair._model.proj_2.iota)
   state ← state.check "rule-K metadata"
     (ruleKName `Eq.rec == `Eq.rec._model.ruleK)
 
@@ -52,7 +52,7 @@ def main : IO UInt32 := do
     |>.addRecursor `Data.Tree.rec_1 2
     |>.addMetadata .unitlike `Data.Tree
     |>.addMetadata .eta `Data.Tree
-    |>.addProjection `Data.Tree.payload
+    |>.addProjection `Data.Tree 0
     |>.addMetadata .ruleK `Data.Tree.rec_1
 
   state ← state.check "table model lookup uses exact original"
@@ -67,12 +67,14 @@ def main : IO UInt32 := do
     `unrelated,
     `Data.Tree.leaf._model,
     `Data.Tree.rec_1._model.iota_1,
+    `Data.Tree._model.proj_0.iota,
     modelName privateOwner
   ]
   let census := table.collisionCensus occupied
   state ← state.check "collision census finds every exact occupied name"
     (census.taken ==
-      #[`Data.Tree.leaf._model, `Data.Tree.rec_1._model.iota_1])
+      #[`Data.Tree.leaf._model, `Data.Tree.rec_1._model.iota_1,
+        `Data.Tree._model.proj_0.iota])
   state ← state.check "well-formed table has no duplicate requirements"
     census.duplicateRequirements.isEmpty
 

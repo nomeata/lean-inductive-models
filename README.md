@@ -81,9 +81,8 @@ secondary pass rather than part of the model correspondence.
 ## Public model declarations
 
 The public interface is attached to exact exported declaration names. For an
-inductive type former `T`, a constructor whose actual name is `C`, a recursor
-whose actual name is `R`, and a primitive structure projection whose actual
-name is `P`, the model declarations are:
+inductive type former `T`, a constructor whose actual name is `C`, and a
+recursor whose actual name is `R`, the model declarations are:
 
 | Original declaration | Model declaration |
 | --- | --- |
@@ -91,8 +90,8 @@ name is `P`, the model declarations are:
 | `C` | `C._model` |
 | `R` | `R._model` |
 | exported rule `j` of `R` | `R._model.iota_j` |
-| eligible primitive projection `P` | `P._model` |
-| constructor reduction of `P` | `P._model.iota` |
+| eligible zero-based field `j` of `T` | `T._model.proj_j` |
+| constructor reduction of field `j` | `T._model.proj_j.iota` |
 
 For example, `C` may be named `Vec.nil` or `Vec.cons`; it is not the word
 `ctor` followed by an index. Likewise, `R` is the exported recursor name—for
@@ -102,7 +101,7 @@ position in that recursor's exported rule array.
 This contract does not expose mutual-group bookkeeping. If `Even` and `Odd`
 are declared together, their carriers are still named independently as
 `Even._model` and `Odd._model`, and every constructor, recursor, and eligible
-projection is modeled under its own exact name. A declaration type may mention
+field projection is attached to its own type former. A declaration type may mention
 a sibling model when the original type mentions the sibling; that dependency
 is part of the declaration-local types, not a separate public group interface.
 
@@ -164,48 +163,55 @@ The modeled constructor and recursor retain the index `n`, and the second
 reduction theorem exposes both the recursive call in the `n` fiber and the
 result in the `Nat.succ n` fiber.
 
-## Structure projections
+## Intrinsic projections
 
 Projection modeling is determined from the exported kernel declarations, not
-from source-level `structure` syntax. A member `T` is structure-like exactly
-when all of these conditions hold:
+from source-level `structure` syntax or named projection functions. A member
+`T` is projection-eligible when it has exactly one constructor `C` and the
+export contains the constructor record for `C`, owned by `T`.
 
-- `T` is non-recursive;
-- `T` has no indices;
-- `T` has exactly one constructor `C`; and
-- the export contains the constructor record for `C`, owned by `T`.
-
-This test is per type former. A non-recursive mutual block may therefore have
-several independently eligible members. For each eligible member, `modelgen`
-recovers every exported primitive projection declaration whose exact value is
-a lambda telescope ending in the kernel expression `Expr.proj T field self`.
-If that projection's exact exported name is `P`, the public declarations are:
+This is the kernel boundary for `Expr.proj`: recursive and indexed
+one-constructor families are included. The test is per type former, so a
+mutual block may have several independently eligible members. For every
+zero-based constructor field
+`j` for which the kernel expression `Expr.proj T j self` is well typed,
+`modelgen` adds:
 
 ```text
-P._model
-P._model.iota
+T._model.proj_j
+T._model.proj_j.iota
 ```
 
-`P._model` has the literal type of `P` after positional universe alignment and
-the simultaneous original-to-model substitution. In particular, `T`, `C`,
-and any earlier projections mentioned by a dependent projection result become
-`T._model`, `C._model`, and their exact projection model names. The definition
-does not use a primitive projection on the model carrier. It eliminates the
-carrier with the model recursor, using the projection result as its motive and
-returning the selected constructor field from the corresponding minor premise.
+The type of `T._model.proj_j` is derived from `C`'s field telescope. It takes
+the family parameters, family indices, and
+`self : T._model parameters indices`; its result is field `j`'s type after the
+simultaneous original-to-model
+substitution. References to an earlier field `i` in a dependent result become
+`T._model.proj_i parameters indices self`. The definition does not use a primitive
+projection on the model carrier. It eliminates the carrier with the model
+recursor, using the field result as its motive and returning field `j` from the
+corresponding minor premise.
 
-For a constructor application `C._model parameters fields`, where field `i`
-is selected by `P`, the reduction theorem is the literal proposition:
+For a `Prop`-valued `T`, Lean's kernel imposes two further conditions. The
+selected field must be a proposition. Moreover, if the remaining constructor
+telescope depends on an earlier field, that earlier field must also be a
+proposition. Only fields satisfying this exact kernel projection rule receive
+an intrinsic projection. Thus `Iff` receives projections for both proof fields,
+whereas `Nonempty α` does not receive a projection from `Nonempty α` to `α`.
+
+For a constructor application `C._model parameters fields`, the reduction
+theorem is the literal proposition:
 
 ```text
-P._model.iota :
-  P._model parameters (C._model parameters fields) = fields[i]
+T._model.proj_j.iota :
+  T._model.proj_j parameters constructor-result-indices
+    (C._model parameters fields) = fields[j]
 ```
 
 The theorem preserves the constructor's complete parameter and field
 telescope, binder information, and declaration universes. Its outer relation
 is the standard `Eq`, and the universe argument of that `Eq` is the exact sort
-of the original projection result. It is not copied from a candidate theorem
+of the constructor field result. It is not copied from a candidate theorem
 and is not replaced by `Eq._model`.
 
 For example, the model of
@@ -220,18 +226,19 @@ contains declarations with the following interface, written as axioms here
 only to display their types:
 
 ```lean
-axiom Pair.first._model {α β : Type} : Pair._model α β → α
+axiom Pair._model.proj_0 {α β : Type} : Pair._model α β → α
 
-axiom Pair.first._model.iota {α β : Type} (first : α) (second : β) :
-  Pair.first._model (Pair.mk._model first second) = first
+axiom Pair._model.proj_0.iota {α β : Type} (first : α) (second : β) :
+  Pair._model.proj_0 (Pair.mk._model first second) = first
 ```
 
 The projection model and its reduction theorem occur before the atomic
-inductive record containing `T`. Projection declarations normally occur after
-their owner in a Lean export, so generation first recovers them from the whole
-input. If a required basis declaration occurs later, final ordering places
-that basis declaration first, then the projection interface, then the modeled
-inductive record. Dependent projection models are emitted in dependency order.
+inductive record containing `T`. Named convenience definitions whose values
+contain `Expr.proj` have no role in this interface and may be absent. If a
+required basis declaration occurs later, final ordering places that basis
+declaration first, then the projection interface, then the modeled inductive
+record. Intrinsic projections are emitted in increasing field order so a
+dependent field can use earlier intrinsic projections.
 
 ## Unit-like inductives
 
@@ -315,15 +322,14 @@ when `R` does not have the `k` flag.
 ## Structural check
 
 The check is deliberately stricter than type checking or definitional
-equality. An inductive record and the recovered primitive projections owned by
-its eligible members determine the correspondence directly from exported
-declarations:
+equality. An inductive record determines the declaration correspondence and
+its intrinsic field slots directly:
 
 ```text
 T  ↦ T._model
 C  ↦ C._model
 R  ↦ R._model
-P  ↦ P._model
+(T, j) ↦ T._model.proj_j
 ```
 
 Every member of an atomic mutual record contributes its own entries to this
@@ -338,26 +344,28 @@ validates the complete model family:
 2. The modeled inductive record does not refer to any declaration introduced
    by its model family. This includes references in names, declaration types,
    recursor rules, and nested expression fields.
-3. Every type former, constructor, recursor, and eligible primitive projection
-   has exactly one declaration at its declaration-local model name.
+3. Every type former and constructor has exactly one declaration at its
+   declaration-local model name, and every kernel-eligible field `j` has
+   exactly one declaration at `T._model.proj_j`.
 4. Every exported recursor rule has exactly one theorem at
    `R._model.iota_j`. A direct iota slot with a nonexistent or noncanonical
    index is rejected.
-5. Every required projection-iota, unit-like, and rule-K theorem is present
+5. Every required intrinsic projection-iota, unit-like, and rule-K theorem is present
    exactly once. Unit-like and rule-K metadata names are also rejected when
    the corresponding kernel feature is absent.
 6. Each model declaration has the same number of universe parameters as its
    original. Parameter names are aligned by position.
 7. After that universe alignment and the one simultaneous constant
-   substitution, the type of each modeled type former, constructor, recursor,
-   and projection is literally equal to the corresponding model declaration
-   type.
+   substitution, the type of each modeled type former, constructor, and
+   recursor is literally equal to the corresponding model declaration type.
+   Each intrinsic projection type is reconstructed literally from the
+   constructor field telescope, substituting earlier intrinsic projections.
 8. The equality proposition determined by each exported recursor rule is
    instantiated with its specified parameters and fields, rewritten by the
    same substitution, and compared literally with its iota theorem type.
-9. For a projection, the checker reconstructs the selected constructor field
-   and the exact sort of the original projection result, then compares the
-   complete `P._model.iota` proposition literally. It rejects a changed `Eq`
+9. For an intrinsic projection, the checker reconstructs the kernel field
+   eligibility, the selected constructor field, and its exact sort, then
+   compares the complete `T._model.proj_j.iota` proposition literally. It rejects a changed `Eq`
    universe even when the changed proposition remains kernel-valid. The
    unit-like and rule-K propositions are checked literally as well.
 

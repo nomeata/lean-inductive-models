@@ -97,6 +97,13 @@ def insertCollision (x : Export) (name : Name) : Export :=
 def withoutDeclaration (x : Export) (name : Name) : Export :=
   { x with decls := x.decls.filter (!·.names.contains name) }
 
+def intrinsicFieldsFor (x : Export) (owner : Name) : Array Nat :=
+  x.decls.findSome? (fun declaration => match declaration with
+    | .induct types constructors _ =>
+      (types.find? (·.name == owner)).map fun type =>
+        x.intrinsicProjectionFieldsFor type constructors
+    | _ => none) |>.getD #[]
+
 def replaceDeclarationType (x : Export) (name : Name) (type : Expr) : Export :=
   { x with decls := x.decls.map fun declaration => match declaration with
     | .ax got params _ isUnsafe =>
@@ -128,43 +135,56 @@ def hasMissingViolation (owner declaration : Name) : Check.Violation → Bool
       gotOwner == owner && gotDeclaration == declaration
   | _ => false
 
+def hasExtraProjectionViolation (owner declaration : Name) : Check.Violation → Bool
+  | .extraProjection gotOwner gotDeclaration =>
+      gotOwner == owner && gotDeclaration == declaration
+  | _ => false
+
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let raw ← readExport "tests/structure_projections.ndjson"
-  let sourceProjections := raw.projectionsFor `Dep
+  let wrapperRaw ← readExport "tests/structure_projections.ndjson"
+  let raw := #[`Dep.key, `Dep.payload, `Dep.witness, `SortFields.carrier,
+    `SortFields.family, `SortFields.element, `SortFields.letCarrier,
+    `depKey, `depPayload, `depWitness].foldl withoutDeclaration wrapperRaw
   let (declarations, report) ← runExport raw
   let generated := outputExport raw declarations
   let names := declarations.flatMap (·.names.toArray)
-  let keyModel := Naming.projectionName `Dep.key
-  let payloadModel := Naming.projectionName `Dep.payload
-  let witnessModel := Naming.projectionName `Dep.witness
-  let keyRule := Naming.projectionIotaName `Dep.key
-  let payloadRule := Naming.projectionIotaName `Dep.payload
-  let witnessRule := Naming.projectionIotaName `Dep.witness
+  let keyModel := Naming.projectionName `Dep 0
+  let payloadModel := Naming.projectionName `Dep 1
+  let witnessModel := Naming.projectionName `Dep 2
+  let keyRule := Naming.projectionIotaName `Dep 0
+  let payloadRule := Naming.projectionIotaName `Dep 1
+  let witnessRule := Naming.projectionIotaName `Dep 2
   let projectionNames := #[keyModel, payloadModel, witnessModel]
   let projectionRules := #[keyRule, payloadRule, witnessRule]
-  let sortFieldProjections := #[`SortFields.carrier, `SortFields.family,
-    `SortFields.element, `SortFields.letCarrier].flatMap fun name =>
-      #[Naming.projectionName name, Naming.projectionIotaName name]
+  let sortFieldProjections := (Array.range 4).flatMap fun fieldIndex =>
+    #[Naming.projectionName `SortFields fieldIndex,
+      Naming.projectionIotaName `SortFields fieldIndex]
   let mut state : TestState := {}
 
-  state := state.check "three source projections recovered in field order" <|
-    sourceProjections.map (fun projection => (projection.name, projection.fieldIndex)) ==
-      #[(`Dep.key, 0), (`Dep.payload, 1), (`Dep.witness, 2)]
+  let (wrapperDeclarations, wrapperReport) ← runExport wrapperRaw
+  let wrapperGenerated := outputExport wrapperRaw wrapperDeclarations
+  let wrapperNames := wrapperDeclarations.flatMap (·.names.toArray)
+  state := state.check "incidental exported wrappers do not change intrinsic types" <|
+    wrapperReport.stmtErrors.isEmpty && projectionNames.all fun name =>
+      declarationType? wrapperGenerated name == declarationType? generated name
+  state := state.check "incidental wrappers receive no legacy model declarations" <|
+    #[`Dep.key._model, `Dep.payload._model, `Dep.witness._model].all fun name =>
+      !wrapperNames.contains name
+
+  state := state.check "intrinsic fields need no exported projection wrappers" <|
+    #[`Dep.key, `Dep.payload, `Dep.witness].all fun name =>
+      (declarationIndex? raw name).isNone
   state := state.check "dependent structure generated" <|
     report.generated.any (·.1 == `Dep) && report.stmtErrors.isEmpty
   state := state.check "exact projection definitions and rules emitted" <|
     projectionNames.all names.contains && projectionRules.all names.contains
 
-  let ownerBeforeSources := match declarationIndex? raw `Dep with
-    | none => false
-    | some owner => sourceProjections.all (owner < ·.declIndex)
-  state := state.check "source projections occur after their owner" ownerBeforeSources
   let modelsBeforeOwner := match declarationIndex? generated `Dep with
     | none => false
     | some owner => (projectionNames ++ projectionRules).all fun name =>
         (declarationIndex? generated name).any (· < owner)
-  state := state.check "whole-export prepass emits every projection model before owner"
+  state := state.check "intrinsic projection interface precedes owner"
     modelsBeforeOwner
 
   state := state.check "projection definitions eliminate with the model recursor" <|
@@ -173,7 +193,7 @@ def main : IO UInt32 := do
         containsConst (Naming.modelName `Dep.rec) value && !containsProjection value
   state := state.check "payload type uses the preceding projection model literally" <|
     (declarationType? generated payloadModel).any fun type =>
-      containsConst keyModel type && !containsConst `Dep.key type
+      containsConst keyModel type
   state := state.check "witness type uses both preceding projection models literally" <|
     (declarationType? generated witnessModel).any fun type =>
       containsConst keyModel type && containsConst payloadModel type &&
@@ -184,25 +204,52 @@ def main : IO UInt32 := do
     sortFieldProjections.all names.contains &&
       (Check.check generated |>.all (·.familyOwner != `SortFields))
 
+  let wcore ← readExport "tests/w_core.ndjson"
+  state := state.check "Prop-valued Iff exposes its two proof fields" <|
+    intrinsicFieldsFor wcore `Iff == #[0, 1]
+  state := state.check "Prop-valued Nonempty cannot expose its data field" <|
+    (intrinsicFieldsFor wcore `Nonempty).isEmpty
+  let indexedProjections := (Array.range 2).flatMap fun fieldIndex =>
+    #[Naming.projectionName `Indexed fieldIndex,
+      Naming.projectionIotaName `Indexed fieldIndex]
+  let recursiveProjections := (Array.range 2).flatMap fun fieldIndex =>
+    #[Naming.projectionName `Recursive fieldIndex,
+      Naming.projectionIotaName `Recursive fieldIndex]
+  state := state.check "indexed one-constructor fields are intrinsic projections" <|
+    intrinsicFieldsFor raw `Indexed == #[0, 1] && indexedProjections.all names.contains &&
+      (Check.check generated).all (·.familyOwner != `Indexed)
+  state := state.check "recursive one-constructor fields are intrinsic projections" <|
+    intrinsicFieldsFor raw `Recursive == #[0, 1] && recursiveProjections.all names.contains &&
+      (Check.check generated).all (·.familyOwner != `Recursive)
+  state := state.check "Prop dependency and multi-constructor fields are excluded" <|
+    (intrinsicFieldsFor raw `PropDependent).isEmpty &&
+      (intrinsicFieldsFor raw `Multi).isEmpty &&
+      !names.contains (Naming.projectionName `PropDependent 0) &&
+      !names.contains (Naming.projectionName `Multi 0)
+  let extraIndexed := Naming.projectionName `Indexed 2
+  let extraViolations := Check.check (insertCollision generated extraIndexed)
+  state := state.check "checker rejects an out-of-range intrinsic projection slot" <|
+    extraViolations.any (hasExtraProjectionViolation `Indexed extraIndexed)
+
   let missingModel := Check.check (withoutDeclaration generated payloadModel)
   state := state.check "checker rejects a missing projection definition" <|
-    missingModel.any (hasMissingViolation `Dep.payload payloadModel)
+    missingModel.any (hasMissingViolation `Dep payloadModel)
   let missingRule := Check.check (withoutDeclaration generated witnessRule)
   state := state.check "checker rejects a missing projection rule" <|
-    missingRule.any (hasMissingViolation `Dep.witness witnessRule)
+    missingRule.any (hasMissingViolation `Dep witnessRule)
   let badModelType := Check.check <|
     replaceDeclarationType generated payloadModel (.sort (.succ .zero))
   state := state.check "checker compares projection types syntactically" <|
-    badModelType.any (hasTypeViolation `Dep.payload payloadModel)
+    badModelType.any (hasTypeViolation `Dep payloadModel)
   let badRuleType := Check.check <|
     replaceDeclarationType generated keyRule (.sort (.succ .zero))
   state := state.check "checker compares projection iota statements syntactically" <|
-    badRuleType.any (hasTypeViolation `Dep.key keyRule)
+    badRuleType.any (hasTypeViolation `Dep keyRule)
   let raisedEqExport := (declarationType? generated keyRule).bind raiseOuterEqLevel?
     |>.map (replaceDeclarationType generated keyRule ·) |>.getD generated
   let raisedEqViolations := Check.check raisedEqExport
   state := state.check "checker rejects a projection iota with only Eq's universe raised" <|
-    raisedEqViolations.any (hasTypeViolation `Dep.key keyRule)
+    raisedEqViolations.any (hasTypeViolation `Dep keyRule)
   let (_, raisedEqReplay) ← runExport raisedEqExport
   state := state.check "raised-Eq projection theorem remains kernel-valid" <|
     raisedEqReplay.unreplayable.isNone
@@ -216,29 +263,21 @@ def main : IO UInt32 := do
       entry.owner == `Dep && entry.role == .projectionIota
 
   -- A real collision retry requires both spellings in the flattened export.
-  -- Manufacture the second module's block and primitive projections using the
-  -- same explicit, whole-name substitution used by serialization.  The
-  -- public block remains in place, so the raw private model names normalize
-  -- onto declarations already installed for it.  The copied payload
-  -- projection deliberately lives outside the copied owner's namespace;
-  -- exact aliases must not assume projections are owner descendants.
+  -- Manufacture the second module's block using the same explicit whole-name
+  -- substitution used by serialization.
   let privateDep := (`_private.ProjectionTest).mkNum 0 |>.str "Dep"
-  let privatePayload := (`_private.ProjectionTest).mkNum 0 |>.str "payload"
   let sourceNames := raw.decls.flatMap (fun declaration => declaration.names.toArray)
     |>.filter fun name => (`Dep).isPrefixOf name
   let privateAliases := sourceNames.foldl (init := Naming.AliasMap.empty)
-    fun aliases name =>
-      let exact := if name == `Dep.payload then privatePayload
-        else name.replacePrefix `Dep privateDep
-      aliases.insert name exact
+    fun aliases name => aliases.insert name (name.replacePrefix `Dep privateDep)
   let privateRecords := raw.decls.map (·.renameAliases privateAliases)
   let privateRaw := { raw with decls := privateRecords }
   let (privateDecls, privateReport) ← runExport privateRaw
   let privateNames := privateDecls.flatMap (·.names.toArray)
-  state := state.check "raw private structure and non-descendant projection model exactly" <|
+  state := state.check "raw private structure gets intrinsic projection names exactly" <|
     privateReport.generated.any (·.1 == privateDep) &&
-      privateNames.contains (Naming.projectionName privatePayload) &&
-      privateNames.contains (Naming.projectionIotaName privatePayload)
+      privateNames.contains (Naming.projectionName privateDep 1) &&
+      privateNames.contains (Naming.projectionIotaName privateDep 1)
   let leakedAliases := privateDecls.flatMap declarationNames |>.filter fun name =>
     name.components.any (· == `_modelgen_alias)
   state := state.check "projection retry aliases do not leak into serialized records" <|
@@ -250,22 +289,22 @@ def main : IO UInt32 := do
       collisionReport.declined.any fun (owner, reason) =>
         owner == `Dep && reason == s!"prim model name taken ({keyModel})"
   let (legacyDecls, legacyReport) ← runExport
-    (insertCollision raw (Name.str keyModel "self"))
-  state := state.check "an old carrier-shaped projection descendant is not a collision" <|
+    (insertCollision raw `Dep.key._model)
+  state := state.check "a legacy wrapper-shaped name is irrelevant" <|
     legacyReport.generated.any (·.1 == `Dep) &&
       legacyDecls.any (·.names.contains payloadModel)
 
-  let mutualRaw ← readExport "tests/mutual_structure_projections.ndjson"
-  let mutualSourceProjections := mutualRaw.projections.filter fun projection =>
-    projection.owner == `MLeft || projection.owner == `MRight
+  let mutualWrapperRaw ← readExport "tests/mutual_structure_projections.ndjson"
+  let mutualRaw := #[`MLeft.value, `MRight.key, `MRight.payload,
+    `leftValue, `rightPayload].foldl withoutDeclaration mutualWrapperRaw
   let (mutualDecls, mutualReport) ← runExport mutualRaw
   let mutualGenerated := outputExport mutualRaw mutualDecls
   let mutualNames := mutualDecls.flatMap (·.names.toArray)
-  let leftProjection := Naming.projectionName `MLeft.value
-  let leftRule := Naming.projectionIotaName `MLeft.value
-  let rightKeyProjection := Naming.projectionName `MRight.key
-  let rightPayloadProjection := Naming.projectionName `MRight.payload
-  let rightPayloadRule := Naming.projectionIotaName `MRight.payload
+  let leftProjection := Naming.projectionName `MLeft 0
+  let leftRule := Naming.projectionIotaName `MLeft 0
+  let rightKeyProjection := Naming.projectionName `MRight 0
+  let rightPayloadProjection := Naming.projectionName `MRight 1
+  let rightPayloadRule := Naming.projectionIotaName `MRight 1
   state := state.check "mutual projection fixture declares PULiftP after its owner" <|
     (declarationIndex? mutualRaw `MLeft).any fun owner =>
       (declarationIndex? mutualRaw `PULiftP).any (owner < ·)
@@ -278,16 +317,16 @@ def main : IO UInt32 := do
         for recursor in recursors do
           if recursor.all.contains `MLeft then
             IO.eprintln s!"source recursor {recursor.name}: motives {recursor.all}, rules {recursor.rules.map (·.ctor)}"
-  state := state.check "non-recursive mutual members recover all primitive projections" <|
-    mutualSourceProjections.map (fun projection => (projection.name, projection.fieldIndex)) ==
-      #[(`MLeft.value, 0), (`MRight.key, 0), (`MRight.payload, 1)]
+  state := state.check "mutual fields need no exported projection wrappers" <|
+    #[`MLeft.value, `MRight.key, `MRight.payload].all fun name =>
+      (declarationIndex? mutualRaw name).isNone
   state := state.check "plain mutual route emits each member's projection interface" <|
     mutualReport.generated.any (·.1 == `MLeft) && mutualReport.stmtErrors.isEmpty &&
       #[leftProjection, leftRule, rightKeyProjection, rightPayloadProjection,
         rightPayloadRule].all mutualNames.contains
   state := state.check "mutual dependent projection type uses its preceding model" <|
     (declarationType? mutualGenerated rightPayloadProjection).any fun type =>
-      containsConst rightKeyProjection type && !containsConst `MRight.key type
+      containsConst rightKeyProjection type
   state := state.check "mutual projection models precede their modeled block" <|
     (declarationIndex? mutualGenerated `MLeft).any fun owner =>
       #[leftProjection, leftRule, rightKeyProjection, rightPayloadProjection,

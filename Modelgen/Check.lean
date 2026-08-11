@@ -336,6 +336,8 @@ inductive Violation where
   /-- Legacy diagnostic retained for API compatibility.  Exact declaration-local
   naming has no syntactic "extra constructor slot" class. -/
   | extraConstructor (owner declaration : Name)
+  /-- A direct intrinsic projection slot has no kernel-valid field index. -/
+  | extraProjection (owner declaration : Name)
   /-- A direct `R._model.iota_j` theorem has no exported rule `j` of `R`. -/
   | extraRule (owner declaration : Name)
   /-- A direct metadata theorem is present although its owner lacks the kernel
@@ -634,11 +636,11 @@ private partial def inferExactType? (x : Export) (declarations : DeclarationType
       let constructorName ← type.ctors.head?
       let constructor ← constructors.find? fun constructor =>
         constructor.name == constructorName && constructor.induct == owner
-      unless type.isKernelStructureLike constructors do none
+      unless type.ctors == [constructorName] do none
       unless (x.intrinsicProjectionFieldsFor type constructors).contains fieldIndex do none
       unless constructor.levelParams.length == levels.length do none
       let ownerArguments := structType.getAppArgs
-      unless type.numParams <= ownerArguments.size do none
+      unless ownerArguments.size == type.numParams + type.numIndices do none
       let params := ownerArguments.extract 0 type.numParams
       let mut current ← instantiateForallsExact
         (constructor.type.instantiateLevelParams constructor.levelParams levels) params
@@ -707,30 +709,45 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
   let params := constructorArgs.extract 0 constructor.numParams
   let fields := constructorArgs.extract constructor.numParams constructorArgs.size
   let levels := model.levelParams.map Level.param
+  let some typePair := family.correspondence.typeFormers.find? (·.owner == projection.owner)
+    | return #[.declarationType projection.owner projection.name]
+  let mappedOwnerType := family.correspondence.expectedType
+    ownerType.levelParams model.levelParams ownerType.type
+  let (ownerBinders, _) : Array OpenBinder × Expr := openForalls
+    ((`_check.intrinsicProjectionOwner).append projection.name) mappedOwnerType
+  let ownerArity := ownerType.numParams + ownerType.numIndices
+  unless ownerBinders.size == ownerArity do
+    return #[.declarationType projection.owner projection.name]
+  let ownerArgs := ownerBinders.map fun (binder : OpenBinder) => binder.value
   let selfValue := mkFVar (FVarId.mk
     ((`_check.intrinsicProjectionSelf).append projection.name))
   let selfBinder : OpenBinder :=
-    { name := `self, type := constructorResult, info := .default, value := selfValue }
+    { name := `self, type := mkAppN (.const typePair.model levels) ownerArgs,
+      info := .default, value := selfValue }
   let mut projectionResult := selectedBinder.type
   for earlier in [:projection.fieldIndex] do
     let earlierField := fields[earlier]!
     let earlierProjection := mkAppN
-      (.const (Naming.projectionName projection.owner earlier) levels) (params.push selfValue)
+      (.const (Naming.projectionName projection.owner earlier) levels) (ownerArgs.push selfValue)
     projectionResult := projectionResult.replace fun subexpression =>
       if subexpression == earlierField then some earlierProjection else none
   let expectedProjectionType := closeForalls
-    ((constructorBinders.extract 0 constructor.numParams).push selfBinder) projectionResult
+    (ownerBinders.push selfBinder) projectionResult
   let mut violations := checkImplementationDecl projection.owner model
   violations := violations ++ checkTheoremDecl projection.owner ruleModel
   unless model.type == expectedProjectionType do
     violations := violations.push (.declarationType projection.owner projection.name)
 
   let major := mkAppN (.const constructorPair.model levels) constructorArgs
-  let some alpha := instantiateForallsExact expectedProjectionType (params.push major)
+  let constructorIndices := constructorResult.getAppArgs.extract constructor.numParams ownerArity
+  unless constructorIndices.size == ownerType.numIndices do
+    return violations.push (.declarationType projection.owner projection.iota)
+  let some alpha := instantiateForallsExact expectedProjectionType
+      (params ++ constructorIndices ++ #[major])
     | return violations.push (.declarationType projection.owner projection.iota)
   let some rhs := fields[projection.fieldIndex]?
     | return violations.push (.declarationType projection.owner projection.iota)
-  let lhs := mkAppN (.const projection.name levels) (params.push major)
+  let lhs := mkAppN (.const projection.name levels) (params ++ constructorIndices ++ #[major])
 
   let sourceConstructorType := constructor.type
   let (sourceBinders, _) : Array OpenBinder × Expr := openForalls
@@ -754,6 +771,19 @@ private def iotaSlot? (name : Name) : Option (Name × Nat) := do
   unless suffix.startsWith "iota_" do none
   return (parent, ← (suffix.drop 5).toNat?)
 
+private def projectionSlot? (owner name : Name) : Option Nat := do
+  let modelRoot := Naming.modelName owner
+  match name with
+  | .str parent suffix =>
+    if parent == modelRoot && suffix.startsWith "proj_" then
+      (suffix.drop 5).toNat?
+    else if suffix == "iota" then
+      let .str grandParent projectionSuffix := parent | none
+      unless grandParent == modelRoot && projectionSuffix.startsWith "proj_" do none
+      (projectionSuffix.drop 5).toNat?
+    else none
+  | _ => none
+
 private abbrev IotaSlots := Std.HashMap Name (Array (Name × Nat))
 
 private def iotaSlots (x : Export) : IotaSlots := Id.run do
@@ -769,7 +799,8 @@ larger export. -/
 def Violation.familyOwner : Violation → Name
   | .modelNotBefore owner .. | .ownerBackreference owner .. |
       .missingPublic owner .. | .duplicatePublic owner .. |
-      .extraConstructor owner .. | .extraRule owner .. | .extraMetadata owner .. |
+      .extraConstructor owner .. | .extraProjection owner .. |
+      .extraRule owner .. | .extraMetadata owner .. |
       .universeArity owner .. |
       .declarationType owner .. | .declarationKind owner .. |
       .declarationSafety owner .. => owner
@@ -820,6 +851,12 @@ def check (x : Export) : Array Violation := Id.run do
   for ownerDecl in [0:x.decls.size] do
     let .induct types constructors recursors := x.decls[ownerDecl]! | continue
     for type in types do
+      let validFields := x.intrinsicProjectionFieldsFor type constructors
+      for declaration in x.decls do
+        for name in declaration.names do
+          if let some fieldIndex := projectionSlot? type.name name then
+            unless validFields.contains fieldIndex do
+              violations := violations.push (.extraProjection type.name name)
       unless type.isKernelUnitlike constructors do
         let name := Naming.unitlikeName type.name
         unless (declarations.getD name #[]).isEmpty do

@@ -240,14 +240,17 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
 /-- Build the parameter/motive/minor prefix for one selected member of a
 mutual model recursor.
 
-The selected motive and minor are supplied by the caller.  Every unrelated
+The selected motive and constructor-field index are supplied by the caller;
+the selected minor is read from the recursor telescope, whose initial binders
+are the constructor fields and whose remaining binders are induction
+hypotheses. Every unrelated
 motive is the constant inhabited lift of `major = major` into the recursor's
 motive sort, and every unrelated minor returns its lifted reflexivity.  This is the common elimination adapter
 for structure metadata (projections and eta): it permits selecting one member
 without assuming an inhabitant of any sibling's codomain. -/
 def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
     (modelRecursor : Name) (motiveIndex minorIndex : Nat)
-    (params : Array Expr) (carrier major targetMotive targetMinor : Expr)
+    (params : Array Expr) (carrier major targetMotive : Expr) (targetFieldIndex : Nat)
     (motiveLevel : Level) (recLevels : List Level) : GenM (Array Expr) := do
   let modelRecursorInfo ← constInfo modelRecursor
   let recType := modelRecursorInfo.type.instantiateLevelParams
@@ -275,7 +278,11 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
   for minor in [0:sourceRecursor.numMinors] do
     let .forallE _ domain body _ := current
       | badShape s!"{modelRecursor} has too few minor binders"
-    let value ← if minor == minorIndex then pure targetMinor
+    let value ← if minor == minorIndex then
+      forallTelescope domain fun binders _ => do
+        let some field := binders[targetFieldIndex]?
+          | badShape s!"{modelRecursor}'s selected minor has no field {targetFieldIndex}"
+        mkLambdaFVars binders field
       else forallTelescope domain fun binders _ => mkLambdaFVars binders fillerValue
     arguments := arguments.push value
     current := body.instantiate1 value
@@ -318,9 +325,9 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
   let mut fields : Array (Name × Nat) := #[]
   for type in types do
-    if type.isKernelStructureLike constructors.toList then
+    if let [constructorName] := type.ctors then
       if let some constructor := constructors.find? fun constructor =>
-          type.ctors.contains constructor.name && constructor.induct == type.name then
+          constructor.name == constructorName && constructor.induct == type.name then
         for fieldIndex in ← eligibleProjectionFieldsM type constructor do
           fields := fields.push (type.name, fieldIndex)
   if fields.isEmpty then return is
@@ -356,8 +363,6 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     let some memberIndex := types.findIdx? (·.name == owner)
       | badShape s!"{owner} has no structure member"
     let type := types[memberIndex]!
-    unless type.isKernelStructureLike constructors.toList do
-      badShape s!"{type.name} is not kernel structure-like"
     let [constructorName] := type.ctors
       | badShape s!"{type.name} does not have exactly one constructor"
     let some constructorIndex := constructors.findIdx? fun constructor =>
@@ -374,8 +379,6 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     let minorIndex ← recursorMinorIndex constructors recursors recursor constructorName
     let some motiveIndex := recursor.all.idxOf? type.name
       | badShape s!"{recursor.name} has no motive for {type.name}"
-    unless recursor.numIndices == 0 do
-      badShape s!"structure recursor {recursor.name} unexpectedly has indices"
     unless recursor.numMotives == recursor.all.length &&
         recursor.numMinors == constructors.size do
       badShape s!"{recursor.name} has an unexpected mutual telescope"
@@ -398,40 +401,39 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     if (← getEnv).constants.contains modelRule then declineWith (.nameTaken publicRule)
 
     let modelConstructorType := (← constInfo modelConstructor).type
+    let modelTypeInfo ← constInfo modelType
     let modelRecursorInfo ← constInfo modelRecursor
-    let carrier := fun (params : Array Expr) => mkAppN (.const modelType us) params
+    let ownerArity := type.numParams + type.numIndices
+    let carrier := fun (arguments : Array Expr) => mkAppN (.const modelType us) arguments
 
     -- Read the selected field type from the modeled constructor telescope.
     -- Every earlier field variable is replaced by the intrinsic projection
     -- already emitted for that field, so dependent results mention no
     -- constructor-local variable outside their scope.
-    let projectionType ← forallBoundedTelescope modelConstructorType (some type.numParams)
-        fun params fieldsType => do
-      withLocalDeclD `self (carrier params) fun self => do
+    let projectionType ← forallBoundedTelescope modelTypeInfo.type (some ownerArity)
+        fun ownerArguments _ => do
+      let params := ownerArguments.extract 0 type.numParams
+      let fieldsType ← instantiateForall modelConstructorType params
+      withLocalDeclD `self (carrier ownerArguments) fun self => do
         let mut current := fieldsType
         for earlier in [0:fieldIndex + 1] do
           let .forallE _ fieldType rest _ := current
             | badShape s!"{constructorName} has too few fields"
           if earlier == fieldIndex then
-            return ← mkForallFVars (params.push self) fieldType
+            return ← mkForallFVars (ownerArguments.push self) fieldType
           let some (_, _, earlierProjection, _) := projectionModels.find? fun entry =>
               entry.1 == type.name && entry.2.1 == earlier
             | badShape s!"{type.name}'s field {fieldIndex} precedes intrinsic field {earlier}"
-          let selected := mkAppN (.const earlierProjection us) (params.push self)
+          let selected := mkAppN (.const earlierProjection us) (ownerArguments.push self)
           current := rest.instantiate1 selected
         badShape s!"{constructorName} has no field {fieldIndex}"
 
-    let definition ← forallBoundedTelescope projectionType (some (type.numParams + 1))
+    let definition ← forallBoundedTelescope projectionType (some (ownerArity + 1))
         fun arguments result => do
       let params := arguments.extract 0 type.numParams
-      let self := arguments[type.numParams]!
-      let targetMotive ← mkLambdaFVars #[self] result
-      let targetMinor ← forallBoundedTelescope
-          (← instantiateForall modelConstructorType params) (some constructor.numFields)
-          fun fields _ => do
-        let some field := fields[fieldIndex]?
-          | badShape s!"{type.name}'s field {fieldIndex} is absent"
-        mkLambdaFVars fields field
+      let indices := arguments.extract type.numParams ownerArity
+      let self := arguments[ownerArity]!
+      let targetMotive ← mkLambdaFVars (indices.push self) result
       let resultLevel ← ilevel result
       let recLevels ←
         if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
@@ -441,9 +443,10 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         else
           badShape s!"{modelRecursor} carries unexpected universe parameters"
       let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-        motiveIndex minorIndex params (carrier params) self targetMotive targetMinor resultLevel recLevels
+        motiveIndex minorIndex params (carrier (params ++ indices)) self targetMotive fieldIndex
+        resultLevel recLevels
       let value ← mkLambdaFVars arguments
-        (mkAppN (.const modelRecursor recLevels) (pre.push self))
+        (mkAppN (.const modelRecursor recLevels) (pre ++ indices ++ #[self]))
       return Declaration.defnDecl
         { name := modelProjection, levelParams := is.levelParams, type := projectionType,
           value, hints := .abbrev, safety := .safe }
@@ -458,20 +461,19 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       let params := arguments.extract 0 type.numParams
       let fields := arguments.extract type.numParams arguments.size
       let major := mkAppN (.const modelConstructor us) arguments
-      let lhs := mkAppN (.const modelProjection us) (params.push major)
+      let majorType ← inferType major
+      let majorArguments := majorType.getAppArgs
+      unless majorArguments.size == ownerArity do
+        badShape s!"{modelConstructor}'s result has {majorArguments.size} arguments, expected {ownerArity}"
+      let indices := majorArguments.extract type.numParams ownerArity
+      let lhs := mkAppN (.const modelProjection us) (params ++ indices ++ #[major])
       let some rhs := fields[fieldIndex]?
         | badShape s!"{type.name}'s field {fieldIndex} is absent"
       let alpha ← inferType lhs
       let fieldLevel ← ilevel alpha
       let targetMotive ← forallBoundedTelescope
-          (← instantiateForall projectionType params) (some 1) fun self result =>
-        mkLambdaFVars self result
-      let targetMinor ← forallBoundedTelescope
-          (← instantiateForall modelConstructorType params) (some constructor.numFields)
-          fun minorFields _ => do
-        let some field := minorFields[fieldIndex]?
-          | badShape s!"{type.name}'s field {fieldIndex} is absent"
-        mkLambdaFVars minorFields field
+          (← instantiateForall projectionType params) (some (type.numIndices + 1))
+          fun motiveArguments result => mkLambdaFVars motiveArguments result
       let recLevels ←
         if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
           pure (fieldLevel :: us)
@@ -480,7 +482,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         else
           badShape s!"{modelRecursor} carries unexpected universe parameters"
       let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-        motiveIndex minorIndex params (carrier params) major targetMotive targetMinor fieldLevel recLevels
+        motiveIndex minorIndex params (carrier (params ++ indices)) major targetMotive fieldIndex
+        fieldLevel recLevels
       let proof := mkAppN (.const iotaTheorem recLevels) (pre ++ fields)
       let type ← mkForallFVars arguments (eqi.mk' fieldLevel alpha lhs rhs)
       let value ← mkLambdaFVars arguments proof
@@ -792,32 +795,39 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
     let numFields := numForalls constructorInfo.type - np
     let us := is.levelParams.map Level.param
     let modelType := is.selfNames[memberIndex]!
-    let wantProjectionType ← forallBoundedTelescope constructorInfo.type (some np)
-        fun params fieldsType => do
-      withLocalDeclD `self (mkAppN (.const modelType us) params) fun self => do
+    let ownerArity := np + ownerInfo.numIndices
+    let some modelTypeInfo := env.constants.find? modelType
+      | errs := errs.push s!"{modelType} was not generated"; continue
+    let wantProjectionType ← forallBoundedTelescope modelTypeInfo.type (some ownerArity)
+        fun ownerArguments _ => do
+      let params := ownerArguments.extract 0 np
+      let fieldsType ← instantiateForall constructorInfo.type params
+      withLocalDeclD `self (mkAppN (.const modelType us) ownerArguments) fun self => do
         let mut current := fieldsType
         for earlier in [0:fieldIndex + 1] do
           let .forallE _ fieldType rest _ := current
             | throwError "{modelConstructor} has too few fields"
-          if earlier == fieldIndex then return ← mkForallFVars (params.push self) fieldType
+          if earlier == fieldIndex then
+            return ← mkForallFVars (ownerArguments.push self) fieldType
           let some (_, _, earlierProjection, _) := is.projections.find? fun entry =>
               entry.1 == owner && entry.2.1 == earlier
             | throwError "{owner} has no intrinsic projection for earlier field {earlier}"
           current := rest.instantiate1
-            (mkAppN (.const earlierProjection us) (params.push self))
+            (mkAppN (.const earlierProjection us) (ownerArguments.push self))
         throwError "{modelConstructor} has no field {fieldIndex}"
     unless projectionInfo.levelParams == is.levelParams &&
         projectionInfo.type == wantProjectionType do
       errs := errs.push s!"{modelProjection} is not {owner}'s intrinsic field {fieldIndex}"
     n := n + 1
     let expected ← forallBoundedTelescope constructorInfo.type (some (np + numFields))
-        fun constructorArgs _ => do
+        fun constructorArgs constructorResult => do
       let params := constructorArgs.extract 0 np
       let fields := constructorArgs.extract np constructorArgs.size
+      let indices := constructorResult.getAppArgs.extract np ownerArity
       let major := mkAppN (.const modelConstructor (is.levelParams.map Level.param))
         constructorArgs
       let lhs := mkAppN (.const modelProjection (is.levelParams.map Level.param))
-        (params.push major)
+        (params ++ indices ++ #[major])
       let some rhs := fields[fieldIndex]?
         | return none
       let alpha ← inferType lhs
@@ -955,9 +965,20 @@ def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr))
       let n := Naming.ruleKName recursor
       if env.constants.contains n then return some n
   if let some (.inductInfo info) := env.constants.find? tname then
-    if !info.isRec && info.numIndices == 0 && ctors.size == 1 then
-      let numFields := numForalls ctors[0]!.2 - info.numParams
-      for fieldIndex in [:numFields] do
+    if ctors.size == 1 then
+      let ctorName := ctors[0]!.1
+      let some (.ctorInfo ctorInfo) := env.constants.find? ctorName | return none
+      let type : EIndType :=
+        { name := info.name, levelParams := info.levelParams, type := info.type,
+          all := info.all, ctors := info.ctors, numParams := info.numParams,
+          numIndices := info.numIndices, numNested := info.numNested, isRec := info.isRec,
+          isReflexive := info.isReflexive, isUnsafe := info.isUnsafe }
+      let constructor : ECtor :=
+        { name := ctorInfo.name, levelParams := ctorInfo.levelParams, type := ctorInfo.type,
+          cidx := ctorInfo.cidx, numParams := ctorInfo.numParams,
+          numFields := ctorInfo.numFields, induct := ctorInfo.induct,
+          isUnsafe := ctorInfo.isUnsafe }
+      for fieldIndex in ← eligibleProjectionFieldsM type constructor do
         for n in #[Naming.projectionName tname fieldIndex,
             Naming.projectionIotaName tname fieldIndex] do
           if env.constants.contains n then return some n

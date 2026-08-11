@@ -421,9 +421,9 @@ private partial def inferExactType? (x : Export) (declarations : ExactDeclaratio
       let constructorName ← type.ctors.head?
       let constructor ← constructors.find? fun constructor =>
         constructor.name == constructorName && constructor.induct == owner
-      unless type.isKernelStructureLike constructors do none
+      unless type.ctors == [constructorName] do none
       let ownerArguments := structType.getAppArgs
-      unless type.numParams <= ownerArguments.size do none
+      unless ownerArguments.size == type.numParams + type.numIndices do none
       let params := ownerArguments.extract 0 type.numParams
       let mut current := constructor.type.instantiateLevelParams constructor.levelParams levels
       for param in params do
@@ -467,10 +467,10 @@ private partial def projectionFieldEligible? (x : Export)
     (body.instantiate1 value) (locals.push (value.fvarId!, fieldType))
 
 /-- Zero-based constructor fields for which the kernel projection expression
-is well typed.  Empty also means that the member is not structure-like. -/
+is well typed.  The kernel requires one constructor, but does not require the
+owner to be non-recursive or unindexed. -/
 def Export.intrinsicProjectionFieldsFor (x : Export) (type : EIndType)
     (constructors : List ECtor) : Array Nat := Id.run do
-  unless type.isKernelStructureLike constructors do return #[]
   let [constructorName] := type.ctors | return #[]
   let some constructor := constructors.find? fun constructor =>
       constructor.name == constructorName && constructor.induct == type.name
