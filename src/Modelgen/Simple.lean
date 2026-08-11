@@ -2217,6 +2217,7 @@ Kept outside [`Modelgen.primIso`] so the already-large route dispatcher does
 not pay to elaborate both the identity and proposition-lift implementations. -/
 def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
     (lparams : List Name) (np : Nat) (memberTy constructorType modelConstructorType : Expr)
+    (declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
     (recursorType : Expr) (w v : Level) :
     GenM (Array Declaration × (Name × Nat × Expr × Expr)) := do
@@ -2237,7 +2238,7 @@ def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
       | .identity => fieldType
       | .propLift => puliftT w fieldType
   let selfDecl := Declaration.defnDecl
-    { name := selfN, levelParams := lparams, type := memberTy, value := selfValue
+    { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfValue
       hints := ← hintsFor selfValue, safety := .safe }
   addChecked selfDecl
   declarations := declarations.push selfDecl
@@ -2377,6 +2378,10 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
     match cur with
     | .sort w => return some (n, w)
     | _ => return none
+  -- Keep the literal exported declaration type for the public model.  The
+  -- exposed form below is definitionally equal, but is only an analysis aid:
+  -- emitting it would weaken the model's promised syntactic correspondence.
+  let declaredMemberTy := memberTy
   let (memberTy, ni, w) ←
     match peel memberTy with
     | some (n, w) => pure (memberTy, n, w)
@@ -3168,7 +3173,8 @@ data tower would have to hold a type the branch tower cannot see"
 
     let recTy := restore tbl rv.type
     let (directDecls, projectionOverride) ← directFieldModel directFieldRoute eqi tname
-      lparams np memberTy cty0 modelCtorTy selfN (ctorN 0) recN rv.levelParams recTy w v
+      lparams np memberTy cty0 modelCtorTy declaredMemberTy selfN (ctorN 0) recN
+        rv.levelParams recTy w v
     out := out ++ directDecls
     projectionOverrides := projectionOverrides.push projectionOverride
   else if armF then
@@ -3275,7 +3281,7 @@ data tower would have to hold a type the branch tower cannot see"
           mkForallFVars #[r] (.forallE `k (← minorTyAt ps is pk? r) r .default)
         mkLambdaFVars (ps ++ is) body
     let dSelf := Declaration.defnDecl
-      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
+      { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
     addChecked dSelf
     out := out.push dSelf
@@ -3602,7 +3608,7 @@ data tower would have to hold a type the branch tower cannot see"
         let β ← βOf ps (← packChain ni pk is 0)
         mkLambdaFVars (ps ++ is) (psigmaT w .zero (skelSelf ps) β)
     let dSelf := Declaration.defnDecl
-      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
+      { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
     addChecked dSelf
     out := out.push dSelf
@@ -3940,7 +3946,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     let selfVal ← withParams fun ps => mkLambdaFVars ps
       (mkAppN (.const wCoreSelf [uL, wKL]) #[wKTy ps, wAAt ps, wBFn ps, wTgAt ps])
     let dSelf := Declaration.defnDecl
-      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
+      { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
     addChecked dSelf
     out := out.push dSelf
@@ -4153,7 +4159,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
     )
     let selfVal ← withParams fun ps => do mkLambdaFVars ps (← carrierAt ps)
     let dSelf := Declaration.defnDecl
-      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
+      { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
     addChecked dSelf
     out := out.push dSelf
@@ -4348,7 +4354,7 @@ carrier is Sort {w}, so the branch tower does not land at the carrier's own sort
         mkLambdaFVars (ps ++ is)
           (match lift? with | none => pr | some ℓ => puliftT ℓ pr)
     let dSelf := Declaration.defnDecl
-      { name := selfN, levelParams := lparams, type := memberTy, value := selfVal
+      { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
         hints := ← hintsFor selfVal, safety := .safe }
     addChecked dSelf
     out := out.push dSelf
