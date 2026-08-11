@@ -1,5 +1,6 @@
 import Modelgen.Model
 import Modelgen.LevelAlgebra
+import Modelgen.Naming
 
 /-!
 # The model of a **plain mutual block**, generated
@@ -34,14 +35,14 @@ For a block `R₀ … R_{r−1}` sharing a parameter telescope `p⃗` and a resu
 sort `Sort u`, where member `k` carries its own index telescope `ι⃗ₖ`:
 
 ```text
-inductive T._model.tag p⃗       : Sort W               -- T._model.tag.k : ∀p⃗ ι⃗ₖ, tag p⃗
-inductive T._model.aux p⃗       : tag p⃗ → Sort u       -- every ctor of every member
-def R_k._model.self            : ∀p⃗ ι⃗ₖ, Sort u  := fun p⃗ ι⃗ₖ => aux p⃗ (tag.k p⃗ ι⃗ₖ)
-def T._model.ctor_j            : <its own type> := fun p⃗ f⃗ => aux.k.c p⃗ f⃗
-def T._model.rec_k             : <R_k.rec's>    := fun p⃗ M⃗ S⃗ ι⃗ₖ t =>
-                                    aux.rec p⃗ (tag.rec p⃗ (fun t => aux p⃗ t → Sort v) M⃗)
-                                             S⃗ (tag.k p⃗ ι⃗ₖ) t
-theorem T._model.iota_k_j      : <R_k.rec's rule j> := Eq.refl _
+inductive T._model._impl.tag p⃗ : Sort W
+inductive T._model._impl.aux p⃗ : tag p⃗ → Sort u
+def R_k._model                 : ∀p⃗ ι⃗ₖ, Sort u := fun p⃗ ι⃗ₖ => aux p⃗ (tag.k p⃗ ι⃗ₖ)
+def R_k.ctor._model            : <its own type> := fun p⃗ f⃗ => aux.k.c p⃗ f⃗
+def R_k.rec._model             : <R_k.rec's> := fun p⃗ M⃗ S⃗ ι⃗ₖ t =>
+                                   aux.rec p⃗ (tag.rec p⃗ (fun t => aux p⃗ t → Sort v) M⃗)
+                                            S⃗ (tag.k p⃗ ι⃗ₖ) t
+theorem R_k.rec._model.iota_j  : <R_k.rec's rule j> := Eq.refl _
 ```
 
 Four things make it work, each of them `mutual_aux.rs`'s and each load-bearing:
@@ -56,12 +57,12 @@ Four things make it work, each of them `mutual_aux.rs`'s and each load-bearing:
   branches.
 * **The minors are passed through untouched.** `aux.rec`'s minor for `aux.k.c`
   wants `Mot (tag.k p⃗ ι⃗) (aux.k.c p⃗ f⃗)`, and the minor in hand has type
-  `Mₖ ι⃗ (T._model.ctor_j p⃗ f⃗)`. Those are δι-equal — `Mot (tag.k p⃗ ι⃗)` reduces
+  `Mₖ ι⃗ (C._model p⃗ f⃗)`. Those are δι-equal — `Mot (tag.k p⃗ ι⃗)` reduces
   to `Mₖ ι⃗` by `tag`'s own ι rule, and `ctor_j` δ-unfolds to `aux.k.c` — so no
   transport is built and none is needed.
-* **Every `T._model.rec_k` hands `aux.rec` the same motive and the same
+* **Every `R_k._model` hands `aux.rec` the same motive and the same
   minors**, differing only in the tag. That is why the induction hypothesis a
-  rule produces is *literally* what `T._model.rec_m` unfolds to, and why the ι
+  rule produces is *literally* what `R_m._model` unfolds to, and why the ι
   theorems are `Eq.refl` rather than a transport.
 
 ## The one number that is not read off the declaration
@@ -102,7 +103,7 @@ That makes oracle 3's *recursor type* comparison true by construction here, and
 `MODELGEN.md` §4 says so rather than letting the number imply otherwise. What is
 **not** vacuous, and is where this construction's correctness actually lives:
 
-* **oracle 1, the kernel.** `T._model.rec_k` is checked *at the export's own
+* **oracle 1, the kernel.** `R_k._model` is checked *at the export's own
   declared type*, so the tag/aux encoding really does implement that recursor;
   and each ι theorem is checked at the export's own rule with `Eq.refl` as its
   proof, so the rule really is definitional in the model.
@@ -153,19 +154,42 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   unless r ≥ 2 && memberTys.size == r && exportCtors.size == r do
     badShape "not a mutual block"
   let root := all[0]!
-  let model := Name.str root "_model"
-  let tagN := Name.str model "tag"
-  let auxN := Name.str model "aux"
+  -- Tag, auxiliary carrier and their constructors are implementation details.
+  -- Only names obtained directly from an exported declaration through
+  -- `Modelgen.Naming` are public contract slots.
+  let impl := Name.str (Naming.modelName root) "_impl"
+  let tagN := Name.str impl "tag"
+  let auxN := Name.str impl "aux"
   let tagCtorN := fun (k : Nat) => Name.num tagN k
-  -- `T._model.aux.k.<last component of the original>`. The member index is in
+  -- `T._model._impl.aux.k.<last component of the original>`. The member index is in
   -- the name because two members of one block may have constructors whose last
   -- components agree — `A.mk` beside `B.mk` is the common case — and the
   -- constructors of every member live on one inductive here.
   let auxCtorN := fun (k : Nat) (cn : Name) => Name.str (Name.num auxN k) (lastStr cn)
-  let selfNames := all.map fun n => Name.str (Name.str n "_model") "self"
-  let ctorN := fun (j : Nat) => Name.str model s!"ctor_{j}"
-  let recN := fun (k : Nat) => Name.str model s!"rec_{k}"
-  let iotaN := fun (k j : Nat) => Name.str model s!"iota_{k}_{j}"
+  let selfNames := all.map Naming.modelName
+  let ctorN := Naming.modelName
+  let exportRecs := (Array.range r).map (exportRecName all)
+  let recN := fun (k : Nat) => Naming.modelName exportRecs[k]!
+  let iotaN := fun (k j : Nat) => Naming.iotaName exportRecs[k]! j
+
+  -- Public collisions are an atomic property of the declaration-local naming
+  -- table.  Census the whole table before emitting even implementation
+  -- support, including every recursor rule rather than discovering an occupied
+  -- iota name halfway through generation.
+  let recRuleCounts ← exportRecs.mapM fun recursor => do
+    let .recInfo info ← constInfo recursor | badShape s!"{recursor} is not a recursor"
+    return info.rules.length
+  let publicTable := Id.run do
+    let mut table := Naming.Table.empty
+    for member in all do table := table.addDeclaration .typeFormer member
+    for ctors in exportCtors do
+      for (ctor, _) in ctors do table := table.addDeclaration .constructor ctor
+    for k in [0:r] do table := table.addRecursor exportRecs[k]! recRuleCounts[k]!
+    return table
+  let occupied := reserved.fold (fun names name => names.push name) #[]
+  let census := publicTable.collisionCensus occupied
+  if let some name := census.taken[0]? <|> census.duplicateRequirements[0]? then
+    declineWith (.nameTaken name)
 
   -- **The whole file, not just the prefix replayed so far.** A model may not
   -- take a name the input introduces later; `mini/tests/fixtures/nested_
@@ -177,10 +201,10 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   taken auxN
   for k in [0:r] do
     taken (tagCtorN k)
-    taken selfNames[k]!
-    taken (recN k)
     for (cn, _) in exportCtors[k]! do taken (auxCtorN k cn)
-  for j in [0:exportCtors.foldl (fun a cs => a + cs.size) 0] do taken (ctorN j)
+  -- The environment also contains declarations generated earlier in a
+  -- composed run, which are not part of the input's `reserved` set.
+  for name in publicTable.requiredNames do taken name
 
   -- Each member's index count and resultant sort. **Every member's sort, not
   -- just the first's**: the kernel requires them to agree and the encoding
@@ -287,7 +311,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
 
   -- ── 3. the carriers, one per member ────────────────────────────────────
   --
-  -- `⟦R_k⟧ := ⟦R_k._model.self⟧` is the keying, and it is per member: `A.rec`
+  -- `⟦R_k⟧ := ⟦R_k._model⟧` is the keying, and it is per member: `A.rec`
   -- and `B.rec` are distinct recursors over distinct majors and a consumer keys
   -- `⟦A⟧` and `⟦B⟧` separately.
   for k in [0:r] do
@@ -312,16 +336,15 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   let mut ctors : Array (Name × Name) := #[]
   for k in [0:r] do
     for (cn, cty) in exportCtors[k]! do
-      let j := ctors.size
       let ty := restore toSelf cty
       let val ← forallBoundedTelescope ty (some (numForalls cty)) fun bs _ =>
         mkLambdaFVars bs (mkAppN (.const (auxCtorN k cn) us) bs)
       let d := Declaration.defnDecl
-        { name := ctorN j, levelParams := lparams, type := ty, value := val
+        { name := ctorN cn, levelParams := lparams, type := ty, value := val
           hints := ← hintsFor val, safety := .safe }
       addChecked d
       out := out.push d
-      ctors := ctors.push (cn, ctorN j)
+      ctors := ctors.push (cn, ctorN cn)
 
   -- The restore table every statement below is written with. It is
   -- [`Modelgen.checkModel`]'s own, built from the `Iso` this is on the way to
@@ -387,7 +410,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       -- **`aux.rec` is handed the same motive and the same minors by every
       -- member's recursor, and differs only in the tag.** That is what makes
       -- the induction hypothesis a rule produces literally what
-      -- `T._model.rec_m` unfolds to, and the ι theorems below `Eq.refl`.
+      -- `R_m._model` unfolds to, and the ι theorems below `Eq.refl`.
       let tagApp := mkAppN (.const (tagCtorN k) us) (ps ++ idxs)
       mkLambdaFVars bs
         (mkAppN (.const auxRecN auxLs) (((ps.push mot) ++ minors).push tagApp |>.push major))
@@ -405,7 +428,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   -- lines ι theorems up with rules by index and checks the key by name.
   --
   -- Every one of them is `Eq.refl`. That is the whole design: the encoding is
-  -- arranged so that `T._model.rec_k … (T._model.ctor_j p⃗ f⃗)` and the rule's
+  -- arranged so that `R_k._model … (C._model p⃗ f⃗)` and the rule's
   -- own right-hand side reach the same normal form by δ and ι alone, so the
   -- generator proves nothing and the kernel decides everything.
   let mut iotas : Array (Nat × Name × Name) := #[]
