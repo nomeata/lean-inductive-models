@@ -1,5 +1,6 @@
 import Modelgen.Simple
 import Modelgen.Cli
+import Modelgen.Naming
 
 /-!
 # The filter
@@ -16,11 +17,12 @@ gets in the way, just after the block for the second (`MODELGEN.md` §1.6). The
 input's own records are otherwise unchanged, and a file with neither kind of
 declaration is copied **byte for byte** rather than re-serialised.
 
-There are **two** constructions and they are separate files. `Modelgen/
+There are **three** constructions and they are separate files. `Modelgen/
 Model.lean` specialises a nested declaration into a mutual block and proves the
 export's recursors over it; `Modelgen/Mutual.lean` packs a plain mutual block
-into a tag and one single inductive. Neither is the other at a degenerate
-setting — §1.6 — and this driver is the only thing that knows both.
+into an implementation tag and one auxiliary inductive; `Modelgen/Simple.lean`
+models a single inductive from the primitive basis. None is a degenerate case
+of another, and this driver is the only thing that composes them.
 
 ## Why the whole file is re-interned when anything is spliced
 
@@ -72,6 +74,19 @@ structure Report where
   unreplayable : Option String := none
   deriving Inhabited
 
+/-- A generated model waiting for its statements to be compared with the
+exact recursor records of the declaration it models. -/
+structure PendingModel where
+  all : Array Name
+  numParams : Nat
+  iso : Iso
+  /-- The export's recursors, in its own order. For a block generated inside
+  this pass, [`Modelgen.recursorsOfNames`] reads back the exact records that
+  this driver just emitted. -/
+  recursors : Array ERec
+
+private abbrev FilterState := Array EDecl × Report × Array PendingModel
+
 /-- Read one inductive block back out of the environment, including the
 recursors the **kernel** generated for it. -/
 def indEDecl (names : Array Name) : MetaM EDecl := do
@@ -101,6 +116,12 @@ def indEDecl (names : Array Name) : MetaM EDecl := do
           rules := rv.rules.map fun r =>
             { ctor := r.ctor, nfields := r.nfields, rhs := r.rhs } }
   return .induct ts.toList cs.toList rs.toList
+
+/-- Read the exact recursor records of a block generated inside this pass. -/
+def recursorsOfNames (names : Array Name) : MetaM (Array ERec) := do
+  let .induct _ _ recursors ← indEDecl names
+    | throwError "{names} did not read back as an inductive block"
+  return recursors.toArray
 
 /-- A generated declaration as an export record. -/
 def toEDecl : Declaration → MetaM EDecl
@@ -163,14 +184,29 @@ own major type rather than off the plan, and compared syntactically.
 
 This is `mini/tests/nested.rs`'s `check_recursors` and `check_iotas`, ported. It
 is what forced a real bug out of the Rust — recursors rewritten at no levels. -/
-def checkModel (all : Array Name) (np : Nat) (is : Iso) : MetaM (Nat × Array String) := do
+def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec) :
+    MetaM (Nat × Array String) := do
   let env ← getEnv
-  let tbl := modelTable env all is
+  let mut tbl := modelTable env all is
+  let exportedFor := fun (modelRecursor : Name) =>
+    recursors.find? fun recursor => Naming.modelName recursor.name == modelRecursor
+  -- `modelTable` is also used below the driver and retains its structural
+  -- fallback. Here the export's exact names are available, so make those the
+  -- authoritative recursor keys rather than reconstructing `T.rec_k`.
+  for modelRecursor in is.recs do
+    if let some recursor := exportedFor modelRecursor then
+      tbl := tbl.insert recursor.name
+        (0, .const modelRecursor (recursor.levelParams.map Level.param))
   let mut n := 0
   let mut errs : Array String := #[]
+  unless recursors.size == is.recs.size do
+    errs := errs.push s!"the export carries {recursors.size} recursors but the model carries \
+      {is.recs.size}"
   for k in [0:is.recs.size] do
-    let ern := exportRecName all k
-    let some (.recInfo rv) := env.constants.find? ern
+    let some rv := exportedFor is.recs[k]!
+      | errs := errs.push s!"model recursor {is.recs[k]!} has no exported recursor"; continue
+    let ern := rv.name
+    let some (.recInfo _) := env.constants.find? ern
       | errs := errs.push s!"{ern} was not installed"; continue
     let some mi := env.constants.find? is.recs[k]!
       | errs := errs.push s!"{is.recs[k]!} was not generated"; continue
@@ -369,10 +405,10 @@ well-founded and must stay unmodelled. That is also what bounds the recursion
 model that needed it, and its own model is appended after; the export only
 requires a declaration to precede its uses. -/
 partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
-    (ctors : Array (Name × Expr)) (reserved : Std.HashSet Name) (basicModels : Bool)
+    (ctors : Array (Name × Expr)) (recursors : Array ERec)
+    (reserved : Std.HashSet Name) (basicModels : Bool)
     (canWait : Bool)
-    (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
-    MetaM ((Array EDecl × Report × Array (Array Name × Nat × Iso)) × Bool) := do
+    (st : FilterState) : MetaM (FilterState × Bool) := do
   let (out, rep, pending) := st
   let saved ← getEnv
   -- **The retry under an alias root**, and it is a retry rather than a
@@ -418,20 +454,23 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
-    let mut st2 := (out, rep, pending.push (#[tname], np, is))
+    let mut st2 := (out, rep, pending.push
+      { all := #[tname], numParams := np, iso := is, recursors := recursors })
     if basicModels then
       for n in is.spliced do
         if primBasis.contains n then continue
         let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
         -- the block's own name only, and only a simple one
         unless iv.all == [n] && iv.numNested == 0 do continue
-        -- already modelled (a second declaration spliced the same thing)
-        if (← getEnv).constants.contains (Name.str (Name.str n "_model") "self") then continue
+        -- Already modeled: the declaration-local carrier itself is the key.
+        if (← getEnv).constants.contains (Naming.modelName n) then continue
         let mut cts : Array (Name × Expr) := #[]
         for cn in iv.ctors do
           if let some ci := (← getEnv).constants.find? cn then cts := cts.push (cn, ci.type)
+        let supportRecursors ← recursorsOfNames #[n]
         st2 :=
-          (← genPrim n iv.levelParams iv.numParams iv.type cts reserved basicModels false st2).1
+          (← genPrim n iv.levelParams iv.numParams iv.type cts supportRecursors reserved
+            basicModels false st2).1
     -- **A model may not leave an inductive it introduced unmodelled.** Arm C
     -- (`MODELGEN.md` §8.15) splices the index erasure of the family it is
     -- carving, so its output contains an inductive that was in nobody's
@@ -456,7 +495,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
           (Modelgen.renameRoot fr to n, ns.map (Modelgen.renameRoot fr to)) }, st2.2.2)
     if basicModels then
       for n in is.requires do
-        unless (← getEnv).constants.contains (Name.str (Name.str n "_model") "self") do
+        unless (← getEnv).constants.contains (Naming.modelName n) do
           -- **Withdraw everything**, and off `st` rather than off the locals:
           -- `out`, `rep` and `pending` have all been added to by the emission
           -- and the descent above, and returning any of those would leave the
@@ -486,12 +525,15 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
 [`Modelgen.primCompose`] now returns entries for it. The leading `Bool` says
 *which* wait: `false` for the basis ([`Modelgen.primReady`]) and `true` for the
 quotient behind `funext` ([`Modelgen.primLateReady`]). -/
-abbrev PrimJob := Bool × Name × List Name × Nat × Expr × Array (Name × Expr)
+abbrev PrimJob :=
+  Bool × Name × List Name × Nat × Expr × Array (Name × Expr) × Array ERec
 
-/-- **The composition's third step**: the single inductives a mutual model
-just emitted — `T._model.tag` and `T._model.aux` — are declarations of the
-output like any other, so `--prim-models` runs on them too. The tag is a
-plain sum and models; `aux` is indexed and takes arm C.
+/-- **The composition's third step**: the implementation inductives a mutual
+model just emitted — `T._model._impl.tag` and `T._model._impl.aux` — are
+declarations of the output like any other, so the simple branch runs on them
+too. The tag is a plain sum and models; the auxiliary is indexed and takes
+arm C. Their own public carriers are the declaration-local names
+`T._model._impl.tag._model` and `T._model._impl.aux._model`.
 
 **And it can wait, exactly as an input declaration can.** A prim model may
 splice `Eq`, `False`, `Nat` and `PSigma`, and a splice is refused at a name the
@@ -517,8 +559,7 @@ end-of-file drain, where nothing more is coming and a decline is the honest
 answer. -/
 def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     (reserved : Std.HashSet Name) (basicModels : Bool) (canWait : Bool)
-    (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
-    MetaM ((Array EDecl × Report × Array (Array Name × Nat × Iso)) × Array PrimJob) := do
+    (st : FilterState) : MetaM (FilterState × Array PrimJob) := do
   let mut st := st
   let mut wait : Array PrimJob := #[]
   -- Asked once, of the environment as it stands at the block: every member of
@@ -530,13 +571,14 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     for cn in iv.ctors do
       let some ci := (← getEnv).constants.find? cn | continue
       cts := cts.push (cn, ci.type)
+    let recursors ← recursorsOfNames #[n]
     if canWait && !ready then
       -- The type and the constructor types are read **here**, at the block,
       -- because that is where the member is known to be installed; the drain
       -- only needs to call `genPrim` with them.
-      wait := wait.push (false, n, lparams, np, iv.type, cts)
+      wait := wait.push (false, n, lparams, np, iv.type, cts, recursors)
     else
-      st := (← genPrim n lparams np iv.type cts reserved basicModels false st).1
+      st := (← genPrim n lparams np iv.type cts recursors reserved basicModels false st).1
   return (st, wait)
 
 /-- One plain mutual block's model, generated and accounted for.
@@ -548,12 +590,11 @@ a block that had to wait for it.
 The second component is [`Modelgen.primCompose`]'s deferred jobs, which the
 caller adds to its own `waitingPrim`; it is empty unless the simple layer is on
 and the basis is late. The basic layer is passed separately and controls the
-support closure of each generated tag and auxiliary model. -/
+support closure of each generated implementation tag and auxiliary model. -/
 def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
-    (tys : Array Expr) (ctors : Array (Array (Name × Expr)))
+    (tys : Array Expr) (ctors : Array (Array (Name × Expr))) (recursors : Array ERec)
     (reserved : Std.HashSet Name) (simpleModels basicModels canWait : Bool)
-    (st : Array EDecl × Report × Array (Array Name × Nat × Iso)) :
-    MetaM ((Array EDecl × Report × Array (Array Name × Nat × Iso)) × Array PrimJob) := do
+    (st : FilterState) : MetaM (FilterState × Array PrimJob) := do
   let (out, rep, pending) := st
   let saved ← getEnv
   match ← (mutualIso all lparams np tys ctors reserved).run with
@@ -568,7 +609,8 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
-    let st := (out, rep, pending.push (all, np, is))
+    let st := (out, rep, pending.push
+      { all := all, numParams := np, iso := is, recursors := recursors })
     if simpleModels then
       primCompose is.members is.levelParams np reserved basicModels canWait st
     else
@@ -588,19 +630,19 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   let mut rep : Report := {}
   -- Held back until the export's own declaration is installed, so the
   -- statements can be compared against the recursors it then mints.
-  let mut pending : Array (Array Name × Nat × Iso) := #[]
+  let mut pending : Array PendingModel := #[]
   -- Plain mutual blocks whose model is waiting for the input's own `Eq`.
   let mut waiting : Array (Array Name × List Name × Nat × Array Expr ×
-    Array (Array (Name × Expr))) := #[]
+    Array (Array (Name × Expr)) × Array ERec) := #[]
   -- Simple inductives waiting for the input's own basis
   -- declarations. The leading `Bool` says *which* wait: `false` for the basis
   -- ([`Modelgen.primReady`]) and `true` for the quotient behind `funext`
   -- ([`Modelgen.primLateReady`]) — kept apart so a model that never touches
   -- `funext` is not moved past a `Quot` it does not need.
   -- **The composition's third step queues here too** ([`Modelgen.PrimJob`]'s
-  -- type): a `T._model.tag` or `T._model.aux` whose model needs a primitive the
-  -- input declares later waits exactly as one of the input's own declarations
-  -- does, instead of declining at a name that is merely late.
+  -- type): a `T._model._impl.tag` or `T._model._impl.aux` whose model needs a
+  -- primitive the input declares later waits exactly as one of the input's own
+  -- declarations does, instead of declining at a name that is merely late.
   let mut waitingPrim : Array PrimJob := #[]
   -- Every name the input declares anywhere, so that a model cannot collide
   -- with one the file itself introduces *later*.
@@ -610,7 +652,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     -- The model, if this is a nested declaration. Generated **before** the
     -- declaration is added, which is where `mini/src/nested.rs` also stands:
     -- nothing in the model mentions `T`.
-    if let .induct ts cs _ := d then
+    if let .induct ts cs inputRecursors := d then
       -- **A mutual block whose members nest is one block, not several.** Lean
       -- specialises the whole block at once — `nest_mutual_both`'s `A`/`B`
       -- become four members with four recursors over one shared motive vector
@@ -639,7 +681,9 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
               rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
               unless is.spliced.isEmpty do
                 rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
-              pending := pending.push (all, t.numParams, is)
+              pending := pending.push
+                { all, numParams := t.numParams, iso := is,
+                  recursors := inputRecursors.toArray }
               -- ── the model of the model (§1.7) ─────────────────────────────
               --
               -- **What has just been emitted is a `mutual … end` block**, and
@@ -677,7 +721,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                     for e in ← toEDecls gd do out := out.push e
                   rep := { rep with
                     generated := rep.generated.push (is.members[0]!, is2.decls.size) }
-                  pending := pending.push (is.members, t.numParams, is2)
+                  let modelRecursors ← recursorsOfNames is.members
+                  pending := pending.push
+                    { all := is.members, numParams := t.numParams, iso := is2,
+                      recursors := modelRecursors }
                   -- ── the third step of the chain (`--prim-models`) ─────────
                   -- The mutual model's own single inductives, modelled from
                   -- the primitives — nested → mutual → primitives, one pass.
@@ -713,13 +760,14 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     -- there is nothing else to read the statements off: a nested declaration's
     -- model restates the recursors of the *specialised* block, which this tool
     -- builds itself, and a plain mutual block has no such second inductive —
-    -- `aux.rec` is not `R_k.rec` at any renaming. So `Modelgen.mutualIso` reads
-    -- the recursors Lean minted for the input's own block, which exist only
-    -- once it is installed (`Modelgen/Mutual.lean`'s header).
+    -- the implementation auxiliary's recursor is not `R_k.rec` at any
+    -- renaming. So `Modelgen.mutualIso` reads the recursors Lean minted for the
+    -- input's own block, which exist only once it is installed
+    -- (`Modelgen/Mutual.lean`'s header).
     --
     -- The **records** still go out ahead of the declaration's whenever they
     -- can, because `out` has not been pushed yet.
-    if let .induct ts cs _ := d then
+    if let .induct ts cs inputRecursors := d then
       if let t :: _ := ts then
         -- **No "is this a block I wrote?" test here**, and that is deliberate.
         -- On this tool's own output the block `T._model.0 … T._model.{n−1}` is
@@ -733,7 +781,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           let ctors := all.map fun n =>
             (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
           let tys := ts.toArray.map (·.type)
-          let job := (all, t.levelParams, t.numParams, tys, ctors)
+          let job := (all, t.levelParams, t.numParams, tys, ctors, inputRecursors.toArray)
           -- **The model may have to wait for the input's own `Eq`.** Its ι
           -- theorems are stated at one, and an export's dependency order
           -- routinely puts `Eq` *after* a block that does not itself use it —
@@ -742,7 +790,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           -- `expand` holds its rule theorems back for the same reason. A file
           -- that declares no `Eq` at all does not wait: §1.5 splices one.
           if ← eqReady reserved then
-            let (st3, jobs) ← genMutual all t.levelParams t.numParams tys ctors reserved
+            let (st3, jobs) ← genMutual all t.levelParams t.numParams tys ctors
+              inputRecursors.toArray reserved
               generation.simple generation.basic true (out, rep, pending)
             (out, rep, pending) ← pure st3
             waitingPrim := waitingPrim ++ jobs
@@ -756,22 +805,24 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
           if ← primReady reserved then
             let (st, lateWait) ← genPrim t.name t.levelParams t.numParams t.type ctors
-              reserved generation.basic true (out, rep, pending)
+              inputRecursors.toArray reserved generation.basic true (out, rep, pending)
             if lateWait then
               waitingPrim := waitingPrim.push
-                (true, t.name, t.levelParams, t.numParams, t.type, ctors)
+                (true, t.name, t.levelParams, t.numParams, t.type, ctors,
+                  inputRecursors.toArray)
             else
               (out, rep, pending) ← pure st
           else
             waitingPrim := waitingPrim.push
-              (false, t.name, t.levelParams, t.numParams, t.type, ctors)
+              (false, t.name, t.levelParams, t.numParams, t.type, ctors,
+                inputRecursors.toArray)
     out := out.push d
     -- The input's own `Eq` has just arrived: every block that was waiting for
     -- it gets its model here, **after** the `Eq` record, which is where
     -- dependency order puts it.
     if !waiting.isEmpty && (← eqReady reserved) then
-      for (all, lp, np, tys, ctors) in waiting do
-        let (st3, jobs) ← genMutual all lp np tys ctors reserved generation.simple
+      for (all, lp, np, tys, ctors, recursors) in waiting do
+        let (st3, jobs) ← genMutual all lp np tys ctors recursors reserved generation.simple
           generation.basic true
           (out, rep, pending)
         (out, rep, pending) ← pure st3
@@ -786,21 +837,22 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       let basisOk ← primReady reserved
       let lateOk ← primLateReady reserved
       if basisOk || lateOk then
-        let mut keep : Array (Bool × Name × List Name × Nat × Expr × Array (Name × Expr)) := #[]
+        let mut keep : Array PrimJob := #[]
         for job in waitingPrim do
-          let (needsLate, n, lp, np, ty, ctors) := job
+          let (needsLate, n, lp, np, ty, ctors, recursors) := job
           if (if needsLate then lateOk else basisOk) then
-            let (st, lateWait) ← genPrim n lp np ty ctors reserved generation.basic true
+            let (st, lateWait) ← genPrim n lp np ty ctors recursors reserved
+              generation.basic true
               (out, rep, pending)
             if lateWait then
-              keep := keep.push (true, n, lp, np, ty, ctors)
+              keep := keep.push (true, n, lp, np, ty, ctors, recursors)
             else
               (out, rep, pending) ← pure st
           else
             keep := keep.push job
         waitingPrim := keep
-    for (all, np, is) in pending do
-      let (m, errs) ← checkModel all np is
+    for model in pending do
+      let (m, errs) ← checkModel model.all model.numParams model.iso model.recursors
       rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
     pending := #[]
     if checkRecursors then
@@ -813,17 +865,18 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   -- saying anything. Nothing in the tree reaches it: over all 230 files the
   -- decline list gains nothing at all against the run before §1.6 existed, and
   -- a block left waiting would have put a `mutual model name taken (Eq)` in it.
-  for (all, lp, np, tys, ctors) in waiting do
-    let (st3, jobs) ← genMutual all lp np tys ctors reserved generation.simple
+  for (all, lp, np, tys, ctors, recursors) in waiting do
+    let (st3, jobs) ← genMutual all lp np tys ctors recursors reserved generation.simple
       generation.basic false
       (out, rep, pending)
     (out, rep, pending) ← pure st3
     waitingPrim := waitingPrim ++ jobs
-  for (_, n, lp, np, ty, ctors) in waitingPrim do
+  for (_, n, lp, np, ty, ctors, recursors) in waitingPrim do
     (out, rep, pending) ← pure
-      (← genPrim n lp np ty ctors reserved generation.basic false (out, rep, pending)).1
-  for (all, np, is) in pending do
-    let (m, errs) ← checkModel all np is
+      (← genPrim n lp np ty ctors recursors reserved generation.basic false
+        (out, rep, pending)).1
+  for model in pending do
+    let (m, errs) ← checkModel model.all model.numParams model.iso model.recursors
     rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
   return (out, rep)
 
