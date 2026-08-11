@@ -97,6 +97,12 @@ srcDir = "test"
 root = "StructureEtaTest"
 supportInterpreter = true
 
+[[lean_exe]]
+name = "deepimaxboxtest"
+srcDir = "test"
+root = "DeepImaxBoxTest"
+supportInterpreter = true
+
 # Diagnostics: these targets are useful during development, but are not
 # correctness suites and are not part of the default build.
 [[lean_exe]]
