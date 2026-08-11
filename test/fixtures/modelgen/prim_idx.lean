@@ -86,7 +86,8 @@
      (`k h`), and no data fields at all: `Inf.below`'s shape without the
      recursion. **Green under every mutation in the sweep, and that is the
      finding rather than a gap** — see below.
-   * `Fmid` — arm F's **refusal**.
+   * `Fmid` — a pivot whose type moves with a preceding non-pivot; arm F
+     transports a function over that pivot along the packed equation.
    * `Rv` — arm G's control, `Acc`'s own shape, every index a pivot; `Rxh` and
      `Rvx` its two mixed cells, a proof non-pivot beside no pivot and beside
      one.
@@ -103,6 +104,7 @@
    | **F** the packed type not instantiated at the caller's index vector | `Fdep` |
    | **E** the unpacked components written back at the identity positions | `Fdep` |
    | **N** the non-pivot positions taken as a prefix rather than as the complement | `Fdep` |
+   | **M** the dependent pivot cast to the constructor endpoint and back instead of transported as a function | `Fmid` |
    | **H** the rebuilt carrier handed every field rather than the bound ones | `Fdep`, `Fdup` |
    | **C** the whole index vector packed rather than the non-pivot subsequence | every cell with a pivot; `Fg` and `Fxh` green |
    | **D** the non-pivot subsequence reversed | nothing here; `prim_shapes`'s `Hq` and the W core's `HEq`, whose packs are dependent |
@@ -146,15 +148,18 @@
    witness that it is inhabited and works; `Fp` would have been a second
    witness of the same nothing.
 
-   # Arm F's refusal, and it is a real one
+   # Arm F's dependent pivot transport
 
    `Fmid : (α : Type) → α → α → Prop` with `mk (x : N) : Fmid N x N.z` is a
    pivot whose *own type* is the ground index before it. The model reads a data
    field off the recursor's index argument, and there that argument's type is
-   index 0 — an arbitrary `Type`, which only the equation says is `N` — so the
-   field cannot be used without a transport this arm does not build. It is the
-   one place the two halves of the axis fail to compose. In contrast,
-   `Acc.below`'s `a : α` is a parameter rather than such an index.
+   index 0 — an arbitrary `Type`, which only the packed equation says is `N`.
+   The recursor therefore transports a **function over the pivot**: at the
+   constructor endpoint it accepts `x : N` and applies the minor; at the caller
+   endpoint it accepts `x : α` and is applied to the caller's field literally.
+   Casting the field to `N` and back would be only propositionally equal to the
+   caller's term and would leave the recursor motive at the wrong syntactic
+   index. The function transport makes both endpoints exact and keeps ι `rfl`.
 
    # Arm G's refusal, and it is one column and not a row
 

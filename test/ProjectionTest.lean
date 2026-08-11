@@ -3,6 +3,8 @@ import Modelgen.Check
 import Modelgen.Mono
 import Modelgen.Order
 
+set_option maxRecDepth 2048
+
 open Lean Meta Modelgen
 
 structure TestState where
@@ -269,6 +271,25 @@ def main : IO UInt32 := do
   state := state.check "no-base recursor eliminates the empty lift" <|
     (definitionValue? noBaseGenerated (Naming.modelName (Name.str noBaseSkel "rec"))).any
       (containsConst `PULiftP.rec)
+
+  -- Arm F's packed equation can change the declared type of a pivot.  Fmid's
+  -- recursor transports a function over that pivot, so the target endpoint is
+  -- applied to the caller's field literally and the exact syntactic interface
+  -- still passes the public checker.
+  let fmidRaw ← readExport "test/fixtures/modelgen/prim_idx.ndjson"
+  let (fmidDeclarations, fmidReport) ← runExport fmidRaw
+  let fmidGenerated := outputExport fmidRaw fmidDeclarations
+  let fmidOrdered ← match Order.reorder fmidGenerated with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot order dependent-pivot fixture: {repr error}"
+  state := state.check "dependent arm-F pivot models" <|
+    fmidReport.generated.contains (`Fmid, 4) &&
+      !fmidReport.declined.any fun (owner, _) => owner == `Fmid
+  state := state.check "dependent arm-F pivot satisfies the exact public checker" <|
+    (Check.check fmidOrdered).all fun violation => violation.familyOwner != `Fmid
+  state := state.check "dependent arm-F recursor performs equality transport" <|
+    (definitionValue? fmidGenerated (Naming.modelName `Fmid.rec)).any
+      (containsConst ``Eq.rec)
 
   -- The parameter-dependent proposition field takes the same route.  Its
   -- source owner precedes the input's own lift declaration, so generation has

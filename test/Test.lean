@@ -448,22 +448,21 @@ def expectedPrim : List Row :=
   -- arriving by accident — which is the fixture saying the boundary is where
   -- it says it is, now from the green side.
   --
-  -- **Three declines, and the two new ones are the two halves of the guard.**
+  -- **Two declines, both on arm G's data non-pivot boundary.**
   -- `Rgd` — a **proof** non-pivot standing in front of a **data** one — is red
   -- exactly when the arm asks its question of the *first* non-pivot rather
   -- than of every one, and `BadC` in `prim_graph` survives that mutation. It
   -- declines naming index **1** and not index 0, which is the claim.
-  -- `Rgd.below` beside it is the same shape at three indices. `Fmid` is arm
-  -- F's own refusal and is untouched.
+  -- `Rgd.below` beside it is the same shape at three indices. `Fmid` is the
+  -- positive arm-F control whose pivot type moves along the packed equation.
   , ("prim_idx",
       [("N", 9), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 14),
        ("Rxh", 18), ("Rxh.below", 22), ("Fam", 6), ("Inf.below", 18),
-       ("Fg", 5), ("Rv.below", 13), ("Fall3", 4), ("Fxh", 6), ("Fdep", 4),
+       ("Fg", 5), ("Rv.below", 13), ("Fall3", 4), ("Fxh", 6), ("Fmid", 4), ("Fdep", 4),
        ("Rvx.below", 13), ("Fdup", 4)],
       [ ("Eq", "prim model: a basis primitive")
       , ("Rgd", "prim model shape: Rgd.mk's index 1 is not one of its own data fields")
-      , ("Rgd.below", "prim model shape: Rgd.below.mk's index 1 is not one of its own data fields")
-      , ("Fmid", "prim model shape: Fmid.mk's index 1 is one of its own data fields but its type mentions index 0")])
+      , ("Rgd.below", "prim model shape: Rgd.below.mk's index 1 is not one of its own data fields")])
   , ("prim_graph",
       [("G1", 17), ("Nonempty", 4), ("G4", 15), ("G4.below", 13), ("Ac", 13),
        ("N", 8), ("Ac.below", 13), ("G3", 13), ("G3.below", 13),
