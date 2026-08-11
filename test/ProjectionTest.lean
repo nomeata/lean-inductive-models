@@ -244,6 +244,32 @@ def main : IO UInt32 := do
       !containsConst `PULiftP value && !containsConst `PULiftP.up value &&
         !containsConst `PULiftP.rec value
 
+  -- A recursive Type with no base constructor is empty, including when arm C
+  -- obtains it as the erasure skeleton of an indexed family.  `NoBase` checks
+  -- both layers: the eight-slot skeleton interface (including its two
+  -- intrinsic projection pairs) must close before the ten-slot indexed model
+  -- is allowed to emit.
+  let noBaseRaw ← readExport "test/fixtures/modelgen/prim_carve.ndjson"
+  let (noBaseDeclarations, noBaseReport) ← runExport noBaseRaw
+  let noBaseGenerated := outputExport noBaseRaw noBaseDeclarations
+  let noBaseOrdered ← match Order.reorder noBaseGenerated with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot order no-base fixture: {repr error}"
+  let noBaseSkel := `NoBase._model._impl.skel
+  state := state.check "no-base indexed family and its empty skeleton both model" <|
+    noBaseReport.generated.contains (`NoBase, 10) &&
+      noBaseReport.generated.contains (noBaseSkel, 8) &&
+      !noBaseReport.declined.any fun (owner, _) => owner == `NoBase || owner == noBaseSkel
+  state := state.check "no-base interfaces satisfy the exact public checker" <|
+    (Check.check noBaseOrdered).all fun violation =>
+      violation.familyOwner != `NoBase && violation.familyOwner != noBaseSkel
+  state := state.check "no-base skeleton uses the exact empty lift carrier" <|
+    (definitionValue? noBaseGenerated (Naming.modelName noBaseSkel)).any
+      (containsConst `PULiftP)
+  state := state.check "no-base recursor eliminates the empty lift" <|
+    (definitionValue? noBaseGenerated (Naming.modelName (Name.str noBaseSkel "rec"))).any
+      (containsConst `PULiftP.rec)
+
   -- The parameter-dependent proposition field takes the same route.  Its
   -- source owner precedes the input's own lift declaration, so generation has
   -- to wait, use that declaration, and let the stable order pass place the

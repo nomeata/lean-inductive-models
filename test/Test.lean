@@ -551,13 +551,12 @@ def expectedPrim : List Row :=
        ("Mx", 8), ("Mx._model._impl.skel", 12),
        ("Two2", 8), ("Two2._model._impl.skel", 6), ("Fn", 8), ("Fn._model._impl.skel", 6),
        ("Sm3", 8), ("Sm3._model._impl.skel", 12), ("Br", 8), ("Br._model._impl.skel", 12),
+       ("NoBase", 10), ("NoBase._model._impl.skel", 8),
        ("Tri3", 8), ("Tri3._model._impl.skel", 6)],
       [ ("Eq", "prim model: a basis primitive")
-      -- withdrawn: the erasure is bare and still does not model, and the
-      -- reason carried is the *skeleton's* own rather than "it did not model"
+      -- withdrawn: the erasure is bare and its `imax` skeleton still does not
+      -- model. `NoBase` beside it is the empty-skeleton positive control.
       , ("IBox", "prim model shape: the spliced inductive IBox._model._impl.skel did \
-          not model")
-      , ("NoBase", "prim model shape: the spliced inductive NoBase._model._impl.skel did \
           not model")])
   -- **Arm W**, and this row is three claims at once.
   --
@@ -623,7 +622,7 @@ def expectedPrim : List Row :=
   -- `_wcore` rows after it are the fragment being modelled in turn
   -- (`Iso.requires`' rule). Both numbers are facts about *ordering*.
   --
-  -- **Three declines, and each is a different boundary.**
+  -- **Two declines, both instances of the same erasure boundary.**
   --
   -- * `OK` and `Key` are the **vanishing mention**: the family parameter is
   --   `fun _ => N`, so the field is `(fun x : T … => N) k`, whose reduct is
@@ -635,9 +634,9 @@ def expectedPrim : List Row :=
   --   Mathlib is this shape, so it is recorded and named rather than built.
   --   Their message must not say *infinitary* — there is no binder over an
   --   occurrence, because there is no occurrence.
-  -- * `Flat` is arm C's withdrawal at a skeleton with **no base constructor**,
-  --   the same inner reason as `prim_carve`'s `NoBase`, reached here by a
-  --   container with no recursive field of its own.
+  -- `Flat` is the positive control: its nested specialization reaches arm C
+  -- through a skeleton with no base constructor, which arm E models as the
+  -- exact empty carrier.
   , ("nest_fam_arg",
       [("N", 9), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model._impl.skel", 6),
        ("RB", 215),
@@ -671,6 +670,8 @@ def expectedPrim : List Row :=
        ("Two._model._impl.0._model._impl.aux", 10),
        ("Two._model._impl.0._model._impl.aux._model._impl.skel", 14),
        ("Flat", 14), ("Flat._model._impl.0", 16), ("Flat._model._impl.0._model._impl.tag", 6),
+       ("Flat._model._impl.0._model._impl.aux", 8),
+       ("Flat._model._impl.0._model._impl.aux._model._impl.skel", 6),
        ("Key", 23), ("Key._model._impl.0", 20), ("Key._model._impl.0._model._impl.tag", 8),
        ("Zeta", 23), ("Zeta._model._impl.0", 20), ("Zeta._model._impl.0._model._impl.tag", 8),
        ("Zeta._model._impl.0._model._impl.aux", 14),
@@ -681,8 +682,6 @@ def expectedPrim : List Row :=
       [ ("Eq", "prim model: a basis primitive")
       , ("OK._model._impl.0._model._impl.aux", "prim model shape: an indexed family at a \
           never-zero sort whose index erasure is not bare")
-      , ("Flat._model._impl.0._model._impl.aux", "prim model shape: the spliced inductive \
-          Flat._model._impl.0._model._impl.aux._model._impl.skel did not model")
       , ("Key._model._impl.0._model._impl.aux", "prim model shape: an indexed family at a \
           never-zero sort whose index erasure is not bare")])
   -- **A basis primitive the input declares after the block whose model needs

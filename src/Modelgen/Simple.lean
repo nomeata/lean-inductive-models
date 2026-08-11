@@ -59,6 +59,11 @@ The recursor destructs the pair, cases on the tag with `Nat.rec` — the large
 elimination the basis buys, and the reason `Nat` is in it — and then
 destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
 
+A linearly recursive declaration with **no base constructor** is empty rather
+than a degenerate case of this tower.  Its carrier is `PULiftP.{w} ⊥`; each
+constructor returns its direct recursive field, and the recursor and ι theorems
+eliminate that empty value.  This is arm E below.
+
 * **A pad** closes a level gap. At a `dsingOk` level it is `D`
   ([`Modelgen.dsingAt`]); at any other level — a bare parameter in the gap,
   `PULift`'s shape — it is `PULiftP.{ℓ} ⊤` ([`Modelgen.unitAt`]), which
@@ -155,9 +160,6 @@ single-valuedness and is propositional.
   branches too and nothing modelled a branching non-indexed inductive; arm W
   does, so the carve now carries every recursive slot and hands the skeleton
   to W.
-* **a recursive declaration with no base constructor** — uninhabited, and the
-  tuple tower has no spine-zero fibre to build. Surfaced and named by arm C's
-  skeleton.
 * **a recursive subsingleton with a non-pivot index at a *data* position** —
   the graph arm's own boundary, not the class: a *recursive subsingleton*
   models, by [`Modelgen.graphArm`]. What that arm cannot reach is an index it

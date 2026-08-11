@@ -144,23 +144,17 @@
    live occupants of the same guard, at layer 3, and they are where it is
    exercised.
 
-   * `IBox` and `NoBase` — two indexed families whose erasure is bare and
-     **still does not model**, so the skeleton is spliced, the prim pass
-     cannot model it, and the whole emission is **withdrawn**. A family whose
-     skeleton does not model produces no emission, so that
-     nothing unmodelled ever reaches a consumer. Without them that rule would
-     be a comment. They withdraw for *different* inner reasons, which is what
-     pins that the decline carries the skeleton's own reason rather than only
-     the fact of failure: `IBox`'s erasure is `prim_declines`' `BoxF`, whose
-     field keeps an `imax` even boxed, and `NoBase`'s erasure is linearly
-     recursive with **no base constructor**.
+   * `IBox` — an indexed family whose erasure is bare but whose skeleton still
+     does not model, so the skeleton is spliced, the prim pass cannot model
+     it, and the whole emission is **withdrawn**. A family whose skeleton does
+     not model produces no emission, so that nothing unmodelled ever reaches
+     a consumer. `IBox`'s erasure is `prim_declines`' `BoxF`, whose field keeps
+     an `imax` even boxed.
 
-   `NoBase` is worth a second sentence, because arm C is how the shape came to
-   light. `NoBase._model._impl.skel` is `S | mk : N → S → S` — an *uninhabited*
-   linearly recursive inductive, which Lean accepts and the tuple tower does
-   not model: its spine's zero fibre is a chain of no fields and the plan
-   gives it no pad. That is a gap in the **Type route** and not in arm C. It is
-   recorded rather than fixed. -/
+   `NoBase` is the opposite control. `NoBase._model._impl.skel` is
+   `S | mk : N → S → S`: an uninhabited, linearly recursive inductive with
+   no base constructor.  Arm E gives that skeleton the exact empty carrier,
+   so arm C can carve and emit the indexed family too. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false
