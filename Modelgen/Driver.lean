@@ -322,7 +322,7 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
     (projectionModels : Array (Name × Nat × Name × Name)) (owner : Name) :
     GenM (Array Expr) :=
   structureRecursorPreArgumentsWith eqi sourceRecursor modelRecursor targetConstructor
-    motiveIndex params carrier major targetMotive motiveLevel recLevels fun binders conclusion => do
+    motiveIndex params carrier major targetMotive motiveLevel recLevels fun _ conclusion => do
         let some constructorApp := findConstructorApp? targetConstructor conclusion
           | badShape s!"{targetConstructor}'s selected minor has no constructor conclusion"
         let constructorArgs := constructorApp.getAppArgs

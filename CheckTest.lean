@@ -77,8 +77,67 @@ def modelIotaTheorem (table : Correspondence) (x : Export) (ownerDecl : Nat)
   return .thm iota.name params (table.expectedIotaType ownerParams params ownerType)
     (.sort .zero) [iota.name]
 
+private structure EtaBinder where
+  name : Name
+  type : Expr
+  info : BinderInfo
+  value : Expr
+
+private partial def openEtaForalls (tag : Name) (expression : Expr) :
+    Array EtaBinder × Expr :=
+  let rec loop (expression : Expr) (binders : Array EtaBinder) :=
+    match expression with
+    | .forallE name type body info =>
+      let value := mkFVar (FVarId.mk (tag.mkNum binders.size))
+      loop (body.instantiate1 value) (binders.push { name, type, info, value })
+    | body => (binders, body)
+  loop expression #[]
+
+private def closeEtaForalls (binders : Array EtaBinder) (body : Expr) : Expr :=
+  binders.reverse.foldl (fun body binder =>
+    .forallE binder.name binder.type (body.abstract #[binder.value]) binder.info) body
+
+def modelEtaTheorem (table : Correspondence) (x : Export) (ownerDecl : Nat)
+    (metadata : Naming.Metadata) : Option EDecl := do
+  let .induct types constructors _ ← x.decls[ownerDecl]? | none
+  let ownerType ← types.find? (·.name == metadata.owner)
+  let [constructorName] := ownerType.ctors | none
+  let constructor ← constructors.find? fun candidate =>
+    candidate.name == constructorName && candidate.induct == metadata.owner
+  guard <| ownerType.numIndices == 0
+  guard <| constructor.numFields ==
+    (table.projections.filter (·.owner == metadata.owner)).size
+  let typePair ← table.typeFormers.find? (·.owner == metadata.owner)
+  let constructorPair ← table.constructors.find? (·.owner == constructorName)
+  let params := modelParams ownerType.levelParams
+  let levels := params.map Level.param
+  let mappedOwnerType := table.expectedType ownerType.levelParams params ownerType.type
+  let (parameterBinders, ownerResult) :=
+    openEtaForalls ((`_checkTest.eta).append metadata.owner) mappedOwnerType
+  guard <| parameterBinders.size == ownerType.numParams
+  let .sort carrierLevel := ownerResult | none
+  let parameterValues := parameterBinders.map (·.value)
+  let carrier := mkAppN (.const typePair.model levels) parameterValues
+  let selfValue := mkFVar (FVarId.mk ((`_checkTest.etaSelf).append metadata.owner))
+  let selfBinder : EtaBinder :=
+    { name := `x, type := carrier, info := .default, value := selfValue }
+  let mut fields : Array Expr := #[]
+  for fieldIndex in [0:constructor.numFields] do
+    let projection ← table.projections.find? fun projection =>
+      projection.owner == metadata.owner && projection.fieldIndex == fieldIndex
+    fields := fields.push <| mkAppN (.const projection.name levels)
+      (parameterValues.push selfValue)
+  let reconstruction := mkAppN (.const constructorPair.model levels)
+    (parameterValues ++ fields)
+  let proposition := mkAppN (.const ``Eq [carrierLevel])
+    #[carrier, selfValue, reconstruction]
+  let type := closeEtaForalls (parameterBinders.push selfBinder) proposition
+  return .thm metadata.name params type (.sort .zero) [metadata.name]
+
 def modelMetadataTheorem (table : Correspondence) (x : Export) (ownerDecl : Nat)
     (metadata : Naming.Metadata) : Option EDecl := do
+  if metadata.kind == .eta then
+    return ← modelEtaTheorem table x ownerDecl metadata
   let (ownerParams, ownerType) ← match metadata.kind with
     | .unitlike => unitlikeProposition? x ownerDecl metadata.owner
     | .ruleK => ruleKProposition? x ownerDecl metadata.owner
@@ -533,11 +592,11 @@ def run (root : String) : IO UInt32 := do
           (Name.str (Naming.modelName owner) "helper")
         let ownerValid := withValidModel unitlikeExport ownerDecl ownerModels
         state ← state.check s!"valid unit-like family {owner}" <|
-          !ownerTable.metadata.isEmpty && (check ownerValid).isEmpty
+          ownerTable.metadata.any (·.kind == .unitlike) && (check ownerValid).isEmpty
       let some mutualDecl := ownerIndex? unitlikeExport `MU | do return 1
       let some mutualUnitlike := correspondenceAt? unitlikeExport mutualDecl | do return 1
       state ← state.check "unit-like is per mutual member" <|
-        mutualUnitlike.metadata.map (·.owner) == #[`MU, `MV]
+        (mutualUnitlike.metadata.filter (·.kind == .unitlike)).map (·.owner) == #[`MU, `MV]
 
       let some positiveDecl := ownerIndex? unitlikeExport `UnitType | do return 1
       let some positiveTable := correspondenceAt? unitlikeExport positiveDecl | do return 1
@@ -554,7 +613,8 @@ def run (root : String) : IO UInt32 := do
       for owner in [`WithField, `Indexed, `Recursive, `TwoCtor, `MR] do
         let some nearDecl := ownerIndex? unitlikeExport owner | do return 1
         let some nearTable := correspondenceAt? unitlikeExport nearDecl | do return 1
-        state ← state.check s!"near miss has no unit-like slot {owner}" nearTable.metadata.isEmpty
+        state ← state.check s!"near miss has no unit-like slot {owner}" <|
+          (nearTable.metadata.filter (·.kind == .unitlike)).isEmpty
         let nearModels := modelDeclarations unitlikeExport nearTable
           (Name.str (Naming.modelName owner) "helper")
         let extraName := Naming.unitlikeName owner

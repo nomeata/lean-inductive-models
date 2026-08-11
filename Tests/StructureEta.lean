@@ -94,13 +94,13 @@ def main : IO UInt32 := do
   let depType := declarationType? projectionOutput depEta
   state := state.check "simple structure emits eta" <|
     projectionReport.generated.any (·.1 == `Dep) && depType.isSome
-  state := state.check "named dependent fields use exact projection models" <|
+  state := state.check "dependent fields use intrinsic projection models" <|
     depType.any fun type =>
-      containsConst (Naming.projectionName `Dep.key) type &&
-      containsConst (Naming.projectionName `Dep.payload) type &&
-      containsConst (Naming.projectionName `Dep.witness) type &&
+      containsConst (Naming.projectionName `Dep 0) type &&
+      containsConst (Naming.projectionName `Dep 1) type &&
+      containsConst (Naming.projectionName `Dep 2) type &&
       !containsConst `Dep.key type && !containsConst `Dep.payload type
-  state := state.check "checker accepts named-projection eta" <|
+  state := state.check "checker accepts intrinsic-projection eta" <|
     Check.check projectionOutput |>.all (·.familyOwner != `Dep)
   state := state.check "Mono keys eta to its owner without an elimination universe" <|
     (Mono.modelTable projectionOutput)[depEta]?.any fun entry =>
@@ -114,7 +114,7 @@ def main : IO UInt32 := do
   state := state.check "checker compares eta syntax literally" <|
     malformed.any (hasTypeViolation `Dep depEta)
   let sourceProjectionType := depType.map (mapConstsE fun name =>
-    if name == Naming.projectionName `Dep.payload then some `Dep.payload else none)
+    if name == Naming.projectionName `Dep 1 then some `Dep.payload else none)
   let sourceProjectionMutation := sourceProjectionType.map
     (replaceDeclarationType projectionOutput depEta ·) |>.getD projectionOutput
   state := state.check "checker rejects a source projection in eta" <|
@@ -132,9 +132,9 @@ def main : IO UInt32 := do
   state := state.check "nonrecursive mutual members independently get eta" <|
     unitNames.contains muEta && unitNames.contains mvEta &&
       unitReport.generated.any (·.1 == `MU)
-  state := state.check "unnamed selector is the exact model recursor" <|
+  state := state.check "plain inductive uses its intrinsic projection" <|
     (declarationType? unitOutput fieldEta).any fun type =>
-      containsConst (Naming.modelName `WithField.rec) type &&
+      containsConst (Naming.projectionName `WithField 0) type &&
         !containsConst `WithField.rec type
   state := state.check "checker accepts zero, unnamed and mutual eta" <|
     Check.check unitOutput |>.all fun violation =>
@@ -152,12 +152,12 @@ def main : IO UInt32 := do
     (Check.check extraIndexed).any
       (hasExtraEta `Indexed (Naming.etaName `Indexed))
 
-  let fallbackType := declarationType? unitOutput fieldEta
-  let sourceRecursorType := fallbackType.map (mapConstsE fun name =>
-    if name == Naming.modelName `WithField.rec then some `WithField.rec else none)
+  let intrinsicType := declarationType? unitOutput fieldEta
+  let sourceRecursorType := intrinsicType.map (mapConstsE fun name =>
+    if name == Naming.projectionName `WithField 0 then some `WithField.rec else none)
   let sourceRecursorMutation := sourceRecursorType.map
     (replaceDeclarationType unitOutput fieldEta ·) |>.getD unitOutput
-  state := state.check "checker rejects a source recursor selector" <|
+  state := state.check "checker rejects a source selector in eta" <|
     (Check.check sourceRecursorMutation).any (hasTypeViolation `WithField fieldEta)
 
   let (_, collisionReport) ← runExport (insertCollision unitRaw unitEta)
