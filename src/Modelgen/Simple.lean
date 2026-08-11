@@ -2454,46 +2454,165 @@ def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
       mkLambdaFVars (ps ++ fields) (eqi.refl' fieldLevel fieldType field)
   return (declarations, (tname, 0, selector, proof))
 
-/-- Arm F's dependent-pivot recursor body, kept outside [`Modelgen.primIso`]
-so the route dispatcher does not elaborate a second nested `Eq.rec` builder.
+/-- Walk arm F's constructor telescope while recovering dependent data fields
+from the caller's index telescope.  Before each moving pivot, a packed equality
+of the complete earlier index prefix transports the caller's pivot back to the
+constructor field type.  Proof fields are then bound at the already recovered
+constructor prefix. -/
+partial def armFZipPrefix (eqi : EqInfo) (memberTy ctorTy : Expr) (np ni : Nat)
+    (isData : Array Bool) (idxPos : Array Nat) (transports : Array (Nat × Nat))
+    (ps is : Array Expr) (ctorIdx : Expr → GenM (Array Expr))
+    (bind : Nat → Name → Expr → (Expr → GenM Expr) → GenM Expr)
+    (k : Array Expr → Array Expr → Array Expr → GenM Expr) : GenM Expr := do
+  let indexPackAt := fun (sel : Array Nat) => do
+    forallBoundedTelescope (← instForall memberTy ps) (some ni) fun opened _ => do
+      let (pk, ℓ) ← packTyAt opened sel 0
+      pure (pk.replaceFVars opened is, ℓ)
+  let indexTypeAt := fun (full : Array Expr) (position : Nat) => do
+    forallBoundedTelescope (← instForall memberTy ps) (some ni) fun opened _ => do
+      pure ((← ityp opened[position]!).replaceFVars opened full)
+  let tele ← instForall ctorTy ps
+  let nf := numForalls tele
+  forallBoundedTelescope tele (some nf) fun raw res => do
+    let rawIdx ← ctorIdx res
+    let rec go (i slot : Nat) (fields bound : Array Expr) : GenM Expr := do
+      if i == nf then
+        let resolved := rawIdx.map (·.replaceFVars raw fields)
+        return ← k fields bound resolved
+      if isData[i]! then
+        let position := idxPos[i]!
+        if transports.contains (i, position) then
+          let sel := Array.range position
+          if sel.isEmpty then
+            badShape s!"a transported pivot at index {position} has no prefix"
+          let (pk, ℓpk) ← indexPackAt sel
+          let previous := raw.extract 0 i
+          let lhsValues := sel.map fun j => rawIdx[j]!.replaceFVars previous fields
+          for value in lhsValues do
+            for later in raw.extract i raw.size do
+              if value.containsFVar later.fvarId! then
+                badShape s!"a transported pivot at index {position} has a constructor prefix depending on an unrecovered field"
+          let lhs ← packChain position pk lhsValues 0
+          let rhs ← packChain position pk (sel.map (is[·]!)) 0
+          bind slot `prefix_eq (eqi.mk' ℓpk pk lhs rhs) fun h => do
+            let hs ← symmOf eqi ℓpk pk lhs rhs h
+            let base := is[position]!
+            let pv ← ilevel (← indexTypeAt is position)
+            let field ← transportAlong eqi pv ℓpk pk rhs lhs hs base fun y => do
+              let ys ← unpackChain position pk y
+              let mut full := is
+              for j in [0:position] do full := full.set! j ys[j]!
+              indexTypeAt full position
+            go (i + 1) (slot + 1) (fields.push field) (bound.push h)
+        else
+          go (i + 1) slot (fields.push is[position]!) bound
+      else
+        let ft := (← ityp raw[i]!).replaceFVars (raw.extract 0 i) fields
+        bind slot (Name.mkSimple s!"field_{i}") ft fun field =>
+          go (i + 1) (slot + 1) (fields.push field) (bound.push field)
+    go 0 0 #[] #[]
 
-The packed equation moves a *function over the pivot*, not the pivot and back:
-at the constructor endpoint the function accepts the constructor field type;
-at the caller endpoint it accepts the caller's type and is applied to the
-caller's field literally. -/
-def armFDependentPivotRec (eqi : EqInfo) (v ℓpk : Level) (lift? : Option Level)
-    (nnp : Nat) (nonPiv : Array Nat) (idxs es esBnd : Array Expr)
-    (fieldIndex position : Nat) (pk pkc pki heq motive minor : Expr)
-    (pivotTy : Expr → GenM Expr)
+def armFZipMinor (eqi : EqInfo) (memberTy ctorTy : Expr) (np ni : Nat)
+    (isData : Array Bool) (idxPos : Array Nat) (transports : Array (Nat × Nat))
+    (ps is : Array Expr) (pk : Expr) (ℓpk : Level)
+    (ctorIdx : Expr → GenM (Array Expr)) (mk : Array Expr → Expr → GenM Expr)
+    (k : Array Expr → Expr → GenM Expr) : GenM Expr := do
+  let sel := Array.range ni
+  armFZipPrefix eqi memberTy ctorTy np ni isData idxPos transports ps is ctorIdx
+    (fun _ name ty cont => withLocalDeclD name ty cont)
+    fun fs bnd idx => do
+      let lhs ← packChain ni pk (sel.map (idx[·]!)) 0
+      let rhs ← packChain ni pk (sel.map (is[·]!)) 0
+      withLocalDeclD `heq (eqi.mk' ℓpk pk lhs rhs) fun h => do
+        mk (bnd.push h) (← k fs h)
+
+def armFZipCtorArgs (eqi : EqInfo) (memberTy : Expr) (ni : Nat)
+    (isData : Array Bool) (idxPos : Array Nat) (transports : Array (Nat × Nat))
+    (ps idx fields : Array Expr) (pk : Expr) (ℓpk : Level) : GenM (Array Expr) := do
+  let nf := isData.size
+  let mut args : Array Expr := #[]
+  for i in [0:nf] do
+    if isData[i]! then
+      let position := idxPos[i]!
+      if transports.contains (i, position) then
+        let sel := Array.range position
+        let (prefixPk, ℓprefix) ←
+          forallBoundedTelescope (← instForall memberTy ps) (some ni) fun opened _ => do
+            let (pk, ℓ) ← packTyAt opened sel 0
+            pure (pk.replaceFVars opened idx, ℓ)
+        let packed ← packChain position prefixPk (sel.map (idx[·]!)) 0
+        args := args.push (eqi.refl' ℓprefix prefixPk packed)
+    else
+      args := args.push fields[i]!
+  let packed ← packChain ni pk ((Array.range ni).map (idx[·]!)) 0
+  pure (args.push (eqi.refl' ℓpk pk packed))
+
+/-- Arm F's full-index zipper recursor.  The outer equality moves the entire
+dependent index telescope.  Its motive is a function over every prefix
+equation and proof field, so the constructor endpoint applies the original
+minor while the caller endpoint rebuilds exactly the Church witness stored in
+the major premise. -/
+def armFZipRec (eqi : EqInfo) (ℓpk : Level) (lift? : Option Level)
+    (pk pkc pki heq motive minor : Expr) (idxs : Array Expr)
+    (zipAll : Array Expr → (Array Expr → Array Expr → GenM Expr) → GenM Expr)
     (minorTy : Array Expr → Expr → GenM Expr)
-    (encodedAt : Array Expr → GenM Expr)
-    (ctorIdx : Array Expr → GenM (Array Expr)) (ctorName : Name) : GenM Expr := do
+    (encodedAt : Array Expr → GenM Expr) (extracted : Array Expr) : GenM Expr := do
   let fam := fun (y : Expr) (h : Expr) => do
-    withLocalDeclD `pivot (← pivotTy y) fun pivot => do
-      let ys ← unpackChain nnp pk y
-      let mut full := idxs
-      for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
-      full := full.set! position pivot
+    let full ← unpackChain idxs.size pk y
+    zipAll full fun _ args => do
       let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
         withLocalDeclD `k (← minorTy full r) fun kk =>
-          mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
+          mkLambdaFVars #[r, kk] (mkAppN kk args)
       let lifted ← match lift? with
         | none => pure rebuilt
         | some ℓ => pure (puliftUp ℓ (← encodedAt full) rebuilt)
-      mkForallFVars #[pivot] (mkAppN motive (full.push lifted))
+      mkForallFVars args (mkAppN motive (full.push lifted))
   let motiveE ← withLocalDeclD `y pk fun y => do
     withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
       mkLambdaFVars #[y, hy] (← fam y hy)
-  let base ← withLocalDeclD `pivot (← pivotTy pkc) fun pivot => do
-    let fields := es.set! fieldIndex pivot
-    let idxP ← ctorIdx fields
-    let pkP ← packChain nnp pk (nonPiv.map (idxP[·]!)) 0
-    unless ← isDefEq pkc pkP do
-      badShape s!"{ctorName}'s transported pivot changes its packed non-pivot endpoint"
-    mkLambdaFVars #[pivot] (mkAppN minor fields)
-  let pv := (mkLevelIMax (.succ .zero) v).normalize
-  let fn := eqi.recAt pv ℓpk pk pkc motiveE base pki heq
-  pure (mkApp fn idxs[position]!)
+  let endpoint ← unpackChain idxs.size pk pkc
+  let base ← zipAll endpoint fun fields args =>
+    mkLambdaFVars args (mkAppN minor fields)
+  let fn := eqi.recAt (← ilevel (← inferType base)) ℓpk pk pkc motiveE base pki heq
+  pure (mkAppN fn extracted)
+
+/-- Extract arm F's zipper premises from the Church major and hand them to the
+full-index equality recursor.  Kept out of [`Modelgen.primIso`] so the route
+dispatcher remains below the default elaboration heartbeat budget. -/
+def armFZipModelRec (eqi : EqInfo) (lift? : Option Level)
+    (memberTy ctorTy : Expr) (np ni : Nat) (isData : Array Bool) (idxPos : Array Nat)
+    (transports : Array (Nat × Nat)) (ps idxs : Array Expr) (base pk motive minor : Expr)
+    (ℓpk : Level) (ctorIdx : Expr → GenM (Array Expr))
+    (minorTy : Array Expr → Expr → GenM Expr)
+    (encodedAt : Array Expr → GenM Expr) : GenM Expr := do
+  let packSel := Array.range ni
+  let project := fun (slot : Nat) => do
+    armFZipPrefix eqi memberTy ctorTy np ni isData idxPos transports ps idxs ctorIdx
+      (fun _ name ty cont => withLocalDeclD name ty cont)
+      fun _ bnd idx => do
+        let lhs ← packChain ni pk (packSel.map (idx[·]!)) 0
+        let rhs ← packChain ni pk (packSel.map (idxs[·]!)) 0
+        withLocalDeclD `heq (eqi.mk' ℓpk pk lhs rhs) fun h => do
+          mkLambdaFVars (bnd.push h) (if slot == bnd.size then h else bnd[slot]!)
+  armFZipPrefix eqi memberTy ctorTy np ni isData idxPos transports ps idxs ctorIdx
+    (fun slot _ ty cont => do
+      let value := mkAppN base #[ty, ← project slot]
+      cont value)
+    fun _ args idxE => do
+      let pkc ← packChain ni pk (packSel.map (idxE[·]!)) 0
+      let pki ← packChain ni pk (packSel.map (idxs[·]!)) 0
+      let eqTy := eqi.mk' ℓpk pk pkc pki
+      let heq := mkAppN base #[eqTy, ← project args.size]
+      armFZipRec eqi ℓpk lift? pk pkc pki heq motive minor idxs
+        (fun full kk =>
+          armFZipPrefix eqi memberTy ctorTy np ni isData idxPos transports ps full ctorIdx
+            (fun _ name ty cont => withLocalDeclD name ty cont)
+            fun fs bnd idx => do
+              let lhs ← packChain ni pk (packSel.map (idx[·]!)) 0
+              let rhs ← packChain ni pk (packSel.map (full[·]!)) 0
+              withLocalDeclD `heq (eqi.mk' ℓpk pk lhs rhs) fun h =>
+                kk fs (bnd.push h))
+        minorTy encodedAt (args.push heq)
 
 set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that
@@ -2837,10 +2956,9 @@ application of {tname}"
   let mut gIdxPos : Array Nat := #[]
   let mut gRecNb : Array (Option Nat) := #[]
   let mut gNf := 0
-  -- Arm F's one canonical pivot transport, when a data field's index type
-  -- depends on an earlier non-pivot.  The focused shape has one data field
-  -- and no proof fields; see the guard in the analysis below.
-  let mut gPivotTransport? : Option (Nat × Nat) := none
+  -- Constructor field / pivot-position pairs whose declared index type moves
+  -- with a non-pivot. Arm F's zipper transports all of them in field order.
+  let mut gPivotTransports : Array (Nat × Nat) := #[]
   -- The index positions that are **not** pivots, in telescope order.
   let mut gNonPiv : Array Nat := #[]
   if armGRec || armFNonRec then
@@ -2865,7 +2983,7 @@ application of {tname}"
           else
             let mut at? : Option Nat := none
             for k in [0:ni] do
-              if idx[k]! == fs[i]! then at? := some k
+              if at?.isNone && idx[k]! == fs[i]! then at? := some k
             -- **Unreachable through the kernel, and kept anyway.** The rule
             -- above is what mints the large eliminator this arm is modelling,
             -- so a data field that is not an index arrives only from a
@@ -2889,7 +3007,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         -- whose declared type is the *ground* index before it.  Other shapes
         -- retain a precise guard here rather than receiving a partial cast.
         forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
-          let mut pivotTransport? : Option (Nat × Nat) := none
+          let mut pivotTransports : Array (Nat × Nat) := #[]
           for j in [0:ni] do
             if piv[j]! then
               let jt ← ityp is[j]!
@@ -2897,18 +3015,12 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
                 if !piv[m]! && jt.containsFVar is[m]!.fvarId! then
                   let some i := (Array.range nfg).find? fun i => isD[i]! && pos[i]! == j
                     | badShape s!"{cn}'s pivot index {j} has no constructor data field"
-                  if isD.any (!·) then
-                    badShape s!"{cn}'s index {j} needs a pivot transport, but the exact \
-arm-F transport applies to one data field and no proof fields"
-                  match pivotTransport? with
-                  | none => pivotTransport? := some (i, j)
-                  | some ij =>
-                    unless ij == (i, j) do
-                      badShape s!"{cn} has more than one data field needing a pivot transport"
+                  unless pivotTransports.contains (i, j) do
+                    pivotTransports := pivotTransports.push (i, j)
           return (isD, pos, flds.map (·.rec?), (Array.range ni).filter (!piv[·]!),
-            pivotTransport?)
+            pivotTransports)
     gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size; gNonPiv := npv
-    gPivotTransport? := pt
+    gPivotTransports := pt
 
   -- **Arm G's half of the index axis.** `GraphInv ι⃗ t val` carries one
   -- equality at the dependent tuple of non-pivot indices.  Its continuation
@@ -3431,6 +3543,9 @@ data tower would have to hold a type the branch tower cannot see"
     let (cn0, cty0) := exportCtors[0]!
     let nonPiv := gNonPiv
     let nnp := nonPiv.size
+    let zipRoute := !gPivotTransports.isEmpty
+    let packSel := if zipRoute then Array.range ni else nonPiv
+    let npack := packSel.size
 
     -- The index vector a walked result type ends at, at either head: the
     -- export's `T p⃗ ι⃗` or the model's own `T._model.self p⃗ ι⃗`.
@@ -3454,21 +3569,10 @@ data tower would have to hold a type the branch tower cannot see"
     -- deliberately leaves free, so it is built once at an opened telescope and
     -- then instantiated. `none` when every index is a pivot.
     let pkAt := fun (ps : Array Expr) (vs : Array Expr) => do
-      if nnp == 0 then return (none : Option (Expr × Level))
+      if npack == 0 then return (none : Option (Expr × Level))
       forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
-        let (pkT, ℓ) ← packTyAt is nonPiv 0
+        let (pkT, ℓ) ← packTyAt is packSel 0
         pure (some (pkT.replaceFVars is vs, ℓ))
-
-    -- The declared type of pivot `position`, with the non-pivot subsequence
-    -- read from `y : Pk`.  Other indices stay at the recursor caller's vector;
-    -- for the focused arm-F shape there is exactly one data field, so the
-    -- pivot's type can depend only on the non-pivots replaced here.
-    let pivotTypeAt := fun (ps anchor : Array Expr) (pk y : Expr) (position : Nat) => do
-      forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => do
-        let ys ← unpackChain nnp pk y
-        let mut full := anchor
-        for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
-        pure ((← ityp is[position]!).replaceFVars is full)
 
     -- `∀ h⃗, Eq Pk (pack ι⃗_ctor|np) (pack ι⃗|np) → …`, the encoding's one
     -- minor, as a binder-introducing continuation so that the equation is
@@ -3476,15 +3580,20 @@ data tower would have to hold a type the branch tower cannot see"
     let underMinor := fun (ps is : Array Expr) (pk? : Option (Expr × Level))
         (mk : Array Expr → Expr → GenM Expr)
         (k : Array Expr → Option Expr → GenM Expr) =>
-      fieldsAt ps is fun fs bnd res => do
-        match pk? with
-        | none => mk bnd (← k fs none)
-        | some (pk, ℓpk) => do
-          let idx ← idxOfRes tname res
-          let lhs ← packChain nnp pk (nonPiv.map (idx[·]!)) 0
-          let rhs ← packChain nnp pk (nonPiv.map (is[·]!)) 0
-          withLocalDeclD `heq (eqi.mk' ℓpk pk lhs rhs) fun h => do
-            mk (bnd.push h) (← k fs (some h))
+      if zipRoute then
+        let (pk, ℓpk) := pk?.get!
+        armFZipMinor eqi memberTy cty0 np ni gIsData gIdxPos gPivotTransports
+          ps is pk ℓpk (idxOfRes tname) mk fun fs h => k fs (some h)
+      else
+        fieldsAt ps is fun fs bnd res => do
+          match pk? with
+          | none => mk bnd (← k fs none)
+          | some (pk, ℓpk) => do
+            let idx ← idxOfRes tname res
+            let lhs ← packChain npack pk (packSel.map (idx[·]!)) 0
+            let rhs ← packChain npack pk (packSel.map (is[·]!)) 0
+            withLocalDeclD `heq (eqi.mk' ℓpk pk lhs rhs) fun h => do
+              mk (bnd.push h) (← k fs (some h))
     let allTy : Array Expr → Expr → GenM Expr := fun xs e => mkForallFVars xs e
     let lamF : Array Expr → Expr → GenM Expr := fun xs e => mkLambdaFVars xs e
     let minorTyAt := fun (ps is : Array Expr) (pk? : Option (Expr × Level)) (r : Expr) =>
@@ -3517,11 +3626,15 @@ data tower would have to hold a type the branch tower cannot see"
       forallBoundedTelescope rtele (some nf) fun fs res => do
         let idx ← idxOfRes selfN res
         let pk? ← pkAt ps idx
-        let bnd := ((Array.range nf).filter (!gIsData[·]!)).map (fs[·]!)
         let args ← match pk? with
-          | none => pure bnd
-          | some (pk, ℓpk) => do
-            pure (bnd.push (eqi.refl' ℓpk pk (← packChain nnp pk (nonPiv.map (idx[·]!)) 0)))
+          | none => pure (((Array.range nf).filter (!gIsData[·]!)).map (fs[·]!))
+          | some (pk, ℓpk) =>
+            if zipRoute then
+              armFZipCtorArgs eqi memberTy ni gIsData gIdxPos gPivotTransports ps idx fs pk ℓpk
+            else do
+              let bnd := ((Array.range nf).filter (!gIsData[·]!)).map (fs[·]!)
+              pure (bnd.push (eqi.refl' ℓpk pk
+                (← packChain npack pk (packSel.map (idx[·]!)) 0)))
         let encoded ← encodedAt ps idx
         let proof ← withLocalDeclD `r (.sort .zero) fun r => do
           withLocalDeclD `k (← minorTyAt ps idx pk? r) fun kk =>
@@ -3547,6 +3660,13 @@ data tower would have to hold a type the branch tower cannot see"
       let base := match lift? with | none => t | some ℓ => puliftDown ℓ encoded t
       let tele ← instForall cty0 ps
       let nf := numForalls tele
+      if zipRoute then
+        let (pk, ℓpk) := pk?.get!
+        let body ← armFZipModelRec eqi lift? memberTy cty0 np ni gIsData gIdxPos
+          gPivotTransports ps idxs base pk motive minor ℓpk (idxOfRes tname)
+          (fun full r => minorTyAt ps full (some (pk, ℓpk)) r)
+          (fun full => encodedAt ps full)
+        return ← mkLambdaFVars bs body
       -- **Recover the fields.** Ordinarily a data field is the recursor's own
       -- index argument at that field's pivot position.  When its declared type
       -- depends on a non-pivot, the packed equation canonically transports it
@@ -3577,8 +3697,8 @@ data tower would have to hold a type the branch tower cannot see"
         -- `ι⃗`, and `T._model.ctor_0 es` is `t` by proof irrelevance.
         mkLambdaFVars bs (mkAppN minor es)
       | some (pk, ℓpk) => do
-        let pkc ← packChain nnp pk (nonPiv.map (idxE[·]!)) 0
-        let pki ← packChain nnp pk (nonPiv.map (idxs[·]!)) 0
+        let pkc ← packChain npack pk (packSel.map (idxE[·]!)) 0
+        let pki ← packChain npack pk (packSel.map (idxs[·]!)) 0
         let eqTy := eqi.mk' ℓpk pk pkc pki
         let heq := mkAppN base #[eqTy, ← underMinor ps idxs pk? lamF
           fun _ h? => pure h?.get!]
@@ -3587,37 +3707,21 @@ data tower would have to hold a type the branch tower cannot see"
         -- Only the **non-pivot** slots move with `y`; the pivots are the
         -- recursor's own index arguments throughout, which is why no transport
         -- is needed on the fields.
-        if let some (i, position) := gPivotTransport? then
-          -- Do not cast the caller's pivot to the constructor endpoint and
-          -- back: that round trip is propositionally, but not definitionally,
-          -- the original field, so the final motive would mention the wrong
-          -- term.  Instead transport a *function over the pivot*.  At `pkc`
-          -- its argument has the constructor field's type; at `pki` it has the
-          -- caller's type and is applied to the caller's pivot literally.
-          let body ← armFDependentPivotRec eqi v ℓpk lift? nnp nonPiv idxs es esBnd
-            i position pk pkc pki heq motive minor
-            (fun y => pivotTypeAt ps idxs pk y position)
-            (fun full r => minorTyAt ps full pk? r)
-            (fun full => encodedAt ps full)
-            (fun fields => do
-              idxOfRes tname (← instForall (← instForall cty0 ps) fields)) cn0
-          mkLambdaFVars bs body
-        else
-          let fam := fun (y : Expr) (h : Expr) => do
-            let ys ← unpackChain nnp pk y
-            let mut full := idxs
-            for k in [0:nnp] do full := full.set! nonPiv[k]! ys[k]!
-            let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
-              withLocalDeclD `k (← minorTyAt ps full pk? r) fun kk =>
-                mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
-            let lifted ← match lift? with
-              | none => pure rebuilt
-              | some ℓ => pure (puliftUp ℓ (← encodedAt ps full) rebuilt)
-            pure (mkAppN motive (full.push lifted))
-          let motiveE ← withLocalDeclD `y pk fun y => do
-            withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
-              mkLambdaFVars #[y, hy] (← fam y hy)
-          mkLambdaFVars bs (eqi.recAt v ℓpk pk pkc motiveE (mkAppN minor es) pki heq)
+        let fam := fun (y : Expr) (h : Expr) => do
+          let ys ← unpackChain npack pk y
+          let mut full := idxs
+          for k in [0:npack] do full := full.set! packSel[k]! ys[k]!
+          let rebuilt ← withLocalDeclD `r (.sort .zero) fun r => do
+            withLocalDeclD `k (← minorTyAt ps full pk? r) fun kk =>
+              mkLambdaFVars #[r, kk] (mkAppN kk (esBnd.push h))
+          let lifted ← match lift? with
+            | none => pure rebuilt
+            | some ℓ => pure (puliftUp ℓ (← encodedAt ps full) rebuilt)
+          pure (mkAppN motive (full.push lifted))
+        let motiveE ← withLocalDeclD `y pk fun y => do
+          withLocalDeclD `hy (eqi.mk' ℓpk pk pkc y) fun hy => do
+            mkLambdaFVars #[y, hy] (← fam y hy)
+        mkLambdaFVars bs (eqi.recAt v ℓpk pk pkc motiveE (mkAppN minor es) pki heq)
     let dRec := Declaration.defnDecl
       { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
