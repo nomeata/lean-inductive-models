@@ -2392,8 +2392,8 @@ uses a small `Type` core and stores it in the exact-sort `PSigma` described by
 `primIso` is also important: that definition is already close to Lean's
 default elaboration budget. -/
 structure WCarrierPlan where
-  public : Level
-  core : Level
+  publicLevel : Level
+  coreLevel : Level
   lifted : Bool
 
 /-- Choose the constrained lift exactly when `w` has no syntactic predecessor
@@ -2402,24 +2402,29 @@ def wCarrierPlan (eligible : Bool) (w : Level) : GenM WCarrierPlan := do
   let lifted ← if eligible && w.normalize.dec.isNone then
       isLevelDefEq (mkLevelMax' (.succ .zero) w) w
     else pure false
-  return { public := w, core := if lifted then .succ .zero else w, lifted }
+  return { publicLevel := w, coreLevel := if lifted then .succ .zero else w, lifted }
 
 def WCarrierPlan.liftFam (p : WCarrierPlan) (lowTy : Expr) : Expr :=
-  .lam `low lowTy (puliftT p.public trueP) .default
+  .lam `low lowTy (puliftT p.publicLevel trueP) .default
 
 /-- Expose `lowTy : Sort core` at the plan's exact public carrier sort. -/
 def WCarrierPlan.carrier (p : WCarrierPlan) (lowTy : Expr) : Expr :=
-  if p.lifted then psigmaT p.core p.public lowTy (p.liftFam lowTy) else lowTy
+  if p.lifted then
+    psigmaT p.coreLevel p.publicLevel lowTy (p.liftFam lowTy)
+  else lowTy
 
 /-- Insert the canonical proof carried only to make the constrained lift land
 at the exact public sort. -/
 def WCarrierPlan.wrap (p : WCarrierPlan) (lowTy low : Expr) : Expr :=
   if p.lifted then
-    psigmaMk p.core p.public lowTy (p.liftFam lowTy) low (unitAtCanon p.public)
+    psigmaMk p.coreLevel p.publicLevel lowTy (p.liftFam lowTy) low
+      (unitAtCanon p.publicLevel)
   else low
 
 def WCarrierPlan.unwrap (p : WCarrierPlan) (lowTy value : Expr) : Expr :=
-  if p.lifted then psigmaFst p.core p.public lowTy (p.liftFam lowTy) value else value
+  if p.lifted then
+    psigmaFst p.coreLevel p.publicLevel lowTy (p.liftFam lowTy) value
+  else value
 
 /-- Pull a public motive back along `wrap`, for the low W recursor. -/
 def WCarrierPlan.motive (p : WCarrierPlan) (lowTy motive : Expr) : GenM Expr := do
@@ -3205,7 +3210,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     !erasureLinear && labelFactored tname np exportCtors
   let wPlan ← wCarrierPlan wShapeEligible w
   let armW := wShapeEligible && (w.normalize.dec.isSome || wPlan.lifted)
-  let wW := wPlan.core
+  let wW := wPlan.coreLevel
   -- Arm W's **internal** names, guarded exactly like arm C's and arm G's, and
   -- only when the arm is taken.
   let wDN := Name.str impl "wD"
