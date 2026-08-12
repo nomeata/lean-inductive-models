@@ -1,12 +1,13 @@
-/- **Arm G on an input that brings its own prelude.** `prim_graph.lean` is the
+/- **Arm G beside an ordinary `PSigma`.** `prim_graph.lean` is the
    same arm on a file that declares only `Eq`, so everything the graph route
-   needs is spliced there; this is the control that says an input's own
-   constants beat a spliced one, and that they are **checked** rather than
-   assumed.
+   needs is spliced there. Here an input-owned ordinary `PSigma` must neither
+   satisfy the tight-pair requirement nor be exempt: the tool splices
+   `PSigma'` and models `PSigma` normally.
 
-   Four things the arm reaches for, and this file has all four:
+   Four things the arm reaches for:
 
-   * `PSigma` — the value is paired with its graph proof, never chosen bare.
+   * `PSigma'` — the value is paired with its graph proof, never chosen bare;
+     it is absent here and is spliced.
    * `Nonempty` — `Classical.choice`'s own domain, and the reason the arm names
      it at all. It is **not** a basis primitive: it is a non-recursive,
      small-eliminating `Prop`, so the Church route models it like anything
@@ -17,17 +18,16 @@
      written out exactly as `funext_binder.lean` writes it. `Ac`'s recursive
      field has binders, so `Graph.unique`'s congruence transports along one.
 
-   **Three of the four are reused and the fourth is not**, and the fourth is
-   the export's doing rather than the tool's: `ensureFunext` is asked lazily,
+   `Nonempty` and `Classical.choice` are reused. `PSigma'` is spliced, while
+   `funext` is asked lazily,
    at the point the model is generated, and `lean4export` emits `Ac.rec` before
    this file's own `funext` — nothing in `Ac` mentions it, so nothing orders it
    earlier. So the report's one splice line for `Ac` reads
-   `Ac._model._impl.funext` and names nothing else. That a *declared* `funext`
+   `PSigma'` and `Ac._model._impl.funext`. That a *declared* `funext`
    ahead of the model is used instead is `funext_binder.lean`'s claim, on the
-   same [`Modelgen.ensureFunext`]; what this file measures is `PSigma`,
-   `Nonempty` and `Classical.choice`, all three of which the replay does reach
-   in time, and the `isDefEq` check `Modelgen.ensureChoice` puts the input's
-   own axiom through. -/
+   same [`Modelgen.ensureFunext`]; what this file measures is the distinction
+   between ordinary and tight pairs, plus the `isDefEq` check
+   `Modelgen.ensureChoice` puts the input's own axiom through. -/
 prelude
 
 universe u v

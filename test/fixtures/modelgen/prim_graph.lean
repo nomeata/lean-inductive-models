@@ -1,7 +1,7 @@
 /- **Arm G's positive shapes** (`src/Modelgen/Simple.lean`'s
    [`Modelgen.graphArm`]): the recursive subsingleton, modelled by the **graph**
    of its own recursion. This is the arm that took `Acc` out of the basis, and
-   these are the exported shapes for the choice-based and `PSigma`-based routes.
+   these are the exported shapes for the choice-based and `PSigma'`-based routes.
 
    Two lines of the recipe are shape-sensitive — the n-ary congruence in
    `Graph.unique` and the `funext` chain, which runs per **binder** of a
@@ -44,7 +44,7 @@
    present.
 
    **The file declares `Eq` and nothing else**, so one run splices everything
-   else the arm needs and the report names it: `PSigma` (the value is paired
+   else the arm needs and the report names it: `PSigma'` (the value is paired
    with its graph proof), `Nonempty` and `Classical.choice` (the extraction),
    and — for the first shape with a binder — the quotient, `Quot.sound` and a
    derived `funext`. `prim_graph_pre.lean` is the same arm on an input that

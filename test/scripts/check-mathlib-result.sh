@@ -16,7 +16,7 @@ printf '%s\n' \
   "Owner: prelude spliced — Eq, PSigma', PSigma'.mk, PUnit" \
   "Eq: exempt — prim model: a basis primitive" \
   "Nat: exempt — prim model: a basis primitive" \
-  "PSigma: exempt — prim model: a basis primitive" \
+  "PSigma: model of 9 declarations" \
   "PUnit: exempt — prim model: a basis primitive" \
   "statements: 48699 compared, 0 differ" \
   "levels: 211 planner comparisons, 0 escapes" \

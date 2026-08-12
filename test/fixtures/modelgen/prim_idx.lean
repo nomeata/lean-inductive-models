@@ -72,7 +72,7 @@
      the non-pivot positions are not a prefix.
    * `Fall3` — **every** index a pivot, at three, mapped on by a 3-cycle. There
      is then nothing left to equate: the carrier is a bare Church conjunction,
-     no `PSigma` is packed and no `Eq.rec` is built. Three and not two, because
+     no `PSigma'` is packed and no `Eq.rec` is built. Three and not two, because
      with two pivots a wrong field↦index map is a transposition.
    * `Fxh` — a non-pivot index that is an expression over a **proof** field
      (`k h`), and no data fields at all: `Inf.below`'s shape without the

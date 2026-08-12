@@ -15,7 +15,7 @@
    * `Dec` — a `Type`-valued sum whose fields are **propositions**, so both
      chains need the `D 1` pad tier (`max 1 0 ≠ 0`).
    * `Sub` — a `Sort (max 1 u)` carrier with a `Sort u` field and a `Prop`
-     field: the `PSigma` chain lands on the declared level exactly.
+     field: the `PSigma'` chain lands on the declared level exactly.
    * `Emp` — **no constructors**: the fibre is empty at every tag and the
      recursor is Church-`⊥`'s `Sort w` eliminator under two destructions.
    * `Tor` — a `Prop` with three constructors: small elimination, the Church
@@ -114,7 +114,7 @@
      unfolding composes with the dependent index analysis.
 
    The file declares `Eq` and nothing else of the basis, so one run splices
-   `Nat`, `PSigma`, `PSigma'`, and `PUnit` and the report names them. Nothing here
+   `Nat`, `PSigma'`, and `PUnit` and the report names them. Nothing here
    splices the quotient, `Quot.sound` or a `funext`: the lift's eta replaced
    the one construction that needed them. -/
 prelude

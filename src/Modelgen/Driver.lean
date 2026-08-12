@@ -51,7 +51,7 @@ structure Report where
   generated : Array (Name × Nat) := #[]
   declined : Array (Name × String) := #[]
   /-- **The basis exemption, which is not a decline** ([`Modelgen.primBasis`]).
-  `Eq`, `Nat`, `PSigma`, `PSigma'`, and `PUnit` are the primitives
+  `Eq`, `Nat`, `PSigma'`, and `PUnit` are the primitives
   the third construction is written in, so a run leaves them unmodelled *by
   definition*; counting them among the declines makes every coverage report
   a number it then had to walk back in the next sentence. Reported on their own
@@ -1612,7 +1612,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           -- Ask the selected route, rather than requiring the whole basis in
           -- advance. A reusable non-basis support declaration such as
           -- `Nonempty` may itself precede an independent input-owned
-          -- `PSigma`, while its Church model does not mention `PSigma` at all.
+          -- an ordinary `PSigma`, while its Church model does not mention
+          -- that independent declaration at all.
           -- Any route that actually reaches a late splice still returns its
           -- exact readiness class below; fixed basis consumers are hoisted by
           -- `scheduledSupportRecord` before ordinary owners.

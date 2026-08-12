@@ -15,7 +15,7 @@
      `Two2.r n _` both live at `n`, so the recursor has to tell them apart on
      its own.
 
-   * `Bl` — an index **telescope of length two**, packed into one `PSigma`.
+   * `Bl` — an index **telescope of length two**, packed into one `PSigma'`.
      Two indices are not enough on their own: `bin` moves the first and leaves
      the second, `wide` moves the second and leaves the first, so a treatment
      that swapped the two, or applied one where the other belongs, is a type

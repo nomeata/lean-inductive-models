@@ -353,9 +353,10 @@ with a binder, pays the quotient, `Quot.sound` and a derived `funext`; `Ac`,
 `G2` and `G3` need only their own `funext`. Projection pairs are counted on top
 of this support split. A version that asked for `funext` per *arm* rather than
 per *shape* remains red here.
-`prim_graph_pre` is the same arm on an input that declares `PSigma`,
-`Nonempty` and `Classical.choice` itself: nothing of those is spliced, and
-`Nonempty`'s own model beside them is what says it is not a basis primitive.
+`prim_graph_pre` is the same arm on an input that declares ordinary `PSigma`,
+`Nonempty` and `Classical.choice` itself. `PSigma'` is the pair support the arm
+splices; both source inductives model beside it, demonstrating that neither
+ordinary `PSigma` nor `Nonempty` is a basis primitive.
 In `prim_graph` `Nonempty` is *spliced* rather than declared, and it is
 modelled there too — that row checks the splice-and-model invariant, and it is
 the fixture that would go red if layer 3 went back to being unable to model
@@ -381,7 +382,7 @@ shared limit.
 `BoxF` is no longer the level-incompleteness decline.  Its field
 `((α → β) → β)` keeps an `imax` inside the outer domain after a shallow
 codomain box, but recursive boxing transforms the whole Π tree.  Every atomic
-leaf gains a never-`Prop` `PSigma` codomain, every `imax` therefore normalizes
+leaf gains a never-`Prop` `PSigma'` codomain, every `imax` therefore normalizes
 to `max`, and the forward and inverse maps are definitionally inverse.  The
 seven declarations recorded below include its intrinsic projection and eta;
 no level-normalizer relaxation or axiom is involved. -/
@@ -444,7 +445,7 @@ def expectedPrim : List Row :=
   -- are two proofs of one proposition and the kernel identifies them.
   --
   -- **The base counts here are the arms, not the cells.** `Rv` is the first
-  -- arm-G model in the file and carries the splice (`PSigma`,
+  -- arm-G model in the file and carries the splice (`PSigma'`,
   -- `Nonempty`, `Classical.choice`, the quotient and a derived `funext`);
   -- `Inf` behind it is arm G's twelve declarations with nothing left to
   -- splice; `N` is 9 for the `Type` route's own basis. Every arm-F cell is 4 —
@@ -603,8 +604,8 @@ def expectedPrim : List Row :=
   -- parameter and a level parameter, `Br` an infinitary child whose binder is a
   -- parameter, and `Dep` a data tower whose second field depends on its first.
   --
-  -- **`Tree` is 218 declarations because it is the first W target in the file**
-  -- and therefore the one that carries `Nat`, `PSigma`, `PSigma'`, `PUnit`, and the W
+  -- **`Tree` is 224 declarations because it is the first W target in the file**
+  -- and therefore the one that carries `Nat`, `PSigma'`, `PUnit`, and the W
   -- core splice. Every later target carries only its own construction and
   -- exact public feature roles. So the number is a property of *ordering* and
   -- not of `Tree`, and if it
@@ -719,21 +720,20 @@ def expectedPrim : List Row :=
        ("Ix._model._impl.0._model._impl.aux", 12),
        ("Ix._model._impl.0._model._impl.aux._model._impl.skel", 16)],
       [("Eq", "prim model: a basis primitive")])
-  -- **A basis primitive occurs after the owners that need it in the raw
-  -- export.** `runFilter` dependency-orders the input while prioritizing the
-  -- fixed support closure, so the input's exact `PSigma` record is installed
-  -- before every selected owner island. This row pins that the same scheduled
-  -- source prefix serves direct simple models and the **composition's third
-  -- step** inside mutual and nested model islands.
+  -- **An ordinary `PSigma` occurs after unrelated owners in the raw export.**
+  -- It is no longer support: earlier owners use the fixed `PSigma'` bundle,
+  -- while the source `PSigma` remains at its dependency position and receives
+  -- its own model. This row distinguishes ordinary source order from support
+  -- scheduling across direct, mutual and nested model islands.
   --
   -- **The order in this row is the claim.** After support scheduling, `N`, `L`
   -- and `Pre` model at their dependency positions, followed by `MA` and its
   -- composed simple models, then `Nd` and its two composed layers. No generated
   -- job survives its owner island or depends on replaying a subsequent owner.
   --
-  -- `Pre` is the direct-simple control. `N`'s splice line names `Nat` and not
-  -- `PSigma`: a primitive absent from the input is spliced, while input-owned
-  -- support is scheduled and reused under its exact name.
+  -- `Pre` is the direct-simple control. `N`'s splice line names the actual
+  -- fixed basis, while the input-owned `PSigma` appears as the final modeled
+  -- owner rather than as an exemption.
   , ("prim_late_basis",
       [("N", 15), ("L", 6), ("Pre", 6), ("MA", 22),
        ("MA._model._impl.tag", 8), ("MA._model._impl.aux", 16),

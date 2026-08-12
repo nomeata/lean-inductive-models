@@ -2,18 +2,18 @@ import Modelgen.Mutual
 import Modelgen.Naming
 
 /-!
-# The model of a **simple inductive from five primitives**, generated
+# The model of a **simple inductive from four primitives**, generated
 
 The `--simple` construction removes the inductive declaration itself: a plain
 (non-mutual, non-nested) inductive's carrier, constructors, recursor and ι
 rules are emitted as ordinary `def`s and `theorem`s over a fixed basis of
 primitive inductives —
 
-    Eq   PSigma   PSigma'   Nat   PUnit
+    Eq   PSigma'   Nat   PUnit
 
 — each spliced into the output at Lean's own shape if the input lacks it,
 exactly as the existing prelude splice does for `Eq`. A consumer that
-recognises the five interface names then needs to implement only the five
+recognises the four interface names then needs to implement only the four
 primitives (plus `Quot`), not general inductives — and, if the input reaches
 [`Modelgen.graphArm`], `Nonempty` and the `Classical.choice` axiom beside
 them. `Nonempty` is not an additional primitive: it is `Classical.choice`'s own
@@ -30,10 +30,11 @@ line for `PUnit` and `PEmpty`, with
 `set_option bootstrap.inductiveCheckResultingUniverse false`
 (`Init/Prelude.lean:123,211`).
 
-The Σ is **`PSigma`-shaped** — `{α : Sort u} → (α → Sort v) →
-Sort (max 1 u v)` — because `Subtype`, structures with `Prop` fields, and
+The Σ is the tight **`PSigma'`** — `{α : Sort u} → (α → Sort v) →
+Sort (max u v)` — because `Subtype`, structures with `Prop` fields, and
 every `Prop`-fibred pair in the constructions below need a Σ over `Sort`,
-which a `Type`-only `Sigma` cannot give without adding `PLift` to the basis.
+which a `Type`-only `Sigma` cannot give. `PUnit` supplies any deliberate
+universe floor instead of baking `1` into every pair.
 
 **`Acc` is not in the basis either, and used to be.** It was there for the
 subsingleton-recursive **large** eliminator — the one grant the kernel makes
@@ -50,7 +51,7 @@ shapes, so `Acc` models like any other declaration now.
 
 ```text
 T._model.self p⃗ := Σ'(n : Nat), F n        F : a Nat.rec cases tower
-F ȷ̄  := the j-th constructor's field chain  (right-nested PSigma,
+F ȷ̄  := the j-th constructor's field chain  (right-nested PSigma',
         boxed and padded to exactly Sort w when the levels demand it)
 F n  := PSigma'.{0,w} ⊥ (fun _ => PUnit.{w}), for n ≥ #ctors
 ```
@@ -598,13 +599,13 @@ def psigmaMk (u v : Level) (α β fst snd : Expr) : Expr :=
 def psigmaRec (s u v : Level) (α β motive m t : Expr) : Expr :=
   psigmaPrimeRec u v s α β motive m t
 
-/-- `PSigma.fst`, as a `PSigma.rec`. Structure eta makes `⟨fst y, snd y⟩ ≡ y`
+/-- `PSigma'.fst`. Structure eta makes `⟨fst y, snd y⟩ ≡ y`
 for a neutral `y`, which is what lets a tuple be taken apart and put back
 together with no transport. -/
 def psigmaFst (u v : Level) (α β y : Expr) : Expr :=
   psigmaPrimeFst u v α β y
 
-/-- `PSigma.snd`, at the motive `fun z => β (fst z)`. -/
+/-- `PSigma'.snd`, at the dependent fibre `β (fst y)`. -/
 def psigmaSnd (u v : Level) (α β y : Expr) : Expr :=
   psigmaPrimeSnd u v α β y
 
@@ -730,8 +731,8 @@ def emptyAtElim (eqi : EqInfo) (v w : Level) (C e : Expr) : GenM Expr :=
 /-! ## The singleton at an arbitrary level
 
 `Sort ℓ` for a **bare or variable** `ℓ` is out of every *other* basis former's
-reach — `Eq` and `Acc` land in `Prop`, `Nat` in `Type`, `PSigma` at
-`max 1 u v`, and a Π lands there only through an `imax` collapse, which needs
+reach — `Eq` and `Acc` land in `Prop`, `Nat` in `Type`, and a Π lands there
+only through an `imax` collapse, which needs
 a `Sort ℓ`-valued *body*. The tight-pair/PUnit composite lands there for
 **any** `ℓ` whatsoever and — unlike the `False`-Π family the old basis used —
 is empty exactly when its proposition is. Thus its lifted `⊤` is the
@@ -784,11 +785,11 @@ partial def dsingOk (ℓ : Level) : Bool :=
   | _ => false
 
 /-- A **definitionally-canonical singleton at exactly `Sort ℓ`**: every
-element is *defeq* to the canonical one, by structure eta on `PSigma` and
+element is *defeq* to the canonical one, by `PUnit` eta, tight-pair eta and
 proof irrelevance on the components — so a pad costs no transport and no
 `funext`, and ι stays `Eq.refl`.
 
-`D 1 := Σ'(_ : ⊤), ⊤` with `⊤ := ∀ C : Prop, C → C`; `D (a+1) :=
+`D 1 := PUnit.{1}`; `D (a+1) :=
 (α : Sort a) → D 1`, whose Π is at `imax (a+1) 1 = a+1`; `D (max a b) :=
 Σ'(_ : D a), D b`. -/
 partial def dsingAt (ℓ : Level) : GenM (Expr × Expr) := do
@@ -809,7 +810,7 @@ partial def dsingAt (ℓ : Level) : GenM (Expr × Expr) := do
 
 `canonical` says whether every element is **defeq** to `canon`, in which case
 no uniqueness proof rides along. **Both families set it**: the
-[`Modelgen.dsingAt`] pad by `PSigma` structure eta and proof irrelevance, and
+[`Modelgen.dsingAt`] pad by `PSigma'`/`PUnit` structure eta, and
 the [`Modelgen.unitAt`] lift — used at a level `dsingOk` cannot build, a bare
 parameter in the gap, `PULift`'s shape — by tight-pair and unit structure eta
 against the literal pair that `canon` is. Thus current planners do not select
@@ -839,7 +840,7 @@ boxing produces `(Box α → Box β) → Box β` at the literal level `max 1 u v
 
 The box pad is `D 1`, every element of which is defeq to canonical.  By
 induction over the Π telescope, `unbox (box v) ≡ v` and `box (unbox y) ≡ y`
-hold by βι, `PSigma` structure eta, proof irrelevance and function eta alone:
+hold by βι, `PSigma'` structure eta, proof irrelevance and function eta alone:
 no transport, no axiom, and ι stays `Eq.refl`. -/
 
 /-- Is there an `imax` anywhere in the level? Asked of normal forms: a level
@@ -850,7 +851,7 @@ partial def levelHasIMax : Level → Bool
   | .succ a => levelHasIMax a
   | _ => false
 
-/-- The universe of [`Modelgen.boxTyOf`] without constructing its `PSigma`
+/-- The universe of [`Modelgen.boxTyOf`] without constructing its `PSigma'`
 terms. The W arm asks its tower-level question before primitives are spliced,
 so this level-only mirror keeps that early, rollback-free guard while using the
 same recursive Π shape as the actual box. -/
@@ -919,7 +920,7 @@ end
 
 /-! ## One constructor's chain
 
-A constructor's field telescope becomes a right-nested `PSigma` at exactly
+A constructor's field telescope becomes a right-nested `PSigma'` at exactly
 `Sort w`. The builders below recurse on the (progressively instantiated)
 telescope expression, so nothing is stored across scopes. `pad?` closes the
 chain when the field levels do not already reach `w` — and always for a
@@ -1160,7 +1161,7 @@ partial def churchSwapAt (tname : Name) (np ni : Nat) (C : Expr) (nf : Nat) (t :
 
 The subsingleton arm's degenerate `r := ⊥` case states
 its Henry-Ford equations as **one** `Eq` at the whole index telescope packed
-into a right-nested `PSigma`, rather than one `Eq` per index. It has to: a
+into a right-nested `PSigma'`, rather than one `Eq` per index. It has to: a
 later index's type may mention an earlier one — `HEq`'s telescope is
 `{β : Sort u} (b : β)`, which is already the dependent worst case — and
 separate equations cannot be stated, let alone transported along, in that
@@ -1170,13 +1171,13 @@ The three functions below are driven by the *packed type* rather than by the
 telescope. That is deliberate: reading a component's type back off a built
 expression is only valid while nothing has beta-reduced it, and that
 assumption has already cost this file two attempts (see
-[`Modelgen.pairArm`]). A `PSigma` application is stable under everything the
+[`Modelgen.pairArm`]). A `PSigma'` application is stable under everything the
 elaborator does to it, so destructuring it is safe. -/
 
 /-- `Σ'(x₁ : A₁) … A_n` over a **subsequence** `sel` of an opened index
 telescope, right-nested, with the last selected index's *type* as the final
 component — so a one-element selection packs to that type alone, with no
-`PSigma` at all. Closed over the *selected* telescope entries and over nothing
+`PSigma'` at all. Closed over the *selected* telescope entries and over nothing
 else: an unselected index stays free, which is exactly what the subsingleton
 arms need when some index positions are **pivots** — positions the model
 substitutes rather than equates — whose variables remain in scope while the
@@ -1201,11 +1202,11 @@ partial def packTyAt (is : Array Expr) (sel : Array Nat) (k : Nat) :
 
 /-- `Σ'(x₁ : A₁) … A_n` over an opened index telescope, right-nested, with the
 last index's *type* as the final component — so a one-index telescope packs to
-that type alone, with no `PSigma` at all. Closed over the telescope. -/
+that type alone, with no `PSigma'` at all. Closed over the telescope. -/
 def packTyOf (is : Array Expr) (k : Nat) : GenM (Expr × Level) :=
   packTyAt is (Array.range is.size) k
 
-/-- Read a `PSigma` application apart: its two levels, its `α` and its `β`. -/
+/-- Read a `PSigma'` application apart: its two levels, its `α` and its `β`. -/
 def psigmaParts (R : Expr) : GenM (Level × Level × Expr × Expr) := do
   let args := R.getAppArgs
   unless R.getAppFn.isConstOf `PSigma' && args.size == 2 do
@@ -1247,8 +1248,8 @@ step ctor c_j pre r post   := ⟨r.1 + 1, ⟨sⱼ, chain (pre, r.2, post)⟩⟩
 ```
 
 `n` counts recursive depth, so the representation is unique and no carve is
-needed. The recursor is `PSigma.rec` on the outer pair, `Nat.rec` on the
-spine, the existing tag towers inside each level, and `PSigma.rec` down each
+needed. The recursor is `PSigma'.rec'` on the outer pair, `Nat.rec` on the
+spine, the existing tag towers inside each level, and `PSigma'.rec'` down each
 chain — and **every ι rule is `Eq.refl`**, because at a step constructor the
 recursive argument is rebuilt as `⟨n, r.2⟩`, which structure eta makes
 definitionally `r`, and the induction hypothesis is the spine's own `Nat.rec`
@@ -2444,7 +2445,7 @@ with constructors `c⃗`:
     Tel p⃗ t j := Σ' (x : Xⱼ,₁), … Σ' (x : Xⱼ,ₘ), 𝟙        -- ⊥ off the end
     B'  p⃗ t   := Σ' j : Nat, Tel p⃗ t j
     A   p⃗     := Σ' t : Nat, D p⃗ t
-    tg  p⃗     := PSigma.fst
+    tg  p⃗     := PSigma'.fst
 
 **Both towers end in a unit at exactly `Sort w` and neither may collapse**, and
 that is what makes the universes come out: the core fixes `A` and `B'` at the
@@ -2453,10 +2454,10 @@ below `u` in general — and there is no `ULift` here to close the gap. Ending
 every tower at [`Modelgen.unitAt`] `w`, which is at exactly `Sort w`, makes the
 max exactly `w` for free at every arity including zero.
 
-`Σ'` is `PSigma` rather than the fragment's `Sigma` for a second reason beside
+`Σ'` is `PSigma'` rather than the fragment's `Sigma` for a second reason beside
 the levels: a non-recursive field may sit at `Prop`, and `Sigma`'s domain may
-not. `PSigma` is on [`Modelgen.primBasis`] and both towers' etas are the
-kernel's structure eta either way.
+not. `PSigma'` is on [`Modelgen.primBasis`] and its eta is the kernel's
+structure eta.
 
 **The junk is uninhabited in both directions and that is load-bearing for
 elaboration, not only for correctness.** `D p⃗ t` for `t ≥ nc` and `Tel p⃗ t j`
@@ -2589,7 +2590,7 @@ def wTowerMkOf (w : Level) (xs vals : Array Expr) : GenM Expr := do
 
 Most declarations expose the W core directly, so both levels are the public
 carrier level.  A predecessor-free, provably positive public level instead
-uses a small `Type` core and stores it in the exact-sort `PSigma` described by
+uses a small `Type` core and stores it in the exact-sort `PSigma'` described by
 [`WCarrierPlan.carrier`].  Keeping this plan and its term builders outside
 `primIso` is also important: that definition is already close to Lean's
 default elaboration budget. -/
@@ -3613,7 +3614,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --
   -- * **`labelFactored`.** The core is generic in `K`, `B' : K → Type u` and
   --   `tg : A → K`, and the arm runs it at **two** instantiations of one
-  --   construction. At `K := Nat`, `tg := PSigma.fst`
+  --   construction. At `K := Nat`, `tg := PSigma'.fst`
   --   the branch type is a function of the *tag* and cannot see the label's
   --   data, which is [`Modelgen.tagFactored`]; at `K := A`, `tg := id` it sees
   --   all of it and only an earlier *recursive* field is out of reach, which is
@@ -3624,8 +3625,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- * **the internal carrier is `Type u`.** `WT.W.{u,w}` fixes `A` and `B'`
   --   at `Type u`. Ordinarily the public carrier already has that shape. At a
   --   never-zero carrier with no syntactic predecessor, the fallback runs the
-  --   core at `Type` and stores that low carrier in a `PSigma` whose second
-  --   component is the derived lift of `True`. The `PSigma` itself lands at the exact
+  --   core at `Type` and stores that low carrier in a `PSigma'` whose second
+  --   component is the derived lift of `True`. The `PSigma'` itself lands at the exact
   --   public `Sort w`; no cumulative definition conversion is assumed.
   -- * **`isRec`.** A non-recursive declaration has no branching to be stopped
   --   by, so it never reaches here.
@@ -3752,7 +3753,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   let wLowSelfAt : Array Expr → Expr := fun ps =>
     mkAppN (.const wCoreSelf [uL, wKL]) #[wKTy ps, wAAt ps, wBFn ps, wTgAt ps]
   -- At the constrained-lift instantiation the low W lives in `Type` while the
-  -- public carrier must live in the literal `Sort w`. `PSigma` supplies that
+  -- public carrier must live in the literal `Sort w`. `PSigma'` supplies that
   -- exact result sort; the second field is a canonical inhabitant of
   -- the derived lift of `True`, so wrapping and unwrapping reduce by the structure
   -- projection and eta rules and add no axiom.
@@ -3831,8 +3832,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- **The eta lemma** — `dispatch = f`, and the whole of the per-constructor
   -- glue. It is
   -- enough to prove `∀ j tel, dispatch j tel = f ⟨j, tel⟩` and instantiate at
-  -- `b.1, b.2`, because `⟨b.1, b.2⟩ ≡ b` is `PSigma`'s definitional eta — so
-  -- **no `PSigma.rec` appears in the proof at all**. Every real branch is
+  -- `b.1, b.2`, because `⟨b.1, b.2⟩ ≡ b` is `PSigma'`'s definitional eta — so
+  -- **no `PSigma'.rec'` appears in the proof at all**. Every real branch is
   -- `Eq.refl`: at branch `r` the left side reduces to `f ⟨r, ⟨tel.1, …, ⟨⟩⟩⟩`
   -- and the right is `f ⟨r, tel⟩`, and those are the same term by that eta
   -- once more and by the terminating unit's own canonicity. Off the end of the
@@ -3883,7 +3884,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         return wPlan.unwrap (wLowSelfAt ps) (mkAppN fields[rcs[r]!]! vs).headBeta
       -- The branch tower is written at the constructor's **own** fields here
       -- rather than at projections of the tower it just built: the two are
-      -- definitionally equal by `PSigma`'s ι rule, and the fields are what the
+      -- definitionally equal by `PSigma'`'s ι rule, and the fields are what the
       -- dispatch's children are applied to anyway.
       return (wLabel ps (natNumeral k) tower,
               ← wDispLam ps k (wKeyOf ps k tower) nrv child)
@@ -3999,7 +4000,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- but proofs — and equates at the rest. So the carrier quantifies the
     -- constructor's `Prop` fields *at the pivots already supplied*, and
     -- Church-conjoins them with **one** `Eq` at the **non-pivot subsequence**
-    -- packed into a `PSigma` ([`Modelgen.packTyAt`]) — the Henry-Ford
+    -- packed into a `PSigma'` ([`Modelgen.packTyAt`]) — the Henry-Ford
     -- equation, stated once because a later index's type may mention an
     -- earlier one:
     --
@@ -4264,7 +4265,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     --
     -- Three reductions carry the ι rules and each is load-bearing:
     -- definitional proof irrelevance (`⟨s, h⟩ ≡ ⟨s, h'⟩`, so the carved
-    -- component never obstructs), the skeleton's own ι, and `PSigma`'s
+    -- component never obstructs), the skeleton's own ι, and `PSigma'`'s
     -- structure eta (`⟨t.1, t.2⟩ ≡ t`, and `unpack (pack ι⃗) ≡ ι⃗`).
     unless large do
       badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
@@ -4273,12 +4274,12 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
 
     let skelSelf := fun (ps : Array Expr) => mkAppN (.const skelN us) ps
-    -- The index telescope packed into one `PSigma` ([`Modelgen.packTyOf`]),
+    -- The index telescope packed into one `PSigma'` ([`Modelgen.packTyOf`]),
     -- at a parameter scope. Closed over the telescope, so it depends on `ps`
     -- alone.
     let pkAt := fun (ps : Array Expr) => do
       forallBoundedTelescope (← instForall memberTy ps) (some ni) fun is _ => packTyOf is 0
-    -- `fun s => good p⃗ s y` — the carve's predicate as `PSigma`'s `β`.
+    -- `fun s => good p⃗ s y` — the carve's predicate as `PSigma'`'s `β`.
     let βOf := fun (ps : Array Expr) (y : Expr) =>
       withLocalDeclD `s (skelSelf ps) fun s =>
         mkLambdaFVars #[s] (mkAppN (.const goodN us) (ps ++ #[s, y]))
@@ -4829,7 +4830,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
       addChecked dA
       out := out.push dA
 
-    -- `PSigma.fst` at the tag scheme and the identity at the label scheme. The
+    -- `PSigma'.fst` at the tag scheme and the identity at the label scheme. The
     -- latter is the former at `tg := id`, and this line is where that reading
     -- is cashed.
     let tgTyD ← withParams fun ps =>
@@ -4918,9 +4919,9 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
 
     -- Storage decisions — pure level arithmetic, and a decline here costs no
-    -- further splice. A chain of one field is that field bare (no `PSigma`,
-    -- so no built-in `1`); longer chains carry `max 1 ℓ⃗` already. A pad at
-    -- `1` closes most gaps and `w` itself covers a deliberately-raised
+    -- further splice. A chain of one field is that field bare (no `PSigma'`,
+    -- so no pair); longer tight chains carry exactly `max ℓ⃗`. A pad at `1`
+    -- deliberately raises this to `max 1 ℓ⃗`, and `w` itself covers a raised
     -- carrier — at *any* `w` now, since the derived lift exists at every level.
     -- What no pad absorbs is an `imax` in a field's level: those fields are
     -- recursively boxed ([`Modelgen.boxTyOf`]) and the plan is retried on the
@@ -5125,8 +5126,8 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
                     (fun j vs => mkAppN minors[j]! vs) cs 0 n) f)
         mkLambdaFVars bs (psigmaRec v (.succ .zero) w natT fib motive minor major)
       else do
-        -- `PSigma.rec` on the outer pair, `Nat.rec` on the spine, the tag
-        -- towers inside each level, `PSigma.rec` down each chain.
+        -- `PSigma'.rec'` on the outer pair, `Nat.rec` on the spine, the tag
+        -- towers inside each level, `PSigma'.rec'` down each chain.
         let spine ← spineAt ps
         let mkOuter := fun (n tup : Expr) => psigmaMk (.succ .zero) w natT spine n tup
         -- the Nat.rec motive: `fun n => (x : V n) → motive ⟨n, x⟩`
@@ -5221,7 +5222,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
       for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
 
     -- **Arm G's prelude, asked for before anything is emitted.** The graph
-    -- route pairs a value with its graph proof (`PSigma`) and extracts it with
+    -- route pairs a value with its graph proof (`PSigma'`) and extracts it with
     -- `Classical.choice`, whose own domain is `Nonempty`; and `Graph.unique`
     -- transports along a `funext` — but only when a recursive field has a
     -- binder, because [`Modelgen.funextUp`] is the only caller and it is the

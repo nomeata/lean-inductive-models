@@ -37,14 +37,18 @@ grep -Eq '^levels: [1-9][0-9]* planner comparisons, 0 escapes$' "$GENERATE_LOG" 
 [[ "$(grep -Ec '^levels: ' "$GENERATE_LOG")" == 1 ]] ||
   fail "generation reported more than one universe-planning result"
 
-# This set follows from the pinned input: it owns four of the five basis
-# inductives. PSigma' is absent there and must instead be spliced below.
-expected_exemptions=$'Eq\nNat\nPSigma\nPUnit'
+# This set follows from the pinned input: it owns three of the four basis
+# inductives. PSigma' is absent there and must instead be spliced below;
+# ordinary PSigma is modelled like any other source inductive.
+expected_exemptions=$'Eq\nNat\nPUnit'
 actual_exemptions="$({
   sed -nE 's/^([^:]+): exempt — .*$/\1/p' "$GENERATE_LOG" || true
 } | LC_ALL=C sort)"
 [[ "$actual_exemptions" == "$expected_exemptions" ]] ||
   fail "basis exemptions differ; expected {$expected_exemptions}, found {$actual_exemptions}"
+
+grep -Eq '^PSigma: model of [1-9][0-9]* declarations$' "$GENERATE_LOG" ||
+  fail "ordinary PSigma was not modelled"
 
 grep -Eq ": prelude spliced — (.*, )?PSigma'(, |$)" "$GENERATE_LOG" ||
   fail "generation did not report splicing the tight PSigma' basis"

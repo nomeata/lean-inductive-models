@@ -1,16 +1,16 @@
-/- **A basis primitive physically follows blocks whose models need it in the
+/- **An ordinary declaration physically follows unrelated model owners in the
    raw export.**
 
    [`Modelgen.runFilter`] dependency-orders the source and prioritizes the
-   complete fixed support closure before opening any selected owner island. A
-   model must use the input's exact `Eq`, `Nat` or `PSigma` when present; it may
-   not splice over a name reserved anywhere in the file.
+   complete fixed support closure before opening any selected owner island.
+   `Eq`, `Nat`, `PSigma'`, and `PUnit` are support; ordinary `PSigma` is not,
+   and therefore remains an ordinary modelled owner at its dependency position.
 
    **What this file adds is that the scheduled prefix reaches composition.**
    [`Modelgen.primCompose`] is the third step over the `_model._impl.tag` and
    `_model._impl.aux` a mutual model just emitted. It runs inside the same
    disposable island as `genMutual` or the nested arm, with the scheduled exact
-   support already installed in the persistent prefix.
+   fixed support already installed in the persistent prefix.
 
    The layout is the whole fixture:
 
@@ -19,19 +19,17 @@
      the third step then models. Three members and unequal constructor counts,
      for the reason `mutual_shapes.lean` gives: two members cannot distinguish
      an ordering.
-   * `PSigma` is declared **after** it, at Lean's own shape, so
-     the raw order exercises support scheduling. [`Modelgen.primReady`] is true
-     before the block is opened, and `Modelgen.checkPSigma` validates the exact
-     input declaration before it is used.
+   * `PSigma` is declared **after** it, at Lean's own shape. The earlier models
+     use tight `PSigma'`; this source block stays put and models in its own turn.
    * `Nd` is a **nested** declaration, also before `PSigma`, because the third
      step has two callers and a repair at one of them would leave the other
      declining. Its `_model._impl.aux` is indexed and takes arm C.
    * `Pre` is the control: a direct simple inductive **before** `PSigma` in the
-     raw export. It uses the same scheduled support prefix as composed models.
+   raw export. It uses the same fixed support prefix as composed models.
 
    `Eq` is declared first and `Nat` is not declared at all — the model splices
-   Lean's `Nat`, and the report distinguishes that splice from the input-owned
-   support. -/
+   Lean's `Nat`, and the report distinguishes that splice from the later
+   ordinary `PSigma` model. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false

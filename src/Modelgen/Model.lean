@@ -109,7 +109,7 @@ inductive Decline where
   be mutually recursive. -/
   | cyclicMimics
   /-- **A basis primitive, which is exempt rather than declined.** `Eq`,
-  `Nat`, `PSigma`, `PSigma'`, and `PUnit` are what the third construction is *written
+  `Nat`, `PSigma'`, and `PUnit` are what the third construction is *written
   in*; modelling one of them would either be circular or would put a second
   `Eq` in the output. Their absence from the models is what makes the
   construction well-founded, so it is not a gap and a census that counts it as
@@ -2324,7 +2324,7 @@ The fragment holds two `Expr.lit (.natVal _)`, and a literal's type is the
 kernel's own `Nat` by fiat — nothing renames it. A prefixed `_wcore.Nat` leaves
 `_wcore.Bool.ctorIdx` returning it while the literal in its body is at `Nat`,
 and that is `(kernel) unknown constant 'Nat'`. Sharing costs nothing anyone
-was counting on: `Nat` is already one of [`Modelgen.primBasis`]'s five, so it
+was counting on: `Nat` is already one of [`Modelgen.primBasis`]'s four, so it
 was never going to be modelled, and sharing it takes an unmodelled inductive
 *out* of the output rather than putting one in. `Nat.beq` and the rest of the
 namespace stay prefixed — they are ordinary definitions and only the type
