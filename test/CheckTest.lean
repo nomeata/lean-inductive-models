@@ -643,6 +643,25 @@ def run (root : String) : IO UInt32 := do
         let ownerValid := withValidModel unitlikeExport ownerDecl ownerModels
         state ← state.check s!"valid unit-like family {owner}" <|
           ownerTable.metadata.any (·.kind == .unitlike) && (check ownerValid).isEmpty
+      -- Several indexed family reports share one SyntaxIndex.  Put a global
+      -- extra-slot diagnostic on the last selected owner so concatenating the
+      -- per-family reports has exactly the aggregate order and multiplicity.
+      let mut multiValid := unitlikeExport
+      let mut multiOwners : Std.HashSet Name := {}
+      for owner in [`UnitType, `UnitProp] do
+        let some ownerDecl := ownerIndex? multiValid owner | do return 1
+        let some ownerTable := correspondenceAt? multiValid ownerDecl | do return 1
+        multiValid := withValidModel multiValid ownerDecl
+          (modelDeclarations multiValid ownerTable (Name.str (Naming.modelName owner) "helper"))
+        multiOwners := multiOwners.insert owner
+      let extraOwner := `WithField
+      let extraName := Naming.unitlikeName extraOwner
+      multiValid := insertBeforeOwner multiValid extraOwner
+        (.ax extraName [] (.sort .zero) false)
+      multiOwners := multiOwners.insert extraOwner
+      state ← state.check "multi-family indexed union equals aggregate with one global extra" <|
+        indexedFamilyUnionFor multiValid multiOwners ==
+          checkStatementsFor multiValid multiOwners
       let some mutualDecl := ownerIndex? unitlikeExport `MU | do return 1
       let some mutualUnitlike := correspondenceAt? unitlikeExport mutualDecl | do return 1
       state ← state.check "unit-like is per mutual member" <|
