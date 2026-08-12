@@ -169,28 +169,56 @@ def emittedNames (run : FilterRun) : Array Name :=
   run.output.decls.flatMap fun declaration =>
     declaration.names.toArray |>.filter (!inputNames.contains ·)
 
-/-- Emitted names belonging to records both witnessed as splices and classified
-as fixed reusable support. This mirrors the persistence gate, but derives its
-expected set independently from the serialized report and output. -/
-def witnessedFixedSupportNames (run : FilterRun) : Array Name :=
+/-- Emitted records both witnessed as splices and classified as fixed reusable
+support. Persistence is a record-level decision: an inductive record rooted at
+`Nonempty`, for example, also installs `Nonempty.intro` and `Nonempty.rec`, even
+though those two names are not independently support roots. -/
+def witnessedFixedSupportRecords (run : FilterRun) : Array EDecl :=
   let witnessed := run.report.spliced.flatMap (·.2)
   run.output.decls.filter (fun declaration =>
       declaration.names.any witnessed.contains &&
         (declaration.names.any persistentSupportRoot ||
-          declaration.names.all persistentSupportName)) |>.flatMap fun declaration =>
-            declaration.names.toArray
+          declaration.names.all persistentSupportName))
+
+def witnessedFixedSupportNames (run : FilterRun) : Array Name :=
+  (witnessedFixedSupportRecords run).flatMap fun declaration => declaration.names.toArray
+
+structure IsolationCensus where
+  generatedOwners : Array Name
+  generatedPublicNames : Array Name
+  witnessedSplices : Array Name
+  fixedSupport : Array Name
+  localSplices : Array Name
+  retainedEmitted : Array Name
+  retainedPublic : Array Name
+  retainedUnexpected : Array Name
+  missingFixed : Array Name
+  deriving Repr
+
+/-- Exact name census for the disposable-environment boundary. The local/fixed
+split follows whole serialized records, matching [`installGeneratedSupportIn`]
+rather than classifying constructor and recursor names in isolation. -/
+def isolationCensus (run : FilterRun) : IsolationCensus :=
+  let generatedOwners := run.report.generated.map (·.1)
+  let generatedPublicNames := generatedOwners.map Naming.modelName
+  let witnessedSplices := run.report.spliced.flatMap (·.2)
+  let fixedSupport := witnessedFixedSupportNames run
+  let localSplices := witnessedSplices.filter (!fixedSupport.contains ·)
+  let retainedEmitted := (emittedNames run).filter run.env.constants.contains
+  { generatedOwners, generatedPublicNames, witnessedSplices, fixedSupport, localSplices,
+    retainedEmitted,
+    retainedPublic := generatedPublicNames.filter run.env.constants.contains,
+    retainedUnexpected := retainedEmitted.filter (!fixedSupport.contains ·),
+    missingFixed := fixedSupport.filter (!run.env.constants.contains ·) }
 
 /-- Every emitted name retained by the final replay environment is fixed,
 witnessed shared support, and every such support name was retained. Public
 interfaces and model-local implementation declarations therefore remain in
 the output only. -/
 def finalEnvironmentIsIsolated (run : FilterRun) : Bool :=
-  let emitted := emittedNames run
-  let fixed := witnessedFixedSupportNames run
-  let retained := emitted.filter run.env.constants.contains
-  run.report.generated.all (fun entry =>
-      !run.env.constants.contains (Naming.modelName entry.1)) &&
-    retained.all fixed.contains && fixed.all run.env.constants.contains
+  let census := isolationCensus run
+  census.retainedPublic.isEmpty && census.retainedUnexpected.isEmpty &&
+    census.missingFixed.isEmpty
 
 def run (root : String) : IO UInt32 := do
   initSearchPath (← findSysroot)
@@ -419,7 +447,9 @@ def run (root : String) : IO UInt32 := do
   let composedRun ← generatedFixtureState
     s!"{root}/test/fixtures/modelgen/nested_iota.ndjson" {}
   let nestedImpl := Name.num `Tree._model._impl 0
-  state := state.check "nested-mutual-simple composition remains one disposable island" <|
+  let composedCensus := isolationCensus composedRun
+  state := state.check
+      s!"nested-mutual-simple composition remains one disposable island: {repr composedCensus}" <|
     composedRun.report.generated.any (·.1 == `Tree) &&
       composedRun.report.generated.any (·.1 == nestedImpl) &&
       (emittedNames composedRun).contains nestedImpl &&
@@ -475,12 +505,15 @@ def run (root : String) : IO UInt32 := do
           declaration.names.all persistentSupportName)) |>.flatMap fun declaration =>
             declaration.names.toArray
   let retainedGenerated := generatedNames.filter aliasRun.env.constants.contains
-  state := state.check "model-local names are disposed after each owner island" <|
+  let localWitnessedNames := witnessed.filter (!fixedWitnessedNames.contains ·)
+  let aliasCensus := isolationCensus aliasRun
+  state := state.check
+      s!"model-local names are disposed after each owner island: {repr aliasCensus}" <|
     aliasRun.report.generated.all (fun entry =>
       !aliasRun.env.constants.contains (Naming.modelName entry.1)) &&
       !aliasRun.env.constants.contains `AliasI._model._impl.skel &&
       generatedNames.contains `AliasI._model._impl.skel &&
-      ((witnessed.filter (!persistentSupportName ·)).all fun name =>
+      (localWitnessedNames.all fun name =>
         !aliasRun.env.constants.contains name) &&
       retainedGenerated.all fixedWitnessedNames.contains &&
       fixedWitnessedNames.all retainedGenerated.contains
@@ -492,7 +525,9 @@ def run (root : String) : IO UInt32 := do
   -- per-owner implementation forest remain confined to this island.
   let wRun ← generatedFixtureState s!"{root}/test/fixtures/modelgen/prim_w.ndjson"
     { noGeneration with simple := true }
-  state := state.check "W core support persists without retaining its model island" <|
+  let wCensus := isolationCensus wRun
+  state := state.check
+      s!"W core support persists without retaining its model island: {repr wCensus}" <|
     wRun.report.generated.any (·.1 == `Tree) &&
       wRun.report.spliced.any (fun (_, names) => names.contains wCoreSelf) &&
       wRun.env.constants.contains wCoreSelf &&
