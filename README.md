@@ -258,8 +258,8 @@ T._model.proj_j.iota :
 For a single nonrecursive, unindexed, unnested owner, and for an unindexed
 member of a plain mutual block, every field uses this literal equation,
 including dependent fields: those carrier routes make the modeled projections
-compute definitionally on the modeled constructor. Recursive, indexed, and
-nested-specialization routes may recover an earlier field only
+compute definitionally on the modeled constructor. Other simple-recursive,
+indexed, and source nested-specialization routes may recover an earlier field only
 propositionally. In those cases a dependent
 field's right-hand side is the canonical transport of `fields[j]`, using the
 already generated projection-iota equalities for the minimal transitive set of
@@ -486,7 +486,7 @@ validates the complete model family:
    instantiated with its specified parameters and fields, rewritten by the
    same substitution, and compared literally with its iota theorem type. The
    definitional single-owner and plain-mutual routes use the constructor field
-   itself; recursive, indexed, and nested-specialization routes use the
+   itself; other simple-recursive, indexed, and source nested-specialization routes use the
    canonical dependent transport when required.
 9. For an intrinsic projection, the checker reconstructs the kernel field
    eligibility, the selected constructor field, and its exact sort, then
