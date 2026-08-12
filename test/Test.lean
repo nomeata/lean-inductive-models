@@ -785,6 +785,10 @@ def runOne (root : String) (a : TAcc) (r : Row)
       (nonemptyIndex.any fun nonempty =>
         psigmaIndex.any fun psigma => nonempty < psigma && rep.generated.any (·.1 == `Nonempty))
       "prim_graph_pre: support Nonempty before independent PSigma did not model"
+  if name == "w_core" then
+    a := check a
+      (rep.generated.any (·.1 == `False) && !rep.declined.any fun entry => entry.1 == `False)
+      "w_core: derived False did not model after fixed Nat support"
   -- **Exempt then declined.** The basis primitives are their own row in the
   -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a

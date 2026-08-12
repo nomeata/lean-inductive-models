@@ -940,14 +940,13 @@ def closeModelIsland (template : Export) (main : Environment)
 
 /-- Source declarations which must be replayed before any owner that can need
 them. This is deliberately wider than [`Modelgen.persistentSupportName`]:
-`False` participates in the simple pass's existing readiness contract but is
-derived rather than spliced. Conversely, when only the nested/mutual layers
-are selected, moving the full simple basis would change independent source
-order for no reason. -/
+When only the nested/mutual layers are selected, moving the full simple basis
+would change independent source order for no reason. `False` is derived, not
+support: preferring it could put its own model before a later input-owned
+`Nat`, although that model needs `Nat`. -/
 def scheduledSupportRecord (generation : Cli.Config) (declaration : EDecl) : Bool :=
   if generation.simple || generation.basic then
-    declaration.names.any persistentSupportRoot || declaration.names.all persistentSupportName ||
-      declaration.names.contains `False
+    declaration.names.any persistentSupportRoot || declaration.names.all persistentSupportName
   else if generation.nested || generation.mutualModels then
     declaration.names.any fun name =>
       name == `Eq || name == `PSigma' || (`PSigma').isPrefixOf name ||
@@ -1343,7 +1342,7 @@ input's own declaration to be replayed. -/
 def primMissingBasis (reserved : Std.HashSet Name) : MetaM (Array Name) := do
   let env ← getEnv
   let mut missing := #[]
-  for n in [`Eq, `Eq.refl, `False, `Nat, `Nat.zero, `Nat.succ, `PSigma, `PSigma.mk,
+  for n in [`Eq, `Eq.refl, `Nat, `Nat.zero, `Nat.succ, `PSigma, `PSigma.mk,
       `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk,
       `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
       `PUnit, `PUnit.unit, `PUnit.rec] do
@@ -1405,7 +1404,6 @@ def primWLogicalReady (reserved : Std.HashSet Name) : MetaM Bool := do
 
 /-- Which prerequisite set a deferred simple model is waiting for. -/
 inductive PrimReadiness where
-  | basis
   | late
   | wLogical
   deriving Inhabited, BEq
@@ -1413,7 +1411,6 @@ inductive PrimReadiness where
 def PrimReadiness.ready (readiness : PrimReadiness)
     (reserved : Std.HashSet Name) : MetaM Bool :=
   match readiness with
-  | .basis => primReady reserved
   | .late => primLateReady reserved
   | .wLogical => primWLogicalReady reserved
 

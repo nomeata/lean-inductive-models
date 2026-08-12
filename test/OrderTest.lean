@@ -239,6 +239,13 @@ def run (root : String) : IO UInt32 := do
     match scheduleSource selectedSupport nestedMutualOnly with
     | .ok scheduled => scheduled.decls == #[axDecl `Eq, axDecl `PUnit, selectedOwner]
     | .error _ => false
+  let derivedFalse := inductiveRecord [`False]
+  let falseBeforeBasis := exportOf #[derivedFalse, selectedOwner, axDecl `Nat, axDecl `Eq]
+  state := state.check "fixed basis hoists before derived False" <|
+    match scheduleSource falseBeforeBasis { nestedMutualOnly with simple := true } with
+    | .ok scheduled =>
+        scheduled.decls == #[axDecl `Nat, axDecl `Eq, derivedFalse, selectedOwner]
+    | .error _ => false
   let alreadyModeled := exportOf
     #[axDecl (Naming.modelName `SelectedA), selectedOwner, axDecl `Eq, axDecl `PUnit]
   state := state.check "support scheduler leaves an already-modeled export unchanged" <|
