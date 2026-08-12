@@ -549,6 +549,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe transparentowneraliasestest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe exportsyntaxnormalizationtest
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-a.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-c.sh
+TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-mathlib-result.sh
 ```
 
 `mainclitest` executes the built `modelgen` binary and covers the complete
