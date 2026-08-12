@@ -809,6 +809,30 @@ def toEDecls (d : Declaration) : MetaM (Array EDecl) := do
     return out
   | _ => return #[← toEDecl d]
 
+/-- Reinstall serialized generated records, with kernel checking, in an
+arbitrary source-prefix environment.
+
+Generation may use a separate analysis environment containing the owner.  A
+successful public model must nevertheless install here, where the owner is
+absent.  This makes owner independence a kernel-checked invariant instead of a
+hope later imposed by record ordering.  The returned environment is a fork;
+the caller may discard it after streaming the records. -/
+def checkGeneratedIn (base : Environment) (records : Array EDecl) :
+    MetaM (Except String Environment) := do
+  let mut checked := base
+  for record in records do
+    if let some declaration := toDeclaration checked record then
+      match checked.addDeclCore 0 declaration none true with
+      | .error exception =>
+        return .error s!"{record.names}: \
+          {← (exception.toMessageData {}).toString}"
+      | .ok next =>
+        checked := next
+        for name in declaration.getNames do
+          if checked.find? name |>.isNone then
+            return .error s!"{name}: checked declaration was lost from the environment"
+  return .ok checked
+
 /-- Read a generated model back from the environment, register every name Lean
 minted for its inductive blocks, and serialize through exact alias lookups.
 The returned `Iso` carries the completed table for reporting and delayed
