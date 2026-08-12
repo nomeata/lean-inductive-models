@@ -114,13 +114,16 @@ had a complete, structurally valid public model in the input, or when another
 selected route generated it during this run.  Basis exemptions never enter
 this calculation. -/
 def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Name × String) :=
-  let discovered := Modelgen.Check.discover input
-  let violations := Modelgen.Check.check input
-  let alreadyCovered : Std.HashSet Name := discovered.foldl (init := {}) fun owners family =>
-    if violations.any (·.familyOwner == family.owner) then owners else owners.insert family.owner
-  let generated := report.generated.foldl (init := {}) fun owners entry => owners.insert entry.1
-  report.declined.filter fun entry =>
-    !alreadyCovered.contains entry.1 && !generated.contains entry.1
+  if report.declined.isEmpty then
+    #[]
+  else
+    let discovered := Modelgen.Check.discover input
+    let violations := Modelgen.Check.check input
+    let alreadyCovered : Std.HashSet Name := discovered.foldl (init := {}) fun owners family =>
+      if violations.any (·.familyOwner == family.owner) then owners else owners.insert family.owner
+    let generated := report.generated.foldl (init := {}) fun owners entry => owners.insert entry.1
+    report.declined.filter fun entry =>
+      !alreadyCovered.contains entry.1 && !generated.contains entry.1
 
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   let input := config.input.getD ""
