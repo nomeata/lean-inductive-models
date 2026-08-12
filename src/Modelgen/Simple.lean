@@ -3135,9 +3135,9 @@ structure PrimAnalysis where
   erasureBare : Bool
   erasureLinear : Bool
 
+set_option maxRecDepth 2048 in
 /-- Analyse the installed declaration and its recursor before any support or
 model declarations are installed. -/
-set_option maxRecDepth 2048 in
 def analysePrim (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) : GenM PrimAnalysis := do
   let us := lparams.map Level.param
