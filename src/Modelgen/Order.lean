@@ -138,6 +138,16 @@ def recordOrder (x : Export) : Except Error (Array Nat) := do
 
   for family in Check.discover x do
     for model in family.decls do
+      -- A genuine generated model never mentions its source owner. If the
+      -- ordinary dependency graph already requires `owner → model`, adding
+      -- the public `model → owner` constraint would create an immediate
+      -- contradiction. Report this pair before running a whole-graph cycle
+      -- algorithm; it also distinguishes a leaked owner reference from an
+      -- unrelated source declaration which merely has a model-shaped name.
+      if outgoing[family.ownerDecl]!.contains model then
+        let records := #[family.ownerDecl, model].qsort (· < ·)
+        let declarations := records.map fun i => x.decls[i]!.names.toArray
+        throw (.cycle records declarations)
       (outgoing, indegree) := addEdge outgoing indegree model family.ownerDecl
 
   let mut ready : Std.TreeSet Nat := {}
