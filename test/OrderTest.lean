@@ -418,11 +418,12 @@ def run (root : String) : IO UInt32 := do
   -- environment, even though all remain in the serialized output.
   let composedRun ← generatedFixtureState
     s!"{root}/test/fixtures/modelgen/nested_iota.ndjson" {}
+  let nestedImpl := Name.num `Tree._model._impl 0
   state := state.check "nested-mutual-simple composition remains one disposable island" <|
     composedRun.report.generated.any (·.1 == `Tree) &&
-      composedRun.report.generated.any (·.1 == `Tree._model._impl.0) &&
-      (emittedNames composedRun).contains `Tree._model._impl.0 &&
-      !composedRun.env.constants.contains `Tree._model._impl.0 &&
+      composedRun.report.generated.any (·.1 == nestedImpl) &&
+      (emittedNames composedRun).contains nestedImpl &&
+      !composedRun.env.constants.contains nestedImpl &&
       finalEnvironmentIsIsolated composedRun
 
   let simpleRun ← generatedFixtureState
