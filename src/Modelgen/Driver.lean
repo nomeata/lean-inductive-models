@@ -3,6 +3,7 @@ import Modelgen.Cli
 import Modelgen.Naming
 import Modelgen.Projection
 import Modelgen.Check
+import Modelgen.Order
 
 /-!
 # The filter
@@ -813,51 +814,59 @@ def checkGeneratedIn (base : Environment) (records : Array EDecl) :
     MetaM (Except String Environment) := do
   let mut checked := base
   for record in records do
-    if let some declaration := toDeclaration checked record then
-      match checked.addDeclCore 0 declaration none true with
-      | .error exception =>
-        return .error s!"{record.names}: \
-          {← (exception.toMessageData {}).toString}"
-      | .ok next =>
-        checked := next
-        for name in declaration.getNames do
-          if checked.find? name |>.isNone then
-            return .error s!"{name}: checked declaration was lost from the environment"
+    let some declaration := toDeclaration checked record
+      | return .error s!"{record.names}: cannot reconstruct a kernel declaration"
+    match checked.addDeclCore 0 declaration none true with
+    | .error exception =>
+      return .error s!"{record.names}: \
+        {← (exception.toMessageData {}).toString}"
+    | .ok next =>
+      checked := next
+      for name in declaration.getNames do
+        unless checked.constants.contains name do
+          return .error s!"{name}: checked declaration was lost from the kernel environment"
   return .ok checked
 
 /-- Recheck the declarations actually constructed in a disposable model fork
 against an owner-free source environment.  Build names are intentional here:
 collision retries are kernel-checked under their injective alias names and are
 renamed back to exact public spellings only when serialized. -/
-def checkGeneratedModelsIn (base : Environment) (models : Array PendingModel) :
-    MetaM (Except String Environment) := do
-  let mut checked := base
-  for model in models do
-    for declaration in model.iso.decls do
-      match checked.addDeclCore 0 declaration none true with
-      | .error exception =>
-        return .error s!"{declaration.getNames}: \
-          {← (exception.toMessageData {}).toString}"
-      | .ok next => checked := next
-  return .ok checked
-
-/-- Persist only shared support which a model had to splice.  Public model
-declarations stay in the disposable fork and are never copied into the replay
-environment. -/
-def installGeneratedSupportIn (base : Environment) (models : Array PendingModel) :
+def installGeneratedSupportIn (base : Environment) (records : Array EDecl) :
     MetaM (Except String Environment) := do
   let mut main := base
-  for model in models do
-    for declaration in model.iso.decls do
-      let isSupport := declaration.getNames.any fun buildName =>
-        model.iso.spliced.contains (model.iso.aliases.exact buildName)
-      if isSupport then
-        match main.addDeclCore 0 declaration none true with
-        | .error exception =>
-          return .error s!"{declaration.getNames}: \
-            {← (exception.toMessageData {}).toString}"
-        | .ok next => main := next
+  for record in records do
+    if record.names.all persistentSupportName then
+      let some declaration := toDeclaration main record
+        | return .error s!"{record.names}: cannot reconstruct shared support"
+      match main.addDeclCore 0 declaration none true with
+      | .error exception =>
+        return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
+      | .ok next => main := next
   return .ok main
+
+/-- Finalize one atomic generated forest.  The source owner participates in
+record ordering but is removed before checked replay, so the kernel sees every
+exact serialized model declaration in the owner-free persistent environment.
+Only fixed shared support is copied back. -/
+def closeModelIsland (template : Export) (main : Environment)
+    (records : Array EDecl) (owner : EDecl) :
+    MetaM (Except String (Array EDecl × Environment)) := do
+  let island := { template with decls := records.push owner }
+  let ordered ← match Order.reorder island with
+    | .ok ordered => pure ordered
+    | .error error => return .error s!"cannot order generated island: {repr error}"
+  let mut generated : Array EDecl := #[]
+  let mut removedOwner := false
+  for record in ordered.decls do
+    if !removedOwner && record == owner then removedOwner := true
+    else generated := generated.push record
+  unless removedOwner do return .error s!"source owner {owner.names} disappeared from its island"
+  match ← checkGeneratedIn main generated with
+  | .error message => return .error message
+  | .ok _ =>
+    match ← installGeneratedSupportIn main generated with
+    | .error message => return .error message
+    | .ok supported => return .ok (generated, supported)
 
 /-- Read a generated model back from the environment, register every name Lean
 minted for its inductive blocks, and serialize through exact alias lookups.
@@ -1599,6 +1608,10 @@ def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
+  let scheduled ← match Order.reorderPrioritizing x fun declaration =>
+      declaration.names.all persistentSupportName with
+    | .ok scheduled => pure scheduled
+    | .error error => throwError "cannot schedule shared support: {repr error}"
   let mut out : Array EDecl := #[]
   let mut rep : Report := {}
   -- Held back until the export's own declaration is installed, so the
@@ -1621,7 +1634,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   -- with one the file itself introduces *later*.
   let reserved : Std.HashSet Name :=
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
-  for d in x.decls do
+  for d in scheduled.decls do
+    let mainBefore ← getEnv
+    let outputBefore := out.size
+    let pendingBefore := pending.size
     -- The model, if this is a nested declaration. Generated **before** the
     -- declaration is added: nothing in the model mentions `T`.
     if let .induct ts cs inputRecursors := d then
@@ -1813,6 +1829,23 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
               readiness := .basis, name := t.name, levelParams := t.levelParams,
               numParams := t.numParams, type := t.type, constructors := ctors,
               recursors := inputRecursors.toArray, projections := #[] }
+    if d matches .induct .. then
+      let generated := out.extract outputBefore out.size
+      let (orderedGenerated, mainWithSupport) ← match
+          ← closeModelIsland x mainBefore generated d with
+        | .ok result => pure result
+        | .error message => throwError
+            "owner-free generated declaration rejected for {d.names}: {message}"
+      out := out.extract 0 outputBefore ++ orderedGenerated
+      pending := pending.extract 0 pendingBefore
+      setEnv mainWithSupport
+      if let some ownerDeclaration := toDeclaration mainWithSupport d then
+        match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
+        | .ok env => setEnv env
+        | .error exception =>
+          let message ← (exception.toMessageData {}).toString
+          return (x.decls,
+            { rep with unreplayable := some s!"{d.names}: {message}" })
     out := out.push d
     -- Drain each block whose exact basis requirements have now arrived.
     if !waiting.isEmpty then
@@ -1862,6 +1895,11 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         else
           keep := keep.push job
       waitingPrim := keep
+    -- With dependency-closed shared support scheduled first, no owner island
+    -- may survive past its record.  A queued job here would otherwise retain
+    -- an ownerful generation environment, defeating the filter invariant.
+    unless waiting.isEmpty && waitingPrim.isEmpty do
+      throwError "a generated model remained deferred after shared-support scheduling"
     -- Statement correspondence is deliberately postponed until every emitted
     -- record is available.  It is an exact export-level comparison and does
     -- not consult this replay environment or the recursors the kernel minted

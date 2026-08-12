@@ -2371,6 +2371,16 @@ def wCoreExpr (e : Expr) : Expr :=
 function can have put it in the environment, so its presence means the fragment
 is already spliced and this run must not splice it twice. -/
 def wCoreSelf : Name := wCoreRoot ++ `WT.W
+
+/-- Names whose generated declarations are reusable support rather than part
+of one model's disposable implementation forest.  These are exact fixed
+interfaces (or the fixed `_wcore` namespace); declaration-local funext and
+arm-C skeleton names deliberately do not qualify. -/
+def persistentSupportName (name : Name) : Bool :=
+  [`Eq, `False, `Nat, `PSigma, `PULiftP, `Nonempty, `Iff, `Quot].any
+      (fun root => root.isPrefixOf name) ||
+    name == `Quot.sound || name == `Classical.choice || name == `propext ||
+    wCoreRoot.isPrefixOf name
 /-- `WT.sup` under the prefix — the node former. -/
 def wCoreSup : Name := wCoreRoot ++ `WT.sup
 /-- `WT.Wrec` under the prefix — the large recursor. -/

@@ -118,8 +118,11 @@ private def addEdge (outgoing : Array (Std.HashSet Nat)) (indegree : Array Nat)
     (outgoing.set! before (outgoing[before]!.insert after),
       indegree.set! after (indegree[after]! + 1))
 
-/-- The stable topological order of the export's atomic records. -/
-def recordOrder (x : Export) : Except Error (Array Nat) := do
+/-- The stable topological order of the export's atomic records, optionally
+preferring a class of records and its complete dependency closure whenever
+both preferred and ordinary nodes are ready. -/
+def recordOrderPrioritizing (x : Export) (prefer : EDecl → Bool) :
+    Except Error (Array Nat) := do
   let n := x.decls.size
   let mut ownership : Std.HashMap Name Nat := Std.HashMap.emptyWithCapacity (n * 2)
   for i in [0:n] do
@@ -149,20 +152,43 @@ def recordOrder (x : Export) : Except Error (Array Nat) := do
         throw (.cycle records declarations)
       (outgoing, indegree) := addEdge outgoing indegree model family.ownerDecl
 
-  let mut ready : Std.TreeSet Nat := {}
+  -- A support record is portable only together with its declaration
+  -- dependencies.  Prefer that whole predecessor closure, not merely the
+  -- named support record, so an unrelated ready owner cannot overtake a later
+  -- support prerequisite.
+  let mut incoming : Array (Array Nat) := Array.replicate n #[]
+  for before in [0:n] do
+    for after in outgoing[before]! do
+      incoming := incoming.set! after (incoming[after]!.push before)
+  let mut preferred : Array Bool := x.decls.map prefer
+  let mut work := (Array.range n).filter fun i => preferred[i]!
+  while let some node := work.back? do
+    work := work.pop
+    for before in incoming[node]! do
+      unless preferred[before]! do
+        preferred := preferred.set! before true
+        work := work.push before
+
+  let mut readyPreferred : Std.TreeSet Nat := {}
+  let mut readyOrdinary : Std.TreeSet Nat := {}
   for i in [0:n] do
-    if indegree[i]! == 0 then ready := ready.insert i
+    if indegree[i]! == 0 then
+      if preferred[i]! then readyPreferred := readyPreferred.insert i
+      else readyOrdinary := readyOrdinary.insert i
   let mut order : Array Nat := #[]
   repeat
-    match ready.min? with
+    match readyPreferred.min? <|> readyOrdinary.min? with
     | none => break
     | some before =>
-      ready := ready.erase before
+      if preferred[before]! then readyPreferred := readyPreferred.erase before
+      else readyOrdinary := readyOrdinary.erase before
       order := order.push before
       for after in outgoing[before]! do
         let degree := indegree[after]! - 1
         indegree := indegree.set! after degree
-        if degree == 0 then ready := ready.insert after
+        if degree == 0 then
+          if preferred[after]! then readyPreferred := readyPreferred.insert after
+          else readyOrdinary := readyOrdinary.insert after
   unless order.size == n do
     let blocked := (Array.range n).filter fun i => indegree[i]! > 0
     -- Kahn's residual contains both the cycle and every node blocked behind
@@ -190,10 +216,19 @@ def recordOrder (x : Export) : Except Error (Array Nat) := do
       current := before
   return order
 
+/-- The ordinary stable order uses no preferred class. -/
+def recordOrder (x : Export) : Except Error (Array Nat) :=
+  recordOrderPrioritizing x fun _ => false
+
 /-- Reorder declaration records, preserving export metadata and expression
 analysis.  No record content is rewritten. -/
 def reorder (x : Export) : Except Error Export := do
   let order ← recordOrder x
+  return { x with decls := order.map fun i => x.decls[i]! }
+
+/-- Reorder with one dependency-closed class scheduled as early as possible. -/
+def reorderPrioritizing (x : Export) (prefer : EDecl → Bool) : Except Error Export := do
+  let order ← recordOrderPrioritizing x prefer
   return { x with decls := order.map fun i => x.decls[i]! }
 
 end Modelgen.Order
