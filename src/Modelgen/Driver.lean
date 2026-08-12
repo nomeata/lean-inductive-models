@@ -1224,7 +1224,7 @@ was **unable to model anything it introduced**, and no coverage figure could
 show it, because a spliced declaration was never a candidate to begin with.
 Earlier coverage figures therefore measured only declarations from the input.
 
-Only *non-basis* splices are modelled: the five on
+Only *non-basis* splices are modelled: the four on
 [`Modelgen.primBasis`] are the exemption that makes the construction
 well-founded and must stay unmodelled. That is also what bounds the recursion
 — a model's own splices are basis members or already present.
@@ -1611,8 +1611,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
           -- Ask the selected route, rather than requiring the whole basis in
           -- advance. A reusable non-basis support declaration such as
-          -- `Nonempty` may itself precede an independent input-owned
-          -- an ordinary `PSigma`, while its Church model does not mention
+          -- `Nonempty` may itself precede an independent input-owned ordinary
+          -- `PSigma`, while its Church model does not mention
           -- that independent declaration at all.
           -- Any route that actually reaches a late splice still returns its
           -- exact readiness class below; fixed basis consumers are hoisted by

@@ -185,7 +185,7 @@ nothing; and arm W applies the W core's propositional ι theorem.
   a checked decline rather than a level-normalizer relaxation.
 * a field mentioning `T` other than as `∀ z⃗, T p⃗ e⃗` — a **nested**
   occurrence, which is layer 1's business.
-* the five **basis primitives themselves** — the exemption that makes the
+* the four **basis primitives themselves** — the exemption that makes the
   construction well-founded.
 -/
 
@@ -2205,7 +2205,7 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
     -- ── `Graph.exists` ──
     -- Totality, again by the `Prop`-motive recursor. `Classical.choice` picks
     -- the sub-values here, and single-valuedness above is what makes the
-    -- choice harmless. The `Nonempty` is of the **PSigma of value and graph
+    -- choice harmless. The `Nonempty` is of the **`PSigma'` of value and graph
     -- proof**, never of `motive ι⃗ t`: that is the whole difference from the
     -- route described above refutes.
     let neAt := fun (is : Array Expr) (t : Expr) => do

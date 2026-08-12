@@ -17,10 +17,10 @@ There are two reasons to use these models:
 The basis is:
 
 ```text
-Eq  Nat  PUnit  PSigma  PSigma'
+Eq  Nat  PUnit  PSigma'
 ```
 
-These five inductives are not modeled. `PSigma'` is the tight dependent pair
+These four inductives are not modeled. `PSigma'` is the tight dependent pair
 `{α : Sort u} → (α → Sort v) → Sort (max u v)`; its named projections and
 arbitrary-sort `rec'` are ordinary definitions derived from primitive
 projections. Together with `PUnit`, it derives the exact-sort propositional
@@ -501,7 +501,7 @@ minted by the kernel. A mismatch is an internal error and no output is written.
 - Unsupported inductive shapes are reported as declines and pass through
   without a model.
 - A checker consuming the models as an inductive front end must implement the
-  five basis inductives and Lean's kernel quotient declarations, and admit the
+  four basis inductives and Lean's kernel quotient declarations, and admit the
   standard axioms `Classical.choice`, `propext`, and `Quot.sound` when a
   generated development uses them.
 - Universe monomorphization is optional, off by default, and is exposed only
