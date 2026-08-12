@@ -327,8 +327,20 @@ def checkPUnit (env : Environment) : Except String Unit := do
     throw "PUnit.unit is not the fieldless canonical constructor"
   let some (.recInfo recursor) := env.constants.find? `PUnit.rec
     | throw "PUnit.rec is not a recursor"
-  unless recursor.levelParams.length == 2 do
-    throw "PUnit.rec is not universe-polymorphic in its motive"
+  let [v, u] := recursor.levelParams
+    | throw "PUnit.rec is not universe-polymorphic in its motive"
+  unless recursor.numParams == 0 && recursor.numMotives == 1 &&
+      recursor.numMinors == 1 && recursor.numIndices == 0 &&
+      recursor.rules.length == 1 && recursor.rules[0]!.ctor == `PUnit.unit do
+    throw "PUnit.rec does not have the standard fieldless-singleton recursor metadata"
+  let punit := Expr.const `PUnit [.param u]
+  let unit := Expr.const `PUnit.unit [.param u]
+  let motiveType := Expr.forallE `self punit (.sort (.param v)) .default
+  let expectedRecursor := Expr.forallE `motive motiveType
+    (.forallE `unitCase (.app (.bvar 0) unit)
+      (.forallE `t punit (.app (.bvar 2) (.bvar 0)) .default) .default) .implicit
+  unless recursor.type == expectedRecursor do
+    throw "PUnit.rec does not have the exact standard arbitrary-sort statement"
 
 /-- `Nat` at Lean's shape, **including the large elimination the whole Type
 route rests on**: `Nat.rec` must carry a motive universe. This property is
