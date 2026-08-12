@@ -75,19 +75,10 @@ structure Report where
   unreplayable : Option String := none
   deriving Inhabited
 
-/-- A generated model waiting for its statements to be compared with the
-exact recursor records of the declaration it models. -/
+/-- One generated model awaiting owner-free reinstallation at the end of its
+disposable construction fork. -/
 structure PendingModel where
-  all : Array Name
-  numParams : Nat
   iso : Iso
-  /-- The export's recursors, in its own order. For a block generated inside
-  this pass, [`Modelgen.recursorsOfNames`] reads back the exact records that
-  this driver just emitted. -/
-  recursors : Array ERec
-  /-- Whole-export projection records associated with this structure owner.
-  They may occur later in the input and need not yet be installed. -/
-  projections : Array EProjection := #[]
 
 /-- The unique minor-premise position belonging to `constructorName` in a
 mutual recursor telescope.  Each exported recursor record carries only its
@@ -834,6 +825,40 @@ def checkGeneratedIn (base : Environment) (records : Array EDecl) :
             return .error s!"{name}: checked declaration was lost from the environment"
   return .ok checked
 
+/-- Recheck the declarations actually constructed in a disposable model fork
+against an owner-free source environment.  Build names are intentional here:
+collision retries are kernel-checked under their injective alias names and are
+renamed back to exact public spellings only when serialized. -/
+def checkGeneratedModelsIn (base : Environment) (models : Array PendingModel) :
+    MetaM (Except String Environment) := do
+  let mut checked := base
+  for model in models do
+    for declaration in model.iso.decls do
+      match checked.addDeclCore 0 declaration none true with
+      | .error exception =>
+        return .error s!"{declaration.getNames}: \
+          {← (exception.toMessageData {}).toString}"
+      | .ok next => checked := next
+  return .ok checked
+
+/-- Persist only shared support which a model had to splice.  Public model
+declarations stay in the disposable fork and are never copied into the replay
+environment. -/
+def installGeneratedSupportIn (base : Environment) (models : Array PendingModel) :
+    MetaM (Except String Environment) := do
+  let mut main := base
+  for model in models do
+    for declaration in model.iso.decls do
+      let isSupport := declaration.getNames.any fun buildName =>
+        model.iso.spliced.contains (model.iso.aliases.exact buildName)
+      if isSupport then
+        match main.addDeclCore 0 declaration none true with
+        | .error exception =>
+          return .error s!"{declaration.getNames}: \
+            {← (exception.toMessageData {}).toString}"
+        | .ok next => main := next
+  return .ok main
+
 /-- Read a generated model back from the environment, register every name Lean
 minted for its inductive blocks, and serialize through exact alias lookups.
 The returned `Iso` carries the completed table for reporting and delayed
@@ -1396,9 +1421,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
-    let mut st2 := (out, rep, pending.push
-      { all := #[tname], numParams := np, iso := is, recursors := recursors,
-        projections })
+    let mut st2 := (out, rep, pending.push { iso := is })
     if basicModels then
       for n in is.spliced do
         if primBasis.contains n then continue
@@ -1561,8 +1584,7 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
-    let st := (out, rep, pending.push
-      { all := all, numParams := np, iso := is, recursors := recursors, projections })
+    let st := (out, rep, pending.push { iso := is })
     if simpleModels then
       primCompose is.members is.levelParams np reserved basicModels canWait st
     else
@@ -1643,9 +1665,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
               rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
               unless is.spliced.isEmpty do
                 rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
-              pending := pending.push
-                { all, numParams := t.numParams, iso := is,
-                  recursors := inputRecursors.toArray, projections := #[] }
+              pending := pending.push { iso := is }
               -- ── the model of the model ────────────────────────────────────
               --
               -- **What has just been emitted is a `mutual … end` block**, and
@@ -1694,10 +1714,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                   out := out ++ records
                   rep := { rep with
                     generated := rep.generated.push (is.members[0]!, is2.decls.size) }
-                  let modelRecursors ← recursorsOfNames is.members
-                  pending := pending.push
-                    { all := is.members, numParams := t.numParams, iso := is2,
-                      recursors := modelRecursors }
+                  pending := pending.push { iso := is2 }
                   -- ── the third step of the chain (`--simple`) ──────────────
                   -- The mutual model's own single inductives, modelled from
                   -- the primitives — nested → mutual → primitives, one pass.
