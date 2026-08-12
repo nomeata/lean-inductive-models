@@ -567,12 +567,30 @@ def run (root : String) : IO UInt32 := do
         (discover mutualValid).any (fun family =>
           family.owner == `A && family.correspondence == mutualTable) &&
         mutualNonProjectionViolations.isEmpty
+      let generatedMutualOwners := ({} : Std.HashSet Name).insert `A
+      let mutualStatements := checkStatementsFor mutualValid generatedMutualOwners
+      state ← state.check "mutual statement count uses the complete root family" <|
+        mutualStatements.statementsChecked == mutualTable.statementCount
+      let mutualPublicNames := mutualTable.publicNames
+      let missingMutualInterface : Export := { mutualValid with
+        decls := mutualValid.decls.filter fun declaration =>
+          !declaration.names.any mutualPublicNames.contains }
+      let missingMutualStatements :=
+        checkStatementsFor missingMutualInterface generatedMutualOwners
+      state ← state.check "a generated family cannot disappear from discovery" <|
+        missingMutualStatements.statementsChecked == mutualTable.statementCount &&
+          missingMutualStatements.violations.any
+            (isMissing `A (Naming.modelName `A))
       let some bCtor := mutualTable.constructors.find? (·.owner == `B.bC) | do
         IO.eprintln "checktest: B.bC correspondence missing"
         return 1
       state ← state.check "mutual diagnostic belongs to exact constructor" <|
         (check (withoutDeclaration mutualValid bCtor.model)).any
           (isMissing bCtor.owner bCtor.model)
+      let wrongMutualConstructor := withDeclarationType mutualValid bCtor.model (.sort .zero)
+      state ← state.check "root-selected statements retain member diagnostics" <|
+        (checkStatementsFor wrongMutualConstructor generatedMutualOwners).violations.any
+          (isTypeMismatch bCtor.owner bCtor.model)
 
     let unitlikePath := s!"{root}/test/fixtures/modelgen/unitlike.ndjson"
     let unitlikeText ← IO.FS.readFile unitlikePath

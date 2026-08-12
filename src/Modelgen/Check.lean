@@ -80,6 +80,14 @@ def Correspondence.statementCount (table : Correspondence) : Nat :=
   table.recursors.size + table.iotas.size + 2 * table.projections.size +
     (table.metadata.filter (·.kind == .ruleK)).size
 
+/-- Every exact source declaration to which a structural diagnostic for this
+correspondence may be attributed.  A generated mutual or nested family is
+reported under its root, but its violations remain attached to the particular
+member, constructor, or recursor whose public slot is wrong. -/
+def Correspondence.diagnosticOwners (table : Correspondence) : Array Name :=
+  table.entries.foldl
+    (fun owners pair => if owners.contains pair.owner then owners else owners.push pair.owner) #[]
+
 /-- The exact original declaration owning one public name in the table. -/
 def Correspondence.originalOfPublic? (table : Correspondence) (name : Name) : Option Name :=
   (table.entries.find? (·.model == name)).map (·.owner) <|>
@@ -445,10 +453,15 @@ private def appendUnique (names : Array Name) (more : List Name) : Array Name :=
   more.foldl (fun out name => if out.contains name then out else out.push name) names
 
 /-- Discover public model families from exact names computed from each original
-inductive record.  One family covers the whole atomic record, but every public
-slot in its correspondence remains attached to its exact original declaration.
-Names merely containing an `_model` component have no special meaning. -/
-def discover (x : Export) : Array Family := Id.run do
+inductive record. `includeEmpty root` retains an expected family even when no
+public slot survived serialization; the generation oracle uses that only for
+roots which this run reports as generated, so complete interface loss becomes
+a collection of missing-public violations rather than an invisible family.
+
+One family covers the whole atomic record, but every public slot in its
+correspondence remains attached to its exact original declaration. Names merely
+containing an `_model` component have no special meaning. -/
+private def discoverWith (x : Export) (includeEmpty : Name → Bool) : Array Family := Id.run do
   let mut declarations : Std.HashMap Name (Array Nat) := {}
   for i in [0:x.decls.size] do
     for name in x.decls[i]!.names do
@@ -460,7 +473,8 @@ def discover (x : Export) : Array Family := Id.run do
     let some root := types.head?.map (·.name) | continue
     let some correspondence := correspondenceAt? x ownerDecl | continue
     let publicNames := correspondence.publicNames
-    unless publicNames.any (fun name => !(declarations.getD name #[]).isEmpty) do continue
+    unless includeEmpty root ||
+        publicNames.any (fun name => !(declarations.getD name #[]).isEmpty) do continue
     let mut modelDecls : Array Nat := #[]
     for name in publicNames do
       for i in declarations.getD name #[] do
@@ -473,6 +487,9 @@ def discover (x : Export) : Array Family := Id.run do
       { owner := root, modelRoot, carrier := modelRoot, ownerDecl, correspondence,
         decls := modelDecls, names := modelNames }
   return families
+
+def discover (x : Export) : Array Family :=
+  discoverWith x fun _ => false
 
 private partial def expressionReference? (targets : Std.HashSet Name) : Expr → Option Name
   | .const name _ => if targets.contains name then some name else none
@@ -1096,9 +1113,13 @@ def checkStatements (x : Export) : StatementReport :=
 Pre-existing models in an already-filtered input remain available as exact
 declaration dependencies, but do not inflate the run's work count or errors. -/
 def checkStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
-  let families := (discover x).filter fun family => owners.contains family.owner
-  let violations := (checkFamilies x (discover x) false).filter fun violation =>
-    owners.contains violation.familyOwner
+  let families := (discoverWith x owners.contains).filter fun family => owners.contains family.owner
+  let diagnosticOwners := families.foldl
+    (fun result family => family.correspondence.diagnosticOwners.foldl
+      (fun result owner => result.insert owner) result)
+    ({} : Std.HashSet Name)
+  let violations := (checkFamilies x families false).filter fun violation =>
+    diagnosticOwners.contains violation.familyOwner
   { statementsChecked := families.foldl
       (fun count family => count + family.correspondence.statementCount) 0
     violations }
