@@ -157,6 +157,11 @@ def generatedReplayRejects (base : Environment) (records : Array EDecl) : IO Boo
   | .error _ => return true
   | .ok _ => return false
 
+/-- The exact-sort proposition-lift support used by the current basis. Kept
+separate from the stable Eq/Nat/pair roots so a basis migration changes one
+assertion rather than weakening the final-environment census. -/
+def currentLiftSupportRoots : Array Name := #[`PUnit]
+
 def run (root : String) : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
@@ -287,11 +292,11 @@ def run (root : String) : IO UInt32 := do
   -- not merely the named record. Otherwise the persistent replay environment
   -- would receive a support declaration before one of its own dependencies.
   let supportDependency := axDecl `SupportDependency
-  let support := axDecl `PSigma (.const `SupportDependency [])
+  let support := axDecl `PSigma' (.const `SupportDependency [])
   let ordinary := axDecl `Ordinary
   let hoisted ← match Order.reorderPrioritizing
       (exportOf #[ordinary, support, supportDependency])
-      (fun declaration => declaration.names.contains `PSigma) with
+      (fun declaration => declaration.names.contains `PSigma') with
     | .ok result => pure result
     | .error error => throw <| IO.userError s!"support hoist failed: {repr error}"
   state := state.check "shared support hoists with a valid dependency closure" <|
@@ -380,7 +385,8 @@ def run (root : String) : IO UInt32 := do
   state := state.check "replay environment retains source and shared support only" <|
     simpleRun.env.constants.contains `Tri &&
       !simpleRun.env.constants.contains (Naming.modelName `Tri) &&
-      [`Eq, `Nat, `PSigma, `PSigma', `PUnit].all simpleRun.env.constants.contains &&
+      [`Eq, `Nat, `PSigma, `PSigma'].all simpleRun.env.constants.contains &&
+      currentLiftSupportRoots.all simpleRun.env.constants.contains &&
       !simpleRun.env.constants.contains `PULiftP
   let svType := declarationType? simple' `Sv
   let svModelType := declarationType? simple' (Naming.modelName `Sv)
