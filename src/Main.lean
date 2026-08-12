@@ -32,40 +32,15 @@ def exitRejected : UInt32 := 1
 def exitDeclined : UInt32 := 2
 def exitToolError : UInt32 := 3
 
-/-- Copy a file to an output stream without retaining it in memory. -/
-partial def copyFileTo (source : String) (target : IO.FS.Stream) : IO Unit := do
-  IO.FS.withFile source .read fun handle =>
-    let rec copy : IO Unit := do
-      let chunk ← handle.read (4 * 1024 * 1024)
-      unless chunk.isEmpty do
-        target.write chunk
-        copy
-    copy
-
-/-- Detect textual and symlink-equivalent paths before opening the output.
-`realPath` is deliberately attempted only for the verbatim no-op case: a new
-output file has no canonical path yet. -/
-def sameExistingFile (source target : String) : IO Bool := do
-  if source == target then return true
-  try
-    return (← IO.FS.realPath source) == (← IO.FS.realPath target)
-  catch _ =>
-    return false
-
-/-- Write an export to stdout or a file.  When no pass changed the export,
-`verbatim` names the input file whose bytes are copied exactly and in bounded
-memory.  A literal in-place no-op is already the desired result; opening the
-target for writing first would truncate it. -/
-def writeExport (target : String) (verbatim : Option String) (x : Export) : IO Unit := do
-  if let some source := verbatim then
-    if target != "-" && (← sameExistingFile source target) then return
+/-- Write the parsed export rather than reopening the input path.  This keeps
+the output tied to the bytes that passed parsing and checking even if the
+input is replaced or mutated while a long generation pass is running. -/
+def writeExport (target : String) (x : Export) : IO Unit := do
   let stream ← if target == "-" then
       IO.getStdout
     else
       pure (IO.FS.Stream.ofHandle (← IO.FS.Handle.mk target .write))
-  match verbatim with
-  | some source => copyFileTo source stream
-  | none => x.writeTo stream
+  x.writeTo stream
   stream.flush
 
 def reportGeneration (config : Modelgen.Cli.Config) (rep : Modelgen.Report) : IO Unit := do
@@ -284,10 +259,8 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
     | .ok (.ok ()) => reportTypeCheckSuccess config "output"
 
   if config.output then
-    let unchanged := !config.monoLevels && finalExport.decls == parsed.decls
     try
-      let verbatim := if unchanged && input != "-" then some input else none
-      writeExport config.outputTarget verbatim finalExport
+      writeExport config.outputTarget finalExport
     catch error =>
       IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
       return exitToolError

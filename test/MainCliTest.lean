@@ -197,32 +197,41 @@ def main (args : List String) : IO UInt32 := do
   else
     state := state.check "file output was created" false
 
-  -- File-input identity is stronger than structural equivalence: comments,
-  -- metadata formatting and blank lines are copied byte-for-byte. This line
-  -- is larger than the reader's 4 MiB chunk, pinning carry handling when no
-  -- newline occurs in an entire chunk.
+  -- This line is larger than the reader's 4 MiB chunk, pinning carry handling
+  -- when no newline occurs in an entire chunk.  Output is deliberately
+  -- reserialized from the checked snapshot rather than reopening a path that
+  -- may have changed after parsing.
   let boundaryPath := s!"{scratch}/main-cli-chunk-boundary.ndjson"
   let boundaryText :=
     "{\"meta\":{},\"padding\":\"" ++ String.ofList (List.replicate (5 * 1024 * 1024) 'x') ++
       "\"}\r\n"
+  let .ok boundaryExport := Modelgen.parse boundaryText (analyse := false) | do
+    IO.eprintln "mainclitest: chunk-boundary input did not parse"
+    return 1
   IO.FS.writeFile boundaryPath boundaryText
   let boundaryRun ← runModelgen binary
     ["--no-inductives", "--no-check", "--quiet", boundaryPath]
   state := state.check "line spanning the chunk boundary parses" (boundaryRun.exitCode == 0)
-  state := state.check "unchanged file output is byte-for-byte verbatim"
-    (boundaryRun.stdout == boundaryText)
-  let boundaryBefore ← IO.FS.readBinFile boundaryPath
+  state := state.check "chunk-boundary output is the parsed snapshot" <|
+    match Modelgen.parse boundaryRun.stdout (analyse := false),
+        Modelgen.parse boundaryText (analyse := false) with
+    | .ok output, .ok input => output.decls == input.decls && output.metaLine == input.metaLine
+    | _, _ => false
   let inPlaceRun ← runModelgen binary
     ["--no-inductives", "--no-check", "--quiet", "-o", boundaryPath, boundaryPath]
-  let boundaryAfter ← IO.FS.readBinFile boundaryPath
-  state := state.check "literal in-place no-op does not truncate input" <|
-    inPlaceRun.exitCode == 0 && inPlaceRun.stdout.isEmpty && boundaryAfter == boundaryBefore
+  let boundaryAfter ← IO.FS.readFile boundaryPath
+  state := state.check "literal in-place output is a complete parsed snapshot" <|
+    inPlaceRun.exitCode == 0 && inPlaceRun.stdout.isEmpty &&
+      match Modelgen.parse boundaryAfter (analyse := false) with
+      | .ok output => output.metaLine == boundaryExport.metaLine
+      | .error _ => false
   let aliasPath := s!"{scratch}/./main-cli-chunk-boundary.ndjson"
   let aliasRun ← runModelgen binary
     ["--no-inductives", "--no-check", "--quiet", "-o", aliasPath, boundaryPath]
-  let boundaryAfterAlias ← IO.FS.readBinFile boundaryPath
-  state := state.check "canonical-path in-place no-op does not truncate input" <|
-    aliasRun.exitCode == 0 && aliasRun.stdout.isEmpty && boundaryAfterAlias == boundaryBefore
+  let boundaryAfterAlias ← IO.FS.readFile boundaryPath
+  state := state.check "canonical-path in-place output remains complete" <|
+    aliasRun.exitCode == 0 && aliasRun.stdout.isEmpty &&
+      (Modelgen.parse boundaryAfterAlias (analyse := false)).isOk
   IO.FS.removeFile boundaryPath
 
   let malformedPath := s!"{scratch}/main-cli-malformed.ndjson"
