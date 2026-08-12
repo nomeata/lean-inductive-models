@@ -30,7 +30,7 @@ only propositionally, so their dependent rules retain the canonical transport
 below. Callers establish the one-constructor precondition while discovering
 intrinsic projections. -/
 def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType) : Bool :=
-  type.numIndices == 0 &&
+  type.ctors.length == 1 && type.numIndices == 0 &&
     ((types.size > 1 && types.all (·.numNested == 0)) ||
       (types.size == 1 && type.numNested == 0 && !type.isRec))
 
