@@ -55,6 +55,7 @@ jobs:
               lake -Kjobs=1 build "$target"
             done
           }
+          test/scripts/check-ci-serialized-builds.sh
 
           case "$SUITE" in
             fixtures)
