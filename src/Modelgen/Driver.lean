@@ -2,6 +2,7 @@ import Modelgen.Simple
 import Modelgen.Cli
 import Modelgen.Naming
 import Modelgen.Projection
+import Modelgen.Check
 
 /-!
 # The filter
@@ -64,8 +65,8 @@ structure Report where
   /-- Recursors whose replayed shape differs from the export's own. -/
   recMismatch : Array Name := #[]
   recChecked : Nat := 0
-  /-- Statements compared against the installed recursors' own rules, and the
-  ones that did not match. -/
+  /-- Public statements compared syntactically against the exact exported
+  owner records, and the ones that did not match. -/
   stmtChecked : Nat := 0
   stmtErrors : Array String := #[]
   /-- The input stopped replaying here: a declaration Lean's kernel will not
@@ -1844,10 +1845,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         else
           keep := keep.push job
       waitingPrim := keep
-    for model in pending do
-      let (m, errs) ← checkModel model.all model.numParams model.iso model.recursors
-        model.projections
-      rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
+    -- Statement correspondence is deliberately postponed until every emitted
+    -- record is available.  It is an exact export-level comparison and does
+    -- not consult this replay environment or the recursors the kernel minted
+    -- for the owner.
     pending := #[]
     if checkRecursors then
       if let .induct _ _ rs := d then
@@ -1872,10 +1873,11 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       (← genPrim job.name job.levelParams job.numParams job.type job.constructors
         job.recursors job.projections reserved generation.basic false
         (out, rep, pending)).1
-  for model in pending do
-    let (m, errs) ← checkModel model.all model.numParams model.iso model.recursors
-      model.projections
-    rep := { rep with stmtChecked := rep.stmtChecked + m, stmtErrors := rep.stmtErrors ++ errs }
+  let generatedOwners := rep.generated.foldl
+    (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
+  let statementReport := Check.checkStatementsFor { x with decls := out } generatedOwners
+  rep := { rep with stmtChecked := statementReport.statementsChecked,
+    stmtErrors := statementReport.violations.map (·.message) }
   return (out, rep)
 
 end Modelgen

@@ -70,32 +70,8 @@ def reportMono (config : Modelgen.Cli.Config) (rep : Modelgen.Mono.Report) : IO 
   IO.eprintln s!"  model groups: {rep.modelGroups} keyed, {rep.modelLoose} loose, \
     {rep.modelDeclined} declined; {rep.recRegen} recursors regenerated"
 
-def violationMessage : Modelgen.Check.Violation → String
-  | .modelNotBefore owner declaration modelDecl ownerDecl =>
-      s!"model declaration {declaration} at record {modelDecl} is not before \
-        {owner} at record {ownerDecl}"
-  | .ownerBackreference owner target =>
-      s!"modeled inductive {owner} refers back to {target}"
-  | .missingPublic owner expected =>
-      s!"model of {owner} is missing {expected}"
-  | .duplicatePublic owner expected count =>
-      s!"model of {owner} declares {expected} {count} times"
-  | .extraConstructor owner declaration =>
-      s!"model of {owner} has an unexpected constructor declaration {declaration}"
-  | .extraProjection owner declaration =>
-      s!"model of {owner} has an unexpected intrinsic projection declaration {declaration}"
-  | .extraRule owner declaration =>
-      s!"model recursor {owner} has an unexpected reduction theorem {declaration}"
-  | .extraMetadata owner declaration kind =>
-      s!"model of {owner} has unexpected {repr kind} metadata {declaration}"
-  | .universeArity owner declaration ownerArity modelArity =>
-      s!"{declaration}, modeling {owner}, has {modelArity} universe parameters; expected {ownerArity}"
-  | .declarationType owner declaration =>
-      s!"type of {declaration} does not literally model the type of {owner}"
-  | .declarationKind owner declaration expected actual =>
-      s!"{declaration}, modeling {owner}, is a {repr actual}; expected a {repr expected}"
-  | .declarationSafety owner declaration actual =>
-      s!"{declaration}, modeling {owner}, has safety {actual}; expected safe"
+def violationMessage (violation : Modelgen.Check.Violation) : String :=
+  violation.message
 
 def orderErrorMessage : Modelgen.Order.Error → String
   | .duplicateName name first second =>

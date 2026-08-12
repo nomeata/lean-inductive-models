@@ -71,6 +71,15 @@ def Correspondence.publicNames (table : Correspondence) : Array Name :=
     table.projections.flatMap (fun projection => #[projection.name, projection.iota]) ++
     table.metadata.map (·.name)
 
+/-- The historical driver statement metric: one comparison for each modeled
+recursor type and ordinary iota, two for each intrinsic projection (definition
+and iota), and one for each rule-K theorem.  Type formers, constructors,
+unit-like witnesses and eta are checked by the same structural pass, but were
+never included in the CLI's `statements:` count. -/
+def Correspondence.statementCount (table : Correspondence) : Nat :=
+  table.recursors.size + table.iotas.size + 2 * table.projections.size +
+    (table.metadata.filter (·.kind == .ruleK)).size
+
 /-- The exact original declaration owning one public name in the table. -/
 def Correspondence.originalOfPublic? (table : Correspondence) (name : Name) : Option Name :=
   (table.entries.find? (·.model == name)).map (·.owner) <|>
@@ -401,6 +410,36 @@ inductive Violation where
   /-- A public implementation definition is not marked exactly `safe`. -/
   | declarationSafety (owner declaration : Name) (actual : String)
   deriving Repr, BEq
+
+/-- Stable text for a structural violation, shared by the CLI and the
+generation-time syntactic oracle. -/
+def Violation.message : Violation → String
+  | .modelNotBefore owner declaration modelDecl ownerDecl =>
+      s!"model declaration {declaration} at record {modelDecl} is not before \
+        {owner} at record {ownerDecl}"
+  | .ownerBackreference owner target =>
+      s!"modeled inductive {owner} refers back to {target}"
+  | .missingPublic owner expected =>
+      s!"model of {owner} is missing {expected}"
+  | .duplicatePublic owner expected count =>
+      s!"model of {owner} declares {expected} {count} times"
+  | .extraConstructor owner declaration =>
+      s!"model of {owner} has an unexpected constructor declaration {declaration}"
+  | .extraProjection owner declaration =>
+      s!"model of {owner} has an unexpected intrinsic projection declaration {declaration}"
+  | .extraRule owner declaration =>
+      s!"model recursor {owner} has an unexpected reduction theorem {declaration}"
+  | .extraMetadata owner declaration kind =>
+      s!"model of {owner} has unexpected {repr kind} metadata {declaration}"
+  | .universeArity owner declaration ownerArity modelArity =>
+      s!"{declaration}, modeling {owner}, has {modelArity} universe parameters; \
+        expected {ownerArity}"
+  | .declarationType owner declaration =>
+      s!"type of {declaration} does not literally model the type of {owner}"
+  | .declarationKind owner declaration expected actual =>
+      s!"{declaration}, modeling {owner}, is a {repr actual}; expected a {repr expected}"
+  | .declarationSafety owner declaration actual =>
+      s!"{declaration}, modeling {owner}, has safety {actual}; expected safe"
 
 private def appendUnique (names : Array Name) (more : List Name) : Array Name :=
   more.foldl (fun out name => if out.contains name then out else out.push name) names
@@ -960,22 +999,24 @@ structure Report where
   violations : Array Violation
   deriving Inhabited, Repr, BEq
 
-private def checkFamilies (x : Export) (families : Array Family) : Array Violation := Id.run do
+private def checkFamilies (x : Export) (families : Array Family)
+    (checkOrder : Bool) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
   let declarations := declarationTypes x
   let constructors := constructorRecords x
   let ruleSlots := iotaSlots x
   for family in families do
-    for modelDecl in family.decls do
-      unless modelDecl < family.ownerDecl do
-        let declaration := x.decls[modelDecl]!
-        for name in declaration.names do
-          if let some owner := family.correspondence.originalOfPublic? name then
-            violations := violations.push
-              (.modelNotBefore owner name modelDecl family.ownerDecl)
-    let targets := family.names.foldl (fun set name => set.insert name) ({} : Std.HashSet Name)
-    if let some (owner, target) := ownerReference? targets x.decls[family.ownerDecl]! then
-      violations := violations.push (.ownerBackreference owner target)
+    if checkOrder then
+      for modelDecl in family.decls do
+        unless modelDecl < family.ownerDecl do
+          let declaration := x.decls[modelDecl]!
+          for name in declaration.names do
+            if let some owner := family.correspondence.originalOfPublic? name then
+              violations := violations.push
+                (.modelNotBefore owner name modelDecl family.ownerDecl)
+      let targets := family.names.foldl (fun set name => set.insert name) ({} : Std.HashSet Name)
+      if let some (owner, target) := ownerReference? targets x.decls[family.ownerDecl]! then
+        violations := violations.push (.ownerBackreference owner target)
     for pair in family.correspondence.typeFormers do
       violations := violations ++ checkPair family.correspondence declarations pair
     for pair in family.correspondence.constructors do
@@ -1033,7 +1074,34 @@ literal after positional universe alignment and the one simultaneous
 declaration-name substitution. -/
 def checkReport (x : Export) : Report :=
   let families := discover x
-  { familiesChecked := families.size, violations := checkFamilies x families }
+  { familiesChecked := families.size, violations := checkFamilies x families true }
+
+/-- Exact public-interface comparison without an environment or an ordering
+assumption.  This is the generation oracle: all expected declarations and
+theorems are reconstructed from the serialized owner records.  The separate
+ordering checker remains responsible for model-before-owner and owner
+backreference invariants. -/
+structure StatementReport where
+  statementsChecked : Nat
+  violations : Array Violation
+  deriving Inhabited, Repr, BEq
+
+def checkStatements (x : Export) : StatementReport :=
+  let families := discover x
+  { statementsChecked := families.foldl
+      (fun count family => count + family.correspondence.statementCount) 0
+    violations := checkFamilies x families false }
+
+/-- Generation-time view restricted to the families emitted by this run.
+Pre-existing models in an already-filtered input remain available as exact
+declaration dependencies, but do not inflate the run's work count or errors. -/
+def checkStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
+  let families := (discover x).filter fun family => owners.contains family.owner
+  let violations := (checkFamilies x (discover x) false).filter fun violation =>
+    owners.contains violation.familyOwner
+  { statementsChecked := families.foldl
+      (fun count family => count + family.correspondence.statementCount) 0
+    violations }
 
 /-- Compatibility view of [`checkReport`] for callers interested only in
 violations. -/
