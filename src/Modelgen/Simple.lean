@@ -2685,6 +2685,141 @@ def primRuleK (eqi : EqInfo) (rv : RecursorVal)
   addChecked d
   return (out.push d, #[(ern, ruleKN)], some ruleKN)
 
+/-! ## Tight dependent-pair storage
+
+A maybe-`Prop` family with two or more data fields cannot use the Church route:
+at a positive universe instantiation that route remembers only inhabitation,
+so intrinsic projections could not satisfy their constructor rules.  A
+right-nested `PSigma'` retains the fields at the exact maximum of their
+universes.  Its named, projection-derived `rec'` is deliberately used rather
+than the kernel's small recursor, so the storage interface itself has no
+elimination-universe restriction. -/
+
+partial def tightTowerTy (fields : Array Expr) (i : Nat) : GenM Expr := do
+  if i + 1 == fields.size then return ← ityp fields[i]!
+  let α ← ityp fields[i]!
+  let u ← ilevel α
+  let rest ← tightTowerTy fields (i + 1)
+  let v ← ilevel rest
+  let β ← mkLambdaFVars #[fields[i]!] rest
+  return mkAppN (.const `PSigma' [u, v]) #[α, β]
+
+def tightTowerAt (fields : Array Expr) (i : Nat) (pre : Array Expr) : GenM
+    (Level × Level × Expr × Expr) := do
+  let substitute := fun (expression : Expr) =>
+    expression.replaceFVars (fields.extract 0 pre.size) pre
+  let α := substitute (← ityp fields[i]!)
+  let u ← ilevel α
+  let rest ← tightTowerTy fields (i + 1)
+  let (v, β) ← withLocalDeclD (← fields[i]!.fvarId!.getUserName) α fun value => do
+    let rest := rest.replaceFVars
+      (fields.extract 0 (pre.size + 1)) (pre.push value)
+    let v ← ilevel rest
+    return (v, ← mkLambdaFVars #[value] rest)
+  return (u, v, α, β)
+
+partial def tightTowerMk (fields : Array Expr) (i : Nat) : GenM Expr := do
+  if i + 1 == fields.size then return fields[i]!
+  let pre := fields.extract 0 i
+  let (u, v, α, β) ← tightTowerAt fields i pre
+  return mkAppN (.const `PSigma'.mk [u, v])
+    #[α, β, fields[i]!, ← tightTowerMk fields (i + 1)]
+
+partial def tightTowerProjs (fields : Array Expr) (i : Nat) (value : Expr)
+    (pre : Array Expr := #[]) : GenM (Array Expr) := do
+  if i + 1 == fields.size then return pre.push value
+  let (_, _, _, _) ← tightTowerAt fields i pre
+  let first := .proj `PSigma' 0 value
+  tightTowerProjs fields (i + 1) (.proj `PSigma' 1 value) (pre.push first)
+
+partial def tightTowerPrepend (fields pre : Array Expr) (i : Nat) (tail : Expr) :
+    GenM Expr := do
+  if i == pre.size then return tail
+  let (u, v, α, β) ← tightTowerAt fields i (pre.extract 0 i)
+  return mkAppN (.const `PSigma'.mk [u, v])
+    #[α, β, pre[i]!, ← tightTowerPrepend fields pre (i + 1) tail]
+
+partial def tightTowerRec (fields : Array Expr) (motive minor value : Expr)
+    (i : Nat := 0) (pre : Array Expr := #[]) : GenM Expr := do
+  if i + 1 == fields.size then return mkAppN minor (pre.push value)
+  let (u, v, α, β) ← tightTowerAt fields i pre
+  let tailType := mkAppN (.const `PSigma' [u, v]) #[α, β]
+  let targetMotive ← withLocalDeclD `tail tailType fun tail => do
+    let full ← tightTowerPrepend fields pre 0 tail
+    mkLambdaFVars #[tail] (mkApp motive full)
+  let branch ← withLocalDeclD `fst α fun fst =>
+    withLocalDeclD `snd (mkApp β fst).headBeta fun snd => do
+      mkLambdaFVars #[fst, snd]
+        (← tightTowerRec fields motive minor snd (i + 1) (pre.push fst))
+  return mkAppN (.const `PSigma'.rec' [u, v, .zero])
+    #[α, β, targetMotive, branch, value]
+
+/-- Emit an exact-sort model for a non-recursive, unindexed,
+one-constructor family with at least two fields. -/
+def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
+    (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
+    (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
+    (recursorType : Expr) :
+    GenM (Array Declaration × Array (Name × Nat × Expr × Expr)) := do
+  let us := lparams.map Level.param
+  let nf := numForalls constructorType - np
+  let withParams := fun {α : Type} (k : Array Expr → GenM α) =>
+    forallBoundedTelescope memberTy (some np) fun ps _ => k ps
+  let selfAt := fun (ps : Array Expr) => mkAppN (.const selfN us) ps
+  let mut declarations : Array Declaration := #[]
+
+  let selfValue ← withParams fun ps => do
+    let tele ← instForall constructorType ps
+    forallBoundedTelescope tele (some nf) fun fields _ =>
+      mkLambdaFVars ps (← tightTowerTy fields 0)
+  let selfDecl := Declaration.defnDecl
+    { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfValue
+      hints := ← hintsFor selfValue, safety := .safe }
+  addChecked selfDecl
+  declarations := declarations.push selfDecl
+
+  let constructorValue ← withParams fun ps => do
+    let tele ← instForall modelConstructorType ps
+    forallBoundedTelescope tele (some nf) fun fields _ =>
+      mkLambdaFVars (ps ++ fields) (← tightTowerMk fields 0)
+  let constructorDecl := Declaration.defnDecl
+    { name := constructorN, levelParams := lparams, type := modelConstructorType,
+      value := constructorValue, hints := ← hintsFor constructorValue, safety := .safe }
+  addChecked constructorDecl
+  declarations := declarations.push constructorDecl
+
+  let recursorValue ← forallBoundedTelescope recursorType (some (np + 3)) fun binders _ => do
+    let motive := binders[np]!
+    let minor := binders[np + 1]!
+    let self := binders[binders.size - 1]!
+    let ps := binders.extract 0 np
+    let tele ← instForall constructorType ps
+    forallBoundedTelescope tele (some nf) fun fields _ =>
+      mkLambdaFVars binders (← tightTowerRec fields motive minor self)
+  let recursorDecl := Declaration.defnDecl
+    { name := recursorN, levelParams := recursorLevelParams, type := recursorType,
+      value := recursorValue, hints := ← hintsFor recursorValue, safety := .safe }
+  addChecked recursorDecl
+  declarations := declarations.push recursorDecl
+
+  let overrides ← withParams fun ps => do
+    let tele ← instForall constructorType ps
+    forallBoundedTelescope tele (some nf) fun fields _ =>
+      withLocalDeclD `self (selfAt ps) fun self => do
+        let projections ← tightTowerProjs fields 0 self
+        (Array.range nf).mapM fun fieldIndex => do
+          let selector ← mkLambdaFVars (ps.push self) projections[fieldIndex]!
+          let proof ← do
+            let proofTele ← instForall constructorType ps
+            forallBoundedTelescope proofTele (some nf) fun constructorFields _ => do
+              let selected := constructorFields[fieldIndex]!
+              let fieldType ← inferType selected
+              let fieldLevel ← ilevel fieldType
+              mkLambdaFVars (ps ++ constructorFields)
+                (eqi.refl' fieldLevel fieldType selected)
+          return (tname, fieldIndex, selector, proof)
+  return (declarations, overrides)
+
 /-- Emit the field-preserving implementation of a tight one-field model.
 Kept outside [`Modelgen.primIso`] so the already-large route dispatcher does
 not pay to elaborate both the identity and proposition-lift implementations. -/
@@ -3352,6 +3487,25 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     else
       pure none
 
+  -- Two or more exact-sort fields are retained by a right-nested `PSigma'`.
+  -- The level test is performed without constructing terms, before any
+  -- support declaration is spliced, so a mismatch remains rollback-free.
+  let directTightRoute : Bool ←
+    if (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
+        !large && numForalls exportCtors[0]!.2 - np >= 2 then
+      withParams fun ps => do
+        let tele ← instForall exportCtors[0]!.2 ps
+        let nf := numForalls tele
+        forallBoundedTelescope tele (some nf) fun fields _ => do
+          let fieldLevels ← fields.mapM fun field => ilevel (← ityp field)
+          let towerLevel := fieldLevels.foldl mkLevelMax' .zero |>.normalize
+          unless ← isLevelDefEq towerLevel w do
+            badShape s!"{exportCtors[0]!.1}'s tight field tower inhabits Sort \
+              {towerLevel}, not the carrier's Sort {w}"
+          return true
+    else
+      pure false
+
   -- The indexed subsingleton has a different carrier from the Church routes —
   -- a packed index equation, not a fold — so it branches before them. At a
   -- maybe-zero sort this proposition is wrapped in `PULiftP`, just like the
@@ -3772,6 +3926,17 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         rv.levelParams recTy w v
     out := out ++ directDecls
     projectionOverrides := projectionOverrides.push projectionOverride
+  else if directTightRoute then
+    let (_, cty0) := exportCtors[0]!
+    let modelCtorTy := restore tbl cty0
+    for d in ← ensurePSigmaPrime reserved do
+      out := out.push d
+      spliced := spliced ++ d.getNames
+    let recTy := restore tbl rv.type
+    let (directDecls, overrides) ← directTightModel eqi tname lparams np memberTy cty0
+      modelCtorTy declaredMemberTy selfN (ctorN 0) recN rv.levelParams recTy
+    out := out ++ directDecls
+    projectionOverrides := projectionOverrides ++ overrides
   else if armF then
     -- ════ arm F: the indexed subsingleton, by one packed index equation ════
     --
