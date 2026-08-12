@@ -136,7 +136,10 @@ def run (root : String) : IO UInt32 := do
   -- record installs all four constants, or malformed first records and
   -- incomplete/reordered/duplicate bundles become indistinguishable from the
   -- three legitimate covered records.
-  let quotientBase ← importModules #[] {}
+  -- `importModules #[] {}` already contains Lean's ambient kernel quotient.
+  -- Generated support is replayed only when its persistent source-prefix
+  -- environment lacks that declaration, which `mkEmptyEnvironment` models.
+  let quotientBase ← mkEmptyEnvironment
   let .ok quotientEnv := quotientBase.addDeclCore 0 .quotDecl none true
     | throw <| IO.userError "the kernel rejected its quotient declaration"
   let some quotientRecords := installedQuotRecords? quotientEnv
