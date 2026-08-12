@@ -110,6 +110,12 @@ root = "PSigmaPrimeTest"
 supportInterpreter = true
 
 [[lean_exe]]
+name = "tightpsigmaprimeroutetest"
+srcDir = "test"
+root = "TightPSigmaPrimeRouteTest"
+supportInterpreter = true
+
+[[lean_exe]]
 name = "vanishingerasuretest"
 srcDir = "test"
 root = "VanishingErasureTest"

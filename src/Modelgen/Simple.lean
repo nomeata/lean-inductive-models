@@ -577,7 +577,7 @@ primitive; all named projections, reduction rules, and the large `rec'` are
 ordinary checked declarations derived from primitive projections. -/
 def ensurePSigmaPrime (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
   let supportNames :=
-    [`PSigma', `PSigma'.mk, `PSigma'.fst, `PSigma'.snd, `PSigma'.rec',
+    [`PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd, `PSigma'.rec',
       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk]
   let mut out ← ensurePrim `PSigma' supportNames psigmaPrimeDecl checkPSigmaPrimeCore reserved
   let expected ← psigmaPrimeDerivedDecls
