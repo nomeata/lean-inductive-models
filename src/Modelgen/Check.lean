@@ -1002,8 +1002,9 @@ structure SyntaxIndex where
   private constructors : Constructors
   private ruleSlots : IotaSlots
   private normalizer : ExactNormalizationEnv
+  private globalExtras : Array Violation := #[]
 
-def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
+private def SyntaxIndex.coreOfExport (x : Export) : SyntaxIndex :=
   { declarations := declarationTypes x, constructors := constructorRecords x,
     ruleSlots := iotaSlots x, normalizer := x.exactNormalizationEnv }
 
@@ -1049,7 +1050,7 @@ private def checkFamilyWithIndex (x : Export) (syntax : SyntaxIndex)
         violations := violations.push (.extraRule pair.owner name)
   return violations
 
-private def checkGlobalExtrasWithIndex (x : Export) (syntax : SyntaxIndex) : Array Violation :=
+private def computeGlobalExtras (x : Export) (syntax : SyntaxIndex) : Array Violation :=
     Id.run do
   let mut violations : Array Violation := #[]
   -- An extra metadata-looking theorem is invalid even when no carrier or
@@ -1080,11 +1081,18 @@ private def checkGlobalExtrasWithIndex (x : Export) (syntax : SyntaxIndex) : Arr
           violations := violations.push (.extraMetadata recursor.name name .ruleK)
   return violations
 
+/-- Build all reusable syntax tables, including the whole-export unexpected
+slot sweep.  Per-family checks subsequently filter this cached array instead
+of rescanning every declaration for every generated island. -/
+def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
+  let syntax := SyntaxIndex.coreOfExport x
+  { syntax with globalExtras := computeGlobalExtras x syntax }
+
 private def checkFamiliesWithIndex (x : Export) (syntax : SyntaxIndex)
     (families : Array Family) (checkOrder : Bool) : Array Violation :=
   families.foldl (fun violations family =>
       violations ++ checkFamilyWithIndex x syntax family checkOrder) #[] ++
-    checkGlobalExtrasWithIndex x syntax
+    syntax.globalExtras
 
 private def checkFamilies (x : Export) (families : Array Family)
     (checkOrder : Bool) : Array Violation :=
@@ -1117,7 +1125,7 @@ def checkFamilyStatementsWithIndex (x : Export) (syntax : SyntaxIndex)
     (family : Family) : StatementReport :=
   let diagnosticOwners := family.correspondence.diagnosticOwners.foldl
     (fun result owner => result.insert owner) ({} : Std.HashSet Name)
-  let global := (checkGlobalExtrasWithIndex x syntax).filter fun violation =>
+  let global := syntax.globalExtras.filter fun violation =>
     diagnosticOwners.contains violation.familyOwner
   { statementsChecked := family.correspondence.statementCount
     violations := checkFamilyWithIndex x syntax family false ++ global }
