@@ -68,8 +68,11 @@ def main : IO UInt32 := do
   let (generated, report) ← runExport raw
   let mut state : TestState := {}
 
+  -- `N` is the first carrier which needs the derived exact-sort lift, so it
+  -- pays once for the complete seven-declaration `PSigma'`/`PUnit` support
+  -- bundle. The alias families and their order are otherwise unchanged.
   let expected : Array (Name × Nat) :=
-    #[(`N, 9), (`AliasI, 8), (`AliasI._model._impl.skel, 6),
+    #[(`N, 16), (`AliasI, 8), (`AliasI._model._impl.skel, 6),
       (`AliasP, 16), (`Nonempty, 4), (`AliasC, 6)]
   state := state.check "generation counts pin all alias routes and support closure" <|
     report.generated == expected
