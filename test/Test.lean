@@ -471,8 +471,8 @@ def expectedPrim : List Row :=
       [ ("Eq", "prim model: a basis primitive")])
   , ("arm_f_zip",
       [("FTwo", 5), ("FProof", 4), ("FChain", 4), ("FEndpoint", 4)],
-      [ ("Eq", "prim model: a basis primitive")
-      , ("Nat", "prim model: a basis primitive")])
+      [ ("Nat", "prim model: a basis primitive")
+      , ("Eq", "prim model: a basis primitive")])
   , ("prim_graph",
       [("G1", 17), ("Nonempty", 4), ("G4", 15), ("G4.below", 13), ("Ac", 13),
        ("N", 15), ("BadC", 14), ("BadC.below", 18), ("Ac.below", 13),
@@ -480,9 +480,9 @@ def expectedPrim : List Row :=
        ("G1.below", 18), ("G2", 13), ("G5", 13), ("G5.below", 13),
        ("G2.below", 13)],
       [ ("Eq", "prim model: a basis primitive")])
-  , ("prim_graph_pre", [("Ac", 13), ("Ac.below", 13), ("Nonempty", 4)],
-      [ ("PSigma", "prim model: a basis primitive")
-      , ("Eq", "prim model: a basis primitive")])
+  , ("prim_graph_pre", [("Nonempty", 4), ("Ac", 13), ("Ac.below", 13)],
+      [ ("Eq", "prim model: a basis primitive")
+      , ("PSigma", "prim model: a basis primitive")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
   -- the core's six roots — the export `lean4export` emits for
   -- `--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat
@@ -518,12 +518,13 @@ def expectedPrim : List Row :=
   -- additionally receive one eta theorem; unit-like and K-like declarations
   -- receive their own one-theorem metadata roles.
   , ("w_core",
-      [("Subtype", 11), ("List", 6), ("Sigma", 9), ("Option", 6), ("Exists", 4),
-       ("And", 8), ("False", 2), ("Decidable", 6), ("PUnit", 6), ("True", 6),
-       ("Or", 6), ("Iff", 8), ("WellFounded", 6),
-       ("Bool", 6), ("HEq", 5), ("PProd", 9), ("Nonempty", 4), ("Acc", 12)],
-      [ ("Nat", "prim model: a basis primitive")
-      , ("Eq", "prim model: a basis primitive")])
+      [("Iff", 8), ("Nonempty", 4), ("Subtype", 17), ("List", 6), ("Sigma", 9),
+       ("Option", 6), ("Exists", 4), ("And", 8), ("False", 2), ("Decidable", 6),
+       ("True", 6), ("Or", 6), ("Acc", 12), ("WellFounded", 6), ("Bool", 6),
+       ("HEq", 5), ("PProd", 9)],
+      [ ("Eq", "prim model: a basis primitive")
+      , ("PUnit", "prim model: a basis primitive")
+      , ("Nat", "prim model: a basis primitive")])
   -- **Arm C**, at one and at many recursive slots, and
   -- the three rows below the models are the arm's boundaries.
   -- Every `X._model._impl.skel` beside an `X` is the spliced index erasure being
@@ -735,10 +736,10 @@ def expectedPrim : List Row :=
   -- `Nat` and not `PSigma`: a primitive the input does *not* declare is
   -- spliced and never waited for.
   , ("prim_late_basis",
-      [("MA", 23), ("Nd", 15), ("Nd._model._impl.0", 14),
-       ("N", 7), ("L", 6), ("Pre", 6),
+      [("N", 15), ("L", 6), ("Pre", 6), ("MA", 22),
        ("MA._model._impl.tag", 8), ("MA._model._impl.aux", 16),
        ("MA._model._impl.aux._model._impl.skel", 14),
+       ("Nd", 15), ("Nd._model._impl.0", 14),
        ("Nd._model._impl.0._model._impl.tag", 6), ("Nd._model._impl.0._model._impl.aux", 12),
        ("Nd._model._impl.0._model._impl.aux._model._impl.skel", 219),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
@@ -747,8 +748,8 @@ def expectedPrim : List Row :=
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4)],
-      [ ("PSigma", "prim model: a basis primitive")
-      , ("Eq", "prim model: a basis primitive")])
+      [ ("Eq", "prim model: a basis primitive")
+      , ("PSigma", "prim model: a basis primitive")])
   ]
 
 structure TAcc where
