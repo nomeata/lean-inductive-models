@@ -440,11 +440,14 @@ def main : IO UInt32 := do
     report.generated.any (·.1 == `Dep) && report.stmtErrors.isEmpty
   state := state.check "exact projection definitions and rules emitted" <|
     projectionNames.all names.contains && projectionRules.all names.contains
-  -- Red baseline for the structural-carrier migration: the current generic
-  -- recursor-derived interface transports dependent constructor fields in the
-  -- public iota statement.  The replacement must flip the last two clauses
-  -- while leaving the independent first field literal.
-  state := state.check "dependent projection iotas expose the current transport debt" <|
+  -- Observation baseline for evaluating alternative carriers: the current
+  -- generic recursor-derived interface transports dependent constructor
+  -- fields in the public iota statement.  This is not an impossibility claim:
+  -- for this nonrecursive, unindexed owner the projection applications are
+  -- definitionally equal to the constructor fields, so another route could
+  -- make all three statements literal.  Recursive and indexed owners have to
+  -- be assessed separately.
+  state := state.check "dependent projection iotas expose the current recursor-route shape" <|
     (declarationType? generated keyRule).any (fun type => !containsConst ``Eq.rec type) &&
       (declarationType? generated payloadRule).any (containsConst ``Eq.rec) &&
       (declarationType? generated witnessRule).any (containsConst ``Eq.rec)
