@@ -1395,7 +1395,7 @@ well-founded and must stay unmodelled. That is also what bounds the recursion
 model that needed it, and its own model is appended after; the export only
 requires a declaration to precede its uses. -/
 partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
-    (ctors : Array (Name × Expr)) (recursors : Array ERec)
+    (ctors : Array (Name × Expr))
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (basicModels : Bool)
     (canWait : Bool)
@@ -1461,9 +1461,8 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
         let mut cts : Array (Name × Expr) := #[]
         for cn in iv.ctors do
           if let some ci := (← getEnv).constants.find? cn then cts := cts.push (cn, ci.type)
-        let supportRecursors ← recursorsOfNames #[n]
         st2 :=
-          (← genPrim n iv.levelParams iv.numParams iv.type cts supportRecursors #[] reserved
+          (← genPrim n iv.levelParams iv.numParams iv.type cts #[] reserved
             basicModels false st2).1
     -- **A model may not leave an inductive it introduced unmodelled.** Arm C
     -- splices the index erasure of the family it is
@@ -1529,9 +1528,8 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     for cn in iv.ctors do
       let some ci := (← getEnv).constants.find? cn | continue
       cts := cts.push (cn, ci.type)
-    let recursors ← recursorsOfNames #[n]
     let (next, wait?) ←
-      genPrim n lparams np iv.type cts recursors #[] reserved basicModels true st
+      genPrim n lparams np iv.type cts #[] reserved basicModels true st
     if wait?.isSome then
       throwError "composed simple model prerequisite remained late after support scheduling"
     st := next
@@ -1543,7 +1541,7 @@ A separate function keeps the block path and the nested composition path on
 one implementation. The basic layer controls the support closure of each
 generated implementation tag and auxiliary model. -/
 def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
-    (tys : Array Expr) (ctors : Array (Array (Name × Expr))) (recursors : Array ERec)
+    (tys : Array Expr) (ctors : Array (Array (Name × Expr)))
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (simpleModels basicModels : Bool)
     (st : FilterState) : MetaM FilterState := do
@@ -1762,8 +1760,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                 needsPULift := true
           unless ← mutualReady needsPULift reserved do
             throwError "plain mutual model prerequisites remained late after support scheduling"
-          let st3 ← genMutual all t.levelParams t.numParams tys ctors
-            inputRecursors.toArray #[] reserved
+          let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
             generation.simple generation.basic (out, rep, pending)
           (out, rep, pending) ← pure st3
         -- ── a simple inductive (`--simple`) ──────────────────────────────
@@ -1775,7 +1772,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           unless ← primReady reserved do
             throwError "simple model basis remained late after support scheduling"
           let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
-            inputRecursors.toArray #[] reserved generation.basic true (out, rep, pending)
+            #[] reserved generation.basic true (out, rep, pending)
           if wait?.isSome then
             throwError "simple model prerequisite remained late after support scheduling"
           (out, rep, pending) ← pure st
