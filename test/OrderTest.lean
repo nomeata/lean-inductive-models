@@ -92,23 +92,53 @@ def mustReorder (label : String) (x : Export) : IO Export :=
   | .ok reordered => return reordered
   | .error error => throw <| IO.userError s!"{label}: unexpected ordering error: {repr error}"
 
-def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
-    IO (Export × Environment) := do
-  let text ← IO.FS.readFile path
-  let .ok parsed := Modelgen.parse text (analyse := false)
-    | throw <| IO.userError s!"cannot parse {path}"
+structure FilterRun where
+  input : Export
+  output : Export
+  report : Report
+  env : Environment
+
+def runFilterState (input : Export) (generation : Modelgen.Cli.Config) : IO FilterRun := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<order-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let ((decls, report), finalState) ← Lean.Core.CoreM.toIO
-    (Lean.Meta.MetaM.run' (runFilter parsed false generation)) context { env }
+    (Lean.Meta.MetaM.run' (runFilter input false generation)) context { env }
   unless report.stmtErrors.isEmpty do
-    throw <| IO.userError s!"{path}: generated statements differ: {report.stmtErrors}"
-  return ({ parsed with decls }, finalState.env)
+    throw <| IO.userError s!"generated statements differ: {report.stmtErrors}"
+  return { input, output := { input with decls }, report, env := finalState.env }
+
+def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
+    IO FilterRun := do
+  let text ← IO.FS.readFile path
+  let .ok parsed := Modelgen.parse text (analyse := false)
+    | throw <| IO.userError s!"cannot parse {path}"
+  runFilterState parsed generation
 
 def generatedFixture (path : String) (generation : Modelgen.Cli.Config) : IO Export := do
-  return (← generatedFixtureState path generation).1
+  return (← generatedFixtureState path generation).output
+
+def ownerDependentRecordIsRejected : IO Bool := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<owner-free-check-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let action : MetaM Bool := do
+    let owner := axDecl `ForkOwner
+    let dependent := axDecl `ForkOwner._model
+      (.forallE `x (.const `ForkOwner []) (.sort (.succ .zero)) .default)
+    let rejected ← checkGeneratedIn env #[dependent]
+    let some ownerDeclaration := toDeclaration env owner | return false
+    let ownerEnv ← match env.addDeclCore 0 ownerDeclaration none true with
+      | .ok result => pure result
+      | .error _ => return false
+    let accepted ← checkGeneratedIn ownerEnv #[dependent]
+    let rejectedWithoutOwner := match rejected with | .error _ => true | .ok _ => false
+    let acceptedWithOwner := match accepted with | .ok _ => true | .error _ => false
+    return rejectedWithoutOwner && acceptedWithOwner
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }
+  return result
 
 def noGeneration : Modelgen.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
@@ -253,6 +283,20 @@ def run (root : String) : IO UInt32 := do
     | .ok scheduled => scheduled.decls == alreadyModeled.decls
     | .error _ => false
 
+  -- Hoisting a fixed support record hoists its complete predecessor closure,
+  -- not merely the named record. Otherwise the persistent replay environment
+  -- would receive a support declaration before one of its own dependencies.
+  let supportDependency := axDecl `SupportDependency
+  let support := axDecl `PSigma (.const `SupportDependency [])
+  let ordinary := axDecl `Ordinary
+  let hoisted ← match Order.reorderPrioritizing
+      (exportOf #[ordinary, support, supportDependency])
+      (fun declaration => declaration.names.contains `PSigma) with
+    | .ok result => pure result
+    | .error error => throw <| IO.userError s!"support hoist failed: {repr error}"
+  state := state.check "shared support hoists with a valid dependency closure" <|
+    hoisted.decls == #[supportDependency, support, ordinary] && dependenciesForward hoisted
+
   let metadataReferences := Order.references metadataRecord
   state := state.check "all inductive record reference fields are traversed" <|
     [`TypeDependency, `AllDependency, `CtorListDependency, `CtorTypeDependency,
@@ -275,6 +319,17 @@ def run (root : String) : IO UInt32 := do
     match Order.recordOrder (exportOf #[axDecl `Duplicate, axDecl `Duplicate]) with
     | .error (.duplicateName name 0 1) => name == `Duplicate
     | _ => false
+
+  state := state.check "exact serialized owner reference is rejected owner-free"
+    (← ownerDependentRecordIsRejected)
+
+  -- With generation disabled, scheduling has no preferred class. The filter
+  -- is byte/order neutral even when the original order is not alphabetical.
+  let neutralInput := exportOf #[axDecl `NeutralB, axDecl `NeutralA]
+  let neutral ← runFilterState neutralInput noGeneration
+  state := state.check "no-generation preserves exact records and rendering" <|
+    neutral.output.decls == neutralInput.decls && neutral.output.render == neutralInput.render &&
+      neutral.report.generated.isEmpty && neutral.report.spliced.isEmpty
 
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,
@@ -315,17 +370,18 @@ def run (root : String) : IO UInt32 := do
         family.correspondence.iotas.any (fun rule =>
           rule.recursor == `Tree.rec && rule.name == Naming.iotaName `Tree.rec 1)
 
-  let (simple, simpleEnv) ← generatedFixtureState
+  let simpleRun ← generatedFixtureState
     s!"{root}/test/fixtures/modelgen/prim_shapes.ndjson"
     { noGeneration with simple := true }
+  let simple := simpleRun.output
   let simple' ← mustReorder "simple declaration-local output" simple
   state := state.check "complete simple output checks literally" <|
     (Check.check simple').isEmpty
   state := state.check "replay environment retains source and shared support only" <|
-    simpleEnv.constants.contains `Tri &&
-      !simpleEnv.constants.contains (Naming.modelName `Tri) &&
-      [`Eq, `Nat, `PSigma, `PSigma', `PUnit].all simpleEnv.constants.contains &&
-        !simpleEnv.constants.contains `PULiftP
+    simpleRun.env.constants.contains `Tri &&
+      !simpleRun.env.constants.contains (Naming.modelName `Tri) &&
+      [`Eq, `Nat, `PSigma, `PSigma', `PUnit].all simpleRun.env.constants.contains &&
+      !simpleRun.env.constants.contains `PULiftP
   let svType := declarationType? simple' `Sv
   let svModelType := declarationType? simple' (Naming.modelName `Sv)
   state := state.check "Sv model preserves its literal declared type" <|
@@ -341,6 +397,35 @@ def run (root : String) : IO UInt32 := do
             pair.owner == `IdxP.rec && pair.model == Naming.modelName `IdxP.rec) &&
           family.correspondence.iotas.any (fun rule =>
             rule.recursor == `IdxP.rec && rule.name == Naming.iotaName `IdxP.rec 1))
+
+  -- The small alias fixture exercises both a model-local arm-C skeleton and
+  -- fixed shared graph support. Every generated declaration that survives in
+  -- the replay environment must be explicitly witnessed as spliced and have
+  -- a fixed support name; public interfaces and local implementation support
+  -- are absent even though they remain in the emitted export.
+  let aliasRun ← generatedFixtureState
+    s!"{root}/test/fixtures/modelgen/transparent_owner_aliases.ndjson" {}
+  let inputNames := aliasRun.input.decls.flatMap fun declaration => declaration.names.toArray
+  let generatedNames := aliasRun.output.decls.flatMap fun declaration =>
+    declaration.names.toArray |>.filter (!inputNames.contains ·)
+  let witnessed := aliasRun.report.spliced.flatMap (·.2)
+  let fixedWitnessedNames := aliasRun.output.decls.filter (fun declaration =>
+      declaration.names.any witnessed.contains &&
+        (declaration.names.any persistentSupportRoot ||
+          declaration.names.all persistentSupportName)) |>.flatMap fun declaration =>
+            declaration.names.toArray
+  let retainedGenerated := generatedNames.filter aliasRun.env.constants.contains
+  state := state.check "model-local names are disposed after each owner island" <|
+    aliasRun.report.generated.all (fun entry =>
+      !aliasRun.env.constants.contains (Naming.modelName entry.1)) &&
+      !aliasRun.env.constants.contains `AliasI._model._impl.skel &&
+      generatedNames.contains `AliasI._model._impl.skel &&
+      ((witnessed.filter (!persistentSupportName ·)).all fun name =>
+        !aliasRun.env.constants.contains name) &&
+      retainedGenerated.all fixedWitnessedNames.contains &&
+      fixedWitnessedNames.all retainedGenerated.contains
+  state := state.check "every witnessed fixed support declaration persists" <|
+    !fixedWitnessedNames.isEmpty && fixedWitnessedNames.all aliasRun.env.constants.contains
 
   IO.println s!"record order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
