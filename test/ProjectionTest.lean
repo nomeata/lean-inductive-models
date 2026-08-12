@@ -440,6 +440,14 @@ def main : IO UInt32 := do
     report.generated.any (·.1 == `Dep) && report.stmtErrors.isEmpty
   state := state.check "exact projection definitions and rules emitted" <|
     projectionNames.all names.contains && projectionRules.all names.contains
+  -- Red baseline for the structural-carrier migration: the current generic
+  -- recursor-derived interface transports dependent constructor fields in the
+  -- public iota statement.  The replacement must flip the last two clauses
+  -- while leaving the independent first field literal.
+  state := state.check "dependent projection iotas expose the current transport debt" <|
+    (declarationType? generated keyRule).any (fun type => !containsConst ``Eq.rec type) &&
+      (declarationType? generated payloadRule).any (containsConst ``Eq.rec) &&
+      (declarationType? generated witnessRule).any (containsConst ``Eq.rec)
 
   let modelsBeforeOwner := match declarationIndex? generated `Dep with
     | none => false
