@@ -955,6 +955,31 @@ def scheduledSupportRecord (generation : Cli.Config) (declaration : EDecl) : Boo
   else
     false
 
+/-- Whether this input record reaches any enabled model-generation branch.
+
+Support scheduling is global so that one fixed, dependency-closed support
+class moves atomically ahead of every selected owner.  It must nevertheless be
+inactive when the export has no selected owner: generation flags alone do not
+justify moving independent source records. -/
+def scheduledModelOwner (generation : Cli.Config) : EDecl → Bool
+  | .induct types _ _ =>
+    match types with
+    | [] => false
+    | first :: _ =>
+      (generation.nested && types.any (·.numNested > 0)) ||
+        (generation.mutualModels && types.length > 1 && !types.any (·.numNested > 0)) ||
+        (types.length == 1 && first.numNested == 0 &&
+          generation.modelsSimpleInput first.name)
+  | _ => false
+
+/-- Dependency-order source records, hoisting the fixed support class exactly
+when at least one input owner reaches an enabled generation branch. -/
+def scheduleSource (x : Export) (generation : Cli.Config) : Except Order.Error Export :=
+  if x.decls.any (scheduledModelOwner generation) then
+    Order.reorderPrioritizing x (scheduledSupportRecord generation)
+  else
+    Order.reorder x
+
 /-- Read a generated model back from the environment, register every name Lean
 minted for its inductive blocks, and serialize through exact alias lookups.
 The returned `Iso` carries the completed table for reporting and delayed
@@ -1661,8 +1686,7 @@ def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
-  let scheduled ← match Order.reorderPrioritizing x fun declaration =>
-      scheduledSupportRecord generation declaration with
+  let scheduled ← match scheduleSource x generation with
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
   let mut mainEnv ← getEnv

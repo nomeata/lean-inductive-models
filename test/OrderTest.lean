@@ -222,6 +222,24 @@ def run (root : String) : IO UInt32 := do
   state := state.check "original order breaks ready-node ties"
     (stable'.decls == #[independent, constantProvider, constantUser])
 
+  -- Enabling the nested and mutual branches does not make their fixed support
+  -- relevant when the file contains only a simple owner.  In that case the
+  -- source remains under ordinary stable dependency ordering.  Once a plain
+  -- mutual owner is present, the same support class still hoists atomically.
+  let nestedMutualOnly := { noGeneration with nested := true, mutualModels := true }
+  let unrelatedSupport := exportOf
+    #[inductiveRecord [`UnselectedSimple], axDecl `Eq, axDecl `PUnit]
+  state := state.check "support scheduler leaves unrelated records unchanged" <|
+    match scheduleSource unrelatedSupport nestedMutualOnly with
+    | .ok scheduled => scheduled.decls == unrelatedSupport.decls
+    | .error _ => false
+  let selectedOwner := inductiveRecord [`SelectedA, `SelectedB]
+  let selectedSupport := exportOf #[selectedOwner, axDecl `Eq, axDecl `PUnit]
+  state := state.check "support scheduler retains the atomic fixed-support hoist" <|
+    match scheduleSource selectedSupport nestedMutualOnly with
+    | .ok scheduled => scheduled.decls == #[axDecl `Eq, axDecl `PUnit, selectedOwner]
+    | .error _ => false
+
   let metadataReferences := Order.references metadataRecord
   state := state.check "all inductive record reference fields are traversed" <|
     [`TypeDependency, `AllDependency, `CtorListDependency, `CtorTypeDependency,
