@@ -162,7 +162,8 @@ def recordOrderPrioritizing (x : Export) (prefer : EDecl → Bool) :
       incoming := incoming.set! after (incoming[after]!.push before)
   let mut preferred : Array Bool := x.decls.map prefer
   let mut work := (Array.range n).filter fun i => preferred[i]!
-  while let some node := work.back? do
+  while !work.isEmpty do
+    let node := work.back!
     work := work.pop
     for before in incoming[node]! do
       unless preferred[before]! do
