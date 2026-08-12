@@ -204,7 +204,7 @@ def main (args : List String) : IO UInt32 := do
   let boundaryPath := s!"{scratch}/main-cli-chunk-boundary.ndjson"
   let boundaryText :=
     "{\"meta\":{},\"padding\":\"" ++ String.ofList (List.replicate (5 * 1024 * 1024) 'x') ++
-      "\"}\n\n"
+      "\"}\r\n"
   IO.FS.writeFile boundaryPath boundaryText
   let boundaryRun ← runModelgen binary
     ["--no-inductives", "--no-check", "--quiet", boundaryPath]
@@ -217,6 +217,12 @@ def main (args : List String) : IO UInt32 := do
   let boundaryAfter ← IO.FS.readBinFile boundaryPath
   state := state.check "literal in-place no-op does not truncate input" <|
     inPlaceRun.exitCode == 0 && inPlaceRun.stdout.isEmpty && boundaryAfter == boundaryBefore
+  let aliasPath := s!"{scratch}/./main-cli-chunk-boundary.ndjson"
+  let aliasRun ← runModelgen binary
+    ["--no-inductives", "--no-check", "--quiet", "-o", aliasPath, boundaryPath]
+  let boundaryAfterAlias ← IO.FS.readBinFile boundaryPath
+  state := state.check "canonical-path in-place no-op does not truncate input" <|
+    aliasRun.exitCode == 0 && aliasRun.stdout.isEmpty && boundaryAfterAlias == boundaryBefore
   IO.FS.removeFile boundaryPath
 
   let malformedPath := s!"{scratch}/main-cli-malformed.ndjson"

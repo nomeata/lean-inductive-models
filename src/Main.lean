@@ -42,12 +42,23 @@ partial def copyFileTo (source : String) (target : IO.FS.Stream) : IO Unit := do
         copy
     copy
 
+/-- Detect textual and symlink-equivalent paths before opening the output.
+`realPath` is deliberately attempted only for the verbatim no-op case: a new
+output file has no canonical path yet. -/
+def sameExistingFile (source target : String) : IO Bool := do
+  if source == target then return true
+  try
+    return (← IO.FS.realPath source) == (← IO.FS.realPath target)
+  catch _ =>
+    return false
+
 /-- Write an export to stdout or a file.  When no pass changed the export,
 `verbatim` names the input file whose bytes are copied exactly and in bounded
 memory.  A literal in-place no-op is already the desired result; opening the
 target for writing first would truncate it. -/
 def writeExport (target : String) (verbatim : Option String) (x : Export) : IO Unit := do
-  if verbatim == some target then return
+  if let some source := verbatim then
+    if target != "-" && (← sameExistingFile source target) then return
   let stream ← if target == "-" then
       IO.getStdout
     else
