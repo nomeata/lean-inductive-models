@@ -1,5 +1,7 @@
 import Modelgen.Check
 
+set_option maxRecDepth 4096
+
 /-!
 # Focused tests for the structural model checker
 
