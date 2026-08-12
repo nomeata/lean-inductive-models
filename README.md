@@ -90,6 +90,10 @@ modelgen --no-inductives --no-check --type-check-input --no-output "$IN"
 modelgen --no-inductives --no-check --type-check-input --no-output - < "$IN"
 ```
 
+With generation and `--mono-levels` disabled, this mode does not apply the
+model generator's ordering policy: the input and output kernel gates receive
+the same parsed declaration stream. `--no-output` suppresses only writing it.
+
 The process exit codes follow the
 [Lean Kernel Arena checker contract](https://github.com/leanprover/lean-kernel-arena#contributing-checkers):
 
@@ -107,7 +111,8 @@ The processing order is:
 3. If enabled, structurally check model families in the unmodified input.
 4. If enabled, monomorphize the input universe levels and order the result.
 5. Generate the selected inductive models.
-6. Put the complete result in dependency and model-before-owner order.
+6. If a transformation ran, put the complete result in dependency and
+   model-before-owner order.
 7. If enabled, structurally check model families in that final result.
 8. If enabled, submit the final result to Lean's kernel.
 9. If enabled, write the result.

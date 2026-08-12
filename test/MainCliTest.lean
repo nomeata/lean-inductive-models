@@ -68,6 +68,19 @@ def main (args : List String) : IO UInt32 := do
     arenaStdin.exitCode == 0 && arenaStdin.stdout.isEmpty &&
       hasDiagnostic arenaStdin.stderr "input kernel check: accepted"
 
+  -- Pure kernel-check mode does not impose this tool's model-before-owner
+  -- ordering policy. This export is kernel-valid even though its model-shaped
+  -- axiom depends on the source owner and would make that policy cyclic.
+  let modelCycleName := Modelgen.Naming.modelName `Tree
+  let modelCycle : Modelgen.EDecl :=
+    .ax modelCycleName [] (.const `Tree []) false
+  let modelCycleText := { nestedExport with decls := nestedExport.decls.push modelCycle }.render
+  let arenaModelCycle ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
+    "--no-output", "-"] modelCycleText
+  state := state.check "pure kernel mode does not impose model ordering" <|
+    arenaModelCycle.exitCode == 0 && arenaModelCycle.stdout.isEmpty
+
   let badName := `ArenaBad
   let badDeclaration : Modelgen.EDecl :=
     .defn badName [] (.sort .zero) (.sort .zero) .opaque "safe" [badName]

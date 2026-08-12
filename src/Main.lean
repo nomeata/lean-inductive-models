@@ -126,6 +126,9 @@ def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Nam
     report.declined.filter fun entry =>
       !alreadyCovered.contains entry.1 && !generated.contains entry.1
 
+def generationEnabled (config : Modelgen.Cli.Config) : Bool :=
+  config.nested || config.mutualModels || config.simple || config.basic
+
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   let input := config.input.getD ""
   let text? ← try
@@ -200,17 +203,20 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
     else
       pure parsed
 
-  let generated ← try
-      let ((decls, report), _) ← Lean.Core.CoreM.toIO
-        (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config)) context { env }
-      pure (Except.ok (decls, report))
-    catch error =>
-      pure (Except.error (toString error))
-  let (decls, generationReport) ← match generated with
-    | .error message =>
-        IO.eprintln s!"{input}: internal error: {message}"
-        return exitToolError
-    | .ok result => pure result
+  let (decls, generationReport) ← if generationEnabled config then do
+      let generated ← try
+          let ((decls, report), _) ← Lean.Core.CoreM.toIO
+            (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config)) context { env }
+          pure (Except.ok (decls, report))
+        catch error =>
+          pure (Except.error (toString error))
+      match generated with
+      | .error message =>
+          IO.eprintln s!"{input}: internal error: {message}"
+          return exitToolError
+      | .ok result => pure result
+    else
+      pure (generationInput.decls, {})
 
   reportGeneration config generationReport
   if let some why := generationReport.unreplayable then
@@ -223,11 +229,14 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
     return exitToolError
 
   let transformed : Export := { generationInput with decls }
-  let finalExport ← match Modelgen.Order.reorder transformed with
-    | .error error =>
-        IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
-        return exitToolError
-    | .ok output => pure output
+  let finalExport ← if generationEnabled config || config.monoLevels then
+      match Modelgen.Order.reorder transformed with
+      | .error error =>
+          IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
+          return exitToolError
+      | .ok output => pure output
+    else
+      pure transformed
 
   if config.checkOutput then
     let report := Modelgen.Check.checkReport finalExport
