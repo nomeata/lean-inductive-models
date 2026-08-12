@@ -1244,7 +1244,8 @@ input's own declaration to be replayed. -/
 def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
   let env ← getEnv
   for n in [`Eq, `Eq.refl, `False, `Nat, `Nat.zero, `Nat.succ, `PSigma, `PSigma.mk,
-      `PULiftP, `PULiftP.up] do
+      `PSigma', `PSigma'.mk, `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk,
+      `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk, `PULiftP, `PULiftP.up] do
     unless env.constants.contains n || !reserved.contains n do return false
   return true
 
