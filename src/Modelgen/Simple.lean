@@ -2739,7 +2739,7 @@ partial def tightTowerPrepend (fields pre : Array Expr) (i : Nat) (tail : Expr) 
   return mkAppN (.const `PSigma'.mk [u, v])
     #[α, β, pre[i]!, ← tightTowerPrepend fields pre (i + 1) tail]
 
-partial def tightTowerRec (fields : Array Expr) (motive minor value : Expr)
+partial def tightTowerRec (s : Level) (fields : Array Expr) (motive minor value : Expr)
     (i : Nat := 0) (pre : Array Expr := #[]) : GenM Expr := do
   if i + 1 == fields.size then return mkAppN minor (pre.push value)
   let (u, v, α, β) ← tightTowerAt fields i pre
@@ -2750,8 +2750,8 @@ partial def tightTowerRec (fields : Array Expr) (motive minor value : Expr)
   let branch ← withLocalDeclD `fst α fun fst =>
     withLocalDeclD `snd (mkApp β fst).headBeta fun snd => do
       mkLambdaFVars #[fst, snd]
-        (← tightTowerRec fields motive minor snd (i + 1) (pre.push fst))
-  return mkAppN (.const `PSigma'.rec' [u, v, .zero])
+        (← tightTowerRec s fields motive minor snd (i + 1) (pre.push fst))
+  return mkAppN (.const `PSigma'.rec' [u, v, s])
     #[α, β, targetMotive, branch, value]
 
 /-- Emit an exact-sort model for a non-recursive, unindexed,
@@ -2759,7 +2759,7 @@ one-constructor family with at least two fields. -/
 def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorType : Expr) :
+    (recursorType : Expr) (v : Level) :
     GenM (Array Declaration × Array (Name × Nat × Expr × Expr)) := do
   let us := lparams.map Level.param
   let nf := numForalls constructorType - np
@@ -2795,7 +2795,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let ps := binders.extract 0 np
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ =>
-      mkLambdaFVars binders (← tightTowerRec fields motive minor self)
+      mkLambdaFVars binders (← tightTowerRec v fields motive minor self)
   let recursorDecl := Declaration.defnDecl
     { name := recursorN, levelParams := recursorLevelParams, type := recursorType,
       value := recursorValue, hints := ← hintsFor recursorValue, safety := .safe }
@@ -3492,7 +3492,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- support declaration is spliced, so a mismatch remains rollback-free.
   let directTightRoute : Bool ←
     if (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
-        !large && numForalls exportCtors[0]!.2 - np >= 2 then
+        numForalls exportCtors[0]!.2 - np >= 2 then
       withParams fun ps => do
         let tele ← instForall exportCtors[0]!.2 ps
         let nf := numForalls tele
@@ -3934,7 +3934,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       spliced := spliced ++ d.getNames
     let recTy := restore tbl rv.type
     let (directDecls, overrides) ← directTightModel eqi tname lparams np memberTy cty0
-      modelCtorTy declaredMemberTy selfN (ctorN 0) recN rv.levelParams recTy
+      modelCtorTy declaredMemberTy selfN (ctorN 0) recN rv.levelParams recTy v
     out := out ++ directDecls
     projectionOverrides := projectionOverrides ++ overrides
   else if armF then
