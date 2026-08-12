@@ -108,10 +108,10 @@ def main : IO UInt32 := do
   state := state.check "indexed BoxF has its complete non-eta interface" <|
     #[indexedModel, indexedCtor, indexedRec, indexedIota, indexedProjection,
       indexedProjectionIota].all names.contains && !names.contains (Naming.etaName `IBox)
-  state := state.check "recursive boxing stores and recovers through PSigma" <|
-    (declarationValue? generated boxModel).any (containsConst `PSigma) &&
-      (declarationValue? generated boxCtor).any (containsConst `PSigma.mk) &&
-      (declarationValue? generated boxRec).any (containsConst `PSigma.rec)
+  state := state.check "recursive boxing stores and recovers through PSigma'" <|
+    (declarationValue? generated boxModel).any (containsConst `PSigma') &&
+      (declarationValue? generated boxCtor).any (containsConst `PSigma'.mk) &&
+      (declarationValue? generated boxRec).any (containsConst `PSigma'.rec')
   state := state.check "the representation adds no choice axiom dependency" <|
     #[boxModel, boxCtor, boxRec, boxProjection].all fun name =>
       (declarationValue? generated name).all fun value =>
@@ -137,16 +137,16 @@ def main : IO UInt32 := do
   let bindRec := Naming.modelName `WBind.rec
   let bindIotas := #[Naming.iotaName `WBind.rec 0, Naming.iotaName `WBind.rec 1]
   state := state.check "W data and binder imax shapes generate at their pinned sizes" <|
-    wReport.generated.any (· == (`WData, 225)) &&
+    wReport.generated.any (· == (`WData, 224)) &&
       wReport.generated.any (· == (`WBind, 12)) &&
       #[`WData, `WBind].all fun owner => !wReport.declined.any (·.1 == owner)
   state := state.check "W imax shapes have constructors, recursors, and both iotas" <|
     (#[dataModel, dataRec, bindModel, bindRec] ++ dataCtors ++ dataIotas ++
       bindCtors ++ bindIotas).all wNames.contains
-  state := state.check "W data and binder towers use recursive PSigma boxing" <|
+  state := state.check "W data and binder towers use recursive PSigma' boxing" <|
     [`WData._model._impl.wD, `WData._model._impl.wF,
       `WBind._model._impl.wTel, `WBind._model._impl.wF].all fun name =>
-        (declarationValue? wGenerated name).any (containsConst `PSigma)
+        (declarationValue? wGenerated name).any (containsConst `PSigma')
   state := state.check "successor-level W carriers remain the direct core shape" <|
     #[dataModel, bindModel].all fun name =>
       (declarationValue? wGenerated name).any fun value =>
@@ -162,19 +162,19 @@ def main : IO UInt32 := do
 
   -- `max 1 u` is positive but has no syntactic predecessor. Arm W therefore
   -- builds its core in `Type` and exposes it at the literal public sort through
-  -- the constrained lift `PSigma low (fun _ => PSigma' True (fun _ => PUnit))`.
+  -- the constrained lift `PSigma' low (fun _ => PSigma' True (fun _ => PUnit))`.
   let maxRaw ← readExport "test/fixtures/modelgen/w_max.ndjson"
   let (maxGenerated, maxReport, _) ← runExport maxRaw
   let maxModel := Naming.modelName `WMax
   state := state.check "predecessor-free W generates at its pinned size" <|
-    maxReport.generated.any (· == (`WMax, 225)) &&
+    maxReport.generated.any (· == (`WMax, 224)) &&
       !maxReport.declined.any (·.1 == `WMax)
   state := state.check "predecessor-free W keeps its exact recursor statements" <|
     maxReport.stmtChecked == 67 && maxReport.stmtErrors.isEmpty
   state := state.check "predecessor-free W carrier uses the derived constrained lift" <|
     (declarationValue? maxGenerated maxModel).any fun value =>
-      containsConst `PSigma value && containsConst `PSigma' value &&
-        containsConst `PUnit value && !containsConst `PULiftP value
+      containsConst `PSigma' value && containsConst `PUnit value &&
+        !containsConst `PSigma value && !containsConst `PULiftP value
   let maxOutputCheck := Check.checkReport maxGenerated
   let maxSerialized ← match parse maxGenerated.render (analyse := false) with
     | .ok output => pure output

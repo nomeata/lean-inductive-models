@@ -390,7 +390,7 @@ def expectedPrim : List Row :=
     -- written owner mention β-reduces away.  The payload is non-recursive, so
     -- `Dead.step` consumes exactly one predecessor and the ordinary tuple
     -- route emits its six public declarations.
-    ("nonindexed_vanishing", [("N", 16), ("Dead", 6)],
+    ("nonindexed_vanishing", [("N", 15), ("Dead", 6)],
       [("Eq", "prim model: a basis primitive")])
   -- The two small-elimination seams under the derived exact-sort lift. `MI` forces the pair
     -- motive at two distinct result indices; `MR.step` forces a recursive
@@ -405,9 +405,9 @@ def expectedPrim : List Row :=
   -- direct-carrier route is index-free. At positive `u`, forgetting the
   -- exact-sort lift boundary is a kernel type error; at `u = 0`, the same declaration
   -- checks the genuinely propositional end.
-  , ("degenerate_graph", [("DG", 16)], [])
+  , ("degenerate_graph", [("DG", 15)], [])
   , ("prim_shapes",
-      [("Tri", 18), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
+      [("Tri", 17), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
        ("Conj3", 10), ("PU", 6), ("Sv", 5), ("PE", 2), ("MNm", 8), ("IdxS", 5),
        ("Dec", 6), ("Conj", 8), ("TagS2", 8), ("TagS", 6), ("PT", 8),
@@ -425,7 +425,7 @@ def expectedPrim : List Row :=
   -- `Nonempty` and `Classical.choice` itself since the untagged core widened it, so the
   -- graph arm splices neither wherever the core has already gone in.
   , ("prim_declines",
-      [("P", 16), ("Idx", 5), ("Inf", 16), ("Nonempty", 4), ("Branch", 213),
+      [("P", 15), ("Idx", 5), ("Inf", 16), ("Nonempty", 4), ("Branch", 213),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
@@ -468,7 +468,7 @@ def expectedPrim : List Row :=
   -- positive arm-F controls for one and several dependent pivot transports;
   -- `arm_f_zip` isolates the wider zipper cases.
   , ("prim_idx",
-      [("N", 16), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 14),
+      [("N", 15), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 14),
        ("Rxh", 18), ("Rxh.below", 22), ("FChain", 4), ("Rgd", 16),
        ("Rgd.below", 20), ("Fam", 6), ("Inf.below", 18),
        ("Fg", 5), ("Rv.below", 13), ("Fall3", 4), ("Fxh", 6), ("Fmid", 4),
@@ -476,19 +476,19 @@ def expectedPrim : List Row :=
        ("Rvx.below", 13), ("Fdup", 4)],
       [ ("Eq", "prim model: a basis primitive")])
   , ("arm_f_zip",
-      [("FTwo", 5), ("FProof", 4), ("FChain", 4), ("FEndpoint", 4)],
+      [("FTwo", 11), ("FProof", 4), ("FChain", 4), ("FEndpoint", 4)],
       [ ("Nat", "prim model: a basis primitive")
       , ("Eq", "prim model: a basis primitive")])
   , ("prim_graph",
-      [("G1", 17), ("Nonempty", 4), ("G4", 15), ("G4.below", 13), ("Ac", 13),
-       ("N", 15), ("BadC", 14), ("BadC.below", 18), ("Ac.below", 13),
+      [("G1", 23), ("Nonempty", 4), ("G4", 15), ("G4.below", 13), ("Ac", 13),
+       ("N", 8), ("BadC", 14), ("BadC.below", 18), ("Ac.below", 13),
        ("G3", 13), ("G3.below", 13),
        ("G1.below", 18), ("G2", 13), ("G5", 13), ("G5.below", 13),
        ("G2.below", 13)],
       [ ("Eq", "prim model: a basis primitive")])
-  , ("prim_graph_pre", [("Nonempty", 4), ("Ac", 13), ("Ac.below", 13)],
-      [ ("Eq", "prim model: a basis primitive")
-      , ("PSigma", "prim model: a basis primitive")])
+  , ("prim_graph_pre", [("Nonempty", 4), ("Ac", 20), ("Ac.below", 13),
+      ("PSigma", 11)],
+      [ ("Eq", "prim model: a basis primitive")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
   -- the core's six roots — the export `lean4export` emits for
   -- `--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat
@@ -524,7 +524,7 @@ def expectedPrim : List Row :=
   -- additionally receive one eta theorem; unit-like and K-like declarations
   -- receive their own one-theorem metadata roles.
   , ("w_core",
-      [("Iff", 8), ("Nonempty", 4), ("Subtype", 17), ("List", 6), ("Sigma", 9),
+      [("Iff", 8), ("Nonempty", 4), ("Subtype", 16), ("List", 6), ("Sigma", 9),
        ("Option", 6), ("Exists", 4), ("And", 8), ("False", 2), ("Decidable", 6),
        ("True", 6), ("Or", 6), ("Acc", 12), ("WellFounded", 6), ("Bool", 6),
        ("HEq", 5), ("PProd", 9)],
@@ -565,7 +565,7 @@ def expectedPrim : List Row :=
   -- are the positive layer-3 occupants for discarding a βζ-dead mention, and
   -- the row below asserts their auxiliary models and erased skeletons.
   , ("prim_carve",
-      [("N", 16), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
+      [("N", 15), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
@@ -588,7 +588,7 @@ def expectedPrim : List Row :=
   -- and therefore carries the W fragment, while the latter is the arm's own
   -- twelve declarations. Both remain on the tagged W instantiation.
   , ("w_imax",
-      [("WData", 225), ("_wcore.Subtype", 9), ("_wcore.List", 6),
+      [("WData", 224), ("_wcore.Subtype", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6),
@@ -624,7 +624,7 @@ def expectedPrim : List Row :=
   -- the section carries: these three at `[propext, Classical.choice,
   -- Quot.sound]` against every other target's `[propext, Quot.sound]`.
   , ("prim_w",
-      [("Tree", 225), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
+      [("Tree", 224), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
@@ -673,7 +673,7 @@ def expectedPrim : List Row :=
   -- through a skeleton with no base constructor, which arm E models as the
   -- exact empty carrier.
   , ("nest_fam_arg",
-      [("N", 16), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model._impl.skel", 6),
+      [("N", 15), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model._impl.skel", 6),
        ("RB", 215),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
@@ -746,9 +746,8 @@ def expectedPrim : List Row :=
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4)],
-      [ ("Eq", "prim model: a basis primitive")
-      , ("PSigma", "prim model: a basis primitive")])
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4), ("PSigma", 9)],
+      [ ("Eq", "prim model: a basis primitive")])
   ]
 
 structure TAcc where
@@ -783,8 +782,9 @@ def runOne (root : String) (a : TAcc) (r : Row)
     let psigmaIndex := x.decls.findIdx? (·.names.contains `PSigma)
     a := check a
       (nonemptyIndex.any fun nonempty =>
-        psigmaIndex.any fun psigma => nonempty < psigma && rep.generated.any (·.1 == `Nonempty))
-      "prim_graph_pre: support Nonempty before independent PSigma did not model"
+        psigmaIndex.any fun psigma => nonempty < psigma &&
+          rep.generated.any (·.1 == `Nonempty) && rep.generated.any (·.1 == `PSigma))
+      "prim_graph_pre: Nonempty and the later ordinary PSigma did not both model"
   if name == "w_core" then
     a := check a
       (rep.generated.any (·.1 == `False) && !rep.declined.any fun entry => entry.1 == `False)

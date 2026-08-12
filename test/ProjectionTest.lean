@@ -326,7 +326,7 @@ def main : IO UInt32 := do
     movingRoute.any fun (type, recursor) =>
       recursor.levelParams.length == type.levelParams.length + 1
   state := state.check "arm-F guard boundaries model at exact interface sizes" <|
-    #[(`LostData, 5), (`MovingPivot, 5)].all guardReport.generated.contains &&
+    #[(`LostData, 5), (`MovingPivot, 11)].all guardReport.generated.contains &&
       !guardReport.declined.any fun (owner, _) => guardOwners.contains owner
   state := state.check "arm-F guard boundary output satisfies the exact checker" <|
     (Check.check guardOrdered).all fun violation => !guardOwners.contains violation.familyOwner
@@ -343,7 +343,8 @@ def main : IO UInt32 := do
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order arm-F zipper fixture: {repr error}"
   let zipOwners := #[`FTwo, `FProof, `FChain, `FEndpoint]
-  let zipSupport := #[`PSigma, `PSigma.rec, `PSigma.mk]
+  let zipSupport := #[`PSigma', `PSigma'.rec, `PSigma'.mk, `PSigma'.fst,
+    `PSigma'.snd, `PSigma'.rec', `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk]
   state := state.check "arm-F fixture schedules a basis-exempt owner before Eq" <|
     (declarationIndex? zipRaw `Nat).any fun natIndex =>
       (declarationIndex? zipRaw `Eq).any fun eqIndex => natIndex < eqIndex
@@ -354,7 +355,7 @@ def main : IO UInt32 := do
           zipOwners.all fun owner =>
             (declarationIndex? zipGenerated owner).any fun ownerIndex => supportIndex < ownerIndex
   state := state.check "arm-F zipper owners model at exact interface sizes" <|
-    #[(`FTwo, 5), (`FProof, 4), (`FChain, 4), (`FEndpoint, 4)].all
+    #[(`FTwo, 11), (`FProof, 4), (`FChain, 4), (`FEndpoint, 4)].all
       zipReport.generated.contains &&
       !zipReport.declined.any fun (owner, _) => zipOwners.contains owner
   state := state.check "arm-F zipper input satisfies the exact public checker" <|

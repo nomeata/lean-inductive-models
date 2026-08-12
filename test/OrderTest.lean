@@ -473,7 +473,8 @@ def run (root : String) : IO UInt32 := do
   state := state.check "replay environment retains source and shared support only" <|
     simpleRun.env.constants.contains `Tri &&
       !simpleRun.env.constants.contains (Naming.modelName `Tri) &&
-      [`Eq, `Nat, `PSigma, `PSigma'].all simpleRun.env.constants.contains &&
+      [`Eq, `Nat, `PSigma'].all simpleRun.env.constants.contains &&
+      !simpleRun.env.constants.contains `PSigma &&
       currentLiftSupportRoots.all simpleRun.env.constants.contains &&
       !simpleRun.env.constants.contains `PULiftP &&
       !simple.decls.any fun declaration =>
