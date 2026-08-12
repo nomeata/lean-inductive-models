@@ -30,11 +30,13 @@ def runExport (input : Export) : IO (Export × Report × Environment) := do
     | .ok result => pure result
     | .error failure =>
       throw <| IO.userError s!"cannot order deep-imax output: {repr failure}"
-  let (replayed, _) ← Core.CoreM.toIO
-    (MetaM.run' (checkGeneratedIn env ordered.decls)) context { env }
-  let .ok replayed := replayed
-    | throw <| IO.userError "cannot replay ordered deep-imax output"
-  return (ordered, report, replayed)
+  let replayConfig : Cli.Config :=
+    { nested := false, mutualModels := false, simple := false, basic := false }
+  let ((_, replayReport), replayState) ← Core.CoreM.toIO
+    (MetaM.run' (runFilter ordered false replayConfig)) context { env }
+  if let some message := replayReport.unreplayable then
+    throw <| IO.userError s!"cannot replay ordered deep-imax output: {message}"
+  return (ordered, report, replayState.env)
 
 def declarationValue? (input : Export) (name : Name) : Option Expr := do
   let .defn got _ _ value .. ← input.decls.find? (·.names.contains name) | none
