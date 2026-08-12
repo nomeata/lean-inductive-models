@@ -177,72 +177,72 @@ def main (args : List String) : IO UInt32 := do
   -- all exported bookkeeping and recursor metadata must independently equal
   -- the `ConstantInfo`s minted by Lean's kernel.
   let metadataCorruptions : Array (String × Modelgen.Export) := #[
-    ("inductive name", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive name", mapInductiveType nestedExport `N fun type =>
       { type with name := `ArenaWrongInductive }),
-    ("inductive level parameters", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive level parameters", mapInductiveType nestedExport `N fun type =>
       { type with levelParams := [`ArenaExtraLevel] }),
-    ("inductive type", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive type", mapInductiveType nestedExport `N fun type =>
       { type with type := .sort .zero }),
-    ("inductive all", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive all", mapInductiveType nestedExport `N fun type =>
       { type with all := [`Eq] }),
-    ("inductive constructor order", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive constructor order", mapInductiveType nestedExport `N fun type =>
       { type with ctors := type.ctors.reverse }),
-    ("inductive parameter count", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive parameter count", mapInductiveType nestedExport `N fun type =>
       { type with numParams := type.numParams + 1 }),
-    ("inductive index count", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive index count", mapInductiveType nestedExport `N fun type =>
       { type with numIndices := type.numIndices + 1 }),
-    ("inductive recursion flag", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive recursion flag", mapInductiveType nestedExport `N fun type =>
       { type with isRec := !type.isRec }),
-    ("inductive nested count", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive nested count", mapInductiveType nestedExport `N fun type =>
       { type with numNested := type.numNested + 1 }),
-    ("inductive reflexivity flag", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive reflexivity flag", mapInductiveType nestedExport `N fun type =>
       { type with isReflexive := !type.isReflexive }),
-    ("inductive unsafe flag", mapInductiveType nestedExport `Nat fun type =>
+    ("inductive unsafe flag", mapInductiveType nestedExport `N fun type =>
       { type with isUnsafe := !type.isUnsafe }),
-    ("constructor type", mapConstructor nestedExport `Nat.succ fun constructor =>
+    ("constructor type", mapConstructor nestedExport `N.s fun constructor =>
       { constructor with type := .sort .zero }),
-    ("constructor name", mapConstructor nestedExport `Nat.zero fun constructor =>
+    ("constructor name", mapConstructor nestedExport `N.z fun constructor =>
       { constructor with name := `ArenaWrongConstructor }),
-    ("constructor level parameters", mapConstructor nestedExport `Nat.zero fun constructor =>
+    ("constructor level parameters", mapConstructor nestedExport `N.z fun constructor =>
       { constructor with levelParams := [`ArenaExtraLevel] }),
-    ("constructor owner", mapConstructor nestedExport `Nat.zero fun constructor =>
+    ("constructor owner", mapConstructor nestedExport `N.z fun constructor =>
       { constructor with induct := `Eq }),
-    ("constructor index", mapConstructor nestedExport `Nat.zero fun constructor =>
+    ("constructor index", mapConstructor nestedExport `N.z fun constructor =>
       { constructor with cidx := constructor.cidx + 1 }),
-    ("constructor parameter count", mapConstructor nestedExport `Nat.zero fun constructor =>
+    ("constructor parameter count", mapConstructor nestedExport `N.z fun constructor =>
       { constructor with numParams := constructor.numParams + 1 }),
-    ("constructor field count", mapConstructor nestedExport `Nat.succ fun constructor =>
+    ("constructor field count", mapConstructor nestedExport `N.s fun constructor =>
       { constructor with numFields := constructor.numFields + 1 }),
-    ("constructor unsafe flag", mapConstructor nestedExport `Nat.zero fun constructor =>
+    ("constructor unsafe flag", mapConstructor nestedExport `N.z fun constructor =>
       { constructor with isUnsafe := !constructor.isUnsafe }),
-    ("recursor name", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor name", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with name := `ArenaWrongRecursor }),
-    ("recursor level parameters", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor level parameters", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with levelParams := recursor.levelParams ++ [`ArenaExtraLevel] }),
-    ("recursor type", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor type", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with type := .sort .zero }),
-    ("recursor all", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor all", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with all := [`Eq] }),
-    ("recursor parameter count", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor parameter count", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with numParams := recursor.numParams + 1 }),
-    ("recursor index count", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor index count", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with numIndices := recursor.numIndices + 1 }),
-    ("recursor motive count", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor motive count", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with numMotives := recursor.numMotives + 1 }),
-    ("recursor minor count", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor minor count", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with numMinors := recursor.numMinors + 1 }),
-    ("recursor rule constructor", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor rule constructor", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with rules := recursor.rules.map fun rule =>
           { rule with ctor := `Eq.refl } }),
-    ("recursor rule field count", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor rule field count", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with rules := recursor.rules.map fun rule =>
           { rule with nfields := rule.nfields + 1 } }),
-    ("recursor rule body", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor rule body", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with rules := recursor.rules.map fun rule =>
           { rule with rhs := .sort .zero } }),
-    ("recursor K flag", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor K flag", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with k := !recursor.k }),
-    ("recursor unsafe flag", mapRecursor nestedExport `Nat.rec fun recursor =>
+    ("recursor unsafe flag", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with isUnsafe := !recursor.isUnsafe })]
   for (field, corruption) in metadataCorruptions do
     let result ← runModelgenStdin binary [
@@ -252,7 +252,7 @@ def main (args : List String) : IO UInt32 := do
       result.exitCode == 1 &&
         (result.stderr.splitOn "input kernel check rejected:").length > 1
 
-  let reorderedConstructorRecords := reverseConstructorsFor nestedExport `Nat
+  let reorderedConstructorRecords := reverseConstructorsFor nestedExport `N
   let reorderedConstructors ← runModelgenStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     reorderedConstructorRecords.render
