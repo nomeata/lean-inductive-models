@@ -56,6 +56,10 @@ def exportDeclarationType? (x : Export) (name : Name) : Option (List Name × Exp
 def exportDeclaration? (x : Export) (name : Name) : Option EDecl :=
   x.decls.find? (·.names.contains name)
 
+def indexedFamilyStatements? (x : Export) (owner : Name) : Option StatementReport := do
+  let family ← (discover x).find? (·.owner == owner)
+  return checkFamilyStatementsWithIndex x (.ofExport x) family
+
 def modelParams (params : List Name) : List Name :=
   (List.range params.length).map fun index => Name.str .anonymous s!"model_u_{index}"
 
@@ -315,10 +319,15 @@ def run (root : String) : IO UInt32 := do
       state ← state.check "family key" false
       state ← state.check "only exact public records establish the family" false
     state ← state.check "valid ordering and independence" (check valid).isEmpty
+    state ← state.check "indexed one-family statements equal the aggregate checker" <|
+      indexedFamilyStatements? valid owner == some (checkStatements valid)
     state ← state.check "unsafe owner may have an independently safe model" <|
       (check (withUnsafeOwner valid validOwnerDecl)).isEmpty
+    let unsafeModel := withDefinitionSafety valid carrier "unsafe"
+    state ← state.check "indexed family preserves corrupted statement diagnostics" <|
+      indexedFamilyStatements? unsafeModel owner == some (checkStatements unsafeModel)
     state ← state.check "unsafe model implementation is rejected" <|
-      (check (withDefinitionSafety valid carrier "unsafe")).any
+      (check unsafeModel).any
         (isSafetyMismatch owner carrier "unsafe")
     state ← state.check "partial model implementation is rejected" <|
       (check (withDefinitionSafety valid carrier "partial")).any

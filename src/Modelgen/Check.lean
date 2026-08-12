@@ -989,47 +989,61 @@ structure Report where
   violations : Array Violation
   deriving Inhabited, Repr, BEq
 
-private def checkFamilies (x : Export) (families : Array Family)
-    (checkOrder : Bool) : Array Violation := Id.run do
+/-- Reusable declaration-facing syntax tables for checking several model
+families from the same source snapshot.  The expression graph is shared with
+the export; constructing an index does not copy declaration bodies. -/
+structure SyntaxIndex where
+  private declarations : DeclarationTypes
+  private constructors : Constructors
+  private ruleSlots : IotaSlots
+
+def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
+  { declarations := declarationTypes x, constructors := constructorRecords x,
+    ruleSlots := iotaSlots x }
+
+private def checkFamilyWithIndex (x : Export) (syntax : SyntaxIndex)
+    (family : Family) (checkOrder : Bool) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
-  let declarations := declarationTypes x
-  let constructors := constructorRecords x
-  let ruleSlots := iotaSlots x
-  for family in families do
-    if checkOrder then
-      for modelDecl in family.decls do
-        unless modelDecl < family.ownerDecl do
-          let declaration := x.decls[modelDecl]!
-          for name in declaration.names do
-            if let some owner := family.correspondence.originalOfPublic? name then
-              violations := violations.push
-                (.modelNotBefore owner name modelDecl family.ownerDecl)
-      let targets := family.names.foldl (fun set name => set.insert name) ({} : Std.HashSet Name)
-      if let some (owner, target) := ownerReference? targets x.decls[family.ownerDecl]! then
-        violations := violations.push (.ownerBackreference owner target)
-    for pair in family.correspondence.typeFormers do
-      violations := violations ++ checkPair family.correspondence declarations pair
-    for pair in family.correspondence.constructors do
-      violations := violations ++ checkPair family.correspondence declarations pair
-    for pair in family.correspondence.recursors do
-      violations := violations ++ checkPair family.correspondence declarations pair
-    for projection in family.correspondence.projections do
-      violations := violations ++ checkProjection x family declarations projection
-    for iota in family.correspondence.iotas do
-      violations := violations ++ checkIota x constructors family declarations iota
-    for metadata in family.correspondence.metadata do
-      violations := violations ++ checkTheoremSlot declarations metadata.owner metadata.name
-      if metadata.kind == .unitlike then
-        violations := violations ++ checkUnitlike x family declarations metadata
-      else if metadata.kind == .eta then
-        violations := violations ++ checkEta x family declarations metadata
-      else if metadata.kind == .ruleK then
-        violations := violations ++ checkRuleK x family declarations metadata
-    for pair in family.correspondence.recursors do
-      let numRules := (family.correspondence.iotas.filter (·.recursor == pair.owner)).size
-      for (name, ruleIndex) in ruleSlots.getD pair.model #[] do
-        if ruleIndex >= numRules || name != Naming.iotaName pair.owner ruleIndex then
-          violations := violations.push (.extraRule pair.owner name)
+  if checkOrder then
+    for modelDecl in family.decls do
+      unless modelDecl < family.ownerDecl do
+        let declaration := x.decls[modelDecl]!
+        for name in declaration.names do
+          if let some owner := family.correspondence.originalOfPublic? name then
+            violations := violations.push
+              (.modelNotBefore owner name modelDecl family.ownerDecl)
+    let targets := family.names.foldl (fun set name => set.insert name) ({} : Std.HashSet Name)
+    if let some (owner, target) := ownerReference? targets x.decls[family.ownerDecl]! then
+      violations := violations.push (.ownerBackreference owner target)
+  for pair in family.correspondence.typeFormers do
+    violations := violations ++ checkPair family.correspondence syntax.declarations pair
+  for pair in family.correspondence.constructors do
+    violations := violations ++ checkPair family.correspondence syntax.declarations pair
+  for pair in family.correspondence.recursors do
+    violations := violations ++ checkPair family.correspondence syntax.declarations pair
+  for projection in family.correspondence.projections do
+    violations := violations ++ checkProjection x family syntax.declarations projection
+  for iota in family.correspondence.iotas do
+    violations := violations ++ checkIota x syntax.constructors family syntax.declarations iota
+  for metadata in family.correspondence.metadata do
+    violations := violations ++ checkTheoremSlot
+      syntax.declarations metadata.owner metadata.name
+    if metadata.kind == .unitlike then
+      violations := violations ++ checkUnitlike x family syntax.declarations metadata
+    else if metadata.kind == .eta then
+      violations := violations ++ checkEta x family syntax.declarations metadata
+    else if metadata.kind == .ruleK then
+      violations := violations ++ checkRuleK x family syntax.declarations metadata
+  for pair in family.correspondence.recursors do
+    let numRules := (family.correspondence.iotas.filter (·.recursor == pair.owner)).size
+    for (name, ruleIndex) in syntax.ruleSlots.getD pair.model #[] do
+      if ruleIndex >= numRules || name != Naming.iotaName pair.owner ruleIndex then
+        violations := violations.push (.extraRule pair.owner name)
+  return violations
+
+private def checkGlobalExtrasWithIndex (x : Export) (syntax : SyntaxIndex) : Array Violation :=
+    Id.run do
+  let mut violations : Array Violation := #[]
   -- An extra metadata-looking theorem is invalid even when no carrier or
   -- other public slot exists to make the declaration a discoverable model
   -- family.  The exact owner record, not suffix parsing, determines the slot.
@@ -1044,19 +1058,29 @@ private def checkFamilies (x : Export) (families : Array Family)
               violations := violations.push (.extraProjection type.name name)
       unless type.isKernelUnitlike constructors do
         let name := Naming.unitlikeName type.name
-        unless (declarations.getD name #[]).isEmpty do
+        unless (syntax.declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .unitlike)
       unless type.isKernelStructureLike constructors &&
           !x.exactNormalizationEnv.isPropositionFormer type.type do
         let name := Naming.etaName type.name
-        unless (declarations.getD name #[]).isEmpty do
+        unless (syntax.declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .eta)
     for recursor in recursors do
       unless recursor.k do
         let name := Naming.ruleKName recursor.name
-        unless (declarations.getD name #[]).isEmpty do
+        unless (syntax.declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata recursor.name name .ruleK)
   return violations
+
+private def checkFamiliesWithIndex (x : Export) (syntax : SyntaxIndex)
+    (families : Array Family) (checkOrder : Bool) : Array Violation :=
+  families.foldl (fun violations family =>
+      violations ++ checkFamilyWithIndex x syntax family checkOrder) #[] ++
+    checkGlobalExtrasWithIndex x syntax
+
+private def checkFamilies (x : Export) (families : Array Family)
+    (checkOrder : Bool) : Array Violation :=
+  checkFamiliesWithIndex x (.ofExport x) families checkOrder
 
 /-- Check order, independence, and every exact public declaration and statement,
 and report the exact number of model families inspected.  All comparisons are
@@ -1075,6 +1099,20 @@ structure StatementReport where
   statementsChecked : Nat
   violations : Array Violation
   deriving Inhabited, Repr, BEq
+
+/-- Check one already-discovered family against reusable syntax tables.  This
+is the island-sized form needed by staged generation: family-local interface
+checks do not rebuild the source declaration, constructor, and rule indexes.
+Global extra-slot diagnostics are retained only when they belong to this
+family's exact source declarations. -/
+def checkFamilyStatementsWithIndex (x : Export) (syntax : SyntaxIndex)
+    (family : Family) : StatementReport :=
+  let diagnosticOwners := family.correspondence.diagnosticOwners.foldl
+    (fun result owner => result.insert owner) ({} : Std.HashSet Name)
+  let global := (checkGlobalExtrasWithIndex x syntax).filter fun violation =>
+    diagnosticOwners.contains violation.familyOwner
+  { statementsChecked := family.correspondence.statementCount
+    violations := checkFamilyWithIndex x syntax family false ++ global }
 
 def checkStatements (x : Export) : StatementReport :=
   let families := discover x
