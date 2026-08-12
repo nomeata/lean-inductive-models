@@ -1312,14 +1312,18 @@ private def isMutualBasisRecord (needsPULift : Bool) (declaration : EDecl) : Boo
 asked of every basis constant a prim model may splice: each must be already
 installed or not declared by the input at all, else the model waits for the
 input's own declaration to be replayed. -/
-def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
+def primMissingBasis (reserved : Std.HashSet Name) : MetaM (Array Name) := do
   let env ← getEnv
+  let mut missing := #[]
   for n in [`Eq, `Eq.refl, `False, `Nat, `Nat.zero, `Nat.succ, `PSigma, `PSigma.mk,
       `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk,
       `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
       `PUnit, `PUnit.unit, `PUnit.rec] do
-    unless env.constants.contains n || !reserved.contains n do return false
-  return true
+    unless env.constants.contains n || !reserved.contains n do missing := missing.push n
+  return missing
+
+def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
+  return (← primMissingBasis reserved).isEmpty
 
 /-- **The names beyond the basis that a prim model may splice** — the ones
 [`Modelgen.primReady`] does not cover and that an input may therefore declare
@@ -1594,7 +1598,8 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
   -- one block is at the same point in the replay.
   let ready ← primReady reserved
   unless ready do
-    throwError "composed simple model basis remained late after support scheduling"
+    throwError "composed simple model basis remained late after support scheduling: \
+      {repr (← primMissingBasis reserved)}"
   for n in members do
     let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
     let mut cts : Array (Name × Expr) := #[]
@@ -1842,8 +1847,10 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         -- restored, and there is nothing else to read them off.
         if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 then
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
-          unless ← primReady reserved do
-            throwError "simple model basis remained late after support scheduling"
+          unless primBasis.contains t.name do
+            unless ← primReady reserved do
+              throwError "simple model basis remained late after support scheduling for {t.name}: \
+                {repr (← primMissingBasis reserved)}"
           let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
             #[] reserved generation.basic true (out, rep, pending)
           if wait?.isSome then

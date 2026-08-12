@@ -341,6 +341,16 @@ def main : IO UInt32 := do
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order arm-F zipper fixture: {repr error}"
   let zipOwners := #[`FTwo, `FProof, `FChain, `FEndpoint]
+  let zipSupport := #[`PSigma, `PSigma.rec, `PSigma.mk]
+  state := state.check "arm-F fixture schedules a basis-exempt owner before Eq" <|
+    (declarationIndex? zipRaw `Nat).any fun natIndex =>
+      (declarationIndex? zipRaw `Eq).any fun eqIndex => natIndex < eqIndex
+  state := state.check "arm-F shared support persists once ahead of every owner" <|
+    zipSupport.all fun support =>
+      (zipDeclarations.filter (·.names.contains support)).size == 1 &&
+        (declarationIndex? zipGenerated support).any fun supportIndex =>
+          zipOwners.all fun owner =>
+            (declarationIndex? zipGenerated owner).any fun ownerIndex => supportIndex < ownerIndex
   state := state.check "arm-F zipper owners model at exact interface sizes" <|
     #[(`FTwo, 5), (`FProof, 4), (`FChain, 4), (`FEndpoint, 4)].all
       zipReport.generated.contains &&
