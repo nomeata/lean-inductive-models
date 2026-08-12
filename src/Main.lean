@@ -11,13 +11,14 @@ module owns only the IO boundary and the pipeline between the already separate
 passes:
 
 1. parse the input export;
-2. structurally check model families already in the input;
-3. optionally monomorphize the input's universe levels;
-4. put the resulting records in dependency and model-before-owner order;
-5. generate the selected inductive models;
-6. order the generated records;
-7. structurally check the final in-memory export; and
-8. emit it, unless output was disabled.
+2. optionally submit the complete input stream to Lean's kernel;
+3. structurally check model families already in the input;
+4. optionally monomorphize the input's universe levels;
+5. put the resulting records in dependency and model-before-owner order;
+6. generate the selected inductive models;
+7. order the generated records;
+8. structurally check and optionally kernel-check the final in-memory export;
+9. emit it, unless output was disabled.
 
 The export is the only stream written to stdout.  Reports and errors go to
 stderr, and `--quiet` suppresses successful pass reports without hiding fatal
@@ -26,10 +27,10 @@ errors.
 
 open Lean Meta Modelgen
 
-def exitOk : UInt32 := 0
-def exitUsage : UInt32 := 1
-def exitInput : UInt32 := 2
-def exitInternal : UInt32 := 3
+def exitAccepted : UInt32 := 0
+def exitRejected : UInt32 := 1
+def exitDeclined : UInt32 := 2
+def exitToolError : UInt32 := 3
 
 /-- Write an export to stdout or a file.  When no pass changed the export,
 `verbatim` preserves the input bytes exactly. -/
@@ -92,32 +93,74 @@ def reportCheckSuccess (config : Modelgen.Cli.Config) (stage : String)
   unless config.quiet do
     IO.eprintln s!"{stage} check: {report.familiesChecked} model families checked"
 
+/-- Run the whole-stream kernel gate in a genuinely empty environment.  The
+outer `Except` reports a tool failure; the inner one is Lean's rejection of
+the submitted export. -/
+def typeCheckExportIO (context : Core.Context) (x : Export) :
+    IO (Except String (Except String Unit)) := do
+  try
+    let env ← mkEmptyEnvironment
+    let (result, _) ← Lean.Core.CoreM.toIO
+      (Lean.Meta.MetaM.run' (Modelgen.typeCheckExport x)) context { env }
+    return .ok result
+  catch error =>
+    return .error (toString error)
+
+def reportTypeCheckSuccess (config : Modelgen.Cli.Config) (stage : String) : IO Unit := do
+  unless config.quiet do IO.eprintln s!"{stage} kernel check: accepted"
+
+/-- A reported generation refusal is fulfilled when the exact owner already
+had a complete, structurally valid public model in the input, or when another
+selected route generated it during this run.  Basis exemptions never enter
+this calculation. -/
+def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Name × String) :=
+  let discovered := Modelgen.Check.discover input
+  let violations := Modelgen.Check.check input
+  let alreadyCovered : Std.HashSet Name := discovered.foldl (init := {}) fun owners family =>
+    if violations.any (·.familyOwner == family.owner) then owners else owners.insert family.owner
+  let generated := report.generated.foldl (init := {}) fun owners entry => owners.insert entry.1
+  report.declined.filter fun entry =>
+    !alreadyCovered.contains entry.1 && !generated.contains entry.1
+
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   let input := config.input.getD ""
   let text? ← try
-      pure (some (← IO.FS.readFile input))
+      if input == "-" then
+        pure (some (← (← IO.getStdin).readToEnd))
+      else
+        pure (some (← IO.FS.readFile input))
     catch error =>
       IO.eprintln s!"{input}: {error}"
       pure none
-  let some text := text? | return exitInput
+  let some text := text? | return exitToolError
   let parsed ← match Modelgen.parse text (analyse := config.monoLevels) with
     | .error error =>
         IO.eprintln s!"{input}: parse error: {error}"
-        return exitInput
+        return exitToolError
     | .ok parsedExport => pure parsedExport
-
-  if config.checkInput then
-    let report := Modelgen.Check.checkReport parsed
-    unless report.violations.isEmpty do
-      reportViolations input "input" report.violations
-      return exitInput
-    reportCheckSuccess config "input" report
 
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<modelgen>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
+
+  if config.typeCheckInput then
+    match ← typeCheckExportIO context parsed with
+    | .error message =>
+      IO.eprintln s!"{input}: input kernel check failed internally: {message}"
+      return exitToolError
+    | .ok (.error message) =>
+      IO.eprintln s!"{input}: input kernel check rejected: {message}"
+      return exitRejected
+    | .ok (.ok ()) => reportTypeCheckSuccess config "input"
+
+  if config.checkInput then
+    let report := Modelgen.Check.checkReport parsed
+    unless report.violations.isEmpty do
+      reportViolations input "input" report.violations
+      return exitRejected
+    reportCheckSuccess config "input" report
 
   -- Monomorphize before generation.  Generated simple/bootstrap support is
   -- already monomorphic at this point; feeding that support back through Mono
@@ -134,21 +177,21 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
       match result with
       | .error message =>
           IO.eprintln s!"{input}: monomorphization failed: {message}"
-          return exitInternal
+          return exitToolError
       | .ok (output, report) =>
           if let some why := report.refused then
             IO.eprintln s!"{input}: monomorphization refused the export: {why}"
-            return exitInternal
+            return exitToolError
           unless report.errors.isEmpty do
             IO.eprintln s!"{input}: monomorphization produced {report.errors.size} errors"
             for error in report.errors do IO.eprintln s!"  ! {error}"
-            return exitInternal
+            return exitToolError
           reportMono config report
           match Modelgen.Order.reorder output with
           | .error error =>
               IO.eprintln s!"{input}: cannot order monomorphized input: \
                 {orderErrorMessage error}"
-              return exitInternal
+              return exitRejected
           | .ok orderedOutput => pure orderedOutput
     else
       pure parsed
@@ -162,39 +205,57 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   let (decls, generationReport) ← match generated with
     | .error message =>
         IO.eprintln s!"{input}: internal error: {message}"
-        return exitInternal
+        return exitToolError
     | .ok result => pure result
 
   reportGeneration config generationReport
+  if let some why := generationReport.unreplayable then
+    IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
+    return exitRejected
   unless generationReport.stmtErrors.isEmpty do
     IO.eprintln s!"{input}: internal error: {generationReport.stmtErrors.size} generated \
       statements differ from their exact exported owner interface; no output written"
     for error in generationReport.stmtErrors do IO.eprintln s!"  ! {error}"
-    return exitInternal
+    return exitToolError
 
   let transformed : Export := { generationInput with decls }
   let finalExport ← match Modelgen.Order.reorder transformed with
     | .error error =>
         IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
-        return exitInternal
+        return exitRejected
     | .ok output => pure output
 
   if config.checkOutput then
     let report := Modelgen.Check.checkReport finalExport
     unless report.violations.isEmpty do
       reportViolations input "output" report.violations
-      return exitInternal
+      return exitRejected
     reportCheckSuccess config "output" report
+
+  if config.typeCheckOutput then
+    match ← typeCheckExportIO context finalExport with
+    | .error message =>
+      IO.eprintln s!"{input}: output kernel check failed internally: {message}"
+      return exitToolError
+    | .ok (.error message) =>
+      IO.eprintln s!"{input}: output kernel check rejected: {message}"
+      return exitRejected
+    | .ok (.ok ()) => reportTypeCheckSuccess config "output"
 
   if config.output then
     let unchanged := !config.monoLevels && finalExport.decls == parsed.decls
-    writeExport config.outputTarget (if unchanged then some text else none) finalExport
-  return exitOk
+    try
+      writeExport config.outputTarget (if unchanged then some text else none) finalExport
+    catch error =>
+      IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
+      return exitToolError
+  if !(unsupportedDeclines parsed generationReport).isEmpty then return exitDeclined
+  return exitAccepted
 
 def main (args : List String) : IO UInt32 := do
   match Modelgen.Cli.parseArgs args with
   | .error error =>
       IO.eprintln error
       IO.eprintln Modelgen.Cli.usage
-      return exitUsage
+      return exitToolError
   | .ok config => run config

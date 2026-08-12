@@ -1018,6 +1018,28 @@ def checkRecs (rs : List ERec) : MetaM (Nat × Array Name) := do
       bad := bad.push r.name
   return (n, bad)
 
+/-- Submit a complete export to Lean's kernel and verify that its serialized
+recursor metadata agrees with the recursors Lean regenerates.
+
+This is the explicit whole-stream verdict gate used by the command line.  It
+is separate from the mandatory checked construction of declarations generated
+by this tool: disabling a CLI type-check gate never weakens model generation's
+owner-free kernel replay. -/
+def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
+  let base ← getEnv
+  match ← checkGeneratedIn base x.decls with
+  | .error message => return .error message
+  | .ok checked =>
+    setEnv checked
+    let mut mismatches : Array Name := #[]
+    for declaration in x.decls do
+      if let .induct _ _ recursors := declaration then
+        let (_, bad) ← checkRecs recursors
+        mismatches := mismatches ++ bad
+    unless mismatches.isEmpty do
+      return .error s!"serialized recursors differ from Lean's kernel: {mismatches.toList}"
+    return .ok ()
+
 /-- **One installed inductive block, read back out of the environment** as the
 member types and constructor lists [`Modelgen.mutualIso`] wants.
 

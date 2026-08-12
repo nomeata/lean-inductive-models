@@ -1,4 +1,5 @@
 import Modelgen.Check
+import Modelgen.Naming
 
 /-!
 End-to-end tests for the public `modelgen` process boundary.
@@ -21,6 +22,10 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
 def runModelgen (binary : String) (args : List String) : IO IO.Process.Output :=
   IO.Process.output { cmd := binary, args := args.toArray }
 
+def runModelgenStdin (binary : String) (args : List String) (input : String) :
+    IO IO.Process.Output :=
+  IO.Process.output { cmd := binary, args := args.toArray } (some input)
+
 def hasDiagnostic (stderr diagnostic : String) : Bool :=
   (stderr.splitOn "\n").contains diagnostic
 
@@ -38,10 +43,78 @@ def main (args : List String) : IO UInt32 := do
   let scratch := s!"{root}/_tmp"
   IO.FS.createDirAll scratch
   let nested := s!"{root}/test/fixtures/modelgen/nested_iota.ndjson"
+  let nestedText ← IO.FS.readFile nested
+  let .ok nestedExport := Modelgen.parse nestedText (analyse := false) | do
+    IO.eprintln "mainclitest: nested fixture did not parse"
+    return 1
   -- This fixture contains `Expr.proj`, so success also pins that the integrated
   -- path asked the reader for projection analysis.
   let mono := s!"{root}/test/fixtures/mono/mono_proj.ndjson"
   let mut state : TestState := {}
+
+  -- Lean Kernel Arena compatibility.  A checker can receive its NDJSON path
+  -- as `$IN`, or read the same bytes from stdin.  Whole-stream kernel verdict
+  -- gates are independent of generation and of the structural model checks.
+  let arenaPath ← runModelgen binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
+    "--no-output", nested]
+  state := state.check "arena path input is accepted with exit 0" <|
+    arenaPath.exitCode == 0 && arenaPath.stdout.isEmpty &&
+      hasDiagnostic arenaPath.stderr "input kernel check: accepted" &&
+      hasDiagnostic arenaPath.stderr "output kernel check: accepted"
+  let arenaStdin ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] nestedText
+  state := state.check "arena stdin input is accepted with exit 0" <|
+    arenaStdin.exitCode == 0 && arenaStdin.stdout.isEmpty &&
+      hasDiagnostic arenaStdin.stderr "input kernel check: accepted"
+
+  let badName := `ArenaBad
+  let badDeclaration : Modelgen.EDecl :=
+    .defn badName [] (.sort .zero) (.sort .zero) .opaque "safe" [badName]
+  let invalidExport := { nestedExport with decls := nestedExport.decls.push badDeclaration }
+  let invalidText := invalidExport.render
+  let invalidPath := s!"{scratch}/main-cli-invalid.ndjson"
+  IO.FS.writeFile invalidPath invalidText
+  let invalidInput ← runModelgen binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", invalidPath]
+  state := state.check "kernel-invalid path input is rejected with exit 1" <|
+    invalidInput.exitCode == 1 &&
+      (invalidInput.stderr.splitOn "input kernel check rejected:").length > 1
+  let invalidOutput ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--no-type-check-input",
+    "--type-check-output", "--no-output", "-"] invalidText
+  state := state.check "kernel-invalid stdin output is rejected with exit 1" <|
+    invalidOutput.exitCode == 1 &&
+      (invalidOutput.stderr.splitOn "output kernel check rejected:").length > 1
+  IO.FS.removeFile invalidPath
+
+  -- A valid declaration occupying a required public model slot is a genuine
+  -- unsupported-generation result, not a kernel rejection.  Conversely, the
+  -- fixed basis exemptions in the ordinary default run remain accepted.
+  let collisionName := Modelgen.Naming.modelName `Tree
+  let collision : Modelgen.EDecl := .ax collisionName [] (.sort (.succ .zero)) false
+  let declinedText := { nestedExport with decls := nestedExport.decls.push collision }.render
+  let declined ← runModelgenStdin binary
+    ["--no-check", "--no-output", "-"] declinedText
+  state := state.check "unsupported generation declines with exit 2" <|
+    declined.exitCode == 2 && (declined.stderr.splitOn "declined").length > 1
+
+  let malformed ← runModelgenStdin binary
+    ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] "not ndjson\n"
+  state := state.check "malformed stdin is a tool error with exit 3" <|
+    malformed.exitCode == 3 && (malformed.stderr.splitOn "parse error:").length > 1
+  let missing ← runModelgen binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output",
+    s!"{scratch}/does-not-exist.ndjson"]
+  state := state.check "missing $IN path is a tool error with exit 3" (missing.exitCode == 3)
+  let badOption ← runModelgen binary ["--unknown-arena-option", nested]
+  state := state.check "CLI misuse is a tool error with exit 3" (badOption.exitCode == 3)
+  let monoRefusal := s!"{root}/test/fixtures/mono/marker_taken.ndjson"
+  let internal ← runModelgen binary [
+    "--no-inductives", "--no-check", "--mono-levels", "--no-output", monoRefusal]
+  state := state.check "internal transform refusal is a tool error with exit 3" <|
+    internal.exitCode == 3 &&
+      (internal.stderr.splitOn "monomorphization refused the export:").length > 1
 
   -- All defaults are exercised here, including stdout output and both checks.
   -- This succeeds once all generated model families precede their owners; it
