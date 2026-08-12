@@ -48,7 +48,7 @@ jobs:
 
           case "$SUITE" in
             fixtures)
-              lake build modelgen test
+              lake -Kjobs=1 build modelgen test
               lake exe test "$GITHUB_WORKSPACE" | tee _tmp/fixtures.log
               test/scripts/check-hard-nested-a.sh
               test/scripts/check-hard-nested-c.sh
@@ -56,7 +56,7 @@ jobs:
               ;;
             focused)
               test/scripts/check-mathlib-result.sh
-              lake build \
+              lake -Kjobs=1 build \
                 clitest generationflagstest checktest ordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
                 projectiontest structureetatest deepimaxboxtest \
@@ -84,7 +84,7 @@ jobs:
               count=18
               ;;
             mono)
-              lake build modelgen monotest mainclitest
+              lake -Kjobs=1 build modelgen monotest mainclitest
               lake exe monotest "$GITHUB_WORKSPACE" | tee _tmp/mono.log
               mono_count="$(sed -nE 's/^monotest: ([0-9]+) checks, all pass$/\1/p' _tmp/mono.log | tail -n1)"
               lake exe mainclitest "$GITHUB_WORKSPACE" | tee _tmp/maincli.log
