@@ -1876,7 +1876,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   let generatedOwners := rep.generated.foldl
     (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
   let statementReport := Check.checkStatementsFor { x with decls := out } generatedOwners
-  rep := { rep with stmtChecked := statementReport.statementsChecked,
+  rep := { rep with stmtChecked := statementReport.statementsChecked
     stmtErrors := statementReport.violations.map (·.message) }
   return (out, rep)
 
