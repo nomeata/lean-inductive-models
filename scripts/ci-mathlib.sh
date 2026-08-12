@@ -109,7 +109,7 @@ perf stat -e instructions -o "$PERF_DIR/check-input.perf" -- \
     --no-inductives --check-input --no-check-output --no-output \
   2> >(tee "$LOG_DIR/check-input.log" >&2)
 
-rg -q '^input check: [1-9][0-9]* model families checked$' \
-  "$LOG_DIR/check-input.log" || fail "serialized input check reported no model families"
+"$ROOT/scripts/check-mathlib-result.sh" \
+  "$LOG_DIR/generate.log" "$OUTPUT" "$LOG_DIR/check-input.log"
 
 echo "mathlib CI: full export generated and serialized models checked"

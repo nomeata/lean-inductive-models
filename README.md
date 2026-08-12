@@ -572,7 +572,11 @@ runs the fixture and universe-level suites with a per-process memory limit. The
 full-Mathlib workflow
 [`.github/workflows/mathlib.yml`](.github/workflows/mathlib.yml) generates and
 checks a pinned Mathlib export under a cgroup memory limit and records
-instruction counts with `perf`.
+instruction counts with `perf`. Its artifact gate requires positive generation,
+statement-comparison, output-check, universe-planning, and serialized-reread
+work; zero statement differences and universe escapes; exactly the four basis
+members owned by that pinned input as exemptions; a spliced `PSigma'`; and no
+legacy `PULiftP`. The observed counts are intentionally not hard-coded.
 
 ## Copyright and license
 

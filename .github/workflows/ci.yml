@@ -55,6 +55,7 @@ jobs:
               count="$(sed -nE 's/^([0-9]+) checks, 0 failed$/\1/p' _tmp/fixtures.log | tail -n1)"
               ;;
             focused)
+              test/scripts/check-mathlib-result.sh
               lake build \
                 clitest generationflagstest checktest ordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
