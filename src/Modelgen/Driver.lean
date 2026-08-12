@@ -1314,9 +1314,9 @@ def eqReady (reserved : Std.HashSet Name) : MetaM Bool := do
 support that derives an inhabitant of each unrelated motive's exact universe.
 If the input owns any part later in dependency order, wait for the complete
 bundle; if it owns none, generation may splice the standard shapes. -/
-def mutualReady (needsPULift : Bool) (reserved : Std.HashSet Name) : MetaM Bool := do
+def mutualReady (needsExactSortLift : Bool) (reserved : Std.HashSet Name) : MetaM Bool := do
   unless ← eqReady reserved do return false
-  unless needsPULift do return true
+  unless needsExactSortLift do return true
   let env ← getEnv
   for name in [`PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
@@ -1329,10 +1329,10 @@ private def hasIntrinsicProjectionFields (x : Export) (types : List EIndType)
   types.any fun type =>
     !(x.intrinsicProjectionFieldsFor type constructors).isEmpty
 
-private def isMutualBasisRecord (needsPULift : Bool) (declaration : EDecl) : Bool :=
+private def isMutualBasisRecord (needsExactSortLift : Bool) (declaration : EDecl) : Bool :=
   declaration.names.any fun name =>
     name == `Eq || name == `Eq.refl ||
-      (needsPULift && (name == `PSigma' || (`PSigma').isPrefixOf name ||
+      (needsExactSortLift && (name == `PSigma' || (`PSigma').isPrefixOf name ||
         name == `PUnit || (`PUnit).isPrefixOf name))
 
 /-- **Can a prim model be written here?** — [`Modelgen.eqReady`]'s question,
@@ -1361,7 +1361,7 @@ Two groups, and they are one list because the wait is the same wait:
 * the quotient-side names deriving `funext` may splice
   ([`Modelgen.ensureFunext`]). A prim model reaches them on the singleton route
   and wherever a pad at a level `dsingOk` cannot build is discharged by
-  transport — `PUnit`'s and `PULift`'s shapes.
+  transport — `PUnit`'s and the derived exact-sort lift's shapes.
 * `Nonempty` and `Classical.choice`, which **arm G** splices and which the W
   core's fragment now also carries. An input that declares `Acc` before
   `Nonempty` — `test/fixtures/modelgen/w_core.ndjson`
@@ -1855,12 +1855,12 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
           let ctors := all.map fun n =>
             (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
           let tys := ts.toArray.map (·.type)
-          let mut needsPULift := hasIntrinsicProjectionFields x ts cs
-          unless needsPULift do
+          let mut needsExactSortLift := hasIntrinsicProjectionFields x ts cs
+          unless needsExactSortLift do
             for type in ts do
               if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then
-                needsPULift := true
-          unless ← mutualReady needsPULift reserved do
+                needsExactSortLift := true
+          unless ← mutualReady needsExactSortLift reserved do
             throwError "plain mutual model prerequisites remained late after support scheduling"
           let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
             generation.simple generation.basic (out, rep, pending)

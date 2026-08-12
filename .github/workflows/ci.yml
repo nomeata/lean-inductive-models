@@ -59,6 +59,7 @@ jobs:
                 clitest generationflagstest checktest ordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
                 projectiontest structureetatest deepimaxboxtest \
+                psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
                 vanishingerasuretest transparentowneraliasestest
               lake exe clitest
               lake exe generationflagstest
@@ -72,9 +73,12 @@ jobs:
               lake exe projectiontest
               lake exe structureetatest
               lake exe deepimaxboxtest
+              lake exe psigmaprimetest
+              lake exe exactsortlifttest
+              lake exe tightpsigmaprimeroutetest
               lake exe vanishingerasuretest
               lake exe transparentowneraliasestest
-              count=14
+              count=17
               ;;
             mono)
               lake build modelgen monotest mainclitest

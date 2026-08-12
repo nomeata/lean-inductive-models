@@ -192,7 +192,7 @@ open Lean Meta
 
 namespace Modelgen
 
-/-- The four, by name. A declaration in this set is the basis and is not
+/-- The five, by name. A declaration in this set is the basis and is not
 modelled — the exemption that makes the construction well-founded.
 
 **`Acc` was the fifth and is not here any more.** Its one grant — the

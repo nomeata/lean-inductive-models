@@ -512,7 +512,8 @@ The correctness executables are:
 TMPDIR="$PWD/_tmp/build-tmp" lake build \
   test monotest clitest generationflagstest checktest ordertest namingtest \
   drivernamingtest privatealiastest simplenamingtest rulektest mainclitest \
-  projectiontest structureetatest deepimaxboxtest vanishingerasuretest \
+  projectiontest structureetatest deepimaxboxtest psigmaprimetest \
+  exactsortlifttest tightpsigmaprimeroutetest vanishingerasuretest \
   transparentowneraliasestest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"
@@ -529,6 +530,9 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe mainclitest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe projectiontest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe structureetatest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe deepimaxboxtest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe psigmaprimetest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe exactsortlifttest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe tightpsigmaprimeroutetest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe vanishingerasuretest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe transparentowneraliasestest
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-a.sh
