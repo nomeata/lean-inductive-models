@@ -33,12 +33,13 @@ def auditLift : MetaM (Except Decline (Array Name × Bool × Bool × Bool × Boo
     let (_, eqDecls) ← ensureEq {}
     let support ← ensureExactSortLift {}
     let second ← ensureExactSortLift {}
-    let names := support.flatMap fun declaration => declaration.getNames.toArray
+    let names := support.flatMap fun (declaration : Declaration) => declaration.getNames.toArray
     let expressions := #[puliftT (.param `u) trueP, puliftUp (.param `u) trueP trueI]
     let noLegacy := expressions.all (fun expression => !containsConst `PULiftP expression) &&
       names.all fun name => name != `PULiftP && name != `PULiftP.up && name != `PULiftP.rec
     let (downIota, recIota, eta) ← checkDerivedDefeqs
-    return (eqDecls.flatMap (fun declaration => declaration.getNames.toArray) ++ names,
+    return (eqDecls.flatMap (fun (declaration : Declaration) =>
+        declaration.getNames.toArray) ++ names,
       checkPUnit (← getEnv) |>.isOk, second.isEmpty, noLegacy,
       downIota && recIota && eta, !primBasis.contains `PULiftP)).run
 
