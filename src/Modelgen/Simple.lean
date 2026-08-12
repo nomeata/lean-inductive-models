@@ -2349,6 +2349,12 @@ inductive PrimRoute | type | prop | bare
 `propLift` lifts an exactly proposition-valued field to that sort. -/
 inductive DirectFieldRoute | identity | propLift
 
+/-- The complete field-preserving direct routes. The one-field cases share
+[`Modelgen.directFieldModel`]; `tight` is the multi-field `PSigma'` tower. -/
+inductive DirectRoute
+  | field (route : DirectFieldRoute)
+  | tight
+
 /-! ## Arm C's index erasure
 
 The skeleton arm C splices is the declaration with its indices dropped: the
@@ -2770,7 +2776,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
 
   let selfValue ← withParams fun ps => do
     let tele ← instForall constructorType ps
-    forallBoundedTelescope tele (some nf) fun fields _ =>
+    forallBoundedTelescope tele (some nf) fun fields _ => do
       mkLambdaFVars ps (← tightTowerTy fields 0)
   let selfDecl := Declaration.defnDecl
     { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfValue
@@ -2780,7 +2786,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
 
   let constructorValue ← withParams fun ps => do
     let tele ← instForall modelConstructorType ps
-    forallBoundedTelescope tele (some nf) fun fields _ =>
+    forallBoundedTelescope tele (some nf) fun fields _ => do
       mkLambdaFVars (ps ++ fields) (← tightTowerMk fields 0)
   let constructorDecl := Declaration.defnDecl
     { name := constructorN, levelParams := lparams, type := modelConstructorType,
@@ -2794,7 +2800,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let self := binders[binders.size - 1]!
     let ps := binders.extract 0 np
     let tele ← instForall constructorType ps
-    forallBoundedTelescope tele (some nf) fun fields _ =>
+    forallBoundedTelescope tele (some nf) fun fields _ => do
       mkLambdaFVars binders (← tightTowerRec v fields motive minor self)
   let recursorDecl := Declaration.defnDecl
     { name := recursorN, levelParams := recursorLevelParams, type := recursorType,
@@ -2804,7 +2810,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
 
   let overrides ← withParams fun ps => do
     let tele ← instForall constructorType ps
-    forallBoundedTelescope tele (some nf) fun fields _ =>
+    forallBoundedTelescope tele (some nf) fun fields _ => do
       withLocalDeclD `self (selfAt ps) fun self => do
         let projections ← tightTowerProjs fields 0 self
         (Array.range nf).mapM fun fieldIndex => do
@@ -2819,6 +2825,41 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
                 (eqi.refl' fieldLevel fieldType selected)
           return (tname, fieldIndex, selector, proof)
   return (declarations, overrides)
+
+/-- Decide whether the exact-sort multi-field route applies, and check its
+right-nested tight-pair carrier level before any support is installed. Kept
+outside [`Modelgen.primIso`] so the route dispatcher does not elaborate this
+telescope walk as another large inline branch. -/
+def planDirectTightRoute (bare nonrecursiveOneConstructor : Bool) (np ni : Nat)
+    (memberTy : Expr) (exportCtors : Array (Name × Expr)) (w : Level) : GenM Bool := do
+  unless bare && nonrecursiveOneConstructor && ni == 0 do return false
+  let (constructorName, constructorType) := exportCtors[0]!
+  unless numForalls constructorType - np >= 2 do return false
+  forallBoundedTelescope memberTy (some np) fun ps _ => do
+    let tele ← instForall constructorType ps
+    let nf := numForalls tele
+    forallBoundedTelescope tele (some nf) fun fields _ => do
+      let fieldLevels ← fields.mapM fun field => do ilevel (← ityp field)
+      let towerLevel := fieldLevels.foldl mkLevelMax' .zero |>.normalize
+      unless ← isLevelDefEq towerLevel w do
+        badShape s!"{constructorName}'s tight field tower inhabits Sort \
+          {towerLevel}, not the carrier's Sort {w}"
+      return true
+
+/-- Install tight-pair support and emit the complete exact-sort model branch.
+The caller only merges the returned declarations, splice witnesses, and
+projection overrides into its route state. -/
+def emitDirectTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
+    (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
+    (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
+    (recursorType : Expr) (v : Level) (reserved : Std.HashSet Name) :
+    GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
+  let support ← ensurePSigmaPrime reserved
+  let (declarations, overrides) ← directTightModel eqi tname lparams np memberTy
+    constructorType modelConstructorType declaredMemberTy selfN constructorN recursorN
+    recursorLevelParams recursorType v
+  let spliced := support.flatMap fun declaration => declaration.getNames.toArray
+  return (support ++ declarations, spliced, overrides)
 
 /-- Emit the field-preserving implementation of a tight one-field model.
 Kept outside [`Modelgen.primIso`] so the already-large route dispatcher does
@@ -2893,6 +2934,28 @@ def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
       let fieldLevel ← ilevel fieldType
       mkLambdaFVars (ps ++ fields) (eqi.refl' fieldLevel fieldType field)
   return (declarations, (tname, 0, selector, proof))
+
+/-- Emit any field-preserving direct route, including its exact support
+splice. Keeping this case split outside [`Modelgen.primIso`] leaves the main
+dispatcher with one compact direct-model branch. -/
+def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
+    (lparams : List Name) (np : Nat)
+    (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
+    (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
+    (recursorType : Expr) (w v : Level) (reserved : Std.HashSet Name) :
+    GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
+  match route with
+  | .field fieldRoute =>
+    let support ← if fieldRoute matches .propLift then ensurePULiftP reserved else pure #[]
+    let (declarations, override) ← directFieldModel fieldRoute eqi tname lparams np
+      memberTy constructorType modelConstructorType declaredMemberTy selfN constructorN
+      recursorN recursorLevelParams recursorType w v
+    let spliced := support.flatMap fun declaration => declaration.getNames.toArray
+    return (support ++ declarations, spliced, #[override])
+  | .tight =>
+    emitDirectTightModel eqi tname lparams np memberTy constructorType modelConstructorType
+      declaredMemberTy selfN constructorN recursorN recursorLevelParams recursorType v
+      reserved
 
 /-- Walk arm F's constructor telescope while recovering dependent data fields
 from the caller's index telescope.  Before each moving pivot, a packed equality
@@ -3488,23 +3551,10 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       pure none
 
   -- Two or more exact-sort fields are retained by a right-nested `PSigma'`.
-  -- The level test is performed without constructing terms, before any
-  -- support declaration is spliced, so a mismatch remains rollback-free.
-  let directTightRoute : Bool ←
-    if (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
-        numForalls exportCtors[0]!.2 - np >= 2 then
-      withParams fun ps => do
-        let tele ← instForall exportCtors[0]!.2 ps
-        let nf := numForalls tele
-        forallBoundedTelescope tele (some nf) fun fields _ => do
-          let fieldLevels ← fields.mapM fun field => ilevel (← ityp field)
-          let towerLevel := fieldLevels.foldl mkLevelMax' .zero |>.normalize
-          unless ← isLevelDefEq towerLevel w do
-            badShape s!"{exportCtors[0]!.1}'s tight field tower inhabits Sort \
-              {towerLevel}, not the carrier's Sort {w}"
-          return true
-    else
-      pure false
+  let directTightRoute ← planDirectTightRoute (route matches PrimRoute.bare)
+    nonrecursiveOneConstructor np ni memberTy exportCtors w
+  let directRoute? : Option DirectRoute := directFieldRoute?.map DirectRoute.field <|>
+    if directTightRoute then some .tight else none
 
   -- The indexed subsingleton has a different carrier from the Church routes —
   -- a packed index equation, not a fold — so it branches before them. At a
@@ -3911,31 +3961,15 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  if let some directFieldRoute := directFieldRoute? then
+  if let some directRoute := directRoute? then
     let (_, cty0) := exportCtors[0]!
     let modelCtorTy := restore tbl cty0
-
-    if directFieldRoute matches .propLift then
-      for d in ← ensurePULiftP reserved do
-        out := out.push d
-        spliced := spliced ++ d.getNames
-
     let recTy := restore tbl rv.type
-    let (directDecls, projectionOverride) ← directFieldModel directFieldRoute eqi tname
+    let (directDecls, directSpliced, overrides) ← emitDirectModel directRoute eqi tname
       lparams np memberTy cty0 modelCtorTy declaredMemberTy selfN (ctorN 0) recN
-        rv.levelParams recTy w v
+      rv.levelParams recTy w v reserved
     out := out ++ directDecls
-    projectionOverrides := projectionOverrides.push projectionOverride
-  else if directTightRoute then
-    let (_, cty0) := exportCtors[0]!
-    let modelCtorTy := restore tbl cty0
-    for d in ← ensurePSigmaPrime reserved do
-      out := out.push d
-      spliced := spliced ++ d.getNames
-    let recTy := restore tbl rv.type
-    let (directDecls, overrides) ← directTightModel eqi tname lparams np memberTy cty0
-      modelCtorTy declaredMemberTy selfN (ctorN 0) recN rv.levelParams recTy v
-    out := out ++ directDecls
+    spliced := spliced ++ directSpliced
     projectionOverrides := projectionOverrides ++ overrides
   else if armF then
     -- ════ arm F: the indexed subsingleton, by one packed index equation ════
