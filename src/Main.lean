@@ -195,7 +195,7 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
           | .error error =>
               IO.eprintln s!"{input}: cannot order monomorphized input: \
                 {orderErrorMessage error}"
-              return exitRejected
+              return exitToolError
           | .ok orderedOutput => pure orderedOutput
     else
       pure parsed
@@ -226,7 +226,7 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   let finalExport ← match Modelgen.Order.reorder transformed with
     | .error error =>
         IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
-        return exitRejected
+        return exitToolError
     | .ok output => pure output
 
   if config.checkOutput then
