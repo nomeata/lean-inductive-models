@@ -156,10 +156,11 @@ def hintsTo : EHints → ReducibilityHints
   | .opaque => .opaque
   | .regular h => .regular h.toUInt32
 
-def safetyOf : String → DefinitionSafety
-  | "unsafe" => .unsafe
-  | "partial" => .partial
-  | _ => .safe
+def safetyOf? : String → Option DefinitionSafety
+| "unsafe" => some .unsafe
+| "partial" => some .partial
+| "safe" => some .safe
+| _ => none
 
 /-- The exact lean4export spelling of a kernel definition-safety annotation. -/
 def safetyTo : DefinitionSafety → String
@@ -171,9 +172,11 @@ def safetyTo : DefinitionSafety → String
 records that `Declaration.quotDecl` already covers. -/
 def toDeclaration (env : Environment) : EDecl → Option Declaration
   | .ax n lp t u => some <| .axiomDecl { name := n, levelParams := lp, type := t, isUnsafe := u }
-  | .defn n lp t v h sf _ => some <| .defnDecl
-      { name := n, levelParams := lp, type := t, value := v
-        hints := hintsTo h, safety := safetyOf sf }
+  | .defn n lp t v h sf _ => do
+      let safety ← safetyOf? sf
+      some <| .defnDecl
+        { name := n, levelParams := lp, type := t, value := v
+          hints := hintsTo h, safety }
   | .thm n lp t v _ => some <| .thmDecl { name := n, levelParams := lp, type := t, value := v }
   | .opaq n lp t v u _ => some <| .opaqueDecl
       { name := n, levelParams := lp, type := t, value := v, isUnsafe := u }
@@ -723,9 +726,12 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
     return (c, some <| .ax (← c.nameF o "name") (← c.nameL o "levelParams")
       (← c.exprF o "type") (← jBool o "isUnsafe"))
   if let .ok o := jField j "def" then
+    let safety ← jStr o "safety"
+    unless (safetyOf? safety).isSome do
+      throw s!"unknown definition safety {safety}"
     return (c, some <| .defn (← c.nameF o "name") (← c.nameL o "levelParams")
       (← c.exprF o "type") (← c.exprF o "value") (← readHints (← jField o "hints"))
-      (← jStr o "safety") (← c.nameL o "all"))
+      safety (← c.nameL o "all"))
   if let .ok o := jField j "thm" then
     return (c, some <| .thm (← c.nameF o "name") (← c.nameL o "levelParams")
       (← c.exprF o "type") (← c.exprF o "value") (← c.nameL o "all"))

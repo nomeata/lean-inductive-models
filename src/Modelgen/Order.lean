@@ -110,6 +110,31 @@ def references (declaration : EDecl) : Std.HashSet Name := Id.run do
   for name in expressionReferences roots do names := names.insert name
   return names
 
+/-- Declaration dependencies which must already be in the kernel environment
+when reconstructing one export record.
+
+Unlike [`references`], this deliberately ignores bookkeeping fields such as
+`all`, recursor metadata, and model-before-owner policy.  Those are checked
+after insertion, but they are not inputs to `Declaration.inductDecl` and must
+not impose an artificial replay order.  A quotient declaration is atomic in
+Lean's kernel and its generated `lift`/`ind` constants mention `Eq`, so every
+one of its four export records carries that dependency here. -/
+def kernelInputReferences (declaration : EDecl) : Std.HashSet Name := Id.run do
+  let mut names : Std.HashSet Name := {}
+  let mut roots : Array Expr := #[]
+  match declaration with
+  | .ax _ _ type _ => roots := roots.push type
+  | .defn _ _ type value .. | .thm _ _ type value .. | .opaq _ _ type value .. =>
+    roots := roots.push type |>.push value
+  | .quot _ _ type _ =>
+    names := names.insert `Eq
+    roots := roots.push type
+  | .induct types constructors _ =>
+    for type in types do roots := roots.push type.type
+    for constructor in constructors do roots := roots.push constructor.type
+  for name in expressionReferences roots do names := names.insert name
+  return names
+
 private def addEdge (outgoing : Array (Std.HashSet Nat)) (indegree : Array Nat)
     (before after : Nat) : Array (Std.HashSet Nat) × Array Nat :=
   if before == after || outgoing[before]!.contains after then
@@ -220,6 +245,45 @@ def recordOrderPrioritizing (x : Export) (prefer : EDecl → Bool) :
 /-- The ordinary stable order uses no preferred class. -/
 def recordOrder (x : Export) : Except Error (Array Nat) :=
   recordOrderPrioritizing x fun _ => false
+
+/-- Stable dependency order for submitting declarations to Lean's kernel.
+
+This has no public-model ordering edges and observes only declaration inputs,
+so it is suitable for a checker: it may change the private replay schedule
+without changing the parsed or emitted export. -/
+def kernelRecordOrder (x : Export) : Except Error (Array Nat) := do
+  let n := x.decls.size
+  let mut ownership : Std.HashMap Name Nat := Std.HashMap.emptyWithCapacity (n * 2)
+  for i in [0:n] do
+    for name in x.decls[i]!.names do
+      if let some first := ownership[name]? then
+        throw (.duplicateName name first i)
+      ownership := ownership.insert name i
+
+  let mut outgoing : Array (Std.HashSet Nat) := Array.replicate n {}
+  let mut indegree : Array Nat := Array.replicate n 0
+  for consumer in [0:n] do
+    for name in kernelInputReferences x.decls[consumer]! do
+      if let some provider := ownership[name]? then
+        (outgoing, indegree) := addEdge outgoing indegree provider consumer
+
+  let mut ready : Std.TreeSet Nat := {}
+  for i in [0:n] do
+    if indegree[i]! == 0 then ready := ready.insert i
+  let mut order : Array Nat := #[]
+  repeat
+    let some before := ready.min? | break
+    ready := ready.erase before
+    order := order.push before
+    for after in outgoing[before]! do
+      let degree := indegree[after]! - 1
+      indegree := indegree.set! after degree
+      if degree == 0 then ready := ready.insert after
+  unless order.size == n do
+    let records := (Array.range n).filter fun i => indegree[i]! > 0
+    let declarations := records.map fun i => x.decls[i]!.names.toArray
+    throw (.cycle records declarations)
+  return order
 
 /-- Reorder declaration records, preserving export metadata and expression
 analysis.  No record content is rewritten. -/

@@ -1006,23 +1006,130 @@ def serialiseIso (is : Iso) : MetaM (Array EDecl × Iso) := do
   -- spliced support are recorded for persistence and reporting.
   return (renamed, { is with aliases := aliases, spliced := spliced })
 
-/-- Compare the export's own recursors against the ones the kernel just
-regenerated. Returns the names that differ. -/
-def checkRecs (rs : List ERec) : MetaM (Nat × Array Name) := do
+/-- The exact exported metadata of one inductive record must be what Lean's
+kernel regenerated from that record's type-former and constructor inputs.
+
+`Declaration.inductDecl` does not take the exported `InductiveVal`,
+`ConstructorVal`, or `RecursorVal` metadata as input.  Merely adding the
+reconstructed declaration therefore proves the constructor types are valid,
+but does not validate fields such as constructor indices, recursion flags, or
+recursor rule arities.  Compare every exported field here, including the fields
+which are bookkeeping rather than kernel declaration inputs. -/
+private def exportedRecursorRules (recursor : ERec) : List RecursorRule :=
+  recursor.rules.map fun rule : ERecRule =>
+    { ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs }
+
+private def recursorMetadataMatches (recursor : ERec) (actual : RecursorVal) : Bool :=
+  actual.name == recursor.name && actual.levelParams == recursor.levelParams &&
+    actual.type == recursor.type && actual.all == recursor.all &&
+    actual.numParams == recursor.numParams && actual.numIndices == recursor.numIndices &&
+    actual.numMotives == recursor.numMotives && actual.numMinors == recursor.numMinors &&
+    actual.rules == exportedRecursorRules recursor && actual.k == recursor.k &&
+    actual.isUnsafe == recursor.isUnsafe
+
+private def metadataMismatch (name : Name) (kind field : String) : String :=
+  s!"{name}: {kind} {field} differs from Lean's kernel"
+
+def checkInductiveMetadata (types : List EIndType) (constructors : List ECtor)
+    (recursors : List ERec) : MetaM (Array String) := do
+  let env ← getEnv
+  let mut mismatches : Array String := #[]
+  for type in types do
+    match env.constants.find? type.name with
+    | some (.inductInfo actual) =>
+      unless actual.name == type.name do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "name")
+      unless actual.levelParams == type.levelParams do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "levelParams")
+      unless actual.type == type.type do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "type")
+      unless actual.all == type.all do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "all")
+      unless actual.ctors == type.ctors do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "constructors")
+      unless actual.numParams == type.numParams do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "numParams")
+      unless actual.numIndices == type.numIndices do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "numIndices")
+      unless actual.numNested == type.numNested do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "numNested")
+      unless actual.isRec == type.isRec do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "isRec")
+      unless actual.isReflexive == type.isReflexive do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "isReflexive")
+      unless actual.isUnsafe == type.isUnsafe do
+        mismatches := mismatches.push (metadataMismatch type.name "inductive" "isUnsafe")
+    | some _ => mismatches := mismatches.push (metadataMismatch type.name "declaration" "kind")
+    | none => mismatches := mismatches.push (metadataMismatch type.name "inductive" "presence")
+  for constructor in constructors do
+    match env.constants.find? constructor.name with
+    | some (.ctorInfo actual) =>
+      unless actual.name == constructor.name do
+        mismatches := mismatches.push (metadataMismatch constructor.name "constructor" "name")
+      unless actual.levelParams == constructor.levelParams do
+        mismatches := mismatches.push
+          (metadataMismatch constructor.name "constructor" "levelParams")
+      unless actual.type == constructor.type do
+        mismatches := mismatches.push (metadataMismatch constructor.name "constructor" "type")
+      unless actual.induct == constructor.induct do
+        mismatches := mismatches.push (metadataMismatch constructor.name "constructor" "induct")
+      unless actual.cidx == constructor.cidx do
+        mismatches := mismatches.push (metadataMismatch constructor.name "constructor" "cidx")
+      unless actual.numParams == constructor.numParams do
+        mismatches := mismatches.push
+          (metadataMismatch constructor.name "constructor" "numParams")
+      unless actual.numFields == constructor.numFields do
+        mismatches := mismatches.push
+          (metadataMismatch constructor.name "constructor" "numFields")
+      unless actual.isUnsafe == constructor.isUnsafe do
+        mismatches := mismatches.push
+          (metadataMismatch constructor.name "constructor" "isUnsafe")
+    | some _ =>
+      mismatches := mismatches.push (metadataMismatch constructor.name "declaration" "kind")
+    | none =>
+      mismatches := mismatches.push (metadataMismatch constructor.name "constructor" "presence")
+  for recursor in recursors do
+    match env.constants.find? recursor.name with
+    | some (.recInfo actual) =>
+      unless actual.name == recursor.name do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "name")
+      unless actual.levelParams == recursor.levelParams do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "levelParams")
+      unless actual.type == recursor.type do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "type")
+      unless actual.all == recursor.all do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "all")
+      unless actual.numParams == recursor.numParams do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "numParams")
+      unless actual.numIndices == recursor.numIndices do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "numIndices")
+      unless actual.numMotives == recursor.numMotives do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "numMotives")
+      unless actual.numMinors == recursor.numMinors do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "numMinors")
+      unless actual.rules == exportedRecursorRules recursor do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "rules")
+      unless actual.k == recursor.k do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "k")
+      unless actual.isUnsafe == recursor.isUnsafe do
+        mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "isUnsafe")
+    | some _ =>
+      mismatches := mismatches.push (metadataMismatch recursor.name "declaration" "kind")
+    | none =>
+      mismatches := mismatches.push (metadataMismatch recursor.name "recursor" "presence")
+  return mismatches
+
+/-- Optional generation-time recursor audit retained for the library driver.
+The whole-stream CLI gate additionally checks types and constructors above. -/
+def checkRecs (recursors : List ERec) : MetaM (Nat × Array Name) := do
   let env ← getEnv
   let mut bad : Array Name := #[]
-  let mut n := 0
-  for r in rs do
-    n := n + 1
-    let some (.recInfo rv) := env.constants.find? r.name | bad := bad.push r.name; continue
-    let sameRules :=
-      rv.rules.length == r.rules.length &&
-      (rv.rules.zip r.rules).all fun (a, b) => a.ctor == b.ctor && a.rhs == b.rhs
-    unless rv.type == r.type && rv.numMotives == r.numMotives && rv.numMinors == r.numMinors
-        && rv.numParams == r.numParams && rv.numIndices == r.numIndices && rv.k == r.k
-        && rv.isUnsafe == r.isUnsafe && sameRules do
-      bad := bad.push r.name
-  return (n, bad)
+  for recursor in recursors do
+    match env.constants.find? recursor.name with
+    | some (.recInfo actual) =>
+      unless recursorMetadataMatches recursor actual do bad := bad.push recursor.name
+    | _ => bad := bad.push recursor.name
+  return (recursors.length, bad)
 
 /-- Submit a complete export to Lean's kernel and verify that its serialized
 recursor metadata agrees with the recursors Lean regenerates.
@@ -1033,17 +1140,22 @@ by this tool: disabling a CLI type-check gate never weakens model generation's
 owner-free kernel replay. -/
 def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   let base ← getEnv
-  match ← checkGeneratedIn base x.decls with
+  let replayRecords ← match Order.kernelRecordOrder x with
+    | .error error =>
+      return .error s!"cannot dependency-order kernel input: {repr error}"
+    | .ok order => pure (order.map fun i => x.decls[i]!)
+  match ← checkGeneratedIn base replayRecords with
   | .error message => return .error message
   | .ok checked =>
     setEnv checked
-    let mut mismatches : Array Name := #[]
+    let mut mismatches : Array String := #[]
     for declaration in x.decls do
-      if let .induct _ _ recursors := declaration then
-        let (_, bad) ← checkRecs recursors
+      if let .induct types constructors recursors := declaration then
+        let bad ← checkInductiveMetadata types constructors recursors
         mismatches := mismatches ++ bad
     unless mismatches.isEmpty do
-      return .error s!"serialized recursors differ from Lean's kernel: {mismatches.toList}"
+      return .error s!"serialized inductive metadata differs from Lean's kernel:\n  \
+        {"\n  ".intercalate mismatches.toList}"
     return .ok ()
 
 /-- **One installed inductive block, read back out of the environment** as the
