@@ -907,9 +907,33 @@ structure Writer where
   names : Std.HashMap Name Nat := Std.HashMap.emptyWithCapacity 1024 |>.insert .anonymous 0
   levels : Std.HashMap Level Nat := Std.HashMap.emptyWithCapacity 64 |>.insert .zero 0
   exprs : Std.HashMap Expr Nat := Std.HashMap.emptyWithCapacity 4096
+  /-- The next arena IDs.  They are counters rather than table sizes so a
+  fresh island-local writer can continue after an earlier island while
+  deliberately forgetting its structural interning tables. -/
+  nextName : Nat := 1
+  nextLevel : Nat := 1
+  nextExpr : Nat := 0
   deriving Inhabited
 
 namespace Writer
+
+/-- The exclusive upper bounds of the three independent export arenas. -/
+structure Cursor where
+  nextName : Nat := 1
+  nextLevel : Nat := 1
+  nextExpr : Nat := 0
+  deriving Inhabited, Repr, BEq
+
+/-- Start a structurally fresh writer at explicit, non-overlapping arena IDs.
+Only the format's distinguished anonymous name and zero level remain shared
+at index zero.  Equal nontrivial nodes written by another island are therefore
+allowed to receive fresh IDs. -/
+def fromCursor (cursor : Cursor) : Writer :=
+  { nextName := cursor.nextName, nextLevel := cursor.nextLevel,
+    nextExpr := cursor.nextExpr }
+
+def cursor (w : Writer) : Cursor :=
+  { nextName := w.nextName, nextLevel := w.nextLevel, nextExpr := w.nextExpr }
 
 private def esc (s : String) : String := (Json.str s).compress
 
@@ -923,14 +947,14 @@ partial def name (w : Writer) (n : Name) : Writer × Nat :=
     | .anonymous => (w, 0)
     | .str p s =>
       let (w, pi) := w.name p
-      let i := w.names.size
+      let i := w.nextName
       let w := (w.push s!"\{\"in\":{i},\"str\":\{\"pre\":{pi},\"str\":{esc s}}}")
-      ({ w with names := w.names.insert n i }, i)
+      ({ w with names := w.names.insert n i, nextName := i + 1 }, i)
     | .num p k =>
       let (w, pi) := w.name p
-      let i := w.names.size
+      let i := w.nextName
       let w := (w.push s!"\{\"in\":{i},\"num\":\{\"i\":{k},\"pre\":{pi}}}")
-      ({ w with names := w.names.insert n i }, i)
+      ({ w with names := w.names.insert n i, nextName := i + 1 }, i)
 
 partial def level (w : Writer) (l : Level) : Writer × Nat :=
   match w.levels[l]? with
@@ -950,9 +974,9 @@ partial def level (w : Writer) (l : Level) : Writer × Nat :=
         let (w, bi) := w.level b
         (w, s!"\"imax\":[{ai},{bi}]")
       | .mvar _ => (w, "\"param\":0")  -- cannot occur in an export
-    let i := w.levels.size
+    let i := w.nextLevel
     let w := w.push s!"\{\"il\":{i},{body}}"
-    ({ w with levels := w.levels.insert l i }, i)
+    ({ w with levels := w.levels.insert l i, nextLevel := i + 1 }, i)
 
 private def levelsJ (w : Writer) (ls : List Level) : Writer × String :=
   let (w, idxs) := ls.foldl (fun (w, acc) l => let (w, i) := w.level l; (w, acc.push i)) (w, #[])
@@ -1008,9 +1032,9 @@ partial def expr (w : Writer) (e : Expr) : Writer × Nat :=
       | .lit (.natVal k) => (w, s!"\"natVal\":\"{k}\"")
       | .lit (.strVal s) => (w, s!"\"strVal\":{esc s}")
       | _ => (w, "\"bvar\":0")  -- mdata/fvar/mvar cannot occur in an export
-    let i := w.exprs.size
+    let i := w.nextExpr
     let w := w.push s!"\{\"ie\":{i},{body}}"
-    ({ w with exprs := w.exprs.insert e i }, i)
+    ({ w with exprs := w.exprs.insert e i, nextExpr := i + 1 }, i)
 
 private def hintsJ : EHints → String
   | .abbrev => "\"abbrev\""
@@ -1096,6 +1120,24 @@ def decl (w : Writer) (d : EDecl) : Writer :=
     w.push s!"\{\"inductive\":\{\"ctors\":[{String.intercalate "," csj.toList}],\
       \"recs\":[{String.intercalate "," rsj.toList}],\
       \"types\":[{String.intercalate "," tsj.toList}]}}"
+
+/-- One declaration split into the arena definitions which must precede every
+declaration spool, and its single reorderable declaration line. -/
+structure DeclSplit where
+  arena : Array String
+  declaration : String
+  after : Cursor
+  deriving Inhabited, Repr, BEq
+
+/-- Serialize one declaration while keeping arena and declaration records
+separate.  The returned writer retains only this island's interning maps, but
+its line buffer is empty and ready for the next declaration in the island. -/
+def splitDecl (w : Writer) (d : EDecl) : Writer × DeclSplit :=
+  let completed := { w with out := #[] } |>.decl d
+  let declaration := completed.out.back!
+  let arena := completed.out.pop
+  let after := completed.cursor
+  ({ completed with out := #[] }, { arena, declaration, after })
 
 end Writer
 
