@@ -162,6 +162,36 @@ separate from the stable Eq/Nat/pair roots so a basis migration changes one
 assertion rather than weakening the final-environment census. -/
 def currentLiftSupportRoots : Array Name := #[`PUnit]
 
+/-- Names added to the serialized output by one filter run, excluding every
+name owned by the input. -/
+def emittedNames (run : FilterRun) : Array Name :=
+  let inputNames := run.input.decls.flatMap fun declaration => declaration.names.toArray
+  run.output.decls.flatMap fun declaration =>
+    declaration.names.toArray |>.filter (!inputNames.contains ·)
+
+/-- Emitted names belonging to records both witnessed as splices and classified
+as fixed reusable support. This mirrors the persistence gate, but derives its
+expected set independently from the serialized report and output. -/
+def witnessedFixedSupportNames (run : FilterRun) : Array Name :=
+  let witnessed := run.report.spliced.flatMap (·.2)
+  run.output.decls.filter (fun declaration =>
+      declaration.names.any witnessed.contains &&
+        (declaration.names.any persistentSupportRoot ||
+          declaration.names.all persistentSupportName)) |>.flatMap fun declaration =>
+            declaration.names.toArray
+
+/-- Every emitted name retained by the final replay environment is fixed,
+witnessed shared support, and every such support name was retained. Public
+interfaces and model-local implementation declarations therefore remain in
+the output only. -/
+def finalEnvironmentIsIsolated (run : FilterRun) : Bool :=
+  let emitted := emittedNames run
+  let fixed := witnessedFixedSupportNames run
+  let retained := emitted.filter run.env.constants.contains
+  run.report.generated.all (fun entry =>
+      !run.env.constants.contains (Naming.modelName entry.1)) &&
+    retained.all fixed.contains && fixed.all run.env.constants.contains
+
 def run (root : String) : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
@@ -339,8 +369,10 @@ def run (root : String) : IO UInt32 := do
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,
   -- and a stable reorder must retain all ordinary implementation dependencies.
-  let generatedMutual ← generatedFixture s!"{root}/test/fixtures/modelgen/mutual_shapes.ndjson"
+  let generatedMutualRun ← generatedFixtureState
+    s!"{root}/test/fixtures/modelgen/mutual_shapes.ndjson"
     { noGeneration with mutualModels := true }
+  let generatedMutual := generatedMutualRun.output
   let generatedMutualFamilies := Check.discover generatedMutual
   state := state.check "generated mutual family has exact member names" <|
     generatedMutualFamilies.any fun family =>
@@ -358,11 +390,14 @@ def run (root : String) : IO UInt32 := do
     (familiesBeforeOwners generatedMutual' && (Check.check generatedMutual').isEmpty &&
       dependenciesForward generatedMutual' &&
       generatedMutual'.decls.size == generatedMutual.decls.size)
+  state := state.check "plain mutual models are absent from the final replay environment" <|
+    finalEnvironmentIsIsolated generatedMutualRun
 
   -- Nested-only generation already emits its family before the owner.  A
   -- stable pass is record-neutral when every dependency is already forward.
-  let nested ← generatedFixture s!"{root}/test/fixtures/modelgen/nested_iota.ndjson"
+  let nestedRun ← generatedFixtureState s!"{root}/test/fixtures/modelgen/nested_iota.ndjson"
     { noGeneration with nested := true }
+  let nested := nestedRun.output
   let nested' ← mustReorder "already-before nested output" nested
   state := state.check "already-before nested output is unchanged"
     (nested'.decls == nested.decls && familiesBeforeOwners nested' &&
@@ -374,6 +409,21 @@ def run (root : String) : IO UInt32 := do
           pair.owner == `Tree.rec && pair.model == Naming.modelName `Tree.rec) &&
         family.correspondence.iotas.any (fun rule =>
           rule.recursor == `Tree.rec && rule.name == Naming.iotaName `Tree.rec 1)
+  state := state.check "nested-only models are absent from the final replay environment" <|
+    finalEnvironmentIsIsolated nestedRun
+
+  -- The default pipeline extends the same island through the generated nested
+  -- block's mutual model and then through each simple model. None of those
+  -- intermediate owners or their interfaces may escape into the source replay
+  -- environment, even though all remain in the serialized output.
+  let composedRun ← generatedFixtureState
+    s!"{root}/test/fixtures/modelgen/nested_iota.ndjson" {}
+  state := state.check "nested-mutual-simple composition remains one disposable island" <|
+    composedRun.report.generated.any (·.1 == `Tree) &&
+      composedRun.report.generated.any (·.1 == `Tree._model._impl.0) &&
+      (emittedNames composedRun).contains `Tree._model._impl.0 &&
+      !composedRun.env.constants.contains `Tree._model._impl.0 &&
+      finalEnvironmentIsIsolated composedRun
 
   let simpleRun ← generatedFixtureState
     s!"{root}/test/fixtures/modelgen/prim_shapes.ndjson"
@@ -435,6 +485,32 @@ def run (root : String) : IO UInt32 := do
       fixedWitnessedNames.all retainedGenerated.contains
   state := state.check "every witnessed fixed support declaration persists" <|
     !fixedWitnessedNames.isEmpty && fixedWitnessedNames.all aliasRun.env.constants.contains
+
+  -- A W model has the largest fixed splice: the reusable `_wcore` fragment.
+  -- The core survives for later source owners, while the public W model and its
+  -- per-owner implementation forest remain confined to this island.
+  let wRun ← generatedFixtureState s!"{root}/test/fixtures/modelgen/prim_w.ndjson"
+    { noGeneration with simple := true }
+  state := state.check "W core support persists without retaining its model island" <|
+    wRun.report.generated.any (·.1 == `Tree) &&
+      wRun.report.spliced.any (fun (_, names) => names.contains wCoreSelf) &&
+      wRun.env.constants.contains wCoreSelf &&
+      !wRun.env.constants.contains (Naming.modelName `Tree) &&
+      finalEnvironmentIsIsolated wRun
+
+  -- Scheduling moves the input's exact PUnit bundle before the owner that
+  -- needs it. It is source state, not a generated splice, and remains present
+  -- after the owner's generated interface has been discarded.
+  let latePUnitRun ← generatedFixtureState
+    s!"{root}/test/fixtures/modelgen/tight_prop_field_late.ndjson"
+    { noGeneration with simple := true }
+  state := state.check "late input PUnit survives scheduled owner-free generation" <|
+    latePUnitRun.report.generated.any (·.1 == `PFP) &&
+      !latePUnitRun.report.spliced.any (fun (_, names) => names.contains `PUnit) &&
+      latePUnitRun.env.constants.contains `PUnit &&
+      latePUnitRun.env.constants.contains `PFP &&
+      !latePUnitRun.env.constants.contains (Naming.modelName `PFP) &&
+      finalEnvironmentIsIsolated latePUnitRun
 
   IO.println s!"record order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
