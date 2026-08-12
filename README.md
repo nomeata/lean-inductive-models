@@ -17,10 +17,15 @@ There are two reasons to use these models:
 The basis is:
 
 ```text
-Eq  Nat  PULiftP  PSigma
+Eq  Nat  PUnit  PSigma  PSigma'
 ```
 
-These four inductives are not modeled. Generated developments may also use
+These five inductives are not modeled. `PSigma'` is the tight dependent pair
+`{α : Sort u} → (α → Sort v) → Sort (max u v)`; its named projections and
+arbitrary-sort `rec'` are ordinary definitions derived from primitive
+projections. Together with `PUnit`, it derives the exact-sort propositional
+lift `PSigma'.{0,u} (fun _ : P => PUnit.{u})`, so no separate `PULiftP`
+primitive is required. Generated developments may also use
 Lean's kernel quotient declarations `Quot`, `Quot.mk`, `Quot.lift`, and
 `Quot.ind`, together with the standard axioms `Classical.choice`, `propext`,
 and `Quot.sound`.
@@ -197,8 +202,8 @@ primitive projection on the model carrier. The general construction eliminates
 the carrier with the model recursor, using the field result as its motive and
 returning field `j` from the corresponding minor premise. Two tight
 one-field models have specialized definitions: an exact-sort payload uses the
-payload itself as the carrier, while a proposition-valued payload uses
-`PULiftP`. The underlying Lean edge case—sort-polymorphic inductives whose
+payload itself as the carrier, while a proposition-valued payload uses the
+derived tight-pair/PUnit lift. The underlying Lean edge case—sort-polymorphic inductives whose
 primitive projections can be stronger than their generated recursors—is
 tracked as [lean4#7637](https://github.com/leanprover/lean4/issues/7637).
 
@@ -485,7 +490,7 @@ and no output is written.
 - Unsupported inductive shapes are reported as declines and pass through
   without a model.
 - A checker consuming the models as an inductive front end must implement the
-  four basis inductives and Lean's kernel quotient declarations, and admit the
+  five basis inductives and Lean's kernel quotient declarations, and admit the
   standard axioms `Classical.choice`, `propext`, and `Quot.sound` when a
   generated development uses them.
 - Universe monomorphization is optional, off by default, and is exposed only

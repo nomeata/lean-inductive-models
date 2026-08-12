@@ -41,10 +41,10 @@
      extraction 0 rather than at its own predecessors is green at `Conj` and
      red only at `Conj3`.
    * `PU` — a **variable-sort singleton** (`PUnit`'s shape): the carrier is
-     `PULiftP ⊤` at exactly `Sort u`, the recursor a transport along the
+     the derived lift of `⊤` at exactly `Sort u`, the recursor a transport along the
      lift's eta.
    * `PE` — a **variable-sort empty carrier** (`PEmpty`'s shape): the
-     carrier is `PULiftP ⊥`, and the recursor — zero minor premises — is
+     carrier is the derived lift of `⊥`, and the recursor — zero minor premises — is
      Church-`⊥`'s `Sort w` eliminator after the lift is projected away.
      This is the shape the old basis could not reach at all.
    * `PM` — a variable-sort carrier with **two** constructors: small
@@ -60,7 +60,7 @@
      elimination, and the model collapses the payload, which the contract
      permits because a `Prop`-valued motive cannot discriminate.
    * `UL` — `PULift`'s shape: a carrier raised by a level (`r`) no field
-     reaches, whose pad level is not `dsingOk` — the `PULiftP ⊤` pad,
+     reaches, whose pad level is not `dsingOk` — the derived `⊤` pad,
      discharged by transport in the destructor.
    * `Lst` — the linear-recursion tower at its simplest: one base
      constructor with no fields, one step constructor with the recursive
@@ -114,7 +114,7 @@
      unfolding composes with the dependent index analysis.
 
    The file declares `Eq` and nothing else of the basis, so one run splices
-   `Nat`, `PSigma` and `PULiftP` and the report names them. Nothing here
+   `Nat`, `PSigma`, `PSigma'`, and `PUnit` and the report names them. Nothing here
    splices the quotient, `Quot.sound` or a `funext`: the lift's eta replaced
    the one construction that needed them. -/
 prelude

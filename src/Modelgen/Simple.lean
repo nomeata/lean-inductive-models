@@ -2,18 +2,18 @@ import Modelgen.Mutual
 import Modelgen.Naming
 
 /-!
-# The model of a **simple inductive from four primitives**, generated
+# The model of a **simple inductive from five primitives**, generated
 
 The `--simple` construction removes the inductive declaration itself: a plain
 (non-mutual, non-nested) inductive's carrier, constructors, recursor and ι
 rules are emitted as ordinary `def`s and `theorem`s over a fixed basis of
 primitive inductives —
 
-    Eq   PSigma   Nat   PULiftP
+    Eq   PSigma   PSigma'   Nat   PUnit
 
 — each spliced into the output at Lean's own shape if the input lacks it,
 exactly as the existing prelude splice does for `Eq`. A consumer that
-recognises the four interface names then needs to implement only the four
+recognises the five interface names then needs to implement only the five
 primitives (plus `Quot`), not general inductives — and, if the input reaches
 [`Modelgen.graphArm`], `Nonempty` and the `Classical.choice` axiom beside
 them. `Nonempty` is not a fifth primitive: it is `Classical.choice`'s own
@@ -22,11 +22,11 @@ domain, needs no exemption, and self-models by the Church route.
 **`False` is not in the basis**: it is *derived* (Church `∀ p : Prop, p`,
 with the `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
 transport along — [`Modelgen.cfalseElim`]), so `False` models like any other
-declaration. Its place is taken by **`PULiftP.{u} (p : Prop) : Sort u`**,
-the lift of a proposition to a bare variable sort. Lean's *elaborator*
-refuses that declaration; Lean's *kernel* takes it and grants it large
-elimination by the subsingleton rule, and `addDeclCore` is the kernel. Core
-itself crosses the same line twice, for `PUnit` and `PEmpty`, with
+declaration. Its role is derived from **`PSigma'` and `PUnit`** as
+`PSigma'.{0,u} (fun _ : p => PUnit.{u})`, a lift of a proposition to a bare
+variable sort. Lean's elaborator refuses both exact-sort primitives at their
+polymorphic declarations; Lean's kernel accepts them. Core crosses the same
+line for `PUnit` and `PEmpty`, with
 `set_option bootstrap.inductiveCheckResultingUniverse false`
 (`Init/Prelude.lean:123,211`).
 
@@ -52,7 +52,7 @@ shapes, so `Acc` models like any other declaration now.
 T._model.self p⃗ := Σ'(n : Nat), F n        F : a Nat.rec cases tower
 F ȷ̄  := the j-th constructor's field chain  (right-nested PSigma,
         boxed and padded to exactly Sort w when the levels demand it)
-F n  := PULiftP.{w} ⊥, an empty type at Sort w, for n ≥ #ctors
+F n  := PSigma'.{0,w} ⊥ (fun _ => PUnit.{w}), for n ≥ #ctors
 ```
 
 The recursor destructs the pair, cases on the tag with `Nat.rec` — the large
@@ -60,13 +60,13 @@ elimination the basis buys, and the reason `Nat` is in it — and then
 destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
 
 A linearly recursive declaration with **no base constructor** is empty rather
-than a degenerate case of this tower.  Its carrier is `PULiftP.{w} ⊥`; each
+than a degenerate case of this tower. Its carrier is the derived lift of `⊥`; each
 constructor returns its direct recursive field, and the recursor and ι theorems
 eliminate that empty value.  This is arm E below.
 
 * **A pad** closes a level gap. At a `dsingOk` level it is `D`
   ([`Modelgen.dsingAt`]); at any other level — a bare parameter in the gap,
-  `PULift`'s shape — it is `PULiftP.{ℓ} ⊤` ([`Modelgen.unitAt`]), which
+  `PULift`'s shape — it is the derived lift of `⊤` ([`Modelgen.unitAt`]), which
   exists at *every* level. **Both are definitionally canonical**, in the one
   sense the construction needs: every element is *defeq to the canonical
   one*, because the canonical one is a literal constructor application and
@@ -96,7 +96,7 @@ T._model.self p⃗ ι⃗ := ∀ C : (∀ ι⃗, Prop), k⃗ → C ι⃗
 
 with `k_j` constructor `j`'s telescope, `T p⃗` replaced by `C` at its
 recursive fields as well as at its result ([`Modelgen.churchSwapAt`]); and at
-a maybe-zero sort that same proposition under `PULiftP.{w}`, which puts it at
+a maybe-zero sort that same proposition under the derived tight-pair/PUnit lift, which puts it at
 exactly `Sort w` for any `w`. The constructors are the folds, `up` of the
 folds under a lift. There is **no transport between the two**: structure eta
 gives `t ≡ up (down t)`, so `motive ι⃗ (up (down t))` and `motive ι⃗ t` are
@@ -123,7 +123,7 @@ Three recursors:
   fields together with a packed index equation.  A pivot whose type moves is
   recovered by prefix equations in a left-to-right zipper before the final
   full-telescope equation; otherwise only the non-pivot subsequence is packed.
-  At a maybe-zero sort, that proposition is carried under `PULiftP` and the
+  At a maybe-zero sort, that proposition is carried under the derived lift and the
   same recursor uses `down` before extraction and `up` in its motive.
 
 **Why the maybe-zero collapse is a model and not a cheat.** At a maybe-zero
@@ -131,7 +131,7 @@ sort the contract never forces two provably distinct elements: zero
 constructors and the subsingleton shape large-eliminate and are subsingletons
 anyway, and everything else there small-eliminates, so the motive lands in
 `Prop` and cannot discriminate. The lift of a proposition is exactly the
-right size — which is also why `PEmpty` models: `PULiftP ⊥` is *empty*, where
+right size — which is also why `PEmpty` models: the lift of `⊥` is *empty*, where
 every type the old basis reached at a bare sort was inhabited.
 
 The ordinary tuple and Church routes prove their ι theorems by `Eq.refl`.
@@ -251,7 +251,7 @@ def psigmaDecl : Declaration :=
 
 `PSigma'` differs from Lean's `PSigma` only in its resulting universe:
 `Sort (max u v)`, with no built-in `1`.  The declaration crosses the same
-bootstrap boundary as `PULiftP`: the result may specialize to `Prop`, so Lean's
+bootstrap boundary: the result may specialize to `Prop`, so Lean's
 surface inductive checker refuses it while the kernel accepts the declaration.
 
 Only the inductive and its constructor are primitive.  The named projections
@@ -726,14 +726,13 @@ def symmOf (eqi : EqInfo) (ℓ : Level) (α a b h : Expr) : GenM Expr :=
 
 /-- **Church `False`'s `Sort v` eliminator**, which is what lets `False` leave
 the basis: from `h : ∀ p : Prop, p` take `h (0 = 1) : 0 = 1`, build the family
-`fun n => Nat.rec (fun _ => Sort v) (PULiftP.{v} ⊤) (fun _ _ => C) n` — whose
+`fun n => Nat.rec (fun _ => Sort v) (lift.{v} ⊤) (fun _ _ => C) n` — whose
 value at `0` is an *inhabited* type and at `1` is `C` — and transport the
 inhabitant along the equation.
 
 `Nat`'s large elimination is what makes the family; `Eq`'s is what transports;
-`PULiftP` is what puts an inhabited type at `Sort v` for a **bare** `v`, which
-is exactly the gap the old basis filled with `False` itself. Splice all three
-before calling this. -/
+The tight-pair/PUnit lift puts an inhabited type at `Sort v` for a **bare**
+`v`, exactly the gap the old basis filled with `False` itself. -/
 def cfalseElim (eqi : EqInfo) (v : Level) (C h : Expr) : GenM Expr := do
   let natT : Expr := .const `Nat []
   let unitAt := puliftT v trueP
@@ -754,15 +753,14 @@ def emptyAtElim (eqi : EqInfo) (v w : Level) (C e : Expr) : GenM Expr :=
 `Sort ℓ` for a **bare or variable** `ℓ` is out of every *other* basis former's
 reach — `Eq` and `Acc` land in `Prop`, `Nat` in `Type`, `PSigma` at
 `max 1 u v`, and a Π lands there only through an `imax` collapse, which needs
-a `Sort ℓ`-valued *body*. `PULiftP` is the primitive that lands there
-directly, for **any** `ℓ` whatsoever, and — unlike the `False`-Π family the
-old basis used — it is empty exactly when its proposition is. So there are two
-carriers at such a sort, not one: `PULiftP ⊤` (the singleton, below) and
-`PULiftP ⊥` ([`Modelgen.emptyAt`]), and `PEmpty` is no longer out of reach.
+a `Sort ℓ`-valued *body*. The tight-pair/PUnit composite lands there for
+**any** `ℓ` whatsoever and — unlike the `False`-Π family the old basis used —
+is empty exactly when its proposition is. Thus its lifted `⊤` is the
+singleton below and its lifted `⊥` is [`Modelgen.emptyAt`].
 
 Like [`Modelgen.dsingAt`]'s pads the singleton **is** definitionally
 canonical — *every element is defeq to [`Modelgen.unitAtCanon`]*, by structure
-eta on `PULiftP` against that literal `up` plus proof irrelevance on `⊤` — so
+eta on `PSigma'` and `PUnit` against the literal pair plus proof irrelevance on `⊤` — so
 wherever one is destructed the applied minor already has the target type and
 no transport rides along. This is where the `False`-Π singleton cost a
 `funext`, and it is why the destructor needs no transport at all and ι is
@@ -834,8 +832,8 @@ partial def dsingAt (ℓ : Level) : GenM (Expr × Expr) := do
 no uniqueness proof rides along. **Both families set it**: the
 [`Modelgen.dsingAt`] pad by `PSigma` structure eta and proof irrelevance, and
 the [`Modelgen.unitAt`] lift — used at a level `dsingOk` cannot build, a bare
-parameter in the gap, `PULift`'s shape — by `PULiftP` structure eta against
-the literal `up` that `canon` is. The `false` case is therefore unreached
+parameter in the gap, `PULift`'s shape — by tight-pair and unit structure eta
+against the literal pair that `canon` is. The `false` case is therefore unreached
 today; [`Modelgen.unitAtUniq`] is the transport it would take, and the
 measurement that says so is in that docstring. -/
 structure Pad where
@@ -1599,7 +1597,7 @@ whether its arguments are still visible is a fact about whoever last touched
 the expression. This is the bug that cost the first two attempts.
 
 At a maybe-zero sort, `Self` itself cannot instantiate the pair's `D : Prop`.
-`baseAt` is the Church proposition under `PULiftP`; extracting a recursive
+`baseAt` is the Church proposition under the derived exact-sort lift; extracting a recursive
 element instantiates at that proposition, maps the stored `Self` through
 `down`, and maps the result back through `up`. With no lift, `baseAt = Self`
 and these two boundary maps are identities. -/
@@ -3543,7 +3541,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- **Arm E**: a linearly recursive, non-indexed `Type` with no base
   -- constructor is empty.  The tuple tower below deliberately starts from a
   -- base-constructor fibre, so this shape is not a degenerate tower: its exact
-  -- model is the empty carrier already provided by `PULiftP False`.  Every
+  -- model is the empty carrier already provided by the derived lift of `False`. Every
   -- constructor has one direct recursive field (linearity plus the absence of
   -- a base constructor), hence maps to that field; the recursor and its iota
   -- rules eliminate the same empty value.  Compute the slots here so the
@@ -3561,14 +3559,14 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   let armE := emptySlots.size == nc && nc > 0 && emptySlots.all Option.isSome
 
   -- A one-field singleton at a maybe-zero sort must retain its field.  The
-  -- ordinary Church/PULiftP route records only a proof of inhabitation; at a
+  -- ordinary Church/lift route records only a proof of inhabitation; at a
   -- positive instantiation two constructor payloads then become equal, so no
   -- intrinsic projection can satisfy both constructor rules.
   --
   -- There are exactly two field-preserving cases using the existing basis.
   -- If the field's sort is definitionally the carrier sort, the field itself
-  -- is the carrier (`PI`).  If the field is exactly a proposition, `PULiftP`
-  -- raises it to the carrier sort without forgetting its proof (`PF`).  Test
+  -- is the carrier (`PI`). If the field is exactly a proposition, the derived
+  -- lift raises it to the carrier sort without forgetting its proof (`PF`). Test
   -- identity first: `PI.{0}` has a proposition-valued instantiation, but its
   -- polymorphic field sort is the carrier's `u`, not the constant level zero.
   let directFieldRoute? : Option DirectFieldRoute ←
@@ -3582,7 +3580,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         if ← isLevelDefEq fieldLevel w then return some .identity
         if fieldLevel.normalize.isZero then return some .propLift
         badShape s!"{exportCtors[0]!.1}'s only field inhabits Sort {fieldLevel}, but the \
-          carrier inhabits Sort {w}: neither identity nor PULiftP can retain it"
+          carrier inhabits Sort {w}: neither identity nor the exact-sort lift can retain it"
     else
       pure none
 
@@ -3594,7 +3592,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
 
   -- The indexed subsingleton has a different carrier from the Church routes —
   -- a packed index equation, not a fold — so it branches before them. At a
-  -- maybe-zero sort this proposition is wrapped in `PULiftP`, just like the
+  -- maybe-zero sort this proposition is wrapped in the derived lift, just like the
   -- ordinary Church route; the construction below inserts the matching
   -- `up`/`down` at its boundary.
   -- **Any number of fields.** The arm used to decline above one, because at
@@ -3648,7 +3646,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --   at `Type u`. Ordinarily the public carrier already has that shape. At a
   --   never-zero carrier with no syntactic predecessor, the fallback runs the
   --   core at `Type` and stores that low carrier in a `PSigma` whose second
-  --   component is `PULiftP.{w} True`. The `PSigma` itself lands at the exact
+  --   component is the derived lift of `True`. The `PSigma` itself lands at the exact
   --   public `Sort w`; no cumulative definition conversion is assumed.
   -- * **`isRec`.** A non-recursive declaration has no branching to be stopped
   --   by, so it never reaches here.
@@ -3777,7 +3775,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- At the constrained-lift instantiation the low W lives in `Type` while the
   -- public carrier must live in the literal `Sort w`. `PSigma` supplies that
   -- exact result sort; the second field is a canonical inhabitant of
-  -- `PULiftP.{w} True`, so wrapping and unwrapping reduce by the structure
+  -- the derived lift of `True`, so wrapping and unwrapping reduce by the structure
   -- projection and eta rules and add no axiom.
   -- `⟨j, tel⟩ : B' p⃗ key`, with the branch index as an expression for the same
   -- reason.
@@ -4944,7 +4942,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- further splice. A chain of one field is that field bare (no `PSigma`,
     -- so no built-in `1`); longer chains carry `max 1 ℓ⃗` already. A pad at
     -- `1` closes most gaps and `w` itself covers a deliberately-raised
-    -- carrier — at *any* `w` now, since `PULiftP` exists at every level.
+    -- carrier — at *any* `w` now, since the derived lift exists at every level.
     -- What no pad absorbs is an `imax` in a field's level: those fields are
     -- recursively boxed ([`Modelgen.boxTyOf`]) and the plan is retried on the
     -- boxed levels, whose exposed Π codomains are never-zero `max`es.
@@ -5206,10 +5204,10 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     --
     -- One construction serves both. At `Sort 0` the carrier is the
     -- impredicative Church encoding itself; at a **maybe-zero** sort it is
-    -- that same encoding under `PULiftP`, which puts it at exactly `Sort w`
+    -- that same encoding under the derived lift, which puts it at exactly `Sort w`
     -- for any `w`. The constructors are the folds, `up` of the folds under a
     -- lift. The recursor is the fold at the right `C`, plus — under a lift —
-    -- one transport along [`Modelgen.puliftEta`], because `PULiftP p` is not
+    -- one transport along [`Modelgen.puliftEta`], because the lifted `p` is not
     -- itself a proposition and proof irrelevance no longer closes the
     -- "which element" question by itself.
     --
@@ -5343,7 +5341,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
       let t := bs[bs.size - 1]!
       -- Under a lift the fold runs on `down t`. Its result lands at
       -- `motive ι⃗ (up (down t))`, which *is* `motive ι⃗ t`: structure eta on
-      -- `PULiftP` gives `t ≡ up (down t)`. So there is no transport, and the
+      -- tight-pair/unit eta gives `t ≡ up (down t)`. So there is no transport, and the
       -- two routes differ in exactly the `down` here and the `up` in the
       -- constructors above.
       let body : Expr ←

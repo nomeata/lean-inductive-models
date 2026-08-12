@@ -1,6 +1,6 @@
 /- A proposition-valued field retained at a bare universe, with the input's
-   own `PULiftP` deliberately declared later.  This pins both parameter
-   dependence and the simple-model basis wait. -/
+   own exact standard `PUnit` deliberately declared later.  This pins both
+   parameter dependence and the simple-model basis wait. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false
@@ -13,7 +13,7 @@ inductive Eq : {α : Sort u} → α → α → Prop where
 inductive PFP (p : Prop) : Sort u where
   | mk : p → PFP p
 
-inductive PULiftP.{w} (p : Prop) : Sort w where
-  | up : p → PULiftP p
+inductive PUnit : Sort u where
+  | unit : PUnit
 
---#export Eq PFP PULiftP
+--#export Eq PFP PUnit

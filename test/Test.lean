@@ -271,7 +271,7 @@ def expectedOwn : List Row :=
     -- one type former and one recursor per member, one definition and one ι
     -- theorem per constructor. Each eligible projection adds its definition
     -- and reduction theorem, each metadata role adds one theorem, and the first
-    -- such model may also carry a `PULiftP` support record. Plus Lean's `Eq`
+    -- such model may also carry tight-pair/PUnit support records. Plus Lean's `Eq`
     -- where the input has none.
     --
     -- **Three members everywhere**, because two cannot distinguish an ordering,
@@ -325,7 +325,7 @@ shape of each model (`self + ctors + rec + iotas`, its exact projection and
 metadata roles, plus spliced basis declarations on the first model that needs
 them). **No model splices a
 `funext` or a `Quot.sound` any more**: `PU` cost both while its carrier was
-the `False`-Π singleton. The `PULiftP` carrier's structure eta is definitional;
+the `False`-Π singleton. The derived lift's structure eta is definitional;
 only equality between two opaque lifted inhabitants uses a recursor and proof
 irrelevance in the internal uniqueness helper.
 The role histogram distinguishes those support declarations from the
@@ -386,18 +386,18 @@ def expectedPrim : List Row :=
     -- route emits its six public declarations.
     ("nonindexed_vanishing", [("N", 9), ("Dead", 6)],
       [("Eq", "prim model: a basis primitive")])
-  -- The two small-elimination seams under `PULiftP`. `MI` forces the pair
+  -- The two small-elimination seams under the derived exact-sort lift. `MI` forces the pair
     -- motive at two distinct result indices; `MR.step` forces a recursive
     -- carrier through `down` in the constructor and through `down`/`up` in the
     -- pair's element projection; `MRI` crosses both at a changing child fibre.
     -- Each has six public declarations; the first model in each raw export also
-    -- pays for the `Eq` and `PULiftP` support records.
+    -- pays for the `Eq` and tight-pair/PUnit support records.
   , ("maybe_zero_indexed", [("MI", 8)], [])
   , ("maybe_zero_recursive", [("MRI", 8), ("MR", 6)], [])
   -- Lifted arm F at its minimum: one proof field and one constant result
   -- index. The latter forces the packed equation; the existing one-field
   -- direct-carrier route is index-free. At positive `u`, forgetting the
-  -- `PULiftP` boundary is a kernel type error; at `u = 0`, the same declaration
+  -- exact-sort lift boundary is a kernel type error; at `u = 0`, the same declaration
   -- checks the genuinely propositional end.
   , ("degenerate_graph", [("DG", 9)], [])
   , ("prim_shapes",
@@ -597,7 +597,7 @@ def expectedPrim : List Row :=
   -- parameter, and `Dep` a data tower whose second field depends on its first.
   --
   -- **`Tree` is 218 declarations because it is the first W target in the file**
-  -- and therefore the one that carries `Nat`, `PSigma`, `PULiftP`, and the W
+  -- and therefore the one that carries `Nat`, `PSigma`, `PSigma'`, `PUnit`, and the W
   -- core splice. Every later target carries only its own construction and
   -- exact public feature roles. So the number is a property of *ordering* and
   -- not of `Tree`, and if it

@@ -110,6 +110,12 @@ root = "PSigmaPrimeTest"
 supportInterpreter = true
 
 [[lean_exe]]
+name = "exactsortlifttest"
+srcDir = "test"
+root = "ExactSortLiftTest"
+supportInterpreter = true
+
+[[lean_exe]]
 name = "tightpsigmaprimeroutetest"
 srcDir = "test"
 root = "TightPSigmaPrimeRouteTest"

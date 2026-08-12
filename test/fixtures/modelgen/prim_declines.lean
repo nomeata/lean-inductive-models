@@ -52,7 +52,7 @@
 
    The three variable-sort shapes this file used to carry — an empty
    carrier, a two-constructor carrier and a carrier whose constructor has a
-   field — are **no longer refusals**: `PULiftP` reaches a bare `Sort u`
+   field — are **no longer refusals**: the derived tight-pair/PUnit lift reaches a bare `Sort u`
    with a carrier that can be empty, and they live in `prim_shapes.lean` as
    `PE`, `PM`, `PF`, `PT` and `PI`. `False` is no longer a refusal either;
    it is derived, and models.

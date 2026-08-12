@@ -29,15 +29,15 @@ mutual
 end
 
 -- Deliberately later than the structure block. Projection generation needs
--- this basis lift for unrelated mutual motives and must wait instead of
--- declining or shadow-splicing it.
-inductive PULiftP.{w} (p : Prop) : Sort w where
-  | up : p → PULiftP p
+-- this exact-sort unit for the derived lift of unrelated mutual motives and
+-- must wait instead of declining or shadow-splicing it.
+inductive PUnit : Sort u where
+  | unit : PUnit
 
 def leftValue (α : Type u) (β : α → Type v) (x : MLeft α β) : α := x.value
 
 def rightPayload (α : Type u) (β : α → Type v) (x : MRight α β) : β x.key :=
   x.payload
 
---#export Eq MLeft MLeft.value MRight MRight.key MRight.payload PULiftP
+--#export Eq MLeft MLeft.value MRight MRight.key MRight.payload PUnit
 --#export leftValue rightPayload

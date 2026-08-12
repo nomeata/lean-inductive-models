@@ -213,7 +213,8 @@ def main : IO UInt32 := do
   -- A maybe-zero singleton cannot use the ordinary Church carrier: it forgets
   -- which payload constructed it, while an intrinsic projection retains that
   -- payload at positive instantiations.  `PI` uses its exact-sort field as the
-  -- carrier; `PF` lifts its exactly proposition-valued field with `PULiftP`.
+  -- carrier; `PF` lifts its exactly proposition-valued field with the derived
+  -- tight-pair/PUnit construction.
   let primRaw ← readExport "test/fixtures/modelgen/prim_shapes.ndjson"
   let (primDeclarations, primReport) ← runExport primRaw
   let primGenerated := outputExport primRaw primDeclarations
@@ -231,13 +232,19 @@ def main : IO UInt32 := do
       !primReport.declined.any (·.1 == `PF) && pfSlots.all primNames.contains
   state := state.check "proposition-field singleton interface is exact" <|
     (Check.check primGenerated).all (·.familyOwner != `PF)
-  state := state.check "proposition-field model uses the existing lift basis" <|
-    (definitionValue? primGenerated (Naming.modelName `PF)).any (containsConst `PULiftP) &&
+  state := state.check "proposition-field model uses only the derived exact-sort lift" <|
+    (definitionValue? primGenerated (Naming.modelName `PF)).any (containsConst `PSigma') &&
+    (definitionValue? primGenerated (Naming.modelName `PF)).any (containsConst `PUnit) &&
     (definitionValue? primGenerated (Naming.modelName `PF.mk)).any
-      (containsConst `PULiftP.up) &&
+      (containsConst `PSigma'.mk) &&
+    (definitionValue? primGenerated (Naming.modelName `PF.mk)).any
+      (containsConst `PUnit.unit) &&
     (definitionValue? primGenerated (Naming.modelName `PF.rec)).any
-      (containsConst `PULiftP.rec) &&
-    (definitionValue? primGenerated pfProjection).any (containsConst `PULiftP.rec)
+      (containsConst `PSigma'.rec') &&
+    (definitionValue? primGenerated pfProjection).any (containsConst `PSigma'.fst) &&
+    pfSlots.all fun name => (declaration? primGenerated name).all fun declaration =>
+      let used := declarationNames declaration
+      !used.contains `PULiftP && !used.contains `PULiftP.up && !used.contains `PULiftP.rec
   state := state.check "proposition-field projection iota is literal and uncast" <|
     (declarationType? primGenerated pfRule).any fun type => !containsConst ``Eq.rec type
   state := state.check "variable-sort singleton retains its intrinsic field" <|
@@ -251,8 +258,8 @@ def main : IO UInt32 := do
       !containsConst `PI.rec._model value
   state := state.check "exact-sort singleton remains the identity route" <|
     piDefinitions.all fun name => (definitionValue? primGenerated name).any fun value =>
-      !containsConst `PULiftP value && !containsConst `PULiftP.up value &&
-        !containsConst `PULiftP.rec value
+      !containsConst `PSigma' value && !containsConst `PUnit value &&
+        !containsConst `PULiftP value
 
   -- A recursive Type with no base constructor is empty, including when arm C
   -- obtains it as the erasure skeleton of an indexed family.  `NoBase` checks
@@ -273,12 +280,12 @@ def main : IO UInt32 := do
   state := state.check "no-base interfaces satisfy the exact public checker" <|
     (Check.check noBaseOrdered).all fun violation =>
       violation.familyOwner != `NoBase && violation.familyOwner != noBaseSkel
-  state := state.check "no-base skeleton uses the exact empty lift carrier" <|
-    (definitionValue? noBaseGenerated (Naming.modelName noBaseSkel)).any
-      (containsConst `PULiftP)
-  state := state.check "no-base recursor eliminates the empty lift" <|
+  state := state.check "no-base skeleton uses the derived exact empty carrier" <|
+    (definitionValue? noBaseGenerated (Naming.modelName noBaseSkel)).any fun value =>
+      containsConst `PSigma' value && containsConst `PUnit value && !containsConst `PULiftP value
+  state := state.check "no-base recursor eliminates the derived empty lift" <|
     (definitionValue? noBaseGenerated (Naming.modelName (Name.str noBaseSkel "rec"))).any
-      (containsConst `PULiftP.rec)
+      fun value => containsConst `PSigma'.rec' value && !containsConst `PULiftP.rec value
 
   -- `Fmid` and the original `FChain` keep the one-pivot path pinned in the
   -- broad index-axis fixture.
@@ -350,7 +357,7 @@ def main : IO UInt32 := do
       (definitionValue? zipGenerated (Naming.modelName recursor)).any (containsConst ``Eq.rec)
 
   -- The parameter-dependent proposition field takes the same route.  Its
-  -- source owner precedes the input's own lift declaration, so generation has
+  -- source owner precedes the input's own `PUnit` declaration, so generation has
   -- to wait, use that declaration, and let the stable order pass place the
   -- complete interface back before its owner.
   let pfpRaw ← readExport "test/fixtures/modelgen/tight_prop_field_late.ndjson"
@@ -363,13 +370,14 @@ def main : IO UInt32 := do
   let pfpNames := pfpDeclarations.flatMap (·.names.toArray)
   let pfpOrdered ← match Order.reorder pfpGenerated with
     | .ok output => pure output
-    | .error error => throw <| IO.userError s!"cannot order late-PULift fixture: {repr error}"
-  state := state.check "parameterized proposition-field fixture has a late lift" <|
+    | .error error => throw <| IO.userError s!"cannot order late-PUnit fixture: {repr error}"
+  state := state.check "parameterized proposition-field fixture has a late PUnit" <|
     (declarationIndex? pfpRaw `PFP).any fun owner =>
-      (declarationIndex? pfpRaw `PULiftP).any (owner < ·)
-  state := state.check "parameterized proposition field waits for the input lift" <|
+      (declarationIndex? pfpRaw `PUnit).any (owner < ·)
+  state := state.check "parameterized proposition field waits for the input PUnit" <|
     pfpReport.generated.any (·.1 == `PFP) && !pfpReport.declined.any (·.1 == `PFP) &&
-      pfpSlots.all pfpNames.contains
+      pfpSlots.all pfpNames.contains && !pfpReport.spliced.any fun (_, names) =>
+        names.contains `PUnit
   state := state.check "ordered late-lift projection interface is exact" <|
     (Check.check pfpOrdered).all (·.familyOwner != `PFP)
 
@@ -559,9 +567,9 @@ def main : IO UInt32 := do
   let rightKeyProjection := Naming.projectionName `MRight 0
   let rightPayloadProjection := Naming.projectionName `MRight 1
   let rightPayloadRule := Naming.projectionIotaName `MRight 1
-  state := state.check "mutual projection fixture declares PULiftP after its owner" <|
+  state := state.check "mutual projection fixture declares PUnit after its owner" <|
     (declarationIndex? mutualRaw `MLeft).any fun owner =>
-      (declarationIndex? mutualRaw `PULiftP).any (owner < ·)
+      (declarationIndex? mutualRaw `PUnit).any (owner < ·)
   unless mutualReport.generated.any (·.1 == `MLeft) do
     IO.eprintln s!"mutual projection generation declined: {mutualReport.declined}"
     for error in mutualReport.stmtErrors do

@@ -228,7 +228,8 @@ def run (root : String) : IO UInt32 := do
   state := state.check "replay environment retains source and shared support only" <|
     simpleEnv.constants.contains `Tri &&
       !simpleEnv.constants.contains (Naming.modelName `Tri) &&
-      [`Eq, `Nat, `PSigma, `PULiftP].all simpleEnv.constants.contains
+      [`Eq, `Nat, `PSigma, `PSigma', `PUnit].all simpleEnv.constants.contains &&
+        !simpleEnv.constants.contains `PULiftP
   let svType := declarationType? simple' `Sv
   let svModelType := declarationType? simple' (Naming.modelName `Sv)
   state := state.check "Sv model preserves its literal declared type" <|

@@ -1394,7 +1394,7 @@ was **unable to model anything it introduced**, and no coverage figure could
 show it, because a spliced declaration was never a candidate to begin with.
 Earlier coverage figures therefore measured only declarations from the input.
 
-Only *non-basis* splices are modelled: the four on
+Only *non-basis* splices are modelled: the five on
 [`Modelgen.primBasis`] are the exemption that makes the construction
 well-founded and must stay unmodelled. That is also what bounds the recursion
 — a model's own splices are basis members or already present.

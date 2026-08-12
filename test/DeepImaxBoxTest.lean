@@ -156,7 +156,7 @@ def main : IO UInt32 := do
 
   -- `max 1 u` is positive but has no syntactic predecessor. Arm W therefore
   -- builds its core in `Type` and exposes it at the literal public sort through
-  -- the four-primitive constrained lift `PSigma low (fun _ => PULiftP True)`.
+  -- the constrained lift `PSigma low (fun _ => PSigma' True (fun _ => PUnit))`.
   let maxRaw ← readExport "test/fixtures/modelgen/w_max.ndjson"
   let (maxGenerated, maxReport, _) ← runExport maxRaw
   let maxModel := Naming.modelName `WMax
@@ -165,9 +165,10 @@ def main : IO UInt32 := do
       !maxReport.declined.any (·.1 == `WMax)
   state := state.check "predecessor-free W keeps its exact recursor statements" <|
     maxReport.stmtChecked == 67 && maxReport.stmtErrors.isEmpty
-  state := state.check "predecessor-free W carrier uses the constrained basis lift" <|
+  state := state.check "predecessor-free W carrier uses the derived constrained lift" <|
     (declarationValue? maxGenerated maxModel).any fun value =>
-      containsConst `PSigma value && containsConst `PULiftP value
+      containsConst `PSigma value && containsConst `PSigma' value &&
+        containsConst `PUnit value && !containsConst `PULiftP value
   let maxOutputCheck := Check.checkReport maxGenerated
   let maxSerialized ← match parse maxGenerated.render (analyse := false) with
     | .ok output => pure output
