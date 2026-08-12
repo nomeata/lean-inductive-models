@@ -1847,10 +1847,13 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         -- restored, and there is nothing else to read them off.
         if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 then
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
-          unless primBasis.contains t.name do
-            unless ← primReady reserved do
-              throwError "simple model basis remained late after support scheduling for {t.name}: \
-                {repr (← primMissingBasis reserved)}"
+          -- Ask the selected route, rather than requiring the whole basis in
+          -- advance. A reusable non-basis support declaration such as
+          -- `Nonempty` may itself precede an independent input-owned
+          -- `PSigma`, while its Church model does not mention `PSigma` at all.
+          -- Any route that actually reaches a late splice still returns its
+          -- exact readiness class below; fixed basis consumers are hoisted by
+          -- `scheduledSupportRecord` before ordinary owners.
           let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
             #[] reserved generation.basic true (out, rep, pending)
           if wait?.isSome then

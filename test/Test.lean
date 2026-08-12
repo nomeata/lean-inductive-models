@@ -778,6 +778,13 @@ def runOne (root : String) (a : TAcc) (r : Row)
   -- axis 1: the counts, in order
   let got := rep.generated.toList.map fun (n, k) => (n.toString, k)
   a := check a (got == want) s!"{name}: models are {got}, expected {want}"
+  if name == "prim_graph_pre" then
+    let nonemptyIndex := x.decls.findIdx? (·.names.contains `Nonempty)
+    let psigmaIndex := x.decls.findIdx? (·.names.contains `PSigma)
+    a := check a
+      (nonemptyIndex.any fun nonempty =>
+        psigmaIndex.any fun psigma => nonempty < psigma && rep.generated.any (·.1 == `Nonempty))
+      "prim_graph_pre: support Nonempty before independent PSigma did not model"
   -- **Exempt then declined.** The basis primitives are their own row in the
   -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a
