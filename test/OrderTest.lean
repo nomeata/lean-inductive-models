@@ -178,7 +178,14 @@ def witnessedFixedSupportRecords (run : FilterRun) : Array EDecl :=
   run.output.decls.filter (fun declaration =>
       declaration.names.any witnessed.contains &&
         (declaration.names.any persistentSupportRoot ||
-          declaration.names.all persistentSupportName))
+          declaration.names.all persistentSupportName ||
+          -- One kernel `quotDecl` is four exact export records. Replaying the
+          -- witnessed `Quot` record atomically installs the other three, so the
+          -- census must classify the complete checked bundle as fixed even
+          -- though only its first record independently names a support root.
+          (witnessed.contains `Quot && match declaration with
+            | .quot name .. => [`Quot, `Quot.mk, `Quot.lift, `Quot.ind].contains name
+            | _ => false)))
 
 def witnessedFixedSupportNames (run : FilterRun) : Array Name :=
   (witnessedFixedSupportRecords run).flatMap fun declaration => declaration.names.toArray
