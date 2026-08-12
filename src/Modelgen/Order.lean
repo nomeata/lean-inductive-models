@@ -1,7 +1,6 @@
 import Modelgen.Check
 import Std.Data.TreeSet.Basic
 import Lean.Util.PtrSet
-import Lean.Util.SCC
 
 /-!
 # Stable record-level dependency ordering
@@ -166,16 +165,29 @@ def recordOrder (x : Export) : Except Error (Array Nat) := do
         if degree == 0 then ready := ready.insert after
   unless order.size == n do
     let blocked := (Array.range n).filter fun i => indegree[i]! > 0
-    -- Kahn's residual contains both the cycle and every node blocked behind it.
-    -- Report one actual strongly connected component; on a full export the
-    -- distinction is the difference between a useful two-or-three-record
-    -- diagnostic and tens of thousands of unrelated downstream records.
-    let components := Lean.SCC.scc blocked.toList fun before =>
-      outgoing[before]!.toList.filter fun after => indegree[after]! > 0
-    let component := (components.find? fun records => records.length > 1).getD blocked.toList
-    let records := component.toArray.qsort (· < ·)
-    let declarations := records.map fun i => x.decls[i]!.names.toArray
-    throw (.cycle records declarations)
+    -- Kahn's residual contains both the cycle and every node blocked behind
+    -- it. Every residual node has a residual predecessor. Select one in a
+    -- single edge scan, then follow predecessors: finiteness guarantees that
+    -- the path enters an actual cycle. This stays linear on a full Mathlib
+    -- export, where a generic hash-map Tarjan traversal is itself expensive.
+    let mut predecessor : Array (Option Nat) := Array.replicate n none
+    for before in blocked do
+      for after in outgoing[before]! do
+        if indegree[after]! > 0 && predecessor[after]!.isNone then
+          predecessor := predecessor.set! after (some before)
+    let mut path : Array Nat := #[]
+    let mut position : Std.HashMap Nat Nat := {}
+    let mut current := blocked[0]!
+    repeat
+      if let some start := position[current]? then
+        let records := (path.extract start path.size).qsort (· < ·)
+        let declarations := records.map fun i => x.decls[i]!.names.toArray
+        throw (.cycle records declarations)
+      position := position.insert current path.size
+      path := path.push current
+      let some before := predecessor[current]!
+        | throw (.cycle blocked (blocked.map fun i => x.decls[i]!.names.toArray))
+      current := before
   return order
 
 /-- Reorder declaration records, preserving export metadata and expression
