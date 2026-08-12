@@ -32,15 +32,28 @@ def exitRejected : UInt32 := 1
 def exitDeclined : UInt32 := 2
 def exitToolError : UInt32 := 3
 
+/-- Copy a file to an output stream without retaining it in memory. -/
+partial def copyFileTo (source : String) (target : IO.FS.Stream) : IO Unit := do
+  IO.FS.withFile source .read fun handle =>
+    let rec copy : IO Unit := do
+      let chunk ← handle.read (4 * 1024 * 1024)
+      unless chunk.isEmpty do
+        target.write chunk
+        copy
+    copy
+
 /-- Write an export to stdout or a file.  When no pass changed the export,
-`verbatim` preserves the input bytes exactly. -/
+`verbatim` names the input file whose bytes are copied exactly and in bounded
+memory.  A literal in-place no-op is already the desired result; opening the
+target for writing first would truncate it. -/
 def writeExport (target : String) (verbatim : Option String) (x : Export) : IO Unit := do
+  if verbatim == some target then return
   let stream ← if target == "-" then
       IO.getStdout
     else
       pure (IO.FS.Stream.ofHandle (← IO.FS.Handle.mk target .write))
   match verbatim with
-  | some text => stream.putStr text
+  | some source => copyFileTo source stream
   | none => x.writeTo stream
   stream.flush
 
@@ -131,16 +144,20 @@ def generationEnabled (config : Modelgen.Cli.Config) : Bool :=
 
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   let input := config.input.getD ""
-  let text? ← try
+  let parsed? ← try
       if input == "-" then
-        pure (some (← (← IO.getStdin).readToEnd))
+        let stdin ← IO.getStdin
+        let result ← Modelgen.parseStream stdin (analyse := config.monoLevels)
+        pure (some result)
       else
-        pure (some (← IO.FS.readFile input))
+        IO.FS.withFile input .read fun handle => do
+          let result ← Modelgen.parseHandle handle (analyse := config.monoLevels)
+          pure (some result)
     catch error =>
       IO.eprintln s!"{input}: {error}"
       pure none
-  let some text := text? | return exitToolError
-  let parsed ← match Modelgen.parse text (analyse := config.monoLevels) with
+  let some parsedResult := parsed? | return exitToolError
+  let parsed ← match parsedResult with
     | .error error =>
         IO.eprintln s!"{input}: parse error: {error}"
         return exitToolError
@@ -258,7 +275,8 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   if config.output then
     let unchanged := !config.monoLevels && finalExport.decls == parsed.decls
     try
-      writeExport config.outputTarget (if unchanged then some text else none) finalExport
+      let verbatim := if unchanged && input != "-" then some input else none
+      writeExport config.outputTarget verbatim finalExport
     catch error =>
       IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
       return exitToolError
