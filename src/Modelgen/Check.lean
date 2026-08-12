@@ -33,8 +33,9 @@ The implemented invariants are:
 
 The second walk covers both names held directly in export records and names in
 expressions.  In expressions it treats both `Expr.const` and the `typeName`
-field of `Expr.proj` as references.  It never unfolds or asks for definitional
-equality.
+field of `Expr.proj` as references. Literal comparisons never ask for
+definitional equality; the few kernel-visible sort observations use only the
+bounded export-syntax normalizer from `Modelgen.Format`.
 -/
 
 open Lean
@@ -287,50 +288,6 @@ def ruleKProposition? (x : Export) (ownerDecl : Nat) (recursorName : Name) :
     { name := `major, type := majorType, info := .default, value := arbitrary }
   return (levelParams, closeForalls (pre.push majorBinder) result)
 
-/- Reduce only transparent exported former aliases.  This is the syntactic
-counterpart of the kernel's Prop test on a structure-like member. -/
-private partial def formerWhnf (x : Export) (expression : Expr)
-    (seen : Std.HashSet Name := {}) : Expr :=
-  match expression with
-  | .mdata _ body => formerWhnf x body seen
-  | .letE _ _ value body _ => formerWhnf x (body.instantiate1 value) seen
-  | .app .. =>
-    let reduced := expression.headBeta
-    if reduced != expression then formerWhnf x reduced seen
-    else match expression.getAppFn with
-      | .const name levels =>
-        if seen.contains name then expression
-        else
-          let value? := x.decls.findSome? fun declaration => match declaration with
-            | .defn n levelParams _ value .. =>
-              if n == name && levelParams.length == levels.length then
-                some (value.instantiateLevelParams levelParams levels)
-              else none
-            | _ => none
-          match value? with
-          | some value => formerWhnf x (mkAppN value expression.getAppArgs) (seen.insert name)
-          | none => expression
-      | _ => expression
-  | .const name levels =>
-    if seen.contains name then expression
-    else
-      let value? := x.decls.findSome? fun declaration => match declaration with
-        | .defn n levelParams _ value .. =>
-          if n == name && levelParams.length == levels.length then
-            some (value.instantiateLevelParams levelParams levels)
-          else none
-        | _ => none
-      match value? with
-      | some value => formerWhnf x value (seen.insert name)
-      | none => expression
-  | _ => expression
-
-private partial def isPropositionFormer (x : Export) (type : Expr) : Bool :=
-  match formerWhnf x type with
-  | .forallE _ _ body _ => isPropositionFormer x body
-  | .sort .zero => true
-  | _ => false
-
 /-- The correspondence table determined by an inductive record, independent
 of whether any model declarations are present. -/
 def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := do
@@ -351,7 +308,8 @@ def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := 
   let ruleKMetadata := recursorRecords.filterMap fun recursor =>
     if recursor.k then some (Naming.Metadata.ofOwner .ruleK recursor.name) else none
   let etaMetadata := types.toArray.filterMap fun type =>
-    if type.isKernelStructureLike ctors && !isPropositionFormer x type.type then
+    if type.isKernelStructureLike ctors &&
+        !x.exactNormalizationEnv.isPropositionFormer type.type then
       some (Naming.Metadata.ofOwner .eta type.name)
     else none
   let mut projections : Array Naming.Projection := #[]
@@ -703,7 +661,7 @@ private def checkEta (x : Export) (family : Family) (declarations : DeclarationT
       candidate.name == constructorName && candidate.induct == metadata.owner
     | return #[.declarationType metadata.owner metadata.name]
   unless ownerType.isKernelStructureLike constructors &&
-      !isPropositionFormer x ownerType.type do
+      !x.exactNormalizationEnv.isPropositionFormer ownerType.type do
     return #[.declarationType metadata.owner metadata.name]
   if ownerType.levelParams.length != model.levelParams.length then
     return #[.universeArity metadata.owner metadata.name
@@ -722,7 +680,7 @@ private def checkEta (x : Export) (family : Family) (declarations : DeclarationT
   unless parameterBinders.size == ownerType.numParams && ownerType.numIndices == 0 do
     return #[.declarationType metadata.owner metadata.name]
   let params := parameterBinders.map fun binder => binder.value
-  let .sort carrierLevel := formerWhnf x ownerResult
+  let .sort carrierLevel := x.exactNormalizationEnv.whnf ownerResult
     | return #[.declarationType metadata.owner metadata.name]
   let carrier := mkAppN (.const typePair.model levels) params
   let selfValue := mkFVar (FVarId.mk
@@ -756,11 +714,6 @@ private abbrev ExactLocals := Array (FVarId × Expr)
 private def ExactLocals.typeOf? (locals : ExactLocals) (id : FVarId) : Option Expr :=
   (locals.find? (·.1 == id)).map (·.2)
 
-private partial def exactWhnf : Expr → Expr
-  | .mdata _ body => exactWhnf body
-  | .letE _ _ value body _ => exactWhnf (body.instantiate1 value)
-  | expression => expression
-
 private def structureOwner? (x : Export) (owner : Name) : Option (EIndType × List ECtor) :=
   x.decls.findSome? fun declaration => match declaration with
     | .induct types constructors _ =>
@@ -770,10 +723,12 @@ private def structureOwner? (x : Export) (owner : Name) : Option (EIndType × Li
 mutual
 
 /-- A deliberately small, exact type synthesizer for the result of an
-exported projection declaration.  It never unfolds a definition: declaration
-types and local binder types suffice to expose the result sort, while the
-projection case follows the exact recovered primitive projection interface. -/
-private partial def inferExactType? (x : Export) (declarations : DeclarationTypes)
+exported projection declaration. Declaration and local binder types suffice;
+when their head is hidden, it unfolds only transparent definitions in the
+export syntax. The projection case follows the exact recovered primitive
+projection interface. -/
+private partial def inferExactType? (x : Export) (normalizer : ExactNormalizationEnv)
+    (declarations : DeclarationTypes)
     (locals : ExactLocals) : Expr → Option Expr
   | .sort level => some (.sort (.succ level))
   | .fvar id => locals.typeOf? id
@@ -782,27 +737,29 @@ private partial def inferExactType? (x : Export) (declarations : DeclarationType
       if declaration.levelParams.length != levels.length then none
       return declaration.type.instantiateLevelParams declaration.levelParams levels
   | .app function argument => do
-      let functionType := exactWhnf (← inferExactType? x declarations locals function)
+      let functionType := normalizer.whnf
+        (← inferExactType? x normalizer declarations locals function)
       let .forallE _ _ body _ := functionType | none
       return body.instantiate1 argument
   | .lam name domain body info => do
       let value := mkFVar (FVarId.mk ((`_check.exactLam).mkNum locals.size))
-      let bodyType ← inferExactType? x declarations
+      let bodyType ← inferExactType? x normalizer declarations
         (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
       return .forallE name domain (bodyType.abstract #[value]) info
   | .forallE name domain body info => do
-      let domainLevel ← inferExactSortLevel? x declarations locals domain
+      let domainLevel ← inferExactSortLevel? x normalizer declarations locals domain
       let value := mkFVar (FVarId.mk ((`_check.exactPi).mkNum locals.size))
-      let bodyLevel ← inferExactSortLevel? x declarations
+      let bodyLevel ← inferExactSortLevel? x normalizer declarations
         (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
       let _ := name
       let _ := info
       return .sort (Level.imax domainLevel bodyLevel).normalize
   | .letE _ _ value body _ =>
-      inferExactType? x declarations locals (body.instantiate1 value)
-  | .mdata _ body => inferExactType? x declarations locals body
+      inferExactType? x normalizer declarations locals (body.instantiate1 value)
+  | .mdata _ body => inferExactType? x normalizer declarations locals body
   | .proj owner fieldIndex struct => do
-      let structType := exactWhnf (← inferExactType? x declarations locals struct)
+      let structType := normalizer.whnf
+        (← inferExactType? x normalizer declarations locals struct)
       let .const structOwner levels := structType.getAppFn | none
       unless structOwner == owner do none
       let (type, constructors) ← structureOwner? x owner
@@ -826,9 +783,11 @@ private partial def inferExactType? (x : Export) (declarations : DeclarationType
   | .lit (.strVal _) => some (.const ``String [])
   | .bvar _ | .mvar _ => none
 
-private partial def inferExactSortLevel? (x : Export) (declarations : DeclarationTypes)
+private partial def inferExactSortLevel? (x : Export) (normalizer : ExactNormalizationEnv)
+    (declarations : DeclarationTypes)
     (locals : ExactLocals) (expression : Expr) : Option Level := do
-  let .sort level := exactWhnf (← inferExactType? x declarations locals expression) | none
+  let .sort level := normalizer.whnf
+    (← inferExactType? x normalizer declarations locals expression) | none
   return level
 
 end
@@ -841,6 +800,7 @@ fields in a dependent result become applications of the corresponding earlier
 intrinsic projections. -/
 private def checkProjection (x : Export) (family : Family) (declarations : DeclarationTypes)
     (projection : Naming.Projection) : Array Violation := Id.run do
+  let normalizer := x.exactNormalizationEnv
   let projectionModels := declarations.getD projection.name #[]
   if projectionModels.isEmpty then
     return #[.missingPublic projection.owner projection.name]
@@ -874,6 +834,12 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
     constructor.levelParams model.levelParams constructor.type
   let (constructorBinders, constructorResult) : Array OpenBinder × Expr := openForalls
     ((`_check.intrinsicProjectionCtor).append projection.name) mappedConstructorType
+  -- Kernel insertion β-normalizes a head application in a constructor-local
+  -- binder type. Mirror exactly that step for the theorem's outer binders, but
+  -- retain written `let`s and named model constants so the public statement
+  -- remains literal. The unnormalized binders below still drive the RHS.
+  let theoremBinders := constructorBinders.map fun binder =>
+    { binder with type := normalizer.beta binder.type }
   unless constructorBinders.size == constructor.numParams + constructor.numFields do
     return #[.declarationType projection.owner projection.name]
   let constructorArgs := constructorBinders.map fun (binder : OpenBinder) => binder.value
@@ -939,7 +905,7 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
       | return violations.push (.declarationType projection.owner projection.iota)
     let some sourceFieldAtIndex := sourceBinders[constructor.numParams + index]?
       | return violations.push (.declarationType projection.owner projection.iota)
-    let some sourceLevel := inferExactSortLevel? x declarations sourceLocals
+    let some sourceLevel := inferExactSortLevel? x normalizer declarations sourceLocals
         sourceFieldAtIndex.type
       | return violations.push (.declarationType projection.owner projection.iota)
     let level := sourceLevel.instantiateParams constructor.levelParams
@@ -958,12 +924,13 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
   let .ok rhs := ProjectionField.normalizeProjectionField eqi projection.name
       normalizedFields projection.fieldIndex
     | return violations.push (.declarationType projection.owner projection.iota)
-  let some sourceEqLevel := inferExactSortLevel? x declarations sourceLocals sourceField.type
+  let some sourceEqLevel :=
+      inferExactSortLevel? x normalizer declarations sourceLocals sourceField.type
     | return violations.push (.declarationType projection.owner projection.iota)
   let eqLevel := sourceEqLevel.instantiateParams constructor.levelParams
     (model.levelParams.map Level.param)
   let expectedBody := mkAppN (.const ``Eq [eqLevel]) #[alpha, lhs, rhs]
-  let expected := closeForalls constructorBinders expectedBody
+  let expected := closeForalls theoremBinders expectedBody
   unless ruleModel.type == expected do
     violations := violations.push (.declarationType projection.owner projection.iota)
   return violations
@@ -1074,7 +1041,7 @@ private def checkFamilies (x : Export) (families : Array Family)
         unless (declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .unitlike)
       unless type.isKernelStructureLike constructors &&
-          !isPropositionFormer x type.type do
+          !x.exactNormalizationEnv.isPropositionFormer type.type do
         let name := Naming.etaName type.name
         unless (declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .eta)

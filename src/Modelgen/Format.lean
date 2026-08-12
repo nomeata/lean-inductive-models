@@ -342,6 +342,89 @@ the kernel's `infer_proj`, expressed over export records so generation,
 checking, and monomorphization enumerate the same slots without consulting a
 named projection wrapper. -/
 
+/-- One transparent definition available to the format-only normalizer. -/
+structure ExactNormalizationDef where
+  levelParams : List Name
+  value : Expr
+
+/-- The deliberately bounded environment used for exact export-syntax
+normalization.  It contains only values of transparent `defn` records from the
+export: opaque declarations, theorems, and any ambient kernel environment are
+invisible. -/
+structure ExactNormalizationEnv where
+  definitions : Std.HashMap Name ExactNormalizationDef
+
+/-- Build the exact normalizer's environment from export records alone.
+Keeping the first occurrence agrees with the other format prepasses and makes
+malformed duplicate-name input deterministic. -/
+def Export.exactNormalizationEnv (x : Export) : ExactNormalizationEnv := Id.run do
+  let mut definitions : Std.HashMap Name ExactNormalizationDef := {}
+  for declaration in x.decls do
+    if let .defn name levelParams _ value .. := declaration then
+      unless definitions.contains name do
+        definitions := definitions.insert name { levelParams, value }
+  return { definitions }
+
+private partial def ExactNormalizationEnv.whnfCore (env : ExactNormalizationEnv)
+    (expression : Expr) (reduceLets unfoldDefinitions : Bool)
+    (seen : Std.HashSet Name) : Expr :=
+  match expression with
+  | .mdata _ body => env.whnfCore body reduceLets unfoldDefinitions seen
+  | .letE _ _ value body _ => if reduceLets then
+      env.whnfCore (body.instantiate1 value) true unfoldDefinitions seen
+    else expression
+  | .app .. =>
+    let reduced := expression.headBeta
+    if reduced != expression then env.whnfCore reduced reduceLets unfoldDefinitions seen
+    else if !unfoldDefinitions then expression
+    else match expression.getAppFn with
+      | .const name levels =>
+        if seen.contains name then expression
+        else match env.definitions[name]? with
+          | some definition =>
+            if definition.levelParams.length == levels.length then
+              let value := definition.value.instantiateLevelParams definition.levelParams levels
+              env.whnfCore (mkAppN value expression.getAppArgs) reduceLets true
+                (seen.insert name)
+            else expression
+          | none => expression
+      | _ => expression
+  | .const name levels =>
+    if !unfoldDefinitions || seen.contains name then expression
+    else match env.definitions[name]? with
+      | some definition =>
+        if definition.levelParams.length == levels.length then
+          env.whnfCore (definition.value.instantiateLevelParams definition.levelParams levels)
+            reduceLets true (seen.insert name)
+        else expression
+      | none => expression
+  | _ => expression
+
+/-- Weak-head normalize using only β, ζ, metadata erasure, and transparent
+named definitions present in this export.  `seen` is the recursion guard for
+self-recursive definitions and cycles of transparent aliases.  Public
+declaration expressions are never rewritten in place; this operation is only
+an exact observation used while reconstructing kernel-visible interfaces. -/
+def ExactNormalizationEnv.whnf (env : ExactNormalizationEnv) (expression : Expr) : Expr :=
+  env.whnfCore expression true true {}
+
+/-- The β-only face of the same bounded normalizer.  Projection theorem
+telescopes use it where kernel insertion has reduced a head application in a
+local binder type while retaining both a written `let` and named public model
+constants literally. -/
+def ExactNormalizationEnv.beta (env : ExactNormalizationEnv) (expression : Expr) : Expr :=
+  env.whnfCore expression false false {}
+
+/-- Whether an exported former ends in `Prop` after exact syntax-only
+normalization.  Π binders remain part of the former; only their final codomain
+decides propositionhood. -/
+partial def ExactNormalizationEnv.isPropositionFormer
+    (env : ExactNormalizationEnv) (expression : Expr) : Bool :=
+  match env.whnf expression with
+  | .forallE _ _ body _ => env.isPropositionFormer body
+  | .sort .zero => true
+  | _ => false
+
 private structure ExactDeclType where
   levelParams : List Name
   type : Expr
@@ -374,11 +457,6 @@ private def exactDeclarationTypes (x : Export) : ExactDeclarationTypes := Id.run
 private def ExactLocals.typeOf? (locals : ExactLocals) (id : FVarId) : Option Expr :=
   (locals.find? (·.1 == id)).map (·.2)
 
-private partial def exactWhnf : Expr → Expr
-  | .mdata _ body => exactWhnf body
-  | .letE _ _ value body _ => exactWhnf (body.instantiate1 value)
-  | expression => expression
-
 private def structureOwner? (x : Export) (owner : Name) : Option (EIndType × List ECtor) :=
   x.decls.findSome? fun declaration => match declaration with
     | .induct types constructors _ =>
@@ -387,7 +465,8 @@ private def structureOwner? (x : Export) (owner : Name) : Option (EIndType × Li
 
 mutual
 
-private partial def inferExactType? (x : Export) (declarations : ExactDeclarationTypes)
+private partial def inferExactType? (x : Export) (normalizer : ExactNormalizationEnv)
+    (declarations : ExactDeclarationTypes)
     (locals : ExactLocals) : Expr → Option Expr
   | .sort level => some (.sort (.succ level))
   | .fvar id => locals.typeOf? id
@@ -396,24 +475,27 @@ private partial def inferExactType? (x : Export) (declarations : ExactDeclaratio
       unless declaration.levelParams.length == levels.length do none
       return declaration.type.instantiateLevelParams declaration.levelParams levels
   | .app function argument => do
-      let functionType := exactWhnf (← inferExactType? x declarations locals function)
+      let functionType := normalizer.whnf
+        (← inferExactType? x normalizer declarations locals function)
       let .forallE _ _ body _ := functionType | none
       return body.instantiate1 argument
   | .lam name domain body info => do
       let value := mkFVar (FVarId.mk ((`_format.exactLam).mkNum locals.size))
-      let bodyType ← inferExactType? x declarations
+      let bodyType ← inferExactType? x normalizer declarations
         (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
       return .forallE name domain (bodyType.abstract #[value]) info
   | .forallE _ domain body _ => do
-      let domainLevel ← inferExactSortLevel? x declarations locals domain
+      let domainLevel ← inferExactSortLevel? x normalizer declarations locals domain
       let value := mkFVar (FVarId.mk ((`_format.exactPi).mkNum locals.size))
-      let bodyLevel ← inferExactSortLevel? x declarations
+      let bodyLevel ← inferExactSortLevel? x normalizer declarations
         (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
       return .sort (Level.imax domainLevel bodyLevel).normalize
-  | .letE _ _ value body _ => inferExactType? x declarations locals (body.instantiate1 value)
-  | .mdata _ body => inferExactType? x declarations locals body
+  | .letE _ _ value body _ =>
+      inferExactType? x normalizer declarations locals (body.instantiate1 value)
+  | .mdata _ body => inferExactType? x normalizer declarations locals body
   | .proj owner fieldIndex struct => do
-      let structType := exactWhnf (← inferExactType? x declarations locals struct)
+      let structType := normalizer.whnf
+        (← inferExactType? x normalizer declarations locals struct)
       let .const structOwner levels := structType.getAppFn | none
       unless structOwner == owner do none
       let (type, constructors) ← structureOwner? x owner
@@ -426,18 +508,13 @@ private partial def inferExactType? (x : Export) (declarations : ExactDeclaratio
       let params := ownerArguments.extract 0 type.numParams
       let mut current := constructor.type.instantiateLevelParams constructor.levelParams levels
       for param in params do
-        let .forallE _ _ body _ := exactWhnf current | none
+        let .forallE _ _ body _ := normalizer.whnf current | none
         current := body.instantiate1 param
-      let ownerIsProp := match exactWhnf type.type with
-        | .forallE .. =>
-          let rec result : Expr → Expr
-            | .forallE _ _ body _ => result body
-            | expression => exactWhnf expression
-          result type.type == .sort .zero
-        | result => result == .sort .zero
+      let ownerIsProp := normalizer.isPropositionFormer type.type
       for earlier in [0:fieldIndex + 1] do
-        let .forallE _ fieldType body _ := exactWhnf current | none
-        let fieldIsProp := inferExactSortLevel? x declarations locals fieldType == some .zero
+        let .forallE _ fieldType body _ := normalizer.whnf current | none
+        let fieldIsProp :=
+          inferExactSortLevel? x normalizer declarations locals fieldType == some .zero
         if earlier == fieldIndex then
           if ownerIsProp && !fieldIsProp then none else return fieldType
         if ownerIsProp && body.hasLooseBVars && !fieldIsProp then none
@@ -447,22 +524,26 @@ private partial def inferExactType? (x : Export) (declarations : ExactDeclaratio
   | .lit (.strVal _) => some (.const ``String [])
   | .bvar _ | .mvar _ => none
 
-private partial def inferExactSortLevel? (x : Export) (declarations : ExactDeclarationTypes)
+private partial def inferExactSortLevel? (x : Export) (normalizer : ExactNormalizationEnv)
+    (declarations : ExactDeclarationTypes)
     (locals : ExactLocals) (expression : Expr) : Option Level := do
-  let .sort level := exactWhnf (← inferExactType? x declarations locals expression) | none
+  let .sort level := normalizer.whnf
+    (← inferExactType? x normalizer declarations locals expression) | none
   return level
 
 end
 
 private partial def projectionFieldEligible? (x : Export)
-    (declarations : ExactDeclarationTypes) (ownerIsProp : Bool) (fieldIndex : Nat)
+    (normalizer : ExactNormalizationEnv) (declarations : ExactDeclarationTypes)
+    (ownerIsProp : Bool) (fieldIndex : Nat)
     (current : Expr) (locals : ExactLocals) : Option Bool := do
-  let .forallE _ fieldType body _ := exactWhnf current | none
-  let fieldIsProp := inferExactSortLevel? x declarations locals fieldType == some .zero
+  let .forallE _ fieldType body _ := normalizer.whnf current | none
+  let fieldIsProp :=
+    inferExactSortLevel? x normalizer declarations locals fieldType == some .zero
   if fieldIndex == 0 then return !ownerIsProp || fieldIsProp
   if ownerIsProp && body.hasLooseBVars && !fieldIsProp then return false
   let value := mkFVar (FVarId.mk ((`_format.projectionField).mkNum locals.size))
-  projectionFieldEligible? x declarations ownerIsProp (fieldIndex - 1)
+  projectionFieldEligible? x normalizer declarations ownerIsProp (fieldIndex - 1)
     (body.instantiate1 value) (locals.push (value.fvarId!, fieldType))
 
 /-- Zero-based constructor fields for which the kernel projection expression
@@ -475,19 +556,21 @@ def Export.intrinsicProjectionFieldsFor (x : Export) (type : EIndType)
       constructor.name == constructorName && constructor.induct == type.name
     | return #[]
   let declarations := exactDeclarationTypes x
+  let normalizer := x.exactNormalizationEnv
   let mut ownerType := type.type
   while ownerType.isForall do ownerType := ownerType.bindingBody!
-  let ownerIsProp := exactWhnf ownerType == .sort .zero
+  let ownerIsProp := normalizer.isPropositionFormer ownerType
   let mut current := constructor.type
   let mut locals : ExactLocals := #[]
   for parameterIndex in [:type.numParams] do
-    let .forallE _ parameterType body _ := exactWhnf current | return #[]
+    let .forallE _ parameterType body _ := normalizer.whnf current | return #[]
     let value := mkFVar (FVarId.mk ((`_format.projectionParam).mkNum parameterIndex))
     locals := locals.push (value.fvarId!, parameterType)
     current := body.instantiate1 value
   let mut result := #[]
   for fieldIndex in [:constructor.numFields] do
-    if projectionFieldEligible? x declarations ownerIsProp fieldIndex current locals == some true then
+    if projectionFieldEligible? x normalizer declarations ownerIsProp fieldIndex current locals ==
+        some true then
       result := result.push fieldIndex
   return result
 
