@@ -108,7 +108,7 @@ inductive Decline where
   be mutually recursive. -/
   | cyclicMimics
   /-- **A basis primitive, which is exempt rather than declined.** `Eq`,
-  `Nat`, `PSigma` and `PULiftP` are what the third construction is *written
+  `Nat`, `PSigma`, `PSigma'`, and `PUnit` are what the third construction is *written
   in*; modelling one of them would either be circular or would put a second
   `Eq` in the output. Their absence from the models is what makes the
   construction well-founded, so it is not a gap and a census that counts it as
@@ -2379,11 +2379,12 @@ arm-C skeleton names deliberately do not qualify. Callers must additionally
 require an explicit [`Iso.spliced`] witness: this namespace predicate alone is
 not ownership evidence. -/
 def persistentSupportRoot (name : Name) : Bool :=
-  [`Eq, `Nat, `PSigma, `PSigma', `PULiftP, `Nonempty, `Iff, `Quot].contains name
+  [`Eq, `Nat, `PSigma, `PSigma', `PUnit, `Nonempty, `Iff, `Quot].contains name
 
 def persistentSupportName (name : Name) : Bool :=
   persistentSupportRoot name ||
     (`PSigma').isPrefixOf name ||
+    (`PUnit).isPrefixOf name ||
     name == `Quot.sound || name == `Classical.choice || name == `propext ||
     wCoreRoot.isPrefixOf name
 /-- `WT.sup` under the prefix — the node former. -/

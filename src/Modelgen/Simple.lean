@@ -184,7 +184,7 @@ nothing; and arm W applies the W core's propositional ι theorem.
   a checked decline rather than a level-normalizer relaxation.
 * a field mentioning `T` other than as `∀ z⃗, T p⃗ e⃗` — a **nested**
   occurrence, which is layer 1's business.
-* the four **basis primitives themselves** — the exemption that makes the
+* the five **basis primitives themselves** — the exemption that makes the
   construction well-founded.
 -/
 
@@ -204,35 +204,22 @@ one. `Nonempty` never joins this list either, though the graph arm names it:
 `False` is **not** among them: it is derived (Church `∀ p : Prop, p`, with
 its `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
 transport along — [`Modelgen.cfalseElim`]), so `False` models like any other
-declaration. `PULiftP` takes its place. -/
-def primBasis : List Name := [`Eq, `PSigma, `PSigma', `Nat, `PULiftP]
+declaration. The tight pair and `PUnit` together take its place. -/
+def primBasis : List Name := [`Eq, `PSigma, `PSigma', `Nat, `PUnit]
 
-/-- **`PULiftP`**: `inductive PULiftP.{u} (p : Prop) : Sort u | up : p →
-PULiftP p` — the lift of a proposition to a **bare variable sort**.
+/-- **Lean's `PUnit`**, exactly as `Init/Prelude.lean` declares it:
+`inductive PUnit.{u} : Sort u | unit : PUnit`.
 
-Lean's *elaborator* refuses this declaration (its resultant sort is `Prop` at
-some instantiations and not others); Lean's *kernel* admits it, because the
-kernel checks only the per-argument inequality `is_geq(u, 0)`, and grants it
-**large elimination** by the subsingleton rule — one constructor, its one
-argument a proposition. Core crosses the same line twice, for `PUnit` and
-`PEmpty`, with `set_option bootstrap.inductiveCheckResultingUniverse false`
-(`Init/Prelude.lean:123,211`). Nothing here goes through the elaborator: the
-declaration is handed to `Environment.addDeclCore` with checking on, which is
-the kernel, which takes it.
-
-It is the basis's only type former at a bare `Sort u` that can be **empty**,
-and that is what it is in the basis for: it closes the whole maybe-zero
-class in one primitive — `PEmpty`, `PUnit`, `Eq`-at-`Sort v`, enums — and it
-retires the `False`-Π pad, whose uniqueness cost a `funext` where
-`PULiftP`'s costs a recursor call and proof irrelevance. -/
-def puliftDecl : Declaration :=
+Like the tight pair below, this crosses Lean's bootstrap resulting-universe
+boundary: at `u = 0` the result is a proposition, while at positive levels it
+is a type.  The kernel accepts the declaration and gives its ordinary
+universe-polymorphic eliminator.  Paired with `PSigma'`, it supplies the
+inhabited exact-sort fibre used by the internally derived propositional lift. -/
+def punitDecl : Declaration :=
   let lu := Level.param `u
-  let ty : Expr := .forallE `p (.sort .zero) (.sort lu) .default
-  let upTy : Expr := .forallE `p (.sort .zero)
-    (.forallE `h (.bvar 0) (.app (.const `PULiftP [lu]) (.bvar 1)) .default) .implicit
-  .inductDecl [`u] 1
-    [{ name := `PULiftP, type := ty,
-       ctors := [{ name := `PULiftP.up, type := upTy }] }] false
+  .inductDecl [`u] 0
+    [{ name := `PUnit, type := .sort lu,
+       ctors := [{ name := `PUnit.unit, type := .const `PUnit [lu] }] }] false
 
 /-- **Lean's `Nat`**, as `Init/Prelude.lean` declares it. The models build
 tags as `succ` chains, so nothing here depends on literals. -/
@@ -323,18 +310,25 @@ def ensurePrim (n : Name) (guard : List Name) (d : Declaration)
   | .ok () => return #[d]
   | .error why => badShape s!"the spliced {n} is not Lean's ({why})"
 
-/-- `PULiftP` at the shape above, **including the large elimination the whole
-maybe-zero territory rests on**: `PULiftP.rec` must carry a motive universe.
-A `PULiftP` in the input that is small-eliminating is not Lean's and is
-refused here rather than silently used. -/
-def checkPULiftP (env : Environment) : Except String Unit := do
-  let some (.inductInfo iv) := env.constants.find? `PULiftP | throw "it is not an inductive type"
-  unless iv.numParams == 1 && iv.numIndices == 0 && iv.ctors == [`PULiftP.up]
+/-- Validate the exact standard polymorphic unit, including its arbitrary-sort
+eliminator.  A merely similarly named singleton is not accepted as basis
+support. -/
+def checkPUnit (env : Environment) : Except String Unit := do
+  let some (.inductInfo iv) := env.constants.find? `PUnit
+    | throw "it is not an inductive type"
+  unless iv.numParams == 0 && iv.numIndices == 0 && iv.ctors == [`PUnit.unit]
       && iv.levelParams.length == 1 do
-    throw "it is not a one-parameter, one-constructor lift with a single level parameter"
-  let some (.recInfo rv) := env.constants.find? `PULiftP.rec | throw "PULiftP.rec is not a recursor"
-  unless rv.levelParams.length == 2 do
-    throw "PULiftP.rec is not large-eliminating (no motive universe)"
+    throw "it is not a nullary, one-constructor polymorphic unit"
+  let [u] := iv.levelParams | throw "it does not have one universe parameter"
+  unless iv.type == .sort (.param u) do throw "it does not land in exactly `Sort u`"
+  let some (.ctorInfo constructor) := env.constants.find? `PUnit.unit
+    | throw "PUnit.unit is not its constructor"
+  unless constructor.type == .const `PUnit [.param u] && constructor.numFields == 0 do
+    throw "PUnit.unit is not the fieldless canonical constructor"
+  let some (.recInfo recursor) := env.constants.find? `PUnit.rec
+    | throw "PUnit.rec is not a recursor"
+  unless recursor.levelParams.length == 2 do
+    throw "PUnit.rec is not universe-polymorphic in its motive"
 
 /-- `Nat` at Lean's shape, **including the large elimination the whole Type
 route rests on**: `Nat.rec` must carry a motive universe. This property is
@@ -425,8 +419,8 @@ def choiceDecl : Declaration :=
   .axiomDecl { name := `Classical.choice, levelParams := [`u]
                type := choiceType (.param `u), isUnsafe := false }
 
-def ensurePULiftP (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
-  ensurePrim `PULiftP [`PULiftP, `PULiftP.up] puliftDecl checkPULiftP reserved
+def ensurePUnit (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
+  ensurePrim `PUnit [`PUnit, `PUnit.unit, `PUnit.rec] punitDecl checkPUnit reserved
 def ensureNonempty (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
   ensurePrim `Nonempty [`Nonempty, `Nonempty.intro] nonemptyDecl checkNonempty reserved
 
@@ -591,6 +585,14 @@ def ensurePSigmaPrime (reserved : Std.HashSet Name) : GenM (Array Declaration) :
   checkPSigmaPrimeDerived expected
   return out
 
+/-- Ensure the complete shared support for the internally derived exact-sort
+propositional lift.  The construction itself is inlined into generated
+expressions; only the exact standard `PUnit` and tight-pair bundle persist. -/
+def ensureExactSortLift (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
+  let pairs ← ensurePSigmaPrime reserved
+  let units ← ensurePUnit reserved
+  return pairs ++ units
+
 /-! ## Expression kit -/
 
 /-- `succ^j zero` — a tag, as constructor chains so the splice needs no
@@ -630,7 +632,7 @@ def psigmaSnd (u v : Level) (α β y : Expr) : Expr :=
 def natRec (s : Level) (motive z sc t : Expr) : Expr :=
   mkAppN (.const `Nat.rec [s]) #[motive, z, sc, t]
 
-/-! ### The two Church propositions, and the lift
+/-! ### The two Church propositions, and the derived exact-sort lift
 
 `False` is no longer a primitive, so the two propositions the constructions
 seed with are written out: `⊥ := ∀ p : Prop, p` and `⊤ := ∀ C : Prop, C → C`.
@@ -649,28 +651,38 @@ large elimination is [`Modelgen.cfalseElim`]. -/
 def falseP : Expr :=
   .forallE `p (.sort .zero) (.bvar 0) .default
 
-/-- `PULiftP.{ℓ} p` — the proposition `p` at exactly `Sort ℓ`, for **any** `ℓ`
-whatsoever, empty exactly when `p` is. -/
+/-- `PUnit.{ℓ}` and its canonical inhabitant. -/
+def punitT (ℓ : Level) : Expr := .const `PUnit [ℓ]
+def punitUnit (ℓ : Level) : Expr := .const `PUnit.unit [ℓ]
+
+/-- The proposition `p` at exactly `Sort ℓ`, for **any** `ℓ` whatsoever,
+empty exactly when `p` is: `PSigma'.{0,ℓ} (fun _ : p => PUnit.{ℓ})`.
+No declaration named `PULiftP` is emitted or referenced. -/
 def puliftT (ℓ : Level) (p : Expr) : Expr :=
-  mkAppN (.const `PULiftP [ℓ]) #[p]
+  psigmaPrimeT .zero ℓ p (.lam `h p (punitT ℓ) .default)
 
-/-- `PULiftP.up.{ℓ} p h`. -/
+/-- The derived lift constructor `⟨h, PUnit.unit⟩`. -/
 def puliftUp (ℓ : Level) (p h : Expr) : Expr :=
-  mkAppN (.const `PULiftP.up [ℓ]) #[p, h]
+  let fibre := .lam `h p (punitT ℓ) .default
+  psigmaPrimeMk .zero ℓ p fibre h (punitUnit ℓ)
 
-/-- `PULiftP.rec.{v,ℓ} p motive m t` — the lift's large eliminator. -/
+/-- The derived lift's arbitrary-sort eliminator, implemented by
+`PSigma'.rec'`.  The ignored `PUnit` field is definitionally canonical. -/
 def puliftRec (v ℓ : Level) (p motive m t : Expr) : Expr :=
-  mkAppN (.const `PULiftP.rec [v, ℓ]) #[p, motive, m, t]
+  let fibre := .lam `h p (punitT ℓ) .default
+  let minor := .lam `h p
+    (.lam `unit (punitT ℓ) (mkApp m (.bvar 1)) .default) .default
+  psigmaPrimeRec .zero ℓ v p fibre motive minor t
 
-/-- `down : PULiftP.{ℓ} p → p`, by the recursor at a `Prop` motive. -/
+/-- The derived lift's `down`, its tight pair's first projection. -/
 def puliftDown (ℓ : Level) (p t : Expr) : Expr :=
-  puliftRec .zero ℓ p (.lam `x (puliftT ℓ p) p .default) (.lam `h p (.bvar 0) .default) t
+  psigmaPrimeFst .zero ℓ p (.lam `h p (punitT ℓ) .default) t
 
-/-- **The lift's eta is definitional.** `PULiftP` is a single-constructor,
-index-free, non-recursive inductive, so the kernel's eta-for-structures fires
-on it — `t ≡ up (down t)` for every `t`, at every level, `Prop` or not. So
-this is `Eq.refl`, not a recursor call, and it is here only so that the one
-place that needs an *equation* rather than a conversion has one.
+/-- **The lift's eta is definitional.** Tight-pair structure eta gives
+`t ≡ ⟨t.1,t.2⟩`, and polymorphic-unit structure eta gives
+`t.2 ≡ PUnit.unit`; hence `t ≡ up (down t)` at every level, including zero.
+This is `Eq.refl`, not a recursor call, and exists only for the one place that
+needs an equation rather than a conversion.
 
 **The rule fires on a redex, and only on one.** Eta-for-structures expands one
 side when the *other* is already a constructor application. So `t ≡ up (down
@@ -683,7 +695,7 @@ conversion is simply not transitive at this shape. Direct kernel checks pin all
 of it.
 
 Two consequences the construction leans on, **both at a redex**. Every element
-of `PULiftP ⊤` is defeq to [`Modelgen.unitAtCanon`], which is a literal `up`,
+of the lifted `⊤` is defeq to [`Modelgen.unitAtCanon`], which is a literal pair,
 so a pad built from it needs no transport — the strict improvement on the
 `False`-Π pad, whose uniqueness was `funext`. And `motive (up (down t))` and
 `motive t` are convertible, so the maybe-zero route's recursor is the `Prop`
@@ -2946,7 +2958,7 @@ def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
     GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
   match route with
   | .field fieldRoute =>
-    let support ← if fieldRoute matches .propLift then ensurePULiftP reserved else pure #[]
+    let support ← if fieldRoute matches .propLift then ensureExactSortLift reserved else pure #[]
     let (declarations, override) ← directFieldModel fieldRoute eqi tname lparams np
       memberTy constructorType modelConstructorType declaredMemberTy selfN constructorN
       recursorN recursorLevelParams recursorType w v
@@ -4052,7 +4064,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- own ι rule fires.
     let lift? : Option Level := if route matches PrimRoute.bare then some w else none
     if lift?.isSome then
-      for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+      for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
     let (cn0, cty0) := exportCtors[0]!
     let nonPiv := gNonPiv
@@ -4634,7 +4646,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- ════ arm E: an exact empty model for recursion without a base ════
     unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
     for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
 
     -- The carrier is empty at exactly the inductive's universe.
     let selfVal ← withParams fun ps =>
@@ -4723,7 +4735,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
 
     for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
     -- **The core itself.** `#[]` when it is
     -- already in, which is every W target after the first in a run.
     let core ← ensureWCore reserved
@@ -4926,7 +4938,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
     for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
 
     -- Storage decisions — pure level arithmetic, and a decline here costs no
     -- further splice. A chain of one field is that field bare (no `PSigma`,
@@ -5229,7 +5241,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
         churchBinders kTys 0 #[] (fun ks => k C ks kTys)
 
     if lift?.isSome then
-      for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+      for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
 
     -- **Arm G's prelude, asked for before anything is emitted.** The graph
     -- route pairs a value with its graph proof (`PSigma`) and extracts it with
@@ -5313,7 +5325,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- ── the recursor ──
     if large && nc == 0 then
       for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
-      for d in ← ensurePULiftP reserved do out := out.push d; spliced := spliced ++ d.getNames
+      for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
     let recTy := restore tbl rv.type
     -- **One fold, two consumers.** Arm G's `ind` — the free `Prop`-motive
     -- recursor the graph route folds at — *is* the strong-induction fold

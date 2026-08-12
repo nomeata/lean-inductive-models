@@ -51,7 +51,7 @@ structure Report where
   generated : Array (Name × Nat) := #[]
   declined : Array (Name × String) := #[]
   /-- **The basis exemption, which is not a decline** ([`Modelgen.primBasis`]).
-  `Eq`, `Nat`, `PSigma` and `PULiftP` are the primitives
+  `Eq`, `Nat`, `PSigma`, `PSigma'`, and `PUnit` are the primitives
   the third construction is written in, so a run leaves them unmodelled *by
   definition*; counting them among the declines makes every coverage report
   a number it then had to walk back in the next sentence. Reported on their own
@@ -416,9 +416,10 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     declineWith (.nameTaken name)
 
   -- Unselected mutual motives must still inhabit the selected projection's
-  -- result sort.  `PULiftP` is the primitive basis operation which lifts the
+  -- result sort. The internally derived tight-pair/PUnit lift carries the
   -- reflexive equality filler to that exact, possibly variable universe.
-  let puliftDecls ← if recursors.any (·.numMotives > 1) then ensurePULiftP reserved else pure #[]
+  let puliftDecls ← if recursors.any (·.numMotives > 1) then
+    ensureExactSortLift reserved else pure #[]
 
   let env ← getEnv
   let eqi ← match EqInfo.check env with
@@ -620,8 +621,8 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
     declineWith (.nameTaken name)
 
   -- A mutual recursor's unrelated motives need an inhabitant at the selected
-  -- motive sort.  The common adapter uses the primitive propositional lift.
-  let puliftDecls ← if types.size > 1 then ensurePULiftP reserved else pure #[]
+  -- motive sort. The common adapter uses the derived tight-pair/PUnit lift.
+  let puliftDecls ← if types.size > 1 then ensureExactSortLift reserved else pure #[]
   let env ← getEnv
   let eqi ← match EqInfo.check env with
     | .ok eqi => pure eqi
@@ -883,7 +884,9 @@ def scheduledSupportRecord (generation : Cli.Config) (declaration : EDecl) : Boo
     declaration.names.any persistentSupportRoot || declaration.names.all persistentSupportName ||
       declaration.names.contains `False
   else if generation.nested || generation.mutualModels then
-    declaration.names.contains `Eq || declaration.names.contains `PULiftP
+    declaration.names.any fun name =>
+      name == `Eq || name == `PSigma' || (`PSigma').isPrefixOf name ||
+        name == `PUnit || (`PUnit).isPrefixOf name
   else
     false
 
@@ -1215,17 +1218,19 @@ def eqReady (reserved : Std.HashSet Name) : MetaM Bool := do
   if (← getEnv).constants.contains `Eq then return true
   return !(reserved.contains `Eq || reserved.contains `Eq.refl)
 
-/-- A plain mutual projection model additionally needs `PULiftP` to inhabit
-the unrelated motives at the selected field's universe.  If the input owns
-that basis declaration later in dependency order, wait for it exactly as the
-existing mutual queue waits for the input's `Eq`; if it owns none, generation
-may splice Lean's basis shape. -/
+/-- A plain mutual projection model additionally needs the tight-pair/PUnit
+support that derives an inhabitant of each unrelated motive's exact universe.
+If the input owns any part later in dependency order, wait for the complete
+bundle; if it owns none, generation may splice the standard shapes. -/
 def mutualReady (needsPULift : Bool) (reserved : Std.HashSet Name) : MetaM Bool := do
   unless ← eqReady reserved do return false
   unless needsPULift do return true
   let env ← getEnv
-  if env.constants.contains `PULiftP then return true
-  return !(reserved.contains `PULiftP || reserved.contains `PULiftP.up)
+  for name in [`PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
+      `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
+      `PUnit, `PUnit.unit, `PUnit.rec] do
+    unless env.constants.contains name || !reserved.contains name do return false
+  return true
 
 private def hasIntrinsicProjectionFields (x : Export) (types : List EIndType)
     (constructors : List ECtor) : Bool :=
@@ -1235,7 +1240,8 @@ private def hasIntrinsicProjectionFields (x : Export) (types : List EIndType)
 private def isMutualBasisRecord (needsPULift : Bool) (declaration : EDecl) : Bool :=
   declaration.names.any fun name =>
     name == `Eq || name == `Eq.refl ||
-      (needsPULift && (name == `PULiftP || name == `PULiftP.up))
+      (needsPULift && (name == `PSigma' || (`PSigma').isPrefixOf name ||
+        name == `PUnit || (`PUnit).isPrefixOf name))
 
 /-- **Can a prim model be written here?** — [`Modelgen.eqReady`]'s question,
 asked of every basis constant a prim model may splice: each must be already
@@ -1245,7 +1251,8 @@ def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
   let env ← getEnv
   for n in [`Eq, `Eq.refl, `False, `Nat, `Nat.zero, `Nat.succ, `PSigma, `PSigma.mk,
       `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk,
-      `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk, `PULiftP, `PULiftP.up] do
+      `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
+      `PUnit, `PUnit.unit, `PUnit.rec] do
     unless env.constants.contains n || !reserved.contains n do return false
   return true
 
