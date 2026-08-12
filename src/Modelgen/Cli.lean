@@ -9,7 +9,7 @@ reading an export or constructing a Lean environment.
 
 Options are applied from left to right. The plural options are bundles:
 `--inductives` (or `--no-inductives`) changes all four model-generation
-branches, and `--check` (or `--no-check`) changes both checks. A later
+branches, and `--check` (or `--no-check`) changes both structural checks. A later
 individual option may therefore override part of an earlier bundle, and a
 later bundle may override earlier individual options.
 -/
@@ -27,6 +27,10 @@ structure Config where
   basic : Bool := true
   checkInput : Bool := true
   checkOutput : Bool := true
+  /-- Submit the complete parsed input stream to Lean's kernel. -/
+  typeCheckInput : Bool := false
+  /-- Submit the complete final transformed stream to Lean's kernel. -/
+  typeCheckOutput : Bool := false
   monoLevels : Bool := false
   /-- Whether an export is written. -/
   output : Bool := true
@@ -50,7 +54,7 @@ def Config.modelsSimpleInput (config : Config) (name : Lean.Name) : Bool :=
   if isBasicInputName name then config.basic else config.simple
 
 def usage : String := String.intercalate "\n" [
-  "usage: modelgen [OPTIONS] IN.ndjson",
+  "usage: modelgen [OPTIONS] IN.ndjson   (`-` reads standard input)",
   "  -o PATH              write the export to PATH (`-` means stdout)",
   "  --[no-]output        enable or disable output",
   "  --[no-]nested        model nested inductives",
@@ -60,7 +64,9 @@ def usage : String := String.intercalate "\n" [
   "  --[no-]inductives    set all four inductive-model options",
   "  --[no-]check-input   check models already present in the input",
   "  --[no-]check-output  check generated models",
-  "  --[no-]check         set both check options",
+  "  --[no-]check         set both structural model-check options",
+  "  --[no-]type-check-input   submit the parsed input to Lean's kernel",
+  "  --[no-]type-check-output  submit the final output to Lean's kernel",
   "  --[no-]mono-levels   monomorphize universe levels",
   "  --[no-]quiet         enable or disable diagnostics"]
 
@@ -96,6 +102,14 @@ where
       go rest { config with checkInput := true, checkOutput := true }
     | "--no-check" :: rest, config =>
       go rest { config with checkInput := false, checkOutput := false }
+    | "--type-check-input" :: rest, config =>
+      go rest { config with typeCheckInput := true }
+    | "--no-type-check-input" :: rest, config =>
+      go rest { config with typeCheckInput := false }
+    | "--type-check-output" :: rest, config =>
+      go rest { config with typeCheckOutput := true }
+    | "--no-type-check-output" :: rest, config =>
+      go rest { config with typeCheckOutput := false }
     | "--mono-levels" :: rest, config => go rest { config with monoLevels := true }
     | "--no-mono-levels" :: rest, config => go rest { config with monoLevels := false }
     | "--output" :: rest, config => go rest { config with output := true }
@@ -103,7 +117,7 @@ where
     | "--quiet" :: rest, config => go rest { config with quiet := true }
     | "--no-quiet" :: rest, config => go rest { config with quiet := false }
     | arg :: rest, config =>
-      if arg.startsWith "-" then
+      if arg != "-" && arg.startsWith "-" then
         .error s!"unknown option {arg}"
       else if let some previous := config.input then
         .error s!"multiple input files: {previous} and {arg}"

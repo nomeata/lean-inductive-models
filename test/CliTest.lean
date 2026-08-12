@@ -30,15 +30,18 @@ def main : IO UInt32 := do
   state ← state.expect "defaults" ["in.ndjson"] fun config =>
     config.input == some "in.ndjson" &&
     config.nested && config.mutualModels && config.simple && config.basic &&
-    config.checkInput && config.checkOutput && !config.monoLevels &&
+    config.checkInput && config.checkOutput &&
+    !config.typeCheckInput && !config.typeCheckOutput && !config.monoLevels &&
     config.output && config.outputTarget == "-" && !config.quiet
 
   state ← state.expect "all individual negative forms" [
       "--no-nested", "--no-mutual", "--no-simple", "--no-basic",
       "--no-check-input", "--no-check-output", "--no-mono-levels",
+      "--no-type-check-input", "--no-type-check-output",
       "--no-output", "--no-quiet", "in.ndjson"] fun config =>
     !config.nested && !config.mutualModels && !config.simple && !config.basic &&
-    !config.checkInput && !config.checkOutput && !config.monoLevels &&
+    !config.checkInput && !config.checkOutput &&
+    !config.typeCheckInput && !config.typeCheckOutput && !config.monoLevels &&
     !config.output && !config.quiet
 
   state ← state.expect "inductives bundle then individual override"
@@ -53,6 +56,13 @@ def main : IO UInt32 := do
   state ← state.expect "individual override then check bundle"
     ["--no-check-input", "--check", "in.ndjson"] fun config =>
       config.checkInput && config.checkOutput
+  state ← state.expect "kernel verdict gates are independent"
+    ["--type-check-input", "--type-check-output", "--no-type-check-input", "in.ndjson"]
+    fun config => !config.typeCheckInput && config.typeCheckOutput
+  state ← state.expect "structural check bundle does not enable kernel verdicts"
+    ["--type-check-input", "--no-check", "--check", "in.ndjson"] fun config =>
+      config.checkInput && config.checkOutput && config.typeCheckInput &&
+        !config.typeCheckOutput
   state ← state.expect "positive option restores default-on boolean"
     ["--no-mutual", "--mutual", "in.ndjson"] fun config => config.mutualModels
   state ← state.expect "mono levels is opt-in and reversible"
@@ -73,6 +83,8 @@ def main : IO UInt32 := do
       config.output && config.outputTarget == "other.ndjson"
   state ← state.expect "stdout target is explicit"
     ["-o", "-", "in.ndjson"] fun config => config.output && config.outputTarget == "-"
+  state ← state.expect "bare dash is standard input" ["-"] fun config =>
+    config.input == some "-"
 
   state ← state.expect "quiet is reversible"
     ["--quiet", "--no-quiet", "in.ndjson"] fun config => !config.quiet
@@ -88,7 +100,6 @@ def main : IO UInt32 := do
 
   state ← state.reject "missing input" []
   state ← state.reject "unknown option" ["--wat", "in.ndjson"]
-  state ← state.reject "bare dash is not an input" ["-"]
   state ← state.reject "missing -o operand" ["in.ndjson", "-o"]
   state ← state.reject "multiple positional inputs" ["one.ndjson", "two.ndjson"]
 
