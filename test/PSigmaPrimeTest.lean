@@ -14,6 +14,17 @@ partial def containsProjection (owner : Name) (field : Nat) : Expr → Bool
   | .mdata _ body => containsProjection owner field body
   | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => false
 
+partial def containsConst (target : Name) : Expr → Bool
+  | .const name _ => name == target
+  | .proj _ _ value => containsConst target value
+  | .app fn argument => containsConst target fn || containsConst target argument
+  | .lam _ type body _ | .forallE _ type body _ =>
+      containsConst target type || containsConst target body
+  | .letE _ type value body _ =>
+      containsConst target type || containsConst target value || containsConst target body
+  | .mdata _ body => containsConst target body
+  | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => false
+
 def auditPrimitive : MetaM (Except Decline (Array Name × Bool × Bool × Bool)) :=
   (do
     let (_, eqDecls) ← ensureEq {}
@@ -24,8 +35,13 @@ def auditPrimitive : MetaM (Except Decline (Array Name × Bool × Bool × Bool))
     let coreOk := checkPSigmaPrimeCore (← getEnv) |>.isOk
     let some (.defnInfo recursor) := (← getEnv).constants.find? `PSigma'.rec'
       | badShape "PSigma'.rec' is not a definition"
-    let projections := containsProjection `PSigma' 0 recursor.value &&
-      containsProjection `PSigma' 1 recursor.value
+    let some (.defnInfo fst) := (← getEnv).constants.find? `PSigma'.fst
+      | badShape "PSigma'.fst is not a definition"
+    let some (.defnInfo snd) := (← getEnv).constants.find? `PSigma'.snd
+      | badShape "PSigma'.snd is not a definition"
+    let projections := containsConst `PSigma'.fst recursor.value &&
+      containsConst `PSigma'.snd recursor.value &&
+      containsProjection `PSigma' 0 fst.value && containsProjection `PSigma' 1 snd.value
     return (eqDecls.flatMap (fun (declaration : Declaration) =>
       declaration.getNames.toArray) ++ names, coreOk,
       second.isEmpty, projections)).run
@@ -46,7 +62,7 @@ def main : IO UInt32 := do
     ("exact support bundle", complete),
     ("tight primitive shape", coreOk),
     ("idempotent validation", idempotent),
-    ("custom recursor uses both primitive projections", projections)]
+    ("custom recursor uses both projection-derived definitions", projections)]
   for (label, passed) in checks do
     unless passed do IO.eprintln s!"FAIL: {label}"
   let passed := (checks.filter (·.2)).size
