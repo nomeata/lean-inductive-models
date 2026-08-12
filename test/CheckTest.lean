@@ -63,6 +63,14 @@ def indexedFamilyStatements? (x : Export) (owner : Name) : Option StatementRepor
 def indexedStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
   checkStatementFamiliesWithIndex x (.ofExport x) (statementFamiliesFor x owners)
 
+def indexedFamilyUnionFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
+  let syntax := SyntaxIndex.ofExport x
+  (statementFamiliesFor x owners).foldl
+      (init := { statementsChecked := 0, violations := #[] }) fun union family =>
+    let report := checkFamilyStatementsWithIndex x syntax family
+    { statementsChecked := union.statementsChecked + report.statementsChecked
+      violations := union.violations ++ report.violations }
+
 def modelParams (params : List Name) : List Name :=
   (List.range params.length).map fun index => Name.str .anonymous s!"model_u_{index}"
 
@@ -326,7 +334,7 @@ def run (root : String) : IO UInt32 := do
       indexedFamilyStatements? valid owner == some (checkStatements valid)
     let treeOwners := ({} : Std.HashSet Name).insert owner
     state ← state.check "indexed nested generated view equals aggregate selection" <|
-      indexedStatementsFor valid treeOwners == checkStatementsFor valid treeOwners
+      indexedFamilyUnionFor valid treeOwners == checkStatementsFor valid treeOwners
     state ← state.check "unsafe owner may have an independently safe model" <|
       (check (withUnsafeOwner valid validOwnerDecl)).isEmpty
     let unsafeModel := withDefinitionSafety valid carrier "unsafe"
@@ -546,7 +554,7 @@ def run (root : String) : IO UInt32 := do
         (check privateValid).isEmpty
     let privateOwners := ({} : Std.HashSet Name).insert privateOwner
     state ← state.check "indexed private-alias family equals aggregate selection" <|
-      indexedStatementsFor privateValid privateOwners ==
+      indexedFamilyUnionFor privateValid privateOwners ==
         checkStatementsFor privateValid privateOwners
 
     let mutualPath := s!"{root}/test/fixtures/modelgen/mutual_shapes.ndjson"
@@ -591,7 +599,7 @@ def run (root : String) : IO UInt32 := do
       state ← state.check "mutual statement count uses the complete root family" <|
         mutualStatements.statementsChecked == mutualTable.statementCount
       state ← state.check "indexed mutual/member diagnostics equal aggregate selection" <|
-        indexedStatementsFor mutualValid generatedMutualOwners == mutualStatements
+        indexedFamilyUnionFor mutualValid generatedMutualOwners == mutualStatements
       let mutualPublicNames := mutualTable.publicNames
       let missingMutualInterface : Export := { mutualValid with
         decls := mutualValid.decls.filter fun declaration =>
@@ -603,7 +611,7 @@ def run (root : String) : IO UInt32 := do
           missingMutualStatements.violations.any
             (isMissing `A (Naming.modelName `A))
       state ← state.check "indexed missing whole family equals aggregate selection" <|
-        indexedStatementsFor missingMutualInterface generatedMutualOwners ==
+        indexedFamilyUnionFor missingMutualInterface generatedMutualOwners ==
           missingMutualStatements
       let some bCtor := mutualTable.constructors.find? (·.owner == `B.bC) | do
         IO.eprintln "checktest: B.bC correspondence missing"
@@ -671,7 +679,7 @@ def run (root : String) : IO UInt32 := do
           state ← state.check "bare extra unit-like theorem is rejected" <|
             (check bareExtra).any (isExtraUnitlike owner extraName)
           state ← state.check "indexed extra-slot sweep equals aggregate selection" <|
-            indexedStatementsFor bareExtra extraOwners ==
+            indexedFamilyUnionFor bareExtra extraOwners ==
               checkStatementsFor bareExtra extraOwners
 
     if state.failed == 0 then
