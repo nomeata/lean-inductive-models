@@ -104,6 +104,12 @@ root = "DeepImaxBoxTest"
 supportInterpreter = true
 
 [[lean_exe]]
+name = "psigmaprimetest"
+srcDir = "test"
+root = "PSigmaPrimeTest"
+supportInterpreter = true
+
+[[lean_exe]]
 name = "vanishingerasuretest"
 srcDir = "test"
 root = "VanishingErasureTest"

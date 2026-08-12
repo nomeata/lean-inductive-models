@@ -205,7 +205,7 @@ one. `Nonempty` never joins this list either, though the graph arm names it:
 its `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
 transport along — [`Modelgen.cfalseElim`]), so `False` models like any other
 declaration. `PULiftP` takes its place. -/
-def primBasis : List Name := [`Eq, `PSigma, `Nat, `PULiftP]
+def primBasis : List Name := [`Eq, `PSigma, `PSigma', `Nat, `PULiftP]
 
 /-- **`PULiftP`**: `inductive PULiftP.{u} (p : Prop) : Sort u | up : p →
 PULiftP p` — the lift of a proposition to a **bare variable sort**.
@@ -260,6 +260,51 @@ def psigmaDecl : Declaration :=
   .inductDecl [`u, `v] 2
     [{ name := `PSigma, type := ty, ctors := [{ name := `PSigma.mk, type := mkTy }] }] false
 
+/-! ## The tight dependent-pair primitive
+
+`PSigma'` differs from Lean's `PSigma` only in its resulting universe:
+`Sort (max u v)`, with no built-in `1`.  The declaration crosses the same
+bootstrap boundary as `PULiftP`: the result may specialize to `Prop`, so Lean's
+surface inductive checker refuses it while the kernel accepts the declaration.
+
+Only the inductive and its constructor are primitive.  The named projections
+and the universe-polymorphic eliminator below are ordinary definitions over
+primitive `.proj` expressions.  In particular, `PSigma'.rec'` does not add a
+second kernel exception: structure eta makes `mk t.1 t.2` convertible to `t`,
+so `fun h t => h t.1 t.2` has an arbitrary `Sort w` motive and its constructor
+rule is reflexivity. -/
+
+def psigmaPrimeDecl : Declaration :=
+  let lu := Level.param `u
+  let lv := Level.param `v
+  let ty : Expr := .forallE `α (.sort lu)
+    (.forallE `β (.forallE `x (.bvar 0) (.sort lv) .default)
+      (.sort (mkLevelMax' lu lv)) .default) .implicit
+  let mkTy : Expr := .forallE `α (.sort lu)
+    (.forallE `β (.forallE `x (.bvar 0) (.sort lv) .default)
+      (.forallE `fst (.bvar 1)
+        (.forallE `snd (.app (.bvar 1) (.bvar 0))
+          (mkAppN (.const `PSigma' [lu, lv]) #[.bvar 3, .bvar 2]) .default)
+        .default) .implicit) .implicit
+  .inductDecl [`u, `v] 2
+    [{ name := `PSigma', type := ty,
+       ctors := [{ name := `PSigma'.mk, type := mkTy }] }] false
+
+def psigmaPrimeT (u v : Level) (α β : Expr) : Expr :=
+  mkAppN (.const `PSigma' [u, v]) #[α, β]
+
+def psigmaPrimeMk (u v : Level) (α β fst snd : Expr) : Expr :=
+  mkAppN (.const `PSigma'.mk [u, v]) #[α, β, fst, snd]
+
+def psigmaPrimeFst (u v : Level) (α β self : Expr) : Expr :=
+  mkAppN (.const `PSigma'.fst [u, v]) #[α, β, self]
+
+def psigmaPrimeSnd (u v : Level) (α β self : Expr) : Expr :=
+  mkAppN (.const `PSigma'.snd [u, v]) #[α, β, self]
+
+def psigmaPrimeRec (u v w : Level) (α β motive minor self : Expr) : Expr :=
+  mkAppN (.const `PSigma'.rec' [u, v, w]) #[α, β, motive, minor, self]
+
 /-- One primitive, checked or spliced. `check` runs on a present declaration
 and says what is wrong with it; a missing one is spliced at Lean's shape and
 re-checked. The pattern is [`Modelgen.ensureEq`]'s, and the name guard is
@@ -312,6 +357,31 @@ def checkPSigma (env : Environment) : Except String Unit := do
   let some (.recInfo rv) := env.constants.find? `PSigma.rec | throw "PSigma.rec is not a recursor"
   unless rv.levelParams.length == 3 do
     throw "PSigma.rec is not large-eliminating"
+
+/-- Validate the only trusted part of the tight pair bundle: the kernel
+inductive and constructor.  The named projections and `rec'` are checked as
+ordinary derived declarations by [`Modelgen.ensurePSigmaPrime`]. -/
+def checkPSigmaPrimeCore (env : Environment) : Except String Unit := do
+  let some (.inductInfo iv) := env.constants.find? `PSigma'
+    | throw "it is not an inductive type"
+  unless iv.numParams == 2 && iv.numIndices == 0 && iv.ctors == [`PSigma'.mk]
+      && iv.levelParams.length == 2 do
+    throw "it is not a two-parameter, one-constructor tight Sort-polymorphic pair"
+  let [u, v] := iv.levelParams | throw "it does not have two universe parameters"
+  let expectedType := match psigmaPrimeDecl with
+    | .inductDecl _ _ [value] _ =>
+      value.type.instantiateLevelParams [`u, `v] [.param u, .param v]
+    | _ => unreachable!
+  unless iv.type == expectedType do
+    throw "its type is not `{α : Sort u} → (α → Sort v) → Sort (max u v)`"
+  let some (.ctorInfo constructor) := env.constants.find? `PSigma'.mk
+    | throw "PSigma'.mk is not its constructor"
+  let expectedConstructor := match psigmaPrimeDecl with
+    | .inductDecl _ _ [value] _ =>
+      value.ctors[0]!.type.instantiateLevelParams [`u, `v] [.param u, .param v]
+    | _ => unreachable!
+  unless constructor.type == expectedConstructor && constructor.numFields == 2 do
+    throw "PSigma'.mk does not retain exactly its dependent first and second components"
 
 /-- **Lean's `Nonempty`**, as `Init/Prelude.lean` declares it:
 `inductive Nonempty (α : Sort u) : Prop | intro (val : α) : Nonempty α`.
@@ -383,6 +453,143 @@ def ensureNat (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
   ensurePrim `Nat [`Nat, `Nat.zero, `Nat.succ] natDecl checkNat reserved
 def ensurePSigma (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
   ensurePrim `PSigma [`PSigma, `PSigma.mk] psigmaDecl checkPSigma reserved
+
+/-- The ordinary declarations derived from the tight pair's two primitive
+projections. None of these declarations crosses the bootstrap inductive
+boundary. -/
+def psigmaPrimeDerivedDecls : GenM (Array Declaration) := do
+  let u := Level.param `u
+  let v := Level.param `v
+  let w := Level.param `w
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok value => pure value
+    | .error message => badShape s!"PSigma' support needs Lean's Eq ({message})"
+
+  let fstDecl ← withLocalDecl `α .implicit (.sort u) fun α =>
+    withLocalDecl `β .implicit (.forallE `x α (.sort v) .default) fun β =>
+    withLocalDeclD `self (psigmaPrimeT u v α β) fun self => do
+      let type ← mkForallFVars #[α, β, self] α
+      let value ← mkLambdaFVars #[α, β, self] (.proj `PSigma' 0 self)
+      return .defnDecl
+        { name := `PSigma'.fst, levelParams := [`u, `v], type, value,
+          hints := ← hintsFor value, safety := .safe }
+
+  let sndDecl ← withLocalDecl `α .implicit (.sort u) fun α =>
+    withLocalDecl `β .implicit (.forallE `x α (.sort v) .default) fun β =>
+    withLocalDeclD `self (psigmaPrimeT u v α β) fun self => do
+      let fst := psigmaPrimeFst u v α β self
+      let type ← mkForallFVars #[α, β, self] (mkApp β fst)
+      let value ← mkLambdaFVars #[α, β, self] (.proj `PSigma' 1 self)
+      return .defnDecl
+        { name := `PSigma'.snd, levelParams := [`u, `v], type, value,
+          hints := ← hintsFor value, safety := .safe }
+
+  let recDecl ← withLocalDecl `α .implicit (.sort u) fun α =>
+    withLocalDecl `β .implicit (.forallE `x α (.sort v) .default) fun β => do
+    let pair := psigmaPrimeT u v α β
+    withLocalDecl `motive .implicit (.forallE `self pair (.sort w) .default) fun motive => do
+      let minorType ← withLocalDeclD `fst α fun fst =>
+        withLocalDeclD `snd (mkApp β fst) fun snd =>
+          mkForallFVars #[fst, snd] (mkApp motive (psigmaPrimeMk u v α β fst snd))
+      withLocalDeclD `minor minorType fun minor =>
+        withLocalDeclD `self pair fun self => do
+          let type ← mkForallFVars #[α, β, motive, minor, self] (mkApp motive self)
+          let body := mkAppN minor
+            #[psigmaPrimeFst u v α β self, psigmaPrimeSnd u v α β self]
+          let value ← mkLambdaFVars #[α, β, motive, minor, self] body
+          return .defnDecl
+            { name := `PSigma'.rec', levelParams := [`u, `v, `w], type, value,
+              hints := ← hintsFor value, safety := .safe }
+
+  let fstRule ← withLocalDecl `α .implicit (.sort u) fun α =>
+    withLocalDecl `β .implicit (.forallE `x α (.sort v) .default) fun β =>
+    withLocalDeclD `fst α fun fst =>
+      withLocalDeclD `snd (mkApp β fst) fun snd => do
+        let pair := psigmaPrimeMk u v α β fst snd
+        let lhs := psigmaPrimeFst u v α β pair
+        let type ← mkForallFVars #[α, β, fst, snd] (eqi.mk' u α lhs fst)
+        let value ← mkLambdaFVars #[α, β, fst, snd] (eqi.refl' u α fst)
+        return .thmDecl
+          { name := `PSigma'.fst_mk, levelParams := [`u, `v], type, value }
+
+  let sndRule ← withLocalDecl `α .implicit (.sort u) fun α =>
+    withLocalDecl `β .implicit (.forallE `x α (.sort v) .default) fun β =>
+    withLocalDeclD `fst α fun fst =>
+      withLocalDeclD `snd (mkApp β fst) fun snd => do
+        let pair := psigmaPrimeMk u v α β fst snd
+        let lhs := psigmaPrimeSnd u v α β pair
+        let fieldType := mkApp β fst
+        let type ← mkForallFVars #[α, β, fst, snd] (eqi.mk' v fieldType lhs snd)
+        let value ← mkLambdaFVars #[α, β, fst, snd] (eqi.refl' v fieldType snd)
+        return .thmDecl
+          { name := `PSigma'.snd_mk, levelParams := [`u, `v], type, value }
+
+  let recRule ← withLocalDecl `α .implicit (.sort u) fun α =>
+    withLocalDecl `β .implicit (.forallE `x α (.sort v) .default) fun β => do
+    let pairType := psigmaPrimeT u v α β
+    withLocalDecl `motive .implicit (.forallE `self pairType (.sort w) .default) fun motive => do
+      let minorType ← withLocalDeclD `fst α fun fst =>
+        withLocalDeclD `snd (mkApp β fst) fun snd =>
+          mkForallFVars #[fst, snd] (mkApp motive (psigmaPrimeMk u v α β fst snd))
+      withLocalDeclD `minor minorType fun minor =>
+        withLocalDeclD `fst α fun fst =>
+          withLocalDeclD `snd (mkApp β fst) fun snd => do
+            let pair := psigmaPrimeMk u v α β fst snd
+            let lhs := psigmaPrimeRec u v w α β motive minor pair
+            let rhs := mkAppN minor #[fst, snd]
+            let resultType := mkApp motive pair
+            let type ← mkForallFVars #[α, β, motive, minor, fst, snd]
+              (eqi.mk' w resultType lhs rhs)
+            let value ← mkLambdaFVars #[α, β, motive, minor, fst, snd]
+              (eqi.refl' w resultType rhs)
+            return .thmDecl
+              { name := `PSigma'.rec'_mk, levelParams := [`u, `v, `w], type, value }
+
+  return #[fstDecl, sndDecl, recDecl, fstRule, sndRule, recRule]
+
+private def checkPSigmaPrimeDerived (expected : Array Declaration) : GenM Unit := do
+  for declaration in expected do
+    let [name] := declaration.getNames
+      | badShape "one PSigma' support declaration has several names"
+    let some actual := (← getEnv).constants.find? name
+      | declineWith (.notLeans name "it is missing from the tight pair support bundle")
+    let (expectedLevels, expectedType, expectedValue, expectedTheorem) := match declaration with
+      | .defnDecl value => (value.levelParams, value.type, value.value, false)
+      | .thmDecl value => (value.levelParams, value.type, value.value, true)
+      | _ => badShape s!"{name} is not a derived tight-pair declaration"
+    let (actualLevels, actualType, actualValue) ← match actual, expectedTheorem with
+      | .defnInfo value, false => pure (value.levelParams, value.type, value.value)
+      | .thmInfo value, true => pure (value.levelParams, value.type, value.value)
+      | _, _ => declineWith (.notLeans name "it has the wrong declaration kind")
+    unless actualLevels.length == expectedLevels.length do
+      declineWith (.notLeans name
+        s!"it has {actualLevels.length} universe parameters, expected {expectedLevels.length}")
+    let levels := actualLevels.map Level.param
+    let expectedType := expectedType.instantiateLevelParams expectedLevels levels
+    let expectedValue := expectedValue.instantiateLevelParams expectedLevels levels
+    unless ← isDefEq actualType expectedType do
+      declineWith (.notLeans name "its type is not the projection-derived interface type")
+    unless ← isDefEq actualValue expectedValue do
+      declineWith (.notLeans name "its value is not the projection-derived implementation")
+
+/-- Ensure the exact tight-pair bundle. The inductive is the one new basis
+primitive; all named projections, reduction rules, and the large `rec'` are
+ordinary checked declarations derived from primitive projections. -/
+def ensurePSigmaPrime (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
+  let supportNames :=
+    [`PSigma', `PSigma'.mk, `PSigma'.fst, `PSigma'.snd, `PSigma'.rec',
+      `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk]
+  let mut out ← ensurePrim `PSigma' supportNames psigmaPrimeDecl checkPSigmaPrimeCore reserved
+  let expected ← psigmaPrimeDerivedDecls
+  for declaration in expected do
+    let [name] := declaration.getNames
+      | badShape "one PSigma' support declaration has several names"
+    if (← getEnv).constants.contains name then continue
+    if reserved.contains name then declineWith (.nameTaken name)
+    addChecked declaration
+    out := out.push declaration
+  checkPSigmaPrimeDerived expected
+  return out
 
 /-! ## Expression kit -/
 
