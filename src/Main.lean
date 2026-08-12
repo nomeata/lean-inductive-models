@@ -168,7 +168,7 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   reportGeneration config generationReport
   unless generationReport.stmtErrors.isEmpty do
     IO.eprintln s!"{input}: internal error: {generationReport.stmtErrors.size} generated \
-      statements differ from the installed recursors' rules; no output written"
+      statements differ from their exact exported owner interface; no output written"
     for error in generationReport.stmtErrors do IO.eprintln s!"  ! {error}"
     return exitInternal
 

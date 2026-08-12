@@ -477,10 +477,21 @@ ordering. The absence of all public model slots for an inductive is not itself
 an error: unsupported or disabled generation may leave an original inductive
 without a model.
 
-Every generated declaration is also submitted to Lean's kernel before it is
-emitted. In addition, the generator compares its generated recursor statements
-against the recursor rules installed by Lean; a mismatch is an internal error
-and no output is written.
+Every generated declaration is submitted to Lean's kernel before it is
+emitted. Construction may inspect the owner in a disposable environment, but
+that is not the acceptance environment. The exact serialized model records are
+ordered with their owner, separated from it, and replayed with kernel checking
+in a fork of the persistent source-prefix environment where the owner is
+absent. A model that depends on its owner is therefore rejected before output.
+Only explicitly witnessed shared support is copied to the persistent
+environment; the model fork is discarded, and replay then continues there with
+the owner but without the model declarations.
+
+Statement correspondence is an independent, format-only gate. The generator
+reconstructs the complete expected public interface from the exact exported
+owner records and compares it syntactically with the already serialized model
+records. This comparison does not consult the replay environment or a recursor
+minted by the kernel. A mismatch is an internal error and no output is written.
 
 ## Scope
 

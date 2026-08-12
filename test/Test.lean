@@ -16,14 +16,18 @@ Four axes, and each one has an occupant that would pass the other three:
    records are counted with the first model that needs them. A generator that quietly
    emitted fewer — dropping a round trip, or a mimic, or one constructor's rule
    — still typechecks and measures nothing, so the table is pinned.
-2. **The kernel.** Every generated declaration goes through
-   `Environment.addDeclCore` with checking on, inside the tool. An `ok` here is
-   Lean's answer and not the generator's.
-3. **The statements.** Each declaration-local recursor model and ι theorem is
-   rebuilt from the rule the **installed** recursor carries and compared syntactically
-   ([`Modelgen.checkModel`]). Well-typedness is not the claim: a generator that
-   stated a different well-typed equation — the rule of the wrong member, the
-   hypothesis at one recursor where the export names another — would satisfy axis 2.
+2. **The kernel.** Every generated declaration is checked while it is built,
+   and the exact serialized model records are checked again in a fork of the
+   persistent source-prefix environment with the owner absent. An `ok` here is
+   Lean's answer that the emitted model is well typed and owner-independent,
+   not the generator's.
+3. **The statements.** [`Modelgen.Check.checkStatementsFor`] rebuilds the
+   complete public interface from the exact exported owner records and compares
+   it syntactically with the serialized model records. It does not consult the
+   replay environment or a kernel-minted owner recursor. Well-typedness is not
+   the claim: a generator that stated a different well-typed equation — the
+   rule of the wrong member, the hypothesis at one recursor where the export
+   names another — would satisfy axis 2.
 4. **The round trip.** `parse (render (parse t)) = parse t`, structurally, and
    a file with no nested inductive comes out byte for byte.
 
@@ -64,9 +68,11 @@ handles them. `test/scripts/export-modelgen.sh` rebuilds their exports.
 stopped the generator without pinning the wording of a kernel diagnostic
 quoted inside it.
 
-Every `.lean` source here is accepted by Lean's kernel, and the fixture suite
-compares the recursors it minted against the export's on every run. Fixtures
-are named for the shape rather than a transient refusal: `poly_nested`, `dependent_fields`,
+Every `.lean` source here is accepted by Lean's kernel. As a separate source
+replay audit, the fixture suite compares the recursors it minted against the
+export's on every run; this is independent of the format-only model-statement
+gate. Fixtures are named for the shape rather than a transient refusal:
+`poly_nested`, `dependent_fields`,
 `indexed_decl`, `indexed_container`, `nest_index_cross` and `funext_binder`
 are all models now.
 
@@ -803,12 +809,14 @@ def runOne (root : String) (a : TAcc) (r : Row)
     gotD.length == wantDeclined.length &&
     (gotD.zip wantDeclined).all fun ((gn, gw), (wn, ww)) => gn == wn && ww.isPrefixOf gw
   a := check a declinesMatch s!"{name}: declines are {gotD}, expected {wantDeclined}"
-  -- axis 3: the statements, against the installed recursors' own rules
+  -- axis 3: exact serialized statements against the exported owner records
   a := check a rep.stmtErrors.isEmpty s!"{name}: {rep.stmtErrors}"
   -- A fixture whose only declarations are refusals has nothing to compare;
   -- one that generated a model must have compared something.
   a := check a (rep.generated.isEmpty || rep.stmtChecked > 0)
     s!"{name}: a model was generated and no statement was compared"
+  -- Independent source replay audit: the input's exported recursors agree with
+  -- those Lean reconstructs from the source inductive record.
   a := check a rep.recMismatch.isEmpty
     s!"{name}: the export's recursors differ from Lean's own: {rep.recMismatch}"
   -- axis 4: the round trip
