@@ -19,6 +19,17 @@ open Lean
 
 namespace Modelgen
 
+/-- Whether a one-constructor owner's projection rules can use each constructor
+field literally, including dependent fields.
+
+For a nonrecursive, unindexed owner the generated constructor/projection path
+computes definitionally.  Recursive and indexed routes may reconstruct a field
+only propositionally, so their dependent rules retain the canonical transport
+below.  Callers establish the one-constructor precondition while discovering
+intrinsic projections. -/
+def projectionIotaUsesLiteralField (type : EIndType) : Bool :=
+  !type.isRec && type.numIndices == 0
+
 /-- One opened constructor field, together with the corresponding modeled
 projection and (for an earlier field) its constructor iota proof.
 

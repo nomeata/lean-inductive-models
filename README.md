@@ -255,13 +255,15 @@ T._model.proj_j.iota :
     (C._model parameters fields) = fields[j]
 ```
 
-If field `j` depends on earlier fields, its right-hand side is instead a
-canonical transport of `fields[j]`. The transport uses the already generated
-projection-iota equalities for the minimal transitive set of earlier fields on
-which its type depends, in increasing field order. It is represented by nested
-applications of `Eq.rec`. This makes the proposition well typed even when an
-earlier modeled projection reduces only propositionally. The generator and
-checker construct the same expression; no transport is added when the
+For a nonrecursive, unindexed one-constructor owner, every field uses this
+literal equation, including dependent fields: its modeled projections compute
+definitionally on the modeled constructor. Recursive and indexed models may
+recover an earlier field only propositionally. In those cases a dependent
+field's right-hand side is the canonical transport of `fields[j]`, using the
+already generated projection-iota equalities for the minimal transitive set of
+earlier fields on which its type depends, in increasing field order. The
+transport is represented by nested applications of `Eq.rec`. The generator
+and checker construct the same expression; no transport is added when the
 dependency set is empty.
 
 The theorem preserves the constructor's complete parameter and field
@@ -480,7 +482,9 @@ validates the complete model family:
    constructor field telescope, substituting earlier intrinsic projections.
 8. The equality proposition determined by each exported recursor rule is
    instantiated with its specified parameters and fields, rewritten by the
-   same substitution, and compared literally with its iota theorem type.
+   same substitution, and compared literally with its iota theorem type. A
+   nonrecursive, unindexed owner uses the constructor field itself; recursive
+   and indexed owners use the canonical dependent transport when required.
 9. For an intrinsic projection, the checker reconstructs the kernel field
    eligibility, the selected constructor field, and its exact sort, then
    compares the complete `T._model.proj_j.iota` proposition literally,

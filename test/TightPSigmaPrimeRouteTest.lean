@@ -109,9 +109,9 @@ def main : IO UInt32 := do
       (declarationValue? generated pi2Projection1).any (containsProjection `PSigma' 1) &&
       (declarationValue? generated depProjection0).any (containsProjection `PSigma' 0) &&
       (declarationValue? generated depProjection1).any (containsProjection `PSigma' 1)
-  state := state.check "dependent field rule carries the canonical transport only where needed" <|
+  state := state.check "nonrecursive dependent field rules are both literal" <|
     (declarationType? generated depRule0).any (!containsConst ``Eq.rec ·) &&
-      (declarationType? generated depRule1).any (containsConst ``Eq.rec)
+      (declarationType? generated depRule1).any (!containsConst ``Eq.rec ·)
   state := state.check "tight families retain structure eta" <|
     #[Naming.etaName `PI2, Naming.etaName `PIDep].all names.contains
 

@@ -560,10 +560,14 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         normalizedFields := normalizedFields.push
           { name := Name.mkSimple s!"field_{index}", info := .default,
             value, type := fieldType, level, projected, iota? }
-      let rhs ← match ProjectionField.normalizeProjectionField eqi
-          publicProjection normalizedFields fieldIndex with
-        | .ok value => pure value
-        | .error message => badShape message
+      let rhs ←
+        if projectionIotaUsesLiteralField type then
+          pure fields[fieldIndex]!
+        else
+          match ProjectionField.normalizeProjectionField eqi
+            publicProjection normalizedFields fieldIndex with
+          | .ok value => pure value
+          | .error message => badShape message
       let alpha ← inferType lhs
       let fieldLevel ← ilevel alpha
       let proof ← match override? with

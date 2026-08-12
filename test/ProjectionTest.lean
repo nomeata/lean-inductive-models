@@ -440,17 +440,9 @@ def main : IO UInt32 := do
     report.generated.any (·.1 == `Dep) && report.stmtErrors.isEmpty
   state := state.check "exact projection definitions and rules emitted" <|
     projectionNames.all names.contains && projectionRules.all names.contains
-  -- Observation baseline for evaluating alternative carriers: the current
-  -- generic recursor-derived interface transports dependent constructor
-  -- fields in the public iota statement.  This is not an impossibility claim:
-  -- for this nonrecursive, unindexed owner the projection applications are
-  -- definitionally equal to the constructor fields, so another route could
-  -- make all three statements literal.  Recursive and indexed owners have to
-  -- be assessed separately.
-  state := state.check "dependent projection iotas expose the current recursor-route shape" <|
-    (declarationType? generated keyRule).any (fun type => !containsConst ``Eq.rec type) &&
-      (declarationType? generated payloadRule).any (containsConst ``Eq.rec) &&
-      (declarationType? generated witnessRule).any (containsConst ``Eq.rec)
+  state := state.check "nonrecursive dependent projection iotas are all literal" <|
+    #[keyRule, payloadRule, witnessRule].all fun rule =>
+      (declarationType? generated rule).any (fun type => !containsConst ``Eq.rec type)
 
   let modelsBeforeOwner := match declarationIndex? generated `Dep with
     | none => false
@@ -613,6 +605,9 @@ def main : IO UInt32 := do
   state := state.check "mutual dependent projection type uses its preceding model" <|
     (declarationType? mutualGenerated rightPayloadProjection).any fun type =>
       containsConst rightKeyProjection type
+  state := state.check "nonrecursive mutual dependent projection iota is literal" <|
+    (declarationType? mutualGenerated rightPayloadRule).any fun type =>
+      !containsConst ``Eq.rec type
   state := state.check "mutual projection models precede their modeled block" <|
     (declarationIndex? mutualGenerated `MLeft).any fun owner =>
       #[leftProjection, leftRule, rightKeyProjection, rightPayloadProjection,

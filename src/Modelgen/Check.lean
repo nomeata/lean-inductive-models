@@ -920,9 +920,15 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
     normalizedFields := normalizedFields.push
       { name := Name.mkSimple s!"field_{index}", info := .default,
         value := fields[index]!, type := mappedField.type, level, projected, iota? }
-  let eqi : EqInfo := { eqN := ``Eq, reflN := ``Eq.refl, recN := ``Eq.rec }
-  let .ok rhs := ProjectionField.normalizeProjectionField eqi projection.name
-      normalizedFields projection.fieldIndex
+  let rhs? := if projectionIotaUsesLiteralField ownerType then
+      fields[projection.fieldIndex]?
+    else
+      let eqi : EqInfo := { eqN := ``Eq, reflN := ``Eq.refl, recN := ``Eq.rec }
+      match ProjectionField.normalizeProjectionField eqi projection.name
+          normalizedFields projection.fieldIndex with
+        | .ok rhs => some rhs
+        | .error _ => none
+  let some rhs := rhs?
     | return violations.push (.declarationType projection.owner projection.iota)
   let some sourceEqLevel :=
       inferExactSortLevel? x normalizer declarations sourceLocals sourceField.type
