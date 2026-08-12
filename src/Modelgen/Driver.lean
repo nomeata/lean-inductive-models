@@ -828,6 +828,9 @@ def checkGeneratedQuotRecords (base : Environment) (records : Array EDecl) :
   let positions := (Array.range records.size).filter fun i =>
     match records[i]! with | .quot .. => true | _ => false
   if positions.isEmpty then return .ok ()
+  for name in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
+    if base.constants.contains name then
+      return .error s!"generated quotient bundle would shadow existing {name}"
   unless positions.size == 4 do
     return .error s!"quotient declaration has {positions.size} export records, expected 4"
   let first := positions[0]!

@@ -139,7 +139,10 @@ def run (root : String) : IO UInt32 := do
   -- `importModules #[] {}` already contains Lean's ambient kernel quotient.
   -- Generated support is replayed only when its persistent source-prefix
   -- environment lacks that declaration, which `mkEmptyEnvironment` models.
-  let quotientBase ← mkEmptyEnvironment
+  -- The quotient's kernel declaration itself depends on exact `Eq` support.
+  let empty ← mkEmptyEnvironment
+  let .ok quotientBase := empty.addDeclCore 0 eqDecl none true
+    | throw <| IO.userError "the kernel rejected exact Eq support"
   let .ok quotientEnv := quotientBase.addDeclCore 0 .quotDecl none true
     | throw <| IO.userError "the kernel rejected its quotient declaration"
   let some quotientRecords := installedQuotRecords? quotientEnv
