@@ -34,6 +34,39 @@ def familyCount? (text : String) : Option Nat := do
   let parsed ← (Modelgen.parse text (analyse := false)).toOption
   return (Modelgen.Check.discover parsed).size
 
+def mapInductiveType (inputExport : Modelgen.Export) (target : Lean.Name)
+    (f : Modelgen.EIndType → Modelgen.EIndType) : Modelgen.Export :=
+  { inputExport with decls := inputExport.decls.map fun declaration => match declaration with
+    | .induct types constructors recursors =>
+      .induct (types.map fun type => if type.name == target then f type else type)
+        constructors recursors
+    | other => other }
+
+def mapConstructor (inputExport : Modelgen.Export) (target : Lean.Name)
+    (f : Modelgen.ECtor → Modelgen.ECtor) : Modelgen.Export :=
+  { inputExport with decls := inputExport.decls.map fun declaration => match declaration with
+    | .induct types constructors recursors =>
+      .induct types
+        (constructors.map fun constructor =>
+          if constructor.name == target then f constructor else constructor)
+        recursors
+    | other => other }
+
+def mapRecursor (inputExport : Modelgen.Export) (target : Lean.Name)
+    (f : Modelgen.ERec → Modelgen.ERec) : Modelgen.Export :=
+  { inputExport with decls := inputExport.decls.map fun declaration => match declaration with
+    | .induct types constructors recursors =>
+      .induct types constructors
+        (recursors.map fun recursor => if recursor.name == target then f recursor else recursor)
+    | other => other }
+
+def reverseConstructorsFor (inputExport : Modelgen.Export) (target : Lean.Name) : Modelgen.Export :=
+  { inputExport with decls := inputExport.decls.map fun declaration => match declaration with
+    | .induct types constructors recursors =>
+      if types.any (·.name == target) then .induct types constructors.reverse recursors
+      else declaration
+    | other => other }
+
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let binary := s!"{root}/.lake/build/bin/modelgen"
@@ -101,6 +134,87 @@ def main (args : List String) : IO UInt32 := do
     invalidOutput.exitCode == 1 &&
       (invalidOutput.stderr.splitOn "output kernel check rejected:").length > 1
   IO.FS.removeFile invalidPath
+
+  -- Kernel replay uses declaration dependencies internally, without applying
+  -- the model-before-owner output policy or changing the stream's bytes.
+  let dependency := `ArenaDependency
+  let dependent := `ArenaDependent
+  let dependencyDecl : Modelgen.EDecl :=
+    .ax dependency [] (.sort (.succ .zero)) false
+  let dependentDecl : Modelgen.EDecl :=
+    .ax dependent [] (.const dependency []) false
+  let reversedDependencies : Modelgen.Export :=
+    { nestedExport with decls := #[dependentDecl, dependencyDecl] }
+  let reversedText := reversedDependencies.render
+  let reversedReplay ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
+    "--quiet", "-"] reversedText
+  state := state.check "kernel replay dependency-orders without transforming output" <|
+    reversedReplay.exitCode == 0 && reversedReplay.stdout == reversedText
+
+  let missingDependency : Modelgen.Export :=
+    { nestedExport with decls := #[dependentDecl] }
+  let missingReplay ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    missingDependency.render
+  state := state.check "missing kernel dependency is rejected with exit 1" <|
+    missingReplay.exitCode == 1 &&
+      (missingReplay.stderr.splitOn "input kernel check rejected:").length > 1
+
+  let cycleLeft := `ArenaCycleLeft
+  let cycleRight := `ArenaCycleRight
+  let dependencyCycle : Modelgen.Export := { nestedExport with decls := #[
+    .ax cycleLeft [] (.const cycleRight []) false,
+    .ax cycleRight [] (.const cycleLeft []) false] }
+  let cycleReplay ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    dependencyCycle.render
+  state := state.check "cyclic kernel dependencies are rejected with exit 1" <|
+    cycleReplay.exitCode == 1 &&
+      (cycleReplay.stderr.splitOn "input kernel check rejected:").length > 1
+
+  -- `Declaration.inductDecl` consumes only type-former and constructor inputs;
+  -- all exported bookkeeping and recursor metadata must independently equal
+  -- the `ConstantInfo`s minted by Lean's kernel.
+  let metadataCorruptions : Array (String × Modelgen.Export) := #[
+    ("inductive all", mapInductiveType nestedExport `Nat fun type =>
+      { type with all := [`Eq] }),
+    ("inductive constructor order", mapInductiveType nestedExport `Nat fun type =>
+      { type with ctors := type.ctors.reverse }),
+    ("inductive recursion flag", mapInductiveType nestedExport `Nat fun type =>
+      { type with isRec := !type.isRec }),
+    ("inductive nested count", mapInductiveType nestedExport `Nat fun type =>
+      { type with numNested := type.numNested + 1 }),
+    ("constructor type", mapConstructor nestedExport `Nat.succ fun constructor =>
+      { constructor with type := .sort .zero }),
+    ("constructor name", mapConstructor nestedExport `Nat.zero fun constructor =>
+      { constructor with name := `ArenaWrongConstructor }),
+    ("constructor record order", reverseConstructorsFor nestedExport `Nat),
+    ("constructor level parameters", mapConstructor nestedExport `Nat.zero fun constructor =>
+      { constructor with levelParams := [`ArenaExtraLevel] }),
+    ("constructor field count", mapConstructor nestedExport `Nat.succ fun constructor =>
+      { constructor with numFields := constructor.numFields + 1 }),
+    ("recursor level parameters", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with levelParams := recursor.levelParams ++ [`ArenaExtraLevel] }),
+    ("recursor all", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with all := [`Eq] }),
+    ("recursor rule field count", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with rules := recursor.rules.map fun rule =>
+          { rule with nfields := rule.nfields + 1 } })]
+  for (field, corruption) in metadataCorruptions do
+    let result ← runModelgenStdin binary [
+      "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+      corruption.render
+    state := state.check s!"corrupt {field} is rejected with exit 1" <|
+      result.exitCode == 1 &&
+        (result.stderr.splitOn "input kernel check rejected:").length > 1
+
+  let unknownSafety := nestedText.replace "\"safety\":\"safe\"" "\"safety\":\"mystery\""
+  let badSafety ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] unknownSafety
+  state := state.check "unknown definition safety is a parse/tool error with exit 3" <|
+    unknownSafety != nestedText && badSafety.exitCode == 3 &&
+      (badSafety.stderr.splitOn "parse error:").length > 1
 
   -- A valid declaration occupying a required public model slot is a genuine
   -- unsupported-generation result, not a kernel rejection.  Conversely, the
