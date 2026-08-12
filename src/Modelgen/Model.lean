@@ -2064,12 +2064,11 @@ structure Iso where
 /-- **The export's names rewritten to the model's**: `T._model` for each real
 member, `C._model` for each constructor, and `R._model` for each recursor.
 
-One table, two readers. [`Modelgen.checkModel`] uses it to rebuild every emitted
-statement from the rule the *installed* recursor carries, and
-[`Modelgen.mutualIso`] uses it to *write* them — a plain mutual block has no
-second inductive to read a statement off, so its recursors and ι rules are the
-export's own, restored. Two copies of this table would be two things to keep in
-step, and the second reader is what made that concrete. -/
+The mutual and simple constructions share this table when writing restored
+recursor types and rules. A plain mutual block has no second inductive to read a
+statement from, so its public recursors and ι rules are the export's own with
+this simultaneous renaming. The independent structural checker later rebuilds
+the correspondence directly from serialized export records. -/
 def modelTable (env : Environment) (all : Array Name) (is : Iso) :
     Std.HashMap Name (Nat × Expr) := Id.run do
   let us := is.levelParams.map Level.param

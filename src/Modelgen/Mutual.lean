@@ -106,12 +106,12 @@ What is
   declared type*, so the tag/aux encoding really does implement that recursor;
   and each ι theorem is checked at the export's own rule with `Eq.refl` as its
   proof, so the rule really is definitional in the model.
-* **oracle 3's ι half.** [`Modelgen.checkModel`] rebuilds each ι statement
-  through its own telescope walk — opening the recursor's binders, reading the
-  index vector off the major's inferred type — and compares it syntactically
-  with the one emitted here, which is built by a different walk in this file.
-  A key filed under the wrong constructor, a level list off by a motive
-  universe, or a rule count that does not match the recursor's is caught there.
+* **the structural oracle.** [`Modelgen.Check`] independently reconstructs the
+  complete public family from the serialized owner and model records and
+  compares every declaration type syntactically. A key filed under the wrong
+  constructor, a level list off by a motive universe, or a rule count that does
+  not match the exported recursor is caught there without consulting the
+  construction environment.
 -/
 
 open Lean Meta
@@ -363,10 +363,9 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       out := out.push d
       ctors := ctors.push (cn, ctorN cn)
 
-  -- The restore table every statement below is written with. It is
-  -- [`Modelgen.checkModel`]'s own, built from the `Iso` this is on the way to
-  -- returning — the recursor names are all that is read out of it here and they
-  -- are known before any of them exists.
+  -- The shared restore table every statement below is written with, built from
+  -- the `Iso` this is on the way to returning. The recursor names are all that
+  -- is read out of it here and they are known before any of them exists.
   let recs := (Array.range r).map recN
   let tbl := modelTable (← getEnv) all
     { decls := #[], levelParams := lparams, members := #[tagN, auxN], selfNames

@@ -982,10 +982,10 @@ def scheduleSource (x : Export) (generation : Cli.Config) : Except Order.Error E
   else
     Order.reorder x
 
-/-- Read a generated model back from the environment, register every name Lean
-minted for its inductive blocks, and serialize through exact alias lookups.
-The returned `Iso` carries the completed table for reporting and delayed
-checking. -/
+/-- Read a generated model back from the construction environment, register
+every name Lean minted for its inductive blocks, and serialize through exact
+alias lookups. The returned `Iso` carries the completed alias and splice
+witnesses used for reporting and shared-support persistence. -/
 def serialiseIso (is : Iso) : MetaM (Array EDecl × Iso) := do
   let mut records : Array EDecl := #[]
   for declaration in is.decls do
@@ -994,12 +994,10 @@ def serialiseIso (is : Iso) : MetaM (Array EDecl × Iso) := do
   let aliases := is.aliases.register names
   let renamed := records.map (·.renameAliases aliases)
   let spliced := is.spliced.map fun name => aliases.exact name
-  -- `Iso` continues to name the declarations installed in the environment.
-  -- Only serialized records take exact aliases.  This is the contract of
-  -- `recs`, `ctors`, `selfNames`, unit-like/rule-K theorem names and
-  -- projections: the delayed statement checker must keep using the alias
-  -- declarations actually installed in the environment.  Spliced names are
-  -- different: they are output/report identities and are serialized exactly.
+  -- `Iso` continues to name declarations in the disposable construction
+  -- environment. Only serialized records take exact aliases; the completed
+  -- map therefore remains available while the exact output identities of
+  -- spliced support are recorded for persistence and reporting.
   return (renamed, { is with aliases := aliases, spliced := spliced })
 
 /-- Compare the export's own recursors against the ones the kernel just
@@ -1019,265 +1017,6 @@ def checkRecs (rs : List ERec) : MetaM (Nat × Array Name) := do
         && rv.isUnsafe == r.isUnsafe && sameRules do
       bad := bad.push r.name
   return (n, bad)
-
-/-- **The model's recursors and ι theorems state the export's own.**
-
-`addDeclCore` says the generator's proof proves the generator's *statement*, and
-a generator that stated a different well-typed equation — the rule of the wrong
-member, the induction hypothesis at `T.rec` where the export says `T.rec_1`, a
-minor applied to its fields in the wrong order — would satisfy it and be wrong.
-So every emitted statement is rebuilt here from the rule the **installed**
-`T.rec_k` carries, reading the constructor's field telescope off the recursor's
-own major type rather than off the plan, and compared syntactically.
-
-This check exposed a real bug in an earlier implementation: recursors rewritten
-at no levels. -/
-def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
-    (_projections : Array EProjection := #[]) :
-    MetaM (Nat × Array String) := do
-  let env ← getEnv
-  let mut tbl := modelTable env all is
-  -- A normalized-name collision installs the model recursor below a retry
-  -- root, while the export continues to carry its exact public owner.  The
-  -- completed alias table is therefore part of the correspondence key, just
-  -- as it is part of serialization; comparing the build name directly loses
-  -- the exported recursor on precisely those retries.
-  let exportedFor := fun (modelRecursor : Name) =>
-    recursors.find? fun recursor =>
-      Naming.modelName recursor.name == is.aliases.exact modelRecursor
-  -- `modelTable` is also used below the driver and retains its structural
-  -- fallback. Here the export's exact names are available, so make those the
-  -- authoritative recursor keys rather than reconstructing `T.rec_k`.
-  for modelRecursor in is.recs do
-    if let some recursor := exportedFor modelRecursor then
-      tbl := tbl.insert recursor.name
-        (0, .const modelRecursor (recursor.levelParams.map Level.param))
-  let mut n := 0
-  let mut errs : Array String := #[]
-  unless recursors.size == is.recs.size do
-    errs := errs.push s!"the export carries {recursors.size} recursors but the model carries \
-      {is.recs.size}"
-  for k in [0:is.recs.size] do
-    let some rv := exportedFor is.recs[k]!
-      | errs := errs.push s!"model recursor {is.recs[k]!} has no exported recursor"; continue
-    let ern := rv.name
-    let some (.recInfo _) := env.constants.find? ern
-      | errs := errs.push s!"{ern} was not installed"; continue
-    let some mi := env.constants.find? is.recs[k]!
-      | errs := errs.push s!"{is.recs[k]!} was not generated"; continue
-    let want := restore tbl rv.type
-    unless mi.type == want do
-      errs := errs.push s!"{is.recs[k]!} is not {ern} at the model"
-    n := n + 1
-    let mine := is.iotas.filter (·.1 == k)
-    let kTheorems := is.ruleKs.filter (·.1 == ern)
-    if rv.k then
-      unless kTheorems.size == 1 do
-        errs := errs.push s!"{is.recs[k]!} has {kTheorems.size} rule-K theorems"
-      if let some (_, theoremName) := kTheorems[0]? then
-        match EqInfo.check env with
-        | .error why => errs := errs.push s!"cannot check {theoremName}: Eq {why}"
-        | .ok eqi =>
-          unless rv.rules.length == 1 do
-            errs := errs.push s!"{ern} is K-like with {rv.rules.length} rules"
-          if rv.rules[0]?.isSome then
-            let some (_, _, iotaName) := mine[0]?
-              | errs := errs.push s!"{ern} has no generated first ι theorem"; continue
-            let some iotaInfo := env.constants.find? iotaName
-              | errs := errs.push s!"{iotaName} was not generated"; continue
-            match ← (ruleKDecl eqi rv.levelParams
-                (rv.numParams + rv.numMotives + rv.numMinors) theoremName
-                iotaInfo.type).run with
-            | .error dec => errs := errs.push s!"cannot state {theoremName}: {dec.label}"
-            | .ok (.thmDecl expected) =>
-              match env.constants.find? theoremName with
-              | some actual =>
-                unless actual.levelParams == expected.levelParams && actual.type == expected.type do
-                  errs := errs.push s!"{theoremName} is not {ern}'s K reduction"
-              | none => errs := errs.push s!"{theoremName} was not generated"
-            | .ok _ => errs := errs.push s!"{theoremName} is not a theorem"
-          n := n + 1
-    else unless kTheorems.isEmpty do
-      errs := errs.push s!"{ern} is not K-like but has a rule-K theorem"
-    unless mine.size == rv.rules.length do
-      errs := errs.push s!"{is.recs[k]!} has {mine.size} ι theorems against {ern}'s \
-        {rv.rules.length} rules"
-      continue
-    -- **A block that eliminates only into `Prop` has no motive universe**, and
-    -- then the rule's `Eq` is at `Prop` and the recursor's level list is the
-    -- declaration's own. `S : Prop | mk : PL S → S` is one; `Eq` itself is
-    -- `Prop` and has a motive universe, so this is read off the level list and
-    -- not off the sort.
-    let large := rv.levelParams.length == is.levelParams.length + 1
-    let v ← if large then
-        match rv.levelParams[0]? with
-        | some lp => pure (Level.param lp)
-        | none => pure Level.zero
-      else pure Level.zero
-    let recLs := if large then v :: is.levelParams.map Level.param
-                 else is.levelParams.map Level.param
-    let nb := np + rv.numMotives + rv.numMinors
-    -- **The indices sit between the minors and the major.** A rule binds no
-    -- index of its own — they are determined by the constructor's result — so
-    -- the ι theorem's telescope is still `p⃗ M⃗ S⃗ f⃗` and the index vector is
-    -- read off the major's own type below.
-    let ni := rv.numIndices
-    let (es, extra) ← forallBoundedTelescope want (some (nb + ni + 1)) fun bs _ => do
-      let pre := bs.extract 0 nb
-      let ps := bs.extract 0 np
-      let motiveK := bs[np + k]!
-      let majorTy ← inferType bs[nb + ni]!
-      let mut es : Array String := #[]
-      let mut cnt := 0
-      for (rule, mineJ) in rv.rules.zip mine.toList do
-        let (_, key, thm) := mineJ
-        unless rule.ctor == key do
-          es := es.push s!"{thm} is about {key}, not {ern}'s rule for {rule.ctor}"
-          continue
-        -- The constructor as it is applied, and its field telescope: at the
-        -- root the model's own constructor, at a mimic the **real** container's
-        -- at the arguments the major's own type carries — which is where this
-        -- reads the occurrence from rather than from the plan.
-        let (headC, hls, hpre, cty) ←
-          if k < is.numAll then do
-            let some (_, modelC) := is.ctors.find? (·.1 == key)
-              | es := es.push s!"{key} has no model constructor"; continue
-            -- The statement oracle must inspect the declaration we emitted,
-            -- not the installed constant. The kernel may store a βζ-normalized
-            -- field domain, while literal correspondence deliberately retains
-            -- the exported constructor syntax in both the constructor and its
-            -- iota theorem.
-            let modelCTy? := is.decls.findSome? fun declaration => match declaration with
-              | .defnDecl value => if value.name == modelC then some value.type else none
-              | _ => none
-            let some modelCTy := modelCTy?
-              | es := es.push s!"{modelC} has no emitted constructor declaration"; continue
-            pure (modelC, is.levelParams.map Level.param, ps,
-              ← instantiateForall modelCTy ps)
-          else do
-            let .const _ cls := majorTy.getAppFn
-              | es := es.push s!"{ern}'s major is not a type"; continue
-            -- The container at its **parameters**: the major's own type is the
-            -- occurrence at this recursor's indices, and the indices are the
-            -- last `ni` arguments of it.
-            let mas := majorTy.getAppArgs
-            let qs := mas.extract 0 (mas.size - ni)
-            let some ci := env.constants.find? key
-              | es := es.push s!"{key} is not declared"; continue
-            pure (key, cls, qs,
-              ← instantiateForall (ci.type.instantiateLevelParams ci.levelParams cls) qs)
-        let e ← forallTelescope cty fun fields _ => do
-          let major := mkAppN (.const headC hls) (hpre ++ fields)
-          let mas := (← inferType major).getAppArgs
-          let idxs := mas.extract (mas.size - ni) mas.size
-          let lhs := mkAppN (.const is.recs[k]! recLs) ((pre ++ idxs).push major)
-          -- The rule's own right-hand side, at the model's names. Lean states it
-          -- as `fun p⃗ M⃗ S⃗ f⃗ => …`, which is this telescope exactly.
-          let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
-          let body := mkAppN (.const `Eq [v]) #[mkAppN motiveK (idxs.push major), lhs, rhs]
-          let some fieldsType := closeForallsExact? cty fields body
-            | return some s!"{headC}'s exported telescope has fewer fields than its installed type"
-          let some wantTy := closeForallsExact? want pre fieldsType
-            | return some s!"{ern}'s exported telescope is shorter than its recursor prefix"
-          let some ti := env.constants.find? thm | return some s!"{thm} was not generated"
-          if ti.levelParams != rv.levelParams then
-            return some s!"{thm} is not at {ern}'s motive universe"
-          if ti.type != wantTy then return some s!"{thm} is not {ern}'s rule for {rule.ctor}"
-          return none
-        if let some m := e then es := es.push m
-        cnt := cnt + 1
-      return (es, cnt)
-    n := n + extra
-    errs := errs ++ es
-  -- Intrinsic projection interfaces are derived solely from the modeled
-  -- constructor telescope.  This deliberately does not consult ordinary
-  -- export declarations whose values happen to contain `Expr.proj`.
-  let projectionEqInfo ← match EqInfo.check env with
-    | .ok eqi => pure eqi
-    | .error message => throwError message
-  for (owner, fieldIndex, modelProjection, modelRule) in is.projections do
-    let some projectionInfo := env.constants.find? modelProjection
-      | errs := errs.push s!"{modelProjection} was not generated"; continue
-    let some memberIndex := all.findIdx? (· == owner)
-      | errs := errs.push s!"{modelProjection}'s owner {owner} is outside its model"; continue
-    let some (.inductInfo ownerInfo) := env.constants.find? owner
-      | errs := errs.push s!"{modelProjection}'s owner {owner} was not installed";
-        continue
-    let [sourceConstructor] := ownerInfo.ctors
-      | errs := errs.push s!"{owner} does not have exactly one constructor";
-        continue
-    let some (_, modelConstructor) := is.ctors.find? (·.1 == sourceConstructor)
-      | errs := errs.push s!"{sourceConstructor} has no model constructor"; continue
-    let some constructorInfo := env.constants.find? modelConstructor
-      | errs := errs.push s!"{modelConstructor} was not generated"; continue
-    let numFields := numForalls constructorInfo.type - np
-    let us := is.levelParams.map Level.param
-    let modelType := is.selfNames[memberIndex]!
-    let ownerArity := np + ownerInfo.numIndices
-    let some modelTypeInfo := env.constants.find? modelType
-      | errs := errs.push s!"{modelType} was not generated"; continue
-    let wantProjectionType ← forallBoundedTelescope modelTypeInfo.type (some ownerArity)
-        fun ownerArguments _ => do
-      let params := ownerArguments.extract 0 np
-      let fieldsType ← instantiateForall constructorInfo.type params
-      withLocalDeclD `self (mkAppN (.const modelType us) ownerArguments) fun self => do
-        let mut current := fieldsType
-        for earlier in [0:fieldIndex + 1] do
-          let .forallE _ fieldType rest _ := current
-            | throwError "{modelConstructor} has too few fields"
-          if earlier == fieldIndex then
-            return ← mkForallFVars (ownerArguments.push self) fieldType
-          let some (_, _, earlierProjection, _) := is.projections.find? fun entry =>
-              entry.1 == owner && entry.2.1 == earlier
-            | throwError "{owner} has no intrinsic projection for earlier field {earlier}"
-          current := rest.instantiate1
-            (mkAppN (.const earlierProjection us) (ownerArguments.push self))
-        throwError "{modelConstructor} has no field {fieldIndex}"
-    unless projectionInfo.levelParams == is.levelParams &&
-        projectionInfo.type == wantProjectionType do
-      errs := errs.push s!"{modelProjection} is not {owner}'s intrinsic field {fieldIndex}"
-    n := n + 1
-    let expected ← forallBoundedTelescope constructorInfo.type (some (np + numFields))
-        fun constructorArgs constructorResult => do
-      let params := constructorArgs.extract 0 np
-      let fields := constructorArgs.extract np constructorArgs.size
-      let indices := constructorResult.getAppArgs.extract np ownerArity
-      let major := mkAppN (.const modelConstructor (is.levelParams.map Level.param))
-        constructorArgs
-      let lhs := mkAppN (.const modelProjection (is.levelParams.map Level.param))
-        (params ++ indices ++ #[major])
-      let mut normalizedFields : Array ProjectionField := #[]
-      for index in [:fields.size] do
-        let value := fields[index]!
-        let fieldType ← inferType value
-        let level ← getLevel fieldType
-        let prior? := is.projections.find? fun entry =>
-          entry.1 == owner && entry.2.1 == index
-        let projected := match prior? with
-          | some (_, _, projection, _) =>
-            mkAppN (.const projection us) (params ++ indices ++ #[major])
-          | none => value
-        let iota? := if index < fieldIndex then prior?.map fun (_, _, _, iota) =>
-          mkAppN (.const iota us) constructorArgs
-        else none
-        normalizedFields := normalizedFields.push
-          { name := Name.mkSimple s!"field_{index}", info := .default,
-            value, type := fieldType, level, projected, iota? }
-      let rhs ← match ProjectionField.normalizeProjectionField projectionEqInfo
-          (Naming.projectionName owner fieldIndex) normalizedFields fieldIndex with
-        | .ok value => pure value
-        | .error _ => return none
-      let alpha ← inferType lhs
-      let level ← getLevel alpha
-      return some (← mkForallFVars constructorArgs (mkAppN (.const `Eq [level]) #[alpha, lhs, rhs]))
-    let some expected := expected
-      | errs := errs.push s!"{modelRule} has no field {fieldIndex}"; continue
-    let some ruleInfo := env.constants.find? modelRule
-      | errs := errs.push s!"{modelRule} was not generated"; continue
-    unless ruleInfo.levelParams == is.levelParams && ruleInfo.type == expected do
-      errs := errs.push s!"{modelRule} is not {owner}'s literal field-{fieldIndex} rule"
-    n := n + 1
-  return (n, errs)
 
 /-- **One installed inductive block, read back out of the environment** as the
 member types and constructor lists [`Modelgen.mutualIso`] wants.
@@ -1841,7 +1580,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     --
     -- The **records** still go out ahead of the declaration's whenever they
     -- can, because `out` has not been pushed yet.
-    if let .induct ts cs inputRecursors := d then
+    if let .induct ts cs _ := d then
       if let t :: _ := ts then
         -- **No "is this a block I wrote?" test here**, and that is deliberate.
         -- On this tool's own output the block `T._model.0 … T._model.{n−1}` is
