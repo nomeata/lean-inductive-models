@@ -449,6 +449,12 @@ private def discoverWith (x : Export) (includeEmpty : Name → Bool) : Array Fam
 def discover (x : Export) : Array Family :=
   discoverWith x fun _ => false
 
+/-- Discover the exact generated-family view, retaining a requested owner even
+when every public model slot is absent.  This is the same fail-closed discovery
+used by the aggregate generation oracle, exposed for staged per-family checks. -/
+def statementFamiliesFor (x : Export) (owners : Std.HashSet Name) : Array Family :=
+  (discoverWith x owners.contains).filter fun family => owners.contains family.owner
+
 private partial def expressionReference? (targets : Std.HashSet Name) : Expr → Option Name
   | .const name _ => if targets.contains name then some name else none
   | .proj typeName _ struct =>
@@ -1114,6 +1120,21 @@ def checkFamilyStatementsWithIndex (x : Export) (syntax : SyntaxIndex)
   { statementsChecked := family.correspondence.statementCount
     violations := checkFamilyWithIndex x syntax family false ++ global }
 
+/-- Batch a selected set of discovered families through one reusable index.
+Unlike concatenating single-family reports, the global unexpected-slot sweep
+runs once, retaining aggregate diagnostic order and multiplicity exactly. -/
+def checkStatementFamiliesWithIndex (x : Export) (syntax : SyntaxIndex)
+    (families : Array Family) : StatementReport :=
+  let diagnosticOwners := families.foldl
+    (fun result family => family.correspondence.diagnosticOwners.foldl
+      (fun result owner => result.insert owner) result)
+    ({} : Std.HashSet Name)
+  let violations := (checkFamiliesWithIndex x syntax families false).filter fun violation =>
+    diagnosticOwners.contains violation.familyOwner
+  { statementsChecked := families.foldl
+      (fun count family => count + family.correspondence.statementCount) 0
+    violations }
+
 def checkStatements (x : Export) : StatementReport :=
   let families := discover x
   { statementsChecked := families.foldl
@@ -1124,16 +1145,8 @@ def checkStatements (x : Export) : StatementReport :=
 Pre-existing models in an already-filtered input remain available as exact
 declaration dependencies, but do not inflate the run's work count or errors. -/
 def checkStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
-  let families := (discoverWith x owners.contains).filter fun family => owners.contains family.owner
-  let diagnosticOwners := families.foldl
-    (fun result family => family.correspondence.diagnosticOwners.foldl
-      (fun result owner => result.insert owner) result)
-    ({} : Std.HashSet Name)
-  let violations := (checkFamilies x families false).filter fun violation =>
-    diagnosticOwners.contains violation.familyOwner
-  { statementsChecked := families.foldl
-      (fun count family => count + family.correspondence.statementCount) 0
-    violations }
+  let families := statementFamiliesFor x owners
+  checkStatementFamiliesWithIndex x (.ofExport x) families
 
 /-- Compatibility view of [`checkReport`] for callers interested only in
 violations. -/
