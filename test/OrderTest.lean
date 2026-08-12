@@ -239,6 +239,12 @@ def run (root : String) : IO UInt32 := do
     match scheduleSource selectedSupport nestedMutualOnly with
     | .ok scheduled => scheduled.decls == #[axDecl `Eq, axDecl `PUnit, selectedOwner]
     | .error _ => false
+  let alreadyModeled := exportOf
+    #[axDecl (Naming.modelName `SelectedA), selectedOwner, axDecl `Eq, axDecl `PUnit]
+  state := state.check "support scheduler leaves an already-modeled export unchanged" <|
+    match scheduleSource alreadyModeled nestedMutualOnly with
+    | .ok scheduled => scheduled.decls == alreadyModeled.decls
+    | .error _ => false
 
   let metadataReferences := Order.references metadataRecord
   state := state.check "all inductive record reference fields are traversed" <|

@@ -961,21 +961,24 @@ Support scheduling is global so that one fixed, dependency-closed support
 class moves atomically ahead of every selected owner.  It must nevertheless be
 inactive when the export has no selected owner: generation flags alone do not
 justify moving independent source records. -/
-def scheduledModelOwner (generation : Cli.Config) : EDecl → Bool
+def scheduledModelOwner (generation : Cli.Config) (reserved : Std.HashSet Name) : EDecl → Bool
   | .induct types _ _ =>
     match types with
     | [] => false
     | first :: _ =>
-      (generation.nested && types.any (·.numNested > 0)) ||
-        (generation.mutualModels && types.length > 1 && !types.any (·.numNested > 0)) ||
-        (types.length == 1 && first.numNested == 0 &&
-          generation.modelsSimpleInput first.name)
+      !reserved.contains (Naming.modelName first.name) &&
+        ((generation.nested && types.any (·.numNested > 0)) ||
+          (generation.mutualModels && types.length > 1 && !types.any (·.numNested > 0)) ||
+          (types.length == 1 && first.numNested == 0 &&
+            generation.modelsSimpleInput first.name))
   | _ => false
 
 /-- Dependency-order source records, hoisting the fixed support class exactly
 when at least one input owner reaches an enabled generation branch. -/
 def scheduleSource (x : Export) (generation : Cli.Config) : Except Order.Error Export :=
-  if x.decls.any (scheduledModelOwner generation) then
+  let reserved := x.decls.foldl (fun names declaration =>
+    declaration.names.foldl (·.insert ·) names) {}
+  if x.decls.any (scheduledModelOwner generation reserved) then
     Order.reorderPrioritizing x (scheduledSupportRecord generation)
   else
     Order.reorder x
