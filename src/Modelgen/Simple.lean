@@ -553,9 +553,9 @@ private def checkPSigmaPrimeDerived (expected : Array Declaration) : GenM Unit :
       | badShape "one PSigma' support declaration has several names"
     let some actual := (← getEnv).constants.find? name
       | declineWith (.notLeans name "it is missing from the tight pair support bundle")
-    let (expectedLevels, expectedType, expectedValue, expectedTheorem) := match declaration with
-      | .defnDecl value => (value.levelParams, value.type, value.value, false)
-      | .thmDecl value => (value.levelParams, value.type, value.value, true)
+    let (expectedLevels, expectedType, expectedValue, expectedTheorem) ← match declaration with
+      | .defnDecl value => pure (value.levelParams, value.type, value.value, false)
+      | .thmDecl value => pure (value.levelParams, value.type, value.value, true)
       | _ => badShape s!"{name} is not a derived tight-pair declaration"
     let (actualLevels, actualType, actualValue) ← match actual, expectedTheorem with
       | .defnInfo value, false => pure (value.levelParams, value.type, value.value)
