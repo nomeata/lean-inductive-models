@@ -387,7 +387,10 @@ def run (root : String) : IO UInt32 := do
       !simpleRun.env.constants.contains (Naming.modelName `Tri) &&
       [`Eq, `Nat, `PSigma, `PSigma'].all simpleRun.env.constants.contains &&
       currentLiftSupportRoots.all simpleRun.env.constants.contains &&
-      !simpleRun.env.constants.contains `PULiftP
+      !simpleRun.env.constants.contains `PULiftP &&
+      !simple.decls.any fun declaration =>
+        declaration.names.contains `PULiftP ||
+          (Order.references declaration).contains `PULiftP
   let svType := declarationType? simple' `Sv
   let svModelType := declarationType? simple' (Naming.modelName `Sv)
   state := state.check "Sv model preserves its literal declared type" <|
