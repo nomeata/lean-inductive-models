@@ -119,9 +119,10 @@ def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Nam
   else
     let discovered := Modelgen.Check.discover input
     let violations := Modelgen.Check.check input
-    let alreadyCovered : Std.HashSet Name := discovered.foldl (init := {}) fun owners family =>
+    let alreadyCovered := discovered.foldl (init := ({} : Std.HashSet Name)) fun owners family =>
       if violations.any (·.familyOwner == family.owner) then owners else owners.insert family.owner
-    let generated := report.generated.foldl (init := {}) fun owners entry => owners.insert entry.1
+    let generated := report.generated.foldl (init := ({} : Std.HashSet Name))
+      fun owners entry => owners.insert entry.1
     report.declined.filter fun entry =>
       !alreadyCovered.contains entry.1 && !generated.contains entry.1
 
