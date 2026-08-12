@@ -91,6 +91,12 @@ root = "MemoryProbe"
 supportInterpreter = true
 
 [[lean_exe]]
+name = "stagedwritertest"
+srcDir = "test"
+root = "StagedWriterTest"
+supportInterpreter = true
+
+[[lean_exe]]
 name = "projectiontest"
 srcDir = "test"
 root = "ProjectionTest"

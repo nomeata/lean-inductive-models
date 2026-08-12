@@ -1124,20 +1124,29 @@ def decl (w : Writer) (d : EDecl) : Writer :=
 /-- One declaration split into the arena definitions which must precede every
 declaration spool, and its single reorderable declaration line. -/
 structure DeclSplit where
+  before : Cursor
   arena : Array String
   declaration : String
   after : Cursor
   deriving Inhabited, Repr, BEq
 
+/-- Fail closed when a spool segment was produced for a different arena
+cursor.  The reader accepts sparse arenas for compatibility, so composition
+must enforce the writer's stronger continuous-ID contract itself. -/
+def DeclSplit.validateStart (split : DeclSplit) (expected : Cursor) : Except String Unit :=
+  if split.before == expected then .ok ()
+  else .error s!"arena segment starts at {repr split.before}, expected {repr expected}"
+
 /-- Serialize one declaration while keeping arena and declaration records
 separate.  The returned writer retains only this island's interning maps, but
 its line buffer is empty and ready for the next declaration in the island. -/
 def splitDecl (w : Writer) (d : EDecl) : Writer × DeclSplit :=
+  let before := w.cursor
   let completed := { w with out := #[] } |>.decl d
   let declaration := completed.out.back!
   let arena := completed.out.pop
   let after := completed.cursor
-  ({ completed with out := #[] }, { arena, declaration, after })
+  ({ completed with out := #[] }, { before, arena, declaration, after })
 
 end Writer
 
