@@ -569,7 +569,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake build \
   drivernamingtest privatealiastest simplenamingtest rulektest mainclitest \
   projectiontest structureetatest deepimaxboxtest psigmaprimetest \
   exactsortlifttest tightpsigmaprimeroutetest vanishingerasuretest \
-  transparentowneraliasestest exportsyntaxnormalizationtest
+  transparentowneraliasestest exportsyntaxnormalizationtest stagedwritertest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe clitest
@@ -591,6 +591,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe tightpsigmaprimeroutetest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe vanishingerasuretest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe transparentowneraliasestest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe exportsyntaxnormalizationtest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe stagedwritertest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-a.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-c.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-mathlib-result.sh
