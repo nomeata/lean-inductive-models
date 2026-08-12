@@ -827,15 +827,19 @@ def checkGeneratedIn (base : Environment) (records : Array EDecl) :
           return .error s!"{name}: checked declaration was lost from the kernel environment"
   return .ok checked
 
-/-- Recheck the declarations actually constructed in a disposable model fork
-against an owner-free source environment.  Build names are intentional here:
-collision retries are kernel-checked under their injective alias names and are
-renamed back to exact public spellings only when serialized. -/
-def installGeneratedSupportIn (base : Environment) (records : Array EDecl) :
+/-- Persist the reusable subset of support explicitly recorded by an accepted
+model island. The `Iso.spliced` witness is essential: namespace shape alone
+must never copy a public model such as `Eq.Example._model` into the replay
+environment. Local skeletons and per-model `funext` remain disposable. -/
+def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
+    (models : Array PendingModel) :
     MetaM (Except String Environment) := do
+  let spliced := models.foldl (init := ({} : Std.HashSet Name)) fun names model =>
+    model.iso.spliced.foldl (fun names name => names.insert name) names
   let mut main := base
   for record in records do
-    if record.names.all persistentSupportName then
+    if record.names.any spliced.contains &&
+        (record.names.any persistentSupportRoot || record.names.all persistentSupportName) then
       let some declaration := toDeclaration main record
         | return .error s!"{record.names}: cannot reconstruct shared support"
       match main.addDeclCore 0 declaration none true with
@@ -849,7 +853,7 @@ record ordering but is removed before checked replay, so the kernel sees every
 exact serialized model declaration in the owner-free persistent environment.
 Only fixed shared support is copied back. -/
 def closeModelIsland (template : Export) (main : Environment)
-    (records : Array EDecl) (owner : EDecl) :
+    (records : Array EDecl) (models : Array PendingModel) (owner : EDecl) :
     MetaM (Except String (Array EDecl × Environment)) := do
   let island := { template with decls := records.push owner }
   let ordered ← match Order.reorder island with
@@ -864,9 +868,24 @@ def closeModelIsland (template : Export) (main : Environment)
   match ← checkGeneratedIn main generated with
   | .error message => return .error message
   | .ok _ =>
-    match ← installGeneratedSupportIn main generated with
+    match ← installGeneratedSupportIn main generated models with
     | .error message => return .error message
     | .ok supported => return .ok (generated, supported)
+
+/-- Source declarations which must be replayed before any owner that can need
+them. This is deliberately wider than [`Modelgen.persistentSupportName`]:
+`False` participates in the simple pass's existing readiness contract but is
+derived rather than spliced. Conversely, when only the nested/mutual layers
+are selected, moving the full simple basis would change independent source
+order for no reason. -/
+def scheduledSupportRecord (generation : Cli.Config) (declaration : EDecl) : Bool :=
+  if generation.simple || generation.basic then
+    declaration.names.any persistentSupportRoot || declaration.names.all persistentSupportName ||
+      declaration.names.contains `False
+  else if generation.nested || generation.mutualModels then
+    declaration.names.contains `Eq || declaration.names.contains `PULiftP
+  else
+    false
 
 /-- Read a generated model back from the environment, register every name Lean
 minted for its inductive blocks, and serialize through exact alias lookups.
@@ -1484,22 +1503,6 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
             st.2.2), none)
     return (st2, none)
 
-/-- **One prim model held back until the input has caught up.**
-[`Modelgen.runFilter`]'s `waitingPrim` queue, named because
-[`Modelgen.primCompose`] now returns entries for it. `readiness` records the
-exact prerequisite class, so a quotient-only model and a W model with a later
-logical interface do not move past each other's unrelated declarations. -/
-structure PrimJob where
-  readiness : PrimReadiness
-  name : Name
-  levelParams : List Name
-  numParams : Nat
-  type : Expr
-  constructors : Array (Name × Expr)
-  recursors : Array ERec
-  projections : Array EProjection := #[]
-  deriving Inhabited
-
 /-- **The composition's third step**: the implementation inductives a mutual
 model just emitted — `T._model._impl.tag` and `T._model._impl.aux` — are
 declarations of the output like any other, so the simple branch runs on them
@@ -1507,36 +1510,19 @@ too. The tag is a plain sum and models; the auxiliary is indexed and takes
 arm C. Their own public carriers are the declaration-local names
 `T._model._impl.tag._model` and `T._model._impl.aux._model`.
 
-**And it can wait, exactly as an input declaration can.** A prim model may
-splice `Eq`, `False`, `Nat` and `PSigma`, and a splice is refused at a name the
-input declares *later* — so `runFilter` holds such a model in `waitingPrim`
-until [`Modelgen.primReady`] and generates it after the input's own. The third
-step had no way to reach that queue: it was called from inside `genMutual` and
-from the nested arm, both of which thread only `(out, rep, pending)`, so it
-passed `canWait := false` and every model here declined at a primitive that was
-merely *late*. On the Mathlib export that is `Lean.Syntax`, replayed at line
-9,948 against `PSigma` at line 95,424: both of its members declined
-`prim model name taken (PSigma)`, and both are models once they are allowed to
-wait.
-
-**This is not the exact-alias retry's class** and the two must not be
-confused. That retry answers [`Modelgen.Decline.nameLost`] — *our* name,
-normalised onto another of ours, which we may rename because nothing in the
-input holds it. This is [`Modelgen.Decline.nameTaken`] — the *input's* name,
-arriving later, which we may not take at any spelling and must simply wait for.
-
-So the deferred jobs are **returned** rather than run, and the caller puts them
-where the input declarations' own jobs go. `canWait := false` at the
-end-of-file drain, where nothing more is coming and a decline is the honest
-answer. -/
+All input-owned prerequisite declarations are dependency-closed and scheduled
+before model islands. Composition therefore completes in the same disposable
+environment as the mutual model; retaining a job after its generated owner
+would retain precisely the ownerful state this pass is designed to discard. -/
 def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
-    (reserved : Std.HashSet Name) (basicModels : Bool) (canWait : Bool)
-    (st : FilterState) : MetaM (FilterState × Array PrimJob) := do
+    (reserved : Std.HashSet Name) (basicModels : Bool)
+    (st : FilterState) : MetaM FilterState := do
   let mut st := st
-  let mut wait : Array PrimJob := #[]
   -- Asked once, of the environment as it stands at the block: every member of
   -- one block is at the same point in the replay.
   let ready ← primReady reserved
+  unless ready do
+    throwError "composed simple model basis remained late after support scheduling"
   for n in members do
     let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
     let mut cts : Array (Name × Expr) := #[]
@@ -1544,32 +1530,23 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
       let some ci := (← getEnv).constants.find? cn | continue
       cts := cts.push (cn, ci.type)
     let recursors ← recursorsOfNames #[n]
-    if canWait && !ready then
-      -- The type and the constructor types are read **here**, at the block,
-      -- because that is where the member is known to be installed; the drain
-      -- only needs to call `genPrim` with them.
-      wait := wait.push
-        { readiness := .basis, name := n, levelParams := lparams, numParams := np,
-          type := iv.type, constructors := cts, recursors }
-    else
-      st := (← genPrim n lparams np iv.type cts recursors #[] reserved basicModels false st).1
-  return (st, wait)
+    let (next, wait?) ←
+      genPrim n lparams np iv.type cts recursors #[] reserved basicModels true st
+    if wait?.isSome then
+      throwError "composed simple model prerequisite remained late after support scheduling"
+    st := next
+  return st
 
 /-- One plain mutual block's model, generated and accounted for.
 
-A function rather than two copies inline because it is called from two places
-in [`Modelgen.runFilter`] — at the block, and again at the input's own `Eq` for
-a block that had to wait for it.
-
-The second component is [`Modelgen.primCompose`]'s deferred jobs, which the
-caller adds to its own `waitingPrim`; it is empty unless the simple layer is on
-and the basis is late. The basic layer is passed separately and controls the
-support closure of each generated implementation tag and auxiliary model. -/
+A separate function keeps the block path and the nested composition path on
+one implementation. The basic layer controls the support closure of each
+generated implementation tag and auxiliary model. -/
 def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (tys : Array Expr) (ctors : Array (Array (Name × Expr))) (recursors : Array ERec)
     (projections : Array EProjection)
-    (reserved : Std.HashSet Name) (simpleModels basicModels canWait : Bool)
-    (st : FilterState) : MetaM (FilterState × Array PrimJob) := do
+    (reserved : Std.HashSet Name) (simpleModels basicModels : Bool)
+    (st : FilterState) : MetaM FilterState := do
   let (out, rep, pending) := st
   let saved ← getEnv
   let mut result ← (do
@@ -1584,8 +1561,8 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
   match result with
   | .error dec =>
     setEnv saved
-    return ((out, { rep with declined := rep.declined.push (all[0]!, dec.labelAs "mutual") },
-      pending), #[])
+    return (out, { rep with declined := rep.declined.push (all[0]!, dec.labelAs "mutual") },
+      pending)
   | .ok is =>
     let (records, is) ← serialiseIso is
     let mut out := out
@@ -1595,9 +1572,9 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
     let st := (out, rep, pending.push { iso := is })
     if simpleModels then
-      primCompose is.members is.levelParams np reserved basicModels canWait st
+      primCompose is.members is.levelParams np reserved basicModels st
     else
-      return (st, #[])
+      return st
 
 /-- Generation settings used by the aggregate fixture suite: nested and mutual
 models remain enabled, while simple models and their bootstrap closure move
@@ -1609,33 +1586,26 @@ def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
   let scheduled ← match Order.reorderPrioritizing x fun declaration =>
-      declaration.names.all persistentSupportName with
+      scheduledSupportRecord generation declaration with
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
+  let mut mainEnv ← getEnv
   let mut out : Array EDecl := #[]
   let mut rep : Report := {}
-  -- Held back until the export's own declaration is installed, so the
-  -- statements can be compared against the recursors it then mints.
+  -- The declarations built inside the current model island. Besides staging
+  -- exact generated names for support persistence, this keeps recursive
+  -- splice closure and nested → mutual → simple composition atomic.
   let mut pending : Array PendingModel := #[]
-  -- Plain mutual blocks whose model is waiting for the input's own `Eq`, or
-  -- (when projections or eta need unrelated motives) its own `PULiftP`.
-  let mut waiting : Array (Array Name × List Name × Nat × Array Expr ×
-    Array (Array (Name × Expr)) × Array ERec × Bool) := #[]
-  -- Simple inductives waiting for the input's own basis
-  -- declarations. Each job records whether it needs the basis, the existing
-  -- quotient/choice set, or W's exact logical set, so a model is not moved
-  -- past an unrelated later declaration.
-  -- **The composition's third step queues here too** ([`Modelgen.PrimJob`]'s
-  -- type): a `T._model._impl.tag` or `T._model._impl.aux` whose model needs a
-  -- primitive the input declares later waits exactly as one of the input's own
-  -- declarations does, instead of declining at a name that is merely late.
-  let mut waitingPrim : Array PrimJob := #[]
   -- Every name the input declares anywhere, so that a model cannot collide
   -- with one the file itself introduces *later*.
   let reserved : Std.HashSet Name :=
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
   for d in scheduled.decls do
-    let mainBefore ← getEnv
+    -- No model declaration is ever installed in `mainEnv`. All constructors
+    -- below work in the ambient disposable fork; closing an inductive record
+    -- restores this exact source prefix plus accepted reusable support.
+    setEnv mainEnv
+    let mainBefore := mainEnv
     let outputBefore := out.size
     let pendingBefore := pending.size
     -- The model, if this is a nested declaration. Generated **before** the
@@ -1735,10 +1705,9 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                   -- The mutual model's own single inductives, modelled from
                   -- the primitives — nested → mutual → primitives, one pass.
                   if generation.simple then
-                    let (st3, jobs) ← primCompose is2.members is2.levelParams
-                      t.numParams reserved generation.basic true (out, rep, pending)
+                    let st3 ← primCompose is2.members is2.levelParams
+                      t.numParams reserved generation.basic (out, rep, pending)
                     (out, rep, pending) ← pure st3
-                    waitingPrim := waitingPrim ++ jobs
     -- Replay, unchecked: the input is trusted. Lean's kernel still runs the
     -- *inductive* elaboration, which is not skippable, so a deliberately
     -- ill-formed inductive stops the replay here. Nothing has been spliced yet
@@ -1791,48 +1760,30 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
             for type in ts do
               if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then
                 needsPULift := true
-          let job :=
-            (all, t.levelParams, t.numParams, tys, ctors, inputRecursors.toArray,
-              needsPULift)
-          -- **The model may have to wait for the input's own basis.** Its ι
-          -- theorems need `Eq`; projection fillers additionally need
-          -- `PULiftP`. An export's dependency order
-          -- routinely puts `Eq` *after* a block that does not itself use it,
-          -- and rule theorems must be held back for the same reason. A file
-          -- that declares no `Eq` at all does not wait: the prelude splice adds one.
-          if ← mutualReady needsPULift reserved then
-            let (st3, jobs) ← genMutual all t.levelParams t.numParams tys ctors
-              inputRecursors.toArray #[] reserved
-              generation.simple generation.basic true (out, rep, pending)
-            (out, rep, pending) ← pure st3
-            waitingPrim := waitingPrim ++ jobs
-          else
-            waiting := waiting.push job
+          unless ← mutualReady needsPULift reserved do
+            throwError "plain mutual model prerequisites remained late after support scheduling"
+          let st3 ← genMutual all t.levelParams t.numParams tys ctors
+            inputRecursors.toArray #[] reserved
+            generation.simple generation.basic (out, rep, pending)
+          (out, rep, pending) ← pure st3
         -- ── a simple inductive (`--simple`) ──────────────────────────────
         -- Generated after the replay, like the plain mutual block and for
         -- the same reason: the statements are the installed recursor's own,
         -- restored, and there is nothing else to read them off.
         if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 then
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
-          if ← primReady reserved then
-            let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
-              inputRecursors.toArray #[] reserved generation.basic true (out, rep, pending)
-            if let some readiness := wait? then
-              waitingPrim := waitingPrim.push {
-                readiness, name := t.name, levelParams := t.levelParams,
-                numParams := t.numParams, type := t.type, constructors := ctors,
-                recursors := inputRecursors.toArray, projections := #[] }
-            else
-              (out, rep, pending) ← pure st
-          else
-            waitingPrim := waitingPrim.push {
-              readiness := .basis, name := t.name, levelParams := t.levelParams,
-              numParams := t.numParams, type := t.type, constructors := ctors,
-              recursors := inputRecursors.toArray, projections := #[] }
+          unless ← primReady reserved do
+            throwError "simple model basis remained late after support scheduling"
+          let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
+            inputRecursors.toArray #[] reserved generation.basic true (out, rep, pending)
+          if wait?.isSome then
+            throwError "simple model prerequisite remained late after support scheduling"
+          (out, rep, pending) ← pure st
     if d matches .induct .. then
       let generated := out.extract outputBefore out.size
+      let islandModels := pending.extract pendingBefore pending.size
       let (orderedGenerated, mainWithSupport) ← match
-          ← closeModelIsland x mainBefore generated d with
+          ← closeModelIsland x mainBefore generated islandModels d with
         | .ok result => pure result
         | .error message => throwError
             "owner-free generated declaration rejected for {d.names}: {message}"
@@ -1841,65 +1792,16 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       setEnv mainWithSupport
       if let some ownerDeclaration := toDeclaration mainWithSupport d then
         match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
-        | .ok env => setEnv env
+        | .ok env =>
+          mainEnv := env
+          setEnv env
         | .error exception =>
           let message ← (exception.toMessageData {}).toString
           return (x.decls,
             { rep with unreplayable := some s!"{d.names}: {message}" })
+    else
+      mainEnv ← getEnv
     out := out.push d
-    -- Drain each block whose exact basis requirements have now arrived.
-    if !waiting.isEmpty then
-      let mut keep := #[]
-      for (all, lp, np, tys, ctors, recursors, needsPULift) in waiting do
-        if ← mutualReady needsPULift reserved then
-          -- The interface must precede its owner even when a basis primitive
-          -- was declared later. Move only those independent basis records in
-          -- front, generate the model there, then restore the owner and every
-          -- intervening source record in their original order.
-          let some ownerIndex := out.findIdx? (·.names.contains all[0]!)
-            | throwError "waiting mutual owner {all[0]!} disappeared from the output"
-          let beforeOwner := out.extract 0 ownerIndex
-          let delayed := out.extract ownerIndex out.size
-          let basis := delayed.filter (isMutualBasisRecord needsPULift)
-          let source := delayed.filter (!isMutualBasisRecord needsPULift ·)
-          let (st3, jobs) ← genMutual all lp np tys ctors recursors #[] reserved
-            generation.simple
-            generation.basic true
-            (beforeOwner ++ basis, rep, pending)
-          let (generatedOut, generatedReport, generatedPending) := st3
-          out := generatedOut ++ source
-          rep := generatedReport
-          pending := generatedPending
-          waitingPrim := waitingPrim ++ jobs
-        else
-          keep := keep.push (all, lp, np, tys, ctors, recursors, needsPULift)
-      waiting := keep
-    -- A prim model may also splice `False`, `Nat` and `PSigma`, so it waits
-    -- for whichever of those the input declares later, not only for `Eq` —
-    -- and one which reaches the quotient, choice, or W logical interface waits
-    -- for that complete late set on top of the basis. The job is re-queued
-    -- with the flag flipped if the basis drain discovers the need; the late
-    -- drain retries it only after every reserved member is installed.
-    if !waitingPrim.isEmpty then
-      let mut keep : Array PrimJob := #[]
-      for job in waitingPrim do
-        if ← job.readiness.ready reserved then
-          let (st, wait?) ← genPrim job.name job.levelParams job.numParams job.type
-            job.constructors job.recursors job.projections reserved
-            generation.basic true
-            (out, rep, pending)
-          if let some readiness := wait? then
-            keep := keep.push { job with readiness }
-          else
-            (out, rep, pending) ← pure st
-        else
-          keep := keep.push job
-      waitingPrim := keep
-    -- With dependency-closed shared support scheduled first, no owner island
-    -- may survive past its record.  A queued job here would otherwise retain
-    -- an ownerful generation environment, defeating the filter invariant.
-    unless waiting.isEmpty && waitingPrim.isEmpty do
-      throwError "a generated model remained deferred after shared-support scheduling"
     -- Statement correspondence is deliberately postponed until every emitted
     -- record is available.  It is an exact export-level comparison and does
     -- not consult this replay environment or the recursors the kernel minted
@@ -1909,25 +1811,6 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       if let .induct _ _ rs := d then
         let (n, b) ← checkRecs rs
         rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
-  -- A block still waiting at the end of the file declared an `Eq` or
-  -- projection-basis `PULiftP` the replay never reached — so the name is taken and no splice may use it, and this
-  -- pass **declines with that reason** rather than dropping the block without
-  -- saying anything. Nothing in the tree reaches it: over all 230 files the
-  -- decline list gains nothing against the run before this ordering was
-  -- introduced, and
-  -- a block left waiting would have put a `mutual model name taken (Eq)` in it.
-  for (all, lp, np, tys, ctors, recursors, _) in waiting do
-    let (st3, jobs) ← genMutual all lp np tys ctors recursors #[] reserved
-      generation.simple
-      generation.basic false
-      (out, rep, pending)
-    (out, rep, pending) ← pure st3
-    waitingPrim := waitingPrim ++ jobs
-  for job in waitingPrim do
-    (out, rep, pending) ← pure
-      (← genPrim job.name job.levelParams job.numParams job.type job.constructors
-        job.recursors job.projections reserved generation.basic false
-        (out, rep, pending)).1
   let generatedOwners := rep.generated.foldl
     (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
   let statementReport := Check.checkStatementsFor { x with decls := out } generatedOwners

@@ -92,7 +92,8 @@ def mustReorder (label : String) (x : Export) : IO Export :=
   | .ok reordered => return reordered
   | .error error => throw <| IO.userError s!"{label}: unexpected ordering error: {repr error}"
 
-def generatedFixture (path : String) (generation : Modelgen.Cli.Config) : IO Export := do
+def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
+    IO (Export × Environment) := do
   let text ← IO.FS.readFile path
   let .ok parsed := Modelgen.parse text (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
@@ -100,11 +101,14 @@ def generatedFixture (path : String) (generation : Modelgen.Cli.Config) : IO Exp
   let context : Core.Context :=
     { fileName := "<order-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
-  let ((decls, report), _) ← Lean.Core.CoreM.toIO
+  let ((decls, report), finalState) ← Lean.Core.CoreM.toIO
     (Lean.Meta.MetaM.run' (runFilter parsed false generation)) context { env }
   unless report.stmtErrors.isEmpty do
     throw <| IO.userError s!"{path}: generated statements differ: {report.stmtErrors}"
-  return { parsed with decls }
+  return ({ parsed with decls }, finalState.env)
+
+def generatedFixture (path : String) (generation : Modelgen.Cli.Config) : IO Export := do
+  return (← generatedFixtureState path generation).1
 
 def noGeneration : Modelgen.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
@@ -215,11 +219,16 @@ def run (root : String) : IO UInt32 := do
         family.correspondence.iotas.any (fun rule =>
           rule.recursor == `Tree.rec && rule.name == Naming.iotaName `Tree.rec 1)
 
-  let simple ← generatedFixture s!"{root}/test/fixtures/modelgen/prim_shapes.ndjson"
+  let (simple, simpleEnv) ← generatedFixtureState
+    s!"{root}/test/fixtures/modelgen/prim_shapes.ndjson"
     { noGeneration with simple := true }
   let simple' ← mustReorder "simple declaration-local output" simple
   state := state.check "complete simple output checks literally" <|
     (Check.check simple').isEmpty
+  state := state.check "replay environment retains source and shared support only" <|
+    simpleEnv.constants.contains `Tri &&
+      !simpleEnv.constants.contains (Naming.modelName `Tri) &&
+      [`Eq, `Nat, `PSigma, `PULiftP].all simpleEnv.constants.contains
   let svType := declarationType? simple' `Sv
   let svModelType := declarationType? simple' (Naming.modelName `Sv)
   state := state.check "Sv model preserves its literal declared type" <|

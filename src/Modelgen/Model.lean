@@ -2375,10 +2375,14 @@ def wCoreSelf : Name := wCoreRoot ++ `WT.W
 /-- Names whose generated declarations are reusable support rather than part
 of one model's disposable implementation forest.  These are exact fixed
 interfaces (or the fixed `_wcore` namespace); declaration-local funext and
-arm-C skeleton names deliberately do not qualify. -/
+arm-C skeleton names deliberately do not qualify. Callers must additionally
+require an explicit [`Iso.spliced`] witness: this namespace predicate alone is
+not ownership evidence. -/
+def persistentSupportRoot (name : Name) : Bool :=
+  [`Eq, `Nat, `PSigma, `PSigma', `PULiftP, `Nonempty, `Iff, `Quot].contains name
+
 def persistentSupportName (name : Name) : Bool :=
-  [`Eq, `False, `Nat, `PSigma, `PULiftP, `Nonempty, `Iff, `Quot].any
-      (fun root => root.isPrefixOf name) ||
+  persistentSupportRoot name ||
     name == `Quot.sound || name == `Classical.choice || name == `propext ||
     wCoreRoot.isPrefixOf name
 /-- `WT.sup` under the prefix — the node former. -/
