@@ -650,8 +650,8 @@ private partial def instantiateForallsExact (expression : Expr) (arguments : Arr
 /-- Check the exact non-Prop structure-eta statement.  Reconstruction is
 through the intrinsic projection slots for the owner's fields, in constructor
 telescope order; exported projection wrapper declarations are irrelevant. -/
-private def checkEta (x : Export) (family : Family) (declarations : DeclarationTypes)
-    (metadata : Naming.Metadata) : Array Violation := Id.run do
+private def checkEta (x : Export) (normalizer : ExactNormalizationEnv) (family : Family)
+    (declarations : DeclarationTypes) (metadata : Naming.Metadata) : Array Violation := Id.run do
   let models := declarations.getD metadata.name #[]
   if models.isEmpty then return #[.missingPublic metadata.owner metadata.name]
   if models.size != 1 then
@@ -667,7 +667,7 @@ private def checkEta (x : Export) (family : Family) (declarations : DeclarationT
       candidate.name == constructorName && candidate.induct == metadata.owner
     | return #[.declarationType metadata.owner metadata.name]
   unless ownerType.isKernelStructureLike constructors &&
-      !x.exactNormalizationEnv.isPropositionFormer ownerType.type do
+      !normalizer.isPropositionFormer ownerType.type do
     return #[.declarationType metadata.owner metadata.name]
   if ownerType.levelParams.length != model.levelParams.length then
     return #[.universeArity metadata.owner metadata.name
@@ -686,7 +686,7 @@ private def checkEta (x : Export) (family : Family) (declarations : DeclarationT
   unless parameterBinders.size == ownerType.numParams && ownerType.numIndices == 0 do
     return #[.declarationType metadata.owner metadata.name]
   let params := parameterBinders.map fun binder => binder.value
-  let .sort carrierLevel := x.exactNormalizationEnv.whnf ownerResult
+  let .sort carrierLevel := normalizer.whnf ownerResult
     | return #[.declarationType metadata.owner metadata.name]
   let carrier := mkAppN (.const typePair.model levels) params
   let selfValue := mkFVar (FVarId.mk
@@ -804,9 +804,8 @@ There is no source projection declaration to rewrite.  Both types are
 synthesized from the unique constructor telescope.  References to earlier
 fields in a dependent result become applications of the corresponding earlier
 intrinsic projections. -/
-private def checkProjection (x : Export) (family : Family) (declarations : DeclarationTypes)
-    (projection : Naming.Projection) : Array Violation := Id.run do
-  let normalizer := x.exactNormalizationEnv
+private def checkProjection (x : Export) (normalizer : ExactNormalizationEnv) (family : Family)
+    (declarations : DeclarationTypes) (projection : Naming.Projection) : Array Violation := Id.run do
   let projectionModels := declarations.getD projection.name #[]
   if projectionModels.isEmpty then
     return #[.missingPublic projection.owner projection.name]
@@ -1002,10 +1001,11 @@ structure SyntaxIndex where
   private declarations : DeclarationTypes
   private constructors : Constructors
   private ruleSlots : IotaSlots
+  private normalizer : ExactNormalizationEnv
 
 def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
   { declarations := declarationTypes x, constructors := constructorRecords x,
-    ruleSlots := iotaSlots x }
+    ruleSlots := iotaSlots x, normalizer := x.exactNormalizationEnv }
 
 private def checkFamilyWithIndex (x : Export) (syntax : SyntaxIndex)
     (family : Family) (checkOrder : Bool) : Array Violation := Id.run do
@@ -1028,7 +1028,8 @@ private def checkFamilyWithIndex (x : Export) (syntax : SyntaxIndex)
   for pair in family.correspondence.recursors do
     violations := violations ++ checkPair family.correspondence syntax.declarations pair
   for projection in family.correspondence.projections do
-    violations := violations ++ checkProjection x family syntax.declarations projection
+    violations := violations ++ checkProjection
+      x syntax.normalizer family syntax.declarations projection
   for iota in family.correspondence.iotas do
     violations := violations ++ checkIota x syntax.constructors family syntax.declarations iota
   for metadata in family.correspondence.metadata do
@@ -1037,7 +1038,8 @@ private def checkFamilyWithIndex (x : Export) (syntax : SyntaxIndex)
     if metadata.kind == .unitlike then
       violations := violations ++ checkUnitlike x family syntax.declarations metadata
     else if metadata.kind == .eta then
-      violations := violations ++ checkEta x family syntax.declarations metadata
+      violations := violations ++ checkEta
+        x syntax.normalizer family syntax.declarations metadata
     else if metadata.kind == .ruleK then
       violations := violations ++ checkRuleK x family syntax.declarations metadata
   for pair in family.correspondence.recursors do
@@ -1067,7 +1069,7 @@ private def checkGlobalExtrasWithIndex (x : Export) (syntax : SyntaxIndex) : Arr
         unless (syntax.declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .unitlike)
       unless type.isKernelStructureLike constructors &&
-          !x.exactNormalizationEnv.isPropositionFormer type.type do
+          !syntax.normalizer.isPropositionFormer type.type do
         let name := Naming.etaName type.name
         unless (syntax.declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .eta)
