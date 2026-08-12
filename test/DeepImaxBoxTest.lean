@@ -23,14 +23,18 @@ def runExport (input : Export) : IO (Export × Report × Environment) := do
   let context : Core.Context :=
     { fileName := "<deep-imax-box-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
-  let ((declarations, report), state) ← Core.CoreM.toIO
+  let ((declarations, report), _) ← Core.CoreM.toIO
     (MetaM.run' (runFilter input false {})) context { env }
   let output := { input with decls := declarations }
   let ordered ← match Order.reorder output with
     | .ok result => pure result
     | .error failure =>
       throw <| IO.userError s!"cannot order deep-imax output: {repr failure}"
-  return (ordered, report, state.env)
+  let (replayed, _) ← Core.CoreM.toIO
+    (MetaM.run' (checkGeneratedIn env ordered.decls)) context { env }
+  let .ok replayed := replayed
+    | throw <| IO.userError "cannot replay ordered deep-imax output"
+  return (ordered, report, replayed)
 
 def declarationValue? (input : Export) (name : Name) : Option Expr := do
   let .defn got _ _ value .. ← input.decls.find? (·.names.contains name) | none
@@ -131,7 +135,7 @@ def main : IO UInt32 := do
   let bindRec := Naming.modelName `WBind.rec
   let bindIotas := #[Naming.iotaName `WBind.rec 0, Naming.iotaName `WBind.rec 1]
   state := state.check "W data and binder imax shapes generate at their pinned sizes" <|
-    wReport.generated.any (· == (`WData, 218)) &&
+    wReport.generated.any (· == (`WData, 225)) &&
       wReport.generated.any (· == (`WBind, 12)) &&
       #[`WData, `WBind].all fun owner => !wReport.declined.any (·.1 == owner)
   state := state.check "W imax shapes have constructors, recursors, and both iotas" <|
@@ -161,7 +165,7 @@ def main : IO UInt32 := do
   let (maxGenerated, maxReport, _) ← runExport maxRaw
   let maxModel := Naming.modelName `WMax
   state := state.check "predecessor-free W generates at its pinned size" <|
-    maxReport.generated.any (· == (`WMax, 218)) &&
+    maxReport.generated.any (· == (`WMax, 225)) &&
       !maxReport.declined.any (·.1 == `WMax)
   state := state.check "predecessor-free W keeps its exact recursor statements" <|
     maxReport.stmtChecked == 67 && maxReport.stmtErrors.isEmpty
@@ -212,6 +216,9 @@ def main : IO UInt32 := do
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   unless state.failed.isEmpty do
     IO.eprintln s!"declined: {report.declined}"
+    IO.eprintln s!"W generated: {wReport.generated}"
+    IO.eprintln s!"WData axioms: {dataAxioms}; WBind axioms: {bindAxioms}"
+    IO.eprintln s!"WMax generated: {maxReport.generated}"
     for violation in Check.check generated do
       if #[`BoxF, `IBox, skeleton].contains violation.familyOwner then
         IO.eprintln s!"check violation: {repr violation}"
