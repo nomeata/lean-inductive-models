@@ -60,7 +60,8 @@ jobs:
                 drivernamingtest privatealiastest simplenamingtest rulektest \
                 projectiontest structureetatest deepimaxboxtest \
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
-                vanishingerasuretest transparentowneraliasestest
+                vanishingerasuretest transparentowneraliasestest \
+                exportsyntaxnormalizationtest
               lake exe clitest
               lake exe generationflagstest
               lake exe checktest "$GITHUB_WORKSPACE"
@@ -78,7 +79,8 @@ jobs:
               lake exe tightpsigmaprimeroutetest
               lake exe vanishingerasuretest
               lake exe transparentowneraliasestest
-              count=17
+              lake exe exportsyntaxnormalizationtest
+              count=18
               ;;
             mono)
               lake build modelgen monotest mainclitest
