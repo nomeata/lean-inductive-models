@@ -1066,6 +1066,10 @@ def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
   a := check a (gen.contains priv)
     s!"alias: the private copy did not model — the normalized-name collision is not \
        escaped; it declined as {rep.declined.filter (·.1 == priv) |>.map (·.2)}"
+  a := check a (rep.stmtChecked > 0)
+    "alias: no generated recursor statement was compared"
+  a := check a rep.stmtErrors.isEmpty
+    s!"alias: generated recursor statements lost their exported owners: {rep.stmtErrors}"
   let modelN := Naming.modelName priv
   a := check a (outD.any (·.names.contains modelN))
     s!"alias: the output does not carry {modelN}, so the declaration-local contract moved"

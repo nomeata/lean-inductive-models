@@ -864,8 +864,14 @@ def checkModel (all : Array Name) (np : Nat) (is : Iso) (recursors : Array ERec)
     MetaM (Nat × Array String) := do
   let env ← getEnv
   let mut tbl := modelTable env all is
+  -- A normalized-name collision installs the model recursor below a retry
+  -- root, while the export continues to carry its exact public owner.  The
+  -- completed alias table is therefore part of the correspondence key, just
+  -- as it is part of serialization; comparing the build name directly loses
+  -- the exported recursor on precisely those retries.
   let exportedFor := fun (modelRecursor : Name) =>
-    recursors.find? fun recursor => Naming.modelName recursor.name == modelRecursor
+    recursors.find? fun recursor =>
+      Naming.modelName recursor.name == is.aliases.exact modelRecursor
   -- `modelTable` is also used below the driver and retains its structural
   -- fallback. Here the export's exact names are available, so make those the
   -- authoritative recursor keys rather than reconstructing `T.rec_k`.
