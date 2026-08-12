@@ -192,7 +192,7 @@ open Lean Meta
 
 namespace Modelgen
 
-/-- The five, by name. A declaration in this set is the basis and is not
+/-- The four, by name. A declaration in this set is the basis and is not
 modelled — the exemption that makes the construction well-founded.
 
 **`Acc` was the fifth and is not here any more.** Its one grant — the
@@ -205,7 +205,7 @@ one. `Nonempty` never joins this list either, though the graph arm names it:
 its `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
 transport along — [`Modelgen.cfalseElim`]), so `False` models like any other
 declaration. The tight pair and `PUnit` together take its place. -/
-def primBasis : List Name := [`Eq, `PSigma, `PSigma', `Nat, `PUnit]
+def primBasis : List Name := [`Eq, `PSigma', `Nat, `PUnit]
 
 /-- **Lean's `PUnit`**, exactly as `Init/Prelude.lean` declares it:
 `inductive PUnit.{u} : Sort u | unit : PUnit`.
@@ -229,23 +229,6 @@ def natDecl : Declaration :=
     [{ name := `Nat, type := .sort (.succ .zero)
        ctors := [{ name := `Nat.zero, type := nat },
                  { name := `Nat.succ, type := .forallE `n nat nat .default }] }] false
-
-/-- **Lean's `PSigma`**: `{α : Sort u} → (β : α → Sort v) →
-Sort (max 1 u v)` with `mk (fst : α) (snd : β fst)`. -/
-def psigmaDecl : Declaration :=
-  let lu := Level.param `u
-  let lv := Level.param `v
-  let w := mkLevelMax' (mkLevelMax' (.succ .zero) lu) lv
-  let ty : Expr := .forallE `α (.sort lu)
-    (.forallE `β (.forallE `x (.bvar 0) (.sort lv) .default) (.sort w) .default) .implicit
-  let mkTy : Expr := .forallE `α (.sort lu)
-    (.forallE `β (.forallE `x (.bvar 0) (.sort lv) .default)
-      (.forallE `fst (.bvar 1)
-        (.forallE `snd (.app (.bvar 1) (.bvar 0))
-          (mkAppN (.const `PSigma [lu, lv]) #[.bvar 3, .bvar 2]) .default)
-        .default) .implicit) .implicit
-  .inductDecl [`u, `v] 2
-    [{ name := `PSigma, type := ty, ctors := [{ name := `PSigma.mk, type := mkTy }] }] false
 
 /-! ## The tight dependent-pair primitive
 
@@ -355,15 +338,6 @@ def checkNat (env : Environment) : Except String Unit := do
   unless rv.levelParams.length == 1 do
     throw "Nat.rec is not large-eliminating (no motive universe)"
 
-def checkPSigma (env : Environment) : Except String Unit := do
-  let some (.inductInfo iv) := env.constants.find? `PSigma | throw "it is not an inductive type"
-  unless iv.numParams == 2 && iv.numIndices == 0 && iv.ctors == [`PSigma.mk]
-      && iv.levelParams.length == 2 do
-    throw "it is not a two-parameter, one-constructor Sort-polymorphic pair"
-  let some (.recInfo rv) := env.constants.find? `PSigma.rec | throw "PSigma.rec is not a recursor"
-  unless rv.levelParams.length == 3 do
-    throw "PSigma.rec is not large-eliminating"
-
 /-- Validate the only trusted part of the tight pair bundle: the kernel
 inductive and constructor.  The named projections and `rec'` are checked as
 ordinary derived declarations by [`Modelgen.ensurePSigmaPrime`]. -/
@@ -457,9 +431,6 @@ def ensureChoice (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
     return #[choiceDecl]
 def ensureNat (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
   ensurePrim `Nat [`Nat, `Nat.zero, `Nat.succ] natDecl checkNat reserved
-def ensurePSigma (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
-  ensurePrim `PSigma [`PSigma, `PSigma.mk] psigmaDecl checkPSigma reserved
-
 /-- The ordinary declarations derived from the tight pair's two primitive
 projections. None of these declarations crosses the bootstrap inductive
 boundary. -/
@@ -619,27 +590,23 @@ def natSuccs : Nat → Expr → Expr
   | j + 1, e => .app (.const `Nat.succ []) (natSuccs j e)
 
 def psigmaT (u v : Level) (α β : Expr) : Expr :=
-  mkAppN (.const `PSigma [u, v]) #[α, β]
+  psigmaPrimeT u v α β
 
 def psigmaMk (u v : Level) (α β fst snd : Expr) : Expr :=
-  mkAppN (.const `PSigma.mk [u, v]) #[α, β, fst, snd]
+  psigmaPrimeMk u v α β fst snd
 
 def psigmaRec (s u v : Level) (α β motive m t : Expr) : Expr :=
-  mkAppN (.const `PSigma.rec [s, u, v]) #[α, β, motive, m, t]
+  psigmaPrimeRec u v s α β motive m t
 
 /-- `PSigma.fst`, as a `PSigma.rec`. Structure eta makes `⟨fst y, snd y⟩ ≡ y`
 for a neutral `y`, which is what lets a tuple be taken apart and put back
 together with no transport. -/
 def psigmaFst (u v : Level) (α β y : Expr) : Expr :=
-  psigmaRec u u v α β (.lam `p (psigmaT u v α β) α .default)
-    (.lam `a α (.lam `b (Expr.app β (.bvar 0)).headBeta (.bvar 1) .default) .default) y
+  psigmaPrimeFst u v α β y
 
 /-- `PSigma.snd`, at the motive `fun z => β (fst z)`. -/
 def psigmaSnd (u v : Level) (α β y : Expr) : Expr :=
-  let motive := Expr.lam `p (psigmaT u v α β)
-    (Expr.app β (psigmaFst u v α β (.bvar 0))).headBeta .default
-  psigmaRec v u v α β motive
-    (.lam `a α (.lam `b (Expr.app β (.bvar 0)).headBeta (.bvar 0) .default) .default) y
+  psigmaPrimeSnd u v α β y
 
 def natRec (s : Level) (motive z sc t : Expr) : Expr :=
   mkAppN (.const `Nat.rec [s]) #[motive, z, sc, t]
@@ -825,8 +792,8 @@ proof irrelevance on the components — so a pad costs no transport and no
 (α : Sort a) → D 1`, whose Π is at `imax (a+1) 1 = a+1`; `D (max a b) :=
 Σ'(_ : D a), D b`. -/
 partial def dsingAt (ℓ : Level) : GenM (Expr × Expr) := do
-  let d1 := psigmaT .zero .zero trueP (.lam `x trueP trueP .default)
-  let c1 := psigmaMk .zero .zero trueP (.lam `x trueP trueP .default) trueI trueI
+  let d1 := punitT (.succ .zero)
+  let c1 := punitUnit (.succ .zero)
   match ℓ.normalize with
   | .succ .zero => return (d1, c1)
   | .succ a =>
@@ -978,7 +945,7 @@ partial def chainTy (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : 
     let rv ← if bx then unboxValOf t xv else pure xv
     let (inner, ℓi) ← chainTy pad? boxed (nf - 1) (rest.instantiate1 rv) (i + 1)
     return (psigmaT ℓt ℓi st (← mkLambdaFVars #[xv] inner),
-      (mkLevelMax' (mkLevelMax' (.succ .zero) ℓt) ℓi).normalize)
+      (mkLevelMax' ℓt ℓi).normalize)
 
 /-- The tuple `⟨v₁, ⟨v₂, …⟩⟩` at the given field values — each boxed where its
 plan says so — closed by the pad's canonical element when there is one. -/
@@ -1230,7 +1197,7 @@ partial def packTyAt (is : Array Expr) (sel : Array Nat) (k : Nat) :
   let (inner, ℓi) ← packTyAt is sel (k + 1)
   let β ← mkLambdaFVars #[x] inner
   return (psigmaT ℓ ℓi ty β,
-    (mkLevelMax' (mkLevelMax' (.succ .zero) ℓ) ℓi).normalize)
+    (mkLevelMax' ℓ ℓi).normalize)
 
 /-- `Σ'(x₁ : A₁) … A_n` over an opened index telescope, right-nested, with the
 last index's *type* as the final component — so a one-index telescope packs to
@@ -1241,9 +1208,9 @@ def packTyOf (is : Array Expr) (k : Nat) : GenM (Expr × Level) :=
 /-- Read a `PSigma` application apart: its two levels, its `α` and its `β`. -/
 def psigmaParts (R : Expr) : GenM (Level × Level × Expr × Expr) := do
   let args := R.getAppArgs
-  unless R.getAppFn.isConstOf `PSigma && args.size == 2 do
-    badShape "the packed index type is not a PSigma application"
-  let [u, v] := R.getAppFn.constLevels! | badShape "PSigma carries the wrong level list"
+  unless R.getAppFn.isConstOf `PSigma' && args.size == 2 do
+    badShape "the packed index type is not a PSigma' application"
+  let [u, v] := R.getAppFn.constLevels! | badShape "PSigma' carries the wrong level list"
   return (u, v, args[0]!, args[1]!)
 
 /-- The packing of a value vector, driven by the packed type. -/
@@ -2244,7 +2211,7 @@ def graphArm (c : GraphCtx) (recTy : Expr) : GenM (Array Declaration) := do
       let α := motAt is t
       let β ← withLocalDeclD `val α fun val => mkLambdaFVars #[val] (grAt is t val)
       let σ := psigmaT c.v .zero α β
-      let ℓσ := (mkLevelMax' (mkLevelMax' (.succ .zero) c.v) .zero).normalize
+      let ℓσ := c.v.normalize
       pure (mkAppN (.const `Nonempty [ℓσ]) #[σ], σ, α, β, ℓσ)
     let grExTy ← forallBoundedTelescope idxTele (some ni) fun is _ =>
       withLocalDeclD `t (selfAt is) fun t => do
@@ -4075,7 +4042,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     let lift? : Option Level := if route matches PrimRoute.bare then some w else none
     if lift?.isSome then
       for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
     let (cn0, cty0) := exportCtors[0]!
     let nonPiv := gNonPiv
     let zipRoute := !gPivotTransports.isEmpty
@@ -4303,7 +4270,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
     for n in [skelN, goodN] do taken n
     for j in [0:nc] do taken (skelCtorN j)
-    for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
 
     let skelSelf := fun (ps : Array Expr) => mkAppN (.const skelN us) ps
     -- The index telescope packed into one `PSigma` ([`Modelgen.packTyOf`]),
@@ -4744,7 +4711,7 @@ own parameters under its binders, so it is nested rather than infinitary"
 carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
 
     for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
     -- **The core itself.** `#[]` when it is
     -- already in, which is every W target after the first in a run.
@@ -4947,7 +4914,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- ════ the Type route ════
     unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
     for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
 
     -- Storage decisions — pure level arithmetic, and a decline here costs no
@@ -4969,7 +4936,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
           -- the caller passes.
           let plan : (Level → Level → GenM Bool) → Array Level →
               GenM (Option (Option Level)) := fun eq ms => do
-            let raw := if nf == 1 then ms[0]! else (ms.foldl mkLevelMax' (.succ .zero)).normalize
+            let raw := if nf == 1 then ms[0]! else (ms.foldl mkLevelMax' .zero).normalize
             if nf > 0 then
               if ← eq raw w then return some none
             let withOne := (ms.foldl mkLevelMax' (.succ .zero)).normalize
@@ -5009,7 +4976,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
           if let some p ← attempt (fun a b => isLevelDefEq a b) then return p
           if let some p ← attempt (fun a b => LevelAlgebra.isLevelDefEqComplete a b) then
             return p
-          let raw := if nf == 1 then ℓs[0]! else (ℓs.foldl mkLevelMax' (.succ .zero)).normalize
+          let raw := if nf == 1 then ℓs[0]! else (ℓs.foldl mkLevelMax' .zero).normalize
           badShape s!"{cn}'s fields reach Sort {raw} and the carrier is Sort {w}: no \
             pad or recursive box closes the gap"
 
@@ -5261,7 +5228,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- identity at none. That is the whole of why the axiom cost is per shape.
     let mut gFx? : Option Name := none
     if armG then
-      for d in ← ensurePSigma reserved do out := out.push d; spliced := spliced ++ d.getNames
+      for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
       for d in ← ensureNonempty reserved do out := out.push d; spliced := spliced ++ d.getNames
       for d in ← ensureChoice reserved do out := out.push d; spliced := spliced ++ d.getNames
       if (Array.range gNf).any (fun i => (gRecNb[i]!.getD 0) > 0) then

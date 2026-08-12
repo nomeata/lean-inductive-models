@@ -1081,7 +1081,7 @@ input's own declaration to be replayed. -/
 def primMissingBasis (reserved : Std.HashSet Name) : MetaM (Array Name) := do
   let env ← getEnv
   let mut missing := #[]
-  for n in [`Eq, `Eq.refl, `Nat, `Nat.zero, `Nat.succ, `PSigma, `PSigma.mk,
+  for n in [`Eq, `Eq.refl, `Nat, `Nat.zero, `Nat.succ,
       `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk,
       `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
       `PUnit, `PUnit.unit, `PUnit.rec] do

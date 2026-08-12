@@ -2379,7 +2379,7 @@ arm-C skeleton names deliberately do not qualify. Callers must additionally
 require an explicit [`Iso.spliced`] witness: this namespace predicate alone is
 not ownership evidence. -/
 def persistentSupportRoot (name : Name) : Bool :=
-  [`Eq, `Nat, `PSigma, `PSigma', `PUnit, `Nonempty, `Iff, `Quot].contains name
+  [`Eq, `Nat, `PSigma', `PUnit, `Nonempty, `Iff, `Quot].contains name
 
 def persistentSupportName (name : Name) : Bool :=
   persistentSupportRoot name ||
