@@ -283,9 +283,11 @@ def main : IO UInt32 := do
   state := state.check "no-base skeleton uses the derived exact empty carrier" <|
     (definitionValue? noBaseGenerated (Naming.modelName noBaseSkel)).any fun value =>
       containsConst `PSigma' value && containsConst `PUnit value && !containsConst `PULiftP value
-  state := state.check "no-base recursor eliminates the derived empty lift" <|
+  state := state.check "no-base recursor projects and eliminates Church false" <|
     (definitionValue? noBaseGenerated (Naming.modelName (Name.str noBaseSkel "rec"))).any
-      fun value => containsConst `PSigma'.rec' value && !containsConst `PULiftP.rec value
+      fun value =>
+        containsConst `PSigma'.fst value && containsConst `Nat.rec value &&
+          containsConst `Eq.rec value && !containsConst `PULiftP.rec value
 
   -- `Fmid` and the original `FChain` keep the one-pivot path pinned in the
   -- broad index-axis fixture.
