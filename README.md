@@ -24,8 +24,7 @@ These four inductives are not modeled. `PSigma'` is the tight dependent pair
 `{α : Sort u} → (α → Sort v) → Sort (max u v)`; its named projections and
 arbitrary-sort `rec'` are ordinary definitions derived from primitive
 projections. Together with `PUnit`, it derives the exact-sort propositional
-lift `PSigma'.{0,u} (fun _ : P => PUnit.{u})`, so no separate `PULiftP`
-primitive is required. Generated developments may also use
+lift `PSigma'.{0,u} (fun _ : P => PUnit.{u})`. Generated developments may also use
 Lean's kernel quotient declarations `Quot`, `Quot.mk`, `Quot.lift`, and
 `Quot.ind`, together with the standard axioms `Classical.choice`, `propext`,
 and `Quot.sound`.
@@ -36,10 +35,14 @@ and `Quot.sound`.
 modelgen [OPTIONS] IN.ndjson
 ```
 
+`IN.ndjson` may be `-` to read standard input.
+
 With no options, `modelgen` generates all supported inductive models, checks
 models in both the input and final output, and writes the transformed export to
 standard output. Equivalently, its model-generation and checking defaults are
 `--inductives --check`; output is enabled and `--mono-levels` is disabled.
+The explicit whole-stream kernel gates `--type-check-input` and
+`--type-check-output` are disabled by default.
 
 Diagnostics go to standard error. Every enabled successful structural check
 reports its exact number of discovered model families as, for example,
@@ -48,42 +51,66 @@ lines together with the other successful-pass diagnostics.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
-| `--nested` / `--no-nested` | on | Enable or disable models for nested inductives. |
-| `--mutual` / `--no-mutual` | on | Enable or disable models for mutual inductives. |
-| `--simple` / `--no-simple` | on | Enable or disable models for ordinary non-mutual inductives. |
-| `--basic` / `--no-basic` | on | Enable or disable models for the bootstrap inputs `Acc` and `Nonempty` and generated support inductives needed by simple models. |
-| `--inductives` / `--no-inductives` | on | Enable or disable all four generation branches above. |
-| `--check-input` / `--no-check-input` | on | Check model families already present in the input export. |
-| `--check-output` / `--no-check-output` | on | Check model families in the final transformed export. |
-| `--check` / `--no-check` | on | Enable or disable both checks. |
-| `--mono-levels` / `--no-mono-levels` | off | Enable or disable the optional universe-level monomorphization pass. |
-| `--output` / `--no-output` | on | Enable or suppress writing the transformed export. |
+| `--nested` | on | Generate models for nested inductives. |
+| `--mutual` | on | Generate models for mutual inductives. |
+| `--simple` | on | Generate models for ordinary non-mutual inductives. |
+| `--basic` | on | Generate models for the bootstrap inputs `Acc` and `Nonempty` and generated support inductives needed by simple models. |
+| `--inductives` | on | Enable all four generation branches above. |
+| `--check-input` | on | Structurally check model families already present in the input export. |
+| `--check-output` | on | Structurally check model families in the final transformed export. |
+| `--check` | on | Enable both structural model-family checks. |
+| `--type-check-input` | off | Submit the complete parsed input to Lean's kernel. |
+| `--type-check-output` | off | Submit the complete final transformed export to Lean's kernel. |
+| `--mono-levels` | off | Run the optional universe-level monomorphization pass. |
+| `--output` | on | Write the transformed export. |
 | `-o PATH` | `-` | Write to `PATH`; `-` means standard output. This also enables output. |
-| `--quiet` / `--no-quiet` | off | Suppress or enable successful-pass diagnostics. |
+| `--quiet` | off | Suppress successful-pass diagnostics. |
 
-Options are applied from left to right. Bundle options and individual options
-therefore override one another in command-line order. For example,
-`--no-inductives --simple` enables only the simple branch, whereas
-`--simple --no-inductives` disables every generation branch. Similarly,
-`--no-check --check-output` enables only the final-output check.
+Every boolean long option has a `--no-...` form that disables it. Options are
+applied from left to right, so bundle and individual options override one
+another in command-line order. For example, `--no-inductives --simple`
+enables only the simple branch, whereas `--simple --no-inductives` disables
+every generation branch. Similarly, `--no-check --check-output` enables only
+the final structural check. `--check` does not change either whole-stream
+kernel gate.
 
 `--no-output` suppresses only the final write. Parsing, enabled checks,
 monomorphization, ordering, and generation still run. This validates an input
-without generating models or writing an export:
+structurally without generating models or writing an export:
 
 ```console
 modelgen --check --no-inductives --no-output IN.ndjson
 ```
 
+For a Lean Kernel Arena-style whole-stream verdict, pass the supplied path or
+pipe the same NDJSON on standard input:
+
+```console
+modelgen --no-inductives --no-check --type-check-input --no-output "$IN"
+modelgen --no-inductives --no-check --type-check-input --no-output - < "$IN"
+```
+
+The process exit codes follow the
+[Lean Kernel Arena checker contract](https://github.com/leanprover/lean-kernel-arena#contributing-checkers):
+
+| Code | Outcome |
+| --- | --- |
+| `0` | Accepted. |
+| `1` | Rejected as invalid, including rejection by Lean's kernel or a requested structural check. |
+| `2` | Declined because a requested generation operation does not support an owner. Basis exemptions in a successful run are not declines. |
+| any other code | Parser, I/O, CLI, or internal tool error (`modelgen` uses `3`). |
+
 The processing order is:
 
 1. Parse the input export.
-2. If enabled, check model families in the unmodified input.
-3. If enabled, monomorphize the input universe levels and order the result.
-4. Generate the selected inductive models.
-5. Put the complete result in dependency and model-before-owner order.
-6. If enabled, check model families in that final result.
-7. If enabled, write the result.
+2. If enabled, submit the unmodified input to Lean's kernel.
+3. If enabled, structurally check model families in the unmodified input.
+4. If enabled, monomorphize the input universe levels and order the result.
+5. Generate the selected inductive models.
+6. Put the complete result in dependency and model-before-owner order.
+7. If enabled, structurally check model families in that final result.
+8. If enabled, submit the final result to Lean's kernel.
+9. If enabled, write the result.
 
 Thus `--mono-levels` runs before inductive-model generation. It is an optional
 secondary pass rather than part of the model correspondence.
@@ -477,6 +504,13 @@ ordering. The absence of all public model slots for an inductive is not itself
 an error: unsupported or disabled generation may leave an original inductive
 without a model.
 
+These structural checks do not submit declaration values to Lean's kernel.
+`--type-check-input` and `--type-check-output` are the independent
+whole-stream kernel verdict gates. The first replays the parsed input in an
+empty kernel environment; the second does the same with the complete ordered
+result, whether or not `--output` writes that result. Both also compare the
+serialized recursor metadata with the recursors Lean regenerates.
+
 Every generated declaration is submitted to Lean's kernel before it is
 emitted. Construction may inspect the owner in a disposable environment, but
 that is not the acceptance environment. The exact serialized model records are
@@ -487,6 +521,10 @@ Only explicitly witnessed shared support is copied to the persistent
 environment; the model fork is discarded, and replay then continues there with
 the owner but without the model declarations.
 
+This checked construction is mandatory and independent of the two CLI kernel
+gates. Disabling `--type-check-input` or `--type-check-output` never permits the
+generator to emit a declaration that failed its owner-free kernel replay.
+
 Statement correspondence is an independent, format-only gate. The generator
 reconstructs the complete expected public interface from the exact exported
 owner records and compares it syntactically with the already serialized model
@@ -495,9 +533,10 @@ minted by the kernel. A mismatch is an internal error and no output is written.
 
 ## Scope
 
-- The tool is not a verifier for arbitrary NDJSON input. It adds and checks
-  model interfaces; it does not establish the provenance of the original
-  declarations.
+- Structural model checks do not verify arbitrary declaration values.
+  `--type-check-input` and `--type-check-output` explicitly request complete
+  Lean-kernel replay of their respective streams; they do not establish the
+  provenance of those declarations.
 - Unsupported inductive shapes are reported as declines and pass through
   without a model.
 - A checker consuming the models as an inductive front end must implement the
@@ -577,7 +616,8 @@ instruction counts with `perf`. Its artifact gate requires positive generation,
 statement-comparison, output-check, universe-planning, and serialized-reread
 work; zero statement differences and universe escapes; exactly the four basis
 members owned by that pinned input as exemptions; a spliced `PSigma'`; and no
-legacy `PULiftP`. The observed counts are intentionally not hard-coded.
+unexpected basis declarations. The observed counts are intentionally not
+hard-coded.
 
 ## Copyright and license
 
