@@ -799,6 +799,52 @@ def installedQuotRecord (env : Environment) : EDecl → Bool
     | _ => false
   | _ => false
 
+/-- The exact four-record export spelling of the kernel quotient already
+installed in `env`.  A quotient declaration is atomic to the kernel even
+though lean4export represents it by four consecutive records. -/
+def installedQuotRecords? (env : Environment) : Option (Array EDecl) := do
+  let record (name : Name) : Option EDecl :=
+    match env.constants.find? name with
+    | some (.quotInfo info) =>
+      some (.quot info.name info.levelParams info.type (quotKindStr info.kind))
+    | _ => none
+  let quot ← record `Quot
+  let mk ← record `Quot.mk
+  let lift ← record `Quot.lift
+  let ind ← record `Quot.ind
+  return #[quot, mk, lift, ind]
+
+/-- Validate quotient records before replaying any generated declaration.
+
+There is no meaningful per-record replay for a quotient: the first record
+causes the kernel to install all four constants.  Consequently the only sound
+serialized representation is one new, consecutive, canonically ordered
+four-record bundle with every exported field equal to the kernel-minted
+metadata.  In particular this rejects a lone first record, a reordered or
+duplicated bundle, and malformed metadata on the first record rather than
+letting the subsequent installed-name checks obscure it. -/
+def checkGeneratedQuotRecords (base : Environment) (records : Array EDecl) :
+    MetaM (Except String Unit) := do
+  let positions := (Array.range records.size).filter fun i =>
+    match records[i]! with | .quot .. => true | _ => false
+  if positions.isEmpty then return .ok ()
+  unless positions.size == 4 do
+    return .error s!"quotient declaration has {positions.size} export records, expected 4"
+  let first := positions[0]!
+  unless positions == #[first, first + 1, first + 2, first + 3] do
+    return .error "quotient export records are not one consecutive bundle"
+  let quotientEnv ← match base.addDeclCore 0 .quotDecl none true with
+    | .error exception =>
+      return .error s!"cannot reconstruct quotient declaration: \
+        {← (exception.toMessageData {}).toString}"
+    | .ok next => pure next
+  let some expected := installedQuotRecords? quotientEnv
+    | return .error "kernel quotient declaration did not install its four constants"
+  let actual := records.extract first (first + 4)
+  unless actual == expected do
+    return .error "quotient export bundle does not match the kernel declaration"
+  return .ok ()
+
 /-- A generated declaration as export records — **plural**, because
 `Declaration.quotDecl` is one kernel declaration and four records. Everything
 else is one record and goes through [`Modelgen.toEDecl`]. -/
@@ -806,12 +852,9 @@ def toEDecls (d : Declaration) : MetaM (Array EDecl) := do
   match d with
   | .quotDecl =>
     let env ← getEnv
-    let mut out : Array EDecl := #[]
-    for n in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
-      let some (.quotInfo qi) := env.constants.find? n
-        | throwError "{n} was not installed by the quotient declaration"
-      out := out.push (.quot qi.name qi.levelParams qi.type (quotKindStr qi.kind))
-    return out
+    let some records := installedQuotRecords? env
+      | throwError "the quotient declaration did not install its four constants"
+    return records
   | _ => return #[← toEDecl d]
 
 /-- Reinstall serialized generated records, with kernel checking, in an
@@ -824,6 +867,9 @@ hope later imposed by record ordering.  The returned environment is a fork;
 the caller may discard it after streaming the records. -/
 def checkGeneratedIn (base : Environment) (records : Array EDecl) :
     MetaM (Except String Environment) := do
+  match ← checkGeneratedQuotRecords base records with
+  | .error message => return .error message
+  | .ok () => pure ()
   let mut checked := base
   for record in records do
     let some declaration := toDeclaration checked record | do

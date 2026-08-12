@@ -113,9 +113,68 @@ def generatedFixture (path : String) (generation : Modelgen.Cli.Config) : IO Exp
 def noGeneration : Modelgen.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
 
+def replayGeneratedIn (base : Environment) (records : Array EDecl) :
+    IO (Except String Environment) := do
+  let context : Core.Context :=
+    { fileName := "<quotient-replay-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run' (checkGeneratedIn base records)) context { env := base }
+  return result
+
+def generatedReplayRejects (base : Environment) (records : Array EDecl) : IO Bool := do
+  match ← replayGeneratedIn base records with
+  | .error _ => return true
+  | .ok _ => return false
+
 def run (root : String) : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
+
+  -- lean4export spells the kernel's one quotient declaration as exactly four
+  -- consecutive records.  Replay must validate the bundle before the first
+  -- record installs all four constants, or malformed first records and
+  -- incomplete/reordered/duplicate bundles become indistinguishable from the
+  -- three legitimate covered records.
+  let quotientBase ← importModules #[] {}
+  let .ok quotientEnv := quotientBase.addDeclCore 0 .quotDecl none true
+    | throw <| IO.userError "the kernel rejected its quotient declaration"
+  let some quotientRecords := installedQuotRecords? quotientEnv
+    | throw <| IO.userError "the kernel did not expose all four quotient records"
+  let #[quot, mk, lift, ind] := quotientRecords
+    | throw <| IO.userError "the kernel quotient did not have four export records"
+  state := state.check "canonical quotient bundle replays exactly once" <|
+    match ← replayGeneratedIn quotientBase quotientRecords with
+    | .ok checked => installedQuotRecords? checked == some quotientRecords
+    | .error _ => false
+  let missingRejected ← generatedReplayRejects quotientBase #[quot, mk, lift]
+  state := state.check "missing quotient record is rejected" missingRejected
+  let reorderedRejected ← generatedReplayRejects quotientBase #[mk, quot, lift, ind]
+  state := state.check "reordered quotient bundle is rejected" reorderedRejected
+  let interleavedRejected ←
+    generatedReplayRejects quotientBase #[quot, mk, axDecl `Between, lift, ind]
+  state := state.check "interleaved quotient bundle is rejected" interleavedRejected
+  let duplicateRejected ← generatedReplayRejects quotientBase #[quot, mk, lift, ind, ind]
+  state := state.check "duplicate quotient record is rejected" duplicateRejected
+  let duplicateBundleRejected ←
+    generatedReplayRejects quotientBase (quotientRecords ++ quotientRecords)
+  state := state.check "duplicate quotient bundle is rejected" duplicateBundleRejected
+  let existingBundleRejected ← generatedReplayRejects quotientEnv quotientRecords
+  state := state.check "quotient bundle cannot shadow an existing quotient" existingBundleRejected
+  let .quot quotName quotParams quotType quotKind := quot
+    | throw <| IO.userError "the first quotient record had the wrong constructor"
+  let nameRejected ← generatedReplayRejects quotientBase
+    #[.quot `NotQuot quotParams quotType quotKind, mk, lift, ind]
+  state := state.check "malformed quotient name is rejected" nameRejected
+  let levelsRejected ← generatedReplayRejects quotientBase
+    #[.quot quotName [`wrong] quotType quotKind, mk, lift, ind]
+  state := state.check "mismatched quotient levels are rejected" levelsRejected
+  let typeRejected ← generatedReplayRejects quotientBase
+    #[.quot quotName quotParams (.sort .zero) quotKind, mk, lift, ind]
+  state := state.check "mismatched quotient type is rejected" typeRejected
+  let kindRejected ← generatedReplayRejects quotientBase
+    #[.quot quotName quotParams quotType (quotKind ++ "-wrong"), mk, lift, ind]
+  state := state.check "mismatched quotient kind is rejected" kindRejected
 
   -- Current simple output can be delayed until a late basis declaration.  The
   -- synthetic two-record form pins the same after-owner move without depending
