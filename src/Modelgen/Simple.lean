@@ -16,7 +16,7 @@ exactly as the existing prelude splice does for `Eq`. A consumer that
 recognises the five interface names then needs to implement only the five
 primitives (plus `Quot`), not general inductives — and, if the input reaches
 [`Modelgen.graphArm`], `Nonempty` and the `Classical.choice` axiom beside
-them. `Nonempty` is not a fifth primitive: it is `Classical.choice`'s own
+them. `Nonempty` is not an additional primitive: it is `Classical.choice`'s own
 domain, needs no exemption, and self-models by the Church route.
 
 **`False` is not in the basis**: it is *derived* (Church `∀ p : Prop, p`,
@@ -33,7 +33,7 @@ line for `PUnit` and `PEmpty`, with
 The Σ is **`PSigma`-shaped** — `{α : Sort u} → (α → Sort v) →
 Sort (max 1 u v)` — because `Subtype`, structures with `Prop` fields, and
 every `Prop`-fibred pair in the constructions below need a Σ over `Sort`,
-which a `Type`-only `Sigma` cannot give without `PLift`, a fifth inductive.
+which a `Type`-only `Sigma` cannot give without adding `PLift` to the basis.
 
 **`Acc` is not in the basis either, and used to be.** It was there for the
 subsingleton-recursive **large** eliminator — the one grant the kernel makes
@@ -795,13 +795,13 @@ def unitAtCanon (ℓ : Level) : Expr := puliftUp ℓ trueP trueI
 element: both components are proofs of `⊤`, and proof irrelevance closes it.
 No `funext`.
 
-**Nothing reaches this today.** [`Modelgen.padsAt`] marks both pad families
-`canonical := true`, because `t ≡ canon` is a conversion the kernel performs
-(the canonical element is a literal `up`, so eta expands `t` against it), so
+[`Modelgen.padsAt`] marks both current pad families `canonical := true`, because
+`t ≡ canon` is a conversion the kernel performs (the canonical element is a
+literal `up`, so eta expands `t` against it). Consequently
 [`Modelgen.chainDestruct`] takes its no-transport branch for the lift pad as
-well as for the `D` pad. It is kept because it is the shape a caller would
-need if a future pad family were canonical only *propositionally*, and it is
-measured rather than assumed: forcing the lift pad through here by setting
+well as for the `D` pad. This function makes the generic `canonical := false`
+branch total, and its behavior is measured rather than assumed: forcing the
+lift pad through here by setting
 `canonical := false` leaves every `prim_shapes` occupant modelling, and
 forcing the `D` pad through here — where the proof is about the wrong type —
 is red at `Tri`, `Opt`, `Dec` and `Big`. -/
@@ -845,9 +845,9 @@ no uniqueness proof rides along. **Both families set it**: the
 [`Modelgen.dsingAt`] pad by `PSigma` structure eta and proof irrelevance, and
 the [`Modelgen.unitAt`] lift — used at a level `dsingOk` cannot build, a bare
 parameter in the gap, `PULift`'s shape — by tight-pair and unit structure eta
-against the literal pair that `canon` is. The `false` case is therefore unreached
-today; [`Modelgen.unitAtUniq`] is the transport it would take, and the
-measurement that says so is in that docstring. -/
+against the literal pair that `canon` is. Thus current planners do not select
+the `false` case; [`Modelgen.unitAtUniq`] is the generic transport branch, and
+the measurement that validates it is in that docstring. -/
 structure Pad where
   ty : Expr
   lv : Level
@@ -4703,7 +4703,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- The tagged W construction and its untagged instantiation. Six
     -- definitions, the constructors, one `Nat.rec` cascade for `rec_0` and one
     -- `WT.Wrec_iota` per rule. Junk uninhabited in both directions and both
-    -- towers ending at exactly the planned `Sort wW`, at either instantiation.
+    -- towers ending at exactly the selected `Sort wW`, at either instantiation.
     --
     -- **The two differ in four declarations and nowhere else**:
     -- `Tel`'s and `B'`'s domain (the tag, or the whole label), `tg` (the first
@@ -4780,7 +4780,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- ── `A` — the label, tag paired with that constructor's data ──
     -- **Emitted before `Tel` at the untagged instantiation**, because there
     -- `Tel` and `B'` are indexed by the label rather than by the tag and would
-    -- name a constant that is not yet in the environment. At the tagged one it
+    -- name a constant absent from the environment. At the tagged one it
     -- keeps its old place, so nothing about that emission moves.
     let aTyD ← withParams fun ps => mkForallFVars ps (.sort wW)
     let aVal ← withParams fun ps =>
@@ -5003,8 +5003,8 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
           -- elaborator's own refusal had sent it to the boxing retry, which
           -- the stock kernel accepts. Coverage went 125 → 124. Second
           -- refusal costs nothing and cannot lose a plan that already works:
-          -- every declaration that models today models by the same route it
-          -- took before, and the complete procedure is consulted only where
+          -- every accepted declaration keeps the route chosen by the first
+          -- procedure, and the complete procedure is consulted only where
           -- the alternative is a decline.
           if let some p ← attempt (fun a b => isLevelDefEq a b) then return p
           if let some p ← attempt (fun a b => LevelAlgebra.isLevelDefEqComplete a b) then

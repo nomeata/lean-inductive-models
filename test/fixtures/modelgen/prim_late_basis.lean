@@ -1,22 +1,16 @@
-/- **A basis primitive the input declares *after* the block whose model needs
-   it**, so the composition's third step has to wait for it.
+/- **A basis primitive physically follows blocks whose models need it in the
+   raw export.**
 
-   A mutual model must use the input's own `Eq`, and
-   [`Modelgen.runFilter`]'s `waitingPrim` applies the same rule to the third
-   construction and the input's own `Eq`, `False`, `Nat` and `PSigma`: a model
-   that would have to *splice* a constant the file itself declares later is
-   held back and generated after that declaration, because a splice may not
-   take a name the input is going to use.
+   [`Modelgen.runFilter`] dependency-orders the source and prioritizes the
+   complete fixed support closure before opening any selected owner island. A
+   model must use the input's exact `Eq`, `Nat` or `PSigma` when present; it may
+   not splice over a name reserved anywhere in the file.
 
-   **What this file adds is that the rule reaches the composition.** The queue
-   belongs to `runFilter`, and [`Modelgen.primCompose`] — the third step, over
-   the `_model._impl.tag` and `_model._impl.aux` a mutual model just emitted — is called
-   from inside `genMutual` and from the nested arm, neither of which could
-   reach it. So it passed `canWait := false` and every one of its models
-   declined `prim model name taken (PSigma)` at a primitive that was merely
-   *late*. `Lean.Syntax` is that shape in Mathlib — replayed at line 9,948 of
-   the export against `PSigma` at line 95,424 — and it was two of the eleven
-   declines the full run reported.
+   **What this file adds is that the scheduled prefix reaches composition.**
+   [`Modelgen.primCompose`] is the third step over the `_model._impl.tag` and
+   `_model._impl.aux` a mutual model just emitted. It runs inside the same
+   disposable island as `genMutual` or the nested arm, with the scheduled exact
+   support already installed in the persistent prefix.
 
    The layout is the whole fixture:
 
@@ -26,20 +20,18 @@
      for the reason `mutual_shapes.lean` gives: two members cannot distinguish
      an ordering.
    * `PSigma` is declared **after** it, at Lean's own shape, so
-     [`Modelgen.primReady`] is false at the block and true at the drain.
-     `Modelgen.checkPSigma` runs on it, so a declaration that is not Lean's
-     would be refused here rather than used.
+     the raw order exercises support scheduling. [`Modelgen.primReady`] is true
+     before the block is opened, and `Modelgen.checkPSigma` validates the exact
+     input declaration before it is used.
    * `Nd` is a **nested** declaration, also before `PSigma`, because the third
      step has two callers and a repair at one of them would leave the other
      declining. Its `_model._impl.aux` is indexed and takes arm C.
-   * `Pre` is the control: a simple inductive **before** `PSigma` whose own
-     model is an input declaration's, not the composition's. It waits on the
-     queue that already existed, so a regression that broke *that* wait while
-     fixing this one is caught in the same file.
+   * `Pre` is the control: a direct simple inductive **before** `PSigma` in the
+     raw export. It uses the same scheduled support prefix as composed models.
 
    `Eq` is declared first and `Nat` is not declared at all — the model splices
-   Lean's `Nat`, which is the case the queue must *not* fire on, and the report
-   says so with a splice line rather than a wait. -/
+   Lean's `Nat`, and the report distinguishes that splice from the input-owned
+   support. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false
@@ -61,8 +53,7 @@ inductive L (α : Type) : Type where
   | nil : L α
   | cons : α → L α → L α
 
-/-- The control: its model is an input declaration's, held by the queue that
-already existed. -/
+/-- The direct-simple control, using the same scheduled support prefix. -/
 inductive Pre : Type where
   | p0 : Pre
   | p1 : N → Pre

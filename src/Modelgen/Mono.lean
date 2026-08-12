@@ -426,8 +426,8 @@ the entry is looked up in `info`.
 **Every name of the record is asked, and they must agree.** A record is one
 group and takes one instantiation, so a record whose names model two different
 declarations has no single `σ` to take; it declines. Public model declarations
-are normally one-name records, while the check also covers any future grouped
-emission without assuming that all of its names have the same owner.
+are normally one-name records, while the check also covers grouped emission
+without assuming that all of its names have the same owner.
 
 **The `σ` mapping is the identity**, which is a claim about `modelgen` and so is
 checked: the model's declarations carry exactly `ℓ⃗`, and [`buildGroups`]

@@ -67,7 +67,7 @@ inductive UTree : Type where
   | unode : List UTree → UTree
 
 /-- The legacy squatter. Nothing about `UTree`; it is deliberately not one of
-    the declaration-local contract names minted today. -/
+    the exact declaration-local contract names. -/
 def UTree._model.self : Type := N
 
 def treeTy : Type := Tree

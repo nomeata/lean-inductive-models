@@ -1092,10 +1092,11 @@ def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
   return (← primMissingBasis reserved).isEmpty
 
 /-- **The names beyond the basis that a prim model may splice** — the ones
-[`Modelgen.primReady`] does not cover and that an input may therefore declare
-*later* than the model that needs them.
+[`Modelgen.primReady`] does not cover. Input-owned records for these names are
+moved, with their dependency closure, ahead of selected owners by
+[`Modelgen.scheduleSource`].
 
-Two groups, and they are one list because the wait is the same wait:
+They form one post-scheduling readiness class:
 
 * the quotient-side names deriving `funext` may splice
   ([`Modelgen.ensureFunext`]). A prim model reaches them on the singleton route
@@ -1106,8 +1107,8 @@ Two groups, and they are one list because the wait is the same wait:
   `Nonempty` — `test/fixtures/modelgen/w_core.ndjson`
   is one, since the fragment's `Acc` comes in through `WellFounded.fix` and its
   `Nonempty` only through `Classical.propDecidable` — used to lose `Acc`'s model
-  to `prim model name taken (Nonempty)`. This is exactly the class where a
-  primitive that is **late**, not a name that is lost. -/
+  to `prim model name taken (Nonempty)`. That is an uninstalled reserved-support
+  name, not a generated name that was lost. -/
 def lateSpliceNames : List Name :=
   [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
    `Nonempty, `Nonempty.intro, `Nonempty.rec, `Classical.choice]
@@ -1115,17 +1116,14 @@ def lateSpliceNames : List Name :=
 /-- The exact logical interface the W fragment shares with the input.
 
 `ensureWCore` refuses to splice any one of these when the input reserves it.
-They form a separate atomic readiness class: retrying at `Iff` but before
-`propext` merely declines a second time, while adding them to
-[`Modelgen.lateSpliceNames`] would make a quotient-only non-W model wait past
-an unrelated later `Iff`. `w_late_iff` pins both sides of that distinction. -/
+They form a separate atomic readiness class so a failed W construction reports
+the complete Iff/propext prerequisite rather than conflating it with the
+quotient/choice support used by non-W routes. `w_late_iff` pins that distinction. -/
 def wLogicalLateNames : List Name := [`Iff, `Iff.intro, `Iff.rec, `propext]
 
-/-- [`Modelgen.primReady`]'s question, asked of the late names. Not folded into
-`primReady` itself: most prim models never touch `funext` or choice, and
-waiting on the quotient for all of them would move every pre-`Quot` model of a
-`Quot`-late export for no reason. This is asked only of a model that has
-already *declined* at one of these names. -/
+/-- [`Modelgen.primReady`]'s question, asked of quotient/choice support after a
+construction has actually encountered one of those names. It is not folded
+into `primReady`: most simple models never use `funext` or choice. -/
 def primLateReady (reserved : Std.HashSet Name) : MetaM Bool := do
   let env ← getEnv
   for n in lateSpliceNames do
@@ -1141,7 +1139,7 @@ def primWLogicalReady (reserved : Std.HashSet Name) : MetaM Bool := do
     unless env.constants.contains n || !reserved.contains n do return false
   return true
 
-/-- Which prerequisite set a deferred simple model is waiting for. -/
+/-- The atomic prerequisite class responsible for a support-name collision. -/
 inductive PrimReadiness where
   | late
   | wLogical
@@ -1153,9 +1151,9 @@ def PrimReadiness.ready (readiness : PrimReadiness)
   | .late => primLateReady reserved
   | .wLogical => primWLogicalReady reserved
 
-/-- Did the model stop at a prerequisite the replay has not reached? Return
-the exact atomic set to wait for, rather than folding W's logical interface
-into the quotient/choice wait and moving unrelated models. -/
+/-- Classify a support-name collision by its exact atomic prerequisite set.
+Callers use this to distinguish a violated scheduling/closure invariant from a
+genuine model-shape decline. -/
 def Decline.lateReadiness? : Decline → Option PrimReadiness
   | .nameTaken n =>
     if lateSpliceNames.contains n then some .late
@@ -1211,12 +1209,11 @@ accounted for — [`Modelgen.primIso`], selected by `--simple`. Shared by the
 input's own simple inductives and the composition (the single inductives the
 other two constructions emit).
 
-`canWait` says whether the caller can hold the model back: a decline at a
-late splice name the replay has not reached
-([`Modelgen.Decline.lateReadiness?`]) returns the exact prerequisite class in
-the second component — recorded nowhere, generated later — instead of a
-decline. The composition and the end-of-file drain pass `false`: there,
-nothing more is coming.
+`canWait` enables prerequisite classification: a collision at fixed support
+([`Modelgen.Decline.lateReadiness?`]) returns its exact class in the second
+component instead of recording a model-shape decline. Source owners have
+already passed through [`Modelgen.scheduleSource`]; recursive splice closure
+passes `false` because it must complete inside the same model island.
 
 **And, with `basicModels`, models for whatever that model had to splice.**
 
@@ -1309,7 +1306,8 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     -- splices the index erasure of the family it is
     -- carving, so its output contains an inductive that was in nobody's
     -- input; if the descent above could not model it, emitting would put a
-    -- fifth inductive in front of a consumer, which splice closure prevents.
+    -- additional unmodelled inductive in front of a consumer, which splice
+    -- closure prevents.
     -- So the whole model is withdrawn and the declaration declines.
     --
     -- Checked **after** the descent and not predicted before it. A cheap test
@@ -1514,7 +1512,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
               --
               -- `Eq` is certainly present: `Modelgen.iso` above went through
               -- `ensureEq`, which either found the input's or spliced Lean's.
-              -- So this never joins the `waiting` set.
+              -- The composed step therefore satisfies its Eq prerequisite in
+              -- this same island.
               if generation.mutualModels && is.members.size > 1 then
                 let saved2 ← getEnv
                 let (tys2, ctors2) ← blockOf is.members
@@ -1605,9 +1604,9 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
             generation.simple generation.basic (out, rep, pending)
           (out, rep, pending) ← pure st3
         -- ── a simple inductive (`--simple`) ──────────────────────────────
-        -- Generated after the replay, like the plain mutual block and for
-        -- the same reason: the statements are the installed recursor's own,
-        -- restored, and there is nothing else to read them off.
+        -- Generated after replay because route construction reads the owner's
+        -- installed recursor metadata. Acceptance later replays the serialized
+        -- model owner-free, and statement correspondence uses export syntax.
         if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 then
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
           -- Ask the selected route, rather than requiring the whole basis in

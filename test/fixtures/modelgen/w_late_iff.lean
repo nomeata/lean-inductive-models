@@ -1,13 +1,14 @@
 /- A W-arm target before the exact shared `Iff` block and `propext`.
 
-   The export roots are deliberately ordered. `LateW` itself mentions none of
-   the shared logical interface. Its model first waits for the later `Eq`
-   basis; when that arrives, the W splice must notice that the file's own
-   exact `Iff`, `Iff.intro`, `Iff.rec`, and `propext` are still coming and keep
-   the whole job queued until all four have been replayed.
+   The raw export roots are deliberately ordered with `LateW` first, although
+   it mentions none of the shared logical interface. Source scheduling moves
+   the dependency-closed exact `Eq`, `Iff`, and `propext` support before the
+   owner island. W construction must then use those input declarations rather
+   than splice over their reserved names.
 
    The quotient and choice-side shared names are absent on purpose, so the W
-   fragment may splice them. This isolates the Iff/propext readiness seam. -/
+   fragment may splice them. This isolates the Iff/propext prerequisite class
+   from quotient/choice support. -/
 
 prelude
 

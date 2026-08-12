@@ -719,28 +719,21 @@ def expectedPrim : List Row :=
        ("Ix._model._impl.0._model._impl.aux", 12),
        ("Ix._model._impl.0._model._impl.aux._model._impl.skel", 16)],
       [("Eq", "prim model: a basis primitive")])
-  -- **A basis primitive the input declares after the block whose model needs
-  -- it.** `runFilter`'s `waitingPrim` has always held an *input* declaration's
-  -- prim model back until `primReady`; what this file pins is that the
-  -- **composition's third step** can wait too. `primCompose` is called from
-  -- inside `genMutual` and from the nested arm, neither of which could reach
-  -- the queue, so it passed `canWait := false` and declined at a primitive
-  -- that was merely late. That is `Lean.Syntax`'s shape in Mathlib and was two
-  -- of the eleven declines the full run reported.
+  -- **A basis primitive occurs after the owners that need it in the raw
+  -- export.** `runFilter` dependency-orders the input while prioritizing the
+  -- fixed support closure, so the input's exact `PSigma` record is installed
+  -- before every selected owner island. This row pins that the same scheduled
+  -- source prefix serves direct simple models and the **composition's third
+  -- step** inside mutual and nested model islands.
   --
-  -- **The order in this row is the claim.** `MA` (the mutual model) and
-  -- `Nd`/`Nd._model._impl.0` (nested, then its mutual) are generated at their own
-  -- declarations, because layers 1 and 2 need only `Eq`. Everything from `N`
-  -- on is the drain at the input's own `PSigma`, in queue order: the three
-  -- input declarations that were already waiting, then the four the
-  -- composition emitted. A row that moved back above `N` would mean the third
-  -- step stopped waiting.
+  -- **The order in this row is the claim.** After support scheduling, `N`, `L`
+  -- and `Pre` model at their dependency positions, followed by `MA` and its
+  -- composed simple models, then `Nd` and its two composed layers. No generated
+  -- job survives its owner island or depends on replaying a subsequent owner.
   --
-  -- `Pre` is the control — a simple inductive before `PSigma` whose model is
-  -- an input declaration's — so a repair that broke the pre-existing wait
-  -- while adding this one is red in the same file. `N`'s splice line names
-  -- `Nat` and not `PSigma`: a primitive the input does *not* declare is
-  -- spliced and never waited for.
+  -- `Pre` is the direct-simple control. `N`'s splice line names `Nat` and not
+  -- `PSigma`: a primitive absent from the input is spliced, while input-owned
+  -- support is scheduled and reused under its exact name.
   , ("prim_late_basis",
       [("N", 15), ("L", 6), ("Pre", 6), ("MA", 22),
        ("MA._model._impl.tag", 8), ("MA._model._impl.aux", 16),

@@ -5,10 +5,11 @@ import Modelgen.Plan
 /-!
 # The model of a nested inductive, generated
 
-**One of two constructions in this package**, and the one that keeps mutuality:
+**The first of three constructions in this package**, and the one that keeps mutuality:
 the model of a nested declaration is a *mutual block* with one extra member per
-nested occurrence. `src/Modelgen/Mutual.lean` is the other, and it removes
-mutuality; the two are not one construction at two settings. What they share
+nested occurrence. `src/Modelgen/Mutual.lean` is the second and removes
+mutuality; `src/Modelgen/Simple.lean` reduces a single inductive to the fixed
+basis. These are not one construction at three settings. What they share
 is the interface, `Decline`, `EqInfo`, the
 prelude splice, [`Modelgen.Iso`], [`Modelgen.modelTable`] and
 [`Modelgen.addChecked`], all of which live here.
@@ -586,7 +587,7 @@ A dependency *on* a packed field is out of reach for a different reason: Lean
 does not support it either. `node : (l : List GTree) → Len l N.z → GTree` fails
 Lean's own nested compilation with `unknown constant 'GTree'`, because the
 auxiliary block replaces `List GTree` with a fresh member and `Len l` is then
-about a constant that does not yet exist.
+about a constant absent at that point in the block.
 
 **The mention has to survive β**, which is why the type goes through
 [`Modelgen.headNorm`] first.
@@ -2045,8 +2046,8 @@ structure Iso where
   Arm C splices the *index erasure* of the family it is
   modelling and carves the family out of it, so its output contains an
   inductive declaration that was in nobody's input. If the prim pass then
-  cannot model that skeleton, the emission would put a fifth inductive in
-  front of a consumer, so the whole model is
+  cannot model that skeleton, the emission would put an additional unmodelled
+  inductive in front of a consumer, so the whole model is
   withdrawn and the declaration declines instead.
 
   The check is **after** the splice-and-model descent rather than a prediction
