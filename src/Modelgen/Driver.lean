@@ -1306,9 +1306,11 @@ private def kernelReplayDeclaration (declaration : EDecl) : Except String (Optio
     let orderedTypes ← first.all.mapM (findInductiveType types)
     let inductiveTypes ← orderedTypes.mapM fun type => do
       let orderedConstructors ← type.ctors.mapM (findConstructor constructors)
-      return ({ name := type.name, type := type.type,
-        ctors := orderedConstructors.map fun constructor =>
-          ({ name := constructor.name, type := constructor.type } : Constructor) } : InductiveType)
+      let ctors : List Constructor := orderedConstructors.map fun constructor =>
+        { name := constructor.name, type := constructor.type }
+      let inductiveType : InductiveType :=
+        { name := type.name, type := type.type, ctors }
+      return inductiveType
     -- Any active inductive record is replayed as safe, exactly as the arena:
     -- valid unsafe blocks are skipped above, while inconsistent unsafe flags
     -- are exposed by the metadata comparison below.
