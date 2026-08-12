@@ -19,13 +19,15 @@ def auditPrimitive : MetaM (Except Decline (Array Name × Bool × Bool × Bool))
     let (_, eqDecls) ← ensureEq {}
     let records ← ensurePSigmaPrime {}
     let second ← ensurePSigmaPrime {}
-    let names := records.flatMap fun declaration => declaration.getNames.toArray
+    let names := records.flatMap fun (declaration : Declaration) =>
+      declaration.getNames.toArray
     let coreOk := checkPSigmaPrimeCore (← getEnv) |>.isOk
     let some (.defnInfo recursor) := (← getEnv).constants.find? `PSigma'.rec'
       | badShape "PSigma'.rec' is not a definition"
     let projections := containsProjection `PSigma' 0 recursor.value &&
       containsProjection `PSigma' 1 recursor.value
-    return (eqDecls.flatMap (fun declaration => declaration.getNames.toArray) ++ names, coreOk,
+    return (eqDecls.flatMap (fun (declaration : Declaration) =>
+      declaration.getNames.toArray) ++ names, coreOk,
       second.isEmpty, projections)).run
 
 def main : IO UInt32 := do
@@ -35,7 +37,7 @@ def main : IO UInt32 := do
       maxHeartbeats := 0, maxRecDepth := 4096 }
   let (result, _) ← Core.CoreM.toIO (MetaM.run' auditPrimitive) context { env }
   let .ok (names, coreOk, idempotent, projections) := result
-    | IO.eprintln s!"PSigma' support declined: {result}"; return 1
+    | IO.eprintln "PSigma' support declined"; return 1
   let expected :=
     [`PSigma', `PSigma'.mk, `PSigma'.fst, `PSigma'.snd, `PSigma'.rec',
       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk]
