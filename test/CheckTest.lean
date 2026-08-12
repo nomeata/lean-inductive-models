@@ -64,10 +64,10 @@ def indexedStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementRep
   checkStatementFamiliesWithIndex x (.ofExport x) (statementFamiliesFor x owners)
 
 def indexedFamilyUnionFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
-  let syntax := SyntaxIndex.ofExport x
+  let index := SyntaxIndex.ofExport x
   (statementFamiliesFor x owners).foldl
       (init := { statementsChecked := 0, violations := #[] }) fun union family =>
-    let report := checkFamilyStatementsWithIndex x syntax family
+    let report := checkFamilyStatementsWithIndex x index family
     { statementsChecked := union.statementsChecked + report.statementsChecked
       violations := union.violations ++ report.violations }
 

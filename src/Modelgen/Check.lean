@@ -1008,7 +1008,7 @@ private def SyntaxIndex.coreOfExport (x : Export) : SyntaxIndex :=
   { declarations := declarationTypes x, constructors := constructorRecords x,
     ruleSlots := iotaSlots x, normalizer := x.exactNormalizationEnv }
 
-private def checkFamilyWithIndex (x : Export) (syntax : SyntaxIndex)
+private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
     (family : Family) (checkOrder : Bool) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
   if checkOrder then
@@ -1023,34 +1023,34 @@ private def checkFamilyWithIndex (x : Export) (syntax : SyntaxIndex)
     if let some (owner, target) := ownerReference? targets x.decls[family.ownerDecl]! then
       violations := violations.push (.ownerBackreference owner target)
   for pair in family.correspondence.typeFormers do
-    violations := violations ++ checkPair family.correspondence syntax.declarations pair
+    violations := violations ++ checkPair family.correspondence index.declarations pair
   for pair in family.correspondence.constructors do
-    violations := violations ++ checkPair family.correspondence syntax.declarations pair
+    violations := violations ++ checkPair family.correspondence index.declarations pair
   for pair in family.correspondence.recursors do
-    violations := violations ++ checkPair family.correspondence syntax.declarations pair
+    violations := violations ++ checkPair family.correspondence index.declarations pair
   for projection in family.correspondence.projections do
     violations := violations ++ checkProjection
-      x syntax.normalizer family syntax.declarations projection
+      x index.normalizer family index.declarations projection
   for iota in family.correspondence.iotas do
-    violations := violations ++ checkIota x syntax.constructors family syntax.declarations iota
+    violations := violations ++ checkIota x index.constructors family index.declarations iota
   for metadata in family.correspondence.metadata do
     violations := violations ++ checkTheoremSlot
-      syntax.declarations metadata.owner metadata.name
+      index.declarations metadata.owner metadata.name
     if metadata.kind == .unitlike then
-      violations := violations ++ checkUnitlike x family syntax.declarations metadata
+      violations := violations ++ checkUnitlike x family index.declarations metadata
     else if metadata.kind == .eta then
       violations := violations ++ checkEta
-        x syntax.normalizer family syntax.declarations metadata
+        x index.normalizer family index.declarations metadata
     else if metadata.kind == .ruleK then
-      violations := violations ++ checkRuleK x family syntax.declarations metadata
+      violations := violations ++ checkRuleK x family index.declarations metadata
   for pair in family.correspondence.recursors do
     let numRules := (family.correspondence.iotas.filter (·.recursor == pair.owner)).size
-    for (name, ruleIndex) in syntax.ruleSlots.getD pair.model #[] do
+    for (name, ruleIndex) in index.ruleSlots.getD pair.model #[] do
       if ruleIndex >= numRules || name != Naming.iotaName pair.owner ruleIndex then
         violations := violations.push (.extraRule pair.owner name)
   return violations
 
-private def computeGlobalExtras (x : Export) (syntax : SyntaxIndex) : Array Violation :=
+private def computeGlobalExtras (x : Export) (index : SyntaxIndex) : Array Violation :=
     Id.run do
   let mut violations : Array Violation := #[]
   -- An extra metadata-looking theorem is invalid even when no carrier or
@@ -1067,17 +1067,17 @@ private def computeGlobalExtras (x : Export) (syntax : SyntaxIndex) : Array Viol
               violations := violations.push (.extraProjection type.name name)
       unless type.isKernelUnitlike constructors do
         let name := Naming.unitlikeName type.name
-        unless (syntax.declarations.getD name #[]).isEmpty do
+        unless (index.declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .unitlike)
       unless type.isKernelStructureLike constructors &&
-          !syntax.normalizer.isPropositionFormer type.type do
+          !index.normalizer.isPropositionFormer type.type do
         let name := Naming.etaName type.name
-        unless (syntax.declarations.getD name #[]).isEmpty do
+        unless (index.declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata type.name name .eta)
     for recursor in recursors do
       unless recursor.k do
         let name := Naming.ruleKName recursor.name
-        unless (syntax.declarations.getD name #[]).isEmpty do
+        unless (index.declarations.getD name #[]).isEmpty do
           violations := violations.push (.extraMetadata recursor.name name .ruleK)
   return violations
 
@@ -1085,14 +1085,14 @@ private def computeGlobalExtras (x : Export) (syntax : SyntaxIndex) : Array Viol
 slot sweep.  Per-family checks subsequently filter this cached array instead
 of rescanning every declaration for every generated island. -/
 def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
-  let syntax := SyntaxIndex.coreOfExport x
-  { syntax with globalExtras := computeGlobalExtras x syntax }
+  let index := SyntaxIndex.coreOfExport x
+  { index with globalExtras := computeGlobalExtras x index }
 
-private def checkFamiliesWithIndex (x : Export) (syntax : SyntaxIndex)
+private def checkFamiliesWithIndex (x : Export) (index : SyntaxIndex)
     (families : Array Family) (checkOrder : Bool) : Array Violation :=
   families.foldl (fun violations family =>
-      violations ++ checkFamilyWithIndex x syntax family checkOrder) #[] ++
-    syntax.globalExtras
+      violations ++ checkFamilyWithIndex x index family checkOrder) #[] ++
+    index.globalExtras
 
 private def checkFamilies (x : Export) (families : Array Family)
     (checkOrder : Bool) : Array Violation :=
@@ -1121,25 +1121,25 @@ is the island-sized form needed by staged generation: family-local interface
 checks do not rebuild the source declaration, constructor, and rule indexes.
 Global extra-slot diagnostics are retained only when they belong to this
 family's exact source declarations. -/
-def checkFamilyStatementsWithIndex (x : Export) (syntax : SyntaxIndex)
+def checkFamilyStatementsWithIndex (x : Export) (index : SyntaxIndex)
     (family : Family) : StatementReport :=
   let diagnosticOwners := family.correspondence.diagnosticOwners.foldl
     (fun result owner => result.insert owner) ({} : Std.HashSet Name)
-  let global := syntax.globalExtras.filter fun violation =>
+  let global := index.globalExtras.filter fun violation =>
     diagnosticOwners.contains violation.familyOwner
   { statementsChecked := family.correspondence.statementCount
-    violations := checkFamilyWithIndex x syntax family false ++ global }
+    violations := checkFamilyWithIndex x index family false ++ global }
 
 /-- Batch a selected set of discovered families through one reusable index.
 Unlike concatenating single-family reports, the global unexpected-slot sweep
 runs once, retaining aggregate diagnostic order and multiplicity exactly. -/
-def checkStatementFamiliesWithIndex (x : Export) (syntax : SyntaxIndex)
+def checkStatementFamiliesWithIndex (x : Export) (index : SyntaxIndex)
     (families : Array Family) : StatementReport :=
   let diagnosticOwners := families.foldl
     (fun result family => family.correspondence.diagnosticOwners.foldl
       (fun result owner => result.insert owner) result)
     ({} : Std.HashSet Name)
-  let violations := (checkFamiliesWithIndex x syntax families false).filter fun violation =>
+  let violations := (checkFamiliesWithIndex x index families false).filter fun violation =>
     diagnosticOwners.contains violation.familyOwner
   { statementsChecked := families.foldl
       (fun count family => count + family.correspondence.statementCount) 0
