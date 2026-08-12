@@ -41,11 +41,11 @@ identity. -/
 def expectedShared : List Row :=
   [ ("nested_iota",
       [("Tree", 15), ("Tree._model._impl.0", 14), ("BTree", 24),
-       ("BTree._model._impl.0", 23), ("PT", 15), ("PT._model._impl.0", 14)], [])
+       ("BTree._model._impl.0", 30), ("PT", 15), ("PT._model._impl.0", 14)], [])
   , ("nested_deep", [("DTree", 23), ("DTree._model._impl.0", 20)], [])
   , ("nested_shapes",
       [("Tree", 15), ("Tree._model._impl.0", 14), ("PTree", 14),
-       ("PTree._model._impl.0", 17), ("DTree", 23), ("DTree._model._impl.0", 20),
+       ("PTree._model._impl.0", 24), ("DTree", 23), ("DTree._model._impl.0", 20),
        ("BTree", 14), ("BTree._model._impl.0", 16)], [])
   , ("nested_iota_arm", [("Tree", 15), ("Tree._model._impl.0", 14)], [])
     -- `nested_keying.lean` deliberately declares the legacy-looking name
@@ -150,7 +150,7 @@ field whose index differs from its result's, and both members nest. -/
 def expectedOwn : List Row :=
   [ ("poly_nested",
       [("PTree", 15), ("PTree._model._impl.0", 14), ("QTree", 22),
-       ("QTree._model._impl.0", 21)], [])
+       ("QTree._model._impl.0", 28)], [])
     -- **`poly_nested` with use sites**, because `poly_nested` has none: nothing
     -- in it instantiates `PTree.{u}` or `QTree.{u,v}`, so the monomorphization pass
     -- downstream gives every group in it exactly one copy and the pipeline's
@@ -166,7 +166,7 @@ def expectedOwn : List Row :=
        ("WTree._model._impl.0", 16), ("UTree", 16), ("UTree._model._impl.0", 16)], [])
   , ("nest_index_cross",
       [("ITr", 15), ("ITr._model._impl.0", 14), ("CTree", 15), ("CTree._model._impl.0", 14),
-       ("PA", 29), ("PA._model._impl.0", 26), ("XT", 24), ("XT._model._impl.0", 20)], [])
+       ("PA", 29), ("PA._model._impl.0", 26), ("XT", 31), ("XT._model._impl.0", 20)], [])
   , ("dependent_fields",
       [("DTree", 15), ("DTree._model._impl.0", 14), ("ETree", 15),
        ("ETree._model._impl.0", 14), ("KTree", 15), ("KTree._model._impl.0", 14)], [])
@@ -183,7 +183,7 @@ def expectedOwn : List Row :=
     -- derivation.
   , ("infinitary",
       [("FTree", 17), ("FTree._model._impl.0", 16), ("GTree", 15),
-       ("GTree._model._impl.0", 14), ("ZTree", 22), ("ZTree._model._impl.0", 23),
+       ("GTree._model._impl.0", 14), ("ZTree", 22), ("ZTree._model._impl.0", 30),
        ("HTree", 18), ("HTree._model._impl.0", 14), ("RTree", 16),
        ("RTree._model._impl.0", 14), ("OTree", 22), ("OTree._model._impl.0", 20)], [])
     -- **A field at a mimic under a binder, with a `funext` to prove it with.**
@@ -195,7 +195,7 @@ def expectedOwn : List Row :=
     -- position with a binder beside one without in the *same* constructor,
     -- where the fold builds the two congruences differently.
   , ("funext_binder",
-      [("HTree", 15), ("HTree._model._impl.0", 14), ("RTree", 16),
+      [("HTree", 15), ("HTree._model._impl.0", 14), ("RTree", 23),
        ("RTree._model._impl.0", 14), ("OTree", 21), ("OTree._model._impl.0", 20),
        ("H2", 15), ("H2._model._impl.0", 14), ("H3", 15), ("H3._model._impl.0", 14)], [])
     -- **That shape crossed with the rest**, because nothing about it on its
@@ -206,7 +206,7 @@ def expectedOwn : List Row :=
     -- telescope, `IdxB` puts the binder at an indexed container, `MutB`/`MutC`
     -- inside a mutual block, `CycB` inside a cyclic group of mimics.
   , ("nest_binder_cross",
-      [("Tr", 15), ("Tr._model._impl.0", 14), ("DTel", 16), ("DTel._model._impl.0", 14),
+      [("Tr", 15), ("Tr._model._impl.0", 14), ("DTel", 23), ("DTel._model._impl.0", 14),
        ("IdxB", 15), ("IdxB._model._impl.0", 14), ("MutB", 28), ("MutB._model._impl.0", 26),
        ("CycB", 23), ("CycB._model._impl.0", 20)], [])
     -- **The sort the block lands in.** `PTree : Prop` eliminates only into
@@ -218,7 +218,7 @@ def expectedOwn : List Row :=
     -- `Prop`-valued and *does* have a motive universe. `STree` nests through a
     -- container polymorphic over `Sort` rather than `Type`.
   , ("nest_sorts",
-      [("PTree", 16), ("PTree._model._impl.0", 14), ("STree", 15),
+      [("PTree", 22), ("PTree._model._impl.0", 14), ("STree", 15),
        ("STree._model._impl.0", 14)], [])
     -- **The sweep.** A claim that there is no shape Lean accepts and this
     -- refuses is worth what was swept for it, so these were written by asking
@@ -231,19 +231,19 @@ def expectedOwn : List Row :=
     -- parameter and an index nesting through an indexed container and through
     -- `List`, one of them under a binder — every axis at once.
   , ("nest_odd_shapes",
-      [("EmpT", 14), ("EmpT._model._impl.0", 10), ("ImpT", 14), ("ImpT._model._impl.0", 16),
+      [("EmpT", 21), ("EmpT._model._impl.0", 10), ("ImpT", 14), ("ImpT._model._impl.0", 16),
        ("LetT", 22), ("LetT._model._impl.0", 22), ("FunP", 15), ("FunP._model._impl.0", 14),
        ("Deep3", 31), ("Deep3._model._impl.0", 26), ("EvT", 29), ("EvT._model._impl.0", 26)], [])
     -- **No `Eq` in the input at all**, which used to be a refusal and is now a
     -- splice: 15 declarations plus Lean's own `Eq`. The file is still named
     -- for what it does *not* declare.
   , ("decline_no_eq", [("Tree", 16), ("Tree._model._impl.0", 14)], [])
-  , ("nest_through_mutual", [("A", 22), ("A._model._impl.0", 20)], [])
-  , ("nest_mutual_both", [("A", 28), ("A._model._impl.0", 27)], [])
+  , ("nest_through_mutual", [("A", 29), ("A._model._impl.0", 20)], [])
+  , ("nest_mutual_both", [("A", 28), ("A._model._impl.0", 34)], [])
   , ("nest_through_nested", [("Tree", 15), ("Tree._model._impl.0", 14), ("T", 23), ("T._model._impl.0", 20)], [])
   , ("nest_cycle_group",
       [("Tree", 15), ("Tree._model._impl.0", 14), ("U", 23), ("U._model._impl.0", 20),
-       ("V", 30), ("V._model._impl.0", 27)], [])
+       ("V", 30), ("V._model._impl.0", 34)], [])
   , ("nest_mutual_cycle",
       [("Tree", 15), ("Tree._model._impl.0", 14), ("P", 37), ("P._model._impl.0", 32),
        ("R", 21), ("R._model._impl.0", 20)], [])
@@ -253,9 +253,9 @@ def expectedOwn : List Row :=
     -- members and four constructors: the tag, the carrier, two type formers,
     -- four constructors, two recursors and four ι theorems is 14.
   , ("nest_family_edges",
-      [("C", 14), ("A1", 34), ("A1._model._impl.0", 33), ("X", 23),
+      [("C", 14), ("A1", 34), ("A1._model._impl.0", 40), ("X", 23),
        ("X._model._impl.0", 20)], [])
-  , ("nest_mutual_index", [("MA", 32), ("MA._model._impl.0", 31)], [])
+  , ("nest_mutual_index", [("MA", 32), ("MA._model._impl.0", 38)], [])
     -- **`nest_fam_arg` is the head-normalization sweep and has moved to `expectedPrim`**,
     -- because the redex it exists for reaches layer 3 as well and that is
     -- where it now has to be measured. The row there asserts everything this
@@ -278,32 +278,32 @@ def expectedOwn : List Row :=
     -- and unequal constructor counts within a block, because equal ones let a
     -- generator that flattened the members wrongly still land every minor at
     -- the right arity.
-  , ("mutual_shapes", [("A", 23), ("PA", 22), ("UA", 24)], [])
+  , ("mutual_shapes", [("A", 30), ("PA", 22), ("UA", 24)], [])
     -- The indices. `T0`/`T1`/`T2` is the shape; `MA`/`MB`/`MC` have index
     -- telescopes of **different lengths**, which is what the tag exists for;
     -- `DA`/`DB` differ in the index *type* at the same sort; `SA`/`SB`/`SC` is
     -- the `Prop` family indexed by `Type 1`, the only shape in the tree where
     -- the tag's own sort is not `Sort 1`; `VA`/`VB` has an index type that
     -- mentions a parameter.
-  , ("mutual_index", [("T0", 25), ("MA", 20), ("DA", 14), ("SA", 18), ("VA", 12)], [])
+  , ("mutual_index", [("T0", 32), ("MA", 20), ("DA", 14), ("SA", 18), ("VA", 12)], [])
     -- `Prop`, where a block of several members has **no motive universe** and
     -- the auxiliary inductive may still have one of its own. Read off each
     -- recursor and never off the sort.
-  , ("mutual_prop", [("Even", 12), ("M0", 16), ("Sa", 15)], [])
+  , ("mutual_prop", [("Even", 12), ("M0", 16), ("Sa", 22)], [])
     -- A member that recurses into nothing: only one member recursive, a member
     -- with **no constructors**, and the K-rule shape. It is isolated because a
     -- replay implementation that recomputes `isRec` per member disagrees with
     -- Lean's block-level flag on both the input and generated output.
-  , ("mutual_nonrec", [("OA", 21), ("EA", 14), ("Ka", 12)], [])
+  , ("mutual_nonrec", [("OA", 28), ("EA", 14), ("Ka", 12)], [])
     -- The sweep: a `let` in a field's type, implicit binders and a
     -- `Sort`-valued field, a **dependent** index telescope, an index at a
     -- parameter (so the tag's sort is `max 1 (u+1)` and not a numeral), and a
     -- parameter that is a function type.
-  , ("mutual_odd_shapes", [("LA", 25), ("IA", 28), ("WA", 14), ("QA", 14), ("FA", 18)], [])
+  , ("mutual_odd_shapes", [("LA", 32), ("IA", 28), ("WA", 14), ("QA", 14), ("FA", 18)], [])
     -- `KB._model.self` is intentionally a legacy-looking squatter. Under the
     -- declaration-local contract it is irrelevant, so both mutual blocks
     -- model; this preserves the regression test that a legacy name is ignored.
-  , ("mutual_keying", [("KA", 15), ("GA", 14)], [])
+  , ("mutual_keying", [("KA", 22), ("GA", 14)], [])
     -- ── the two composed constructions ────────────────────────────────────
     --
     -- **The axis only the composition reaches.** Lean's nested specialisation
@@ -314,7 +314,7 @@ def expectedOwn : List Row :=
     -- the two guesses that did not reproduce it and `Q` is the control.
     -- Put `==` back where `isLevelDefEq` is and `PS._model._impl.0` declines alone.
   , ("compose_sorts",
-      [("PT", 16), ("PT._model._impl.0", 14), ("PF", 15), ("PF._model._impl.0", 14),
+      [("PT", 23), ("PT._model._impl.0", 14), ("PF", 15), ("PF._model._impl.0", 14),
        ("PS", 15), ("PS._model._impl.0", 14), ("Q", 14), ("Q._model._impl.0", 14)], [])
   ]
 
@@ -384,7 +384,7 @@ def expectedPrim : List Row :=
     -- written owner mention β-reduces away.  The payload is non-recursive, so
     -- `Dead.step` consumes exactly one predecessor and the ordinary tuple
     -- route emits its six public declarations.
-    ("nonindexed_vanishing", [("N", 9), ("Dead", 6)],
+    ("nonindexed_vanishing", [("N", 16), ("Dead", 6)],
       [("Eq", "prim model: a basis primitive")])
   -- The two small-elimination seams under the derived exact-sort lift. `MI` forces the pair
     -- motive at two distinct result indices; `MR.step` forces a recursive
@@ -392,16 +392,16 @@ def expectedPrim : List Row :=
     -- pair's element projection; `MRI` crosses both at a changing child fibre.
     -- Each has six public declarations; the first model in each raw export also
     -- pays for the `Eq` and tight-pair/PUnit support records.
-  , ("maybe_zero_indexed", [("MI", 8)], [])
-  , ("maybe_zero_recursive", [("MRI", 8), ("MR", 6)], [])
+  , ("maybe_zero_indexed", [("MI", 15)], [])
+  , ("maybe_zero_recursive", [("MRI", 15), ("MR", 6)], [])
   -- Lifted arm F at its minimum: one proof field and one constant result
   -- index. The latter forces the packed equation; the existing one-field
   -- direct-carrier route is index-free. At positive `u`, forgetting the
   -- exact-sort lift boundary is a kernel type error; at `u = 0`, the same declaration
   -- checks the genuinely propositional end.
-  , ("degenerate_graph", [("DG", 9)], [])
+  , ("degenerate_graph", [("DG", 16)], [])
   , ("prim_shapes",
-      [("Tri", 11), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
+      [("Tri", 18), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
        ("Conj3", 10), ("PU", 6), ("Sv", 5), ("PE", 2), ("MNm", 8), ("IdxS", 5),
        ("Dec", 6), ("Conj", 8), ("TagS2", 8), ("TagS", 6), ("PT", 8),
@@ -419,7 +419,7 @@ def expectedPrim : List Row :=
   -- `Nonempty` and `Classical.choice` itself since the untagged core widened it, so the
   -- graph arm splices neither wherever the core has already gone in.
   , ("prim_declines",
-      [("P", 9), ("Idx", 5), ("Inf", 16), ("Nonempty", 4), ("Branch", 213),
+      [("P", 16), ("Idx", 5), ("Inf", 16), ("Nonempty", 4), ("Branch", 213),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
@@ -462,7 +462,7 @@ def expectedPrim : List Row :=
   -- positive arm-F controls for one and several dependent pivot transports;
   -- `arm_f_zip` isolates the wider zipper cases.
   , ("prim_idx",
-      [("N", 9), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 14),
+      [("N", 16), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 14),
        ("Rxh", 18), ("Rxh.below", 22), ("FChain", 4), ("Rgd", 16),
        ("Rgd.below", 20), ("Fam", 6), ("Inf.below", 18),
        ("Fg", 5), ("Rv.below", 13), ("Fall3", 4), ("Fxh", 6), ("Fmid", 4),
@@ -475,7 +475,7 @@ def expectedPrim : List Row :=
       , ("Nat", "prim model: a basis primitive")])
   , ("prim_graph",
       [("G1", 17), ("Nonempty", 4), ("G4", 15), ("G4.below", 13), ("Ac", 13),
-       ("N", 8), ("BadC", 14), ("BadC.below", 18), ("Ac.below", 13),
+       ("N", 15), ("BadC", 14), ("BadC.below", 18), ("Ac.below", 13),
        ("G3", 13), ("G3.below", 13),
        ("G1.below", 18), ("G2", 13), ("G5", 13), ("G5.below", 13),
        ("G2.below", 13)],
@@ -558,7 +558,7 @@ def expectedPrim : List Row :=
   -- are the positive layer-3 occupants for discarding a βζ-dead mention, and
   -- the row below asserts their auxiliary models and erased skeletons.
   , ("prim_carve",
-      [("N", 9), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
+      [("N", 16), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
@@ -581,7 +581,7 @@ def expectedPrim : List Row :=
   -- and therefore carries the W fragment, while the latter is the arm's own
   -- twelve declarations. Both remain on the tagged W instantiation.
   , ("w_imax",
-      [("WData", 218), ("_wcore.Subtype", 9), ("_wcore.List", 6),
+      [("WData", 225), ("_wcore.Subtype", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6),
@@ -617,7 +617,7 @@ def expectedPrim : List Row :=
   -- the section carries: these three at `[propext, Classical.choice,
   -- Quot.sound]` against every other target's `[propext, Quot.sound]`.
   , ("prim_w",
-      [("Tree", 218), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
+      [("Tree", 225), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
@@ -666,7 +666,7 @@ def expectedPrim : List Row :=
   -- through a skeleton with no base constructor, which arm E models as the
   -- exact empty carrier.
   , ("nest_fam_arg",
-      [("N", 9), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model._impl.skel", 6),
+      [("N", 16), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model._impl.skel", 6),
        ("RB", 215),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
