@@ -19,8 +19,9 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else
     { state with failed := state.failed.push label }
 
-def runModelgen (binary : String) (args : List String) : IO IO.Process.Output :=
-  IO.Process.output { cmd := binary, args := args.toArray }
+def runModelgen (binary : String) (args : List String) (input? : Option String := none) :
+    IO IO.Process.Output :=
+  IO.Process.output { cmd := binary, args := args.toArray } input?
 
 def runModelgenStdin (binary : String) (args : List String) (input : String) :
     IO IO.Process.Output :=
@@ -129,6 +130,20 @@ def main (args : List String) : IO UInt32 := do
     internal.exitCode == 3 &&
       (internal.stderr.splitOn "monomorphization refused the export:").length > 1
 
+  -- A literal `-` is standard input, not an unknown option.  The streaming
+  -- reader sees the same records as a file reader; stdin cannot use the
+  -- verbatim-copy shortcut after it has been consumed, so compare exports
+  -- structurally rather than requiring its harmless re-interning to preserve
+  -- whitespace.
+  let stdinRun ← runModelgen binary
+    ["--no-inductives", "--no-check", "--quiet", "-"] (some nestedText)
+  state := state.check "stdin input succeeds" (stdinRun.exitCode == 0)
+  state := state.check "stdin and file parse to the same export" <|
+    match Modelgen.parse stdinRun.stdout (analyse := false),
+        Modelgen.parse nestedText (analyse := false) with
+    | .ok stdinExport, .ok fileExport => stdinExport.decls == fileExport.decls
+    | _, _ => false
+
   -- All defaults are exercised here, including stdout output and both checks.
   -- This succeeds once all generated model families precede their owners; it
   -- is the integration seam between the CLI and the ordering repair.
@@ -181,6 +196,43 @@ def main (args : List String) : IO UInt32 := do
     IO.FS.removeFile outputPath
   else
     state := state.check "file output was created" false
+
+  -- File-input identity is stronger than structural equivalence: comments,
+  -- metadata formatting and blank lines are copied byte-for-byte. This line
+  -- is larger than the reader's 4 MiB chunk, pinning carry handling when no
+  -- newline occurs in an entire chunk.
+  let boundaryPath := s!"{scratch}/main-cli-chunk-boundary.ndjson"
+  let boundaryText :=
+    "{\"meta\":{},\"padding\":\"" ++ String.ofList (List.replicate (5 * 1024 * 1024) 'x') ++
+      "\"}\n\n"
+  IO.FS.writeFile boundaryPath boundaryText
+  let boundaryRun ← runModelgen binary
+    ["--no-inductives", "--no-check", "--quiet", boundaryPath]
+  state := state.check "line spanning the chunk boundary parses" (boundaryRun.exitCode == 0)
+  state := state.check "unchanged file output is byte-for-byte verbatim"
+    (boundaryRun.stdout == boundaryText)
+  let boundaryBefore ← IO.FS.readBinFile boundaryPath
+  let inPlaceRun ← runModelgen binary
+    ["--no-inductives", "--no-check", "--quiet", "-o", boundaryPath, boundaryPath]
+  let boundaryAfter ← IO.FS.readBinFile boundaryPath
+  state := state.check "literal in-place no-op does not truncate input" <|
+    inPlaceRun.exitCode == 0 && inPlaceRun.stdout.isEmpty && boundaryAfter == boundaryBefore
+  IO.FS.removeFile boundaryPath
+
+  let malformedPath := s!"{scratch}/main-cli-malformed.ndjson"
+  IO.FS.writeFile malformedPath "{not-json}\n"
+  let malformedRun ← runModelgen binary
+    ["--no-inductives", "--no-check", "--no-output", malformedPath]
+  state := state.check "malformed NDJSON is a tool error" <|
+    malformedRun.exitCode == 3 && malformedRun.stdout.isEmpty &&
+      malformedRun.stderr.contains "parse error"
+  IO.FS.writeBinFile malformedPath (ByteArray.mk #[0xff, 0x0a])
+  let utf8Run ← runModelgen binary
+    ["--no-inductives", "--no-check", "--no-output", malformedPath]
+  state := state.check "malformed UTF-8 is a tool error" <|
+    utf8Run.exitCode == 3 && utf8Run.stdout.isEmpty &&
+      utf8Run.stderr.contains "the input is not valid UTF-8"
+  IO.FS.removeFile malformedPath
 
   -- Options apply left-to-right at the actual process boundary.  The last
   -- --no-output wins in the first invocation; the later --output wins in the

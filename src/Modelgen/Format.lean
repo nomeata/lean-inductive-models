@@ -808,7 +808,7 @@ the 10-million-line prefix it takes the parse's peak from 2,381,888 KB to
 **1.3 % fewer instructions**. `Handle.getLine` is not the route: it did not
 finish a 1-million-line prefix in ten minutes.
 -/
-def parseHandle (h : IO.FS.Handle) (analyse : Bool := true) : IO (Except String Export) := do
+def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String Export) := do
   -- **One ref per growing array, and `modifyGet`.** `RCtx` holds three arrays
   -- that grow by `push`, and a `push` is in-place only while the array is
   -- uniquely referenced. Two shapes lose that and both were measured on a 20 MB
@@ -878,6 +878,10 @@ def parseHandle (h : IO.FS.Handle) (analyse : Bool := true) : IO (Except String 
     let exprs ← if analyse then cRef.modifyGet fun c => (c.exprs, {}) else pure #[]
     return .ok { metaLine, decls := ← declsRef.get,
                  projNodes := if analyse then projNodesOf exprs else {} }
+
+/-- Handle-specialized wrapper around [`parseStream`]. -/
+def parseHandle (h : IO.FS.Handle) (analyse : Bool := true) : IO (Except String Export) :=
+  parseStream (IO.FS.Stream.ofHandle h) analyse
 
 /-! ## Writing
 
