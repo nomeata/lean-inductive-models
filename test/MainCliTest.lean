@@ -177,29 +177,73 @@ def main (args : List String) : IO UInt32 := do
   -- all exported bookkeeping and recursor metadata must independently equal
   -- the `ConstantInfo`s minted by Lean's kernel.
   let metadataCorruptions : Array (String × Modelgen.Export) := #[
+    ("inductive name", mapInductiveType nestedExport `Nat fun type =>
+      { type with name := `ArenaWrongInductive }),
+    ("inductive level parameters", mapInductiveType nestedExport `Nat fun type =>
+      { type with levelParams := [`ArenaExtraLevel] }),
+    ("inductive type", mapInductiveType nestedExport `Nat fun type =>
+      { type with type := .sort .zero }),
     ("inductive all", mapInductiveType nestedExport `Nat fun type =>
       { type with all := [`Eq] }),
     ("inductive constructor order", mapInductiveType nestedExport `Nat fun type =>
       { type with ctors := type.ctors.reverse }),
+    ("inductive parameter count", mapInductiveType nestedExport `Nat fun type =>
+      { type with numParams := type.numParams + 1 }),
+    ("inductive index count", mapInductiveType nestedExport `Nat fun type =>
+      { type with numIndices := type.numIndices + 1 }),
     ("inductive recursion flag", mapInductiveType nestedExport `Nat fun type =>
       { type with isRec := !type.isRec }),
     ("inductive nested count", mapInductiveType nestedExport `Nat fun type =>
       { type with numNested := type.numNested + 1 }),
+    ("inductive reflexivity flag", mapInductiveType nestedExport `Nat fun type =>
+      { type with isReflexive := !type.isReflexive }),
+    ("inductive unsafe flag", mapInductiveType nestedExport `Nat fun type =>
+      { type with isUnsafe := !type.isUnsafe }),
     ("constructor type", mapConstructor nestedExport `Nat.succ fun constructor =>
       { constructor with type := .sort .zero }),
     ("constructor name", mapConstructor nestedExport `Nat.zero fun constructor =>
       { constructor with name := `ArenaWrongConstructor }),
     ("constructor level parameters", mapConstructor nestedExport `Nat.zero fun constructor =>
       { constructor with levelParams := [`ArenaExtraLevel] }),
+    ("constructor owner", mapConstructor nestedExport `Nat.zero fun constructor =>
+      { constructor with induct := `Eq }),
+    ("constructor index", mapConstructor nestedExport `Nat.zero fun constructor =>
+      { constructor with cidx := constructor.cidx + 1 }),
+    ("constructor parameter count", mapConstructor nestedExport `Nat.zero fun constructor =>
+      { constructor with numParams := constructor.numParams + 1 }),
     ("constructor field count", mapConstructor nestedExport `Nat.succ fun constructor =>
       { constructor with numFields := constructor.numFields + 1 }),
+    ("constructor unsafe flag", mapConstructor nestedExport `Nat.zero fun constructor =>
+      { constructor with isUnsafe := !constructor.isUnsafe }),
+    ("recursor name", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with name := `ArenaWrongRecursor }),
     ("recursor level parameters", mapRecursor nestedExport `Nat.rec fun recursor =>
       { recursor with levelParams := recursor.levelParams ++ [`ArenaExtraLevel] }),
+    ("recursor type", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with type := .sort .zero }),
     ("recursor all", mapRecursor nestedExport `Nat.rec fun recursor =>
       { recursor with all := [`Eq] }),
+    ("recursor parameter count", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with numParams := recursor.numParams + 1 }),
+    ("recursor index count", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with numIndices := recursor.numIndices + 1 }),
+    ("recursor motive count", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with numMotives := recursor.numMotives + 1 }),
+    ("recursor minor count", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with numMinors := recursor.numMinors + 1 }),
+    ("recursor rule constructor", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with rules := recursor.rules.map fun rule =>
+          { rule with ctor := `Eq.refl } }),
     ("recursor rule field count", mapRecursor nestedExport `Nat.rec fun recursor =>
       { recursor with rules := recursor.rules.map fun rule =>
-          { rule with nfields := rule.nfields + 1 } })]
+          { rule with nfields := rule.nfields + 1 } }),
+    ("recursor rule body", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with rules := recursor.rules.map fun rule =>
+          { rule with rhs := .sort .zero } }),
+    ("recursor K flag", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with k := !recursor.k }),
+    ("recursor unsafe flag", mapRecursor nestedExport `Nat.rec fun recursor =>
+      { recursor with isUnsafe := !recursor.isUnsafe })]
   for (field, corruption) in metadataCorruptions do
     let result ← runModelgenStdin binary [
       "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
@@ -214,6 +258,36 @@ def main (args : List String) : IO UInt32 := do
     reorderedConstructorRecords.render
   state := state.check "constructor record array order is not semantic metadata" <|
     reorderedConstructors.exitCode == 0
+
+  -- General declaration metadata is an input to kernel insertion rather than
+  -- kernel-minted output.  Use non-default but valid values to ensure replay
+  -- preserves every field instead of silently rebuilding defaults.
+  let universeName := `ArenaUniverse
+  let proposition := `ArenaProposition
+  let proof := `ArenaProof
+  let theoremName := `ArenaTheorem
+  let definitionName := `ArenaDefinition
+  let opaqueName := `ArenaOpaque
+  let generalMetadata : Modelgen.Export := { nestedExport with decls := #[
+    .thm theoremName [] (.const proposition []) (.const proof [])
+      [theoremName, proof],
+    .opaq opaqueName [universeName] (.sort (.succ (.param universeName)))
+      (.sort (.param universeName)) false [opaqueName, definitionName],
+    .defn definitionName [universeName] (.sort (.succ (.param universeName)))
+      (.sort (.param universeName)) (.regular 17) "safe"
+      [definitionName, opaqueName],
+    .ax proof [] (.const proposition []) false,
+    .ax proposition [] (.sort .zero) false,
+    -- Invalid bodies and dependencies remain outside the arena verdict when
+    -- their safety says that Lean itself cannot kernel-check them.
+    .defn `ArenaPartial [] (.sort .zero) (.const `ArenaMissing []) .opaque "partial"
+      [`ArenaPartial],
+    .ax `ArenaUnsafe [] (.const `ArenaMissing []) true] }
+  let generalReplay ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
+    "--quiet", "-"] generalMetadata.render
+  state := state.check "general metadata and arena safety skips replay exactly" <|
+    generalReplay.exitCode == 0 && generalReplay.stdout == generalMetadata.render
 
   let unknownSafety := nestedText.replace "\"safety\":\"safe\"" "\"safety\":\"mystery\""
   let badSafety ← runModelgenStdin binary [
@@ -243,12 +317,25 @@ def main (args : List String) : IO UInt32 := do
     return 1
   let quotientRecords := quotientExport.decls.filter fun declaration =>
     match declaration with | .quot .. => true | _ => false
-  let quotientPrincipal := { quotientExport with decls := quotientRecords.extract 0 1 }
+  let some equalityRecord := quotientExport.decls.find? fun declaration =>
+      declaration.names.contains `Eq | do
+    IO.eprintln "mainclitest: quotient fixture did not contain Eq"
+    return 1
+  -- The arena erases the three companion records, but `quotDecl` itself still
+  -- needs the exported Eq declaration which its minted lift/ind types use.
+  let quotientPrincipal :=
+    { quotientExport with decls := #[equalityRecord, quotientRecords[0]!] }
   let principalReplay ← runModelgenStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     quotientPrincipal.render
-  state := state.check "arena-compatible quotient principal replays without companions" <|
+  state := state.check "arena-compatible quotient principal replays with Eq but no companions" <|
     quotientRecords.size == 4 && principalReplay.exitCode == 0
+  let quotientWithoutEquality := { quotientExport with decls := quotientRecords.extract 0 1 }
+  let principalWithoutEquality ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    quotientWithoutEquality.render
+  state := state.check "quotient principal without Eq is kernel-invalid" <|
+    quotientRecords.size == 4 && principalWithoutEquality.exitCode == 1
   let quotientCompanions := { quotientExport with decls := quotientRecords.extract 1 4 }
   let companionsReplay ← runModelgenStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]

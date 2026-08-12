@@ -179,14 +179,15 @@ def safetyTo : DefinitionSafety → String
 records that `Declaration.quotDecl` already covers. -/
 def toDeclaration (env : Environment) : EDecl → Option Declaration
   | .ax n lp t u => some <| .axiomDecl { name := n, levelParams := lp, type := t, isUnsafe := u }
-  | .defn n lp t v h sf _ => do
+  | .defn n lp t v h sf all => do
       let safety ← safetyOf? sf
       some <| .defnDecl
         { name := n, levelParams := lp, type := t, value := v
-          hints := hintsTo h, safety }
-  | .thm n lp t v _ => some <| .thmDecl { name := n, levelParams := lp, type := t, value := v }
-  | .opaq n lp t v u _ => some <| .opaqueDecl
-      { name := n, levelParams := lp, type := t, value := v, isUnsafe := u }
+          hints := hintsTo h, safety, all }
+  | .thm n lp t v all => some <| .thmDecl
+      { name := n, levelParams := lp, type := t, value := v, all }
+  | .opaq n lp t v u all => some <| .opaqueDecl
+      { name := n, levelParams := lp, type := t, value := v, isUnsafe := u, all }
   | .quot .. => if env.constants.contains `Quot then none else some .quotDecl
   | .induct ts cs _ =>
     let its := ts.map fun t =>
