@@ -25,6 +25,15 @@ printf '%s\n' "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"PSigma'\"}}" > "$output"
 printf '%s\n' 'input check: 12001 model families checked' > "$recheck"
 
 checker="$ROOT/scripts/check-mathlib-result.sh"
+
+# GitHub's stock Ubuntu runner does not provide ripgrep. Shadow any host copy
+# so this regression test also proves the checker has no hidden rg dependency.
+rg() {
+  echo "mathlib result parser unexpectedly invoked rg" >&2
+  return 127
+}
+export -f rg
+
 "$checker" "$generate" "$output" "$recheck" >/dev/null
 
 sed 's/0 differ/1 differ/' "$generate" > "$WORK/bad-statements.log"

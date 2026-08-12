@@ -27,7 +27,7 @@ fail() {
   exit 1
 }
 
-for tool in git lake perf rg; do
+for tool in git lake perf grep; do
   command -v "$tool" >/dev/null || fail "required command not found: $tool"
 done
 
@@ -96,10 +96,10 @@ perf stat -e instructions -o "$PERF_DIR/generate.perf" -- \
   2> >(tee "$LOG_DIR/generate.log" >&2)
 
 [[ -s "$OUTPUT" ]] || fail "generated export is missing or empty"
-if rg -n ': declined' "$LOG_DIR/generate.log"; then
+if grep -En ': declined' "$LOG_DIR/generate.log"; then
   fail "one or more Mathlib inductives declined"
 fi
-rg -q ': model of [1-9][0-9]* declarations' "$LOG_DIR/generate.log" ||
+grep -Eq ': model of [1-9][0-9]* declarations' "$LOG_DIR/generate.log" ||
   fail "generation reported no models"
 
 # Re-read the bytes that were actually written. The positive diagnostic guard

@@ -22,19 +22,19 @@ for artifact in "$GENERATE_LOG" "$OUTPUT" "$CHECK_INPUT_LOG"; do
   [[ -s "$artifact" ]] || fail "missing or empty artifact: $artifact"
 done
 
-rg -q '^statements: [1-9][0-9]* compared, 0 differ$' "$GENERATE_LOG" ||
+grep -Eq '^statements: [1-9][0-9]* compared, 0 differ$' "$GENERATE_LOG" ||
   fail "generated-statement comparison was absent, empty, or nonzero"
-[[ "$(rg -c '^statements: ' "$GENERATE_LOG")" == 1 ]] ||
+[[ "$(grep -Ec '^statements: ' "$GENERATE_LOG")" == 1 ]] ||
   fail "generation reported more than one statement-comparison result"
 
-rg -q '^output check: [1-9][0-9]* model families checked$' "$GENERATE_LOG" ||
+grep -Eq '^output check: [1-9][0-9]* model families checked$' "$GENERATE_LOG" ||
   fail "in-memory output check reported no model families"
-[[ "$(rg -c '^output check: ' "$GENERATE_LOG")" == 1 ]] ||
+[[ "$(grep -Ec '^output check: ' "$GENERATE_LOG")" == 1 ]] ||
   fail "generation reported more than one output-check result"
 
-rg -q '^levels: [1-9][0-9]* planner comparisons, 0 escapes$' "$GENERATE_LOG" ||
+grep -Eq '^levels: [1-9][0-9]* planner comparisons, 0 escapes$' "$GENERATE_LOG" ||
   fail "universe planning was absent, empty, or escaped"
-[[ "$(rg -c '^levels: ' "$GENERATE_LOG")" == 1 ]] ||
+[[ "$(grep -Ec '^levels: ' "$GENERATE_LOG")" == 1 ]] ||
   fail "generation reported more than one universe-planning result"
 
 # This set follows from the pinned input: it owns four of the five basis
@@ -46,20 +46,20 @@ actual_exemptions="$({
 [[ "$actual_exemptions" == "$expected_exemptions" ]] ||
   fail "basis exemptions differ; expected {$expected_exemptions}, found {$actual_exemptions}"
 
-rg -q ": prelude spliced — (.*, )?PSigma'(, |$)" "$GENERATE_LOG" ||
+grep -Eq ": prelude spliced — (.*, )?PSigma'(, |$)" "$GENERATE_LOG" ||
   fail "generation did not report splicing the tight PSigma' basis"
-rg -Fq "\"str\":\"PSigma'\"}" "$OUTPUT" ||
+grep -Fq "\"str\":\"PSigma'\"}" "$OUTPUT" ||
   fail "serialized output has no exact PSigma' name-table entry"
 
 # PULiftP was replaced by the derived PSigma'/PUnit construction. Its name
 # must not survive in either the emitted stream or either report.
-if rg -Fn 'PULiftP' "$GENERATE_LOG" "$OUTPUT" "$CHECK_INPUT_LOG"; then
+if grep -Fn 'PULiftP' "$GENERATE_LOG" "$OUTPUT" "$CHECK_INPUT_LOG"; then
   fail "legacy PULiftP survived in a full-Mathlib artifact"
 fi
 
-rg -q '^input check: [1-9][0-9]* model families checked$' "$CHECK_INPUT_LOG" ||
+grep -Eq '^input check: [1-9][0-9]* model families checked$' "$CHECK_INPUT_LOG" ||
   fail "serialized input recheck reported no model families"
-[[ "$(rg -c '^input check: ' "$CHECK_INPUT_LOG")" == 1 ]] ||
+[[ "$(grep -Ec '^input check: ' "$CHECK_INPUT_LOG")" == 1 ]] ||
   fail "serialized input recheck reported more than one result"
 
 echo "mathlib result: generation, exact interfaces, levels, basis, and serialized reread pass"
