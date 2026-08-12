@@ -788,6 +788,17 @@ built-ins recognise it on the way in. -/
 def quotKindStr : QuotKind → String
   | .type => "type" | .ctor => "ctor" | .lift => "lift" | .ind => "ind"
 
+/-- Whether a quotient export record is exactly the part of the single kernel
+`quotDecl` already installed in `env`.  This distinguishes the three covered
+records of a valid four-record bundle from malformed or unrelated records. -/
+def installedQuotRecord (env : Environment) : EDecl → Bool
+  | .quot name levelParams type kind =>
+    match env.constants.find? name with
+    | some (.quotInfo info) => info.levelParams == levelParams && info.type == type &&
+        quotKindStr info.kind == kind
+    | _ => false
+  | _ => false
+
 /-- A generated declaration as export records — **plural**, because
 `Declaration.quotDecl` is one kernel declaration and four records. Everything
 else is one record and goes through [`Modelgen.toEDecl`]. -/
@@ -815,8 +826,12 @@ def checkGeneratedIn (base : Environment) (records : Array EDecl) :
     MetaM (Except String Environment) := do
   let mut checked := base
   for record in records do
-    let some declaration := toDeclaration checked record
-      | return .error s!"{record.names}: cannot reconstruct a kernel declaration"
+    let some declaration := toDeclaration checked record | do
+      -- One `Declaration.quotDecl` installs all four exported quotient names.
+      -- The remaining three records are therefore already represented, not
+      -- failed reconstructions, once their exact constant is present.
+      if installedQuotRecord checked record then continue
+      return .error s!"{record.names}: cannot reconstruct a kernel declaration"
     match checked.addDeclCore 0 declaration none true with
     | .error exception =>
       return .error s!"{record.names}: \
@@ -841,8 +856,9 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
   for record in records do
     if record.names.any spliced.contains &&
         (record.names.any persistentSupportRoot || record.names.all persistentSupportName) then
-      let some declaration := toDeclaration main record
-        | return .error s!"{record.names}: cannot reconstruct shared support"
+      let some declaration := toDeclaration main record | do
+        if installedQuotRecord main record then continue
+        return .error s!"{record.names}: cannot reconstruct shared support"
       match main.addDeclCore 0 declaration none true with
       | .error exception =>
         return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
