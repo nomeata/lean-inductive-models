@@ -12,7 +12,12 @@ mkdir -p "$root/_tmp"
 work="$(mktemp -d "$root/_tmp/check-hard-nested-a.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
-ulimit -Sv "${MODELGEN_MEMORY_KB:-16777216}"
+memory_limit_kib="${MODELGEN_MEMORY_KB:-16777216}"
+current_memory_limit="$(ulimit -Sv)"
+if [[ "$current_memory_limit" == unlimited ]] ||
+    ((current_memory_limit > memory_limit_kib)); then
+  ulimit -Sv "$memory_limit_kib"
+fi
 TMPDIR="$work" "$bin" "$fixture" \
   -o "$work/modelled.ndjson" --no-simple --no-basic 2>"$work/report"
 
