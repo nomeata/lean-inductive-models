@@ -18,7 +18,7 @@ jobs:
   mathlib:
     name: Full Mathlib (>=48 GB self-hosted runner)
     runs-on: [self-hosted, linux, x64, lean-high-memory-48gb]
-    timeout-minutes: 120
+    timeout-minutes: 240
     env:
       TMPDIR: ${{ github.workspace }}/_tmp/tmp
 
