@@ -32,10 +32,12 @@ theorem PSigma'.rec'_mk {α : Sort u} {β : α → Sort v}
     PSigma'.rec' h (.mk fst snd) = h fst snd := rfl
 
 set_option bootstrap.inductiveCheckResultingUniverse false in
+set_option genSizeOf false in
 inductive PI2 (α : Sort u) (β : Sort v) : Sort (max u v) where
   | mk (fst : α) (snd : β) : PI2 α β
 
 set_option bootstrap.inductiveCheckResultingUniverse false in
+set_option genSizeOf false in
 inductive PIDep (α : Sort u) (β : α → Sort v) : Sort (max u v) where
   | mk (fst : α) (snd : β fst) : PIDep α β
 
