@@ -519,9 +519,10 @@ without a model.
 These structural checks do not submit declaration values to Lean's kernel.
 `--type-check-input` and `--type-check-output` are the independent
 whole-stream kernel verdict gates. The first replays the parsed input in an
-empty kernel environment; the second does the same with the complete ordered
+empty kernel environment; the second does the same with the complete final
 result, whether or not `--output` writes that result. Both also compare the
-serialized recursor metadata with the recursors Lean regenerates.
+serialized inductive, constructor, and recursor metadata with what Lean
+regenerates.
 
 Every generated declaration is submitted to Lean's kernel before it is
 emitted. Construction may inspect the owner in a disposable environment, but

@@ -162,6 +162,13 @@ def safetyOf? : String → Option DefinitionSafety
 | "safe" => some .safe
 | _ => none
 
+def quotKindOf? : String → Option QuotKind
+| "type" => some .type
+| "ctor" => some .ctor
+| "lift" => some .lift
+| "ind" => some .ind
+| _ => none
+
 /-- The exact lean4export spelling of a kernel definition-safety annotation. -/
 def safetyTo : DefinitionSafety → String
   | .unsafe => "unsafe"
@@ -739,8 +746,10 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
     return (c, some <| .opaq (← c.nameF o "name") (← c.nameL o "levelParams")
       (← c.exprF o "type") (← c.exprF o "value") (← jBool o "isUnsafe") (← c.nameL o "all"))
   if let .ok o := jField j "quot" then
+    let kind ← jStr o "kind"
+    unless (quotKindOf? kind).isSome do throw s!"unknown quotient kind {kind}"
     return (c, some <| .quot (← c.nameF o "name") (← c.nameL o "levelParams")
-      (← c.exprF o "type") (← jStr o "kind"))
+      (← c.exprF o "type") kind)
   if let .ok o := jField j "inductive" then
     return (c, some <| .induct
       (← (← jArr o "types").toList.mapM (readIndType c))
@@ -791,6 +800,11 @@ def parse (text : String) (analyse : Bool := true) : Except String Export := do
     let (c', d?) ← readLine c j
     c := c'
     if let some d := d? then decls := decls.push d
+  let mut names : Std.HashSet Name := {}
+  for declaration in decls do
+    for name in declaration.names do
+      if names.contains name then throw s!"duplicate declaration {name}"
+      names := names.insert name
   return { metaLine, decls, projNodes := if analyse then projNodesOf c.exprs else {} }
 
 /-- **The same parse, off a handle, a chunk at a time.**
@@ -878,11 +892,17 @@ def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String 
   match err with
   | some e => return .error e
   | none =>
+    let decls ← declsRef.get
+    let mut names : Std.HashSet Name := {}
+    for declaration in decls do
+      for name in declaration.names do
+        if names.contains name then return .error s!"duplicate declaration {name}"
+        names := names.insert name
     -- The arena is taken out of the ref rather than read out of it, so that the
     -- pass below sees the only reference to it and it is released as soon as it
     -- has been walked.
     let exprs ← if analyse then cRef.modifyGet fun c => (c.exprs, {}) else pure #[]
-    return .ok { metaLine, decls := ← declsRef.get,
+    return .ok { metaLine, decls,
                  projNodes := if analyse then projNodesOf exprs else {} }
 
 /-- Handle-specialized wrapper around [`parseStream`]. -/

@@ -189,7 +189,6 @@ def main (args : List String) : IO UInt32 := do
       { constructor with type := .sort .zero }),
     ("constructor name", mapConstructor nestedExport `Nat.zero fun constructor =>
       { constructor with name := `ArenaWrongConstructor }),
-    ("constructor record order", reverseConstructorsFor nestedExport `Nat),
     ("constructor level parameters", mapConstructor nestedExport `Nat.zero fun constructor =>
       { constructor with levelParams := [`ArenaExtraLevel] }),
     ("constructor field count", mapConstructor nestedExport `Nat.succ fun constructor =>
@@ -209,12 +208,53 @@ def main (args : List String) : IO UInt32 := do
       result.exitCode == 1 &&
         (result.stderr.splitOn "input kernel check rejected:").length > 1
 
+  let reorderedConstructorRecords := reverseConstructorsFor nestedExport `Nat
+  let reorderedConstructors ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    reorderedConstructorRecords.render
+  state := state.check "constructor record array order is not semantic metadata" <|
+    reorderedConstructors.exitCode == 0
+
   let unknownSafety := nestedText.replace "\"safety\":\"safe\"" "\"safety\":\"mystery\""
   let badSafety ← runModelgenStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] unknownSafety
   state := state.check "unknown definition safety is a parse/tool error with exit 3" <|
     unknownSafety != nestedText && badSafety.exitCode == 3 &&
       (badSafety.stderr.splitOn "parse error:").length > 1
+
+  let duplicateText :=
+    { nestedExport with decls := nestedExport.decls.push nestedExport.decls[0]! }.render
+  let duplicate ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] duplicateText
+  state := state.check "duplicate declaration is a parse/tool error with exit 3" <|
+    duplicate.exitCode == 3 && (duplicate.stderr.splitOn "parse error:").length > 1
+
+  let quotientPath := s!"{root}/test/fixtures/modelgen/prim_graph_pre.ndjson"
+  let quotientText ← IO.FS.readFile quotientPath
+  let unknownQuotient := quotientText.replace "\"kind\":\"type\"" "\"kind\":\"mystery\""
+  let badQuotient ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    unknownQuotient
+  state := state.check "unknown quotient kind is a parse/tool error with exit 3" <|
+    unknownQuotient != quotientText && badQuotient.exitCode == 3 &&
+      (badQuotient.stderr.splitOn "parse error:").length > 1
+  let .ok quotientExport := Modelgen.parse quotientText (analyse := false) | do
+    IO.eprintln "mainclitest: quotient fixture did not parse"
+    return 1
+  let quotientRecords := quotientExport.decls.filter fun declaration =>
+    match declaration with | .quot .. => true | _ => false
+  let quotientPrincipal := { quotientExport with decls := quotientRecords.extract 0 1 }
+  let principalReplay ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    quotientPrincipal.render
+  state := state.check "arena-compatible quotient principal replays without companions" <|
+    quotientRecords.size == 4 && principalReplay.exitCode == 0
+  let quotientCompanions := { quotientExport with decls := quotientRecords.extract 1 4 }
+  let companionsReplay ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    quotientCompanions.render
+  state := state.check "arena-compatible quotient companions alone are ignored" <|
+    quotientRecords.size == 4 && companionsReplay.exitCode == 0
 
   -- A valid declaration occupying a required public model slot is a genuine
   -- unsupported-generation result, not a kernel rejection.  Conversely, the

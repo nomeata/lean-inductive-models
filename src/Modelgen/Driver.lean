@@ -1160,12 +1160,8 @@ def Export.constantInfos (x : Export) : Except String (Std.HashMap Name Constant
       constants ← insertConstantInfo constants <| .opaqueInfo
         { name, levelParams, type, value, isUnsafe, all }
     | .quot name levelParams type kind =>
-      let kind ← match kind with
-        | "type" => pure QuotKind.type
-        | "ctor" => pure QuotKind.ctor
-        | "lift" => pure QuotKind.lift
-        | "ind" => pure QuotKind.ind
-        | other => throw s!"unknown quotient kind {other}"
+      let some kind := quotKindOf? kind
+        | throw s!"unknown quotient kind {kind}"
       constants ← insertConstantInfo constants <| .quotInfo
         { name, levelParams, type, kind }
     | .induct types constructors recursors =>
@@ -1191,7 +1187,7 @@ def Export.constantInfos (x : Export) : Except String (Std.HashMap Name Constant
   return constants
 
 /-- Submit a complete export to Lean's kernel and verify that its serialized
-recursor metadata agrees with the recursors Lean regenerates.
+inductive, constructor, and recursor metadata agrees with what Lean regenerates.
 
 This is the explicit whole-stream verdict gate used by the command line.  It
 is separate from the mandatory checked construction of declarations generated
@@ -1199,9 +1195,6 @@ by this tool: disabling a CLI type-check gate never weakens model generation's
 owner-free kernel replay. -/
 def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   let base ← getEnv
-  match ← checkGeneratedQuotRecords base x.decls with
-  | .error message => return .error message
-  | .ok () => pure ()
   let constants ← match x.constantInfos with
     | .error message => return .error message
     | .ok constants => pure constants
@@ -1216,6 +1209,29 @@ def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   let some checked := checked? | return .error "kernel replay produced no environment"
   setEnv checked
   let mut mismatches : Array String := #[]
+  for (_, expected) in constants do
+    if expected.isUnsafe || expected.isPartial then continue
+    match expected, checked.constants.find? expected.name with
+    | .axiomInfo expected, some (.axiomInfo actual) =>
+      unless actual == expected do
+        mismatches := mismatches.push
+          (metadataMismatch expected.name "axiom" "metadata")
+    | .defnInfo expected, some (.defnInfo actual) =>
+      unless actual == expected do
+        mismatches := mismatches.push
+          (metadataMismatch expected.name "definition" "metadata")
+    | .thmInfo expected, some (.thmInfo actual) =>
+      unless actual == expected do
+        mismatches := mismatches.push
+          (metadataMismatch expected.name "theorem" "metadata")
+    | .opaqueInfo expected, some (.opaqueInfo actual) =>
+      unless actual == expected do
+        mismatches := mismatches.push
+          (metadataMismatch expected.name "opaque declaration" "metadata")
+    | .quotInfo _, _ | .inductInfo _, _ | .ctorInfo _, _ | .recInfo _, _ => pure ()
+    | _, _ =>
+      mismatches := mismatches.push
+        (metadataMismatch expected.name "declaration" "kind or presence")
   for declaration in x.decls do
     if let .induct types constructors recursors := declaration then
       -- `Environment.replay` intentionally skips unsafe and partial constants,
