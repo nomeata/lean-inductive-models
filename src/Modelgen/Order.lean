@@ -1,6 +1,7 @@
 import Modelgen.Check
 import Std.Data.TreeSet.Basic
 import Lean.Util.PtrSet
+import Lean.Util.SCC
 
 /-!
 # Stable record-level dependency ordering
@@ -36,8 +37,8 @@ namespace Modelgen.Order
 inductive Error where
   /-- Two atomic records claim to introduce the same declaration name. -/
   | duplicateName (name : Name) (first second : Nat)
-  /-- These original record indices are cyclic or blocked by a cycle. -/
-  | cycle (records : Array Nat)
+  /-- One cyclic strongly connected component, with each record's declarations. -/
+  | cycle (records : Array Nat) (declarations : Array (Array Name))
   deriving Repr, BEq
 
 namespace ExprReferences
@@ -154,8 +155,17 @@ def recordOrder (x : Export) : Except Error (Array Nat) := do
         indegree := indegree.set! after degree
         if degree == 0 then ready := ready.insert after
   unless order.size == n do
-    let cyclic := (Array.range n).filter fun i => indegree[i]! > 0
-    throw (.cycle cyclic)
+    let blocked := (Array.range n).filter fun i => indegree[i]! > 0
+    -- Kahn's residual contains both the cycle and every node blocked behind it.
+    -- Report one actual strongly connected component; on a full export the
+    -- distinction is the difference between a useful two-or-three-record
+    -- diagnostic and tens of thousands of unrelated downstream records.
+    let components := Lean.SCC.scc blocked.toList fun before =>
+      outgoing[before]!.toList.filter fun after => indegree[after]! > 0
+    let component := (components.find? fun records => records.length > 1).getD blocked.toList
+    let records := component.toArray.qsort (· < ·)
+    let declarations := records.map fun i => x.decls[i]!.names.toArray
+    throw (.cycle records declarations)
   return order
 
 /-- Reorder declaration records, preserving export metadata and expression

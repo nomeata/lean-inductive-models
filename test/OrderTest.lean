@@ -165,7 +165,8 @@ def run (root : String) : IO UInt32 := do
     axDecl (Naming.modelName `Cycle) (.const `Cycle [])]
   state := state.check "model-owner backreference is an explicit cycle" <|
     match Order.recordOrder cyclic with
-    | .error (.cycle records) => records == #[0, 1]
+    | .error (.cycle records declarations) =>
+      records == #[0, 1] && declarations == #[#[`Cycle], #[Naming.modelName `Cycle]]
     | _ => false
 
   -- Duplicate ownership would make dependency targets ambiguous; reject it

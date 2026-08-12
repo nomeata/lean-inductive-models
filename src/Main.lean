@@ -100,9 +100,9 @@ def violationMessage : Modelgen.Check.Violation → String
 def orderErrorMessage : Modelgen.Order.Error → String
   | .duplicateName name first second =>
       s!"declaration name {name} occurs in both records {first} and {second}"
-  | .cycle records =>
+  | .cycle records declarations =>
       s!"declaration dependencies and model-before-owner constraints form a cycle at records \
-        {records.toList}"
+        {records.toList}: {declarations.toList.map (·.toList)}"
 
 def reportViolations (input stage : String)
     (violations : Array Modelgen.Check.Violation) : IO Unit := do
