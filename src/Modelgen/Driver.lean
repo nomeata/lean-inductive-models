@@ -561,7 +561,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           { name := Name.mkSimple s!"field_{index}", info := .default,
             value, type := fieldType, level, projected, iota? }
       let rhs ←
-        if projectionIotaUsesLiteralField type then
+        if projectionIotaUsesLiteralField types type then
           pure fields[fieldIndex]!
         else
           match ProjectionField.normalizeProjectionField eqi
@@ -570,7 +570,9 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           | .error message => badShape message
       let alpha ← inferType lhs
       let fieldLevel ← ilevel alpha
-      let proof ← match override? with
+      let proof ← if projectionIotaUsesLiteralField types type then
+          pure (eqi.refl' fieldLevel alpha lhs)
+        else match override? with
         | some (_, _, _, proof) => pure (proof.beta arguments)
         | none => do
           let targetMotive ← forallBoundedTelescope

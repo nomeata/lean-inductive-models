@@ -46,6 +46,13 @@ inductive Ix : Type where
 inductive Indexed (α : Type u) : Ix → Type u where
   | mk (payload : α) : Indexed α Ix.here
 
+/-- The later field depends on the payload while the result fibre is still
+constrained to `here`.  This pins the indexed fallback: unlike an ordinary
+structure, its model does not make the earlier projection reduce
+definitionally, so the second public rule needs canonical transport. -/
+inductive IndexedDep (α : Type u) (β : α → Type v) : Ix → Type (max u v) where
+  | mk (key : α) (payload : β key) : IndexedDep α β Ix.here
+
 /-- Raw kernel projections also support recursive one-constructor families. -/
 inductive Maybe (α : Type u) : Type u where
   | none
@@ -79,4 +86,4 @@ def depWitness (α : Type u) (β : α → Type v) (x : Dep α β) :
 --#export Eq Dep Dep.key Dep.payload Dep.witness SortFields SortFields.carrier
 --#export SortFields.family SortFields.element SortFields.letCarrier
 --#export depKey depPayload depWitness
---#export Ix Indexed Maybe Recursive PropDependent Multi
+--#export Ix Indexed IndexedDep Maybe Recursive PropDependent Multi

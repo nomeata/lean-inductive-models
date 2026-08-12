@@ -22,13 +22,17 @@ namespace Modelgen
 /-- Whether a one-constructor owner's projection rules can use each constructor
 field literally, including dependent fields.
 
-For a nonrecursive, unindexed owner the generated constructor/projection path
-computes definitionally.  Recursive and indexed routes may reconstruct a field
+For an unindexed plain-mutual member the auxiliary inductive supplies primitive
+constructor reduction.  For a single unindexed, unnested, nonrecursive owner,
+the direct field/tight route supplies explicit reflexive projection overrides.
+Recursive, indexed, and nested-specialisation routes may reconstruct a field
 only propositionally, so their dependent rules retain the canonical transport
-below.  Callers establish the one-constructor precondition while discovering
+below. Callers establish the one-constructor precondition while discovering
 intrinsic projections. -/
-def projectionIotaUsesLiteralField (type : EIndType) : Bool :=
-  !type.isRec && type.numIndices == 0
+def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType) : Bool :=
+  type.numIndices == 0 &&
+    ((types.size > 1 && types.all (·.numNested == 0)) ||
+      (types.size == 1 && type.numNested == 0 && !type.isRec))
 
 /-- One opened constructor field, together with the corresponding modeled
 projection and (for an earlier field) its constructor iota proof.

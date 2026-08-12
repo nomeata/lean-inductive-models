@@ -56,6 +56,10 @@ def definitionValue? (x : Export) (name : Name) : Option Expr := do
   let .defn got _ _ value .. ← declaration? x name | none
   if got == name then some value else none
 
+def theoremValue? (x : Export) (name : Name) : Option Expr := do
+  let .thm got _ _ value _ ← declaration? x name | none
+  if got == name then some value else none
+
 def ownerAndRecursor? (x : Export) (owner : Name) : Option (EIndType × ERec) :=
   x.decls.findSome? fun declaration => match declaration with
     | .induct types _ recursors => do
@@ -247,6 +251,13 @@ def main : IO UInt32 := do
       !used.contains `PULiftP && !used.contains `PULiftP.up && !used.contains `PULiftP.rec
   state := state.check "proposition-field projection iota is literal and uncast" <|
     (declarationType? primGenerated pfRule).any fun type => !containsConst ``Eq.rec type
+  let propStructureRules :=
+    (Array.range 2).map (Naming.projectionIotaName `Conj) ++
+      (Array.range 3).map (Naming.projectionIotaName `Conj3)
+  state := state.check "Prop-structure dependent iotas are literal reflexivity" <|
+    propStructureRules.all fun rule =>
+      (declarationType? primGenerated rule).any (!containsConst ``Eq.rec ·) &&
+        (theoremValue? primGenerated rule).any (containsConst ``Eq.refl)
   state := state.check "variable-sort singleton retains its intrinsic field" <|
     primReport.generated.any (·.1 == `PI) &&
       !primReport.declined.any (·.1 == `PI) &&
@@ -443,6 +454,9 @@ def main : IO UInt32 := do
   state := state.check "nonrecursive dependent projection iotas are all literal" <|
     #[keyRule, payloadRule, witnessRule].all fun rule =>
       (declarationType? generated rule).any (fun type => !containsConst ``Eq.rec type)
+  state := state.check "nonrecursive dependent projection iotas are reflexivity proofs" <|
+    #[keyRule, payloadRule, witnessRule].all fun rule =>
+      (theoremValue? generated rule).any (containsConst ``Eq.refl)
 
   let modelsBeforeOwner := match declarationIndex? generated `Dep with
     | none => false
@@ -476,15 +490,30 @@ def main : IO UInt32 := do
   let indexedProjections := (Array.range 1).flatMap fun fieldIndex =>
     #[Naming.projectionName `Indexed fieldIndex,
       Naming.projectionIotaName `Indexed fieldIndex]
+  let indexedDepProjections := (Array.range 2).flatMap fun fieldIndex =>
+    #[Naming.projectionName `IndexedDep fieldIndex,
+      Naming.projectionIotaName `IndexedDep fieldIndex]
   let recursiveProjections := (Array.range 2).flatMap fun fieldIndex =>
     #[Naming.projectionName `Recursive fieldIndex,
       Naming.projectionIotaName `Recursive fieldIndex]
   state := state.check "indexed one-constructor fields are intrinsic projections" <|
     intrinsicFieldsFor raw `Indexed == #[0] && indexedProjections.all names.contains &&
       (Check.check generated).all (·.familyOwner != `Indexed)
+  state := state.check "dependent indexed field keeps canonical transport" <|
+    intrinsicFieldsFor raw `IndexedDep == #[0, 1] &&
+      indexedDepProjections.all names.contains &&
+      (declarationType? generated (Naming.projectionIotaName `IndexedDep 0)).any
+        (!containsConst ``Eq.rec ·) &&
+      (declarationType? generated (Naming.projectionIotaName `IndexedDep 1)).any
+        (containsConst ``Eq.rec) &&
+      (Check.check generated).all (·.familyOwner != `IndexedDep)
   state := state.check "recursive one-constructor fields are intrinsic projections" <|
     intrinsicFieldsFor raw `Recursive == #[0, 1] && recursiveProjections.all names.contains &&
       (Check.check generated).all (·.familyOwner != `Recursive)
+  state := state.check "recursive projections retain the recursor fallback" <|
+    (Array.range 2).all fun fieldIndex =>
+      (definitionValue? generated (Naming.projectionName `Recursive fieldIndex)).any
+        (containsConst (Naming.modelName `Recursive.rec))
   state := state.check "Prop dependency and multi-constructor fields are excluded" <|
     (intrinsicFieldsFor raw `PropDependent).isEmpty &&
       (intrinsicFieldsFor raw `Multi).isEmpty &&
@@ -494,6 +523,9 @@ def main : IO UInt32 := do
   let extraViolations := Check.check (insertCollision generated extraIndexed)
   state := state.check "checker rejects an out-of-range intrinsic projection slot" <|
     extraViolations.any (hasExtraProjectionViolation `Indexed extraIndexed)
+  state := state.check "projection route choice emits no public marker" <|
+    declarations.all fun declaration =>
+      !(declarationNames declaration).contains `Modelgen.projectionIotaUsesLiteralField
 
   let missingModel := Check.check (withoutDeclaration generated payloadModel)
   state := state.check "checker rejects a missing projection definition" <|

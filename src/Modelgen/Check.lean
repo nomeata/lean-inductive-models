@@ -920,7 +920,7 @@ private def checkProjection (x : Export) (family : Family) (declarations : Decla
     normalizedFields := normalizedFields.push
       { name := Name.mkSimple s!"field_{index}", info := .default,
         value := fields[index]!, type := mappedField.type, level, projected, iota? }
-  let rhs? := if projectionIotaUsesLiteralField ownerType then
+  let rhs? := if projectionIotaUsesLiteralField ownerTypes.toArray ownerType then
       fields[projection.fieldIndex]?
     else
       let eqi : EqInfo := { eqN := ``Eq, reflN := ``Eq.refl, recN := ``Eq.rec }
