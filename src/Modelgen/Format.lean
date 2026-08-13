@@ -1219,6 +1219,9 @@ private partial def createSpoolDirectory (root : System.FilePath) : IO System.Fi
     if ← directory.pathExists then IO.FS.removeDirAll directory
     throw error
 
+private def removeOwnedSpoolFile (path : System.FilePath) : IO Unit := do
+  if ← path.pathExists then IO.FS.removeFile path
+
 /-- Create an owner-only spool directory immediately below the caller's
 project-local scratch root, open its three fresh files, and remove that owned
 directory unconditionally after `action`.  The root must already exist and be
@@ -1241,8 +1244,13 @@ def withRawSpoolIn (root : System.FilePath) (action : RawSpool → IO α) : IO �
     action spool
   finally
     -- The directory was atomically created by this call and made owner-only;
-    -- no pre-existing or caller-selected leaf is ever a cleanup target.
-    if ← directory.pathExists then IO.FS.removeDirAll directory
+    -- no pre-existing or caller-selected leaf is ever a cleanup target. Remove
+    -- only the three leaves we created, then the now-empty directory; a path
+    -- replacement cannot turn cleanup into a recursive deletion.
+    removeOwnedSpoolFile paths.metadata
+    removeOwnedSpoolFile paths.arena
+    removeOwnedSpoolFile paths.declarations
+    if ← directory.pathExists then IO.FS.removeDir directory
 
 /-! ## Writing
 

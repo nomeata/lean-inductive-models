@@ -19,6 +19,16 @@ def removeIfPresent (path : String) : IO Unit := do
 def parseHandleAt (path : String) : IO (Except String Export) :=
   IO.FS.withFile path .read fun handle => Modelgen.parseHandle handle
 
+def rawCertificateAt (path : String) : IO (Except String (Export × RawCertificate)) :=
+  IO.FS.withFile path .read fun handle =>
+    Modelgen.parseHandleWithSink handle { emit := fun _ => pure () } (analyse := false)
+
+def rawFastPathRejected (path text : String) : IO Bool := do
+  IO.FS.writeFile path text
+  match ← rawCertificateAt path with
+  | .ok (_, certificate) => return !certificate.canonical
+  | .error _ => return false
+
 def bothReject (whole streamed : Except String Export) : Bool :=
   match whole, streamed with
   | .error _, .error _ => true
@@ -53,9 +63,22 @@ def main (args : List String) : IO UInt32 := do
   let projectionOrderPath := s!"{scratch}/staged-writer-projection-order.ndjson"
   let projectionOverwritePath := s!"{scratch}/staged-writer-projection-overwrite.ndjson"
   let parserCompatibilityPath := s!"{scratch}/staged-writer-parser-compatibility.ndjson"
+  let rawCanonicalPath := s!"{scratch}/raw-spool-canonical.ndjson"
+  let rawNameGapPath := s!"{scratch}/raw-spool-name-gap.ndjson"
+  let rawLevelGapPath := s!"{scratch}/raw-spool-level-gap.ndjson"
+  let rawExprGapPath := s!"{scratch}/raw-spool-expr-gap.ndjson"
+  let rawNameOrderPath := s!"{scratch}/raw-spool-name-order.ndjson"
+  let rawNoLfPath := s!"{scratch}/raw-spool-no-lf.ndjson"
+  let rawWhitespacePath := s!"{scratch}/raw-spool-whitespace.ndjson"
+  let rawBlankPath := s!"{scratch}/raw-spool-blank.ndjson"
+  let rawCrlfPath := s!"{scratch}/raw-spool-crlf.ndjson"
+  let rawRootSentinel := s!"{scratch}/raw-spool-root-sentinel"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
     nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath,
-    projectionOrderPath, projectionOverwritePath, parserCompatibilityPath]
+    projectionOrderPath, projectionOverwritePath, parserCompatibilityPath,
+    rawCanonicalPath, rawNameGapPath, rawLevelGapPath, rawExprGapPath,
+    rawNameOrderPath, rawNoLfPath, rawWhitespacePath, rawBlankPath, rawCrlfPath,
+    rawRootSentinel]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -95,6 +118,52 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "one island still hash-conses shared structure" <|
     sharedSplit.arena.size == 1 &&
       sharedSplit.after == { nextName := 5, nextLevel := 2, nextExpr := 1 }
+
+  -- Parse-time staging sees exact bytes while the input descriptor is still
+  -- open.  The source arena remains interleaved here; the three spools split
+  -- it without retaining any raw line in the parsed Export.
+  let rawMeta := "{\"meta\":\"raw-spool-test\"}\n"
+  let rawFirstDecl := firstSplit.declaration ++ "\n"
+  let rawSecondDecl := secondSplit.declaration ++ "\n"
+  let rawCanonical := rawMeta ++ lines firstSplit.arena ++ rawFirstDecl ++
+    lines secondSplit.arena ++ rawSecondDecl
+  IO.FS.writeFile rawCanonicalPath rawCanonical
+  let staged ← withRawSpoolIn scratch fun spool => do
+    let parsed ← IO.FS.withFile rawCanonicalPath .read fun handle =>
+      parseHandleWithSink handle spool.sink (analyse := false)
+    spool.flush
+    let metadata ← IO.FS.readFile spool.paths.metadata
+    let arena ← IO.FS.readFile spool.paths.arena
+    let declarations ← IO.FS.readFile spool.paths.declarations
+    return (parsed, metadata, arena, declarations, spool.paths)
+  let (stagedParse, stagedMetadata, stagedArena, stagedDeclarations, stagedPaths) := staged
+  let expectedArena := lines (firstSplit.arena ++ secondSplit.arena)
+  let expectedDeclarations := rawFirstDecl ++ rawSecondDecl
+  state := state.check "canonical parse-time spool preserves exact split bytes" <|
+    stagedMetadata == rawMeta && stagedArena == expectedArena &&
+      stagedDeclarations == expectedDeclarations
+  state := state.check "canonical parse-time spool records exact cursor and spans" <|
+    match stagedParse with
+    | .ok (output, certificate) =>
+      output.decls == #[first, second] && certificate.canonical &&
+        certificate.cursor == { nextName := 7, nextLevel := 3, nextExpr := 2 } &&
+        certificate.metadataBytes == rawMeta.utf8ByteSize.toUInt64 &&
+        certificate.arenaBytes == expectedArena.utf8ByteSize.toUInt64 &&
+        certificate.declarationBytes == expectedDeclarations.utf8ByteSize.toUInt64 &&
+        certificate.declarations == #[
+          { offset := 0, bytes := rawFirstDecl.utf8ByteSize },
+          { offset := rawFirstDecl.utf8ByteSize.toUInt64,
+            bytes := rawSecondDecl.utf8ByteSize }]
+    | .error _ => false
+  state := state.check "ordinary and staged streaming parses are identical" <|
+    match stagedParse, (← parseHandleAt rawCanonicalPath) with
+    | .ok (stagedExport, _), .ok ordinary =>
+      stagedExport.metaLine == ordinary.metaLine && stagedExport.decls == ordinary.decls &&
+        stagedExport.projNodes.isEmpty && ordinary.projNodes.isEmpty
+    | _, _ => false
+  state := state.check "raw spool files are removed after success" <|
+    !(← stagedPaths.metadata.pathExists) && !(← stagedPaths.arena.pathExists) &&
+      !(← stagedPaths.declarations.pathExists)
 
   -- Starting the second independent writer at the old cursor reuses arena
   -- IDs. The parser must reject that rather than silently binding the later
@@ -163,6 +232,81 @@ def main (args : List String) : IO UInt32 := do
   let overwrittenDecl : EDecl := .ax `After [] (.sort (.param `After)) false
   state := state.check "explicit repeated arena IDs overwrite in both readers" <|
     bothHaveDecls (Modelgen.parse overwrite) (← parseHandleAt overwritePath) #[overwrittenDecl]
+
+  -- Parser compatibility is wider than the raw-hoist contract.  Each axis is
+  -- certified independently and any gap, reorder, or overwrite selects the
+  -- existing full re-interning path.
+  let rawNameGap := lines #[
+    "{\"in\":2,\"str\":{\"pre\":0,\"str\":\"NameGap\"}}",
+    "{\"il\":1,\"param\":2}",
+    "{\"ie\":0,\"sort\":1}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":2,\"type\":0}}"]
+  let rawLevelGap := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"LevelGap\"}}",
+    "{\"il\":2,\"param\":1}",
+    "{\"ie\":0,\"sort\":2}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":0}}"]
+  let rawExprGap := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"ExprGap\"}}",
+    "{\"il\":1,\"param\":1}",
+    "{\"ie\":2,\"sort\":1}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":2}}"]
+  let rawNameOrder := lines #[
+    "{\"in\":2,\"str\":{\"pre\":0,\"str\":\"NameTwo\"}}",
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"NameOne\"}}",
+    "{\"il\":1,\"param\":2}",
+    "{\"ie\":0,\"sort\":1}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":2,\"type\":0}}"]
+  state := state.check "raw certification rejects a name-ID gap"
+    (← rawFastPathRejected rawNameGapPath rawNameGap)
+  state := state.check "raw certification rejects a level-ID gap"
+    (← rawFastPathRejected rawLevelGapPath rawLevelGap)
+  state := state.check "raw certification rejects an expression-ID gap"
+    (← rawFastPathRejected rawExprGapPath rawExprGap)
+  state := state.check "raw certification rejects out-of-order IDs"
+    (← rawFastPathRejected rawNameOrderPath rawNameOrder)
+  state := state.check "raw certification rejects sparse high IDs"
+    (← rawFastPathRejected sparsePath sparse)
+  state := state.check "raw certification rejects arena overwrites"
+    (← rawFastPathRejected overwritePath overwrite)
+
+  let rawNoLf := (rawCanonical.dropEnd 1).toString
+  let rawWhitespace := " " ++ rawCanonical
+  let rawBlank := "\n" ++ rawCanonical
+  let rawCrlf := rawCanonical.replace "\n" "\r\n"
+  state := state.check "raw certification requires a final LF"
+    (← rawFastPathRejected rawNoLfPath rawNoLf)
+  state := state.check "raw certification requires canonical JSON spelling"
+    (← rawFastPathRejected rawWhitespacePath rawWhitespace)
+  state := state.check "raw certification rejects blank records"
+    (← rawFastPathRejected rawBlankPath rawBlank)
+  state := state.check "raw certification rejects CRLF records"
+    (← rawFastPathRejected rawCrlfPath rawCrlf)
+
+  let exceptionPathsRef ← IO.mkRef (none : Option RawSpoolPaths)
+  let cleanupAfterException ← try
+      withRawSpoolIn scratch fun spool => do
+        exceptionPathsRef.set (some spool.paths)
+        throw <| IO.userError "intentional raw spool failure"
+      pure false
+    catch _ =>
+      match ← exceptionPathsRef.get with
+      | none => pure false
+      | some paths =>
+        pure (!(← paths.metadata.pathExists) && !(← paths.arena.pathExists) &&
+          !(← paths.declarations.pathExists))
+  state := state.check "raw spool files are removed after exceptions" cleanupAfterException
+  IO.FS.writeFile rawRootSentinel "do-not-delete"
+  withRawSpoolIn scratch fun _ => pure ()
+  state := state.check "raw spool cleanup preserves existing scratch contents" <|
+    (← IO.FS.readFile rawRootSentinel) == "do-not-delete"
+  let missingRoot := s!"{scratch}/raw-spool-missing-root"
+  if ← System.FilePath.pathExists missingRoot then IO.FS.removeDirAll missingRoot
+  let missingRootRefused ← try
+      withRawSpoolIn missingRoot fun _ => pure false
+    catch _ => pure true
+  state := state.check "raw spool refuses a missing scratch root without creating it" <|
+    missingRootRefused && !(← System.FilePath.pathExists missingRoot)
 
   -- Projection analysis follows record dependencies, not numeric ID order.
   let projectionOrder := lines #[
