@@ -1678,10 +1678,10 @@ def mutualReady (needsExactSortLift : Bool) (reserved : Std.HashSet Name) : Meta
     unless env.constants.contains name || !reserved.contains name do return false
   return true
 
-private def hasIntrinsicProjectionFields (x : Export) (types : List EIndType)
+private def hasIntrinsicProjectionFields (index : Check.SyntaxIndex) (types : List EIndType)
     (constructors : List ECtor) : Bool :=
   types.any fun type =>
-    !(x.intrinsicProjectionFieldsFor type constructors).isEmpty
+    !(index.intrinsicProjectionFields type constructors).isEmpty
 
 private def isMutualBasisRecord (needsExactSortLift : Bool) (declaration : EDecl) : Bool :=
   declaration.names.any fun name =>
@@ -2260,7 +2260,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           let ctors := all.map fun n =>
             (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
           let tys := ts.toArray.map (·.type)
-          let mut needsExactSortLift := hasIntrinsicProjectionFields x ts cs
+          let mut needsExactSortLift := hasIntrinsicProjectionFields sourceSyntax ts cs
           unless needsExactSortLift do
             for type in ts do
               if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then

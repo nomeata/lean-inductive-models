@@ -1208,6 +1208,13 @@ private def intrinsicProjectionFieldsWithIndex (index : SyntaxIndex)
       fields := fields.push fieldIndex
   return fields
 
+/-- Kernel-valid intrinsic projection field indices using the syntax tables
+already built for this export. Driver readiness checks use this query to avoid
+reconstructing whole-export declaration and normalization maps per owner. -/
+def SyntaxIndex.intrinsicProjectionFields (index : SyntaxIndex)
+    (type : EIndType) (constructors : List ECtor) : Array Nat :=
+  intrinsicProjectionFieldsWithIndex index type constructors
+
 private def SyntaxIndex.recordOccurrences (index : SyntaxIndex) (name : Name) : Array Nat :=
   index.recordPrefix.getD name #[] ++
     (index.records.getD name #[]).map fun ordinal => index.recordOffset + ordinal
