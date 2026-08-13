@@ -170,6 +170,31 @@ elab "oneLayerCompatibilityProof%" : term => do
 
 private def oneLayerCompatibilityProof : Expr := oneLayerCompatibilityProof%
 
+/-- Instantiate the embedded oracle after all semantic arguments are known.
+The first six entries are `M, P, Q, R, C, H`; spelling them explicitly avoids
+asking application synthesis to infer universes through higher-order families. -/
+def applyOneLayerCompatibility (levels : List Level) (arguments : Array Expr) (expected : Expr) :
+    MetaM (Except String Expr) := do
+  unless arguments.size == 22 do
+    return .error s!"one-layer compatibility needs 22 arguments, got {arguments.size}"
+  let levelParams := (collectLevelParams {} oneLayerCompatibilityProof).params
+  unless levels.length == levelParams.size do
+    return .error s!"one-layer compatibility needs {levelParams.size} universes, got {levels.length}"
+  let template := oneLayerCompatibilityProof.instantiateLevelParams
+    levelParams.toList levels
+  let proof := mkAppN template arguments
+  let proof ← instantiateMVars proof
+  let actual ← inferType proof
+  unless ← isDefEq actual expected do
+    return .error s!"compatibility result has type {actual}, expected {expected}"
+  let proof ← instantiateMVars proof
+  if proof.hasExprMVar || proof.hasLevelMVar then
+    return .error "compatibility proof retains metavariables"
+  if proof.getUsedConstants.contains ``oneLayerRecursorCompatibility then
+    return .error "compatibility proof refers to the tool-side oracle declaration"
+  check proof
+  return .ok proof
+
 /-- Names internal to one private/public one-layer equivalence. -/
 structure OneLayerNames where
   publicNames : PrimInterfaceNames

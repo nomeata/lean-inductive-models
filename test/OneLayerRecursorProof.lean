@@ -44,3 +44,71 @@ theorem compatibility
     (rollCtor p) (unrollRoll (publicCtor p))
 
 end OneLayerRecursorProof
+
+namespace OneLayerRecursorApplication
+
+axiom M : Type
+axiom P : Type
+axiom Q : Type
+axiom R : Type
+axiom C : P → Sort 1
+axiom H : R → Sort 1
+axiom roll : P → M
+axiom unroll : M → P
+axiom unrollRoll : ∀ p, unroll (roll p) = p
+axiom rollField : R → Q
+axiom unrollField : Q → R
+axiom unrollRollField : ∀ p, unrollField (rollField p) = p
+axiom privateCtor : Q → M
+axiom publicCtor : R → P
+axiom rollCtor : ∀ p, roll (publicCtor p) = privateCtor (rollField p)
+axiom privateIH : ∀ q, H (unrollField q)
+axiom publicIH : ∀ p, H p
+axiom ihAgreement : ∀ q, publicIH (unrollField q) = privateIH q
+axiom minor : ∀ p, H p → C (publicCtor p)
+axiom core : ∀ q, C (unroll q)
+axiom constructorAgreement : ∀ q,
+  publicCtor (unrollField q) = unroll (privateCtor q)
+axiom coreIota : ∀ q, core (privateCtor q) =
+  Eq.mp (congrArg C (constructorAgreement q))
+    (minor (unrollField q) (privateIH q))
+
+def expected := InductiveModels.oneLayerRecursorCompatibility roll unroll unrollRoll
+  rollField unrollField unrollRollField privateCtor publicCtor rollCtor
+  privateIH publicIH ihAgreement minor core constructorAgreement coreIota
+
+end OneLayerRecursorApplication
+
+open Lean Meta InductiveModels
+
+run_meta
+  let arguments ← #[``OneLayerRecursorApplication.M,
+    ``OneLayerRecursorApplication.P,
+    ``OneLayerRecursorApplication.Q,
+    ``OneLayerRecursorApplication.R,
+    ``OneLayerRecursorApplication.C,
+    ``OneLayerRecursorApplication.H,
+    ``OneLayerRecursorApplication.roll,
+    ``OneLayerRecursorApplication.unroll,
+    ``OneLayerRecursorApplication.unrollRoll,
+    ``OneLayerRecursorApplication.rollField,
+    ``OneLayerRecursorApplication.unrollField,
+    ``OneLayerRecursorApplication.unrollRollField,
+    ``OneLayerRecursorApplication.privateCtor,
+    ``OneLayerRecursorApplication.publicCtor,
+    ``OneLayerRecursorApplication.rollCtor,
+    ``OneLayerRecursorApplication.privateIH,
+    ``OneLayerRecursorApplication.publicIH,
+    ``OneLayerRecursorApplication.ihAgreement,
+    ``OneLayerRecursorApplication.minor,
+    ``OneLayerRecursorApplication.core,
+    ``OneLayerRecursorApplication.constructorAgreement,
+    ``OneLayerRecursorApplication.coreIota].mapM mkConstWithFreshMVarLevels
+  let expected ← inferType (← mkConstWithFreshMVarLevels
+    ``OneLayerRecursorApplication.expected)
+  let result ← applyOneLayerCompatibility [.zero, .zero, .succ .zero, .succ .zero]
+    arguments expected
+  let proof ← match result with
+    | .ok proof => pure proof
+    | .error message => throwError "the embedded compatibility proof did not apply: {message}"
+  check proof
