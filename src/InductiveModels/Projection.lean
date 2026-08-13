@@ -78,6 +78,20 @@ def oneLayerProjectionFamily (types : Array EIndType) (type : EIndType) : Bool :
     type.numIndices == 0 && type.numNested == 0 && type.isRec &&
     !type.isUnsafe
 
+private partial def endsInNeverZeroSort : Expr → Bool
+  | .forallE _ _ body _ => endsInNeverZeroSort body
+  | .sort level => level.normalize.isNeverZero
+  | _ => false
+
+/-- The first indexed fibre adapter: one nonrecursive, one-constructor member
+at one index in a genuine `Type`.  The generated private/public certificate,
+not this shape predicate alone, authorizes literal dependent projection rules. -/
+def indexedFibreOneLayerProjectionFamily (types : Array EIndType)
+    (type : EIndType) : Bool :=
+  types.size == 1 && type.all == [type.name] && type.ctors.length == 1 &&
+    type.numIndices == 1 && type.numNested == 0 && !type.isRec &&
+    !type.isUnsafe && endsInNeverZeroSort type.type
+
 /-- One opened constructor field, together with the corresponding modeled
 projection and (for an earlier field) its constructor iota proof.
 

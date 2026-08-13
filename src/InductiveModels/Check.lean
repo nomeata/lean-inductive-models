@@ -642,7 +642,7 @@ serialized declarations.  Names alone do not select the new contract: every
 private public-facing type, both directions of the equivalence, and both laws
 must be uniquely present and exact.  A partial prefix is malformed rather
 than a request to reinterpret the family as legacy output. -/
-private def phase1DirectTypeOneLayerCertificate (declarations : DeclarationTypes)
+private def phase1OneLayerCertificate (declarations : DeclarationTypes)
     (ownerType : EIndType) (family : Family) :
     Phase1OneLayerCertificate := Id.run do
   let publicCarrierName := Naming.modelName ownerType.name
@@ -659,7 +659,8 @@ private def phase1DirectTypeOneLayerCertificate (declarations : DeclarationTypes
     privateRecursorName, privateIotaName, rollName, unrollName,
     unrollRollName, rollUnrollName]
   unless certificateNames.any declarations.contains do return .absent
-  unless oneLayerProjectionFamily #[ownerType] ownerType do
+  unless oneLayerProjectionFamily #[ownerType] ownerType ||
+      indexedFibreOneLayerProjectionFamily #[ownerType] ownerType do
     return .malformed privateCarrierName
   let some constructorPair := family.correspondence.constructors[0]?
     | return .malformed privateConstructorName
@@ -715,7 +716,8 @@ private def phase1DirectTypeOneLayerCertificate (declarations : DeclarationTypes
     return .malformed privateIotaName
   let (parameters, result) := openForalls
     ((`_check.oneLayerCertificate).append ownerType.name) publicCarrier.type
-  unless parameters.size == ownerType.numParams do return .malformed publicCarrierName
+  unless parameters.size == ownerType.numParams + ownerType.numIndices do
+    return .malformed publicCarrierName
   let .sort carrierLevel := result | return .malformed publicCarrierName
   let levels := publicCarrier.levelParams.map Level.param
   let parameterValues := parameters.map (fun binder => binder.value)
@@ -1257,7 +1259,7 @@ private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
   for projection in family.correspondence.projections do
     let certificate := match ownerTypes.find? fun type => type.name == projection.owner with
       | some ownerType =>
-        phase1DirectTypeOneLayerCertificate index.declarations ownerType family
+        phase1OneLayerCertificate index.declarations ownerType family
       | none => .malformed projection.owner
     violations := violations ++ checkProjection
       x index.structures index.normalizer family index.declarations certificate projection

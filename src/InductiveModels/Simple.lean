@@ -3450,6 +3450,22 @@ def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
     type.ctors.length == 1 && type.numIndices == 0 && type.numNested == 0 && type.isRec &&
     !type.isUnsafe
 
+/-- Capability boundary for the first indexed fibre adapter.  Recursive
+indexed families deliberately remain on the legacy implementation: in
+particular no result index is ever reconstructed after moving a recursive
+field. -/
+def phase1IndexedFibreOneLayerEligible (tname : Name) (np : Nat)
+    (memberTy : Expr) (exportCtors : Array (Name × Expr))
+    (sourceRecursor? : Option ERec) : MetaM Bool := do
+  let some (.inductInfo type) := (← getEnv).constants.find? tname | return false
+  let neverZero ← forallBoundedTelescope memberTy (some (np + type.numIndices))
+    fun _ result => match result with
+      | .sort level => pure level.normalize.isNeverZero
+      | _ => pure false
+  return neverZero && sourceRecursor?.isSome && exportCtors.size == 1 &&
+    type.all == [tname] && type.ctors.length == 1 && type.numIndices == 1 &&
+    type.numNested == 0 && !type.isRec && !type.isUnsafe
+
 set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the

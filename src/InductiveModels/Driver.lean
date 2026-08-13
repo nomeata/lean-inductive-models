@@ -607,9 +607,10 @@ private def eligibleProjectionFieldsM (type : EIndType) (constructor : ECtor) : 
         result := result.push fieldIndex
     return result
 
-private def phase1DirectTypeOneLayerProjectionCertificate (type : EIndType)
+private def phase1OneLayerProjectionCertificate (type : EIndType)
     (constructorName : Name) (is : Iso) : GenM Bool := do
-  unless oneLayerProjectionFamily #[type] type do return false
+  unless oneLayerProjectionFamily #[type] type ||
+      indexedFibreOneLayerProjectionFamily #[type] type do return false
   let some implementation := is.implementation? | return false
   let some publicModel := is.selfNames[0]? | return false
   let impl := Name.str publicModel "_impl"
@@ -718,7 +719,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     let override? := is.projectionOverrides.find? fun entry =>
       entry.1 == type.name && entry.2.1 == fieldIndex
     let phase1OneLayer ←
-      phase1DirectTypeOneLayerProjectionCertificate type constructorName is
+      phase1OneLayerProjectionCertificate type constructorName is
     let modelConstructorInfo ← generatedDeclInfo is modelConstructor
     let modelConstructorType := modelConstructorInfo.type
     let modelTypeInfo ← generatedDeclInfo is modelType
@@ -2086,6 +2087,9 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
   let selectOneLayer ← if selectPublicOneLayer then
       phase1DirectTypeOneLayerEligible tname np ty ctors sourceRecursor?
     else pure false
+  let selectIndexedFibre ← if selectPublicOneLayer && !selectOneLayer then
+      phase1IndexedFibreOneLayerEligible tname np ty ctors sourceRecursor?
+    else pure false
   let exactTaken ← exactPrimNameTaken? tname ctors projections
   let initial ← match exactTaken with
     | some n => pure (.error (.nameTaken n))
@@ -2096,6 +2100,12 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
             let some sourceConstructor := ctors[0]?
               | badShape s!"{tname}'s selected one-layer family has no constructor"
             oneLayerIso tname root lparams np ty sourceConstructor sourceRecursor reserved
+          else if selectIndexedFibre then
+            let some sourceRecursor := sourceRecursor?
+              | badShape s!"{tname}'s selected indexed fibre has no exact recursor"
+            let some sourceConstructor := ctors[0]?
+              | badShape s!"{tname}'s selected indexed fibre has no constructor"
+            indexedFibreOneLayerIso tname root lparams np ty sourceConstructor sourceRecursor reserved
           else
             primIso tname root lparams np ty ctors reserved
               (sourceRecursor? := sourceRecursor?)
@@ -2111,6 +2121,12 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
           let some sourceConstructor := ctors[0]?
             | badShape s!"{tname}'s selected one-layer family has no constructor"
           oneLayerIso tname root lparams np ty sourceConstructor sourceRecursor reserved
+        else if selectIndexedFibre then
+          let some sourceRecursor := sourceRecursor?
+            | badShape s!"{tname}'s selected indexed fibre has no exact recursor"
+          let some sourceConstructor := ctors[0]?
+            | badShape s!"{tname}'s selected indexed fibre has no constructor"
+          indexedFibreOneLayerIso tname root lparams np ty sourceConstructor sourceRecursor reserved
         else
           primIso tname root lparams np ty ctors reserved
             (sourceRecursor? := sourceRecursor?)
