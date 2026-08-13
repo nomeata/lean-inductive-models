@@ -147,6 +147,13 @@ structure StagedRecord where
   locator : StagedLocator
   deriving Inhabited, Repr
 
+/-- Compact shadow of the final transformed declaration stream. `order` is a
+permutation of `records`; generated payloads live only in `islands` as spans. -/
+structure StagedPlan where
+  islands : Array StagedIsland := #[]
+  records : Array StagedRecord := #[]
+  order : Array Nat := #[]
+
 /-- The unique minor-premise position belonging to `constructorName` in a
 mutual recursor telescope.  Each exported recursor record carries only its
 own member's rules, while the installed mutual recursor consumes every
@@ -968,22 +975,26 @@ def checkGeneratedIn (base : Environment) (records : Array EDecl) :
 model island. The `Iso.spliced` witness is essential: namespace shape alone
 must never copy a public model such as `Eq.Example._model` into the replay
 environment. Local skeletons and per-model `funext` remain disposable. -/
+def generatedSupportRecords (records : Array EDecl) (models : Array PendingModel) :
+    Array EDecl :=
+  let spliced := models.foldl (init := ({} : Std.HashSet Name)) fun names model =>
+    model.spliced.foldl (fun names name => names.insert name) names
+  records.filter fun record =>
+    record.names.any spliced.contains &&
+      (record.names.any persistentSupportRoot || record.names.all persistentSupportName)
+
 def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
     (models : Array PendingModel) :
     MetaM (Except String Environment) := do
-  let spliced := models.foldl (init := ({} : Std.HashSet Name)) fun names model =>
-    model.spliced.foldl (fun names name => names.insert name) names
   let mut main := base
-  for record in records do
-    if record.names.any spliced.contains &&
-        (record.names.any persistentSupportRoot || record.names.all persistentSupportName) then
-      let some declaration := toDeclaration main record | do
-        if installedQuotRecord main record then continue
-        return .error s!"{record.names}: cannot reconstruct shared support"
-      match main.addDeclCore 0 declaration none true with
-      | .error exception =>
-        return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
-      | .ok next => main := next
+  for record in generatedSupportRecords records models do
+    let some declaration := toDeclaration main record | do
+      if installedQuotRecord main record then continue
+      return .error s!"{record.names}: cannot reconstruct shared support"
+    match main.addDeclCore 0 declaration none true with
+    | .error exception =>
+      return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
+    | .ok next => main := next
   return .ok main
 
 /-- Finalize one atomic generated forest.  The source owner participates in
@@ -1911,7 +1922,7 @@ def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
 and compacted at its close boundary; the legacy declaration array remains for
 the moment as an independent final-order/report oracle. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
-    (sink? : Option IslandSink) : MetaM (Array EDecl × Report × Array StagedIsland) := do
+    (sink? : Option IslandSink) : MetaM (Array EDecl × Report × StagedPlan) := do
   let scheduled ← match scheduleSource x generation with
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
@@ -1919,9 +1930,17 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- Built once. Each island overlays only its generated records, avoiding the
   -- former full-source declaration/constructor/rule/normalizer rebuild.
   let sourceSyntax := Check.SyntaxIndex.ofSource x
+  let mut persistentSyntax := sourceSyntax
+  let sourceSummaries := Order.summaries scheduled
+  let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
+  let rawOrdinals := x.decls.foldlIdx (init := ({} : Std.HashMap Name Nat))
+    fun ordinal ordinals declaration => declaration.names.foldl
+      (fun ordinals name => ordinals.insert name ordinal) ordinals
   let mut legacyOut : Array EDecl := #[]
   let mut rep : Report := {}
   let mut staged : Array StagedIsland := #[]
+  let mut stagedRecords : Array StagedRecord := #[]
+  let mut scheduledOrdinal := 0
   let mut islandStatements : Check.StatementReport :=
     { statementsChecked := 0, violations := #[] }
   -- The declarations built inside the current model island. Besides staging
@@ -2073,7 +2092,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       | .ok e => setEnv e
       | .error ex =>
         let msg ← (ex.toMessageData {}).toString
-        return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" }, staged)
+        return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" }, {})
     -- Basis exemption is granted only after the complete exported interface
     -- has been compared with one freshly minted by the kernel. The disposable
     -- alias environment used by the validator is never installed here.
@@ -2155,7 +2174,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       let islandOwners := (rep.generated.extract reportedBefore rep.generated.size).foldl
         (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
       let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
-          ← closeModelIsland x mainBefore generated islandModels d sourceSyntax islandOwners with
+          ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners with
         | .ok result => pure result
         | .error message => throwError
             "owner-free generated declaration rejected for {d.names}: {message}"
@@ -2170,9 +2189,21 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           throwError "staged island cardinality mismatch for {d.names}: \
             summaries={compact.summaries.size}, extras={compact.globalExtras.size}, \
             spans={commit.declarations.size}"
+        let islandNumber := staged.size
+        let tagged := Order.tagIsland islandNumber compact.summaries
+        for localOrdinal in [:tagged.size] do
+          stagedRecords := stagedRecords.push {
+            summary := tagged[localOrdinal]!
+            globalExtra := compact.globalExtras[localOrdinal]!
+            locator := .generated islandNumber localOrdinal }
         staged := staged.push {
-          compact := { compact with summaries := Order.tagIsland staged.size compact.summaries }
+          compact := { compact with summaries := tagged }
           commit }
+      let persistentRecords := generatedSupportRecords orderedGenerated islandModels
+      persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
+        | .ok index => pure index
+        | .error message => throwError
+            "cannot index accepted persistent support for {d.names}: {message}"
       legacyOut := legacyOut ++ orderedGenerated
       setEnv mainWithSupport
       if let some ownerDeclaration := toDeclaration mainWithSupport d then
@@ -2183,10 +2214,19 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         | .error exception =>
           let message ← (exception.toMessageData {}).toString
           return (x.decls,
-            { rep with unreplayable := some s!"{d.names}: {message}" }, staged)
+            { rep with unreplayable := some s!"{d.names}: {message}" }, {})
     else
       mainEnv ← getEnv
     legacyOut := legacyOut.push d
+    if sink?.isSome then
+      let some firstName := d.names.head? | throwError "source declaration has no name"
+      let some rawOrdinal := rawOrdinals[firstName]?
+        | throwError "scheduled source declaration {firstName} lost its raw ordinal"
+      stagedRecords := stagedRecords.push {
+        summary := sourceSummaries[scheduledOrdinal]!
+        globalExtra := sourceGlobalExtras[scheduledOrdinal]!
+        locator := .source rawOrdinal }
+    scheduledOrdinal := scheduledOrdinal + 1
     -- Statement correspondence is deliberately postponed until every emitted
     -- record is available.  It is an exact export-level comparison and does
     -- not consult this replay environment or the recursors the kernel minted
@@ -2210,10 +2250,36 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       islands={repr islandStatements}, aggregate={repr finalLocal}"
   let statementReport :=
     Check.checkStatementFamiliesWithIndex finalExport finalIndex finalFamilies
+  let stagedOrder ← if sink?.isSome then
+      match Order.summaryRecordOrder (stagedRecords.map (·.summary)) with
+      | .ok order => pure order
+      | .error error => throwError "cannot compactly order staged records: {repr error}"
+    else pure #[]
+  if sink?.isSome then
+    let fullOrder ← match Order.recordOrder finalExport with
+      | .ok order => pure order
+      | .error error => throwError "full oracle cannot order staged records: {repr error}"
+    let compactNames := stagedOrder.map fun i => stagedRecords[i]!.summary.introduced
+    let fullNames := fullOrder.map fun i => finalExport.decls[i]!.names.toArray
+    unless compactNames == fullNames do
+      throwError "compact staged order disagrees with full export: \
+        compact={repr compactNames}, full={repr fullNames}"
+    let orderedGlobals := stagedOrder.map fun i => stagedRecords[i]!.globalExtra
+    let diagnosticOwners := staged.foldl (init := ({} : Std.HashSet Name))
+      fun owners island => island.compact.diagnosticOwners.toArray.foldl
+        (fun owners owner => owners.insert owner) owners
+    let compactGlobal := Check.globalExtrasFromRecords orderedGlobals |>.filter fun violation =>
+      diagnosticOwners.contains violation.familyOwner
+    let compactStatementReport : Check.StatementReport :=
+      { islandStatements with
+        violations := islandStatements.violations ++ compactGlobal }
+    unless compactStatementReport == statementReport do
+      throwError "compact staged statements disagree with full export: \
+        compact={repr compactStatementReport}, full={repr statementReport}"
   rep := { rep with stmtChecked := statementReport.statementsChecked }
   rep := { rep with
     stmtErrors := statementReport.violations.map fun violation => violation.message }
-  return (legacyOut, rep, staged)
+  return (legacyOut, rep, { islands := staged, records := stagedRecords, order := stagedOrder })
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
@@ -2226,7 +2292,7 @@ but the full output remains live for the established final Order/Check oracle.
 The AST-dropping entry point is enabled only after compact equivalence tests
 cover the full fixture matrix. -/
 def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
-    (sink : IslandSink) : MetaM (Array EDecl × Report × Array StagedIsland) :=
+    (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) :=
   runFilterCore x checkRecursors generation (some sink)
 
 end Modelgen

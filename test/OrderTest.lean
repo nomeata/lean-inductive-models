@@ -100,6 +100,8 @@ structure FilterRun where
 
 structure StagedFilterRun extends FilterRun where
   islands : Array StagedIsland
+  records : Array StagedRecord
+  order : Array Nat
 
 def cursorAfter (records : Array EDecl) : Writer.Cursor :=
   let writer := records.foldl (fun writer record => (writer.splitDecl record).1) (Writer.fromCursor {})
@@ -124,14 +126,15 @@ def runFilterStagedState (scratch : String) (input : Export)
     let context : Core.Context :=
       { fileName := "<order-staged-test>", fileMap := default,
         maxHeartbeats := 0, maxRecDepth := 8192 }
-    let ((decls, report, islands), finalState) ← Lean.Core.CoreM.toIO
+    let ((decls, report, plan), finalState) ← Lean.Core.CoreM.toIO
       (Lean.Meta.MetaM.run'
         (runFilterWithIslandSink input false generation (.ofStage stage))) context { env }
     let sealed ← stage.finish
     unless sealed.cursor == (← stage.cursor) do
       throw <| IO.userError "sealed staged cursor changed after finish"
     return {
-      input, output := { input with decls }, report, env := finalState.env, islands }
+      input, output := { input with decls }, report, env := finalState.env,
+      islands := plan.islands, records := plan.records, order := plan.order }
 
 def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
     IO FilterRun := do
@@ -531,6 +534,8 @@ def run (root : String) : IO UInt32 := do
   state := state.check "staged island sink preserves exact output and report" <|
     aliasStaged.output.decls == aliasRun.output.decls &&
       aliasStaged.report == aliasRun.report &&
+      aliasStaged.records.size == aliasStaged.output.decls.size &&
+      aliasStaged.order.size == aliasStaged.records.size &&
       aliasStaged.islands.size == aliasRun.report.generated.size &&
       aliasStaged.islands.all fun island =>
         island.compact.summaries.size == island.commit.declarations.size &&
