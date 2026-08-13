@@ -91,6 +91,11 @@ lean_exe sourcestructuresyntaxtest where
   root := `SourceStructureSyntaxTest
   supportInterpreter := true
 
+lean_exe composedrecursorsyntaxtest where
+  srcDir := "test"
+  root := `ComposedRecursorSyntaxTest
+  supportInterpreter := true
+
 lean_exe mainclitest where
   srcDir := "test"
   root := `MainCliTest
