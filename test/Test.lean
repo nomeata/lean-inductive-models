@@ -808,6 +808,12 @@ def runOne (root : String) (a : TAcc) (r : Row)
   -- one that generated a model must have compared something.
   a := check a (rep.generated.isEmpty || rep.stmtChecked > 0)
     s!"{name}: a model was generated and no statement was compared"
+  a := check a (rep.generated.isEmpty == (rep.maxLivePendingModels == 0))
+    s!"{name}: pending-model retention does not match generation: \
+      peak {rep.maxLivePendingModels}, generated {rep.generated.size}"
+  a := check a (rep.generated.isEmpty == (rep.maxLiveIslandRecords == 0))
+    s!"{name}: island-record retention does not match generation: \
+      peak {rep.maxLiveIslandRecords}, generated {rep.generated.size}"
   -- Independent source replay audit: the input's exported recursors agree with
   -- those Lean reconstructs from the source inductive record.
   a := check a rep.recMismatch.isEmpty

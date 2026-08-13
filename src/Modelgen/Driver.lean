@@ -70,6 +70,12 @@ structure Report where
   owner records, and the ones that did not match. -/
   stmtChecked : Nat := 0
   stmtErrors : Array String := #[]
+  /-- Peak number of complete model witnesses retained inside one not-yet-closed
+  generated island.  This is a retention invariant, not an output statistic. -/
+  maxLivePendingModels : Nat := 0
+  /-- Peak number of generated declaration records retained by one island
+  before ordering, checking, and eventual staged serialization. -/
+  maxLiveIslandRecords : Nat := 0
   /-- The input stopped replaying here: a declaration Lean's kernel will not
   load at all. The filter then becomes the identity, which is what a filter
   should be when it can do nothing. -/
@@ -925,8 +931,9 @@ record ordering but is removed before checked replay, so the kernel sees every
 exact serialized model declaration in the owner-free persistent environment.
 Only fixed shared support is copied back. -/
 def closeModelIsland (template : Export) (main : Environment)
-    (records : Array EDecl) (models : Array PendingModel) (owner : EDecl) :
-    MetaM (Except String (Array EDecl × Environment)) := do
+    (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
+    (generatedOwners : Std.HashSet Name) :
+    MetaM (Except String (Array EDecl × Environment × Check.StatementReport)) := do
   let island := { template with decls := records.push owner }
   let ordered ← match Order.reorder island with
     | .ok ordered => pure ordered
@@ -937,12 +944,25 @@ def closeModelIsland (template : Export) (main : Environment)
     if !removedOwner && record == owner then removedOwner := true
     else generated := generated.push record
   unless removedOwner do return .error s!"source owner {owner.names} disappeared from its island"
+  -- Statement correspondence is an export-syntax check, so it can run while
+  -- the owner is still absent from the persistent replay environment.  Keep
+  -- all source declarations in the view: transparent aliases and exact
+  -- projection metadata outside this island remain legitimate dependencies
+  -- of the generated interface.  The final aggregate check below is retained
+  -- as an oracle until staged output no longer constructs the complete array.
+  let statementReport :=
+    if generatedOwners.isEmpty then
+      ({} : Check.StatementReport)
+    else
+      let view := { template with decls := generated ++ template.decls }
+      let families := Check.statementFamiliesFor view generatedOwners
+      Check.checkStatementFamiliesWithIndex view (.ofExport view) families
   match ← checkGeneratedIn main generated with
   | .error message => return .error message
   | .ok _ =>
     match ← installGeneratedSupportIn main generated models with
     | .error message => return .error message
-    | .ok supported => return .ok (generated, supported)
+    | .ok supported => return .ok (generated, supported, statementReport)
 
 /-- Source declarations which must be replayed before any owner that can need
 them. This is deliberately wider than [`Modelgen.persistentSupportName`]:
@@ -1802,6 +1822,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   let mut mainEnv ← getEnv
   let mut out : Array EDecl := #[]
   let mut rep : Report := {}
+  let mut islandStatements : Check.StatementReport := {}
   -- The declarations built inside the current model island. Besides staging
   -- exact generated names for support persistence, this keeps recursive
   -- splice closure and nested → mutual → simple composition atomic.
@@ -1818,6 +1839,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     let mainBefore := mainEnv
     let outputBefore := out.size
     let pendingBefore := pending.size
+    let reportedBefore := rep.generated.size
     -- The model, if this is a nested declaration. Generated **before** the
     -- declaration is added: nothing in the model mentions `T`.
     if let .induct ts cs inputRecursors := d then
@@ -1998,11 +2020,20 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     if d matches .induct .. then
       let generated := out.extract outputBefore out.size
       let islandModels := pending.extract pendingBefore pending.size
-      let (orderedGenerated, mainWithSupport) ← match
-          ← closeModelIsland x mainBefore generated islandModels d with
+      rep := { rep with
+        maxLivePendingModels := max rep.maxLivePendingModels islandModels.size
+        maxLiveIslandRecords := max rep.maxLiveIslandRecords generated.size }
+      let islandOwners := (rep.generated.extract reportedBefore rep.generated.size).foldl
+        (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
+      let (orderedGenerated, mainWithSupport, statementReport) ← match
+          ← closeModelIsland x mainBefore generated islandModels d islandOwners with
         | .ok result => pure result
         | .error message => throwError
             "owner-free generated declaration rejected for {d.names}: {message}"
+      islandStatements :=
+        { statementsChecked := islandStatements.statementsChecked +
+            statementReport.statementsChecked
+          violations := islandStatements.violations ++ statementReport.violations }
       out := out.extract 0 outputBefore ++ orderedGenerated
       pending := pending.extract 0 pendingBefore
       setEnv mainWithSupport
@@ -2030,6 +2061,9 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   let generatedOwners := rep.generated.foldl
     (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
   let statementReport := Check.checkStatementsFor { x with decls := out } generatedOwners
+  unless islandStatements == statementReport do
+    throwError "per-island statement checks disagree with the final aggregate: \
+      islands={repr islandStatements}, aggregate={repr statementReport}"
   rep := { rep with stmtChecked := statementReport.statementsChecked }
   rep := { rep with
     stmtErrors := statementReport.violations.map fun violation => violation.message }
