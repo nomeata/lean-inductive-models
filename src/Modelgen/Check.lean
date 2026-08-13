@@ -148,11 +148,20 @@ private def closeForalls (binders : Array OpenBinder) (body : Expr) : Expr :=
 
 private abbrev Constructors := Std.HashMap Name ECtor
 
+private abbrev StructureOwners := Std.HashMap Name (EIndType × List ECtor)
+
 private def constructorRecords (x : Export) : Constructors := Id.run do
   let mut result : Constructors := {}
   for declaration in x.decls do
     if let .induct _ constructors _ := declaration then
       for constructor in constructors do result := result.insert constructor.name constructor
+  return result
+
+private def structureOwners (x : Export) : StructureOwners := Id.run do
+  let mut result : StructureOwners := {}
+  for declaration in x.decls do
+    if let .induct types constructors _ := declaration then
+      for type in types do result := result.insert type.name (type, constructors)
   return result
 
 /-- The literal equality proposition exported for rule `ruleIndex` of
@@ -720,12 +729,6 @@ private abbrev ExactLocals := Array (FVarId × Expr)
 private def ExactLocals.typeOf? (locals : ExactLocals) (id : FVarId) : Option Expr :=
   (locals.find? (·.1 == id)).map (·.2)
 
-private def structureOwner? (x : Export) (owner : Name) : Option (EIndType × List ECtor) :=
-  x.decls.findSome? fun declaration => match declaration with
-    | .induct types constructors _ =>
-      (types.find? (·.name == owner)).map fun type => (type, constructors)
-    | _ => none
-
 mutual
 
 /-- A deliberately small, exact type synthesizer for the result of an
@@ -733,7 +736,8 @@ exported projection declaration. Declaration and local binder types suffice;
 when their head is hidden, it unfolds only transparent definitions in the
 export syntax. The projection case follows the exact recovered primitive
 projection interface. -/
-private partial def inferExactType? (x : Export) (normalizer : ExactNormalizationEnv)
+private partial def inferExactType? (structures : StructureOwners)
+    (normalizer : ExactNormalizationEnv)
     (declarations : DeclarationTypes)
     (locals : ExactLocals) : Expr → Option Expr
   | .sort level => some (.sort (.succ level))
@@ -744,56 +748,63 @@ private partial def inferExactType? (x : Export) (normalizer : ExactNormalizatio
       return declaration.type.instantiateLevelParams declaration.levelParams levels
   | .app function argument => do
       let functionType := normalizer.whnf
-        (← inferExactType? x normalizer declarations locals function)
+        (← inferExactType? structures normalizer declarations locals function)
       let .forallE _ _ body _ := functionType | none
       return body.instantiate1 argument
   | .lam name domain body info => do
       let value := mkFVar (FVarId.mk ((`_check.exactLam).mkNum locals.size))
-      let bodyType ← inferExactType? x normalizer declarations
+      let bodyType ← inferExactType? structures normalizer declarations
         (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
       return .forallE name domain (bodyType.abstract #[value]) info
   | .forallE name domain body info => do
-      let domainLevel ← inferExactSortLevel? x normalizer declarations locals domain
+      let domainLevel ← inferExactSortLevel? structures normalizer declarations locals domain
       let value := mkFVar (FVarId.mk ((`_check.exactPi).mkNum locals.size))
-      let bodyLevel ← inferExactSortLevel? x normalizer declarations
+      let bodyLevel ← inferExactSortLevel? structures normalizer declarations
         (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
       let _ := name
       let _ := info
       return .sort (Level.imax domainLevel bodyLevel).normalize
   | .letE _ _ value body _ =>
-      inferExactType? x normalizer declarations locals (body.instantiate1 value)
-  | .mdata _ body => inferExactType? x normalizer declarations locals body
+      inferExactType? structures normalizer declarations locals (body.instantiate1 value)
+  | .mdata _ body => inferExactType? structures normalizer declarations locals body
   | .proj owner fieldIndex struct => do
       let structType := normalizer.whnf
-        (← inferExactType? x normalizer declarations locals struct)
+        (← inferExactType? structures normalizer declarations locals struct)
       let .const structOwner levels := structType.getAppFn | none
       unless structOwner == owner do none
-      let (type, constructors) ← structureOwner? x owner
+      let (type, constructors) ← structures[owner]?
       let constructorName ← type.ctors.head?
       let constructor ← constructors.find? fun constructor =>
         constructor.name == constructorName && constructor.induct == owner
       unless type.ctors == [constructorName] do none
-      unless (x.intrinsicProjectionFieldsFor type constructors).contains fieldIndex do none
       unless constructor.levelParams.length == levels.length do none
       let ownerArguments := structType.getAppArgs
       unless ownerArguments.size == type.numParams + type.numIndices do none
       let params := ownerArguments.extract 0 type.numParams
-      let mut current ← instantiateForallsExact
-        (constructor.type.instantiateLevelParams constructor.levelParams levels) params
+      let mut current := constructor.type.instantiateLevelParams constructor.levelParams levels
+      for param in params do
+        let .forallE _ _ body _ := normalizer.whnf current | none
+        current := body.instantiate1 param
+      let ownerIsProp := normalizer.isPropositionFormer type.type
       for earlier in [0:fieldIndex + 1] do
-        let .forallE _ fieldType rest _ := current | none
-        if earlier == fieldIndex then return fieldType
+        let .forallE _ fieldType rest _ := normalizer.whnf current | none
+        let fieldIsProp :=
+          inferExactSortLevel? structures normalizer declarations locals fieldType == some .zero
+        if earlier == fieldIndex then
+          if ownerIsProp && !fieldIsProp then none else return fieldType
+        if ownerIsProp && rest.hasLooseBVars && !fieldIsProp then none
         current := rest.instantiate1 (.proj owner earlier struct)
       none
   | .lit (.natVal _) => some (.const ``Nat [])
   | .lit (.strVal _) => some (.const ``String [])
   | .bvar _ | .mvar _ => none
 
-private partial def inferExactSortLevel? (x : Export) (normalizer : ExactNormalizationEnv)
+private partial def inferExactSortLevel? (structures : StructureOwners)
+    (normalizer : ExactNormalizationEnv)
     (declarations : DeclarationTypes)
     (locals : ExactLocals) (expression : Expr) : Option Level := do
   let .sort level := normalizer.whnf
-    (← inferExactType? x normalizer declarations locals expression) | none
+    (← inferExactType? structures normalizer declarations locals expression) | none
   return level
 
 end
@@ -804,7 +815,8 @@ There is no source projection declaration to rewrite.  Both types are
 synthesized from the unique constructor telescope.  References to earlier
 fields in a dependent result become applications of the corresponding earlier
 intrinsic projections. -/
-private def checkProjection (x : Export) (normalizer : ExactNormalizationEnv) (family : Family)
+private def checkProjection (x : Export) (structures : StructureOwners)
+    (normalizer : ExactNormalizationEnv) (family : Family)
     (declarations : DeclarationTypes) (projection : Naming.Projection) : Array Violation := Id.run do
   let projectionModels := declarations.getD projection.name #[]
   if projectionModels.isEmpty then
@@ -910,7 +922,7 @@ private def checkProjection (x : Export) (normalizer : ExactNormalizationEnv) (f
       | return violations.push (.declarationType projection.owner projection.iota)
     let some sourceFieldAtIndex := sourceBinders[constructor.numParams + index]?
       | return violations.push (.declarationType projection.owner projection.iota)
-    let some sourceLevel := inferExactSortLevel? x normalizer declarations sourceLocals
+    let some sourceLevel := inferExactSortLevel? structures normalizer declarations sourceLocals
         sourceFieldAtIndex.type
       | return violations.push (.declarationType projection.owner projection.iota)
     let level := sourceLevel.instantiateParams constructor.levelParams
@@ -936,7 +948,7 @@ private def checkProjection (x : Export) (normalizer : ExactNormalizationEnv) (f
   let some rhs := rhs?
     | return violations.push (.declarationType projection.owner projection.iota)
   let some sourceEqLevel :=
-      inferExactSortLevel? x normalizer declarations sourceLocals sourceField.type
+      inferExactSortLevel? structures normalizer declarations sourceLocals sourceField.type
     | return violations.push (.declarationType projection.owner projection.iota)
   let eqLevel := sourceEqLevel.instantiateParams constructor.levelParams
     (model.levelParams.map Level.param)
@@ -1000,13 +1012,20 @@ the export; constructing an index does not copy declaration bodies. -/
 structure SyntaxIndex where
   private declarations : DeclarationTypes
   private constructors : Constructors
+  private structures : StructureOwners
   private ruleSlots : IotaSlots
   private normalizer : ExactNormalizationEnv
   private globalExtras : Array Violation := #[]
+  private sourceFamilies : Std.HashMap Name (Array Family) := {}
+
+private def familyTable (x : Export) : Std.HashMap Name (Array Family) :=
+  (discoverWith x fun _ => true).foldl (init := {}) fun table family =>
+    table.insert family.owner ((table.getD family.owner #[]).push family)
 
 private def SyntaxIndex.coreOfExport (x : Export) : SyntaxIndex :=
   { declarations := declarationTypes x, constructors := constructorRecords x,
-    ruleSlots := iotaSlots x, normalizer := x.exactNormalizationEnv }
+    structures := structureOwners x, ruleSlots := iotaSlots x,
+    normalizer := x.exactNormalizationEnv, sourceFamilies := familyTable x }
 
 private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
     (family : Family) (checkOrder : Bool) : Array Violation := Id.run do
@@ -1030,7 +1049,7 @@ private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
     violations := violations ++ checkPair family.correspondence index.declarations pair
   for projection in family.correspondence.projections do
     violations := violations ++ checkProjection
-      x index.normalizer family index.declarations projection
+      x index.structures index.normalizer family index.declarations projection
   for iota in family.correspondence.iotas do
     violations := violations ++ checkIota x index.constructors family index.declarations iota
   for metadata in family.correspondence.metadata do
@@ -1088,6 +1107,48 @@ def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
   let index := SyntaxIndex.coreOfExport x
   { index with globalExtras := computeGlobalExtras x index }
 
+/-- Overlay an island in front of a persistent source index without rescanning
+the source export.  This has exactly the first-occurrence/duplicate semantics
+of indexing `{ source with decls := records ++ source.decls }`: declaration and
+rule arrays are prefixed, generated transparent definitions win, while a
+source constructor/owner record (which occurs later in that synthetic view)
+wins the maps whose historical scan keeps the last occurrence.  Global extras
+remain a final-export concern and are intentionally not recomputed here. -/
+def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) : SyntaxIndex :=
+    Id.run do
+  let mut declarations := source.declarations
+  let mut ruleSlots := source.ruleSlots
+  for declaration in records.reverse do
+    for info in (declTypes declaration).reverse do
+      declarations := declarations.insert info.name
+        (#[info] ++ declarations.getD info.name #[])
+    for name in declaration.names.reverse do
+      if let some (parent, index) := iotaSlot? name then
+        ruleSlots := ruleSlots.insert parent
+          (#[((name, index))] ++ ruleSlots.getD parent #[])
+  let mut constructors := source.constructors
+  let mut structures := source.structures
+  for declaration in records do
+    if let .induct types ctors _ := declaration then
+      for constructor in ctors do
+        unless source.constructors.contains constructor.name do
+          constructors := constructors.insert constructor.name constructor
+      for type in types do
+        unless source.structures.contains type.name do
+          structures := structures.insert type.name (type, ctors)
+  let mut definitions := source.normalizer.definitions
+  for declaration in records.reverse do
+    if let .defn name levelParams _ value .. := declaration then
+      definitions := definitions.insert name { levelParams, value }
+  return { source with declarations, constructors, structures, ruleSlots,
+    normalizer := { definitions } }
+
+/-- Fail-closed family templates for one owner from the persistent source
+snapshot.  They are built once with the source `SyntaxIndex`; island checks do
+not rediscover them by scanning the complete input. -/
+def SyntaxIndex.sourceStatementFamilies (index : SyntaxIndex) (owner : Name) : Array Family :=
+  index.sourceFamilies.getD owner #[]
+
 private def checkFamiliesWithIndex (x : Export) (index : SyntaxIndex)
     (families : Array Family) (checkOrder : Bool) : Array Violation :=
   families.foldl (fun violations family =>
@@ -1130,6 +1191,16 @@ def checkFamilyStatementsWithIndex (x : Export) (index : SyntaxIndex)
   { statementsChecked := family.correspondence.statementCount
     violations := checkFamilyWithIndex x index family false ++ global }
 
+/-- Batch only family-local statement diagnostics.  Staged generation uses
+this form for each island and leaves the whole-export unexpected-slot sweep to
+the final aggregate pass, preserving its historical order and multiplicity. -/
+def checkStatementFamiliesLocalWithIndex (x : Export) (index : SyntaxIndex)
+    (families : Array Family) : StatementReport :=
+  { statementsChecked := families.foldl
+      (fun count family => count + family.correspondence.statementCount) 0
+    violations := families.foldl (fun violations family =>
+      violations ++ checkFamilyWithIndex x index family false) #[] }
+
 /-- Batch a selected set of discovered families through one reusable index.
 Unlike concatenating single-family reports, the global unexpected-slot sweep
 runs once, retaining aggregate diagnostic order and multiplicity exactly. -/
@@ -1139,11 +1210,10 @@ def checkStatementFamiliesWithIndex (x : Export) (index : SyntaxIndex)
     (fun result family => family.correspondence.diagnosticOwners.foldl
       (fun result owner => result.insert owner) result)
     ({} : Std.HashSet Name)
-  let violations := (checkFamiliesWithIndex x index families false).filter fun violation =>
+  let local := checkStatementFamiliesLocalWithIndex x index families
+  let global := index.globalExtras.filter fun violation =>
     diagnosticOwners.contains violation.familyOwner
-  { statementsChecked := families.foldl
-      (fun count family => count + family.correspondence.statementCount) 0
-    violations }
+  { local with violations := local.violations ++ global }
 
 def checkStatements (x : Export) : StatementReport :=
   let families := discover x

@@ -936,7 +936,7 @@ exact serialized model declaration in the owner-free persistent environment.
 Only fixed shared support is copied back. -/
 def closeModelIsland (template : Export) (main : Environment)
     (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
-    (generatedOwners : Std.HashSet Name) :
+    (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name) :
     MetaM (Except String (Array EDecl × Environment × Check.StatementReport)) := do
   let island := { template with decls := records.push owner }
   let ordered ← match Order.reorder island with
@@ -958,9 +958,21 @@ def closeModelIsland (template : Export) (main : Environment)
     if generatedOwners.isEmpty then
       { statementsChecked := 0, violations := #[] }
     else
-      let view := { template with decls := generated ++ template.decls }
-      let families := Check.statementFamiliesFor view generatedOwners
-      Check.checkStatementFamiliesWithIndex view (.ofExport view) families
+      let index := sourceSyntax.prependRecords generated
+      let sourceRoot? := match owner with
+        | .induct types _ _ => types.head?.map (·.name)
+        | _ => none
+      let generatedOnlyOwners := sourceRoot?.elim generatedOwners generatedOwners.erase
+      let generatedView := { template with decls := generated }
+      let generatedFamilies := Check.statementFamiliesFor generatedView generatedOnlyOwners
+      let generatedReport :=
+        Check.checkStatementFamiliesLocalWithIndex generatedView index generatedFamilies
+      let sourceFamilies := sourceRoot?.elim #[] fun root =>
+        if generatedOwners.contains root then sourceSyntax.sourceStatementFamilies root else #[]
+      let sourceReport :=
+        Check.checkStatementFamiliesLocalWithIndex template index sourceFamilies
+      { statementsChecked := generatedReport.statementsChecked + sourceReport.statementsChecked
+        violations := generatedReport.violations ++ sourceReport.violations }
   -- Drop the construction fork before reconstructing any declaration.  The
   -- exact serialized records and compact splice witnesses above are the only
   -- state allowed to cross into owner-free checked replay.
@@ -1828,6 +1840,9 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
   let mut mainEnv ← getEnv
+  -- Built once. Each island overlays only its generated records, avoiding the
+  -- former full-source declaration/constructor/rule/normalizer rebuild.
+  let sourceSyntax := Check.SyntaxIndex.ofExport x
   let mut out : Array EDecl := #[]
   let mut rep : Report := {}
   let mut islandStatements : Check.StatementReport :=
@@ -2035,7 +2050,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       let islandOwners := (rep.generated.extract reportedBefore rep.generated.size).foldl
         (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
       let (orderedGenerated, mainWithSupport, statementReport) ← match
-          ← closeModelIsland x mainBefore generated islandModels d islandOwners with
+          ← closeModelIsland x mainBefore generated islandModels d sourceSyntax islandOwners with
         | .ok result => pure result
         | .error message => throwError
             "owner-free generated declaration rejected for {d.names}: {message}"
@@ -2069,10 +2084,15 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
   let generatedOwners := rep.generated.foldl
     (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
-  let statementReport := Check.checkStatementsFor { x with decls := out } generatedOwners
-  unless islandStatements == statementReport do
-    throwError "per-island statement checks disagree with the final aggregate: \
-      islands={repr islandStatements}, aggregate={repr statementReport}"
+  let finalExport := { x with decls := out }
+  let finalFamilies := Check.statementFamiliesFor finalExport generatedOwners
+  let finalIndex := Check.SyntaxIndex.ofExport finalExport
+  let finalLocal := Check.checkStatementFamiliesLocalWithIndex finalExport finalIndex finalFamilies
+  unless islandStatements == finalLocal do
+    throwError "per-island statement checks disagree with the final family-local aggregate: \
+      islands={repr islandStatements}, aggregate={repr finalLocal}"
+  let statementReport :=
+    Check.checkStatementFamiliesWithIndex finalExport finalIndex finalFamilies
   rep := { rep with stmtChecked := statementReport.statementsChecked }
   rep := { rep with
     stmtErrors := statementReport.violations.map fun violation => violation.message }
