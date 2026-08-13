@@ -436,4 +436,107 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
     spliced := spliced }
   return (result, members)
 
+private def mapMutualField (certificate : IsoFamilyImplementation) (operation : Bool)
+    (levels : List Level) (parameters : Array Expr) (shape : MutualFieldShape)
+    (value : Expr) : Expr :=
+  match shape.target? with
+  | none => value
+  | some target =>
+    let member := familyCertificateMember! certificate target
+    let name := if operation then member.roll else member.unroll
+    mkAppN (.const name levels) (parameters.push value)
+
+/-- Attach exact public constructors and direct layer-projection
+implementations.  `operation = true` above denotes public-to-private `roll`;
+the reverse direction is used only while reading a stored recursive field. -/
+def buildMutualOneLayerFields (source : EDecl) (reserved : Std.HashSet Name)
+    (base : Iso) (members : Array MutualMemberShape) : GenM Iso := do
+  let .induct sourceTypes sourceConstructors _ := source
+    | badShape "mutual public fields need an exact inductive block"
+  let types := sourceTypes.toArray
+  let constructors := sourceConstructors.toArray
+  let all := types.map (·.name)
+  let some certificate := base.familyImplementation?
+    | badShape "mutual public fields have no family certificate"
+  let lparams := types[0]!.levelParams
+  let levels := lparams.map Level.param
+  let np := types[0]!.numParams
+  let env ← getEnv
+  let exact := exactFamilySource env all base
+  let mut declarations := base.decls
+  let mut overrides := #[]
+  let eqi ← match EqInfo.check env with
+    | .ok info => pure info
+    | .error message => badShape message
+  for constructor in constructors do
+    let shape := familyMember! members constructor.induct
+    let member := familyCertificateMember! certificate constructor.induct
+    let fieldsShape := shape.constructorFields.find? (·.1 == constructor.name)
+      |>.map (·.2) |>.getD #[]
+    unless fieldsShape.size == constructor.numFields do
+      badShape s!"{constructor.name}'s mutual field shape has the wrong arity"
+    let name := publicConstructor constructor.name
+    ensureFresh reserved name
+    let type := exact constructor.type
+    let value ← forallBoundedTelescope type (some (np + constructor.numFields))
+        fun binders _ => do
+      let parameters := binders.extract 0 np
+      let fields := binders.extract np binders.size
+      let stored := fields.mapIdx fun index field =>
+        mapMutualField certificate true levels parameters fieldsShape[index]! field
+      let body ← if shape.changed then
+          wTowerMkOf shape.level stored stored
+        else pure (mkAppN (.const (privateConstructor! member constructor.name) levels)
+          (parameters ++ stored))
+      mkLambdaFVars binders body
+    let declaration := Declaration.defnDecl
+      { name, levelParams := lparams, type, value
+        hints := ← hintsFor value, safety := .safe }
+    addChecked declaration
+    declarations := declarations.push declaration
+  -- A changed member's projections read the public tower directly.  The
+  -- driver remains the authority for public names and exact declaration types;
+  -- these closed terms are route-specific implementations only.
+  for type in types do
+    let shape := familyMember! members type.name
+    unless shape.changed do continue
+    let member := familyCertificateMember! certificate type.name
+    let constructor := constructors.find? (·.induct == type.name) |>.get!
+    let fieldsShape := shape.constructorFields.find? (·.1 == constructor.name)
+      |>.map (·.2) |>.getD #[]
+    let privateConstructorType ← generatedType (privateConstructor! member constructor.name)
+    let projectionValues ← forallBoundedTelescope type.type (some np) fun parameters _ => do
+      let telescope ← instForall privateConstructorType parameters
+      forallBoundedTelescope telescope (some constructor.numFields) fun fields _ =>
+        withLocalDeclD `self (mkAppN (.const member.publicSelf levels) parameters) fun self => do
+          let stored ← wTowerProjsOf shape.level fields self
+          let values := stored.mapIdx fun index field =>
+            mapMutualField certificate false levels parameters fieldsShape[index]! field
+          pure (parameters, self, values)
+    let (parameters, self, values) := projectionValues
+    for index in [0:constructor.numFields] do
+      let projectionValue ← mkLambdaFVars (parameters.push self) values[index]!
+      let projectionProof ← forallBoundedTelescope (exact constructor.type)
+          (some (np + constructor.numFields)) fun binders _ => do
+        let ps := binders.extract 0 np
+        let fields := binders.extract np binders.size
+        let field := fields[index]!
+        let proof ← match fieldsShape[index]!.target? with
+          | some target =>
+            let targetMember := familyCertificateMember! certificate target
+            pure <| mkAppN (.const targetMember.unrollRoll levels) (ps.push field)
+          | none =>
+            let fieldType ← inferType field
+            pure <| eqi.refl' (← ilevel fieldType) fieldType field
+        mkLambdaFVars binders proof
+      overrides := overrides.push (type.name, index, projectionValue, projectionProof)
+  return { base with decls := declarations, projectionOverrides := overrides }
+
+/-- Complete constructor-layer boundary.  Public recursors are added by the
+final stage, so callers must not serialize this intermediate value. -/
+def mutualOneLayerFields (source : EDecl) (reserved : Std.HashSet Name)
+    (buildRoot? : Option Name := none) : GenM (Iso × Array MutualMemberShape) := do
+  let (base, members) ← mutualOneLayerBase source reserved buildRoot?
+  return (← buildMutualOneLayerFields source reserved base members, members)
+
 end InductiveModels
