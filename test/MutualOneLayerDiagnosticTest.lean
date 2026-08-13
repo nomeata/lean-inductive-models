@@ -5,12 +5,10 @@ import InductiveModels.Order
 /-!
 # Plain-mutual partial one-layer diagnostic
 
-This is deliberately not a correctness target. It records the exact public
-surface already produced for a two-member recursive SCC, then leaves two red
-expectations for the next adapter: the source-exact projection-iota telescope
-and a complete private/public family certificate. The legacy mutual route's
-literal RHS and multi-constructor sibling remain controls rather than being
-reinterpreted as failures.
+This permanent focused target checks the exact public surface produced for a
+two-member recursive SCC, including the source-exact projection-iota telescope
+and complete private/public family certificate. The legacy mutual route's
+literal RHS and multi-constructor sibling remain controls.
 -/
 
 open Lean Meta InductiveModels
