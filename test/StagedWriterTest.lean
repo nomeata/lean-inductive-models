@@ -27,6 +27,14 @@ def bothHaveDecls (whole streamed : Except String Export) (expected : Array EDec
   | .ok first, .ok second => first.decls == expected && second.decls == expected
   | _, _ => false
 
+def bothProjectionFacts (whole streamed : Except String Export)
+    (present absent : Array Expr) : Bool :=
+  match whole, streamed with
+  | .ok first, .ok second =>
+      present.all (first.projNodes.contains ·) && present.all (second.projNodes.contains ·) &&
+        absent.all (!first.projNodes.contains ·) && absent.all (!second.projNodes.contains ·)
+  | _, _ => false
+
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let scratch := s!"{root}/_tmp"
@@ -40,8 +48,11 @@ def main (args : List String) : IO UInt32 := do
   let exprHolePath := s!"{scratch}/staged-writer-expr-hole.ndjson"
   let sparsePath := s!"{scratch}/staged-writer-sparse.ndjson"
   let overwritePath := s!"{scratch}/staged-writer-overwrite.ndjson"
+  let projectionOrderPath := s!"{scratch}/staged-writer-projection-order.ndjson"
+  let projectionOverwritePath := s!"{scratch}/staged-writer-projection-overwrite.ndjson"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
-    nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath]
+    nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath,
+    projectionOrderPath, projectionOverwritePath]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -149,6 +160,37 @@ def main (args : List String) : IO UInt32 := do
   let overwrittenDecl : EDecl := .ax `After [] (.sort (.param `After)) false
   state := state.check "explicit repeated arena IDs overwrite in both readers" <|
     bothHaveDecls (Modelgen.parse overwrite) (← parseHandleAt overwritePath) #[overwrittenDecl]
+
+  -- Projection analysis follows record dependencies, not numeric ID order.
+  let projectionOrder := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"ProjectionOwner\"}}",
+    "{\"ie\":10,\"bvar\":0}",
+    "{\"ie\":20,\"proj\":{\"idx\":0,\"struct\":10,\"typeName\":1}}",
+    "{\"ie\":2,\"app\":{\"arg\":10,\"fn\":20}}"]
+  IO.FS.writeFile projectionOrderPath projectionOrder
+  let struct := Expr.bvar 0
+  let projection := Expr.proj `ProjectionOwner 0 struct
+  let projectionParent := Expr.app projection struct
+  state := state.check "projection analysis accepts out-of-order numeric IDs" <|
+    bothProjectionFacts (Modelgen.parse projectionOrder) (← parseHandleAt projectionOrderPath)
+      #[projection, projectionParent] #[]
+
+  -- A parent captures the child expression present when its record is parsed.
+  -- Overwriting that child ID changes only subsequent parents.
+  let projectionOverwrite := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"ProjectionOwner\"}}",
+    "{\"ie\":10,\"bvar\":0}",
+    "{\"ie\":0,\"proj\":{\"idx\":0,\"struct\":10,\"typeName\":1}}",
+    "{\"ie\":1,\"app\":{\"arg\":10,\"fn\":0}}",
+    "{\"ie\":0,\"sort\":0}",
+    "{\"ie\":2,\"app\":{\"arg\":0,\"fn\":0}}"]
+  IO.FS.writeFile projectionOverwritePath projectionOverwrite
+  let replacement := Expr.sort .zero
+  let replacementParent := Expr.app replacement replacement
+  state := state.check "projection analysis observes expression overwrite time" <|
+    bothProjectionFacts (Modelgen.parse projectionOverwrite)
+      (← parseHandleAt projectionOverwritePath) #[projection, projectionParent]
+      #[replacement, replacementParent]
 
   for path in paths do removeIfPresent path
   IO.println s!"staged writer: {state.passed} passed, {state.failed.size} failed"
