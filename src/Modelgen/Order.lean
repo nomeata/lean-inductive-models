@@ -118,28 +118,30 @@ opaque expressionReferences (roots : Array Expr) : Std.HashSet Name := {}
 private def insertNames (set : Std.HashSet Name) (names : List Name) : Std.HashSet Name :=
   names.foldl (fun set name => set.insert name) set
 
-/-- Every direct name reference and expression root in one export record. -/
+/-- Every semantic name reference and expression root in one export record.
+
+The various `all` fields are mutual-block bookkeeping, not declaration
+dependencies. Lean's kernel does not consume them when checking a constant;
+inserting them here would turn every separately exported mutual block into a
+spurious dependency cycle. -/
 def references (declaration : EDecl) : Std.HashSet Name := Id.run do
   let mut names : Std.HashSet Name := {}
   let mut roots : Array Expr := #[]
   match declaration with
   | .ax _ _ type _ => roots := roots.push type
-  | .defn _ _ type value _ _ all | .thm _ _ type value all =>
-    names := insertNames names all
+  | .defn _ _ type value _ _ _ | .thm _ _ type value _ =>
     roots := roots.push type |>.push value
-  | .opaq _ _ type value _ all =>
-    names := insertNames names all
+  | .opaq _ _ type value _ _ =>
     roots := roots.push type |>.push value
   | .quot _ _ type _ => roots := roots.push type
   | .induct types ctors recursors =>
     for type in types do
-      names := insertNames (insertNames names type.all) type.ctors
+      names := insertNames names type.ctors
       roots := roots.push type.type
     for ctor in ctors do
       names := names.insert ctor.induct
       roots := roots.push ctor.type
     for recursor in recursors do
-      names := insertNames names recursor.all
       roots := roots.push recursor.type
       for rule in recursor.rules do
         names := names.insert rule.ctor
