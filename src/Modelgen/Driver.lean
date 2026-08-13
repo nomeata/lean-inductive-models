@@ -1558,6 +1558,33 @@ private def kernelReplayDeclaration (declaration : EDecl) : Except String (Optio
     -- are exposed by the metadata comparison below.
     return some <| .inductDecl first.levelParams first.numParams inductiveTypes false
 
+/-- Expressions the official kernel must validate for one active export record.
+
+`Environment.addDeclCore` is the final authority, but the Arena corpus also
+tracks bugs in that implementation.  `Meta.check` independently walks every
+serialized expression, including constructor parameters erased by nested
+inductive compilation and projections whose proposition sort is only visible
+after level normalization.  For an inductive record these expressions are
+checked after insertion so references to the block being defined are in scope.
+-/
+private def kernelReplayExpressions : EDecl → Array Expr
+  | .ax _ _ type _ => #[type]
+  | .defn _ _ type value _ _ _ => #[type, value]
+  | .thm _ _ type value _ => #[type, value]
+  | .opaq _ _ type value _ _ => #[type, value]
+  | .quot _ _ type _ => #[type]
+  | .induct types constructors _ =>
+      types.toArray.map (·.type) ++ constructors.toArray.map (·.type)
+
+private def checkKernelReplayExpressions (record : EDecl) : MetaM (Except String Unit) := do
+  try
+    for expression in kernelReplayExpressions record do
+      Meta.check expression
+    return .ok ()
+  catch exception =>
+    return .error s!"{record.names}: expression validation failed: \
+      {← exception.toMessageData.toString}"
+
 /-- Replay grouped export records directly into a kernel environment.
 
 Using `Lean.Environment.replay` here would split the constant map back into
@@ -1572,10 +1599,19 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
       | .ok declaration => pure declaration
       | .error message => return .error message
     let some declaration := declaration? | continue
+    setEnv (.ofKernelEnv checked)
+    unless record matches .induct .. do
+      if let .error message ← checkKernelReplayExpressions record then
+        return .error message
     match checked.addDeclCore 0 declaration none with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
-    | .ok next => checked := next
+    | .ok next =>
+      checked := next
+      if record matches .induct .. then
+        setEnv (.ofKernelEnv checked)
+        if let .error message ← checkKernelReplayExpressions record then
+          return .error message
   return .ok (.ofKernelEnv checked)
 
 /-- Submit a complete export to Lean's kernel and verify that its serialized

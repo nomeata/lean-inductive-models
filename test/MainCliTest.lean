@@ -388,8 +388,13 @@ def main (args : List String) : IO UInt32 := do
     { nestedExport with decls := nestedExport.decls.push nestedExport.decls[0]! }.render
   let duplicate ← runModelgenStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] duplicateText
-  state := state.check "duplicate declaration is a parse/tool error with exit 3" <|
-    duplicate.exitCode == 3 && (duplicate.stderr.splitOn "parse error:").length > 1
+  state := state.check "duplicate declaration is an Arena rejection with exit 1" <|
+    duplicate.exitCode == 1 && (duplicate.stderr.splitOn "parse error:").length > 1
+  let duplicateOutsideArena ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--no-type-check-input", "--no-output", "-"] duplicateText
+  state := state.check "duplicate declaration outside Arena mode remains a tool error" <|
+    duplicateOutsideArena.exitCode == 3 &&
+      (duplicateOutsideArena.stderr.splitOn "parse error:").length > 1
 
   let quotientPath := s!"{root}/test/fixtures/modelgen/prim_graph_pre.ndjson"
   let quotientText ← IO.FS.readFile quotientPath
