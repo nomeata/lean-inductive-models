@@ -190,7 +190,7 @@ def ParseTee.finish (tee : ParseTee) : IO RawSpoolSizes := do
 `Expr` is needed to commit the island. -/
 structure PreparedDecl where private mk ::
   private split : Writer.DeclSplit
-  deriving Inhabited, Repr, BEq
+  deriving Repr, BEq
 
 /-- An island-local serialization transaction. Arena IDs are not published to
 the shared stage until the whole cursor chain validates and every byte writes. -/
@@ -198,7 +198,7 @@ structure PreparedIsland where private mk ::
   private before : Writer.Cursor
   private declarations : Array PreparedDecl
   private after : Writer.Cursor
-  deriving Inhabited, Repr, BEq
+  deriving Repr, BEq
 
 /-- Serialize one nonempty accepted island in memory. The private constructors
 of `PreparedIsland` and `PreparedDecl` make the validated cursor chain the only
@@ -215,6 +215,7 @@ def prepareIsland (cursor : Writer.Cursor) (records : Array EDecl) :
   return .ok (.mk cursor declarations writer.cursor)
 
 private def PreparedIsland.validate (island : PreparedIsland) : Except String Unit := do
+  if island.declarations.isEmpty then throw "prepared island is empty"
   let mut cursor := island.before
   for declaration in island.declarations do
     declaration.split.validateStart cursor
@@ -231,9 +232,20 @@ structure IslandCommit where
   after : Writer.Cursor
   deriving Inhabited, Repr, BEq
 
-private structure IslandStageState where
+/-- A successfully flushed island payload. Paths are published only in this
+sealed result; an open or poisoned stage exposes no composition locators. -/
+structure SealedIsland where
+  arenaPath : System.FilePath
+  declarationPath : System.FilePath
+  arenaSize : UInt64
+  declarationSize : UInt64
   cursor : Writer.Cursor
-  failed : Bool := false
+  deriving Repr, BEq
+
+private inductive IslandStageState where
+  | open (cursor : Writer.Cursor)
+  | failed (cursor : Writer.Cursor)
+  | finished (result : SealedIsland)
 
 private inductive CommitFault where
   | afterFirstArena
@@ -254,20 +266,17 @@ def IslandStage.create (workspace : Workspace) (cursor : Writer.Cursor) : IO Isl
   return {
     arena := ← workspace.createFile "generated-arena.ndjson"
     declarations := ← workspace.createFile "generated-declarations.ndjson"
-    state := ← Std.Mutex.new { cursor } }
+    state := ← Std.Mutex.new (.open cursor) }
 
-def IslandStage.cursor (stage : IslandStage) : IO Writer.Cursor :=
-  stage.state.atomically fun state => return (← state.get).cursor
+def IslandStage.cursor (stage : IslandStage) : IO Writer.Cursor := do
+  stage.state.atomically fun state => do match ← state.get with
+    | .open cursor | .failed cursor => return cursor
+    | .finished result => return result.cursor
 
 /-- Current append counters for diagnostics. Access is serialized with commit
 so callers never observe the middle of a transaction. -/
 def IslandStage.sizes (stage : IslandStage) : IO (UInt64 × UInt64) :=
   stage.state.atomically fun _ => return (← stage.arena.size, ← stage.declarations.size)
-
-/-- Read-only locators used by final composition after successful `finish`.
-Handles remain private, so no caller can bypass serialized append state. -/
-def IslandStage.paths (stage : IslandStage) : System.FilePath × System.FilePath :=
-  (stage.arena.path, stage.declarations.path)
 
 private def IslandStage.inject (stage : IslandStage) (point : CommitFault) : IO Unit :=
   if stage.injectedFault == some point then
@@ -287,10 +296,13 @@ def IslandStage.commit (stage : IslandStage) (island : PreparedIsland) : IO Isla
   | .ok _ => pure ()
   stage.state.atomically fun stateRef => do
     let state ← stateRef.get
-    if state.failed then throw <| IO.userError "island append stage is poisoned"
-    unless island.before == state.cursor do
+    let current ← match state with
+      | .open cursor => pure cursor
+      | .failed _ => throw <| IO.userError "island append stage is poisoned"
+      | .finished _ => throw <| IO.userError "island append stage is already finished"
+    unless island.before == current do
       throw <| IO.userError
-        s!"stale island starts at {repr island.before}, expected {repr state.cursor}"
+        s!"stale island starts at {repr island.before}, expected {repr current}"
     try
       let mut arenas : Array ByteSpan := #[]
       let mut declarations : Array ByteSpan := #[]
@@ -306,17 +318,30 @@ def IslandStage.commit (stage : IslandStage) (island : PreparedIsland) : IO Isla
         declarations := declarations.push
           (← stage.declarations.append (declaration.split.declaration ++ "\n").toUTF8)
         if declarations.size == 1 then stage.inject .afterFirstDeclaration
-      stateRef.set { cursor := island.after }
+      stateRef.set (.open island.after)
       return { before := island.before, arenas, declarations, after := island.after }
     catch error =>
-      stateRef.set { state with failed := true }
+      stateRef.set (.failed current)
       throw error
 
-def IslandStage.finish (stage : IslandStage) : IO (UInt64 × UInt64 × Writer.Cursor) := do
+def IslandStage.finish (stage : IslandStage) : IO SealedIsland := do
   stage.state.atomically fun stateRef => do
     let state ← stateRef.get
-    if state.failed then throw <| IO.userError "cannot finish poisoned island append stage"
-    return (← stage.arena.finish, ← stage.declarations.finish, state.cursor)
+    match state with
+    | .failed _ => throw <| IO.userError "cannot finish poisoned island append stage"
+    | .finished result => return result
+    | .open cursor => try
+        let result : SealedIsland := {
+          arenaPath := stage.arena.path
+          declarationPath := stage.declarations.path
+          arenaSize := ← stage.arena.finish
+          declarationSize := ← stage.declarations.finish
+          cursor }
+        stateRef.set (.finished result)
+        return result
+      catch error =>
+        stateRef.set (.failed cursor)
+        throw error
 
 /-! Failure injection is kept in a visibly test-only namespace; production
 construction always uses `IslandStage.create` and has no injected fault. -/
@@ -337,8 +362,14 @@ def createFailingIslandStage (workspace : Workspace) (cursor : Writer.Cursor)
   return {
     arena := ← workspace.createFile "generated-arena.ndjson"
     declarations := ← workspace.createFile "generated-declarations.ndjson"
-    state := ← Std.Mutex.new { cursor }
+    state := ← Std.Mutex.new (.open cursor)
     injectedFault }
+
+/-- Cause `finish` to encounter a real filesystem error after valid appends.
+The open file handle remains owned by the workspace; removing its directory
+entry makes the subsequent metadata validation fail. -/
+def removeArenaBeforeFinish (stage : IslandStage) : IO Unit :=
+  IO.FS.removeFile stage.arena.path
 
 end Test
 

@@ -301,20 +301,27 @@ def main (args : List String) : IO UInt32 := do
       catch _ => pure true
     let unchangedAfterStale := (← stage.cursor) == cursorAfterCommit &&
       (← stage.sizes) == (arenaSizeAfterCommit, declarationSizeAfterCommit)
-    let (arenaSize, declarationSize, finalCursor) ← stage.finish
-    let (arenaPath, declarationPath) := stage.paths
-    let arenaText ← IO.FS.readFile arenaPath
-    let declarationText ← IO.FS.readFile declarationPath
-    return (commit, finalCursor, arenaSize, declarationSize, arenaText,
-      declarationText, staleRejected, unchangedAfterStale)
-  let (islandCommit, islandCursor, islandArenaSize, islandDeclarationSize,
+    let sealed ← stage.finish
+    let repeated ← stage.finish
+    let postFinishSizes ← stage.sizes
+    let .ok nextPrepared := Spool.prepareIsland sealed.cursor #[first]
+      | throw (IO.userError "prepare post-finish island")
+    let postFinishRejected ← try
+        discard <| stage.commit nextPrepared
+        pure false
+      catch _ => pure true
+    let arenaText ← IO.FS.readFile sealed.arenaPath
+    let declarationText ← IO.FS.readFile sealed.declarationPath
+    return (commit, sealed, repeated, postFinishSizes, arenaText,
+      declarationText, staleRejected, unchangedAfterStale, postFinishRejected)
+  let (islandCommit, sealedIsland, repeatedSeal, postFinishSizes,
       islandArena, islandDeclarations, staleRejected, unchangedAfterStale,
-      ) := islandResult
+      postFinishRejected) := islandResult
   state := state.check "prepared island commits exact parseable payloads" <|
-    islandCommit.before == {} && islandCommit.after == islandCursor &&
+    islandCommit.before == {} && islandCommit.after == sealedIsland.cursor &&
       islandCommit.declarations.size == 2 &&
-      islandArenaSize == islandArena.utf8ByteSize.toUInt64 &&
-      islandDeclarationSize == islandDeclarations.utf8ByteSize.toUInt64 &&
+      sealedIsland.arenaSize == islandArena.utf8ByteSize.toUInt64 &&
+      sealedIsland.declarationSize == islandDeclarations.utf8ByteSize.toUInt64 &&
       match Modelgen.parse (islandArena ++ islandDeclarations) (analyse := false) with
       | .ok output => output.decls == #[first, second]
       | .error _ => false
@@ -322,6 +329,11 @@ def main (args : List String) : IO UInt32 := do
     staleRejected && unchangedAfterStale
   state := state.check "empty island transaction is rejected" <|
     isExceptError (Spool.prepareIsland {} #[])
+  state := state.check "repeated finish returns the same sealed island" <|
+    repeatedSeal == sealedIsland
+  state := state.check "post-finish commit rejects without changing files" <|
+    postFinishRejected && postFinishSizes ==
+      (sealedIsland.arenaSize, sealedIsland.declarationSize)
   let islandWorkspaceRemoved ← match ← islandDirectoryRef.get with
     | some directory => pure !(← directory.pathExists)
     | none => pure false
@@ -349,6 +361,27 @@ def main (args : List String) : IO UInt32 := do
     return exactlyOne && finished
   state := state.check "concurrent island commits serialize with one stale rejection"
     concurrentCommit
+
+  let finishFailurePoisons ← Spool.withWorkspace scratch fun workspace => do
+    let stage ← Spool.IslandStage.create workspace {}
+    let .ok prepared := Spool.prepareIsland {} #[first, second] | return false
+    discard <| stage.commit prepared
+    Spool.Test.removeArenaBeforeFinish stage
+    let firstFinishRejected ← try
+        discard <| stage.finish
+        pure false
+      catch _ => pure true
+    let repeatedFinishRejected ← try
+        discard <| stage.finish
+        pure false
+      catch _ => pure true
+    let .ok nextPrepared := Spool.prepareIsland (← stage.cursor) #[first] | return false
+    let commitRejected ← try
+        discard <| stage.commit nextPrepared
+        pure false
+      catch _ => pure true
+    return firstFinishRejected && repeatedFinishRejected && commitRejected
+  state := state.check "finish filesystem failure poisons stage" finishFailurePoisons
 
   -- Starting the second independent writer at the old cursor reuses arena
   -- IDs. The parser must reject that rather than silently binding the later
