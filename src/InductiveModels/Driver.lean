@@ -77,6 +77,11 @@ private def generatedDeclInfo (is : Iso) (name : Name) : GenM GeneratedDeclInfo 
     | badShape s!"generated declaration table has no public type for {name}"
   return info
 
+private def instantiateForallsExact? (expression : Expr) (arguments : Array Expr) : Option Expr :=
+  arguments.foldlM (fun expression argument => match expression with
+    | .forallE _ _ body _ => some (body.instantiate1 argument)
+    | _ => none) expression
+
 /-- Apply the same deliberately bounded beta-only normalization as the exact
 statement checker to the domains of a constructor telescope. -/
 private partial def betaForallDomains (normalizer : ExactNormalizationEnv) : Expr → Expr
@@ -790,7 +795,9 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
             publicProjection normalizedFields fieldIndex with
           | .ok value => pure value
           | .error message => badShape message
-      let alpha ← inferType lhs
+      let some alpha := instantiateForallsExact? projectionType
+          (params ++ indices ++ #[major])
+        | badShape s!"{modelProjection}'s exact public type has the wrong arity"
       let fieldLevel ← ilevel alpha
       let proof ← if projectionIotaUsesLiteralField types type then
           pure (eqi.refl' fieldLevel alpha lhs)

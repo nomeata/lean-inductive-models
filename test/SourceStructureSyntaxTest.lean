@@ -52,16 +52,25 @@ already supplies every surrounding structure expression; this controlled raw
 syntax perturbation isolates the source-vs-installed metadata seam without
 depending on elaborator simplification policy for a particular surface term. -/
 def injectFieldSyntax (x : Export) : Export :=
-  let wrap (domain : Expr) := .mdata {} domain
-  { x with decls := x.decls.map fun declaration => match declaration with
-    | .induct types constructors recursors =>
-      .induct types (constructors.map fun constructor =>
-        if constructor.induct == `SourceStructure then
-          -- parameters alpha/family, then inherited parent and betaField
-          let type := mapForallDomainAt constructor.type (constructor.numParams + 1) wrap
-          { constructor with type }
-        else constructor) recursors
-    | declaration => declaration }
+  let preserveLevelSyntax (expression : Expr) : Expr := expression.replace fun subexpression =>
+    match subexpression with
+    | .const ``Eq levels =>
+      some (.const ``Eq (levels.map fun level => .max (.succ .zero) level))
+    | _ => none
+  let wrap (domain : Expr) := .mdata {} (preserveLevelSyntax domain)
+  { x with decls := x.decls.map fun declaration =>
+    let declaration : EDecl := match declaration with
+      | .induct types constructors recursors =>
+        .induct types (constructors.map fun constructor =>
+          if constructor.induct == `SourceStructure then
+            -- parameters alpha/family, then inherited parent and betaField
+            let type := mapForallDomainAt constructor.type (constructor.numParams + 1) wrap
+            { constructor with type }
+          else constructor) recursors
+      | declaration => declaration
+    if declaration.names.contains `SourceStructure then
+      declaration.mapNames id preserveLevelSyntax
+    else declaration }
 
 private partial def firstDifference? (actual expected : Expr)
     (path : String := "root") : Option String :=

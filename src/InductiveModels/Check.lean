@@ -104,12 +104,48 @@ def Correspondence.substitute (table : Correspondence) (expression : Expr) : Exp
     (fun map pair => map.insert pair.owner pair.model) ({} : Std.HashMap Name Name)
   mapConstsE (fun name => replacements[name]?) expression
 
+/-- Rename universe parameters without normalizing the exported level syntax.
+
+`Level.instantiateParams` deliberately canonicalizes expressions such as
+`max 1 (u+1)`.  That is useful to the kernel, but it is the wrong operation at
+the literal public-interface boundary: lean4export records that redundant
+`max`, and a generated declaration which retained it must be compared with the
+same tree. -/
+private partial def renameLevelParamsExact (renames : Std.HashMap Name Name) : Level → Level
+  | .zero => .zero
+  | .succ level => .succ (renameLevelParamsExact renames level)
+  | .max left right =>
+    .max (renameLevelParamsExact renames left) (renameLevelParamsExact renames right)
+  | .imax left right =>
+    .imax (renameLevelParamsExact renames left) (renameLevelParamsExact renames right)
+  | .param name => .param (renames[name]?.getD name)
+  | .mvar id => .mvar id
+
+/-- The expression analogue of [`renameLevelParamsExact`].  Rebuild only nodes
+which can carry levels; ordinary expression syntax and sharing are otherwise
+left to `Expr.replace`. -/
+private def renameExprLevelParamsExact (ownerParams modelParams : List Name)
+    (expression : Expr) : Expr :=
+  let renames := (ownerParams.zip modelParams).foldl
+    (fun map pair => map.insert pair.1 pair.2) ({} : Std.HashMap Name Name)
+  expression.replace fun subexpression => match subexpression with
+    | .sort level => some (.sort (renameLevelParamsExact renames level))
+    | .const name levels =>
+      some (.const name (levels.map (renameLevelParamsExact renames)))
+    | _ => none
+
+private def renameLevelParamNamesExact (ownerParams modelParams : List Name)
+    (level : Level) : Level :=
+  let renames := (ownerParams.zip modelParams).foldl
+    (fun map pair => map.insert pair.1 pair.2) ({} : Std.HashMap Name Name)
+  renameLevelParamsExact renames level
+
 /-- Align the owner's declaration universes with the model declaration's by
 position and then apply the simultaneous public constant substitution.  A
 length mismatch is rejected by the caller rather than truncated here. -/
 def Correspondence.expectedType (table : Correspondence) (ownerParams modelParams : List Name)
     (type : Expr) : Expr :=
-  table.substitute (type.instantiateLevelParams ownerParams (modelParams.map Level.param))
+  table.substitute (renameExprLevelParamsExact ownerParams modelParams type)
 
 /-- Align and rewrite an iota proposition while retaining its outer ambient
 `Eq`.  This distinction matters when the modeled inductive is itself `Eq`: its
@@ -117,7 +153,7 @@ arguments and rule use `Eq._model`, but the theorem relating both sides still
 uses the export's equality type. -/
 def Correspondence.expectedIotaType (table : Correspondence)
     (ownerParams modelParams : List Name) (type : Expr) : Expr :=
-  let aligned := type.instantiateLevelParams ownerParams (modelParams.map Level.param)
+  let aligned := renameExprLevelParamsExact ownerParams modelParams type
   let rec rewrite : Expr → Expr
     | .forallE name domain body info =>
       .forallE name (table.substitute domain) (rewrite body) info
@@ -947,8 +983,7 @@ private def checkProjection (x : Export) (structures : StructureOwners)
     let some sourceLevel := inferExactSortLevel? structures normalizer declarations sourceLocals
         sourceFieldAtIndex.type
       | return violations.push (.declarationType projection.owner projection.iota)
-    let level := sourceLevel.instantiateParams constructor.levelParams
-      (model.levelParams.map Level.param)
+    let level := renameLevelParamNamesExact constructor.levelParams model.levelParams sourceLevel
     let projected := mkAppN
       (.const (Naming.projectionName projection.owner index) levels)
       (params ++ constructorIndices ++ #[major])
@@ -972,8 +1007,8 @@ private def checkProjection (x : Export) (structures : StructureOwners)
   let some sourceEqLevel :=
       inferExactSortLevel? structures normalizer declarations sourceLocals sourceField.type
     | return violations.push (.declarationType projection.owner projection.iota)
-  let eqLevel := sourceEqLevel.instantiateParams constructor.levelParams
-    (model.levelParams.map Level.param)
+  let eqLevel := renameLevelParamNamesExact
+    constructor.levelParams model.levelParams sourceEqLevel
   let expectedBody := mkAppN (.const ``Eq [eqLevel]) #[alpha, lhs, rhs]
   let expected := closeForalls theoremBinders expectedBody
   unless ruleModel.type == expected do
