@@ -261,6 +261,52 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "spool composition rejects an EOF mismatch" <|
     isExceptError (composition.validate (compositionSize + 1))
 
+  let islandDirectoryRef ← IO.mkRef (none : Option System.FilePath)
+  let islandResult ← Spool.withWorkspace scratch fun workspace => do
+    islandDirectoryRef.set (some workspace.directory)
+    let stage ← Spool.IslandStage.create workspace {}
+    let prepared := Spool.prepareIsland {} #[first, second]
+    let commit ← stage.commit prepared
+    let cursorAfterCommit ← stage.cursor
+    let arenaSizeAfterCommit ← stage.arena.size
+    let declarationSizeAfterCommit ← stage.declarations.size
+    let staleRejected ← try
+        discard <| stage.commit prepared
+        pure false
+      catch _ => pure true
+    let unchangedAfterStale := (← stage.cursor) == cursorAfterCommit &&
+      (← stage.arena.size) == arenaSizeAfterCommit &&
+      (← stage.declarations.size) == declarationSizeAfterCommit
+    let malformed := { prepared with after := {} }
+    let malformedRejected ← try
+        discard <| stage.commit malformed
+        pure false
+      catch _ => pure true
+    let (arenaSize, declarationSize, finalCursor) ← stage.finish
+    let arenaText ← IO.FS.readFile stage.arena.path
+    let declarationText ← IO.FS.readFile stage.declarations.path
+    return (commit, finalCursor, arenaSize, declarationSize, arenaText,
+      declarationText, staleRejected, unchangedAfterStale, malformedRejected)
+  let (islandCommit, islandCursor, islandArenaSize, islandDeclarationSize,
+      islandArena, islandDeclarations, staleRejected, unchangedAfterStale,
+      malformedRejected) := islandResult
+  state := state.check "prepared island commits exact parseable payloads" <|
+    islandCommit.before == {} && islandCommit.after == islandCursor &&
+      islandCommit.declarations.size == 2 &&
+      islandArenaSize == islandArena.utf8ByteSize.toUInt64 &&
+      islandDeclarationSize == islandDeclarations.utf8ByteSize.toUInt64 &&
+      match Modelgen.parse (islandArena ++ islandDeclarations) (analyse := false) with
+      | .ok output => output.decls == #[first, second]
+      | .error _ => false
+  state := state.check "stale island transaction writes and publishes nothing" <|
+    staleRejected && unchangedAfterStale
+  state := state.check "malformed island transaction is rejected before publication"
+    malformedRejected
+  let islandWorkspaceRemoved ← match ← islandDirectoryRef.get with
+    | some directory => pure !(← directory.pathExists)
+    | none => pure false
+  state := state.check "island stage workspace is removed" islandWorkspaceRemoved
+
   -- Starting the second independent writer at the old cursor reuses arena
   -- IDs. The parser must reject that rather than silently binding the later
   -- declaration to the earlier island's nodes.

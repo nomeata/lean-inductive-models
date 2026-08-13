@@ -185,6 +185,84 @@ def ParseTee.finish (tee : ParseTee) : IO RawSpoolSizes := do
     arena := ← tee.arena.finish
     declarations := ← tee.declarations.finish }
 
+/-- String-only prepared declaration. Once prepared, no generated `EDecl` or
+`Expr` is needed to commit the island. -/
+structure PreparedDecl where
+  split : Writer.DeclSplit
+  deriving Inhabited, Repr, BEq
+
+/-- An island-local serialization transaction. Arena IDs are not published to
+the shared stage until the whole cursor chain validates and every byte writes. -/
+structure PreparedIsland where
+  before : Writer.Cursor
+  declarations : Array PreparedDecl
+  after : Writer.Cursor
+  deriving Inhabited, Repr, BEq
+
+def prepareIsland (cursor : Writer.Cursor) (records : Array EDecl) : PreparedIsland := Id.run do
+  let mut writer := Writer.fromCursor cursor
+  let mut declarations : Array PreparedDecl := #[]
+  for record in records do
+    let (next, split) := writer.splitDecl record
+    writer := next
+    declarations := declarations.push { split }
+  return { before := cursor, declarations, after := writer.cursor }
+
+def PreparedIsland.validate (island : PreparedIsland) : Except String Unit := do
+  let mut cursor := island.before
+  for declaration in island.declarations do
+    declaration.split.validateStart cursor
+    cursor := declaration.split.after
+  unless cursor == island.after do
+    throw s!"prepared island ends at {repr cursor}, advertised {repr island.after}"
+
+/-- Spans published by one accepted island. Arena runs remain in serialized
+island order; declaration spans may later be scheduled by compact summaries. -/
+structure IslandCommit where
+  before : Writer.Cursor
+  arenas : Array ByteSpan
+  declarations : Array ByteSpan
+  after : Writer.Cursor
+  deriving Inhabited, Repr, BEq
+
+/-- Append-only generated payloads plus the next globally unoccupied arena IDs. -/
+structure IslandStage where
+  arena : SpoolFile
+  declarations : SpoolFile
+  private cursorRef : IO.Ref Writer.Cursor
+
+def IslandStage.create (workspace : Workspace) (cursor : Writer.Cursor) : IO IslandStage := do
+  return {
+    arena := ← workspace.createFile "generated-arena.ndjson"
+    declarations := ← workspace.createFile "generated-declarations.ndjson"
+    cursorRef := ← IO.mkRef cursor }
+
+def IslandStage.cursor (stage : IslandStage) : IO Writer.Cursor := stage.cursorRef.get
+
+/-- Validate before the first write; publish the new cursor only after every
+append succeeds. A stale/forged transaction cannot write or advance the stage.
+An IO failure may leave unindexed tail bytes, but it cannot publish a cursor or
+composition and therefore aborts the whole output transaction. -/
+def IslandStage.commit (stage : IslandStage) (island : PreparedIsland) : IO IslandCommit := do
+  match island.validate with
+  | .error error => throw <| IO.userError error
+  | .ok _ => pure ()
+  let current ← stage.cursor
+  unless island.before == current do
+    throw <| IO.userError s!"stale island starts at {repr island.before}, expected {repr current}"
+  let mut arenas : Array ByteSpan := #[]
+  let mut declarations : Array ByteSpan := #[]
+  for declaration in island.declarations do
+    for line in declaration.split.arena do
+      arenas := arenas.push (← stage.arena.append (line ++ "\n").toUTF8)
+    declarations := declarations.push
+      (← stage.declarations.append (declaration.split.declaration ++ "\n").toUTF8)
+  stage.cursorRef.set island.after
+  return { before := island.before, arenas, declarations, after := island.after }
+
+def IslandStage.finish (stage : IslandStage) : IO (UInt64 × UInt64 × Writer.Cursor) := do
+  return (← stage.arena.finish, ← stage.declarations.finish, ← stage.cursor)
+
 private def Workspace.cleanup (workspace : Workspace) : IO Unit := do
   let mut firstError : Option IO.Error := none
   for path in ← workspace.ownedFiles.get do
