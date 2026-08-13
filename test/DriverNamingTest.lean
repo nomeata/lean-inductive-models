@@ -204,11 +204,18 @@ def main : IO UInt32 := do
     declaration.names.contains `Eq
   state := state.check "late-Eq fixture really puts support after every representative owner"
     ([`Pre, `MA, `Nd].all fun owner => declarationBefore lateEqInput owner `Eq)
+  let lateEqOrdinary ← match Order.reorder lateEqInput with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot ordinarily order late Eq: {repr error}"
+  state := state.check "ordinary source order leaves generation-only Eq dependencies late"
+    ([`Pre, `MA, `Nd].all fun owner => declarationBefore lateEqOrdinary owner `Eq)
   let lateEq ← runExport "canonical Eq after selected owners" lateEqInput false
     { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
   state := state.check "late canonical Eq is scheduled before representative owners"
     (lateEq.generated `Pre && lateEq.generated `MA && lateEq.generated `Nd &&
-      !lateEq.report.declined.any fun (_, reason) => reason.endsWith "name taken (Eq)")
+      !lateEq.report.declined.any fun (_, reason) => reason.endsWith "name taken (Eq)" &&
+      [`Eq, `Pre, `MA, `Nd].all fun name =>
+        (lateEq.output.filter (·.names.contains name)).size == 1)
 
   -- The graph fixture's infinitary recursive field derives its own funext.
   -- Supply only the exact quotient bundle and Quot.sound from the companion
@@ -232,13 +239,20 @@ def main : IO UInt32 := do
   let lateQuotInput := { graphSource with decls := graphSource.decls ++ quotientSupport }
   state := state.check "late-Quot fixture really puts support after the recursive owner"
     (declarationBefore lateQuotInput `Ac `Quot)
+  let lateQuotOrdinary ← match Order.reorder lateQuotInput with
+    | .ok output => pure output
+    | .error error => throw <| IO.userError s!"cannot ordinarily order late Quot: {repr error}"
+  state := state.check "ordinary source order leaves generation-only Quot dependencies late"
+    (declarationBefore lateQuotOrdinary `Ac `Quot)
   let lateQuot ← runExport "canonical Quot after recursive owner" lateQuotInput false
     { noGeneration with simple := true, basic := true }
   let lateQuotOutput : Export := { lateQuotInput with decls := lateQuot.output }
   state := state.check "late source Quot closes recursive funext support"
     (lateQuot.generated `Ac && !lateQuot.declined `Ac &&
       declarationBefore lateQuotOutput `Quot `Ac &&
-      !lateQuot.report.declined.any fun (_, reason) => reason.endsWith "name taken (Quot)")
+      !lateQuot.report.declined.any fun (_, reason) => reason.endsWith "name taken (Quot)" &&
+      [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound, `Ac].all fun name =>
+        (lateQuot.output.filter (·.names.contains name)).size == 1)
 
   let composed ← runFixture "test/fixtures/inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true, simple := true }
