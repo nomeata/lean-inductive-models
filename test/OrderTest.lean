@@ -424,6 +424,9 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental syntax discovery equals whole-export discovery" <|
     Check.discoverWithIndex censusInput census.sourceSyntax ==
       Check.discoverWithIndex censusInput referenceIndex
+  state := state.check "incremental transparent normalizer equals whole-export normalizer" <|
+    census.sourceSyntax.exactNormalizer.whnf (.const `CensusTransparent []) ==
+      referenceIndex.exactNormalizer.whnf (.const `CensusTransparent [])
   state := state.check "incremental global syntax rows equal whole-export rows" <|
     Check.globalExtraRecordsWithIndex census.sourceSyntax censusInput.decls ==
       Check.globalExtraRecordsWithIndex referenceIndex censusInput.decls
