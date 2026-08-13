@@ -20,14 +20,15 @@ private def reportFailure (message : String) : IO Unit := do
 
 /-- Run the current executable once with identical arguments and inherited
 standard streams, working directory, environment, limits, and process group.
-Only the private marker is added. -/
-def runWorker (args : List String) : IO UInt32 := do
+The private marker is forced after the caller's phase-local environment. -/
+def runWorkerWithEnv (args : List String)
+    (environment : Array (String × Option String)) : IO UInt32 := do
   try
     let executable ← IO.appPath
     let child ← IO.Process.spawn {
       cmd := executable.toString
       args := args.toArray
-      env := #[(workerMarker, some "1")]
+      env := environment ++ #[(workerMarker, some "1")]
       stdin := .inherit
       stdout := .inherit
       stderr := .inherit }
@@ -40,6 +41,10 @@ def runWorker (args : List String) : IO UInt32 := do
   catch error =>
     reportFailure s!"lean-inductive-models: cannot supervise worker: {error}"
     return 3
+
+/-- Run one ordinary supervised worker without an internal phase payload. -/
+def runWorker (args : List String) : IO UInt32 :=
+  runWorkerWithEnv args #[]
 
 /-- Enter the worker exactly once. A normal worker result is returned byte for
 byte and code for code; only native/impossible process statuses are contained. -/

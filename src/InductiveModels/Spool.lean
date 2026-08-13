@@ -177,6 +177,17 @@ def Workspace.createFile (workspace : Workspace) (leaf : String) : IO SpoolFile 
   workspace.ownedFiles.modify (fun paths => paths.push path)
   return file
 
+/-- Register one not-yet-created private leaf for exact cleanup. The workspace
+directory is already atomically reserved and owner-only; delaying creation lets
+the transactional output writer install the candidate without replacing an
+open handle (which is required for portability to Windows). -/
+def Workspace.reservePath (workspace : Workspace) (leaf : String) : IO System.FilePath := do
+  unless validLeaf leaf do throw <| IO.userError "spool file must be one non-special path component"
+  let path := workspace.directory / leaf
+  if ← path.pathExists then throw <| IO.userError s!"spool file already exists: {path}"
+  workspace.ownedFiles.modify (fun paths => paths.push path)
+  return path
+
 /-- The three logical parser payloads. This is not yet a byte-exact snapshot:
 noncanonical ignored records are intentionally absent, and such a certificate
 always selects the existing full writer. -/
