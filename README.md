@@ -687,13 +687,19 @@ runs the fixture and universe-level suites and the published Arena corpus with
 a per-process memory limit. The
 full-Mathlib workflow
 [`.github/workflows/mathlib.yml`](.github/workflows/mathlib.yml) generates and
-checks a pinned Mathlib export under a cgroup memory limit and records
-instruction counts with `perf`. Its artifact gate requires positive generation,
+checks a pinned Mathlib export on a standard `ubuntu-24.04` hosted runner. Each
+large process tree has a 10 GiB address-space limit. The exporter writes a
+compressed stream which is fed to the staged generator through a FIFO; build
+trees, checkouts, and the compressed source are reclaimed before the staged
+spool and final output need the disk. The workflow records instruction counts
+when the hosted kernel permits `perf`, and always records phase-by-phase disk
+and process metrics. Its artifact gate requires positive generation,
 statement-comparison, output-check, universe-planning, and serialized-reread
 work; zero statement differences and universe escapes; exemptions for the
 three ordinary-inductive basis members owned by that pinned input (`Eq`, `Nat`,
 and `PUnit`); a spliced `PSigma'`; the kernel `Quot` bundle when required; and
-no unexpected basis declarations. The observed counts
+no unexpected basis declarations. The serialized reread includes both the
+structural checker and Lean's kernel checker. The observed counts
 are intentionally not hard-coded.
 
 ## Copyright and license

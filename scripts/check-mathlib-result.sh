@@ -68,4 +68,9 @@ grep -Eq '^input check: [1-9][0-9]* model families checked$' "$CHECK_INPUT_LOG" 
 [[ "$(grep -Ec '^input check: ' "$CHECK_INPUT_LOG")" == 1 ]] ||
   fail "serialized input recheck reported more than one result"
 
-echo "mathlib result: generation, exact interfaces, levels, basis, and serialized reread pass"
+grep -Fxq 'input kernel check: accepted' "$CHECK_INPUT_LOG" ||
+  fail "serialized input kernel check did not accept the export"
+[[ "$(grep -Fxc 'input kernel check: accepted' "$CHECK_INPUT_LOG")" == 1 ]] ||
+  fail "serialized input kernel check reported more than one result"
+
+echo "mathlib result: generation, exact interfaces, levels, basis, and kernel reread pass"

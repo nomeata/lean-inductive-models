@@ -22,7 +22,9 @@ printf '%s\n' \
   "levels: 211 planner comparisons, 0 escapes" \
   "output check: 12001 model families checked" > "$generate"
 printf '%s\n' "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"PSigma'\"}}" > "$output"
-printf '%s\n' 'input check: 12001 model families checked' > "$recheck"
+printf '%s\n' \
+  'input kernel check: accepted' \
+  'input check: 12001 model families checked' > "$recheck"
 
 checker="$ROOT/scripts/check-mathlib-result.sh"
 
@@ -39,6 +41,12 @@ export -f rg
 sed 's/0 differ/1 differ/' "$generate" > "$WORK/bad-statements.log"
 if "$checker" "$WORK/bad-statements.log" "$output" "$recheck" >/dev/null 2>&1; then
   echo "mathlib result parser accepted a statement difference" >&2
+  exit 1
+fi
+
+grep -vF 'input kernel check: accepted' "$recheck" > "$WORK/no-kernel-check.log"
+if "$checker" "$generate" "$output" "$WORK/no-kernel-check.log" >/dev/null 2>&1; then
+  echo "mathlib result parser accepted a missing kernel reread" >&2
   exit 1
 fi
 
