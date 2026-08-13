@@ -98,6 +98,13 @@ structure FilterRun where
   report : Report
   env : Environment
 
+structure StagedFilterRun extends FilterRun where
+  islands : Array StagedIsland
+
+def cursorAfter (records : Array EDecl) : Writer.Cursor :=
+  let writer := records.foldl (fun writer record => (writer.splitDecl record).1) (Writer.fromCursor {})
+  writer.cursor
+
 def runFilterState (input : Export) (generation : Modelgen.Cli.Config) : IO FilterRun := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -108,6 +115,23 @@ def runFilterState (input : Export) (generation : Modelgen.Cli.Config) : IO Filt
   unless report.stmtErrors.isEmpty do
     throw <| IO.userError s!"generated statements differ: {report.stmtErrors}"
   return { input, output := { input with decls }, report, env := finalState.env }
+
+def runFilterStagedState (scratch : String) (input : Export)
+    (generation : Modelgen.Cli.Config) : IO StagedFilterRun :=
+  Spool.withWorkspace scratch fun workspace => do
+    let stage ← Spool.IslandStage.create workspace (cursorAfter input.decls)
+    let env ← importModules #[] {}
+    let context : Core.Context :=
+      { fileName := "<order-staged-test>", fileMap := default,
+        maxHeartbeats := 0, maxRecDepth := 8192 }
+    let ((decls, report, islands), finalState) ← Lean.Core.CoreM.toIO
+      (Lean.Meta.MetaM.run'
+        (runFilterWithIslandSink input false generation (.ofStage stage))) context { env }
+    let sealed ← stage.finish
+    unless sealed.cursor == (← stage.cursor) do
+      throw <| IO.userError "sealed staged cursor changed after finish"
+    return {
+      input, output := { input with decls }, report, env := finalState.env, islands }
 
 def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
     IO FilterRun := do
@@ -503,6 +527,14 @@ def run (root : String) : IO UInt32 := do
   -- are absent even though they remain in the emitted export.
   let aliasRun ← generatedFixtureState
     s!"{root}/test/fixtures/modelgen/transparent_owner_aliases.ndjson" {}
+  let aliasStaged ← runFilterStagedState s!"{root}/_tmp" aliasRun.input {}
+  state := state.check "staged island sink preserves exact output and report" <|
+    aliasStaged.output.decls == aliasRun.output.decls &&
+      aliasStaged.report == aliasRun.report &&
+      aliasStaged.islands.size == aliasRun.report.generated.size &&
+      aliasStaged.islands.all fun island =>
+        island.compact.summaries.size == island.commit.declarations.size &&
+          island.compact.globalExtras.size == island.commit.declarations.size
   let inputNames := aliasRun.input.decls.flatMap fun declaration => declaration.names.toArray
   let generatedNames := aliasRun.output.decls.flatMap fun declaration =>
     declaration.names.toArray |>.filter (!inputNames.contains ·)

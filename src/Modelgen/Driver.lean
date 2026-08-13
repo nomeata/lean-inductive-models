@@ -83,7 +83,7 @@ structure Report where
   load at all. The filter then becomes the identity, which is what a filter
   should be when it can do nothing. -/
   unreplayable : Option String := none
-  deriving Inhabited
+  deriving Inhabited, Repr, BEq
 
 /-- Whether one reported decline still represents unsupported generation after
 accounting for an existing or newly generated model. A noncanonical basis
@@ -115,6 +115,21 @@ only, so this value cannot retain the generated expression graph. -/
 structure StagedIsland where
   compact : CompactIsland
   commit : Spool.IslandCommit
+
+/-- Transaction endpoint for accepted generated islands. The Driver calls this
+only after ordering, exact statement checking, owner-free kernel replay, and
+support installation have all succeeded. -/
+structure IslandSink where
+  commit : Array EDecl → IO Spool.IslandCommit
+
+/-- Adapt the append-only spool stage to the Driver sink interface. -/
+def IslandSink.ofStage (stage : Spool.IslandStage) : IslandSink where
+  commit records := do
+    let cursor ← stage.cursor
+    let prepared ← match Spool.prepareIsland cursor records with
+      | .ok prepared => pure prepared
+      | .error message => throw <| IO.userError message
+    stage.commit prepared
 
 /-- Origin of one declaration in the eventual compact record schedule. Source
 indices address the parser certificate's declaration spans; generated indices
@@ -1892,9 +1907,11 @@ together. -/
 def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
   { simple := primModels, basic := primModels }
 
-/-- **The filter.** -/
-def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
-    MetaM (Array EDecl × Report) := do
+/-- Shared generation loop. With a sink, every accepted island is serialized
+and compacted at its close boundary; the legacy declaration array remains for
+the moment as an independent final-order/report oracle. -/
+private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
+    (sink? : Option IslandSink) : MetaM (Array EDecl × Report × Array StagedIsland) := do
   let scheduled ← match scheduleSource x generation with
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
@@ -1904,6 +1921,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   let sourceSyntax := Check.SyntaxIndex.ofSource x
   let mut out : Array EDecl := #[]
   let mut rep : Report := {}
+  let mut staged : Array StagedIsland := #[]
   let mut islandStatements : Check.StatementReport :=
     { statementsChecked := 0, violations := #[] }
   -- The declarations built inside the current model island. Besides staging
@@ -2054,7 +2072,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       | .ok e => setEnv e
       | .error ex =>
         let msg ← (ex.toMessageData {}).toString
-        return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" })
+        return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" }, staged)
     -- Basis exemption is granted only after the complete exported interface
     -- has been compared with one freshly minted by the kernel. The disposable
     -- alias environment used by the validator is never installed here.
@@ -2135,7 +2153,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         maxLiveIslandRecords := max rep.maxLiveIslandRecords generated.size }
       let islandOwners := (rep.generated.extract reportedBefore rep.generated.size).foldl
         (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
-      let (orderedGenerated, _, mainWithSupport, statementReport) ← match
+      let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
           ← closeModelIsland x mainBefore generated islandModels d sourceSyntax islandOwners with
         | .ok result => pure result
         | .error message => throwError
@@ -2144,6 +2162,16 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         { statementsChecked := islandStatements.statementsChecked +
             statementReport.statementsChecked
           violations := islandStatements.violations ++ statementReport.violations }
+      if let some sink := sink? then
+        let commit ← sink.commit orderedGenerated
+        unless compact.summaries.size == compact.globalExtras.size &&
+            compact.summaries.size == commit.declarations.size do
+          throwError "staged island cardinality mismatch for {d.names}: \
+            summaries={compact.summaries.size}, extras={compact.globalExtras.size}, \
+            spans={commit.declarations.size}"
+        staged := staged.push {
+          compact := { compact with summaries := Order.tagIsland staged.size compact.summaries }
+          commit }
       out := out.extract 0 outputBefore ++ orderedGenerated
       pending := pending.extract 0 pendingBefore
       setEnv mainWithSupport
@@ -2155,7 +2183,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         | .error exception =>
           let message ← (exception.toMessageData {}).toString
           return (x.decls,
-            { rep with unreplayable := some s!"{d.names}: {message}" })
+            { rep with unreplayable := some s!"{d.names}: {message}" }, staged)
     else
       mainEnv ← getEnv
     out := out.push d
@@ -2186,6 +2214,20 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   rep := { rep with stmtChecked := statementReport.statementsChecked }
   rep := { rep with
     stmtErrors := statementReport.violations.map fun violation => violation.message }
-  return (out, rep)
+  return (out, rep, staged)
+
+/-- **The filter.** -/
+def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
+    MetaM (Array EDecl × Report) := do
+  let (decls, report, _) ← runFilterCore x checkRecursors generation none
+  return (decls, report)
+
+/-- Transitional staged oracle. Accepted islands are committed immediately,
+but the full output remains live for the established final Order/Check oracle.
+The AST-dropping entry point is enabled only after compact equivalence tests
+cover the full fixture matrix. -/
+def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
+    (sink : IslandSink) : MetaM (Array EDecl × Report × Array StagedIsland) :=
+  runFilterCore x checkRecursors generation (some sink)
 
 end Modelgen
