@@ -2366,12 +2366,16 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       let some firstName := d.names.head? | throwError "source declaration has no name"
       let some rawOrdinal := rawOrdinals[firstName]?
         | throwError "scheduled source declaration {firstName} lost its raw ordinal"
-      let modeledIsland? := if modeledSourceFamilies.isEmpty then none else some (staged.size - 1)
+      let modeledIsland? ← if modeledSourceFamilies.isEmpty then pure none else
+        match staged.size with
+        | 0 => throwError "modeled source family {d.names} has no committed generated island"
+        | size + 1 => pure (some size)
       stagedRecords := stagedRecords.push {
         summary := sourceSummaries[scheduledOrdinal]!
         globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtras[scheduledOrdinal]!
         families := sourceFamilyRecords[scheduledOrdinal]! ++
-          (modeledSourceFamilies.map (·.inIsland (staged.size - 1)))
+          (modeledSourceFamilies.map fun family =>
+            modeledIsland?.elim family family.inIsland)
         checkIsland? := modeledIsland?
         locator := .source rawOrdinal }
     scheduledOrdinal := scheduledOrdinal + 1
@@ -2388,23 +2392,20 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       | .ok order => pure order
       | .error error => throwError "cannot compactly order staged records: {repr error}"
     else pure #[]
-  let compactCheckResult : Except String Check.Report := if sink?.isSome then
+  let compactUnavailable? := if sink?.isSome then
+      compactAvailabilityError? stagedRecords persistentSupportOrigins
+    else none
+  let compactCheckReport : Check.Report ← if sink?.isSome && compactUnavailable?.isNone then
       let orderedRecords := stagedOrder.map fun i =>
         { owner := stagedRecords[i]!.summary.owner
           modelSlots := stagedRecords[i]!.summary.modelSlots
           globalExtra := stagedRecords[i]!.globalExtra
           families := stagedRecords[i]!.families : Check.CompactCheckRecord }
-      match compactAvailabilityError? stagedRecords persistentSupportOrigins with
-      | some message => .error message
-      | none => Check.compactOrderedReport orderedRecords
+      match Check.compactOrderedReport orderedRecords with
+      | .ok report => pure report
+      | .error message => throwError "invalid compact output certificate: {message}"
     else
-      .ok ({ familiesChecked := 0, violations := #[] } : Check.Report)
-  let compactUnavailable? := match compactCheckResult with
-    | .error message => some message
-    | .ok _ => none
-  let compactCheckReport := match compactCheckResult with
-    | .ok report => report
-    | .error _ => ({ familiesChecked := 0, violations := #[] } : Check.Report)
+      pure ({ familiesChecked := 0, violations := #[] } : Check.Report)
   let compactStatementReport := if sink?.isSome then
     let orderedGlobals := stagedOrder.map fun i => stagedRecords[i]!.globalExtra
     let diagnosticOwners := staged.foldl (init := ({} : Std.HashSet Name))
