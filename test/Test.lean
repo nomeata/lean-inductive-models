@@ -1257,23 +1257,19 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
     IO.FS.removeFile tmp
   else
     a := check a false "CLI: `-o FILE` wrote no file"
-  -- **The exit statuses a consumer keys on**: a decline
-  -- has to be tellable from a malformed input and both from a usage error, and
-  -- these cases once all used status 1, so each distinction is pinned here.
-  --
-  -- **`3` has no occupant here and cannot have one**: it is this tool failing,
-  -- and no input in the tree reaches it — 450 statements compared with 0
-  -- differing, and no exception escapes the filter. It is checked by
-  -- construction and not by measurement, which is the weakest of the four and
-  -- is said rather than hidden.
+  -- **The Lean Kernel Arena exit statuses a consumer keys on**: accepted,
+  -- rejected, declined, and tool failure are respectively 0, 1, 2, and 3.
+  -- Malformed command lines, malformed serialization, and failed file IO are
+  -- all failures of this tool to submit a candidate to the kernel, not kernel
+  -- rejection or a model-generation decline.
   a := check a (r.exitCode == 0) "CLI: a decline is not exit 0"
   let u ← mg ["--no-such-flag"]
-  a := check a (u.exitCode == 1) s!"CLI: an unknown flag exited {u.exitCode}, expected 1"
+  a := check a (u.exitCode == 3) s!"CLI: an unknown flag exited {u.exitCode}, expected 3"
   let m ← mg [s!"{root}/test/scripts/export-modelgen.sh", "-o", "-"]
-  a := check a (m.exitCode == 2) s!"CLI: an unparsable input exited {m.exitCode}, expected 2"
+  a := check a (m.exitCode == 3) s!"CLI: an unparsable input exited {m.exitCode}, expected 3"
   a := check a m.stdout.isEmpty "CLI: an unparsable input still wrote to stdout"
   let n ← mg [s!"{root}/test/fixtures/modelgen/no-such-file.ndjson", "-o", "-"]
-  a := check a (n.exitCode == 2) s!"CLI: a missing input exited {n.exitCode}, expected 2"
+  a := check a (n.exitCode == 3) s!"CLI: a missing input exited {n.exitCode}, expected 3"
   return a
 
 /-! ## The composition: model generation, then universe monomorphization
