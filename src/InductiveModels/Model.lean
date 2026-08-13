@@ -2072,6 +2072,22 @@ end Rule
 
 /-! ## The driver -/
 
+/-- The public names of one modeled inductive interface.
+
+Most constructions implement and expose the same family, so [`Iso`] keeps its
+historical fields as the public interface and leaves `implementation?` empty.
+The one-layer recursive construction is different: it implements the fixpoint
+at private names and exposes a separate, exact source-shaped public layer.
+Keeping that distinction explicit prevents later consumers from accidentally
+publishing the private recursor or using the public wrapper as the recursive
+proof oracle. -/
+structure IsoInterface where
+  selfNames : Array Name
+  ctors : Array (Name × Name)
+  recs : Array Name
+  iotas : Array (Nat × Name × Name)
+  deriving Inhabited
+
 /-- Everything one nested declaration's model came to. -/
 structure Iso where
   /-- Every generated declaration, in dependency order and already accepted. -/
@@ -2093,6 +2109,10 @@ structure Iso where
   recs : Array Name
   /-- `(member, the rule's constructor as the export names it, the theorem)`. -/
   iotas : Array (Nat × Name × Name)
+  /-- Private fixpoint interface when it differs from the public fields above.
+  `none` means the implementation and public interface are identical.  This is
+  name-only and does not retain a second declaration array. -/
+  implementation? : Option IsoInterface := none
   /-- `(member, theorem)` for the real members on which Lean's kernel enables
   its unit-like equality shortcut. -/
   unitlikes : Array (Nat × Name) := #[]
@@ -2138,6 +2158,16 @@ structure Iso where
   collision.  This is a whole-name table: raw private constructor names need
   not share any prefix with their owner. -/
   aliases : Naming.AliasMap := .empty
+
+/-- The exact public family consumed by correspondence, serialization, and
+the statement checker. -/
+def Iso.publicInterface (is : Iso) : IsoInterface :=
+  { selfNames := is.selfNames, ctors := is.ctors, recs := is.recs, iotas := is.iotas }
+
+/-- The family whose recursor and iota proofs implement the public model.
+Ordinary routes share the public family structurally. -/
+def Iso.implementationInterface (is : Iso) : IsoInterface :=
+  is.implementation?.getD is.publicInterface
   deriving Inhabited
 
 /-- **The export's names rewritten to the model's**: `T._model` for each real
