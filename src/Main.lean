@@ -143,7 +143,8 @@ private structure RawStage where
 
 private inductive FilterOutput where
   | full (declarations : Array Modelgen.EDecl)
-  | staged (composition : Modelgen.Spool.MixedComposition)
+  | staged (raw : RawStage) (stage : Modelgen.Spool.IslandStage)
+      (plan : Modelgen.StagedPlan)
 
 private def mixedComposition (raw : RawStage) (sealed : Modelgen.Spool.SealedIsland)
     (spans : Array Modelgen.StagedDeclarationSpan) : Modelgen.Spool.MixedComposition :=
@@ -275,11 +276,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
               (Lean.Meta.MetaM.run'
                 (Modelgen.runFilterStaged generationInput false config (.ofStage stage)))
               context { env }
-            let sealed ← stage.finish
-            let spans ← match plan.declarationSpans raw.certificate raw.sizes sealed with
-              | .ok spans => pure spans
-              | .error message => throw <| IO.userError s!"invalid staged output plan: {message}"
-            pure (Except.ok (.staged (mixedComposition raw sealed spans), report))
+            pure (Except.ok (.staged raw stage plan, report))
           else
             let ((decls, report), _) ← Lean.Core.CoreM.toIO
               (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config))
@@ -312,11 +309,21 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     if (unsupportedDeclines parsed generationReport).isEmpty then exitAccepted
     else exitDeclined
   match filterOutput with
-  | .staged composition =>
+  | .staged raw stage plan =>
     -- Eligibility excludes whole-output checks until they have compact or
-    -- serialized-stream equivalents. The plan and every physical spool span
-    -- have already validated before this transaction opens its destination.
+    -- serialized-stream equivalents. Seal and validate the plan before the
+    -- output transaction, then validate every physical file before its first
+    -- destination byte.
     try
+      let sealed ← stage.finish
+      let spans ← match plan.declarationSpans raw.certificate raw.sizes
+          parsed.decls.size sealed with
+        | .ok spans => pure spans
+        | .error message => throw <| IO.userError s!"invalid staged output plan: {message}"
+      let composition := mixedComposition raw sealed spans
+      match composition.validate with
+      | .ok _ => pure ()
+      | .error message => throw <| IO.userError s!"invalid staged composition: {message}"
       Modelgen.Output.write config.outputTarget composition.emit
     catch error =>
       IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"

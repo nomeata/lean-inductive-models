@@ -35,6 +35,8 @@ def ByteSpan.validate (span : ByteSpan) (fileSize : UInt64) : Except String Unit
     throw "spool span starts beyond the signed 64-bit seek range"
   let some endpoint := span.end?
     | throw "spool span endpoint overflows UInt64"
+  unless endpoint.toNat ≤ maxSeekOffset do
+    throw "spool span ends beyond the signed 64-bit seek range"
   unless endpoint ≤ fileSize do
     throw "spool span extends beyond end of file"
 
@@ -539,6 +541,11 @@ private def spansPartitionFile (spans : Array ByteSpan) (fileSize : UInt64) : Bo
 the output transaction. This makes a missing, repeated, overlapping, or
 out-of-range span fail before stdout receives its first byte. -/
 def MixedComposition.validate (composition : MixedComposition) : Except String Unit := do
+  for size in #[composition.sourceSizes.metadata, composition.sourceSizes.arena,
+      composition.sourceSizes.declarations, composition.generatedArenaSize,
+      composition.generatedDeclarationSize] do
+    unless size.toNat ≤ maxSeekOffset do
+      throw "staged spool file exceeds the signed 64-bit seek range"
   let mut source : Array ByteSpan := #[]
   let mut generated : Array ByteSpan := #[]
   for declaration in composition.declarations do

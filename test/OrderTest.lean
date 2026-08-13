@@ -153,25 +153,31 @@ def runFilterStagedState (scratch : String) (input : Export)
       throw <| IO.userError "sealed staged cursor changed after finish"
     let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
     let sourceSizes := syntheticRawSizes input.decls.size
-    let planValid := match plan.declarationSpans certificate sourceSizes sealed with
+    let planValid := match plan.declarationSpans certificate sourceSizes input.decls.size sealed with
       | .ok spans => spans.size == plan.records.size
       | .error _ => false
     let duplicateOrder := if plan.order.size < 2 then plan.order.push 0
       else plan.order.set! 1 plan.order[0]!
     let duplicateRejected := if plan.records.isEmpty then true else
-      match { plan with order := duplicateOrder }.declarationSpans certificate sourceSizes sealed with
+      match { plan with order := duplicateOrder }.declarationSpans certificate sourceSizes
+          input.decls.size sealed with
       | .ok _ => false
       | .error _ => true
     let badCursor : Writer.Cursor :=
       { sealed.cursor with nextExpr := sealed.cursor.nextExpr + 1 }
     let cursorRejected :=
-      match plan.declarationSpans certificate sourceSizes { sealed with cursor := badCursor } with
+      match plan.declarationSpans certificate sourceSizes input.decls.size
+          { sealed with cursor := badCursor } with
+      | .ok _ => false
+      | .error _ => true
+    let sourceCountRejected :=
+      match plan.declarationSpans certificate sourceSizes (input.decls.size + 1) sealed with
       | .ok _ => false
       | .error _ => true
     return {
       input, output := { input with decls }, report, env := finalState.env,
       islands := plan.islands, records := plan.records, order := plan.order, planValid,
-      malformedPlansRejected := duplicateRejected && cursorRejected }
+      malformedPlansRejected := duplicateRejected && cursorRejected && sourceCountRejected }
 
 def runFilterDroppedState (scratch : String) (input : Export)
     (generation : Modelgen.Cli.Config) : IO DroppedFilterRun :=
@@ -187,7 +193,7 @@ def runFilterDroppedState (scratch : String) (input : Export)
     let sealed ← stage.finish
     let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
     let planValid := match plan.declarationSpans certificate
-        (syntheticRawSizes input.decls.size) sealed with
+        (syntheticRawSizes input.decls.size) input.decls.size sealed with
       | .ok spans => spans.size == plan.records.size
       | .error _ => false
     return { report, plan, planValid }

@@ -181,6 +181,23 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "output kernel rejection occurs before named output is touched" <|
     gatedOutput.exitCode == 1 && (← IO.FS.readFile gatedOutputPath) == gatedSentinel
   IO.FS.removeFile gatedOutputPath
+
+  -- A staged run may have committed an earlier owner's model before a later
+  -- source declaration fails kernel replay. The report verdict must reject
+  -- before sealing the island spool or opening the named output transaction.
+  let stagedReplayTarget : System.FilePath := s!"{scratch}/main-cli-staged-replay-output.ndjson"
+  IO.FS.writeFile stagedReplayTarget gatedSentinel
+  let stagedReplayRejected ← IO.Process.output {
+    cmd := binary
+    args := #["--no-check", "--no-type-check-output", "-o",
+      stagedReplayTarget.toString, "-"]
+    env := #[("MODELGEN_RAW_SPOOL", some "1")] } (some invalidText)
+  state := state.check "late staged replay rejection leaves named output untouched" <|
+    stagedReplayRejected.exitCode == 1 &&
+      (← IO.FS.readFile stagedReplayTarget) == gatedSentinel &&
+      (stagedReplayRejected.stderr.splitOn
+        "kernel rejected an input declaration during generation:").length > 1
+  IO.FS.removeFile stagedReplayTarget
   IO.FS.removeFile invalidPath
 
   -- Kernel replay uses declaration dependencies internally, without applying

@@ -173,9 +173,10 @@ private def spansPartition (spans : Array Spool.ByteSpan) (size : UInt64) : Bool
 This binds source raw ordinals, generated island spans, cursor publication, and
 the final compact permutation without reparsing a staged export. -/
 def StagedPlan.declarationSpans (plan : StagedPlan) (certificate : RawCertificate)
-    (sourceSizes : RawSpoolSizes) (sealed : Spool.SealedIsland) :
+    (sourceSizes : RawSpoolSizes) (sourceDeclarationCount : Nat)
+    (sealed : Spool.SealedIsland) :
     Except String (Array StagedDeclarationSpan) := do
-  discard <| certificate.validate sourceSizes certificate.declarations.size
+  discard <| certificate.validate sourceSizes sourceDeclarationCount
   unless plan.order.size == plan.records.size do
     throw "staged order length does not match staged records"
   let mut seenOrder : Std.HashSet Nat := {}
