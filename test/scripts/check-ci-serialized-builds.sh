@@ -8,8 +8,10 @@ lakefile="$root/lakefile.lean"
 
 # Keep the retired project name out of both tracked text and tracked paths.
 # Construct it from separate fragments so this guard does not exempt itself.
+# `-a` deliberately treats tracked binary blobs as text: generated archives or
+# other binary fixtures must not preserve the retired bytes either.
 retired_name="$(printf '%s%s' 'model' 'gen')"
-if git -C "$root" grep -Iin "$retired_name" -- .; then
+if git -C "$root" grep -ain "$retired_name" -- .; then
   echo "tracked content still contains the retired project name" >&2
   exit 1
 fi
