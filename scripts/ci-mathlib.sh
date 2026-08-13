@@ -140,8 +140,8 @@ checkout_pinned() {
 
 # Build one root per Lake invocation. Copy the standalone executables out of
 # their build trees so every build artifact can be reclaimed before generation.
-run_measured build-generator \
-  lake -Kjobs=1 build lean-inductive-models
+(cd "$ROOT" && run_measured build-generator \
+  lake -Kjobs=1 build lean-inductive-models)
 cp "$ROOT/.lake/build/bin/lean-inductive-models" \
   "$BIN_DIR/lean-inductive-models"
 [[ -x "$BIN_DIR/lean-inductive-models" ]] || fail "model generator was not built"
