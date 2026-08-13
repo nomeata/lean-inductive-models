@@ -162,6 +162,18 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "runtime workspace is a secure physical child of project _tmp" <|
     secureWorkspaceBoundary && secureWorkspaceCleaned
 
+  let reservedCandidatePath ← IO.mkRef (none : Option System.FilePath)
+  Spool.withWorkspace scratch fun workspace => do
+    let path ← workspace.reservePath "output-kernel-candidate.ndjson"
+    reservedCandidatePath.set (some path)
+    IO.FS.writeFile path "private candidate\n"
+  let reservedCandidatePath? ← reservedCandidatePath.get
+  let reservedCandidateCleaned ← if let some path := reservedCandidatePath? then
+      path.pathExists.map Bool.not
+    else pure false
+  state := state.check "reserved output-kernel candidate is cleaned with its workspace"
+    reservedCandidateCleaned
+
   let externalTmp : System.FilePath := s!"{root}/staged-writer-external-tmp"
   if ← externalTmp.pathExists then IO.FS.removeDirAll externalTmp
   IO.FS.createDir externalTmp
