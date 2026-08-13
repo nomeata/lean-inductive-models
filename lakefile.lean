@@ -40,6 +40,8 @@ lean_exe supervisortest where
   srcDir := "test"
   root := `SupervisorTest
   supportInterpreter := true
+  -- Test-only C source: linked into no production executable.
+  moreLinkArgs := #["test/SupervisorSignal.c"]
 
 lean_exe generationflagstest where
   srcDir := "test"
