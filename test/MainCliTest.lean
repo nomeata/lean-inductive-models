@@ -616,6 +616,16 @@ def main (args : List String) : IO UInt32 := do
     observedLegacy.exitCode == defaults.exitCode &&
       hasDiagnostic observedLegacy.stderr "output backend: legacy" &&
       sameSemanticExport observedLegacy.stdout defaults.stdout
+  let discardCwd := s!"{scratch}/main-cli-compact-discard-root"
+  IO.FS.createDirAll discardCwd
+  let discarded ← runInductiveModelsAt binaryAbsolute.toString
+    ["--no-output", "--no-type-check-output", nestedAbsolute.toString] discardCwd
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "generated no-output selects compact discard without a spool root" <|
+    discarded.exitCode == defaults.exitCode && discarded.stdout.isEmpty &&
+      hasDiagnostic discarded.stderr "output backend: compact-discard" &&
+      !(← System.FilePath.pathExists (discardCwd / "_tmp"))
+  IO.FS.removeDir discardCwd
   let stagedNamedPath := s!"{scratch}/main-cli-staged-opt-out.ndjson"
   removeIfPresent stagedNamedPath
   let stagedNamed ← runInductiveModelsWithEnv binary
@@ -659,6 +669,12 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "output kernel checking selects legacy output" <|
     kernelOutputMode.exitCode == 0 &&
       hasDiagnostic kernelOutputMode.stderr "output backend: legacy"
+  let kernelDiscardMode ← runInductiveModelsWithEnv binary
+    ["--no-output", "--no-check", "--type-check-output", nested]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "no-output kernel checking retains the legacy fresh-worker seam" <|
+    kernelDiscardMode.exitCode == 0 && kernelDiscardMode.stdout.isEmpty &&
+      hasDiagnostic kernelDiscardMode.stderr "output backend: legacy"
 
   -- Generated arena IDs may differ from the legacy global writer, so compare
   -- parsed exports, exact declaration order, diagnostics, and exit status
