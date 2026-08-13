@@ -3418,7 +3418,7 @@ def PrimInterfaceNames.oneLayerImplementation (root : Name)
 /-- Source/kernel metadata boundary for the first one-layer production route.
 Capability checks which can fail (support, exact recursor layout and carrier
 level) still run before this predicate is committed to emission. -/
-def oneLayerSimpleEligible (tname : Name) (np : Nat) (memberTy : Expr)
+def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr))
     (sourceRecursor? : Option ERec) : MetaM Bool := do
   let env ← getEnv
@@ -3426,9 +3426,19 @@ def oneLayerSimpleEligible (tname : Name) (np : Nat) (memberTy : Expr)
   let neverZero ← forallBoundedTelescope memberTy (some np) fun _ result => match result with
     | .sort level => pure level.normalize.isNeverZero
     | _ => pure false
-  return neverZero && sourceRecursor?.isSome && exportCtors.size == 1 && type.all == [tname] &&
+  let oneRecursiveField ← match exportCtors[0]? with
+    | some (_, constructorType) =>
+      forallBoundedTelescope constructorType (some np) fun parameters _ => do
+        match ← (instForall constructorType parameters).run with
+        | .error _ => pure false
+        | .ok telescope =>
+          match ← (classifyCtor tname (numForalls telescope) telescope).run with
+          | .error _ => pure false
+          | .ok shape => pure ((shape.filter (·.rec?.isSome)).size == 1)
+    | none => pure false
+  return neverZero && oneRecursiveField && sourceRecursor?.isSome && exportCtors.size == 1 && type.all == [tname] &&
     type.ctors.length == 1 && type.numIndices == 0 && type.numNested == 0 && type.isRec &&
-    !type.isUnsafe && !type.isReflexive
+    !type.isUnsafe
 
 set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that

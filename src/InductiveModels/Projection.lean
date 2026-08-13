@@ -41,7 +41,7 @@ silently accept the new literal contract from an old transported model. -/
 def oneLayerProjectionFamily (types : Array EIndType) (type : EIndType) : Bool :=
   types.size == 1 && type.all == [type.name] && type.ctors.length == 1 &&
     type.numIndices == 0 && type.numNested == 0 && type.isRec &&
-    !type.isUnsafe && !type.isReflexive
+    !type.isUnsafe
 
 /-- One opened constructor field, together with the corresponding modeled
 projection and (for an earlier field) its constructor iota proof.

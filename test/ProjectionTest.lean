@@ -446,6 +446,18 @@ def main : IO UInt32 := do
   let wtyProjection1 := Naming.projectionName `Wty 1
   let wtyRule0 := Naming.projectionIotaName `Wty 0
   let wtyRule1 := Naming.projectionIotaName `Wty 1
+  let wtyPrivateRoot := `Wty._model._impl
+  let wtyCertificate := #[Name.str wtyPrivateRoot "self", Name.str wtyPrivateRoot "ctor_0",
+    Name.str wtyPrivateRoot "rec", Name.str wtyPrivateRoot "rec_iota_0",
+    Name.str wtyPrivateRoot "roll", Name.str wtyPrivateRoot "unroll",
+    Name.str wtyPrivateRoot "unroll_roll", Name.str wtyPrivateRoot "roll_unroll"]
+  state := state.check "dependent recursive singleton carries the complete one-layer certificate" <|
+    wtyCertificate.all wNames.contains
+  let wtyShape := wRaw.decls.findSome? fun declaration => match declaration with
+    | .induct types _ _ => types.toArray.find? (·.name == `Wty)
+    | _ => none
+  state := state.check "dependent recursive singleton is in the phase-1 source shape" <|
+    wtyShape.any fun type => oneLayerProjectionFamily #[type] type
   state := state.check "dependent recursive singleton emits every intrinsic field" <|
     wReport.generated.any (·.1 == `Wty) && !wReport.declined.any (·.1 == `Wty) &&
       #[wtyProjection0, wtyProjection1, wtyRule0, wtyRule1].all wNames.contains
@@ -701,6 +713,8 @@ def main : IO UInt32 := do
     for name in recursiveProjections do
       IO.eprintln s!"recursive slot {name}: {names.contains name}"
     IO.eprintln s!"Iff fields: {intrinsicFieldsFor wcore `Iff}"
+    if let some type := wtyShape then
+      IO.eprintln s!"Wty source shape: all={type.all}, ctors={type.ctors}, indices={type.numIndices}, nested={type.numNested}, rec={type.isRec}, unsafe={type.isUnsafe}, reflexive={type.isReflexive}"
     for violation in Check.check generated do
       if #[`Dep, `SortFields, `Indexed, `Recursive].contains violation.familyOwner then
         IO.eprintln s!"projection check violation: {repr violation}"

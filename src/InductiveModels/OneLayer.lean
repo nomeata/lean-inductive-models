@@ -209,6 +209,29 @@ elab "oneLayerIHCompatibilityProof%" : term => do
 private def oneLayerCompatibilityProof : Expr := oneLayerCompatibilityProof%
 private def oneLayerIHCompatibilityProof : Expr := oneLayerIHCompatibilityProof%
 
+private partial def firstDifferencePath? (actual expected : Expr)
+    (path : String := "root") : Option String :=
+  if actual == expected then none else
+  match actual, expected with
+  | .app af aa, .app ef ea =>
+    firstDifferencePath? af ef s!"{path}.fn" <|>
+      firstDifferencePath? aa ea s!"{path}.arg"
+  | .lam _ ad ab ai, .lam _ ed eb ei
+  | .forallE _ ad ab ai, .forallE _ ed eb ei =>
+    if ai != ei then some s!"{path}.binderInfo" else
+    firstDifferencePath? ad ed s!"{path}.domain" <|>
+      firstDifferencePath? ab eb s!"{path}.body"
+  | .letE _ aty av ab an, .letE _ ety ev eb en =>
+    if an != en then some s!"{path}.letKind" else
+    firstDifferencePath? aty ety s!"{path}.type" <|>
+      firstDifferencePath? av ev s!"{path}.value" <|>
+      firstDifferencePath? ab eb s!"{path}.body"
+  | .mdata _ ab, .mdata _ eb => firstDifferencePath? ab eb s!"{path}.mdata"
+  | .proj an ai av, .proj en ei ev =>
+    if an != en || ai != ei then some s!"{path}.projection" else
+      firstDifferencePath? av ev s!"{path}.subject"
+  | _, _ => some path
+
 /-- Instantiate the embedded oracle after all semantic arguments are known.
 The first six entries are `M, P, Q, R, C, H`; spelling them explicitly avoids
 asking application synthesis to infer universes through higher-order families. -/
@@ -224,8 +247,8 @@ def applyOneLayerCompatibility (levels : List Level) (arguments : Array Expr) (e
   let proof := mkAppN template arguments
   let proof ← instantiateMVars proof
   let actual ← inferType proof
-  unless ← isDefEq actual expected do
-    return .error s!"compatibility result has type {actual}, expected {expected}"
+  unless ← withTransparency .all <| isDefEq actual expected do
+    return .error s!"compatibility result differs at {(firstDifferencePath? actual expected).getD "definitionally unequal subterm"}: {actual}, expected {expected}"
   let proof ← instantiateMVars proof
   if proof.hasExprMVar || proof.hasLevelMVar then
     return .error "compatibility proof retains metavariables"
@@ -252,6 +275,33 @@ def applyOneLayerIHCompatibility (levels : List Level) (arguments : Array Expr)
     return .error "IH compatibility proof retains metavariables"
   check proof
   return .ok proof
+
+/-- Count fully applied occurrences of one recursor constant.  Once a local
+replacement function is supplied, applications of that function are treated
+as atomic: its body deliberately contains the installed recursor that it
+replaces, and must not be mistaken for untouched source syntax. -/
+private partial def recursorApplicationCount (target : Name) (protected? : Option Expr)
+    (expression : Expr) : Nat :=
+  if protected?.any fun protectedExpression => expression.getAppFn == protectedExpression then
+    0
+  else if expression.getAppFn.constName? == some target then
+    expression.getAppArgs.foldl
+      (fun total argument => total + recursorApplicationCount target protected? argument) 1
+  else
+    match expression with
+    | .app function argument =>
+      recursorApplicationCount target protected? function +
+        recursorApplicationCount target protected? argument
+    | .lam _ type body _ | .forallE _ type body _ =>
+      recursorApplicationCount target protected? type +
+        recursorApplicationCount target protected? body
+    | .letE _ type value body _ =>
+      recursorApplicationCount target protected? type +
+        recursorApplicationCount target protected? value +
+        recursorApplicationCount target protected? body
+    | .mdata _ body => recursorApplicationCount target protected? body
+    | .proj _ _ subject => recursorApplicationCount target protected? subject
+    | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => 0
 
 /-- Names internal to one private/public one-layer equivalence. -/
 structure OneLayerNames where
@@ -427,6 +477,46 @@ partial def oneLayerOccurrenceRoundTrip (owner intermediate : Name) (np : Nat)
       | badShape s!"a one-layer recursive field does not end in {owner}"
     pure (mkAppN (.const theoremName levels) (arguments.extract 0 np |>.push value))
 
+private def oneLayerTowerValue (level : Level) (telescope : Expr)
+    (sourceFields values : Array Expr) : GenM Expr := do
+  let rec build (remaining : Nat) (current : Expr) (stored : Array Expr) :
+      GenM Expr := do
+    match remaining with
+    | 0 => return ← wTowerMkOf level sourceFields stored
+    | remaining + 1 =>
+      let index := stored.size
+      let .forallE name domain body info := current
+        | badShape "a one-layer storage telescope has too few fields"
+      let some value := values[index]?
+        | badShape "a one-layer storage value is missing"
+      let valueDomain := domain.replaceFVars sourceFields stored
+      unless ← isDefEq (← inferType value) valueDomain do
+        badShape s!"a one-layer storage value {index} has type {← inferType value}, expected {valueDomain}"
+      withLocalDecl name info valueDomain fun _ =>
+        build remaining (body.instantiate1 value)
+          (stored.push value)
+  build values.size telescope #[]
+
+private def oneLayerCongrChain (eqi : EqInfo) (v : Level) (α : Expr)
+    (mkStep : Array Expr → GenM Expr) (ga gb pfs : Array Expr) : GenM Expr := do
+  let n := ga.size
+  let mixed := fun (j : Nat) => (Array.range n).map fun m => if m < j then gb[m]! else ga[m]!
+  let base ← mkStep ga
+  let mut acc := eqi.refl' v α base
+  for j in [0:n] do
+    let A ← ityp ga[j]!
+    let ℓA ← ilevel A
+    let atA ← mkStep ((mixed j).set! j ga[j]!)
+    let famAt := fun (x : Expr) => mkStep ((mixed j).set! j x)
+    let factor ← transportAlong eqi .zero ℓA A ga[j]! gb[j]! pfs[j]!
+      (eqi.refl' v α atA) fun z => do
+        let atZ ← famAt z
+        pure (eqi.mk' v α atA atZ)
+    let before ← mkStep (mixed j)
+    let after ← mkStep (mixed (j + 1))
+    acc ← transOf eqi v α base before after acc factor
+  return acc
+
 /-- Public constructor fields obtained from private fields, and the equation
 identifying the rebuilt public constructor with `unroll` of the private one. -/
 private def oneLayerConstructorAgreement (np : Nat)
@@ -455,10 +545,11 @@ private def oneLayerConstructorAgreement (np : Nat)
       let type ← inferType field
       proofs := proofs.push (eqi.refl' (← ilevel type) type field)
   let publicCarrier := mkAppN (.const names.publicNames.self levels) parameters
-  let stored ← wTowerMkOf level privateFields privateFields
-  let mkStep := fun values => stored.replaceFVars privateFields values
-  let rebuilt := mkStep storedFields
-  let storageEquality ← congrChain eqi level publicCarrier
+  let privateTelescope ← instantiateForall privateConstructorType parameters
+  let mkStep := oneLayerTowerValue level privateTelescope privateFields
+  let stored ← mkStep privateFields
+  let rebuilt ← mkStep storedFields
+  let storageEquality ← oneLayerCongrChain eqi level publicCarrier
     mkStep storedFields privateFields proofs
   let plan ← oneLayerUnrollPlan names level levels parameters
     privateConstructorType privateRecursorType
@@ -515,7 +606,27 @@ private structure OneLayerRecursorPlan where
   privateMotive : Expr
   privateMinor : Expr
   core : Expr
+  publicRec : Expr
   recLevels : List Level
+
+/-- The exact primitive normal form of `Eq.mp (congrArg family equality)
+base`.  The embedded compatibility theorem elaborates to this two-`Eq.rec`
+term; sharing the construction prevents the public recursor declaration and
+its proof oracle from choosing merely propositionally equal transports. -/
+private def transportOneLayerMotiveAlong (eqi : EqInfo) (v ℓ : Level)
+    (α a b equality base : Expr) (family : Expr → GenM Expr) : GenM Expr := do
+  let source ← family a
+  let target ← family b
+  let congrMotive ← withLocalDeclD `z α fun z =>
+    withLocalDeclD `hz (eqi.mk' ℓ α a z) fun hz => do
+      let target ← family z
+      mkLambdaFVars #[z, hz] (eqi.mk' (.succ v) (.sort v) source target)
+  let congruence := eqi.recAt .zero ℓ α a congrMotive
+    (eqi.refl' (.succ v) (.sort v) source) b equality
+  let castMotive ← withLocalDeclD `target (.sort v) fun targetType =>
+    withLocalDeclD `h (eqi.mk' (.succ v) (.sort v) source targetType) fun h =>
+      mkLambdaFVars #[targetType, h] targetType
+  return eqi.recAt v (.succ v) (.sort v) source castMotive base target congruence
 
 /-- The private recursion shared by the public recursor definition and its
 compatibility proof.  Factoring it keeps the theorem arguments literally
@@ -567,7 +678,15 @@ private def oneLayerRecursorPlan (tname : Name) (lparams : List Name) (np : Nat)
   let core ← withLocalDeclD `value privateCarrier fun value =>
     mkLambdaFVars #[value] (mkAppN (.const names.implementation.recursor recLevels)
       (parameters ++ #[privateMotive, privateMinor, value]))
-  return { privateMotive, privateMinor, core, recLevels }
+  let publicRec ← withLocalDeclD `value publicCarrier fun value => do
+    let privateMajor := mkAppN (.const names.roll us) (parameters.push value)
+    let privateResult := mkApp core privateMajor
+    let roundTrip := mkAppN (.const names.unrollRoll us) (parameters.push value)
+    let body ← transportOneLayerMotiveAlong eqi motiveLevel level publicCarrier
+      (mkAppN (.const names.unroll us) (parameters.push privateMajor)) value
+      roundTrip privateResult fun result => pure (mkApp publicMotive result)
+    mkLambdaFVars #[value] body
+  return { privateMotive, privateMinor, core, publicRec, recLevels }
 
 /-- Build `P`, `roll : P → M`, and `unroll : M → P` over an already checked
 private simple implementation.  No caller selects this helper until the two
@@ -622,10 +741,9 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
     let fieldCount := numForalls telescope
     forallBoundedTelescope telescope (some fieldCount) fun fields _ => do
       mkLambdaFVars parameters (← wTowerTyOf level fields)
-  let publicSelfHints ← hintsFor publicSelfValue
   let publicSelf := Declaration.defnDecl
     { name := names.publicNames.self, levelParams := lparams, type := publicSelfType
-      value := publicSelfValue, hints := publicSelfHints, safety := .safe }
+      value := publicSelfValue, hints := .abbrev, safety := .safe }
   addChecked publicSelf
   declarations := declarations.push publicSelf
 
@@ -774,6 +892,7 @@ def buildOneLayerPublicFields (tname : Name) (lparams : List Name) (np : Nat)
   let publicTable := modelTable (← getEnv) #[tname] publicIso
   let privateConstructorType := restore privateTable sourceConstructor.2
   let publicConstructorType := restore publicTable sourceConstructor.2
+  let constructorValueType := publicConstructorType
   let level ← exactCarrierLevel memberTy np
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
@@ -794,21 +913,25 @@ def buildOneLayerPublicFields (tname : Name) (lparams : List Name) (np : Nat)
     let publicTelescope ← instForall publicConstructorType parameters
     let privateTelescope ← instForall privateConstructorType parameters
     let fieldCount := numForalls publicTelescope
-    forallBoundedTelescope publicTelescope (some fieldCount) fun publicFields _ =>
-      forallBoundedTelescope privateTelescope (some fieldCount) fun privateFields _ => do
-        let mut stored : Array Expr := #[]
-        for index in [0:fieldCount] do
-          let value ← if fieldShape[index]!.rec?.isSome then
-              mapOneLayerOccurrence names.publicNames.self np names.roll us
-                (← inferType publicFields[index]!) publicFields[index]!
-            else pure publicFields[index]!
-          stored := stored.push value
-        mkLambdaFVars (parameters ++ publicFields)
-          (← wTowerMkOf level privateFields stored)
+    forallBoundedTelescope publicTelescope (some fieldCount) fun publicFields _ => do
+      let mut stored : Array Expr := #[]
+      for index in [0:fieldCount] do
+        let value ← if fieldShape[index]!.rec?.isSome then do
+            let type ← inferType publicFields[index]!
+            mapOneLayerOccurrence names.publicNames.self np names.roll us
+              type publicFields[index]!
+          else pure publicFields[index]!
+        stored := stored.push value
+      let value ← oneLayerTowerValue level privateTelescope publicFields stored
+      let expectedResult := mkAppN (.const names.publicNames.self us) parameters
+      let actualResult ← inferType value
+      unless ← withTransparency .all <| isDefEq actualResult expectedResult do
+        badShape s!"{names.publicNames.ctors[0]!}'s concrete layer type {actualResult} does not inhabit {expectedResult}, which unfolds to {← withTransparency .all <| whnf expectedResult}"
+      mkLambdaFVars (parameters ++ publicFields) value
   let constructorHints ← hintsFor constructorValue
   let constructor := Declaration.defnDecl
     { name := names.publicNames.ctors[0]!, levelParams := lparams
-      type := publicConstructorType, value := constructorValue
+      type := constructorValueType, value := constructorValue
       hints := constructorHints, safety := .safe }
   addChecked constructor
   declarations := declarations.push constructor
@@ -885,16 +1008,10 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
     let publicMinor := publicBinders[np + 1]!
     let publicMajor := publicBinders[publicBinders.size - 1]!
     let motiveLevel ← ilevel (mkApp publicMotive publicMajor)
-    let publicCarrier := mkAppN (.const names.publicNames.self us) parameters
     let plan ← oneLayerRecursorPlan tname lparams np parameters publicMotive publicMinor
       motiveLevel level privateConstructorType privateRecursorType privateRecursorInfo
       fieldShape eqi base publicFields
-    let privateMajor := mkAppN (.const names.roll us) (parameters.push publicMajor)
-    let privateResult := mkApp plan.core privateMajor
-    let roundTrip := mkAppN (.const names.unrollRoll us) (parameters.push publicMajor)
-    let body ← transportAlong eqi motiveLevel level publicCarrier
-      (mkAppN (.const names.unroll us) (parameters.push privateMajor)) publicMajor
-      roundTrip privateResult fun value => pure (mkApp publicMotive value)
+    let body := mkApp plan.publicRec publicMajor
     mkLambdaFVars publicBinders body
   let recursorHints ← hintsFor recursorValue
   let recursor := Declaration.defnDecl
@@ -949,10 +1066,7 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
       let plan ← oneLayerRecursorPlan tname lparams np parameters motive pre[np + 1]!
         (← ilevel alpha) level privateConstructorType privateRecursorType privateRecursorInfo
         fieldShape eqi base publicFields
-      let publicRec ← withLocalDeclD `value
-          (mkAppN (.const names.publicNames.self us) parameters) fun value =>
-        mkLambdaFVars #[value] (mkAppN (.const names.publicNames.recursor publicRecLevels)
-          (pre.push value))
+      let publicRec := plan.publicRec
       let hypothesisFamily ← withLocalDeclD `field publicFieldType fun field => do
         let type ← oneLayerHypothesisType names.publicNames.self np motive publicFieldType field
         mkLambdaFVars #[field] type
@@ -1042,11 +1156,47 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
         privateCtor, publicCtor, rollCtor,
         privateIH, publicIH, ihAgreement,
         minor, plan.core, constructorAgreement, coreIota]
+      -- The exported rule is restored with the public declaration table, so
+      -- its recursive hypotheses still call the installed public recursor.
+      -- The compatibility theorem is applied before that declaration is
+      -- unfolded: replace only calls with this exact parameter/motive/minor
+      -- prefix by the local recursor body used on the left-hand side.
+      let localRhs := rhs.replace fun subexpression => Id.run do
+        let .const name _ := subexpression.getAppFn | return none
+        unless name == names.publicNames.recursor do return none
+        let arguments := subexpression.getAppArgs
+        unless arguments.size == pre.size + 1 do return none
+        for index in [:pre.size] do
+          unless arguments[index]! == pre[index]! do return none
+        return some (mkApp publicRec arguments[pre.size]!)
+      let sourceCalls := recursorApplicationCount names.publicNames.recursor none rhs
+      unless sourceCalls == 1 do
+        badShape s!"{names.publicNames.iotas[0]!}'s phase-1 source rule has {sourceCalls} recursive public calls"
+      let unmatchedCalls := recursorApplicationCount names.publicNames.recursor
+        (some publicRec) localRhs
+      unless unmatchedCalls == 0 do
+        badShape s!"{names.publicNames.iotas[0]!}'s source rule retains {unmatchedCalls} unmatched public recursor calls"
+      let theoremLhs := mkApp publicRec (mkApp publicCtor publicField)
+      let theoremRhs := mkApp2 minor publicField (mkApp publicIH publicField)
+      unless ← withTransparency .all <| isDefEq theoremLhs (mkApp publicRec major) do
+        badShape s!"{names.publicNames.iotas[0]!}'s local constructor does not match its exact source major"
+      unless ← withTransparency .all <| isDefEq theoremRhs localRhs do
+        badShape s!"{names.publicNames.iotas[0]!}'s local minor does not match its exact source rule"
+      -- Type inference beta-reduces the local constructor/minor/IH arguments
+      -- when it instantiates the embedded theorem.  Use their already-checked
+      -- exact source forms as the expected result, while the same stored
+      -- `publicRec` remains opaque in both sides.
+      let localProposition := eqi.mk' (← ilevel alpha) alpha
+        (mkApp publicRec major) localRhs
       let proof ← match ← applyOneLayerCompatibility
           [carrierUniverse, fieldUniverse, ← ilevel alpha, hypothesisLevel]
-          (arguments.push publicField) proposition with
+          (arguments.push publicField) localProposition with
         | .ok proof => pure proof
         | .error message => badShape s!"{names.publicNames.iotas[0]!}'s compatibility failed: {message}"
+      let actual ← inferType proof
+      unless ← withTransparency .all <| isDefEq actual proposition do
+        badShape s!"{names.publicNames.iotas[0]!}'s local compatibility proof does not unfold to its public statement: {actual} != {proposition}"
+      check proof
       pure <| Declaration.thmDecl
         { name := names.publicNames.iotas[0]!, levelParams := sourceRecursor.levelParams
           type := theoremType, value := ← mkLambdaFVars (pre ++ fields) proof }

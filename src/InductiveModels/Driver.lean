@@ -607,6 +607,27 @@ private def eligibleProjectionFieldsM (type : EIndType) (constructor : ECtor) : 
         result := result.push fieldIndex
     return result
 
+private def phase1DirectTypeOneLayerProjectionCertificate (type : EIndType)
+    (constructorName : Name) (is : Iso) : GenM Bool := do
+  unless oneLayerProjectionFamily #[type] type do return false
+  let some implementation := is.implementation? | return false
+  let some publicModel := is.selfNames[0]? | return false
+  let impl := Name.str publicModel "_impl"
+  let expected : IsoInterface :=
+    { selfNames := #[Name.str impl "self"]
+      ctors := #[(constructorName, Name.str impl "ctor_0")]
+      recs := #[Name.str impl "rec"]
+      iotas := #[(0, constructorName, Name.str impl "rec_iota_0")] }
+  unless implementation.selfNames == expected.selfNames &&
+      implementation.ctors == expected.ctors &&
+      implementation.recs == expected.recs &&
+      implementation.iotas == expected.iotas do
+    badShape s!"{type.name}'s phase-1 one-layer implementation certificate is malformed"
+  for name in #[Name.str impl "roll", Name.str impl "unroll",
+      Name.str impl "unroll_roll", Name.str impl "roll_unroll"] do
+    let _ ← generatedDeclInfo is name
+  return true
+
 /-- Add modeled primitive projections and their literal constructor rules for
 every kernel structure-like member in a generated block.
 
@@ -696,6 +717,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     if (← getEnv).constants.contains modelRule then declineWith (.nameTaken publicRule)
     let override? := is.projectionOverrides.find? fun entry =>
       entry.1 == type.name && entry.2.1 == fieldIndex
+    let phase1OneLayer ←
+      phase1DirectTypeOneLayerProjectionCertificate type constructorName is
     let modelConstructorInfo ← generatedDeclInfo is modelConstructor
     let modelConstructorType := modelConstructorInfo.type
     let modelTypeInfo ← generatedDeclInfo is modelType
@@ -786,8 +809,9 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         normalizedFields := normalizedFields.push
           { name := Name.mkSimple s!"field_{index}", info := .default,
             value, type := fieldType, level, projected, iota? }
+      let legacyLiteral := projectionIotaUsesLiteralField types type
       let rhs ←
-        if projectionIotaUsesLiteralField types type then
+        if legacyLiteral || phase1OneLayer then
           pure fields[fieldIndex]!
         else
           match ProjectionField.normalizeProjectionField eqi
@@ -798,11 +822,12 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           (params ++ indices ++ #[major])
         | badShape s!"{modelProjection}'s exact public type has the wrong arity"
       let fieldLevel ← ilevel alpha
-      let proof ← if projectionIotaUsesLiteralField types type then
-          pure (eqi.refl' fieldLevel alpha lhs)
-        else match override? with
+      let proof ← match override? with
         | some (_, _, _, proof) => pure (proof.beta arguments)
-        | none => do
+        | none =>
+          if legacyLiteral then
+            pure (eqi.refl' fieldLevel alpha lhs)
+          else do
           let targetMotive ← forallBoundedTelescope
               (← instantiateForall projectionType params) (some (type.numIndices + 1))
               fun motiveArguments result => mkLambdaFVars motiveArguments result
@@ -2053,7 +2078,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
       addSourceStructureModels block projections normalizer reserved is
     | none => addInstalledStructureModels #[tname] projections reserved is
   let selectOneLayer ← if selectPublicOneLayer then
-      oneLayerSimpleEligible tname np ty ctors sourceRecursor?
+      phase1DirectTypeOneLayerEligible tname np ty ctors sourceRecursor?
     else pure false
   let exactTaken ← exactPrimNameTaken? tname ctors projections
   let initial ← match exactTaken with
@@ -2522,7 +2547,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           -- `scheduledSupportRecord` before ordinary owners.
           let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
             #[] reserved generation.basic true (out, rep, pending)
-            (some (d, sourceNormalizer)) exactTransform
+            (some (d, sourceNormalizer)) exactTransform true
           if wait?.isSome then
             throwError "simple model prerequisite remained late after support scheduling"
           (out, rep, pending) ← pure st
