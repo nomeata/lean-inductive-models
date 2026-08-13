@@ -483,7 +483,7 @@ has committed to constructing declarations, malformed intermediate syntax,
 missing metadata, or kernel rejection is a tool failure and must reach the
 CLI's exit-3 containment boundary. -/
 def badShape (msg : String) : GenM α :=
-  lift <| Lean.throwError msg
+  ExceptT.lift (show MetaM α from Lean.throwError msg)
 
 /-- `Meta.inferType`, at the generator's monad. -/
 def ityp (e : Expr) : GenM Expr := inferType e
