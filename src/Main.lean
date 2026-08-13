@@ -270,6 +270,8 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
   let (filterOutput, generationReport) ← if generationEnabled config then do
       let generated : Except String (FilterOutput × Modelgen.Report) ← try
           if let some raw := rawStage? then
+            let levelCallsBefore ← Modelgen.LevelAlgebra.levelCalls.get
+            let levelEscapesBefore ← Modelgen.LevelAlgebra.levelEscapes.get
             let stage ← Modelgen.Spool.IslandStage.create raw.workspace
               (Modelgen.Writer.Cursor.ofRaw raw.certificate.cursor)
             let ((report, plan), _) ← Lean.Core.CoreM.toIO
@@ -279,6 +281,8 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
             match plan.unavailable? with
             | none => pure (Except.ok (FilterOutput.staged raw stage plan, report))
             | some _ =>
+              Modelgen.LevelAlgebra.levelCalls.set levelCallsBefore
+              Modelgen.LevelAlgebra.levelEscapes.set levelEscapesBefore
               let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
                 (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config))
                 context { env }
@@ -380,7 +384,8 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   -- expanded across the fixture matrix. Statically ineligible modes never tee
   -- their input, so the experiment cannot impose a disk/time regression on
   -- kernel-output checking, monomorphization, no-output, or parser-only invocations.
-  if (← IO.getEnv "MODELGEN_RAW_SPOOL") == some "1" && stagedModeEligible config then
+  if (← IO.getEnv "MODELGEN_RAW_SPOOL") == some "1" &&
+      (← IO.getEnv "MODELGEN_PLANNER_LEVEL_TRACE") != some "1" && stagedModeEligible config then
     let scratch := (← IO.currentDir) / "_tmp"
     Modelgen.Spool.withOptionalWorkspace scratch (runWithWorkspace config)
   else

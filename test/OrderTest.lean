@@ -207,13 +207,6 @@ def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
 def generatedFixture (path : String) (generation : Modelgen.Cli.Config) : IO Export := do
   return (← generatedFixtureState path generation).output
 
-def withOwnerType (x : Export) (owner : Name) (type : Expr) : Export :=
-  { x with decls := x.decls.map fun declaration => match declaration with
-    | .induct (first :: rest) constructors recursors =>
-      if first.name == owner then .induct ({ first with type } :: rest) constructors recursors
-      else declaration
-    | other => other }
-
 def mapConstructor (input : Export) (target : Name) (f : ECtor → ECtor) : Export :=
   { input with decls := input.decls.map fun declaration => match declaration with
     | .induct types constructors recursors =>
@@ -548,18 +541,14 @@ def run (root : String) : IO UInt32 := do
           rule.recursor == `Tree.rec && rule.name == Naming.iotaName `Tree.rec 1)
   state := state.check "nested-only models are absent from the final replay environment" <|
     finalEnvironmentIsIsolated nestedRun
-  let nestedCarrier := Naming.modelName `Tree
-  let nestedBackrefInput := withOwnerType nestedRun.input `Tree (.const nestedCarrier [])
-  let nestedBackrefShadow ← runFilterStagedState s!"{root}/_tmp" nestedBackrefInput
+  let futureModelProbe : EDecl :=
+    .ax `CompactFallbackProbe [] (.const (Naming.modelName `Tree) []) false
+  let futureModelInput := { nestedRun.input with
+    decls := #[futureModelProbe] ++ nestedRun.input.decls }
+  let futureModelDropped ← runFilterDroppedState s!"{root}/_tmp" futureModelInput
     { noGeneration with nested := true }
-  let nestedBackrefDropped ← runFilterDroppedState s!"{root}/_tmp" nestedBackrefInput
-    { noGeneration with nested := true }
-  state := state.check "recaptured staged source owner retains its model backreference" <|
-    nestedBackrefShadow.plan.checkReport.violations.any fun violation =>
-      violation == .ownerBackreference `Tree nestedCarrier
-  state := state.check "dropped source owner backreference equals the shadow report" <|
-    nestedBackrefDropped.plan.unavailable?.isNone &&
-      nestedBackrefDropped.plan.checkReport == nestedBackrefShadow.plan.checkReport
+  state := state.check "later generated provider marks compact staging unavailable" <|
+    futureModelDropped.plan.unavailable?.isSome
 
   -- The default pipeline extends the same island through the generated nested
   -- block's mutual model and then through each simple model. None of those

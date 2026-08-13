@@ -2392,10 +2392,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       | .ok order => pure order
       | .error error => throwError "cannot compactly order staged records: {repr error}"
     else pure #[]
-  let compactUnavailable? := if sink?.isSome then
-      compactAvailabilityError? stagedRecords persistentSupportOrigins
-    else none
-  let compactCheckReport : Check.Report ← if sink?.isSome && compactUnavailable?.isNone then
+  let compactCheckReport : Check.Report ← if sink?.isSome then
       let orderedRecords := stagedOrder.map fun i =>
         { owner := stagedRecords[i]!.summary.owner
           modelSlots := stagedRecords[i]!.summary.modelSlots
@@ -2406,6 +2403,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       | .error message => throwError "invalid compact output certificate: {message}"
     else
       pure ({ familiesChecked := 0, violations := #[] } : Check.Report)
+  let compactUnavailable? := if sink?.isSome then
+      compactAvailabilityError? stagedRecords persistentSupportOrigins
+    else none
   let compactStatementReport := if sink?.isSome then
     let orderedGlobals := stagedOrder.map fun i => stagedRecords[i]!.globalExtra
     let diagnosticOwners := staged.foldl (init := ({} : Std.HashSet Name))

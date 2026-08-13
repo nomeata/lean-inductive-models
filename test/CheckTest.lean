@@ -493,6 +493,8 @@ def run (root : String) : IO UInt32 := do
       IO.eprintln "checktest: compact owner row missing"
       return 1
     let ownerCertificate := compactRows[ownerRow]!.families[0]!
+    let compactRows := compactRows.set! ownerRow
+      { compactRows[ownerRow]! with modelSlots := ownerCertificate.publicNames }
     state ← state.check "duplicate compact family certificates fail closed" <|
       compactRejected <| compactOrderedReport (compactRows.set! ownerRow
         { compactRows[ownerRow]! with families := #[ownerCertificate, ownerCertificate] })
