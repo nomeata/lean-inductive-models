@@ -688,9 +688,10 @@ a per-process memory limit. The
 full-Mathlib workflow
 [`.github/workflows/mathlib.yml`](.github/workflows/mathlib.yml) generates and
 checks a pinned Mathlib export on a standard `ubuntu-24.04` hosted runner.
-Serialized builds, cache extraction, and export have a 12 GiB address-space
-limit; the model generator and kernel reread have the authoritative 10 GiB
-worker limit. The exporter writes a
+Serialized builds and cache extraction have a 12 GiB address-space limit; the
+single full-environment exporter has a 14 GiB limit; and the model generator
+and kernel reread retain the authoritative 10 GiB worker limit. The exporter
+writes a
 compressed stream which is fed to the staged generator through a FIFO; build
 trees, checkouts, and the compressed source are reclaimed before the staged
 spool and final output need the disk. The workflow records instruction counts

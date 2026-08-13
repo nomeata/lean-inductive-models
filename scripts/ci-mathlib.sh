@@ -24,6 +24,7 @@ MATHLIB_REV="5e932f97dd25535344f80f9dd8da3aab83df0fe6"
 EXPORTER_REV="caccfbebbc99077962b3321125b2375bb3fa22db"
 WORKER_LIMIT_KIB=$((10 * 1024 * 1024))
 BUILD_LIMIT_KIB=$((12 * 1024 * 1024))
+EXPORT_LIMIT_KIB=$((14 * 1024 * 1024))
 # The measured staged spool and output are each about 6 GB. This is a
 # generation-phase guard, after all disposable builds and checkouts are gone;
 # it is not a runner-size preflight.
@@ -81,8 +82,11 @@ cleanup_tree() {
 }
 
 # Every large process tree has an exact address-space ceiling. Serialized Lake
-# builds, cache extraction, and export need 12 GiB (Simple.c exceeds 10 GiB).
-# The public generator and serialized kernel reread use the authoritative
+# builds and cache extraction need 12 GiB (Simple.c exceeds 10 GiB). The
+# exporter imports all of Mathlib and retains the format's global expression
+# index, so it alone gets 14 GiB while gzip streams beside it, leaving 2 GiB
+# of the standard runner's 16 GiB for the compressor and runner services. The
+# public generator and serialized kernel reread retain the authoritative
 # 10 GiB worker ceiling; the supervised child inherits its parent's limit.
 run_capped() (
   limit_kib="$1"
@@ -127,7 +131,11 @@ run_measured() {
 }
 
 run_build_measured() {
-  run_measured "$BUILD_LIMIT_KIB" "12 GiB build/export" "$@"
+  run_measured "$BUILD_LIMIT_KIB" "12 GiB build/cache" "$@"
+}
+
+run_export_measured() {
+  run_measured "$EXPORT_LIMIT_KIB" "14 GiB Mathlib export" "$@"
 }
 
 run_worker_measured() {
@@ -195,7 +203,7 @@ disk_census mathlib-cached
 rm -f "$INPUT_GZ" "$INPUT_FIFO" "$OUTPUT"
 set +e
 (cd "$MATHLIB_DIR" &&
-  run_build_measured export lake env "$BIN_DIR/lean4export" Mathlib) |
+  run_export_measured export lake env "$BIN_DIR/lean4export" Mathlib) |
   gzip -1 > "$INPUT_GZ"
 export_status=("${PIPESTATUS[@]}")
 set -e
