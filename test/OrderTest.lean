@@ -588,13 +588,20 @@ def run (root : String) : IO UInt32 := do
     s!"{root}/test/fixtures/modelgen/transparent_owner_aliases.ndjson" {}
   let aliasStaged ← runFilterStagedState s!"{root}/_tmp" aliasRun.input {}
   let aliasDropped ← runFilterDroppedState s!"{root}/_tmp" aliasRun.input {}
+  let stagedGeneratedRecords := aliasStaged.records.foldl (init := 0) fun count record =>
+    match record.locator with
+    | .generated .. => count + 1
+    | .source _ => count
+  let stagedCommittedRecords := aliasStaged.islands.foldl (init := 0) fun count island =>
+    count + island.commit.declarations.size
   state := state.check "staged island sink preserves exact output and report" <|
     aliasStaged.output.decls == aliasRun.output.decls &&
       aliasStaged.report == aliasRun.report &&
       aliasStaged.records.size == aliasStaged.output.decls.size &&
       aliasStaged.order.size == aliasStaged.records.size &&
       aliasStaged.planValid && aliasStaged.malformedPlansRejected &&
-      aliasStaged.islands.size == aliasRun.report.generated.size &&
+      stagedCommittedRecords == stagedGeneratedRecords &&
+      aliasStaged.islands.all (fun island => !island.commit.declarations.isEmpty) &&
       aliasStaged.islands.all fun island =>
         island.compact.summaries.size == island.commit.declarations.size &&
           island.compact.globalExtras.size == island.commit.declarations.size
