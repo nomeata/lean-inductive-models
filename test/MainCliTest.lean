@@ -1,5 +1,6 @@
 import Modelgen.Check
 import Modelgen.Naming
+import Modelgen.Output
 
 set_option maxRecDepth 4096
 
@@ -43,6 +44,16 @@ def hasDiagnostic (stderr diagnostic : String) : Bool :=
 def familyCount? (text : String) : Option Nat := do
   let parsed ← (Modelgen.parse text (analyse := false)).toOption
   return (Modelgen.Check.discover parsed).size
+
+def removeIfPresent (path : System.FilePath) : IO Unit := do
+  try IO.FS.removeFile path
+  catch
+    | .noFileOrDirectory .. => pure ()
+    | error => throw error
+
+def hasOutputSibling (directory : System.FilePath) : IO Bool := do
+  return (← directory.readDir).any fun entry =>
+    entry.fileName.startsWith ".modelgen-output-" && entry.fileName.endsWith ".tmp"
 
 def mapInductiveType (inputExport : Modelgen.Export) (target : Lean.Name)
     (f : Modelgen.EIndType → Modelgen.EIndType) : Modelgen.Export :=
@@ -156,6 +167,15 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "kernel-invalid stdin output is rejected with exit 1" <|
     invalidOutput.exitCode == 1 &&
       (invalidOutput.stderr.splitOn "output kernel check rejected:").length > 1
+  let gatedOutputPath : System.FilePath := s!"{scratch}/main-cli-gated-output.ndjson"
+  let gatedSentinel := "output gate sentinel\n"
+  IO.FS.writeFile gatedOutputPath gatedSentinel
+  let gatedOutput ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--no-type-check-input",
+    "--type-check-output", "-o", gatedOutputPath.toString, "-"] invalidText
+  state := state.check "output kernel rejection occurs before named output is touched" <|
+    gatedOutput.exitCode == 1 && (← IO.FS.readFile gatedOutputPath) == gatedSentinel
+  IO.FS.removeFile gatedOutputPath
   IO.FS.removeFile invalidPath
 
   -- Kernel replay uses declaration dependencies internally, without applying
@@ -516,6 +536,65 @@ def main (args : List String) : IO UInt32 := do
     IO.FS.removeFile outputPath
   else
     state := state.check "file output was created" false
+
+  -- Named output uses a fresh sibling and one rename. Each injected failure
+  -- happens after the sibling has received bytes, but before the destination
+  -- can be replaced; the old file and directory must remain clean.
+  let failureTarget : System.FilePath := s!"{scratch}/main-cli-output-failure.ndjson"
+  for failure in #[Modelgen.Output.Test.Failure.write, .flush, .rename] do
+    IO.FS.writeFile failureTarget "old-output\n"
+    let rejected ← try
+        Modelgen.Output.Test.writeNamedFailing failureTarget failure
+        pure false
+      catch _ => pure true
+    state := state.check s!"injected {repr failure} preserves named output" <|
+      rejected && (← IO.FS.readFile failureTarget) == "old-output\n" &&
+        !(← hasOutputSibling scratch)
+  IO.FS.removeFile failureTarget
+
+  let noBasenameRejected ← try
+      Modelgen.Output.write "." fun stream => stream.putStr "unreachable"
+      pure false
+    catch _ => pure true
+  state := state.check "named output requires a final file name" noBasenameRejected
+
+  let contained ← Modelgen.Output.containToolErrors do
+    throw <| IO.userError "injected uncaught tool failure"
+  state := state.check "uncaught IO is contained as exit 3" (contained == 3)
+
+  -- Atomic replacement acts on the literal final directory entry. It does
+  -- not write through a symbolic link or mutate the other name of a hardlink.
+  let linkReferent : System.FilePath := s!"{scratch}/main-cli-link-referent.ndjson"
+  let symbolicTarget : System.FilePath := s!"{scratch}/main-cli-symbolic-output.ndjson"
+  let linkSentinel := "symbolic referent sentinel\n"
+  removeIfPresent symbolicTarget
+  IO.FS.writeFile linkReferent linkSentinel
+  unless System.Platform.isWindows do
+    discard <| IO.Process.run {
+      cmd := "ln", args := #["-s", linkReferent.toString, symbolicTarget.toString] }
+    let symbolicRun ← runModelgen binary [
+      "--no-inductives", "--no-check", "--quiet", "-o", symbolicTarget.toString, nested]
+    state := state.check "named output replaces a symlink, not its referent" <|
+      symbolicRun.exitCode == 0 && (← IO.FS.readFile linkReferent) == linkSentinel &&
+        (← symbolicTarget.symlinkMetadata).type == .file &&
+        (Modelgen.parse (← IO.FS.readFile symbolicTarget) (analyse := false)).isOk
+  removeIfPresent symbolicTarget
+  IO.FS.removeFile linkReferent
+
+  let hardSource : System.FilePath := s!"{scratch}/main-cli-hard-source.ndjson"
+  let hardTarget : System.FilePath := s!"{scratch}/main-cli-hard-output.ndjson"
+  removeIfPresent hardTarget
+  IO.FS.writeFile hardSource nestedText
+  IO.FS.hardLink hardSource hardTarget
+  let hardRun ← runModelgen binary [
+    "--no-inductives", "--no-check", "--quiet", "-o", hardTarget.toString,
+    hardSource.toString]
+  state := state.check "named output replaces only the selected hardlink entry" <|
+    hardRun.exitCode == 0 && (← IO.FS.readFile hardSource) == nestedText &&
+      (← hardSource.metadata).numLinks == 1 && (← hardTarget.metadata).numLinks == 1 &&
+      (Modelgen.parse (← IO.FS.readFile hardTarget) (analyse := false)).isOk
+  IO.FS.removeFile hardTarget
+  IO.FS.removeFile hardSource
 
   -- This line is larger than the reader's 4 MiB chunk, pinning carry handling
   -- when no newline occurs in an entire chunk.  Output is deliberately
