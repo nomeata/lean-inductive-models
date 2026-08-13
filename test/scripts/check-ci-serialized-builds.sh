@@ -6,6 +6,20 @@ workflow="$root/.github/workflows/ci.yml"
 readme="$root/README.md"
 lakefile="$root/lakefile.lean"
 
+# Keep the retired project name out of both tracked text and tracked paths.
+# Construct it from separate fragments so this guard does not exempt itself.
+retired_name="$(printf '%s%s' 'model' 'gen')"
+if git -C "$root" grep -Iin "$retired_name" -- .; then
+  echo "tracked content still contains the retired project name" >&2
+  exit 1
+fi
+while IFS= read -r tracked_path; do
+  if [[ "${tracked_path,,}" == *"$retired_name"* ]]; then
+    echo "tracked path still contains the retired project name: $tracked_path" >&2
+    exit 1
+  fi
+done < <(git -C "$root" ls-files)
+
 mapfile -t direct_builds < <(
   sed -nE 's/^[[:space:]]*(lake .*build .*)$/\1/p' "$workflow"
 )

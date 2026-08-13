@@ -44,7 +44,7 @@ jobs:
           command -v systemd-run >/dev/null
           systemctl --user show-environment >/dev/null
 
-          unit="inductive-models-mathlib-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          unit="lean-inductive-models-mathlib-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           systemd-run --user --wait --collect --pipe --quiet \
             --service-type=exec \
             --unit="$unit" \
