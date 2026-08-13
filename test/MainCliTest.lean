@@ -690,6 +690,21 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "noncanonical no-output input needs no raw staging certificate" <|
     noncanonicalDiscard.exitCode == defaults.exitCode && noncanonicalDiscard.stdout.isEmpty &&
       hasDiagnostic noncanonicalDiscard.stderr "output backend: compact-discard"
+  let noncanonicalKernelArgs :=
+    ["--no-output", "--no-check", "--type-check-output", "-"]
+  let noncanonicalKernelLegacy ← runInductiveModelsLegacy binary noncanonicalKernelArgs
+    (some noncanonicalInput)
+  let noncanonicalKernelBefore ← System.FilePath.readDir scratch
+  let noncanonicalKernelFresh ← runInductiveModels binary noncanonicalKernelArgs
+    (some noncanonicalInput)
+  let noncanonicalKernelAfter ← System.FilePath.readDir scratch
+  state := state.check "fresh kernel replay preserves noncanonical fallback report and exit" <|
+    noncanonicalKernelFresh.exitCode == noncanonicalKernelLegacy.exitCode &&
+      noncanonicalKernelFresh.stdout.isEmpty && noncanonicalKernelLegacy.stdout.isEmpty &&
+      noncanonicalKernelFresh.stderr == noncanonicalKernelLegacy.stderr &&
+      hasDiagnostic noncanonicalKernelFresh.stderr "output kernel check: accepted"
+  state := state.check "noncanonical fresh kernel fallback cleans its private workspace" <|
+    sameDirectoryEntries noncanonicalKernelBefore noncanonicalKernelAfter
 
   let traceMode ← runInductiveModelsWithEnv binary
     ["--no-check-output", "--no-type-check-output", nested]
@@ -783,6 +798,19 @@ def main (args : List String) : IO UInt32 := do
       fallbackStaged.stderr == fallbackLegacy.stderr
   state := state.check "compact availability fallback preserves exact ordinary output" <|
     fallbackStaged.stdout == fallbackLegacy.stdout
+  let freshFallbackArgs :=
+    ["--no-type-check-input", "--type-check-output", "--no-output", "-"]
+  let freshFallbackLegacy ← runInductiveModelsLegacy binary freshFallbackArgs
+    (some stabilityMiss.render)
+  let freshFallbackBefore ← System.FilePath.readDir scratch
+  let freshFallback ← runInductiveModels binary freshFallbackArgs (some stabilityMiss.render)
+  let freshFallbackAfter ← System.FilePath.readDir scratch
+  state := state.check "fresh kernel replay preserves compact-availability fallback" <|
+    freshFallback.exitCode == freshFallbackLegacy.exitCode && freshFallback.stdout.isEmpty &&
+      freshFallbackLegacy.stdout.isEmpty && freshFallback.stderr == freshFallbackLegacy.stderr &&
+      hasDiagnostic freshFallback.stderr "output kernel check: accepted"
+  state := state.check "compact-availability fresh fallback cleans its private workspace" <|
+    sameDirectoryEntries freshFallbackBefore freshFallbackAfter
   let leakedGeneratedSpools ← System.FilePath.readDir scratch
   state := state.check "staged generated output removes its workspace" <|
     !leakedGeneratedSpools.any (fun entry => entry.fileName.startsWith "lean-inductive-models-spool-")
