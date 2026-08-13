@@ -1235,10 +1235,11 @@ for that pass, so record the eligibility decisions while each owner is live.
 These summaries contain names, field indices, and booleans only; in
 particular, they cannot retain an island's expression graph.
 
-The outer array returned by `globalExtraTemplatesForRecordsWithIndex` remains
-aligned with its input records, including non-inductive records.  A compact
-final ordering can therefore reorder templates with the same locators it uses
-for declaration records. -/
+The outer array returned by `globalExtraRecordsWithIndex` remains aligned with
+its input records, including non-inductive records. Each element binds the
+introduced names to its templates so a caller cannot reorder one axis without
+the other. A compact final ordering may therefore permute these records with
+the same locators it uses for declaration records. -/
 
 /-- One owner-local decision needed by the unexpected public-slot sweep. -/
 inductive GlobalExtraTemplate where
@@ -1247,36 +1248,42 @@ inductive GlobalExtraTemplate where
   | recursor (owner : Name) (allowsRuleK : Bool)
   deriving Inhabited, Repr, BEq
 
+/-- Names and owner decisions captured atomically for one export record. -/
+structure GlobalExtraRecord where
+  names : Array Name
+  templates : Array GlobalExtraTemplate
+  deriving Inhabited, Repr, BEq
+
 /-- Capture unexpected-slot eligibility for each record without retaining an
 `Expr`.  Projection eligibility and proposition-former tests use the supplied
 overlay index, so generated owners may depend on transparent source aliases.
 As with the staging pipeline generally, duplicate owner declarations must be
 rejected by compact ordering before capture; the index's owner table is not a
 substitute for that collision check. -/
-def globalExtraTemplatesForRecordsWithIndex (index : SyntaxIndex)
-    (records : Array EDecl) : Array (Array GlobalExtraTemplate) :=
+def globalExtraRecordsWithIndex (index : SyntaxIndex)
+    (records : Array EDecl) : Array GlobalExtraRecord :=
   records.map fun declaration => match declaration with
     | .induct types constructors recursors =>
-      types.toArray.map (fun type =>
-        .type type.name (intrinsicProjectionFieldsWithIndex index type constructors)
-          (type.isKernelUnitlike constructors)
-          (type.isKernelStructureLike constructors &&
-            !index.normalizer.isPropositionFormer type.type)) ++
-      recursors.toArray.map fun recursor => .recursor recursor.name recursor.k
-    | _ => #[]
+      { names := declaration.names.toArray
+        templates := types.toArray.map (fun type =>
+          .type type.name (intrinsicProjectionFieldsWithIndex index type constructors)
+            (type.isKernelUnitlike constructors)
+            (type.isKernelStructureLike constructors &&
+              !index.normalizer.isPropositionFormer type.type)) ++
+        recursors.toArray.map fun recursor => .recursor recursor.name recursor.k }
+    | _ => { names := declaration.names.toArray, templates := #[] }
 
 /-- Reproduce the historical global-extra diagnostic order from value-free
-owner templates and declaration names in final record order.  `orderedNames`
-is deliberately an array rather than a set: repeated slot names retain their
-projection-diagnostic order and multiplicity, while a local set answers
-metadata presence queries. -/
-def globalExtrasFromTemplates (templates : Array (Array GlobalExtraTemplate))
-    (orderedNames : Array Name) : Array Violation := Id.run do
+records in final order. The flattened names deliberately remain an array:
+repeated slot names retain projection-diagnostic order and multiplicity, while
+a local set answers metadata presence queries. -/
+def globalExtrasFromRecords (records : Array GlobalExtraRecord) : Array Violation := Id.run do
+  let orderedNames := records.flatMap (·.names)
   let declared := orderedNames.foldl (fun names name => names.insert name)
     ({} : Std.HashSet Name)
   let mut violations : Array Violation := #[]
-  for record in templates do
-    for template in record do
+  for record in records do
+    for template in record.templates do
       match template with
       | .type owner validFields allowsUnitlike allowsEta =>
         for name in orderedNames do
@@ -1298,14 +1305,12 @@ def globalExtrasFromTemplates (templates : Array (Array GlobalExtraTemplate))
             violations := violations.push (.extraMetadata owner name .ruleK)
   return violations
 
-/-- Convenience form for an in-memory export.  Staged callers instead retain
-the per-record templates, reorder them with compact declaration locators, and
-pass the corresponding final name order to `globalExtrasFromTemplates`. -/
+/-- Convenience form for an in-memory export. Staged callers instead retain
+the bound per-record summaries and reorder them with compact declaration
+locators before calling `globalExtrasFromRecords`. -/
 def compactGlobalExtrasWithIndex (index : SyntaxIndex) (records : Array EDecl) :
     Array Violation :=
-  globalExtrasFromTemplates
-    (globalExtraTemplatesForRecordsWithIndex index records)
-    (records.flatMap fun declaration => declaration.names.toArray)
+  globalExtrasFromRecords (globalExtraRecordsWithIndex index records)
 
 /-- Discover selected families whose owner records belong to one generated
 island, using its overlay for transparent aliases and projection eligibility.

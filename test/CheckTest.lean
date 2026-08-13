@@ -333,6 +333,19 @@ def run (root : String) : IO UInt32 := do
     let validOwnerDecl := rawOwnerDecl + models.size
     let families := discover valid
     let mut state : TestState := {}
+    let interleavedAProjection := Naming.projectionName `Interleave.A 3
+    let interleavedBProjection := Naming.projectionName `Interleave.B 7
+    let interleavedGlobal : Array GlobalExtraRecord := #[
+      { names := #[`Interleave.A]
+        templates := #[.type `Interleave.A #[] true true] },
+      { names := #[interleavedBProjection], templates := #[] },
+      { names := #[`Interleave.B]
+        templates := #[.type `Interleave.B #[] true true] },
+      { names := #[interleavedAProjection], templates := #[] }]
+    state ← state.check "bound global-extra records preserve interleaved owner order" <|
+      globalExtrasFromRecords interleavedGlobal == #[
+        .extraProjection `Interleave.A interleavedAProjection,
+        .extraProjection `Interleave.B interleavedBProjection]
     state ← state.check "one public family discovered" (families.size == 1)
     if let some family := families[0]? then
       state ← state.check "family key" <|
