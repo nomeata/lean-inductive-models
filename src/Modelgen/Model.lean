@@ -80,9 +80,11 @@ open Lean Meta
 
 namespace Modelgen
 
-/-- Why a nested declaration's model could not be built. Each is a shape. -/
+/-- A positively recognized reason not to emit a requested public interface.
+
+Construction-invariant failures do not belong here; [`Modelgen.badShape`]
+raises an internal tool error for those. -/
 inductive Decline where
-  | dependentFields
   /-- **A prelude constant the input declares at something other than Lean's
   statement.** Absence is not this: a prelude constant the input simply does
   not have is *spliced* ([`Modelgen.ensureEq`], [`Modelgen.ensureFunext`]).
@@ -105,9 +107,6 @@ inductive Decline where
   that for nested, mutual, and simple generation, and only on this constructor.
   -/
   | nameLost (n : Name)
-  /-- Two mimics whose containers mention each other, so `pack` would have to
-  be mutually recursive. -/
-  | cyclicMimics
   /-- **A basis primitive, which is exempt rather than declined.** `Eq`,
   `Nat`, `PSigma'`, and `PUnit` are what the third construction is *written
   in*; modelling one of them would either be circular or would put a second
@@ -130,11 +129,9 @@ being built. `nested` is the model of a nested declaration
 ([`Modelgen.mutualIso`]); the prefix is a parameter rather than a second copy of
 the enumeration, because a second copy is a second thing to keep in step. -/
 def Decline.labelAs (what : String) : Decline → String
-  | .dependentFields => s!"{what} model with dependent fields"
   | .notLeans n why => s!"{what} model: the input's {n} is not Lean's ({why})"
   | .nameTaken n => s!"{what} model name taken ({n})"
   | .nameLost n => s!"{what} model name lost to a normalized-name collision ({n})"
-  | .cyclicMimics => s!"{what} model with mutually recursive occurrences"
   | .basisExempt =>
     s!"{what} model: a basis primitive (the exemption that makes the construction \
 well-founded)"
@@ -472,9 +469,9 @@ structure Gen where
   for a recursor goes through [`Modelgen.Gen.recLs`] for that reason. -/
   largeElim : Bool
 
-/-- The generator's monad: `MetaM`, with a *shape* decline as its own error so
-that a declaration this module cannot write is never confused with one the
-kernel rejected. -/
+/-- The generator's monad: `MetaM`, with an explicit non-emission result as its
+own error. Internal construction failures remain exceptions in the underlying
+`MetaM` and are therefore never reported as deliberate declines. -/
 abbrev GenM := ExceptT Decline MetaM
 
 def declineWith (d : Decline) : GenM α := throwThe Decline d
@@ -613,7 +610,7 @@ def noDepOnPacked (packed : Array Expr) (fs tys : Array Expr) : GenM Unit := do
     let ti := headNorm tys[i]!
     for j in [0:i] do
       if packed.contains fs[j]! && ti.containsFVar fs[j]!.fvarId! then
-        declineWith .dependentFields
+        badShape "a field type depends on an earlier packed field"
 
 /-- Read `n` minor premise types off a recursor application. -/
 def withMinorTypes (recApp : Expr) (n : Nat) (k : Array Expr → GenM α) : GenM α := do
@@ -1092,8 +1089,7 @@ def Family.memberUnder? (f : Family) (t : Expr) : GenM (Option (Nat × Nat)) := 
 def Family.withIndices (f : Family) (j : Nat) (k : Array Expr → GenM α) : GenM α := do
   forallBoundedTelescope (← ityp f.doms[j]!) (some f.fidx[j]!) fun idxs _ => k idxs
 
-/-- **The family a group of mutually recursive mimics is one recursion over**,
-or a decline.
+/-- **The family a group of mutually recursive mimics is one recursion over**.
 
 `nest_through_nested`'s `T` nests into `Tree T`, `Tree`'s own `node` field is
 `List (Tree T)` and *that* copy's `cons` head is `Tree T` again, so mimics 0
@@ -1142,7 +1138,7 @@ def familyFor (g : Gen) (grp : Array Nat) (ps : Array Expr) : GenM Family := do
       let .recInfo rj ← constInfo recs[j]! | badShape s!"{recs[j]!} is not a recursor"
       for rl in rj.rules do rules := rules.push (j, rl.ctor)
     return { recs, cls, qs, doms, fidx, mimic, rules }
-  declineWith .cyclicMimics
+  badShape "a mutually recursive mimic group has no matching recursor family"
 
 /-- The minor types the family's recursors bind at this motive vector. They are
 the same for every component, so they are read off component 0 once. -/
@@ -2565,7 +2561,7 @@ matters:
 A group of size one is emitted the way it always was. A larger one is one
 simultaneous recursion, and [`Modelgen.familyFor`] finds the recursors Lean
 already generated for it. -/
-def mimicGroups (pl : Plan) : Except Decline (Array (Array Nat)) := Id.run do
+def mimicGroups (pl : Plan) : Except String (Array (Array Nat)) := Id.run do
   let m := pl.mimics.size
   let r := pl.numAll
   let mut adj : Array (Array Bool) := Array.replicate m (Array.replicate m false)
@@ -2606,7 +2602,7 @@ def mimicGroups (pl : Plan) : Except Decline (Array (Array Nat)) := Id.run do
           order := order.push groups[a]!
           placed := placed.set! a true
           break
-  if order.size != ng then return .error .cyclicMimics
+  if order.size != ng then return .error "the mimic condensation graph is cyclic"
   return .ok order
 
 /-- **Build the model, or say which shape stopped it.**
@@ -2820,7 +2816,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- once.
   let groups ← match mimicGroups pl with
     | .ok gs => pure gs
-    | .error d => declineWith d
+    | .error message => badShape message
   let mut done := Array.replicate pl.mimics.size false
   let emit := fun (nm : Name) (ty val : Expr) (isThm : Bool) => do
     let hint ← hintsFor val

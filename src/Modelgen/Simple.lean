@@ -361,9 +361,8 @@ private def alignBasisLevelParams (declaration : Declaration) (actual : List Nam
   | _ => declaration
 
 /-- Require an encountered basis owner to be the exact canonical declaration
-family before it may be reported as an exemption. A noncanonical but
-kernel-valid declaration is an unsupported-generation decline, not a kernel
-rejection and never a successful exemption. -/
+family before it may be reported as an exemption. A noncanonical declaration
+is never a successful exemption. -/
 def validateBasisOwner (root : Name) (owner : EDecl) : GenM Unit := do
   let .induct (type :: _) _ _ := owner
     | badShape "the basis owner is not a nonempty inductive record"
