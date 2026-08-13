@@ -363,6 +363,15 @@ Missing, duplicate, renamed, differently typed, or non-theorem eta slots are
 rejected; an eta-looking declaration is also rejected for an ineligible
 member.
 
+An alternative one-layer carrier/equivalence design has been successfully
+compile-checked in
+[`OneLayerProjectionPrototype.lean`](test/OneLayerProjectionPrototype.lean),
+with implementation notes in
+[`OneLayerProjectionPrototype.md`](test/OneLayerProjectionPrototype.md). It is
+a prototype, not runtime coverage: production retains the projection and eta
+implementation described above, and a full carrier/recursor migration remains
+future work.
+
 ## Unit-like inductives
 
 For each member `T` with Lean's kernel unit-like treatment, the generator adds:
@@ -607,6 +616,10 @@ correctness_targets=(
   transparentowneraliasestest exportsyntaxnormalizationtest
   basisvalidationtest stagedwritertest
 )
+compile_only_targets=(
+  OneLayerProjectionPrototype
+)
+build_serially "${compile_only_targets[@]}"
 build_serially "${correctness_targets[@]}"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"

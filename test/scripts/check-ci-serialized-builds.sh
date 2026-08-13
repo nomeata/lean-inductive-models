@@ -85,6 +85,52 @@ if [[ "$readme_actual" != "$expected" ]]; then
   exit 1
 fi
 
+mapfile -t lake_compile_only_targets < <(
+  current=
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^lean_lib[[:space:]]+([^[:space:]]+)[[:space:]]+where$ ]]; then
+      current="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^lean_exe[[:space:]]+ ]]; then
+      current=
+    elif [[ -n "$current" && "$line" =~ ^[[:space:]]+srcDir[[:space:]]+:=[[:space:]]+\"test\"$ ]]; then
+      printf '%s\n' "$current"
+      current=
+    elif [[ -n "$current" && "$line" =~ ^[[:space:]]+srcDir[[:space:]]+:= ]]; then
+      current=
+    fi
+  done < "$lakefile"
+)
+
+readme_compile_source="$(
+  sed -n '/^compile_only_targets=($/,/^)/p' "$readme"
+)"
+ci_compile_source="$(
+  sed -n '/^          compile_only_targets=($/,/^          )/p' "$workflow" |
+    sed 's/^          //'
+)"
+for matrix_name in readme_compile_source ci_compile_source; do
+  declare -n matrix_source="$matrix_name"
+  if [[ -z "$matrix_source" ]]; then
+    printf '%s\n' "$matrix_name is missing" >&2
+    exit 1
+  fi
+  mapfile -t compile_matrix_targets < <(
+    eval "$matrix_source"
+    printf '%s\n' "${compile_only_targets[@]}"
+  )
+  sorted_matrix_targets="$(printf '%s\n' "${compile_matrix_targets[@]}" | LC_ALL=C sort)"
+  sorted_compile_targets="$(
+    printf '%s\n' "${lake_compile_only_targets[@]}" | LC_ALL=C sort
+  )"
+  if [[ "$sorted_matrix_targets" != "$sorted_compile_targets" ]]; then
+    printf '%s differs from lakefile.lean compile-only targets:\n' "$matrix_name" >&2
+    diff -u \
+      <(printf '%s\n' "$sorted_compile_targets") \
+      <(printf '%s\n' "$sorted_matrix_targets") >&2 || true
+    exit 1
+  fi
+done
+
 mapfile -t lake_test_targets < <(
   current=
   while IFS= read -r line; do

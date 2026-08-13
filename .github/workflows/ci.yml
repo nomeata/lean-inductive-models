@@ -91,6 +91,9 @@ jobs:
               lake -Kjobs=1 build "$target"
             done
           }
+          compile_only_targets=(
+            OneLayerProjectionPrototype
+          )
           test/scripts/check-ci-serialized-builds.sh
 
           case "$SUITE" in
@@ -103,6 +106,7 @@ jobs:
               ;;
             focused)
               test/scripts/check-mathlib-result.sh
+              build_serially "${compile_only_targets[@]}"
               build_serially \
                 clitest supervisortest generationflagstest checktest ordertest incrementalordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
