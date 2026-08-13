@@ -21,7 +21,7 @@ private def reportFailure (message : String) : IO Unit := do
 /-- Run the current executable once with identical arguments and inherited
 standard streams, working directory, environment, limits, and process group.
 The private marker is forced after the caller's phase-local environment. -/
-def runWorkerWithEnv (args : List String)
+def runWorkerRaw (args : List String)
     (environment : Array (String × Option String)) : IO UInt32 := do
   try
     let executable ← IO.appPath
@@ -33,14 +33,19 @@ def runWorkerWithEnv (args : List String)
       stdout := .inherit
       stderr := .inherit }
     let status ← child.wait
-    if status ≤ 3 then
-      return status
-    reportFailure s!"lean-inductive-models: worker terminated with native status {status}; \
-      reporting internal tool error 3"
-    return 3
+    return status
   catch error =>
     reportFailure s!"lean-inductive-models: cannot supervise worker: {error}"
     return 3
+
+/-- Run one public-contract worker and contain every native/impossible status. -/
+def runWorkerWithEnv (args : List String)
+    (environment : Array (String × Option String)) : IO UInt32 := do
+  let status ← runWorkerRaw args environment
+  if status ≤ 3 then return status
+  reportFailure s!"lean-inductive-models: worker terminated with native status {status}; \
+    reporting internal tool error 3"
+  return 3
 
 /-- Run one ordinary supervised worker without an internal phase payload. -/
 def runWorker (args : List String) : IO UInt32 :=

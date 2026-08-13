@@ -141,6 +141,23 @@ structure Workspace where
   directory : System.FilePath
   private ownedFiles : IO.Ref (Array System.FilePath)
 
+private def validateWorkspaceDirectory (root directory : System.FilePath) : IO Unit := do
+  unless root.fileName == some "_tmp" do
+    throw <| IO.userError s!"spool workspace root must be the project _tmp directory: {root}"
+  let rootMetadata ← root.symlinkMetadata
+  unless rootMetadata.type == .dir do
+    throw <| IO.userError s!"spool workspace root is not a physical directory: {root}"
+  let directoryMetadata ← directory.symlinkMetadata
+  unless directoryMetadata.type == .dir do
+    throw <| IO.userError s!"spool workspace is not a physical directory: {directory}"
+  let canonicalRoot ← IO.FS.realPath root
+  let canonicalDirectory ← IO.FS.realPath directory
+  let rootParts := canonicalRoot.components
+  let directoryParts := canonicalDirectory.components
+  unless rootParts.length < directoryParts.length &&
+      directoryParts.take rootParts.length == rootParts do
+    throw <| IO.userError s!"spool workspace {directory} is outside project root {root}"
+
 def Workspace.create (root : System.FilePath) : IO Workspace := do
   unless root.fileName == some "_tmp" do
     throw <| IO.userError s!"spool workspace root must be the project _tmp directory: {root}"
@@ -165,6 +182,14 @@ def Workspace.create (root : System.FilePath) : IO Workspace := do
     throw <| IO.userError s!"secure temporary directory {directory} is outside project root {root}; set TMPDIR below {root}"
   let ownedFiles ← IO.mkRef #[]
   return { root, directory, ownedFiles }
+
+/-- Attach a subprocess to an already reserved physical workspace. Its local
+ownership list is used only for safe creation; the coordinating parent has
+pre-registered every fixed leaf and remains responsible for cleanup. -/
+def Workspace.attach (root directory : System.FilePath) : IO Workspace := do
+  validateWorkspaceDirectory root directory
+  let ownedFiles ← IO.mkRef #[]
+  return { root, directory := ← IO.FS.realPath directory, ownedFiles }
 
 private def validLeaf (leaf : String) : Bool :=
   !leaf.isEmpty && leaf != "." && leaf != ".." &&
@@ -435,6 +460,25 @@ private def Workspace.run (workspace : Workspace) (action : Workspace → IO α)
 def withWorkspace (root : System.FilePath) (action : Workspace → IO α) : IO α := do
   let workspace ← Workspace.create root
   workspace.run action
+
+/-- Establish a workspace under an exact project `_tmp` independently of the
+caller's ambient temporary-directory setting. Environment mutation is confined
+to the atomic directory reservation and restored before `action`; the public
+process is single-threaded at this boundary. Existing non-directory/symlink
+roots remain rejected by `Workspace.create`. -/
+def withRootedWorkspace (root : System.FilePath) (action : Workspace → IO α) : IO α := do
+  if !(← root.pathExists) then IO.FS.createDirAll root
+  let previous ← IO.getEnv "TMPDIR"
+  let workspaceResult ← try
+      Std.Internal.IO.Async.System.setEnvVar "TMPDIR" root.toString
+      pure (Except.ok (← Workspace.create root) : Except IO.Error Workspace)
+    catch error => pure (Except.error error : Except IO.Error Workspace)
+  match previous with
+  | some value => Std.Internal.IO.Async.System.setEnvVar "TMPDIR" value
+  | none => Std.Internal.IO.Async.System.unsetEnvVar "TMPDIR"
+  match workspaceResult with
+  | Except.error error => throw error
+  | Except.ok workspace => workspace.run action
 
 /-- Try to reserve a workspace before calling `action`. Failure to establish
 the optional optimization is represented by `none`; once `action` starts, its
