@@ -952,8 +952,8 @@ def closeModelIsland (template : Export) (main : Environment)
   -- the owner is still absent from the persistent replay environment.  Keep
   -- all source declarations in the view: transparent aliases and exact
   -- projection metadata outside this island remain legitimate dependencies
-  -- of the generated interface.  The final aggregate check below is retained
-  -- as an oracle until staged output no longer constructs the complete array.
+  -- of the generated interface.  The final aggregate check below remains an
+  -- independent oracle for the per-island result.
   let statementReport :=
     if generatedOwners.isEmpty then
       { statementsChecked := 0, violations := #[] }

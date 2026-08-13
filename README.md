@@ -574,7 +574,7 @@ The correctness executables are:
 
 ```console
 TMPDIR="$PWD/_tmp/build-tmp" lake build \
-  test monotest clitest generationflagstest checktest ordertest namingtest \
+  test monotest clitest generationflagstest checktest ordertest incrementalordertest namingtest \
   drivernamingtest privatealiastest simplenamingtest rulektest mainclitest \
   projectiontest structureetatest deepimaxboxtest psigmaprimetest \
   exactsortlifttest tightpsigmaprimeroutetest vanishingerasuretest \
@@ -585,6 +585,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe clitest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe generationflagstest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe checktest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe ordertest "$PWD"
+TMPDIR="$PWD/_tmp/build-tmp" lake exe incrementalordertest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe namingtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe drivernamingtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe privatealiastest
@@ -604,6 +605,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe stagedwritertest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-a.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-c.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-mathlib-result.sh
+test/scripts/check-ci-serialized-builds.sh
 ```
 
 `mainclitest` executes the built `modelgen` binary and covers the complete
@@ -619,6 +621,7 @@ fixture requires the pinned exporter:
 
 ```console
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-modelgen.sh prim_shapes
+TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-mono.sh mono_proj
 ```
 
 All scratch data is kept under the repository-local `_tmp/` directory.
