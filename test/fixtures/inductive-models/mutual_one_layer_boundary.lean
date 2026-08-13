@@ -24,7 +24,8 @@ unsafe axiom lcVoid : Type
 mutual
 inductive MutualLayerA (alpha : Type u) (beta : alpha -> Type v) : Type (max u v) where
   | mk (key : alpha) (child : MutualLayerB alpha beta)
-      (payload : (fun selected => beta selected) key) : MutualLayerA alpha beta
+      (payload : Eq.rec (motive := fun _ _ => Type v)
+        (beta key) (Eq.refl (beta key))) : MutualLayerA alpha beta
 inductive MutualLayerB (alpha : Type u) (beta : alpha -> Type v) : Type (max u v) where
   | stop : MutualLayerB alpha beta
   | back (parent : MutualLayerA alpha beta) : MutualLayerB alpha beta

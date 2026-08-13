@@ -259,6 +259,9 @@ def run (root : String) : IO UInt32 := do
     actual keyProjection == expected keyProjection &&
       actual childProjection == expected childProjection &&
       actual payloadProjection == expected payloadProjection
+  state := state.check "payload iota preserves source-authored Eq.rec syntax" <|
+    containsConst ``Eq.rec constructor.type &&
+      (actual payloadRule).any (containsConst ``Eq.rec)
   state := state.check "legacy mutual route keeps literal projection RHSs" <|
     #[keyRule, childRule, payloadRule].all fun rule =>
       (actual rule).any fun type =>

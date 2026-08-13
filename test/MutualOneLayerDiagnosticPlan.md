@@ -51,7 +51,7 @@ unchanged, projection-ineligible sibling.
 `MutualLayerA`'s key, cross-member recursive child, and dependent payload use
 literal projection RHSs. The payload depends only on the ordinary key, so no
 generated dependency transport is needed. Its theorem telescope must retain
-the source beta-redex. `MutualLayerB` remains multi-constructor and receives no
+the source-authored reflexive `Eq.rec`. `MutualLayerB` remains multi-constructor and receives no
 intrinsic projections. The diagnostic also mutates the payload RHS with an
 identity `Eq.rec`; the current checker rejects that old transported spelling,
 which must remain true after the family certificate is introduced.
