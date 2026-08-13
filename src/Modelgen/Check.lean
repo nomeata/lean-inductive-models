@@ -1050,6 +1050,12 @@ structure SyntaxIndex where
   private sourceFamilies : Std.HashMap Name (Array Family) := {}
   private names : Std.HashSet Name := {}
 
+/-- The exact syntax normalizer already retained by this index.  The returned
+value structurally shares its definition table; consumers must reuse it rather
+than rebuilding a second whole-export map. -/
+def SyntaxIndex.exactNormalizer (index : SyntaxIndex) : ExactNormalizationEnv :=
+  index.normalizer
+
 private def declarationRecords (x : Export) : Std.HashMap Name (Array Nat) := Id.run do
   let mut records : Std.HashMap Name (Array Nat) := {}
   for i in [0:x.decls.size] do

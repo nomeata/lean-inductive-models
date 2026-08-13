@@ -2119,7 +2119,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- Built once. Each island overlays only its generated records, avoiding the
   -- former full-source declaration/constructor/rule/normalizer rebuild.
   let sourceSyntax := Check.SyntaxIndex.ofSource x
-  let sourceNormalizer := x.exactNormalizationEnv
+  let sourceNormalizer := sourceSyntax.exactNormalizer
   let mut persistentSyntax := sourceSyntax
   let sourceSummaries := Order.summaries scheduled
   let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
