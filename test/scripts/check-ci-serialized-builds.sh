@@ -3,7 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 workflow="$root/.github/workflows/ci.yml"
-readme="$root/README.md"
+maintainer_guide="$root/docs/maintainers/Testing.md"
 lakefile="$root/lakefile.lean"
 
 # Keep the retired project name out of both tracked text and tracked paths.
@@ -74,18 +74,18 @@ if [[ "$actual" != "$expected" ]]; then
 fi
 
 readme_function_source="$(
-  sed -n '/^build_serially() {$/,/^}$/p' "$readme"
+  sed -n '/^build_serially() {$/,/^}$/p' "$maintainer_guide"
 )"
 if [[ -z "$readme_function_source" ]]; then
-  echo "README build_serially function is missing" >&2
+  echo "maintainer guide build_serially function is missing" >&2
   exit 1
 fi
 mapfile -t readme_direct_builds < <(
-  sed -nE 's/^[[:space:]]*(TMPDIR="[^\"]+" )?(lake .*build .*)$/\2/p' "$readme"
+  sed -nE 's/^[[:space:]]*(TMPDIR="[^\"]+" )?(lake .*build .*)$/\2/p' "$maintainer_guide"
 )
 if [[ "${#readme_direct_builds[@]}" -ne 1 ||
       "${readme_direct_builds[0]}" != 'lake -Kjobs=1 build "$target"' ]]; then
-  printf '%s\n' "README contains a Lake build outside the one-target loop:" >&2
+  printf '%s\n' "maintainer guide contains a Lake build outside the one-target loop:" >&2
   printf '  %s\n' "${readme_direct_builds[@]}" >&2
   exit 1
 fi
@@ -96,7 +96,7 @@ readme_actual="$({
   build_serially alpha beta gamma
 })"
 if [[ "$readme_actual" != "$expected" ]]; then
-  printf 'README build_serially did not issue one Lake root per invocation:\n%s\n' \
+  printf 'maintainer guide build_serially did not issue one Lake root per invocation:\n%s\n' \
     "$readme_actual" >&2
   exit 1
 fi
@@ -118,7 +118,7 @@ mapfile -t lake_compile_only_targets < <(
 )
 
 readme_compile_source="$(
-  sed -n '/^compile_only_targets=($/,/^)/p' "$readme"
+  sed -n '/^compile_only_targets=($/,/^)/p' "$maintainer_guide"
 )"
 ci_compile_source="$(
   sed -n '/^          compile_only_targets=($/,/^          )/p' "$workflow" |
@@ -162,10 +162,10 @@ mapfile -t lake_test_targets < <(
 )
 
 readme_targets_source="$(
-  sed -n '/^correctness_targets=($/,/^)/p' "$readme"
+  sed -n '/^correctness_targets=($/,/^)/p' "$maintainer_guide"
 )"
 if [[ -z "$readme_targets_source" ]]; then
-  echo "README correctness_targets array is missing" >&2
+  echo "maintainer guide correctness_targets array is missing" >&2
   exit 1
 fi
 mapfile -t readme_targets < <(
@@ -176,7 +176,7 @@ mapfile -t readme_targets < <(
 sorted_lake_targets="$(printf '%s\n' "${lake_test_targets[@]}" | LC_ALL=C sort)"
 sorted_readme_targets="$(printf '%s\n' "${readme_targets[@]}" | LC_ALL=C sort)"
 if [[ "$sorted_readme_targets" != "$sorted_lake_targets" ]]; then
-  printf '%s\n' "README correctness targets differ from lakefile.lean:" >&2
+  printf '%s\n' "maintainer guide correctness targets differ from lakefile.lean:" >&2
   diff -u \
     <(printf '%s\n' "$sorted_lake_targets") \
     <(printf '%s\n' "$sorted_readme_targets") >&2 || true
@@ -184,7 +184,7 @@ if [[ "$sorted_readme_targets" != "$sorted_lake_targets" ]]; then
 fi
 
 mapfile -t readme_run_targets < <(
-  sed -nE 's/^TMPDIR="[^\"]+" lake exe ([^[:space:]]+).*$/\1/p' "$readme"
+  sed -nE 's/^(TMPDIR="[^\"]+" )?lake exe ([^[:space:]]+).*$/\2/p' "$maintainer_guide"
 )
 mapfile -t ci_run_targets < <(
   sed -nE 's/^[[:space:]]*lake exe ([^[:space:]]+).*$/\1/p' "$workflow"
@@ -210,7 +210,7 @@ mapfile -t readme_check_scripts < <(
   sed -nE \
     -e 's|^(TMPDIR="[^\"]+" )?(test/scripts/check-[^[:space:]]+\.sh).*|\2|p' \
     -e 's|^(TMPDIR="[^\"]+" )?(test/scripts/check_[^[:space:]]+\.py).*|\2|p' \
-    "$readme" | LC_ALL=C sort
+    "$maintainer_guide" | LC_ALL=C sort
 )
 mapfile -t ci_check_scripts < <(
   sed -nE \
@@ -231,4 +231,4 @@ for matrix_name in readme_check_scripts ci_check_scripts; do
   fi
 done
 
-echo "CI/README serialized builds and correctness matrix: ${#lake_test_targets[@]} targets, ${#check_scripts[@]} scripts"
+echo "CI/maintainer-guide serialized builds and correctness matrix: ${#lake_test_targets[@]} targets, ${#check_scripts[@]} scripts"
