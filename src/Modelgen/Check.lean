@@ -426,51 +426,6 @@ def Violation.message : Violation → String
 private def appendUnique (names : Array Name) (more : List Name) : Array Name :=
   more.foldl (fun out name => if out.contains name then out else out.push name) names
 
-/-- Discover public model families from exact names computed from each original
-inductive record. `includeEmpty root` retains an expected family even when no
-public slot survived serialization; the generation oracle uses that only for
-roots which this run reports as generated, so complete interface loss becomes
-a collection of missing-public violations rather than an invisible family.
-
-One family covers the whole atomic record, but every public slot in its
-correspondence remains attached to its exact original declaration. Names merely
-containing an `_model` component have no special meaning. -/
-private def discoverWith (x : Export) (includeEmpty : Name → Bool) : Array Family := Id.run do
-  let mut declarations : Std.HashMap Name (Array Nat) := {}
-  for i in [0:x.decls.size] do
-    for name in x.decls[i]!.names do
-      declarations := declarations.insert name ((declarations.getD name #[]).push i)
-
-  let mut families : Array Family := #[]
-  for ownerDecl in [0:x.decls.size] do
-    let .induct types _ _ := x.decls[ownerDecl]! | continue
-    let some root := types.head?.map (·.name) | continue
-    let some correspondence := correspondenceAt? x ownerDecl | continue
-    let publicNames := correspondence.publicNames
-    unless includeEmpty root ||
-        publicNames.any (fun name => !(declarations.getD name #[]).isEmpty) do continue
-    let mut modelDecls : Array Nat := #[]
-    for name in publicNames do
-      for i in declarations.getD name #[] do
-        unless modelDecls.contains i do modelDecls := modelDecls.push i
-    modelDecls := modelDecls.qsort (· < ·)
-    let modelNames := modelDecls.foldl
-      (fun names i => appendUnique names x.decls[i]!.names) #[]
-    let modelRoot := Naming.modelName root
-    families := families.push
-      { owner := root, modelRoot, carrier := modelRoot, ownerDecl, correspondence,
-        decls := modelDecls, names := modelNames }
-  return families
-
-def discover (x : Export) : Array Family :=
-  discoverWith x fun _ => false
-
-/-- Discover the exact generated-family view, retaining a requested owner even
-when every public model slot is absent.  This is the same fail-closed discovery
-used by the aggregate generation oracle, exposed for staged per-family checks. -/
-def statementFamiliesFor (x : Export) (owners : Std.HashSet Name) : Array Family :=
-  (discoverWith x owners.contains).filter fun family => owners.contains family.owner
-
 private partial def expressionReference? (targets : Std.HashSet Name) : Expr → Option Name
   | .const name _ => if targets.contains name then some name else none
   | .proj typeName _ struct =>
@@ -1082,27 +1037,25 @@ structure SyntaxIndex where
   private structures : StructureOwners
   private ruleSlots : IotaSlots
   private normalizer : ExactNormalizationEnv
+  /-- Exact declaration-record occurrences in source order.  Keeping this in
+  the shared index prevents family discovery from rebuilding a whole-export
+  name table for every consumer. -/
+  private records : Std.HashMap Name (Array Nat)
   private globalExtras : Array Violation := #[]
   private sourceFamilies : Std.HashMap Name (Array Family) := {}
   private names : Std.HashSet Name := {}
 
-private def familyTable (x : Export) : Std.HashMap Name (Array Family) := Id.run do
-  let mut table : Std.HashMap Name (Array Family) := {}
-  for ownerDecl in [0:x.decls.size] do
-    let .induct types _ _ := x.decls[ownerDecl]! | continue
-    let some root := types.head?.map (·.name) | continue
-    let some correspondence := correspondenceAt? x ownerDecl | continue
-    let family : Family :=
-      { owner := root, modelRoot := Naming.modelName root,
-        carrier := Naming.modelName root, ownerDecl, correspondence,
-        decls := #[], names := #[] }
-    table := table.insert root ((table.getD root #[]).push family)
-  return table
+private def declarationRecords (x : Export) : Std.HashMap Name (Array Nat) := Id.run do
+  let mut records : Std.HashMap Name (Array Nat) := {}
+  for i in [0:x.decls.size] do
+    for name in x.decls[i]!.names do
+      records := records.insert name ((records.getD name #[]).push i)
+  return records
 
 private def SyntaxIndex.coreOfExport (x : Export) : SyntaxIndex :=
   { declarations := declarationTypes x, constructors := constructorRecords x,
     structures := structureOwners x, ruleSlots := iotaSlots x,
-    normalizer := x.exactNormalizationEnv, sourceFamilies := familyTable x,
+    normalizer := x.exactNormalizationEnv, records := declarationRecords x,
     names := x.decls.foldl (fun names declaration =>
       declaration.names.foldl (·.insert ·) names) {} }
 
@@ -1148,57 +1101,6 @@ private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
         violations := violations.push (.extraRule pair.owner name)
   return violations
 
-private def computeGlobalExtras (x : Export) (index : SyntaxIndex) : Array Violation :=
-    Id.run do
-  let mut violations : Array Violation := #[]
-  -- An extra metadata-looking theorem is invalid even when no carrier or
-  -- other public slot exists to make the declaration a discoverable model
-  -- family.  The exact owner record, not suffix parsing, determines the slot.
-  for ownerDecl in [0:x.decls.size] do
-    let .induct types constructors recursors := x.decls[ownerDecl]! | continue
-    for type in types do
-      let validFields := x.intrinsicProjectionFieldsFor type constructors
-      for declaration in x.decls do
-        for name in declaration.names do
-          if let some fieldIndex := projectionSlot? type.name name then
-            unless validFields.contains fieldIndex do
-              violations := violations.push (.extraProjection type.name name)
-      unless type.isKernelUnitlike constructors do
-        let name := Naming.unitlikeName type.name
-        unless (index.declarations.getD name #[]).isEmpty do
-          violations := violations.push (.extraMetadata type.name name .unitlike)
-      unless type.isKernelStructureLike constructors &&
-          !index.normalizer.isPropositionFormer type.type do
-        let name := Naming.etaName type.name
-        unless (index.declarations.getD name #[]).isEmpty do
-          violations := violations.push (.extraMetadata type.name name .eta)
-    for recursor in recursors do
-      unless recursor.k do
-        let name := Naming.ruleKName recursor.name
-        unless (index.declarations.getD name #[]).isEmpty do
-          violations := violations.push (.extraMetadata recursor.name name .ruleK)
-  return violations
-
-/-- Build all reusable syntax tables, including the whole-export unexpected
-slot sweep.  Per-family checks subsequently filter this cached array instead
-of rescanning every declaration for every generated island. -/
-def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
-  let index := SyntaxIndex.coreOfExport x
-  { index with globalExtras := computeGlobalExtras x index }
-
-/-- Build the persistent generation-time source tables without the global
-unexpected-slot sweep. Island checks consume only family-local diagnostics;
-the final aggregate constructs an `ofExport` index and runs that sweep once. -/
-def SyntaxIndex.ofSource (x : Export) : SyntaxIndex :=
-  SyntaxIndex.coreOfExport x
-
-/-- Attach the one whole-export unexpected-slot sweep to an already complete
-overlay. The caller is responsible for having overlaid every declaration not
-present in the source snapshot; collision rejection makes that requirement
-fail closed. -/
-def SyntaxIndex.withGlobalExtras (x : Export) (index : SyntaxIndex) : SyntaxIndex :=
-  { index with globalExtras := computeGlobalExtras x index }
-
 /-- Overlay an island in front of a persistent source index without rescanning
 the source export. Any name collision fails closed before first/last-map
 semantics could hide it. Declaration and rule arrays are prefixed, generated
@@ -1243,6 +1145,7 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
     structures := structures
     ruleSlots := ruleSlots
     normalizer := { definitions := definitions }
+    records := source.records
     globalExtras := source.globalExtras
     sourceFamilies := source.sourceFamilies
     names := names }
@@ -1286,6 +1189,78 @@ private def intrinsicProjectionFieldsWithIndex (index : SyntaxIndex)
     if projectionFieldEligibleWithIndex index ownerIsProp fieldIndex current locals == some true then
       fields := fields.push fieldIndex
   return fields
+
+/-! ## Indexed family discovery
+
+The historical discovery helper rebuilt the complete transparent-definition
+and declaration-type tables once per inductive owner.  On a flattened export
+that is quadratic in the number of records.  Discovery below consumes the one
+shared syntax index instead: all whole-export tables are built once and each
+owner performs only its local correspondence walk. -/
+
+/-- Indexed core of family discovery. `includeEmpty root` retains an expected
+family even when none of its public slots is declared. -/
+private def discoverWithIndexWhere (x : Export) (index : SyntaxIndex)
+    (includeEmpty : Name → Bool) : Array Family := Id.run do
+  let mut families : Array Family := #[]
+  for ownerDecl in [0:x.decls.size] do
+    let declaration := x.decls[ownerDecl]!
+    let .induct types _ _ := declaration | continue
+    let some root := types.head?.map (·.name) | continue
+    let some correspondence := correspondenceFor? index.normalizer
+        (intrinsicProjectionFieldsWithIndex index) declaration
+      | continue
+    let publicNames := correspondence.publicNames
+    unless includeEmpty root ||
+        publicNames.any (fun name => !(index.records.getD name #[]).isEmpty) do continue
+    let mut modelDecls : Array Nat := #[]
+    for name in publicNames do
+      for i in index.records.getD name #[] do
+        unless modelDecls.contains i do modelDecls := modelDecls.push i
+    modelDecls := modelDecls.qsort (· < ·)
+    let modelNames := modelDecls.foldl
+      (fun names i => appendUnique names x.decls[i]!.names) #[]
+    let modelRoot := Naming.modelName root
+    families := families.push
+      { owner := root, modelRoot, carrier := modelRoot, ownerDecl, correspondence,
+        decls := modelDecls, names := modelNames }
+  return families
+
+/-- Discover public model families using syntax tables already built for the
+same export. This is the reusable production entry point for passes which need
+both an index and family discovery. -/
+def discoverWithIndex (x : Export) (index : SyntaxIndex) : Array Family :=
+  discoverWithIndexWhere x index fun _ => false
+
+/-- Discover public model families from exact names computed from each original
+inductive record. One family covers each atomic owner record; a declaration
+record introducing any exact public slot belongs to that family in its
+entirety. -/
+def discover (x : Export) : Array Family :=
+  discoverWithIndex x (SyntaxIndex.coreOfExport x)
+
+/-- Discover the exact generated-family view, retaining a requested owner even
+when every public model slot is absent. -/
+def statementFamiliesForWithIndex (x : Export) (index : SyntaxIndex)
+    (owners : Std.HashSet Name) : Array Family :=
+  (discoverWithIndexWhere x index owners.contains).filter fun family =>
+    owners.contains family.owner
+
+def statementFamiliesFor (x : Export) (owners : Std.HashSet Name) : Array Family :=
+  statementFamiliesForWithIndex x (SyntaxIndex.coreOfExport x) owners
+
+private def sourceFamilyTable (families : Array Family) : Std.HashMap Name (Array Family) :=
+  families.foldl (init := {}) fun table family =>
+    let template := { family with decls := #[], names := #[] }
+    table.insert family.owner ((table.getD family.owner #[]).push template)
+
+/-- Build persistent generation-time source tables without the whole-output
+unexpected-slot sweep. Every owner template is attached after indexed
+discovery, breaking the former per-owner whole-export reconstruction. -/
+def SyntaxIndex.ofSource (x : Export) : SyntaxIndex :=
+  let index := SyntaxIndex.coreOfExport x
+  let families := discoverWithIndexWhere x index fun _ => true
+  { index with sourceFamilies := sourceFamilyTable families }
 
 /-! ## Value-free global-extra summaries
 
@@ -1390,6 +1365,22 @@ def globalExtrasFromRecords (records : Array GlobalExtraRecord) : Array Violatio
             violations := violations.push (.extraMetadata owner name .ruleK)
   return violations
 
+/-- Build all reusable syntax tables, including the whole-export unexpected
+slot sweep. Family discovery and projection eligibility share the same index;
+the global sweep uses the linear name index above rather than rescanning the
+complete declaration stream for every inductive owner. -/
+def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
+  let index := SyntaxIndex.ofSource x
+  { index with globalExtras :=
+      globalExtrasFromRecords (globalExtraRecordsWithIndex index x.decls) }
+
+/-- Attach the whole-export unexpected-slot sweep to an already complete
+overlay. The caller is responsible for having overlaid every declaration not
+present in the source snapshot. -/
+def SyntaxIndex.withGlobalExtras (x : Export) (index : SyntaxIndex) : SyntaxIndex :=
+  { index with globalExtras :=
+      globalExtrasFromRecords (globalExtraRecordsWithIndex index x.decls) }
+
 /-- Restrict the expensive unexpected-slot sweep to selected diagnostic
 owners before any template scans the complete final name array. Names from
 unselected records remain visible because a selected owner's unexpected public
@@ -1443,8 +1434,10 @@ and report the exact number of model families inspected.  All comparisons are
 literal after positional universe alignment and the one simultaneous
 declaration-name substitution. -/
 def checkReport (x : Export) : Report :=
-  let families := discover x
-  { familiesChecked := families.size, violations := checkFamilies x families true }
+  let index := SyntaxIndex.ofExport x
+  let families := discoverWithIndex x index
+  { familiesChecked := families.size,
+    violations := checkFamiliesWithIndex x index families true }
 
 /-! ## Compact whole-output certificates
 
@@ -1506,7 +1499,7 @@ the full-export convenience form; staged generation captures source and island
 families separately through `compactFamilyCertificateWithIndex`. -/
 def compactFamilyCertificates (x : Export) : Array CompactFamilyCertificate :=
   let index := SyntaxIndex.ofSource x
-  (discover x).map (compactFamilyCertificateWithIndex x index)
+  (discoverWithIndex x index).map (compactFamilyCertificateWithIndex x index)
 
 /-- One final record's global-extra template and family certificates. Keeping
 the fields bound makes it possible to reject a certificate attached to a row
@@ -1571,7 +1564,7 @@ def compactOrderedReport (records : Array CompactCheckRecord) : Except String Re
 /-- In-memory equivalence oracle for an already ordered export. -/
 def compactOrderedCheckReport (x : Export) : Except String Report :=
   let index := SyntaxIndex.ofSource x
-  let families := discover x
+  let families := discoverWithIndex x index
   let familyRecords := compactFamilyCertificateRecordsWithIndex x index families
   let modelSlotRecords := families.foldl (init := Array.replicate x.decls.size #[])
     fun records family => records.set! family.ownerDecl family.correspondence.publicNames
@@ -1631,17 +1624,19 @@ def checkStatementFamiliesWithIndex (x : Export) (index : SyntaxIndex)
   { localReport with violations := localReport.violations ++ global }
 
 def checkStatements (x : Export) : StatementReport :=
-  let families := discover x
+  let index := SyntaxIndex.ofExport x
+  let families := discoverWithIndex x index
   { statementsChecked := families.foldl
       (fun count family => count + family.correspondence.statementCount) 0
-    violations := checkFamilies x families false }
+    violations := checkFamiliesWithIndex x index families false }
 
 /-- Generation-time view restricted to the families emitted by this run.
 Pre-existing models in an already-filtered input remain available as exact
 declaration dependencies, but do not inflate the run's work count or errors. -/
 def checkStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
-  let families := statementFamiliesFor x owners
-  checkStatementFamiliesWithIndex x (.ofExport x) families
+  let index := SyntaxIndex.ofExport x
+  let families := statementFamiliesForWithIndex x index owners
+  checkStatementFamiliesWithIndex x index families
 
 /-- Compatibility view of [`checkReport`] for callers interested only in
 violations. -/
