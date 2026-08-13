@@ -2009,9 +2009,10 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let mut persistentSyntax := sourceSyntax
   let sourceSummaries := Order.summaries scheduled
   let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
-  let rawOrdinals := x.decls.foldlIdx (init := ({} : Std.HashMap Name Nat))
-    fun ordinal ordinals declaration => declaration.names.foldl
-      (fun ordinals name => ordinals.insert name ordinal) ordinals
+  let mut rawOrdinals : Std.HashMap Name Nat := {}
+  for ordinal in [0:x.decls.size] do
+    rawOrdinals := x.decls[ordinal]!.names.foldl
+      (fun ordinals name => ordinals.insert name ordinal) rawOrdinals
   let mut legacyOut : Array EDecl := #[]
   let mut rep : Report := {}
   let mut staged : Array StagedIsland := #[]
