@@ -79,6 +79,63 @@ partial def containsConst (target : Name) : Expr → Bool
   | .mdata _ body => containsConst target body
   | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => false
 
+partial def containsRedundantZeroMaxLevel : Level → Bool
+  | .max _ .zero | .max .zero _ => true
+  | .succ level => containsRedundantZeroMaxLevel level
+  | .max left right | .imax left right =>
+      containsRedundantZeroMaxLevel left || containsRedundantZeroMaxLevel right
+  | .zero | .param _ | .mvar _ => false
+
+partial def containsRedundantZeroMax : Expr → Bool
+  | .sort level => containsRedundantZeroMaxLevel level
+  | .const _ levels => levels.any containsRedundantZeroMaxLevel
+  | .proj _ _ struct => containsRedundantZeroMax struct
+  | .app fn argument => containsRedundantZeroMax fn || containsRedundantZeroMax argument
+  | .lam _ type body _ | .forallE _ type body _ =>
+      containsRedundantZeroMax type || containsRedundantZeroMax body
+  | .letE _ type value body _ =>
+      containsRedundantZeroMax type || containsRedundantZeroMax value ||
+        containsRedundantZeroMax body
+  | .mdata _ body => containsRedundantZeroMax body
+  | .bvar _ | .fvar _ | .mvar _ | .lit _ => false
+
+/-- A test-only defeq-redundant level spelling.  The raw constructor is
+intentional: normalization would destroy the syntax this regression pins. -/
+def redundantSourceLevels (expression : Expr) : Expr :=
+  expression.replace fun
+    | .sort level => some (.sort (.max level .zero))
+    | .const `Wty.rec (motiveLevel :: ownerLevels) =>
+        some (.const `Wty.rec (.max motiveLevel .zero :: ownerLevels))
+    | _ => none
+
+/-- `Eq.rec` returning `Sort level` along reflexivity, hence definitionally
+equal to the original sort but observably source-authored syntax. -/
+def authoredSortTransport (level : Level) : Expr :=
+  let α := Expr.sort (.succ level)
+  let value := Expr.sort level
+  let equalityLevel := .succ (.succ level)
+  let motive := Expr.lam `target α
+    (Expr.lam `equality
+      (mkAppN (.const ``Eq [equalityLevel]) #[α, value, .bvar 0])
+      (Expr.sort (.succ level)) .default) .default
+  let equality := mkAppN (.const ``Eq.refl [equalityLevel]) #[α, value]
+  mkAppN (.const ``Eq.rec [equalityLevel, equalityLevel])
+    #[α, value, motive, value, value, equality]
+
+/-- Add one source-authored, definitionally trivial transport to the outer
+parameter domain of every exact face in an exported inductive record. -/
+def authoredOuterSortTransport : Expr → Expr
+  | .forallE name (.sort level) body info =>
+      .forallE name (authoredSortTransport level) body info
+  | .lam name (.sort level) body info =>
+      .lam name (authoredSortTransport level) body info
+  | expression => expression
+
+def mapOwnerSyntax (x : Export) (owner : Name) (map : Expr → Expr) : Export :=
+  { x with decls := x.decls.map fun declaration =>
+      if declaration.names.contains owner then EDecl.mapNames id map declaration
+      else declaration }
+
 partial def containsProjection : Expr → Bool
   | .proj .. => true
   | .app fn argument => containsProjection fn || containsProjection argument
@@ -475,6 +532,36 @@ def main : IO UInt32 := do
   state := state.check "complete direct one-layer public interface introduces no Eq.rec" <|
     wtyPublicStatements.all fun name =>
       (declarationType? wGenerated name).any fun type => !containsConst ``Eq.rec type
+
+  -- Exact public syntax is a name-only rewrite.  Definitional equality is not
+  -- enough here: redundant level spelling from the exporter must survive the
+  -- private adapter, public carrier, recursor/iota, and projection family.
+  let wExactRaw := mapOwnerSyntax wRaw `Wty redundantSourceLevels
+  let (wExactDeclarations, wExactReport) ← runExport wExactRaw
+  let wExactGenerated := outputExport wExactRaw wExactDeclarations
+  let wExactFaces := #[Naming.modelName `Wty, Naming.modelName `Wty.mk,
+    Naming.modelName `Wty.rec, Naming.iotaName `Wty.rec 0,
+    wtyProjection0, wtyProjection1, wtyRule0, wtyRule1]
+  state := state.check "one-layer carrier retains the exact redundant source level syntax" <|
+    wExactReport.unreplayable.isNone &&
+      declarationType? wExactGenerated (Naming.modelName `Wty) ==
+        declarationType? wExactRaw `Wty
+  state := state.check "redundant source levels span carrier ctor rec iota and projections" <|
+    wExactFaces.all fun name =>
+      (declarationType? wExactGenerated name).any containsRedundantZeroMax
+
+  -- A clean source has no `Eq.rec` in these propositions, but the generator
+  -- must not turn that into a blanket erasure rule.  A source-authored,
+  -- definitionally trivial transport remains literal across the same family.
+  let wAuthoredRaw := mapOwnerSyntax wRaw `Wty authoredOuterSortTransport
+  let (wAuthoredDeclarations, wAuthoredReport) ← runExport wAuthoredRaw
+  let wAuthoredGenerated := outputExport wAuthoredRaw wAuthoredDeclarations
+  let wAuthoredMappedFaces := wExactFaces.filter fun name =>
+    name != wtyRule0 && name != wtyRule1
+  state := state.check "source-authored Eq.rec survives mapped one-layer public faces" <|
+    wAuthoredReport.unreplayable.isNone &&
+      wAuthoredMappedFaces.all fun name =>
+        (declarationType? wAuthoredGenerated name).any (containsConst ``Eq.rec)
   let treePrivateRoot := `Tree._model._impl
   let treeOneLayerCertificate := #[Name.str treePrivateRoot "self",
     Name.str treePrivateRoot "ctor_0", Name.str treePrivateRoot "rec",
@@ -755,4 +842,16 @@ def main : IO UInt32 := do
     for violation in Check.check wGenerated do
       if violation.familyOwner == `Wty then
         IO.eprintln s!"Wty projection check violation: {repr violation}"
+    IO.eprintln s!"Wty redundant generated={wExactReport.generated}, declined={wExactReport.declined}, unreplayable={wExactReport.unreplayable}, statements={wExactReport.stmtErrors}"
+    for violation in Check.check wExactGenerated do
+      if violation.familyOwner == `Wty then
+        IO.eprintln s!"Wty redundant check violation: {repr violation}"
+    if let some sourceType := declarationType? wExactRaw `Wty then
+      IO.eprintln s!"Wty redundant source type: {repr sourceType}"
+    if let some generatedType := declarationType? wExactGenerated (Naming.modelName `Wty) then
+      IO.eprintln s!"Wty redundant generated type: {repr generatedType}"
+    IO.eprintln s!"Wty authored generated={wAuthoredReport.generated}, declined={wAuthoredReport.declined}, unreplayable={wAuthoredReport.unreplayable}, statements={wAuthoredReport.stmtErrors}"
+    for violation in Check.check wAuthoredGenerated do
+      if violation.familyOwner == `Wty then
+        IO.eprintln s!"Wty authored check violation: {repr violation}"
   return if state.failed.isEmpty then 0 else 1
