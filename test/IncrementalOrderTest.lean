@@ -239,6 +239,31 @@ def randomSummaries (seed : Nat) : Array Order.DeclSummary :=
   let size := pseudo seed 0 80 25
   (Array.range size).map (randomSummary seed size)
 
+def randomDuplicateSummaries (seed : Nat) :
+    Array Order.DeclSummary × Name × Nat × Nat :=
+  let size := pseudo seed 0 90 23 + 2
+  let summaries := (Array.range size).map (randomSummary seed size)
+  let first := pseudo seed 0 91 size
+  let second := (first + 1 + pseudo seed 0 92 (size - 1)) % size
+  let duplicate := summaries[first]!.introduced[0]!
+  let summaries := summaries.modify second fun declaration =>
+    { declaration with introduced := declaration.introduced.push duplicate }
+  (summaries, duplicate, min first second, max first second)
+
+def randomCycleSummaries (seed : Nat) :
+    Array Order.DeclSummary × Array Nat × Array (Array Name) :=
+  let prefixSize := pseudo seed 0 93 17
+  let prelude := (Array.range prefixSize).map fun i =>
+    summary i #[Name.mkSimple s!"cycle_prefix_{seed}_{i}"]
+  let a := Name.mkSimple s!"cycle_a_{seed}"
+  let b := Name.mkSimple s!"cycle_b_{seed}"
+  let c := Name.mkSimple s!"cycle_c_{seed}"
+  let summaries := prelude ++ #[
+    summary prefixSize #[a] #[c],
+    summary (prefixSize + 1) #[b] #[a],
+    summary (prefixSize + 2) #[c] #[b]]
+  (summaries, #[prefixSize, prefixSize + 1, prefixSize + 2], #[#[a], #[b], #[c]])
+
 def run (root : String) : IO UInt32 := do
   let mut state : TestState := {}
   let configs : Array (String × Cli.Config) := #[
@@ -368,6 +393,39 @@ def run (root : String) : IO UInt32 := do
   state := state.check "random compact graphs match the quadratic reference exactly" <|
     (Array.range 512).all fun seed =>
       compactOrderAgreesWithQuadratic (randomSummaries seed)
+
+  state := state.check "random duplicate diagnostics match exactly" <|
+    (Array.range 256).all fun seed =>
+      let (summaries, name, first, second) := randomDuplicateSummaries seed
+      compactOrderAgreesWithQuadratic summaries &&
+        isExactError (Order.summaryRecordOrderPrioritizing summaries)
+          (.duplicateName name first second)
+
+  state := state.check "random residual-cycle diagnostics match exactly" <|
+    (Array.range 256).all fun seed =>
+      let (summaries, records, declarations) := randomCycleSummaries seed
+      compactOrderAgreesWithQuadratic summaries &&
+        isExactError (Order.summaryRecordOrderPrioritizing summaries)
+          (.cycle records declarations)
+
+  -- Repeated updates to one nested bucket are the shape which exposed the
+  -- outer-array copy-on-write regression. Keep both the owner/model list and
+  -- dependency adjacency accumulators covered by the independent oracle.
+  let fanSize := 128
+  let fanNames := (Array.range fanSize).map fun i => Name.mkSimple s!"fan_{i}"
+  let fanProviders := (Array.range fanSize).map fun i => summary i #[fanNames[i]!]
+  let hub := summary fanSize #[`FanHub] fanNames (support := true)
+  let fanConsumers := (Array.range fanSize).map fun i =>
+    summary (fanSize + 1 + i) #[Name.mkSimple s!"consumer_{i}"] #[`FanHub]
+  let sharedOwner := Name.mkSimple "shared_owner"
+  let modelBase := fanSize * 2 + 1
+  let ownerAndModels := #[summary modelBase #[sharedOwner] (owner := some sharedOwner)] ++
+    (Array.range fanSize).map fun i =>
+      summary (modelBase + 1 + i) #[Name.mkSimple s!"shared_model_{i}"]
+        (modelBefore := #[sharedOwner])
+  let repeatedBuckets := fanProviders ++ #[hub] ++ fanConsumers ++ ownerAndModels
+  state := state.check "repeated nested-bucket updates match the quadratic reference" <|
+    compactOrderAgreesWithQuadratic repeatedBuckets
 
   IO.println s!"compact order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
