@@ -45,6 +45,11 @@ def familyCount? (text : String) : Option Nat := do
   let parsed ← (Modelgen.parse text (analyse := false)).toOption
   return (Modelgen.Check.discover parsed).size
 
+def sameSemanticExport (left right : String) : Bool :=
+  match Modelgen.parse left (analyse := false), Modelgen.parse right (analyse := false) with
+  | .ok left, .ok right => left.metaLine == right.metaLine && left.decls == right.decls
+  | _, _ => false
+
 def removeIfPresent (path : System.FilePath) : IO Unit := do
   try IO.FS.removeFile path
   catch
@@ -524,6 +529,27 @@ def main (args : List String) : IO UInt32 := do
   let leakedSpools ← System.FilePath.readDir scratch
   state := state.check "successful staged parse removes its workspace" <|
     !leakedSpools.any (fun entry => entry.fileName.startsWith "modelgen-spool-")
+
+  -- The internal production opt-in now extends through transactional island
+  -- serialization and mixed final composition. Generated arena IDs may differ
+  -- from the legacy global writer, so compare parsed exports, exact declaration
+  -- order, diagnostics, and exit status rather than raw bytes.
+  for (label, fixture) in #[
+      ("nested multi-model island", nested),
+      ("late scheduled support", s!"{root}/test/fixtures/modelgen/prim_late_basis.ndjson")] do
+    let args := #["--no-check-output", "--no-type-check-output", "--no-mono-levels", fixture]
+    let legacy ← IO.Process.output { cmd := binary, args }
+    let staged ← IO.Process.output {
+      cmd := binary
+      args
+      env := #[("MODELGEN_RAW_SPOOL", some "1")] }
+    state := state.check s!"staged {label} preserves report and exit" <|
+      staged.exitCode == legacy.exitCode && staged.stderr == legacy.stderr
+    state := state.check s!"staged {label} preserves semantic output and order" <|
+      sameSemanticExport staged.stdout legacy.stdout
+  let leakedGeneratedSpools ← System.FilePath.readDir scratch
+  state := state.check "staged generated output removes its workspace" <|
+    !leakedGeneratedSpools.any (fun entry => entry.fileName.startsWith "modelgen-spool-")
   let outputPath := s!"{scratch}/main-cli-output.ndjson"
   if ← System.FilePath.pathExists outputPath then IO.FS.removeFile outputPath
   let fileRun ← runModelgen binary
