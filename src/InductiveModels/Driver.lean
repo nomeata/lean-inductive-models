@@ -2360,22 +2360,39 @@ structure SourceCensus where
   reserved : Std.HashSet Name
   rawOrdinals : Std.HashMap Name Nat
 
+/-- Single callback state for all raw-source products. -/
+structure SourceCensus.Builder where
+  private syntaxBuilder : Check.SyntaxIndex.Builder := {}
+  private summaryBuilder : Order.SummaryBuilder := {}
+  private reserved : Std.HashSet Name := {}
+  private rawOrdinals : Std.HashMap Name Nat := {}
+  private nextOrdinal : Nat := 0
+
+/-- Accumulate one raw source declaration into every census axis. -/
+def SourceCensus.Builder.push (builder : SourceCensus.Builder)
+    (declaration : EDecl) : SourceCensus.Builder :=
+  { syntaxBuilder := builder.syntaxBuilder.push declaration
+    summaryBuilder := builder.summaryBuilder.push declaration
+    reserved := declaration.names.foldl (·.insert ·) builder.reserved
+    rawOrdinals := declaration.names.foldl
+      (fun ordinals name => ordinals.insert name builder.nextOrdinal) builder.rawOrdinals
+    nextOrdinal := builder.nextOrdinal + 1 }
+
+/-- Freeze all callback products while structurally sharing the one immutable
+syntax index with the summary-family attachment pass. -/
+def SourceCensus.Builder.freeze (builder : SourceCensus.Builder) : SourceCensus :=
+  let sourceSyntax := builder.syntaxBuilder.freeze
+  { sourceSyntax
+    summaries := builder.summaryBuilder.freeze sourceSyntax
+    reserved := builder.reserved
+    rawOrdinals := builder.rawOrdinals }
+
 /-- Build one source census through declaration callbacks.  The last raw
 ordinal for a duplicate name deliberately matches the historical Driver loop;
 ordering still reports the duplicate before consuming that map. -/
 def SourceCensus.ofSource (source : Export) : SourceCensus :=
-  let syntaxBuilder := source.decls.foldl
-    (fun builder declaration => builder.push declaration)
-    ({} : Check.SyntaxIndex.Builder)
-  let sourceSyntax := syntaxBuilder.freeze
-  let summaries := Order.summariesIncremental source sourceSyntax
-  let reserved := source.decls.foldl (fun names declaration =>
-    declaration.names.foldl (·.insert ·) names) ({} : Std.HashSet Name)
-  let (_, rawOrdinals) := source.decls.foldl (init :=
-      (0, ({} : Std.HashMap Name Nat))) fun state declaration =>
-    (state.1 + 1, declaration.names.foldl
-      (fun ordinals name => ordinals.insert name state.1) state.2)
-  { sourceSyntax, summaries, reserved, rawOrdinals }
+  (source.decls.foldl (fun builder declaration => builder.push declaration)
+    ({} : SourceCensus.Builder)).freeze
 
 /-- Rebind source-family certificates to a reordered declaration view without
 interpreting the source index's raw record occurrences as view ordinals. -/
@@ -2391,6 +2408,20 @@ def SourceCensus.familyCertificateRecords (census : SourceCensus)
     if let .induct (type :: _) _ _ := view.decls[i]! then
       rows := rows.set! i (byOwner.getD type.name #[])
   return rows
+
+/-- Produce today's complete scheduled `Export` from frozen summaries.  The
+historical value-retaining scheduler remains as a property oracle; both use
+the same owner-major/model-major stable graph algorithm. -/
+def SourceCensus.schedule (census : SourceCensus) (source : Export)
+    (generation : Cli.Config) : Except Order.Error Export := do
+  let preferSupport := sourceNeedsSupportScheduling source generation census.reserved
+  let summaries := if preferSupport then
+      census.summaries.map fun summary =>
+        { summary with support :=
+            scheduledSupportRecord generation source.decls[summary.ordinal]! }
+    else census.summaries
+  let order ← Order.summaryRecordOrderPrioritizing summaries
+  return { source with decls := order.map fun ordinal => source.decls[ordinal]! }
 
 private structure FilterContext where
   source : Export
@@ -2834,7 +2865,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     (retention : RetentionMode)
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false) :
     MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep) := do
-  let scheduled ← match scheduleSource x generation with
+  let sourceCensus := SourceCensus.ofSource x
+  let scheduled ← match sourceCensus.schedule x generation with
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
   match validateScheduledSupport scheduled generation with
@@ -2844,7 +2876,6 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- Build the immutable source products once.  They are deliberately still
   -- derived from today's complete scheduled Export; only the logical
   -- declaration transition is extracted in this phase.
-  let sourceCensus := SourceCensus.ofSource x
   let sourceSyntax := sourceCensus.sourceSyntax
   let sourceNormalizer := sourceSyntax.exactNormalizer
   let sourceSummaries := Order.summariesIncremental scheduled sourceSyntax

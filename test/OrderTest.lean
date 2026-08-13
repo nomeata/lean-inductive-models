@@ -399,6 +399,12 @@ def orderOutcomesEqual (left right : Except Order.Error (Array Nat)) : Bool :=
   | .error left, .error right => toString (repr left) == toString (repr right)
   | _, _ => false
 
+def scheduleOutcomesEqual (left right : Except Order.Error Export) : Bool :=
+  match left, right with
+  | .ok left, .ok right => left.render == right.render
+  | .error left, .error right => toString (repr left) == toString (repr right)
+  | _, _ => false
+
 def run (root : String) : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
@@ -579,6 +585,14 @@ def run (root : String) : IO UInt32 := do
     match scheduleSource selectedSupport nestedMutualOnly with
     | .ok scheduled => scheduled.decls == #[axDecl `Eq, axDecl `PUnit, selectedOwner]
     | .error _ => false
+  let selectedCensus := SourceCensus.ofSource selectedSupport
+  state := state.check "frozen-summary support schedule equals full scheduler" <|
+    scheduleOutcomesEqual (selectedCensus.schedule selectedSupport nestedMutualOnly)
+      (scheduleSource selectedSupport nestedMutualOnly)
+  let unrelatedCensus := SourceCensus.ofSource unrelatedSupport
+  state := state.check "frozen-summary ordinary schedule equals full scheduler" <|
+    scheduleOutcomesEqual (unrelatedCensus.schedule unrelatedSupport noGeneration)
+      (scheduleSource unrelatedSupport noGeneration)
   let derivedFalse := inductiveRecord [`False]
   let falseBeforeBasis := exportOf #[derivedFalse, selectedOwner, axDecl `Nat, axDecl `Eq]
   state := state.check "fixed basis hoists before derived False" <|
