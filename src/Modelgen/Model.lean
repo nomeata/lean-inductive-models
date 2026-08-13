@@ -118,7 +118,6 @@ inductive Decline where
   row ([`Modelgen.Report.exempt`]) and the decline count can mean what it
   says. -/
   | basisExempt
-  | malformed (msg : String)
   deriving Inhabited
 
 /-- The word that reaches a report line, **under the construction's own name**.
@@ -139,7 +138,6 @@ def Decline.labelAs (what : String) : Decline → String
   | .basisExempt =>
     s!"{what} model: a basis primitive (the exemption that makes the construction \
 well-founded)"
-  | .malformed m => s!"{what} model shape: {m}"
 
 /-- The word that reaches a report line for a **nested** declaration's model. -/
 def Decline.label : Decline → String := Decline.labelAs "nested"
@@ -480,7 +478,15 @@ kernel rejected. -/
 abbrev GenM := ExceptT Decline MetaM
 
 def declineWith (d : Decline) : GenM α := throwThe Decline d
-def badShape (msg : String) : GenM α := declineWith (.malformed msg)
+/-- Abort generation after an internal construction invariant has failed.
+
+This is deliberately *not* a [`Decline`]. A decline says that the generator
+positively recognized a valid shape it has chosen not to support. Once a route
+has committed to constructing declarations, malformed intermediate syntax,
+missing metadata, or kernel rejection is a tool failure and must reach the
+CLI's exit-3 containment boundary. -/
+def badShape (msg : String) : GenM α :=
+  lift <| Lean.throwError msg
 
 /-- `Meta.inferType`, at the generator's monad. -/
 def ityp (e : Expr) : GenM Expr := inferType e

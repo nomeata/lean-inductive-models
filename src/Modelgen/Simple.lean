@@ -366,9 +366,9 @@ kernel-valid declaration is an unsupported-generation decline, not a kernel
 rejection and never a successful exemption. -/
 def validateBasisOwner (root : Name) (owner : EDecl) : GenM Unit := do
   let .induct (type :: _) _ _ := owner
-    | declineWith (.malformed "the basis owner is not a nonempty inductive record")
+    | badShape "the basis owner is not a nonempty inductive record"
   let some canonical := basisCanonicalDecl? root
-    | declineWith (.malformed s!"{root} is not a basis owner")
+    | badShape s!"{root} is not a basis owner"
   let env ← getEnv
   let canonical := alignBasisLevelParams canonical type.levelParams
   let alias := freshBasisAlias env root canonical
