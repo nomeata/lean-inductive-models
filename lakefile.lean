@@ -81,6 +81,11 @@ lean_exe rulektest where
   root := `RuleKTest
   supportInterpreter := true
 
+lean_exe defaultctoriotatest where
+  srcDir := "test"
+  root := `DefaultCtorIotaTest
+  supportInterpreter := true
+
 lean_exe mainclitest where
   srcDir := "test"
   root := `MainCliTest
