@@ -208,9 +208,14 @@ def summaryRecordOrderPrioritizing (summaries : Array DeclSummary) :
       if let some provider := ownership[name]? then
         (outgoing, indegree) := addEdge outgoing indegree provider consumer
 
-  for model in [0:n] do
-    for ownerName in summaries[model]!.modelBefore do
-      let some owner := ownership[ownerName]? | continue
+  -- Match `Check.discover`'s owner-record order and each family's sorted model
+  -- record order exactly. Edge insertion order is normally observationally
+  -- irrelevant, but on a malformed graph it determines which concrete cycle
+  -- the established diagnostic reports.
+  for owner in [0:n] do
+    let some ownerName := summaries[owner]!.owner | continue
+    for model in [0:n] do
+      unless summaries[model]!.modelBefore.contains ownerName do continue
       if outgoing[owner]!.contains model then
         let records := #[owner, model].qsort (· < ·)
         let declarations := records.map fun i => summaries[i]!.introduced
