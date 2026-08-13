@@ -2158,6 +2158,7 @@ structure Iso where
   collision.  This is a whole-name table: raw private constructor names need
   not share any prefix with their owner. -/
   aliases : Naming.AliasMap := .empty
+  deriving Inhabited
 
 /-- The exact public family consumed by correspondence, serialization, and
 the statement checker. -/
@@ -2167,8 +2168,9 @@ def Iso.publicInterface (is : Iso) : IsoInterface :=
 /-- The family whose recursor and iota proofs implement the public model.
 Ordinary routes share the public family structurally. -/
 def Iso.implementationInterface (is : Iso) : IsoInterface :=
-  is.implementation?.getD is.publicInterface
-  deriving Inhabited
+  match is.implementation? with
+  | some implementation => implementation
+  | none => is.publicInterface
 
 /-- **The export's names rewritten to the model's**: `T._model` for each real
 member, `C._model` for each constructor, and `R._model` for each recursor.

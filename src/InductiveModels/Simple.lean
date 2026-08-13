@@ -3382,7 +3382,7 @@ set_option maxRecDepth 2048 in
 stopped it. **The export's declaration must already be installed**: the
 recursor this restates is the one Lean minted for it, and the ι rules are
 its own, restored — exactly [`InductiveModels.mutualIso`]'s arrangement. -/
-def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
+private def primIsoCore (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
     (sourceRecursor? : Option ERec := none) : GenM Iso := do
   let us := lparams.map Level.param
@@ -5687,5 +5687,16 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
            projectionOverrides
            requires := if armC then #[skelN] else requires
            aliases }
+
+/-- Public entry point for the simple construction.
+
+The implementation is factored from this boundary so a selected recursive
+family can be built once at private names and then adapted to its public
+one-layer interface.  Until that adapter is selected this wrapper is exactly
+the historical call, including collision retry and declaration order. -/
+def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
+    (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
+    (sourceRecursor? : Option ERec := none) : GenM Iso :=
+  primIsoCore tname root lparams np memberTy exportCtors reserved sourceRecursor?
 
 end InductiveModels
