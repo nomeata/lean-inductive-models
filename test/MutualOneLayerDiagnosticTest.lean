@@ -98,6 +98,24 @@ def replaceDeclarationType (x : Export) (name : Name) (type : Expr) : Export :=
 def removeDeclaration (x : Export) (name : Name) : Export :=
   { x with decls := x.decls.filter fun declaration => !declaration.names.contains name }
 
+def insertCollision (x : Export) (name : Name) : Export :=
+  { x with decls := x.decls.push (.ax name [] (.sort (.succ .zero)) false) }
+
+def declarationNamesAndReferences : EDecl → Array Name
+  | .ax name _ type _ | .quot name _ type _ => #[name] ++ type.getUsedConstants
+  | .defn name _ type value _ _ all | .thm name _ type value all =>
+    #[name] ++ all.toArray ++ type.getUsedConstants ++ value.getUsedConstants
+  | .opaq name _ type value _ all =>
+    #[name] ++ all.toArray ++ type.getUsedConstants ++ value.getUsedConstants
+  | .induct types constructors recursors =>
+    (types.toArray.flatMap fun type =>
+      #[type.name] ++ type.all.toArray ++ type.ctors.toArray ++ type.type.getUsedConstants) ++
+    (constructors.toArray.flatMap fun constructor =>
+      #[constructor.name, constructor.induct] ++ constructor.type.getUsedConstants) ++
+    (recursors.toArray.flatMap fun recursor =>
+      #[recursor.name] ++ recursor.all.toArray ++ recursor.type.getUsedConstants ++
+        recursor.rules.toArray.flatMap fun rule => #[rule.ctor] ++ rule.rhs.getUsedConstants)
+
 partial def containsConst (target : Name) : Expr -> Bool
   | .const name _ => name == target
   | .proj _ _ subject => containsConst target subject
@@ -330,6 +348,33 @@ def run (root : String) : IO UInt32 := do
         Naming.modelName `MutualLayerB.back, Naming.modelName `MutualLayerB.rec,
         Naming.iotaName `MutualLayerB.rec 0, Naming.iotaName `MutualLayerB.rec 1].all
           generatedNames.contains
+
+  -- A raw private constructor makes the first build lose a normalized name;
+  -- the retry must serialize every private-family helper back to its exact
+  -- source-derived spelling without moving the public contract.
+  let privateConstructor :=
+    (`_private.MutualOneLayerDiagnostic).mkNum 0 |>.str "MutualLayerAMk"
+  let privateAliases := Naming.AliasMap.empty.insert `MutualLayerA.mk privateConstructor
+  let privateInput := { input with
+    decls := input.decls.map (·.renameAliases privateAliases) }
+  let (privateGenerated, privateReport) ← runExport privateInput
+  let privateNames := privateGenerated.decls.flatMap (·.names.toArray)
+  let leakedAliases := privateGenerated.decls.flatMap declarationNamesAndReferences |>.filter
+    fun name => name.components.any (· == `_inductive_models_alias)
+  state := state.check "mutual retry preserves exact serialized names" <|
+    privateReport.generated.any (·.1 == `MutualLayerA) &&
+      !privateReport.declined.any (·.1 == `MutualLayerA) &&
+      privateReport.unreplayable.isNone && privateReport.stmtErrors.isEmpty &&
+      privateNames.contains (Naming.modelName privateConstructor) && leakedAliases.isEmpty &&
+      (Check.check privateGenerated).all fun violation =>
+        !#[`MutualLayerA, `MutualLayerB].contains violation.familyOwner
+  let exactCollision := Name.str memberARoot "roll"
+  let (_, collisionReport) ← runExport (insertCollision privateInput exactCollision)
+  state := state.check "mutual retry checks exact family collisions" <|
+    !collisionReport.generated.any (·.1 == `MutualLayerA) &&
+      collisionReport.unreplayable.isNone && collisionReport.stmtErrors.isEmpty &&
+      collisionReport.declined.filter (·.1 == `MutualLayerA) ==
+        #[(`MutualLayerA, s!"mutual model name taken ({exactCollision})")]
 
   IO.println s!"mutual one-layer diagnostic: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
