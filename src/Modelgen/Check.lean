@@ -1041,6 +1041,11 @@ structure SyntaxIndex where
   the shared index prevents family discovery from rebuilding a whole-export
   name table for every consumer. -/
   private records : Std.HashMap Name (Array Nat)
+  /-- Sparse occurrences introduced in front of `records` by island overlays.
+  Base occurrences are interpreted after `recordOffset`; keeping both axes
+  separate avoids copying the whole source map whenever support is prepended. -/
+  private recordPrefix : Std.HashMap Name (Array Nat) := {}
+  private recordOffset : Nat := 0
   private globalExtras : Array Violation := #[]
   private sourceFamilies : Std.HashMap Name (Array Family) := {}
   private names : Std.HashSet Name := {}
@@ -1140,23 +1145,25 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
     if let .defn name levelParams _ value .. := declaration then
       definitions := definitions.insert name { levelParams, value }
   -- `discoverWithIndex` may consume the resulting index together with the
-  -- literal combined view `records ++ source`. Shift every retained source
-  -- ordinal and bind generated names to their new prefix positions. Collision
-  -- rejection above guarantees these insertions cannot hide a source slot.
-  let mut recordOccurrences : Std.HashMap Name (Array Nat) := {}
-  for (name, occurrences) in source.records do
-    recordOccurrences := recordOccurrences.insert name
+  -- literal combined view `records ++ source`. Shift only the sparse existing
+  -- overlay; base source occurrences retain their map and acquire one offset.
+  -- Collision rejection above guarantees new prefix entries cannot hide one.
+  let mut recordPrefix : Std.HashMap Name (Array Nat) := {}
+  for (name, occurrences) in source.recordPrefix do
+    recordPrefix := recordPrefix.insert name
       (occurrences.map fun ordinal => records.size + ordinal)
   for ordinal in [0:records.size] do
     for name in records[ordinal]!.names do
-      recordOccurrences := recordOccurrences.insert name #[ordinal]
+      recordPrefix := recordPrefix.insert name #[ordinal]
   return .ok {
     declarations := declarations
     constructors := constructors
     structures := structures
     ruleSlots := ruleSlots
     normalizer := { definitions := definitions }
-    records := recordOccurrences
+    records := source.records
+    recordPrefix := recordPrefix
+    recordOffset := source.recordOffset + records.size
     globalExtras := source.globalExtras
     sourceFamilies := source.sourceFamilies
     names := names }
@@ -1201,6 +1208,10 @@ private def intrinsicProjectionFieldsWithIndex (index : SyntaxIndex)
       fields := fields.push fieldIndex
   return fields
 
+private def SyntaxIndex.recordOccurrences (index : SyntaxIndex) (name : Name) : Array Nat :=
+  index.recordPrefix.getD name #[] ++
+    (index.records.getD name #[]).map fun ordinal => index.recordOffset + ordinal
+
 /-! ## Indexed family discovery
 
 The historical discovery helper rebuilt the complete transparent-definition
@@ -1223,10 +1234,10 @@ private def discoverWithIndexWhere (x : Export) (index : SyntaxIndex)
       | continue
     let publicNames := correspondence.publicNames
     unless includeEmpty root ||
-        publicNames.any (fun name => !(index.records.getD name #[]).isEmpty) do continue
+        publicNames.any (fun name => !(index.recordOccurrences name).isEmpty) do continue
     let mut modelDecls : Array Nat := #[]
     for name in publicNames do
-      for i in index.records.getD name #[] do
+      for i in index.recordOccurrences name do
         unless modelDecls.contains i do modelDecls := modelDecls.push i
     modelDecls := modelDecls.qsort (· < ·)
     let modelNames := modelDecls.foldl
