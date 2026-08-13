@@ -1,0 +1,343 @@
+import InductiveModels.Driver
+import InductiveModels.Check
+import InductiveModels.Order
+
+/-!
+# Indexed one-layer fibre diagnostic
+
+This is a deliberately red production-target test.  `IndexedDep` is already a
+minimal one-constructor indexed `Type` with an ordinary dependent field.  Its
+current public carrier, constructor, recursor, recursor iota and projection
+types have the desired source-name-rewritten spelling, but the second
+projection rule still receives the legacy canonical transport and the family
+has no private/public one-layer certificate.
+
+The final guarded declaration pins the source boundary separately: Lean does
+not admit a result index which mentions a recursive constructor field, even
+when a reducible function erases the apparent dependency.  The adapter must
+not manufacture semantics beyond that kernel-accepted boundary.
+-/
+
+open Lean Meta InductiveModels
+
+set_option maxRecDepth 2048
+
+namespace IndexedFibreRejectedBoundary
+
+inductive Ix where
+  | here
+  | elsewhere
+
+def erasedResultIndex {alpha : Sort u} (_ : alpha) : Ix :=
+  Ix.here
+
+/--
+error: (kernel) invalid return type for 'IndexedFibreRejectedBoundary.MovedRecursiveResult.mk'
+-/
+#guard_msgs in
+inductive MovedRecursiveResult : Ix -> Type where
+  | mk (child : MovedRecursiveResult Ix.here) :
+      MovedRecursiveResult (erasedResultIndex child)
+
+end IndexedFibreRejectedBoundary
+
+structure TestState where
+  passed : Nat := 0
+  failed : Array String := #[]
+
+def TestState.check (state : TestState) (label : String) (condition : Bool) : TestState :=
+  if condition then { state with passed := state.passed + 1 }
+  else { state with failed := state.failed.push label }
+
+structure OpenBinder where
+  name : Name
+  type : Expr
+  info : BinderInfo
+  value : Expr
+  deriving Inhabited
+
+partial def openForalls (tag : Name) (expression : Expr) : Array OpenBinder × Expr :=
+  let rec loop (expression : Expr) (binders : Array OpenBinder) :=
+    match expression with
+    | .forallE name type body info =>
+      let value := mkFVar (FVarId.mk (tag.mkNum binders.size))
+      loop (body.instantiate1 value) (binders.push { name, type, info, value })
+    | body => (binders, body)
+  loop expression #[]
+
+def closeForalls (binders : Array OpenBinder) (body : Expr) : Expr :=
+  binders.reverse.foldl (fun body binder =>
+    .forallE binder.name binder.type (body.abstract #[binder.value]) binder.info) body
+
+def instantiateForalls? (expression : Expr) (arguments : Array Expr) : Option Expr := Id.run do
+  let mut expression := expression
+  for argument in arguments do
+    let .forallE _ _ body _ := expression | return none
+    expression := body.instantiate1 argument
+  return expression
+
+def readExport (path : String) : IO Export := do
+  let .ok parsed := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
+    | throw <| IO.userError s!"cannot parse {path}"
+  return parsed
+
+def runExport (input : Export) : IO (Export × Report) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<indexed-fibre-diagnostic>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let action : MetaM (Export × Report) := do
+    let (declarations, report) ← runFilter input false
+      { nested := true, mutualModels := true, simple := true, basic := true }
+    let generated : Export := { input with decls := declarations }
+    let ordered ← match Order.reorder generated with
+      | .ok output => pure output
+      | .error error => throwError "cannot order indexed diagnostic: {repr error}"
+    return (ordered, report)
+  return (← Core.CoreM.toIO (MetaM.run' action) context { env }).1
+
+def declarationType? (x : Export) (name : Name) : Option (List Name × Expr) :=
+  x.decls.findSome? fun declaration => match declaration with
+    | .ax got params type _ | .quot got params type _ =>
+      if got == name then some (params, type) else none
+    | .defn got params type .. | .thm got params type .. | .opaq got params type .. =>
+      if got == name then some (params, type) else none
+    | .induct types constructors recursors =>
+      (types.find? (·.name == name)).map (fun type => (type.levelParams, type.type)) <|>
+      (constructors.find? (·.name == name)).map (fun ctor => (ctor.levelParams, ctor.type)) <|>
+      (recursors.find? (·.name == name)).map (fun rec => (rec.levelParams, rec.type))
+
+def replaceDeclarationType (x : Export) (name : Name) (type : Expr) : Export :=
+  { x with decls := x.decls.map fun declaration => match declaration with
+    | .ax got params _ isUnsafe =>
+      if got == name then .ax got params type isUnsafe else declaration
+    | .defn got params _ value hints safety all =>
+      if got == name then .defn got params type value hints safety all else declaration
+    | .thm got params _ value all =>
+      if got == name then .thm got params type value all else declaration
+    | .opaq got params _ value isUnsafe all =>
+      if got == name then .opaq got params type value isUnsafe all else declaration
+    | _ => declaration }
+
+partial def containsConst (target : Name) : Expr -> Bool
+  | .const name _ => name == target
+  | .proj _ _ subject => containsConst target subject
+  | .app fn argument => containsConst target fn || containsConst target argument
+  | .lam _ type body _ | .forallE _ type body _ =>
+    containsConst target type || containsConst target body
+  | .letE _ type value body _ =>
+    containsConst target type || containsConst target value || containsConst target body
+  | .mdata _ body => containsConst target body
+  | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => false
+
+partial def equalityLevel? : Expr -> Option Level
+  | .forallE _ _ body _ => equalityLevel? body
+  | body => match body.getAppFn with
+    | .const ``Eq [level] => some level
+    | _ => none
+
+/-- A definitionally trivial, deliberately nonliteral equality RHS.  It is
+used only to keep the rejection oracle live after the generator starts
+emitting the desired literal rule. -/
+def identityTransport (level : Level) (alpha value : Expr) : Expr :=
+  let motive := Expr.lam `target alpha
+    (Expr.lam `equality
+      (mkAppN (.const ``Eq [level]) #[alpha, value, .bvar 0]) alpha .default) .default
+  let equality := mkAppN (.const ``Eq.refl [level]) #[alpha, value]
+  mkAppN (.const ``Eq.rec [level, level])
+    #[alpha, value, motive, value, value, equality]
+
+partial def transportOuterEqualityRhs? : Expr -> Option Expr
+  | .forallE name domain body info =>
+    return .forallE name domain (← transportOuterEqualityRhs? body) info
+  | body => do
+    let .const ``Eq [level] := body.getAppFn | none
+    let #[alpha, lhs, rhs] := body.getAppArgs | none
+    some <| mkAppN (.const ``Eq [level]) #[alpha, lhs, identityTransport level alpha rhs]
+
+def hasTypeViolation (owner declaration : Name) : Check.Violation -> Bool
+  | .declarationType gotOwner gotDeclaration =>
+    gotOwner == owner && gotDeclaration == declaration
+  | _ => false
+
+def projectionExpectations (x : Export) (family : Check.Family)
+    (ownerType : EIndType) (constructor : ECtor)
+    (modelParams : List Name) : MetaM (Array (Name × Expr)) := do
+  let mappedConstructorType := family.correspondence.expectedType
+    constructor.levelParams modelParams constructor.type
+  let (constructorBinders, constructorResult) := openForalls
+    `_test.indexedFibreCtor mappedConstructorType
+  let mappedOwnerType := family.correspondence.expectedType
+    ownerType.levelParams modelParams ownerType.type
+  let (ownerBinders, _) := openForalls `_test.indexedFibreOwner mappedOwnerType
+  let ownerArgs := ownerBinders.map (·.value)
+  let ownerArity := ownerType.numParams + ownerType.numIndices
+  let ownerParams := ownerArgs.extract 0 ownerType.numParams
+  let some fieldsType := instantiateForalls? mappedConstructorType ownerParams
+    | throwError "cannot instantiate IndexedDep constructor parameters"
+  let (fieldBinders, _) := openForalls `_test.indexedFibreFields fieldsType
+  let fields := constructorBinders.extract constructor.numParams constructorBinders.size
+  let constructorArgs := constructorBinders.map (·.value)
+  let params := constructorArgs.extract 0 constructor.numParams
+  let levels := modelParams.map Level.param
+  let some typePair := family.correspondence.typeFormers.find? (·.owner == ownerType.name)
+    | throwError "missing IndexedDep modeled owner"
+  let some constructorPair := family.correspondence.constructors.find?
+      (·.owner == constructor.name)
+    | throwError "missing IndexedDep modeled constructor"
+  let major := mkAppN (.const constructorPair.model levels) constructorArgs
+  let indices := constructorResult.getAppArgs.extract constructor.numParams ownerArity
+  let selfValue := mkFVar (FVarId.mk `_test.indexedFibreSelf)
+  let selfBinder : OpenBinder :=
+    { name := `self, type := mkAppN (.const typePair.model levels) ownerArgs,
+      info := .default, value := selfValue }
+  let mut result := #[]
+  for projection in family.correspondence.projections do
+    if projection.owner == ownerType.name then
+      let some selected := fieldBinders[projection.fieldIndex]?
+        | throwError "missing IndexedDep field {projection.fieldIndex}"
+      let mut projectionResult := selected.type
+      for earlier in [:projection.fieldIndex] do
+        projectionResult := projectionResult.replace fun subexpression =>
+          if subexpression == fieldBinders[earlier]!.value then
+            some <| mkAppN
+              (.const (Naming.projectionName ownerType.name earlier) levels)
+              (ownerArgs.push selfValue)
+          else none
+      let projectionType := closeForalls (ownerBinders.push selfBinder) projectionResult
+      result := result.push (projection.name, projectionType)
+      let some alpha := instantiateForalls? projectionType (params ++ indices ++ #[major])
+        | throwError "cannot instantiate IndexedDep projection {projection.fieldIndex}"
+      let lhs := mkAppN (.const projection.name levels) (params ++ indices ++ #[major])
+      let rhs := fields[projection.fieldIndex]!.value
+      let some (_, actualRuleType) := declarationType? x projection.iota
+        | throwError "missing IndexedDep projection rule {projection.iota}"
+      let some eqLevel := equalityLevel? actualRuleType
+        | throwError "IndexedDep projection rule {projection.iota} is not an equality"
+      let expectedRule := closeForalls constructorBinders <|
+        mkAppN (.const ``Eq [eqLevel]) #[alpha, lhs, rhs]
+      result := result.push (projection.iota, expectedRule)
+  return result
+
+def sourceShape? (x : Export) (owner : Name) : Option (EIndType × ECtor × ERec) :=
+  x.decls.findSome? fun declaration => match declaration with
+    | .induct types constructors recursors => do
+      let type ← types.find? (·.name == owner)
+      let constructor ← constructors.find? (·.induct == owner)
+      let recursor ← recursors.find? (·.all.contains owner)
+      return (type, constructor, recursor)
+    | _ => none
+
+def recursiveResultIndependent (constructor : ECtor) : Bool :=
+  let (binders, result) := openForalls `_test.fixedRecursiveResult constructor.type
+  let fields := binders.extract constructor.numParams binders.size
+  fields.all fun field =>
+    !containsConst constructor.induct field.type || !result.containsFVar field.value.fvarId!
+
+def run (root : String) : IO UInt32 := do
+  let input ← readExport s!"{root}/test/fixtures/inductive-models/structure_projections.ndjson"
+  let (generated, report) ← runExport input
+  let some family := Check.discover generated |>.find? (·.owner == `IndexedDep)
+    | throw <| IO.userError "generated fixture has no IndexedDep family"
+  let some (ownerType, constructor, recursor) := sourceShape? generated `IndexedDep
+    | throw <| IO.userError "generated fixture has no IndexedDep source shape"
+  let some typePair := family.correspondence.typeFormers.find? (·.owner == `IndexedDep)
+    | throw <| IO.userError "IndexedDep has no modeled carrier"
+  let some ctorPair := family.correspondence.constructors.find? (·.owner == `IndexedDep.mk)
+    | throw <| IO.userError "IndexedDep has no modeled constructor"
+  let some recPair := family.correspondence.recursors.find? (·.owner == `IndexedDep.rec)
+    | throw <| IO.userError "IndexedDep has no modeled recursor"
+  let iotaName := Naming.iotaName `IndexedDep.rec 0
+  let some iotaPair := family.correspondence.iotas.find? (·.name == iotaName)
+    | throw <| IO.userError "IndexedDep has no modeled recursor iota"
+  let some (typeParams, actualCarrier) := declarationType? generated typePair.model
+    | throw <| IO.userError "IndexedDep modeled carrier is absent"
+  let some (ctorParams, actualConstructor) := declarationType? generated ctorPair.model
+    | throw <| IO.userError "IndexedDep modeled constructor is absent"
+  let some (recParams, actualRecursor) := declarationType? generated recPair.model
+    | throw <| IO.userError "IndexedDep modeled recursor is absent"
+  let some (iotaParams, actualIota) := declarationType? generated iotaPair.name
+    | throw <| IO.userError "IndexedDep modeled iota is absent"
+  let some (_, sourceIota) := Check.iotaProposition? generated family.ownerDecl recursor.name 0
+    | throw <| IO.userError "cannot reconstruct IndexedDep source iota"
+  let expectedCarrier := family.correspondence.expectedType
+    ownerType.levelParams typeParams ownerType.type
+  let expectedConstructor := family.correspondence.expectedType
+    constructor.levelParams ctorParams constructor.type
+  let expectedRecursor := family.correspondence.expectedType
+    recursor.levelParams recParams recursor.type
+  let expectedIota := family.correspondence.expectedIotaType
+    recursor.levelParams iotaParams sourceIota
+  let projectionEnv ← importModules #[] {}
+  let projectionContext : Core.Context :=
+    { fileName := "<indexed-fibre-projection-oracle>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (projectionFaces, _) ← Core.CoreM.toIO
+    (MetaM.run' (projectionExpectations generated family ownerType constructor typeParams))
+    projectionContext { env := projectionEnv }
+
+  let keyProjection := Naming.projectionName `IndexedDep 0
+  let payloadProjection := Naming.projectionName `IndexedDep 1
+  let keyRule := Naming.projectionIotaName `IndexedDep 0
+  let payloadRule := Naming.projectionIotaName `IndexedDep 1
+  let expectedProjection := fun name => projectionFaces.find? (·.1 == name) |>.map (·.2)
+  let actual := fun name => declarationType? generated name |>.map (·.2)
+  let privateRoot := `IndexedDep._model._impl
+  let certificate := #[Name.str privateRoot "self", Name.str privateRoot "ctor_0",
+    Name.str privateRoot "rec", Name.str privateRoot "rec_iota_0",
+    Name.str privateRoot "roll", Name.str privateRoot "unroll",
+    Name.str privateRoot "unroll_roll", Name.str privateRoot "roll_unroll"]
+  let generatedNames := generated.decls.flatMap (·.names.toArray)
+
+  let mut state : TestState := {}
+  state := state.check "IndexedDep uses the exact public source names" <|
+    typePair.model == Naming.modelName `IndexedDep &&
+      ctorPair.model == Naming.modelName `IndexedDep.mk &&
+      recPair.model == Naming.modelName `IndexedDep.rec &&
+      iotaPair.name == Naming.iotaName `IndexedDep.rec 0 &&
+      #[keyProjection, payloadProjection, keyRule, payloadRule].all generatedNames.contains
+  state := state.check "indexed carrier is the exact source-name rewrite" <|
+    actualCarrier == expectedCarrier
+  state := state.check "indexed constructor is the exact source-name rewrite" <|
+    actualConstructor == expectedConstructor
+  state := state.check "indexed recursor is the exact source-name rewrite" <|
+    actualRecursor == expectedRecursor
+  state := state.check "indexed recursor iota is the exact source-name rewrite" <|
+    actualIota == expectedIota
+  state := state.check "indexed ordinary projection type is exact" <|
+    actual keyProjection == expectedProjection keyProjection
+  state := state.check "indexed dependent projection type is exact" <|
+    actual payloadProjection == expectedProjection payloadProjection
+  state := state.check "indexed ordinary projection iota has the literal field RHS" <|
+    actual keyRule == expectedProjection keyRule
+  state := state.check "indexed dependent projection iota has the literal field RHS" <|
+    actual payloadRule == expectedProjection payloadRule
+  state := state.check "indexed family carries the complete one-layer fibre certificate" <|
+    certificate.all generatedNames.contains
+
+  let currentPayloadRule := actual payloadRule
+  let transportedCandidate := if currentPayloadRule.any (containsConst ``Eq.rec) then
+      generated
+    else
+      currentPayloadRule.bind transportOuterEqualityRhs?
+        |>.map (replaceDeclarationType generated payloadRule ·) |>.getD generated
+  state := state.check "checker rejects the old transported dependent projection rule" <|
+    (Check.check transportedCandidate).any (hasTypeViolation `IndexedDep payloadRule)
+  state := state.check "current diagnostic reaches generation and kernel replay" <|
+    report.generated.any (·.1 == `IndexedDep) && report.unreplayable.isNone &&
+      report.stmtErrors.isEmpty
+
+  let boundary ← readExport
+    s!"{root}/test/fixtures/inductive-models/indexed_fibre_boundary.ndjson"
+  let fixedShape := sourceShape? boundary `FixedRecursiveResult
+  state := state.check "exportable recursive control has a fixed result index" <|
+    fixedShape.any fun (type, constructor, _) =>
+      type.numIndices == 1 && type.isRec && type.ctors.length == 1 &&
+        recursiveResultIndependent constructor
+
+  IO.println s!"indexed fibre diagnostic: {state.passed} passed, {state.failed.size} failed"
+  for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
+  return if state.failed.isEmpty then 0 else 1
+
+def main (args : List String) : IO UInt32 :=
+  run (args.head?.getD ".")
