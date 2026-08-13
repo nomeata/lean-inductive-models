@@ -1,4 +1,4 @@
-import InductiveModels.OneLayer
+import InductiveModels.MutualOneLayer
 import InductiveModels.Cli
 import InductiveModels.Naming
 import InductiveModels.Projection
@@ -633,6 +633,84 @@ private def phase1OneLayerProjectionCertificate (type : EIndType)
     let _ ← generatedDeclInfo is name
   return true
 
+/-- Validate the simultaneous adapter as one complete owner/rule-keyed
+certificate.  No member can opt into literal projection rules independently:
+an absent, partial, duplicated, or malformed family fails closed. -/
+private def mutualOneLayerProjectionCertificate (types : Array EIndType)
+    (constructors : Array ECtor) (recursors : Array ERec) (type : EIndType)
+    (constructorName : Name) (is : Iso) : GenM Bool := do
+  let some certificate := is.familyImplementation? | return false
+  let source := EDecl.induct types.toList constructors.toList recursors.toList
+  let some changedMembers ← mutualOneLayerChangedMembers? source
+    | badShape s!"{type.name}'s mutual one-layer certificate is outside the selected source shape"
+  unless certificate.members.size == types.size && is.numAll == types.size &&
+      is.selfNames.size == types.size && is.recs.size == types.size do
+    badShape s!"{type.name}'s mutual one-layer family certificate is incomplete"
+  let names : MutualFamilyNames :=
+    { familyRoot := certificate.root
+      tag := Name.str certificate.root "tag"
+      aux := Name.str certificate.root "aux" }
+  unless certificate.support == #[names.tag, names.aux] do
+    badShape s!"{type.name}'s mutual one-layer support certificate is malformed"
+  for name in certificate.support do
+    let _ ← generatedDeclInfo is name
+  for memberIndex in [:types.size] do
+    let sourceType := types[memberIndex]!
+    let matching := certificate.members.filter fun member => member.owner == sourceType.name
+    unless matching.size == 1 do
+      badShape s!"{sourceType.name}'s mutual one-layer owner key is absent or duplicated"
+    let member := matching[0]!
+    let some (_, changed) := changedMembers.find? fun entry => entry.1 == sourceType.name
+      | badShape s!"{sourceType.name}'s mutual one-layer source classification is incomplete"
+    unless member.changed == changed && member.publicSelf == is.selfNames[memberIndex]! do
+      badShape s!"{sourceType.name}'s mutual one-layer public member slot is malformed"
+    let some sourceRecursor := recursors.find? fun recursor =>
+        recursor.name == Name.str sourceType.name "rec"
+      | badShape s!"{sourceType.name}'s exact mutual recursor record is absent"
+    unless member.privateSelf == names.privateSelf sourceType.name &&
+        member.privateRecursor == names.privateRecursor sourceType.name &&
+        member.roll == names.roll sourceType.name &&
+        member.unroll == names.unroll sourceType.name &&
+        member.unrollRoll == names.unrollRoll sourceType.name &&
+        member.rollUnroll == names.rollUnroll sourceType.name do
+      badShape s!"{sourceType.name}'s mutual one-layer member names are malformed"
+    let ownerConstructors := constructors.filter fun constructor =>
+      constructor.induct == sourceType.name
+    unless member.privateConstructors.size == ownerConstructors.size &&
+        member.privateIotas.size == sourceRecursor.rules.length do
+      badShape s!"{sourceType.name}'s mutual one-layer constructor/rule certificate is incomplete"
+    for constructor in ownerConstructors do
+      let expected := names.privateConstructor sourceType.name constructor.name
+      unless member.privateConstructors.filter (fun entry => entry.1 == constructor.name) ==
+          #[(constructor.name, expected)] do
+        badShape s!"{constructor.name}'s mutual one-layer constructor key is malformed"
+      let _ ← generatedDeclInfo is expected
+      let some (_, publicConstructor) := is.ctors.find? fun entry =>
+          entry.1 == constructor.name
+        | badShape s!"{constructor.name}'s mutual one-layer public constructor is absent"
+      let _ ← generatedDeclInfo is publicConstructor
+    for rule in sourceRecursor.rules do
+      let expected := names.privateIota sourceType.name rule.ctor
+      unless member.privateIotas.filter (fun entry =>
+          entry.1 == sourceRecursor.name && entry.2.1 == rule.ctor) ==
+          #[(sourceRecursor.name, rule.ctor, expected)] do
+        badShape s!"{sourceRecursor.name}/{rule.ctor}'s mutual rule key is malformed"
+      let _ ← generatedDeclInfo is expected
+    for name in #[member.publicSelf, member.privateSelf, member.privateRecursor,
+        member.roll, member.unroll, member.unrollRoll, member.rollUnroll,
+        is.recs[memberIndex]!] do
+      let _ ← generatedDeclInfo is name
+    for rule in sourceRecursor.rules do
+      unless (is.iotas.filter fun entry =>
+          entry.1 == memberIndex && entry.2.1 == rule.ctor).size == 1 do
+        badShape s!"{sourceRecursor.name}/{rule.ctor}'s public rule key is absent or duplicated"
+  let some member := certificate.members.find? fun member => member.owner == type.name
+    | badShape s!"{type.name}'s mutual one-layer projection owner is absent"
+  unless constructors.any fun constructor =>
+      constructor.name == constructorName && constructor.induct == type.name do
+    badShape s!"{constructorName}'s mutual one-layer projection constructor is absent"
+  return member.changed
+
 /-- Add modeled primitive projections and their literal constructor rules for
 every kernel structure-like member in a generated block.
 
@@ -722,8 +800,11 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     if (← getEnv).constants.contains modelRule then declineWith (.nameTaken publicRule)
     let override? := is.projectionOverrides.find? fun entry =>
       entry.1 == type.name && entry.2.1 == fieldIndex
-    let phase1OneLayer ←
+    let singletonOneLayer ←
       phase1OneLayerProjectionCertificate type constructorName is
+    let mutualOneLayer ←
+      mutualOneLayerProjectionCertificate types constructors recursors type constructorName is
+    let phase1OneLayer := singletonOneLayer || mutualOneLayer
     let modelConstructorInfo ← generatedDeclInfo is modelConstructor
     let modelConstructorType := modelConstructorInfo.type
     let modelTypeInfo ← generatedDeclInfo is modelType
@@ -2270,15 +2351,24 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (exactTransform : EDecl → EDecl := id) : MetaM ModelIslandState := do
   let (out, rep, pending) := st
   let saved ← getEnv
-  let mut result ← (do
-    let is ← mutualIso all lparams np tys ctors reserved (sourceBlock? := sourceBlock?)
-    addInstalledStructureModels all projections reserved is).run
+  let generate := fun (buildRoot? : Option Name) => do
+    let selected ← match sourceBlock? with
+      | some source => mutualOneLayerEligible source
+      | none => pure false
+    if selected then
+      let some source := sourceBlock?
+        | badShape "selected mutual one-layer family has no exact source block"
+      let is ← mutualOneLayerIso source reserved buildRoot?
+      let normalizer := ({ metaLine := .null, decls := #[source] } : Export).exactNormalizationEnv
+      addSourceStructureModels source projections normalizer reserved is
+    else
+      let is ← mutualIso all lparams np tys ctors reserved buildRoot?
+        (sourceBlock? := sourceBlock?)
+      addInstalledStructureModels all projections reserved is
+  let mut result ← (generate none).run
   if let .error (.nameLost _) := result then
     setEnv saved
-    result ← (do
-      let is ← mutualIso all lparams np tys ctors reserved
-        (some (Naming.retryRoot all[0]!)) (sourceBlock? := sourceBlock?)
-      addInstalledStructureModels all projections reserved is).run
+    result ← (generate (some (Naming.retryRoot all[0]!))).run
   match result with
   | .error dec =>
     setEnv saved

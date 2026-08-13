@@ -95,6 +95,18 @@ private def classifyMutualOneLayer (types : Array EIndType)
     members := members.push { owner := type.name, changed, level, constructorFields }
   if anyChanged then return some members else return none
 
+/-- Owner-keyed selection result used by downstream certificate validation. -/
+def mutualOneLayerChangedMembers? (source : EDecl) : GenM (Option (Array (Name × Bool))) := do
+  let .induct types constructors _ := source | return none
+  return (← classifyMutualOneLayer types.toArray constructors.toArray).map fun members =>
+    members.map fun member => (member.owner, member.changed)
+
+/-- Pure selection boundary used by the driver before it mutates the
+environment.  Construction repeats the classification and therefore cannot
+turn an incomplete source block into a partial family certificate. -/
+def mutualOneLayerEligible (source : EDecl) : GenM Bool :=
+  return (← mutualOneLayerChangedMembers? source).isSome
+
 private def exactFamilySource (env : Environment) (all : Array Name)
     (publicIso : Iso) (expression : Expr) : Expr :=
   let mapping := modelTable env all publicIso
