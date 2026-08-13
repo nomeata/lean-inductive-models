@@ -43,6 +43,15 @@ structure OneLayerBase where
   implementationNames : IsoInterface
   deriving Inhabited
 
+/-- Public constructor and intrinsic-projection implementation, before the
+public recursor family is attached. -/
+structure OneLayerPublicFields where
+  declarations : Array Declaration
+  spliced : Array Name
+  projectionOverrides : Array (Name × Nat × Expr × Expr)
+  fx? : Option Name
+  deriving Inhabited
+
 private def generatedType (name : Name) : GenM Expr := do
   let some info := (← getEnv).constants.find? name
     | badShape s!"generated declaration {name} is absent"
@@ -291,5 +300,95 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
 
   let implementationNames := implementationIso.publicInterface
   return { declarations, spliced, names, implementationNames }
+
+/-- Attach the exact public constructor and direct layer projections.
+Recursive constructor inputs are mapped into the private fixpoint with `roll`;
+recursive projections map back with `unroll`.  Their public iota RHS is still
+the literal source field, while the proof override is pointwise
+`unroll_roll` (and therefore need not be reflexivity). -/
+def buildOneLayerPublicFields (tname : Name) (lparams : List Name) (np : Nat)
+    (memberTy : Expr) (sourceConstructor : Name × Expr)
+    (reserved : Std.HashSet Name) (implementationIso : Iso)
+    (base : OneLayerBase) : GenM OneLayerPublicFields := do
+  let names := base.names
+  let us := lparams.map Level.param
+  let privateTable := modelTable (← getEnv) #[tname] implementationIso
+  let publicIso : Iso := { implementationIso with
+    selfNames := #[names.publicNames.self]
+    ctors := #[(sourceConstructor.1, names.publicNames.ctors[0]!)]
+    recs := #[names.publicNames.recursor]
+    iotas := #[] }
+  let publicTable := modelTable (← getEnv) #[tname] publicIso
+  let privateConstructorType := restore privateTable sourceConstructor.2
+  let publicConstructorType := restore publicTable sourceConstructor.2
+  let level ← exactCarrierLevel memberTy np
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok information => pure information
+    | .error message => badShape s!"{tname}'s one-layer fields need Eq ({message})"
+
+  let fieldShape ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
+    let telescope ← instForall publicConstructorType parameters
+    classifyCtor names.publicNames.self (numForalls telescope) telescope
+  let needsFunext := fieldShape.any fun field => field.rec?.any (· > 0)
+  let (fx?, funextDeclarations) ← if needsFunext then do
+      let (name, declarations) ← ensureFunext names.implementation.impl eqi reserved
+      pure (some name, declarations)
+    else pure (none, #[])
+  let mut declarations := funextDeclarations
+  let spliced := funextDeclarations.flatMap (·.getNames.toArray)
+
+  let constructorValue ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
+    let publicTelescope ← instForall publicConstructorType parameters
+    let privateTelescope ← instForall privateConstructorType parameters
+    let fieldCount := numForalls publicTelescope
+    forallBoundedTelescope publicTelescope (some fieldCount) fun publicFields _ =>
+      forallBoundedTelescope privateTelescope (some fieldCount) fun privateFields _ => do
+        let mut stored : Array Expr := #[]
+        for index in [0:fieldCount] do
+          let value ← if fieldShape[index]!.rec?.isSome then
+              mapOneLayerOccurrence names.publicNames.self np names.roll us
+                (← inferType publicFields[index]!) publicFields[index]!
+            else pure publicFields[index]!
+          stored := stored.push value
+        mkLambdaFVars (parameters ++ publicFields)
+          (← wTowerMkOf level privateFields stored)
+  let constructorHints ← hintsFor constructorValue
+  let constructor := Declaration.defnDecl
+    { name := names.publicNames.ctors[0]!, levelParams := lparams
+      type := publicConstructorType, value := constructorValue
+      hints := constructorHints, safety := .safe }
+  addChecked constructor
+  declarations := declarations.push constructor
+
+  let mut overrides : Array (Name × Nat × Expr × Expr) := #[]
+  for fieldIndex in [0:fieldShape.size] do
+    let selector ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
+      let privateTelescope ← instForall privateConstructorType parameters
+      let fieldCount := numForalls privateTelescope
+      forallBoundedTelescope privateTelescope (some fieldCount) fun privateFields _ =>
+        withLocalDeclD `layer
+            (mkAppN (.const names.publicNames.self us) parameters) fun layer => do
+          let fields ← wTowerProjsOf level privateFields layer
+          let value ← if fieldShape[fieldIndex]!.rec?.isSome then
+              mapOneLayerOccurrence names.implementation.self np names.unroll us
+                (← inferType fields[fieldIndex]!) fields[fieldIndex]!
+            else pure fields[fieldIndex]!
+          mkLambdaFVars (parameters.push layer) value
+    let proof ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
+      let publicTelescope ← instForall publicConstructorType parameters
+      let fieldCount := numForalls publicTelescope
+      forallBoundedTelescope publicTelescope (some fieldCount) fun publicFields _ => do
+        let selected := publicFields[fieldIndex]!
+        let equality ← if fieldShape[fieldIndex]!.rec?.isSome then
+            oneLayerOccurrenceRoundTrip names.publicNames.self names.implementation.self np
+              names.roll names.unroll names.unrollRoll fx? us
+              (← inferType selected) selected
+          else
+            let type ← inferType selected
+            pure (eqi.refl' (← ilevel type) type selected)
+        mkLambdaFVars (parameters ++ publicFields) equality
+    overrides := overrides.push (tname, fieldIndex, selector, proof)
+
+  return { declarations, spliced, projectionOverrides := overrides, fx? }
 
 end InductiveModels
