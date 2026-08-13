@@ -76,6 +76,104 @@ theorem oneLayerRecursorCompatibility
   exact compat (rollField p) (roll (publicCtor p)) p
     (unrollRollField p) (rollCtor p) (unrollRoll (publicCtor p))
 
+/-- Two-field companion of [`oneLayerRecursorCompatibility`].  The recursive
+fields are independent in the source telescope, so equality induction can
+hold both private fields and both private induction hypotheses fixed while it
+changes the two public endpoints in source order. -/
+theorem twoFieldOneLayerRecursorCompatibility
+    {M P : Type u} {Q₁ R₁ : Type w₁} {Q₂ R₂ : Type w₂}
+    {C : P → Sort v} {H₁ : R₁ → Sort x₁} {H₂ : R₂ → Sort x₂}
+    (roll : P → M) (unroll : M → P)
+    (unrollRoll : ∀ p, unroll (roll p) = p)
+    (rollField₁ : R₁ → Q₁) (unrollField₁ : Q₁ → R₁)
+    (unrollRollField₁ : ∀ p, unrollField₁ (rollField₁ p) = p)
+    (rollField₂ : R₂ → Q₂) (unrollField₂ : Q₂ → R₂)
+    (unrollRollField₂ : ∀ p, unrollField₂ (rollField₂ p) = p)
+    (privateCtor : Q₁ → Q₂ → M) (publicCtor : R₁ → R₂ → P)
+    (rollCtor : ∀ p₁ p₂,
+      roll (publicCtor p₁ p₂) = privateCtor (rollField₁ p₁) (rollField₂ p₂))
+    (privateIH₁ : ∀ q, H₁ (unrollField₁ q)) (publicIH₁ : ∀ p, H₁ p)
+    (ihAgreement₁ : ∀ q, publicIH₁ (unrollField₁ q) = privateIH₁ q)
+    (privateIH₂ : ∀ q, H₂ (unrollField₂ q)) (publicIH₂ : ∀ p, H₂ p)
+    (ihAgreement₂ : ∀ q, publicIH₂ (unrollField₂ q) = privateIH₂ q)
+    (minor : ∀ p₁ p₂, H₁ p₁ → H₂ p₂ → C (publicCtor p₁ p₂))
+    (core : ∀ q, C (unroll q))
+    (constructorAgreement : ∀ q₁ q₂,
+      publicCtor (unrollField₁ q₁) (unrollField₂ q₂) =
+        unroll (privateCtor q₁ q₂))
+    (coreIota : ∀ q₁ q₂, core (privateCtor q₁ q₂) =
+      Eq.mp (congrArg C (constructorAgreement q₁ q₂))
+        (minor (unrollField₁ q₁) (unrollField₂ q₂)
+          (privateIH₁ q₁) (privateIH₂ q₂))) :
+    let publicRec : ∀ p, C p := fun p =>
+      Eq.mp (congrArg C (unrollRoll p)) (core (roll p))
+    ∀ p₁ p₂, publicRec (publicCtor p₁ p₂) =
+      minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂) := by
+  have cancel {a b : P} (h : a = b) (value : C a) :
+      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value := by
+    exact Eq.rec (motive := fun b h =>
+      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value) rfl h
+  intro publicRec p₁ p₂
+  unfold publicRec
+  have compat (q₁ : Q₁) (q₂ : Q₂) (r : M) (p₁ : R₁) (p₂ : R₂)
+      (hp₁ : unrollField₁ q₁ = p₁) (hp₂ : unrollField₂ q₂ = p₂)
+      (hc : r = privateCtor q₁ q₂) (hout : unroll r = publicCtor p₁ p₂) :
+      Eq.mp (congrArg C hout) (core r) =
+        minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂) := by
+    let afterCtor : ∀ (r : M), r = privateCtor q₁ q₂ →
+        ∀ (p₁ : R₁) (hp₁ : unrollField₁ q₁ = p₁)
+          (p₂ : R₂) (hp₂ : unrollField₂ q₂ = p₂)
+          (hout : unroll r = publicCtor p₁ p₂),
+          Eq.mp (congrArg C hout) (core r) =
+            minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂) :=
+      fun r hc => Eq.rec (motive := fun r _ =>
+          ∀ (p₁ : R₁) (hp₁ : unrollField₁ q₁ = p₁)
+            (p₂ : R₂) (hp₂ : unrollField₂ q₂ = p₂)
+            (hout : unroll r = publicCtor p₁ p₂),
+            Eq.mp (congrArg C hout) (core r) =
+              minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂))
+        (fun p₁ hp₁ => Eq.rec (motive := fun p₁ _ =>
+            ∀ (p₂ : R₂) (hp₂ : unrollField₂ q₂ = p₂)
+              (hout : unroll (privateCtor q₁ q₂) = publicCtor p₁ p₂),
+              Eq.mp (congrArg C hout) (core (privateCtor q₁ q₂)) =
+                minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂))
+          (fun p₂ hp₂ => Eq.rec (motive := fun p₂ _ =>
+              ∀ hout : unroll (privateCtor q₁ q₂) =
+                  publicCtor (unrollField₁ q₁) p₂,
+                Eq.mp (congrArg C hout) (core (privateCtor q₁ q₂)) =
+                  minor (unrollField₁ q₁) p₂
+                    (publicIH₁ (unrollField₁ q₁)) (publicIH₂ p₂))
+            (fun hout => by
+              let move := fun value : C (unroll (privateCtor q₁ q₂)) =>
+                Eq.mp (congrArg C hout) value
+              let first := congrArg move (coreIota q₁ q₂)
+              let privateResult := minor (unrollField₁ q₁) (unrollField₂ q₂)
+                (privateIH₁ q₁) (privateIH₂ q₂)
+              have paths : hout = (constructorAgreement q₁ q₂).symm := by rfl
+              have middle : move
+                    (Eq.mp (congrArg C (constructorAgreement q₁ q₂)) privateResult) =
+                  privateResult := by
+                exact Eq.rec (motive := fun h _ =>
+                    Eq.mp (congrArg C h)
+                        (Eq.mp (congrArg C (constructorAgreement q₁ q₂)) privateResult) =
+                      privateResult)
+                  (cancel (constructorAgreement q₁ q₂) _) paths.symm
+              let firstIH := congrArg
+                (fun ih => minor (unrollField₁ q₁) (unrollField₂ q₂)
+                  ih (privateIH₂ q₂)) (ihAgreement₁ q₁)
+              let secondIH := congrArg
+                (minor (unrollField₁ q₁) (unrollField₂ q₂)
+                  (publicIH₁ (unrollField₁ q₁))) (ihAgreement₂ q₂)
+              exact first.trans (middle.trans (firstIH.symm.trans secondIH.symm)))
+            hp₂)
+          hp₁)
+        hc.symm
+    exact afterCtor r hc p₁ hp₁ p₂ hp₂ hout
+  exact compat (rollField₁ p₁) (rollField₂ p₂)
+    (roll (publicCtor p₁ p₂)) p₁ p₂
+    (unrollRollField₁ p₁) (unrollRollField₂ p₂)
+    (rollCtor p₁ p₂) (unrollRoll (publicCtor p₁ p₂))
+
 /-- The pointwise induction hypothesis presented by the public recursor is the
 private recursive result.  Equality induction holds the private computation
 fixed; proof irrelevance identifies the remaining section witness with
@@ -195,6 +293,18 @@ elab "oneLayerCompatibilityProof%" : term => do
   return quoteClosedExprValue value
 
 open Elab Term in
+elab "twoFieldOneLayerCompatibilityProof%" : term => do
+  let info ← getConstInfo ``twoFieldOneLayerRecursorCompatibility
+  let .thmInfo theoremInfo := info
+    | throwError "twoFieldOneLayerRecursorCompatibility is not a theorem"
+  let value ← inlineCompatibilityConstants theoremInfo.value
+  let extra := value.getUsedConstants.filter fun name =>
+    name != ``Eq && name != ``Eq.refl && name != ``Eq.rec
+  unless extra.isEmpty do
+    throwError "embedded two-field one-layer compatibility proof retains {extra}"
+  return quoteClosedExprValue value
+
+open Elab Term in
 elab "oneLayerIHCompatibilityProof%" : term => do
   let info ← getConstInfo ``oneLayerIHCompatibility
   let .thmInfo theoremInfo := info
@@ -207,6 +317,7 @@ elab "oneLayerIHCompatibilityProof%" : term => do
   return quoteClosedExprValue value
 
 private def oneLayerCompatibilityProof : Expr := oneLayerCompatibilityProof%
+private def twoFieldOneLayerCompatibilityProof : Expr := twoFieldOneLayerCompatibilityProof%
 private def oneLayerIHCompatibilityProof : Expr := oneLayerIHCompatibilityProof%
 
 private partial def firstDifferencePath? (actual expected : Expr)
@@ -254,6 +365,27 @@ def applyOneLayerCompatibility (levels : List Level) (arguments : Array Expr) (e
     return .error "compatibility proof retains metavariables"
   if proof.getUsedConstants.contains ``oneLayerRecursorCompatibility then
     return .error "compatibility proof refers to the tool-side oracle declaration"
+  check proof
+  return .ok proof
+
+def applyTwoFieldOneLayerCompatibility (levels : List Level) (arguments : Array Expr)
+    (expected : Expr) : MetaM (Except String Expr) := do
+  unless arguments.size == 31 || arguments.size == 33 do
+    return .error s!"two-field compatibility needs 31 arguments and two optional fields, got {arguments.size}"
+  let levelParams := (collectLevelParams {} twoFieldOneLayerCompatibilityProof).params
+  unless levels.length == levelParams.size do
+    return .error s!"two-field compatibility needs {levelParams.size} universes, got {levels.length}"
+  let template := twoFieldOneLayerCompatibilityProof.instantiateLevelParams
+    levelParams.toList levels
+  let proof ← instantiateMVars (mkAppN template arguments)
+  let actual ← inferType proof
+  unless ← withTransparency .all <| isDefEq actual expected do
+    return .error s!"two-field compatibility result differs at {(firstDifferencePath? actual expected).getD "definitionally unequal subterm"}: {actual}, expected {expected}"
+  let proof ← instantiateMVars proof
+  if proof.hasExprMVar || proof.hasLevelMVar then
+    return .error "two-field compatibility proof retains metavariables"
+  if proof.getUsedConstants.contains ``twoFieldOneLayerRecursorCompatibility then
+    return .error "two-field compatibility proof refers to the tool-side oracle declaration"
   check proof
   return .ok proof
 
@@ -381,7 +513,7 @@ private def proveOneLayerIota (names : OneLayerNames) (roundTrips : Array Expr)
     let (result, _) ← simpGoal goal.mvarId! context
     unless result.isNone do
       let pending := result.map (·.2) |>.getD goal.mvarId!
-      badShape s!"{names.publicNames.iotas[0]!}'s equivalence laws do not prove its exact public rule: {repr (← pending.getType)}"
+      badShape s!"{names.publicNames.iotas[0]!}'s equivalence laws do not prove its exact public rule"
     instantiateMVars goal
 
 /-- The induction-hypothesis telescope associated with one direct or
@@ -1097,8 +1229,7 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
               let type ← inferType field
               pure (eqi.refl' (← ilevel type) type field)
           roundTrips := roundTrips.push proof
-        let proof ← try proveOneLayerIota names roundTrips proposition catch _ =>
-          badShape s!"{tname}'s multi-field one-layer proof did not close"
+        let proof ← proveOneLayerIota names roundTrips proposition
         let forbidden := proof.getUsedConstants.filter fun name =>
           (`InductiveModels).isPrefixOf name || name == ``HEq || name == ``HEq.refl
         unless forbidden.isEmpty do
