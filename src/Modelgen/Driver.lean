@@ -1578,14 +1578,42 @@ private def kernelReplayExpressions : EDecl → Array Expr
   | .induct types constructors _ =>
       types.toArray.map (·.type) ++ constructors.toArray.map (·.type)
 
+private partial def metaConstantsAvailable (environment : Environment)
+    (unavailable : Std.HashSet Name) (pending : List Name)
+    (visited : Std.HashSet Name := {}) : Bool :=
+  match pending with
+  | [] => true
+  | name :: pending =>
+    if visited.contains name then
+      metaConstantsAvailable environment unavailable pending visited
+    else if unavailable.contains name then false
+    else match environment.findConstVal? name with
+      | none => false
+      | some value =>
+        metaConstantsAvailable environment unavailable
+          (value.type.getUsedConstants.toList ++ pending) (visited.insert name)
+
 private def checkKernelReplayExpressions (record : EDecl)
     (only : Option (Std.HashSet Expr) := none)
     (unavailable : Std.HashSet Name := {}) : MetaM (Except String Unit) := do
   try
+    let environment ← getEnv
     for expression in kernelReplayExpressions record do
       if let some selected := only then
         unless selected.contains expression do continue
-      if expression.getUsedConstants.any unavailable.contains then continue
+      -- The supplemental full environment is intentionally only a mirror of
+      -- the authoritative kernel replay. Besides records omitted after a
+      -- normalized private-name collision, inductive compilation can create
+      -- auxiliary constants in the kernel environment which `addDeclCore` on
+      -- this mirror does not expose through its async constant map. Check a
+      -- root only when Meta's own constant lookup can resolve every reference
+      -- reached through constant types. (For example, an exported theorem may
+      -- mention a generated helper whose type mentions a nested recursor that
+      -- exists only in the kernel environment.) The official kernel and
+      -- metadata comparison still validate every root.
+      unless metaConstantsAvailable environment unavailable
+          expression.getUsedConstants.toList do
+        continue
       Meta.check expression
     return .ok ()
   catch
