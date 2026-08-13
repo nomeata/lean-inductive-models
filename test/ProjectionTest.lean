@@ -600,6 +600,47 @@ def main : IO UInt32 := do
   state := state.check "literal recursive rules require the complete certificate" <|
     (Check.check noOneLayerCertificate).any (hasTypeViolation `Wty wtyRule1)
 
+  -- The next production tranche folds the same private/public compatibility
+  -- proof once per recursive constructor field.  These owners differ only in
+  -- the recursive suffix: direct/direct, direct/infinitary,
+  -- infinitary/infinitary, and an ordinary dependent prefix followed by two
+  -- direct fields.  Every public proposition remains the literal name-only
+  -- source rewrite; transports are confined to proof values.
+  let multiFieldOwners : Array (Name × Nat) :=
+    #[(`Twin, 2), (`Mixed, 2), (`TwinInf, 2), (`Prefix, 4)]
+  for (owner, fieldCount) in multiFieldOwners do
+    let privateRoot := Name.str (Naming.modelName owner) "_impl"
+    let certificate := #[Name.str privateRoot "self", Name.str privateRoot "ctor_0",
+      Name.str privateRoot "rec", Name.str privateRoot "rec_iota_0",
+      Name.str privateRoot "roll", Name.str privateRoot "unroll",
+      Name.str privateRoot "unroll_roll", Name.str privateRoot "roll_unroll"]
+    let publicFaces := #[Naming.modelName owner, Naming.modelName (Name.str owner "mk"),
+      Naming.modelName (Name.str owner "rec"), Naming.iotaName (Name.str owner "rec") 0] ++
+      (Array.range fieldCount).flatMap fun index =>
+        #[Naming.projectionName owner index, Naming.projectionIotaName owner index]
+    state := state.check s!"{owner} carries the complete multi-field one-layer certificate" <|
+      certificate.all wNames.contains
+    state := state.check s!"{owner} public family is exact and generated" <|
+      wReport.generated.any (fun row => row.1 == owner) &&
+        !wReport.declined.any (fun row => row.1 == owner) &&
+        (Check.check wGenerated).all (fun violation =>
+          violation.familyOwner != owner || violation matches .modelNotBefore ..)
+    state := state.check s!"{owner} public statements introduce no Eq.rec" <|
+      publicFaces.all fun name =>
+        (declarationType? wGenerated name).any fun type => !containsConst ``Eq.rec type
+    state := state.check s!"{owner} projection iotas retain literal field RHS" <|
+      (Array.range fieldCount).all fun index =>
+        (declarationType? wGenerated (Naming.projectionIotaName owner index)).any fun type =>
+          !containsConst ``Eq.rec type
+
+  let twinAuthoredRaw := mapRecursorSyntax wRaw `Twin.rec authoredOuterSortTransport
+  let (twinAuthoredDeclarations, twinAuthoredReport) ← runExport twinAuthoredRaw
+  let twinAuthoredGenerated := outputExport twinAuthoredRaw twinAuthoredDeclarations
+  state := state.check "multi-field source-authored Eq.rec is preserved" <|
+    twinAuthoredReport.unreplayable.isNone && twinAuthoredReport.stmtErrors.isEmpty &&
+      #[Naming.modelName `Twin.rec, Naming.iotaName `Twin.rec 0].all fun name =>
+        (declarationType? twinAuthoredGenerated name).any (containsConst ``Eq.rec)
+
   let (wrapperDeclarations, wrapperReport) ← runExport wrapperRaw
   let wrapperGenerated := outputExport wrapperRaw wrapperDeclarations
   let wrapperNames := wrapperDeclarations.flatMap (·.names.toArray)

@@ -109,6 +109,23 @@ inductive Bad : Type where
 inductive Wty (α : Type u) (β : α → Type u) : Type u where
   | mk : (a : α) → (β a → Wty α β) → Wty α β
 
+/- The phase-two one-layer boundary: every declaration below is still one
+   constructor, unindexed and unnested, but its constructor has more than one
+   recursive occurrence.  Their four shapes keep the proof fold honest:
+   direct/direct, direct/infinitary, infinitary/infinitary, and a dependent
+   *ordinary* prefix before the recursive suffix. -/
+inductive Twin : Type where
+  | mk : Twin → Twin → Twin
+
+inductive Mixed (P : Type) : Type where
+  | mk : Mixed P → (P → Mixed P) → Mixed P
+
+inductive TwinInf (P Q : Type) : Type where
+  | mk : (P → TwinInf P Q) → (Q → TwinInf P Q) → TwinInf P Q
+
+inductive Prefix (α : Type u) (β : α → Type u) : Type u where
+  | mk : (a : α) → β a → Prefix α β → Prefix α β → Prefix α β
+
 inductive Utd : Type where
   | nil : Utd
   | mk : (k : P) → (j : P) → (PFam k → Utd) → (PFam j → Utd) → Utd
