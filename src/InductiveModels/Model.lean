@@ -2529,7 +2529,8 @@ def persistentSupportName (name : Name) : Bool :=
   persistentSupportRoot name ||
     (`PSigma').isPrefixOf name ||
     (`PUnit).isPrefixOf name ||
-    name == `Quot.sound || name == `Classical.choice || name == `propext ||
+    [`Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
+      `Classical.choice, `propext].contains name ||
     wCoreRoot.isPrefixOf name
 /-- `WT.sup` under the prefix — the node former. -/
 def wCoreSup : Name := wCoreRoot ++ `WT.sup

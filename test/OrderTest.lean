@@ -116,12 +116,14 @@ structure FilterRun where
 structure StagedFilterRun extends FilterRun where
   plan : StagedPlan
   planValid : Bool
+  planError? : Option String
   malformedPlansRejected : Bool
 
 structure DroppedFilterRun where
   report : Report
   plan : StagedPlan
   planValid : Bool
+  planError? : Option String
 
 def cursorAfter (records : Array EDecl) : Writer.Cursor :=
   let writer := records.foldl (fun writer record => (writer.splitDecl record).1) (Writer.fromCursor {})
@@ -167,9 +169,10 @@ def runFilterStagedState (scratch : String) (input : Export)
       throw <| IO.userError "sealed staged cursor changed after finish"
     let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
     let sourceSizes := syntheticRawSizes input.decls.size
-    let planValid := match plan.declarationSpans certificate sourceSizes input.decls.size sealed with
-      | .ok spans => spans.size == plan.declarations.size
-      | .error _ => false
+    let (planValid, planError?) :=
+      match plan.declarationSpans certificate sourceSizes input.decls.size sealed with
+      | .ok spans => (spans.size == plan.declarations.size, none)
+      | .error error => (false, some error)
     let duplicateDeclarations := if plan.declarations.size < 2 then plan.declarations.push (.source 0)
       else plan.declarations.set! 1 plan.declarations[0]!
     let duplicateRejected := if plan.declarations.isEmpty then true else
@@ -190,7 +193,7 @@ def runFilterStagedState (scratch : String) (input : Export)
       | .error _ => true
     return {
       input, output := { input with decls }, report, env := finalState.env,
-      plan, planValid,
+      plan, planValid, planError?,
       malformedPlansRejected := duplicateRejected && cursorRejected && sourceCountRejected }
 
 def runFilterDroppedState (scratch : String) (input : Export)
@@ -206,11 +209,12 @@ def runFilterDroppedState (scratch : String) (input : Export)
         (runFilterStaged input checkRecursors generation (.ofStage stage))) context { env }
     let sealed ← stage.finish
     let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
-    let planValid := match plan.declarationSpans certificate
-        (syntheticRawSizes input.decls.size) input.decls.size sealed with
-      | .ok spans => spans.size == plan.declarations.size
-      | .error _ => false
-    return { report, plan, planValid }
+    let (planValid, planError?) :=
+      match plan.declarationSpans certificate
+          (syntheticRawSizes input.decls.size) input.decls.size sealed with
+      | .ok spans => (spans.size == plan.declarations.size, none)
+      | .error error => (false, some error)
+    return { report, plan, planValid, planError? }
 
 def generatedFixtureState (path : String) (generation : InductiveModels.Cli.Config) :
     IO FilterRun := do
@@ -897,7 +901,7 @@ def run (root : String) : IO UInt32 := do
     ("dropped declarations", wDropped.plan.declarations == wStaged.plan.declarations),
     ("dropped islands", wDropped.plan.islands == wStaged.plan.islands)]
   unless wParity.all (·.2) do
-    IO.eprintln s!"one-layer W parity: {repr wParity}"
+    IO.eprintln s!"one-layer W parity: {repr wParity}; staged={repr wStaged.planError?}; dropped={repr wDropped.planError?}"
   state := state.check "one-layer W output is identical across legacy and staged drivers" <|
     wParity.all (·.2)
 
