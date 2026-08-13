@@ -40,6 +40,11 @@ def runFixture (path : String) (generation : Modelgen.Cli.Config) : IO FixtureRe
     | throw <| IO.userError s!"cannot parse {path}"
   runExport path input false generation
 
+def postponeRecords (input : Export) (postpone : EDecl → Bool) : Export :=
+  { input with
+    decls := input.decls.filter (fun declaration => !postpone declaration) ++
+      input.decls.filter postpone }
+
 def flipFirstRecursorSafety (input : Export) : Option (Export × Name) := do
   let index ← input.decls.findIdx? fun declaration => match declaration with
     | .induct _ _ (_ :: _) => true
@@ -153,6 +158,37 @@ def main : IO UInt32 := do
   state := state.check "mutual implementation composes through simple naming"
     (mutualResult.generated tag && mutualResult.hasExactCarrier tag &&
       !mutualResult.hasLegacyCarrier tag)
+
+  -- Put canonical Eq physically behind the direct, mutual, nested and
+  -- composed owners. The reserved-name guards must remain strict; source
+  -- scheduling, not a prelude splice, is what makes every construction work.
+  let lateEqText ← IO.FS.readFile "test/fixtures/modelgen/prim_late_basis.ndjson"
+  let .ok lateEqSource := Modelgen.parse lateEqText (analyse := false)
+    | throw <| IO.userError "cannot parse the late-Eq source fixture"
+  let lateEqInput := postponeRecords lateEqSource fun declaration =>
+    declaration.names.contains `Eq
+  let lateEq ← runExport "canonical Eq after selected owners" lateEqInput false
+    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
+  state := state.check "late canonical Eq is scheduled before representative owners"
+    (lateEq.generated `Pre && lateEq.generated `MA && lateEq.generated `Nd &&
+      !lateEq.report.declined.any fun (_, reason) => reason.endsWith "name taken (Eq)")
+
+  -- The graph fixture's infinitary recursive field needs a derived funext.
+  -- Move the complete source quotient interface behind `Ac`: the scheduler
+  -- must hoist the exact kernel bundle and Quot.sound, while ensureFunext's
+  -- reserved-name checks remain untouched.
+  let lateQuotText ← IO.FS.readFile "test/fixtures/modelgen/prim_graph_pre.ndjson"
+  let .ok lateQuotSource := Modelgen.parse lateQuotText (analyse := false)
+    | throw <| IO.userError "cannot parse the late-Quot source fixture"
+  let lateQuotInput := postponeRecords lateQuotSource fun declaration =>
+    declaration.names.any fun name => name == `Quot || (`Quot).isPrefixOf name
+  let lateQuot ← runExport "canonical Quot after recursive owner" lateQuotInput false
+    { noGeneration with simple := true, basic := true }
+  let lateQuotOutput : Export := { lateQuotInput with decls := lateQuot.output }
+  state := state.check "late source Quot closes recursive funext support"
+    (lateQuot.generated `Ac && !lateQuot.declined `Ac &&
+      declarationBefore lateQuotOutput `Quot `Ac &&
+      !lateQuot.report.declined.any fun (_, reason) => reason.endsWith "name taken (Quot)")
 
   let composed ← runFixture "test/fixtures/modelgen/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true, simple := true }
