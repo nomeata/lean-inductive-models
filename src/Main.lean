@@ -126,14 +126,14 @@ def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Nam
 def generationEnabled (config : Modelgen.Cli.Config) : Bool :=
   config.nested || config.mutualModels || config.simple || config.basic
 
-/-- Initial internal fast-path boundary. Output structural checking still
-needs the complete final `Export`, and output kernel checking must replay the
-exact final byte stream; both therefore retain the legacy in-memory path.
-Monomorphization rewrites source declarations, while a no-output or
-no-generation invocation has no staged payload to compose. -/
+/-- Initial internal fast-path boundary. Structural output checking consumes
+the compact report certified while each family was live. Output kernel checking
+must still replay the exact final byte stream and therefore retains the legacy
+in-memory path. Monomorphization rewrites source declarations, while a no-output
+or no-generation invocation has no staged payload to compose. -/
 def stagedModeEligible (config : Modelgen.Cli.Config) : Bool :=
   config.output && generationEnabled config && !config.monoLevels &&
-    !config.checkOutput && !config.typeCheckOutput
+    !config.typeCheckOutput
 
 private structure RawStage where
   workspace : Modelgen.Spool.Workspace
@@ -310,10 +310,14 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     else exitDeclined
   match filterOutput with
   | .staged raw stage plan =>
-    -- Eligibility excludes whole-output checks until they have compact or
-    -- serialized-stream equivalents. Seal and validate the plan before the
-    -- output transaction, then validate every physical file before its first
-    -- destination byte.
+    if config.checkOutput then
+      unless plan.checkReport.violations.isEmpty do
+        reportViolations input "output" plan.checkReport.violations
+        return exitRejected
+      reportCheckSuccess config "output" plan.checkReport
+    -- Output kernel checking remains on the full-AST path. Seal and validate
+    -- the plan before the output transaction, then validate every physical
+    -- file before its first destination byte.
     try
       let sealed ← stage.finish
       let spans ← match plan.declarationSpans raw.certificate raw.sizes
@@ -369,7 +373,7 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   -- The staged path remains an internal opt-in while end-to-end equivalence is
   -- expanded across the fixture matrix. Statically ineligible modes never tee
   -- their input, so the experiment cannot impose a disk/time regression on
-  -- output checking, monomorphization, no-output, or parser-only invocations.
+  -- kernel-output checking, monomorphization, no-output, or parser-only invocations.
   if (← IO.getEnv "MODELGEN_RAW_SPOOL") == some "1" && stagedModeEligible config then
     let scratch := (← IO.currentDir) / "_tmp"
     Modelgen.Spool.withOptionalWorkspace scratch (runWithWorkspace config)

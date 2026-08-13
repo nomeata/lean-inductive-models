@@ -576,6 +576,16 @@ def main (args : List String) : IO UInt32 := do
       staged.exitCode == legacy.exitCode && staged.stderr == legacy.stderr
     state := state.check s!"staged {label} preserves semantic output and order" <|
       sameSemanticExport staged.stdout legacy.stdout
+  let checkedLegacy ← IO.Process.output { cmd := binary, args := #[nested] }
+  let checkedStaged ← IO.Process.output {
+    cmd := binary
+    args := #[nested]
+    env := #[("MODELGEN_RAW_SPOOL", some "1")] }
+  state := state.check "staged compact output check preserves report and exit" <|
+    checkedStaged.exitCode == checkedLegacy.exitCode &&
+      checkedStaged.stderr == checkedLegacy.stderr
+  state := state.check "staged compact output check preserves semantic output and order" <|
+    sameSemanticExport checkedStaged.stdout checkedLegacy.stdout
   let leakedGeneratedSpools ← System.FilePath.readDir scratch
   state := state.check "staged generated output removes its workspace" <|
     !leakedGeneratedSpools.any (fun entry => entry.fileName.startsWith "modelgen-spool-")
