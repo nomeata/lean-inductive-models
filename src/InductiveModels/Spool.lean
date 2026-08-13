@@ -13,9 +13,9 @@ def rawFastPathEligible (certificate : RawCertificate) (sizes : RawSpoolSizes)
     | .ok _ => true
     | .error _ => false
 
-/-- Largest offset accepted by both POSIX `fseeko` and Windows `_fseeki64` in
-the portable shim. The export format uses unsigned counters, but host file
-offsets are signed 64-bit. -/
+/-- Largest spool offset admitted by the staged format. Keeping the historical
+signed-64 bound makes validation independent of host integer and filesystem
+limits even though the pure-Lean copier advances with bounded reads. -/
 def maxSeekOffset : Nat := 9223372036854775807
 
 /-- A persistent range in a spool file. Both fields are fixed width; all
@@ -148,6 +148,13 @@ def Workspace.create (root : System.FilePath) : IO Workspace := do
   unless rootMetadata.type == .dir do
     throw <| IO.userError s!"spool workspace root is not a physical directory: {root}"
   let canonicalRoot ← IO.FS.realPath root
+  -- Lean's runtime reserves this directory atomically with owner-only access.
+  -- It does not expose descriptor-relative parent attestation, so unlike the
+  -- former Linux shim this does not inspect the parent's UID or mode. Instead
+  -- the runtime temporary directory must canonically remain inside the
+  -- caller's project `_tmp`; CI and documented invocations set `TMPDIR`
+  -- accordingly. Optional staging falls back before doing work when it does
+  -- not. The exact empty directory is removed on a containment failure.
   let directory ← IO.FS.createTempDir
   let canonicalDirectory ← IO.FS.realPath directory
   let rootParts := canonicalRoot.components

@@ -1,4 +1,5 @@
 import InductiveModels.Spool
+import Std.Internal.Async.System
 
 open Lean InductiveModels
 
@@ -17,6 +18,14 @@ def lines (records : Array String) : String :=
 
 def removeIfPresent (path : String) : IO Unit := do
   if ← System.FilePath.pathExists path then IO.FS.removeFile path
+
+def withTempDirectoryVariable (value : System.FilePath) (action : IO α) : IO α := do
+  let old ← IO.getEnv "TMPDIR"
+  Std.Internal.IO.Async.System.setEnvVar "TMPDIR" value.toString
+  try action finally
+    match old with
+    | some old => Std.Internal.IO.Async.System.setEnvVar "TMPDIR" old
+    | none => Std.Internal.IO.Async.System.unsetEnvVar "TMPDIR"
 
 def parseHandleAt (path : String) : IO (Except String Export) :=
   IO.FS.withFile path .read fun handle => InductiveModels.parseHandle handle
@@ -152,6 +161,32 @@ def main (args : List String) : IO UInt32 := do
     else pure false
   state := state.check "runtime workspace is a secure physical child of project _tmp" <|
     secureWorkspaceBoundary && secureWorkspaceCleaned
+
+  let externalTmp : System.FilePath := s!"{root}/staged-writer-external-tmp"
+  if ← externalTmp.pathExists then IO.FS.removeDirAll externalTmp
+  IO.FS.createDir externalTmp
+  let externalFallback ← withTempDirectoryVariable externalTmp <|
+    Spool.withOptionalWorkspace scratch fun workspace? => pure workspace?.isNone
+  let externalEntries ← externalTmp.readDir
+  state := state.check "external TMPDIR disables optional staging and cleans its reservation" <|
+    externalFallback && externalEntries.isEmpty
+
+  let symlinkTarget : System.FilePath := s!"{root}/staged-writer-symlink-target"
+  let symlinkTmp : System.FilePath := s!"{scratch}/staged-writer-symlink-tmp"
+  if ← symlinkTmp.pathExists then IO.FS.removeDirAll symlinkTmp
+  if ← symlinkTarget.pathExists then IO.FS.removeDirAll symlinkTarget
+  IO.FS.createDir symlinkTarget
+  let symlinkEscape ← if System.Platform.isWindows then (pure true : IO Bool) else do
+    discard <| IO.Process.run {
+      cmd := "ln", args := #["-s", symlinkTarget.toString, symlinkTmp.toString] }
+    let fellBack ← withTempDirectoryVariable symlinkTmp <|
+      Spool.withOptionalWorkspace scratch fun workspace? => pure workspace?.isNone
+    let entries ← symlinkTarget.readDir
+    IO.FS.removeFile symlinkTmp
+    pure (fellBack && entries.isEmpty : Bool)
+  state := state.check "canonical containment rejects a TMPDIR symlink escape" symlinkEscape
+  IO.FS.removeDir symlinkTarget
+  IO.FS.removeDir externalTmp
   let suffixProbe := rawSpoolSuffixOfBytes <| ByteArray.mk #[
     0x00, 0x0f, 0x10, 0x2a, 0x34, 0x4b, 0x56, 0x67,
     0x78, 0x89, 0x9a, 0xab, 0xbc, 0xcd, 0xde, 0xff]
@@ -168,6 +203,24 @@ def main (args : List String) : IO UInt32 := do
     match parsed with
     | .ok output => output.decls == #[second, first]
     | .error _ => false
+
+  let largeForwardPath := s!"{scratch}/staged-writer-large-forward.bin"
+  removeIfPresent largeForwardPath
+  let largeForward ← Spool.withWorkspace scratch fun workspace => do
+    let file ← workspace.createFile "large-forward.bin"
+    let firstBytes := ByteArray.mk (Array.replicate (4194304 + 17) (0x5a : UInt8))
+    let secondBytes := ByteArray.mk (Array.replicate 31 (0xa5 : UInt8))
+    let firstSpan ← file.append firstBytes
+    let secondSpan ← file.append secondBytes
+    let fileSize ← file.finish
+    let composition : Spool.Composition := {
+      declarations := #[firstSpan, secondSpan], declarationOrder := #[0, 1] }
+    IO.FS.withFile file.path .read fun source =>
+      IO.FS.withFile largeForwardPath .write fun destination =>
+        composition.emit source destination fileSize
+    return (← IO.FS.readBinFile largeForwardPath) == firstBytes ++ secondBytes
+  state := state.check "large forward spans cross the bounded copy buffer exactly" largeForward
+  removeIfPresent largeForwardPath
   state := state.check "fresh island advances every explicit arena counter" <|
     firstSplit.after == { nextName := 4, nextLevel := 2, nextExpr := 1 } &&
       secondSplit.after == { nextName := 7, nextLevel := 3, nextExpr := 2 }
