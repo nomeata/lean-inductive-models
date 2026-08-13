@@ -2,13 +2,13 @@ import Modelgen.Driver
 import Modelgen.Order
 
 /-!
-# Default-parameter recursor-iota syntax diagnostic
+# Default-parameter recursor-iota syntax regression
 
 `DefaultCtor.synthetic` mirrors `Lean.SourceInfo.synthetic`: its last source
 constructor binder is an `optParam`, while Lean's generated recursor minor
-premise exposes the reduced field domain.  This test records all three exact
-faces involved in the current mismatch: the serialized generated theorem, the
-statement checker's reconstruction, and the type stored after kernel replay.
+premise exposes the reduced field domain. This test records all three exact
+faces at that boundary: the serialized generated theorem, the statement
+checker's reconstruction, and the type stored after kernel replay.
 -/
 
 open Lean Meta Modelgen
@@ -72,6 +72,7 @@ structure Evidence where
   expectedPretty : String
   kernelPretty : String
   difference : String
+  ownerFreeAccepted : Bool
 
 def collectEvidence (path : String) : IO Evidence := do
   let .ok input := Modelgen.parse (← IO.FS.readFile path) (analyse := false)
@@ -101,6 +102,27 @@ def collectEvidence (path : String) : IO Evidence := do
       | throwError "checker could not reconstruct DefaultCtor's second iota proposition"
     let expected := family.correspondence.expectedIotaType ownerParams modelParams ownerType
 
+    -- Replay exactly the source prefix available before the owner, then ask
+    -- the production owner-free gate to check only generated records. This
+    -- pins that the syntax repair did not merely satisfy the correspondence
+    -- checker while weakening the kernel boundary.
+    let inputNames := input.decls.foldl (init := ({} : Std.HashSet Name)) fun names declaration =>
+      declaration.names.foldl (·.insert ·) names
+    let generatedRecords := ordered.decls.filter fun declaration =>
+      declaration.names.any fun name => !inputNames.contains name
+    let mut sourceBase := base
+    for declaration in input.decls do
+      unless declaration.names.contains `DefaultCtor do
+        if let some replay := toDeclaration sourceBase declaration then
+          match sourceBase.addDeclCore 0 replay none false with
+          | .ok next => sourceBase := next
+          | .error exception =>
+            throwError "source-prefix replay rejected {declaration.names}: {
+              ← (exception.toMessageData {}).toString}"
+    let ownerFreeAccepted := match ← checkGeneratedIn sourceBase generatedRecords with
+      | .ok _ => true
+      | .error _ => false
+
     let mut checked := base
     for declaration in ordered.decls do
       if let some replay := toDeclaration checked declaration then
@@ -118,6 +140,7 @@ def collectEvidence (path : String) : IO Evidence := do
     let kernelPretty := toString (← ppExpr kernel)
     return {
       report, actual, expected, kernel, actualPretty, expectedPretty, kernelPretty
+      ownerFreeAccepted
       difference := (firstDifference? actual expected).getD "no structural difference" }
   return (← Core.CoreM.toIO (MetaM.run' action) context { env := base }).1
 
@@ -131,21 +154,18 @@ def run (root : String) : IO UInt32 := do
   IO.println s!"default ctor kernel readback: {evidence.kernelPretty}"
   IO.println s!"default ctor first difference: {evidence.difference}"
 
-  let expectedMessage :=
-    "type of DefaultCtor.rec._model.iota_1 does not literally model the type of DefaultCtor.rec"
   let mut state : TestState := {}
-  state := state.check "direct simple route reports exactly the default-binder mismatch"
-    (evidence.report.stmtErrors == #[expectedMessage])
-  state := state.check "serialized theorem retains the constructor optParam domain"
-    (containsText evidence.actualPretty "canonical : optParam Flag Flag.false")
+  state := state.check "direct simple route has no statement mismatch"
+    evidence.report.stmtErrors.isEmpty
+  state := state.check "serialized theorem follows the recursor's reduced field domain"
+    (containsText evidence.actualPretty "startPos endPos canonical : Flag" &&
+      !containsText evidence.actualPretty "canonical : optParam Flag Flag.false")
   state := state.check "kernel readback exactly equals the serialized theorem type"
     (evidence.actual == evidence.kernel && evidence.actualPretty == evidence.kernelPretty)
-  state := state.check "checker reconstruction reduces the optParam domain"
-    (evidence.actual != evidence.expected &&
-      containsText evidence.expectedPretty "startPos endPos canonical : Flag")
-  state := state.check "first structural difference isolates the canonical binder domain"
-    (containsText evidence.difference "forall.domain" &&
-      containsText evidence.difference "optParam")
+  state := state.check "checker reconstruction exactly equals the serialized theorem"
+    (evidence.actual == evidence.expected && evidence.difference == "no structural difference")
+  state := state.check "generated records pass owner-free kernel replay"
+    evidence.ownerFreeAccepted
 
   IO.println s!"default constructor iota: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
