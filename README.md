@@ -545,6 +545,16 @@ owner records and compares it syntactically with the already serialized model
 records. This comparison does not consult the replay environment or a recursor
 minted by the kernel. A mismatch is an internal error and no output is written.
 
+For canonical input, ordinary generation serializes each accepted model island
+to a private workspace and retains only compact ordering and checking
+certificates until final output. The source bytes and staged declaration spans
+are then composed transactionally in the certified final order. A failed raw
+certificate or unavailable compact certificate safely selects the full in-memory
+path. `--mono-levels` and `--type-check-output` also retain the complete final
+export because they respectively rewrite the source and replay the final stream
+through Lean's kernel. This architecture is intended to bound generated-model
+retention; no full-corpus memory bound is claimed without a measured run.
+
 ## Scope
 
 - Structural model checks do not verify arbitrary declaration values.

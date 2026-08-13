@@ -2036,8 +2036,8 @@ def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
   { simple := primModels, basic := primModels }
 
 /-- Shared generation loop. With a sink, every accepted island is serialized
-and compacted at its close boundary; the legacy declaration array remains for
-the moment as an independent final-order/report oracle. -/
+and compacted at its close boundary. The full declaration array is retained
+only by callers which explicitly request the legacy final-order/report oracle. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink? : Option IslandSink) (retainOracle : Bool) :
     MetaM (Array EDecl × Report × StagedPlan) := do
@@ -2361,7 +2361,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
             { islands := #[], declarations := #[] })
     else
       mainEnv ← getEnv
-    legacyOut := legacyOut.push d
+    if retainOracle then legacyOut := legacyOut.push d
     if sink?.isSome then
       let some firstName := d.names.head? | throwError "source declaration has no name"
       let some rawOrdinal := rawOrdinals[firstName]?
@@ -2469,9 +2469,9 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   let (decls, report, _) ← runFilterCore x checkRecursors generation none true
   return (decls, report)
 
-/-- Transitional staged oracle. Accepted islands are committed immediately,
-but the full output remains live for the established final Order/Check oracle.
-The returned plan has already discarded the compact checking summaries. -/
+/-- Transitional test oracle. Accepted islands are committed immediately, but
+the full output remains live for comparison with final Order/Check. The
+returned plan has already discarded the compact checking summaries. -/
 def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) :=
   runFilterCore x checkRecursors generation (some sink) true

@@ -22,21 +22,39 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else
     { state with failed := state.failed.push label }
 
+def defaultModelgenEnv : Array (String × Option String) :=
+  #[("MODELGEN_LEGACY_OUTPUT", none), ("MODELGEN_RAW_SPOOL", none),
+    ("MODELGEN_OUTPUT_BACKEND_TRACE", none),
+    ("MODELGEN_PLANNER_LEVEL_TRACE", none)]
+
+def runModelgenWithEnv (binary : String) (args : List String)
+    (env : Array (String × Option String)) (input? : Option String := none) :
+    IO IO.Process.Output :=
+  IO.Process.output {
+    cmd := binary
+    args := args.toArray
+    env := defaultModelgenEnv ++ env } input?
+
 def runModelgen (binary : String) (args : List String) (input? : Option String := none) :
     IO IO.Process.Output :=
-  IO.Process.output { cmd := binary, args := args.toArray } input?
+  runModelgenWithEnv binary args #[] input?
 
-def runModelgenAt (binary : String) (args : List String) (cwd : String) :
+def runModelgenLegacy (binary : String) (args : List String)
+    (input? : Option String := none) : IO IO.Process.Output :=
+  runModelgenWithEnv binary args #[("MODELGEN_LEGACY_OUTPUT", some "1")] input?
+
+def runModelgenAt (binary : String) (args : List String) (cwd : String)
+    (env : Array (String × Option String) := #[]) :
     IO IO.Process.Output :=
   IO.Process.output {
     cmd := binary
     args := args.toArray
     cwd := some cwd
-    env := #[("MODELGEN_RAW_SPOOL", some "1")] }
+    env := defaultModelgenEnv ++ env }
 
 def runModelgenStdin (binary : String) (args : List String) (input : String) :
     IO IO.Process.Output :=
-  IO.Process.output { cmd := binary, args := args.toArray } (some input)
+  runModelgen binary args (some input)
 
 def hasDiagnostic (stderr diagnostic : String) : Bool :=
   (stderr.splitOn "\n").contains diagnostic
@@ -189,11 +207,9 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.writeFile stagedReplayTarget gatedSentinel
   let lateReplayCorruption := mapConstructor nestedExport `PT.node fun constructor =>
     { constructor with type := .sort .zero }
-  let stagedReplayRejected ← IO.Process.output {
-    cmd := binary
-    args := #["--no-check", "--no-type-check-output", "-o",
-      stagedReplayTarget.toString, "-"]
-    env := #[("MODELGEN_RAW_SPOOL", some "1")] } (some lateReplayCorruption.render)
+  let stagedReplayRejected ← runModelgen binary
+    ["--no-check", "--no-type-check-output", "-o",
+      stagedReplayTarget.toString, "-"] (some lateReplayCorruption.render)
   let stagedReplayUntouched :=
     stagedReplayRejected.exitCode == 1 &&
       (← IO.FS.readFile stagedReplayTarget) == gatedSentinel &&
@@ -537,12 +553,12 @@ def main (args : List String) : IO UInt32 := do
   let stdoutRun ← runModelgen binary
     ["--no-inductives", "--no-check", "--quiet", nested]
   state := state.check "stdout output succeeds" (stdoutRun.exitCode == 0)
-  let stagedRun ← IO.Process.output {
-    cmd := binary
-    args := #["--no-inductives", "--no-check", "--quiet", nested]
-    env := #[("MODELGEN_RAW_SPOOL", some "1")] }
-  state := state.check "internal staged parse preserves ordinary output" <|
-    stagedRun.exitCode == 0 && stagedRun.stdout == stdoutRun.stdout
+  let generationDisabled ← runModelgenWithEnv binary
+    ["--no-inductives", "--no-check", "--quiet", nested]
+    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "generation-disabled output selects the legacy backend" <|
+    generationDisabled.exitCode == 0 && generationDisabled.stdout == stdoutRun.stdout &&
+      hasDiagnostic generationDisabled.stderr "output backend: legacy"
   let fallbackCwd := s!"{scratch}/main-cli-no-spool-root"
   IO.FS.createDirAll fallbackCwd
   let nestedPath : System.FilePath := nested
@@ -551,40 +567,95 @@ def main (args : List String) : IO UInt32 := do
   let nestedAbsolute := if nestedPath.isAbsolute then nestedPath else currentDirectory / nestedPath
   let binaryAbsolute := if binaryPath.isAbsolute then binaryPath else currentDirectory / binaryPath
   let fallbackRun ← runModelgenAt binaryAbsolute.toString
-    ["--no-inductives", "--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
+    ["--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
+    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "missing staging root falls back without changing output" <|
-    fallbackRun.exitCode == 0 && fallbackRun.stdout == stdoutRun.stdout
+    fallbackRun.exitCode == 0 && sameSemanticExport fallbackRun.stdout defaults.stdout &&
+      hasDiagnostic fallbackRun.stderr "output backend: legacy"
   IO.FS.removeDir fallbackCwd
   let leakedSpools ← System.FilePath.readDir scratch
   state := state.check "successful staged parse removes its workspace" <|
     !leakedSpools.any (fun entry => entry.fileName.startsWith "modelgen-spool-")
 
-  -- The internal production opt-in now extends through transactional island
-  -- serialization and mixed final composition. Generated arena IDs may differ
-  -- from the legacy global writer, so compare parsed exports, exact declaration
-  -- order, diagnostics, and exit status rather than raw bytes.
+  -- Eligible canonical generation selects staged output without an enabling
+  -- environment variable. The trace observes the actual backend after raw
+  -- certification and compact-availability checks; it is not a selector.
+  let observedDefault ← runModelgenWithEnv binary [nested]
+    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "ordinary default generation selects staged output" <|
+    observedDefault.exitCode == defaults.exitCode &&
+      hasDiagnostic observedDefault.stderr "output backend: staged" &&
+      sameSemanticExport observedDefault.stdout defaults.stdout
+  let observedLegacy ← runModelgenWithEnv binary [nested] #[
+    ("MODELGEN_LEGACY_OUTPUT", some "1"),
+    ("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "explicit A/B override selects legacy output" <|
+    observedLegacy.exitCode == defaults.exitCode &&
+      hasDiagnostic observedLegacy.stderr "output backend: legacy" &&
+      sameSemanticExport observedLegacy.stdout defaults.stdout
+  let stagedNamedPath := s!"{scratch}/main-cli-staged-default.ndjson"
+  removeIfPresent stagedNamedPath
+  let stagedNamed ← runModelgenWithEnv binary
+    ["-o", stagedNamedPath, nested]
+    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+  let stagedNamedText ← if ← System.FilePath.pathExists stagedNamedPath then
+      IO.FS.readFile stagedNamedPath
+    else pure ""
+  state := state.check "ordinary named output selects staged output" <|
+    stagedNamed.exitCode == defaults.exitCode && stagedNamed.stdout.isEmpty &&
+      hasDiagnostic stagedNamed.stderr "output backend: staged" &&
+      sameSemanticExport stagedNamedText defaults.stdout
+  removeIfPresent stagedNamedPath
+  state := state.check "staged named output leaves no transaction sibling" <|
+    !(← hasOutputSibling scratch)
+
+  -- Parseable but noncanonical raw bytes are not eligible for mixed raw/staged
+  -- composition. Certification falls back before generation without changing
+  -- the accepted semantic output.
+  let noncanonicalInput := "\n" ++ nestedExport.render
+  let noncanonicalDefault ← runModelgenWithEnv binary
+    ["--no-check", "--no-type-check-output", "-"]
+    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")] (some noncanonicalInput)
+  let noncanonicalLegacy ← runModelgenLegacy binary
+    ["--no-check", "--no-type-check-output", "-"] (some noncanonicalInput)
+  state := state.check "noncanonical raw input selects legacy output" <|
+    noncanonicalDefault.exitCode == noncanonicalLegacy.exitCode &&
+      hasDiagnostic noncanonicalDefault.stderr "output backend: legacy" &&
+      sameSemanticExport noncanonicalDefault.stdout noncanonicalLegacy.stdout
+
+  let traceMode ← runModelgenWithEnv binary
+    ["--no-check-output", "--no-type-check-output", nested]
+    #[("MODELGEN_PLANNER_LEVEL_TRACE", some "1"),
+      ("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "planner trace mode selects legacy output" <|
+    traceMode.exitCode == 0 && hasDiagnostic traceMode.stderr "output backend: legacy"
+
+  let kernelOutputMode ← runModelgenWithEnv binary
+    ["--no-check", "--type-check-output", nested]
+    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "output kernel checking selects legacy output" <|
+    kernelOutputMode.exitCode == 0 &&
+      hasDiagnostic kernelOutputMode.stderr "output backend: legacy"
+
+  -- Generated arena IDs may differ from the legacy global writer, so compare
+  -- parsed exports, exact declaration order, diagnostics, and exit status
+  -- rather than raw bytes.
   for (label, fixture) in #[
       ("nested multi-model island", nested),
       ("late scheduled support", s!"{root}/test/fixtures/modelgen/prim_late_basis.ndjson")] do
     let args := #["--no-check-output", "--no-type-check-output", "--no-mono-levels", fixture]
-    let legacy ← IO.Process.output { cmd := binary, args }
-    let staged ← IO.Process.output {
-      cmd := binary
-      args
-      env := #[("MODELGEN_RAW_SPOOL", some "1")] }
-    state := state.check s!"staged {label} preserves report and exit" <|
+    let legacy ← runModelgenLegacy binary args.toList
+    let staged ← runModelgen binary args.toList
+    state := state.check s!"default staged {label} preserves report and exit" <|
       staged.exitCode == legacy.exitCode && staged.stderr == legacy.stderr
-    state := state.check s!"staged {label} preserves semantic output and order" <|
+    state := state.check s!"default staged {label} preserves semantic output and order" <|
       sameSemanticExport staged.stdout legacy.stdout
-  let checkedLegacy ← IO.Process.output { cmd := binary, args := #[nested] }
-  let checkedStaged ← IO.Process.output {
-    cmd := binary
-    args := #[nested]
-    env := #[("MODELGEN_RAW_SPOOL", some "1")] }
-  state := state.check "staged compact output check preserves report and exit" <|
+  let checkedLegacy ← runModelgenLegacy binary [nested]
+  let checkedStaged ← runModelgen binary [nested]
+  state := state.check "default staged compact output check preserves report and exit" <|
     checkedStaged.exitCode == checkedLegacy.exitCode &&
       checkedStaged.stderr == checkedLegacy.stderr
-  state := state.check "staged compact output check preserves semantic output and order" <|
+  state := state.check "default staged compact output check preserves semantic output and order" <|
     sameSemanticExport checkedStaged.stdout checkedLegacy.stdout
   -- The source snapshot can mention a public name which this run will only
   -- generate later. Its early compact syntax certificate is deliberately
@@ -596,12 +667,8 @@ def main (args : List String) : IO UInt32 := do
     #[Modelgen.EDecl.ax `CompactFallbackProbe [] (.const futureModel []) false] ++
       nestedExport.decls }
   let fallbackArgs := #["--no-type-check-input", "--no-type-check-output", "-"]
-  let fallbackLegacy ← IO.Process.output { cmd := binary, args := fallbackArgs }
-    (some stabilityMiss.render)
-  let fallbackStaged ← IO.Process.output {
-    cmd := binary
-    args := fallbackArgs
-    env := #[("MODELGEN_RAW_SPOOL", some "1")] } (some stabilityMiss.render)
+  let fallbackLegacy ← runModelgenLegacy binary fallbackArgs.toList (some stabilityMiss.render)
+  let fallbackStaged ← runModelgen binary fallbackArgs.toList (some stabilityMiss.render)
   state := state.check "compact availability miss falls back with exact report and exit" <|
     fallbackStaged.exitCode == fallbackLegacy.exitCode &&
       fallbackStaged.stderr == fallbackLegacy.stderr
@@ -753,9 +820,12 @@ def main (args : List String) : IO UInt32 := do
 
   -- The integrated switch is mode A: it keeps recursor elimination levels,
   -- runs before inductive generation, and performs Mono's kernel replay.
-  let monoRun ← runModelgen binary
+  let monoRun ← runModelgenWithEnv binary
     ["--no-inductives", "--mono-levels", "--quiet", mono]
+    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "mono-levels mode A succeeds" (monoRun.exitCode == 0)
+  state := state.check "mono-levels selects the legacy backend" <|
+    hasDiagnostic monoRun.stderr "output backend: legacy"
   state := state.check "mono-levels writes marker-renamed declarations" <|
     (monoRun.stdout.splitOn "_at").length > 1
 

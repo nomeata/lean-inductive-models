@@ -146,6 +146,14 @@ private inductive FilterOutput where
   | staged (raw : RawStage) (stage : Modelgen.Spool.IslandStage)
       (plan : Modelgen.StagedPlan)
 
+/-- Optional A/B and test diagnostic. This observes the actual filter result;
+it never enables staging or changes eligibility. -/
+private def reportOutputBackend (output : FilterOutput) : IO Unit := do
+  if (← IO.getEnv "MODELGEN_OUTPUT_BACKEND_TRACE") == some "1" then
+    IO.eprintln s!"output backend: {match output with
+      | .full .. => "legacy"
+      | .staged .. => "staged"}"
+
 private def mixedComposition (raw : RawStage) (sealed : Modelgen.Spool.SealedIsland)
     (spans : Array Modelgen.StagedDeclarationSpan) : Modelgen.Spool.MixedComposition :=
   { sourceMetadataPath := raw.tee.metadata.path
@@ -302,6 +310,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     else
       pure (FilterOutput.full generationInput.decls, ({} : Modelgen.Report))
 
+  reportOutputBackend filterOutput
   reportGeneration config generationReport
   if let some why := generationReport.unreplayable then
     IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -380,12 +389,13 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     return outcome
 
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
-  -- The staged path remains an internal opt-in while end-to-end equivalence is
-  -- expanded across the fixture matrix. Statically ineligible modes never tee
-  -- their input, so the experiment cannot impose a disk/time regression on
-  -- kernel-output checking, monomorphization, no-output, or parser-only invocations.
-  if (← IO.getEnv "MODELGEN_RAW_SPOOL") == some "1" &&
-      (← IO.getEnv "MODELGEN_PLANNER_LEVEL_TRACE") != some "1" && stagedModeEligible config then
+  -- Canonical eligible generation uses bounded-memory staged output by default.
+  -- The legacy override is retained for deliberate A/B measurements. Statically
+  -- ineligible modes never tee their input, and planner trace mode stays on the
+  -- full-AST path so a private failed staging attempt cannot duplicate trace lines.
+  if (← IO.getEnv "MODELGEN_LEGACY_OUTPUT") != some "1" &&
+      (← IO.getEnv "MODELGEN_PLANNER_LEVEL_TRACE") != some "1" &&
+      stagedModeEligible config then
     let scratch := (← IO.currentDir) / "_tmp"
     Modelgen.Spool.withOptionalWorkspace scratch (runWithWorkspace config)
   else
