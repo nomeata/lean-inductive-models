@@ -2122,6 +2122,38 @@ structure IsoInterface where
   iotas : Array (Nat × Name × Name)
   deriving Inhabited
 
+/-- One member of a simultaneous private/public family boundary.
+
+Every association is carried by its source name.  In particular, constructors
+and recursor rules are not zipped with exporter arrays: mutual recursors need
+not be serialized in member order.  `changed` records whether the public
+carrier is a genuine one-layer representation or the identity alias used to
+keep an ineligible sibling inside the simultaneous certificate. -/
+structure IsoFamilyMember where
+  owner : Name
+  changed : Bool
+  publicSelf : Name
+  privateSelf : Name
+  privateRecursor : Name
+  privateConstructors : Array (Name × Name)
+  privateIotas : Array (Name × Name × Name)
+  roll : Name
+  unroll : Name
+  unrollRoll : Name
+  rollUnroll : Name
+  deriving Inhabited
+
+/-- Complete certificate for a partial simultaneous family adapter.
+
+`support` names the declaration-local mutual implementation support (currently
+the tag and auxiliary carrier).  Consumers accept the new literal projection
+contract only after validating every support and member slot. -/
+structure IsoFamilyImplementation where
+  root : Name
+  support : Array Name
+  members : Array IsoFamilyMember
+  deriving Inhabited
+
 /-- Everything one nested declaration's model came to. -/
 structure Iso where
   /-- Every generated declaration, in dependency order and already accepted. -/
@@ -2147,6 +2179,11 @@ structure Iso where
   `none` means the implementation and public interface are identical.  This is
   name-only and does not retain a second declaration array. -/
   implementation? : Option IsoInterface := none
+  /-- Owner-keyed simultaneous implementation certificate for a partial mutual
+  one-layer family.  This is separate from the historical singleton
+  `implementation?` so legacy consumers cannot accidentally interpret a
+  partial mutual prefix as a complete certificate. -/
+  familyImplementation? : Option IsoFamilyImplementation := none
   /-- `(member, theorem)` for the real members on which Lean's kernel enables
   its unit-like equality shortcut. -/
   unitlikes : Array (Nat × Name) := #[]
