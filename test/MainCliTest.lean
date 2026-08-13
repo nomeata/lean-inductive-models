@@ -586,6 +586,27 @@ def main (args : List String) : IO UInt32 := do
       checkedStaged.stderr == checkedLegacy.stderr
   state := state.check "staged compact output check preserves semantic output and order" <|
     sameSemanticExport checkedStaged.stdout checkedLegacy.stdout
+  -- The source snapshot can mention a public name which this run will only
+  -- generate later. Its early compact syntax certificate is deliberately
+  -- unavailable; the private staged attempt must rerun the ordinary filter,
+  -- preserving the exact report, exit, and output rather than surfacing an
+  -- internal error or publishing its partial spool.
+  let futureModel := Modelgen.Naming.modelName `Tree
+  let stabilityMiss := { nestedExport with decls :=
+    #[Modelgen.EDecl.ax `CompactFallbackProbe [] (.const futureModel []) false] ++
+      nestedExport.decls }
+  let fallbackArgs := #["--no-type-check-input", "--no-type-check-output", "-"]
+  let fallbackLegacy ← IO.Process.output { cmd := binary, args := fallbackArgs }
+    (some stabilityMiss.render)
+  let fallbackStaged ← IO.Process.output {
+    cmd := binary
+    args := fallbackArgs
+    env := #[("MODELGEN_RAW_SPOOL", some "1")] } (some stabilityMiss.render)
+  state := state.check "compact availability miss falls back with exact report and exit" <|
+    fallbackStaged.exitCode == fallbackLegacy.exitCode &&
+      fallbackStaged.stderr == fallbackLegacy.stderr
+  state := state.check "compact availability fallback preserves exact ordinary output" <|
+    fallbackStaged.stdout == fallbackLegacy.stdout
   let leakedGeneratedSpools ← System.FilePath.readDir scratch
   state := state.check "staged generated output removes its workspace" <|
     !leakedGeneratedSpools.any (fun entry => entry.fileName.startsWith "modelgen-spool-")
