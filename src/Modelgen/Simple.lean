@@ -261,6 +261,124 @@ def psigmaPrimeDecl : Declaration :=
     [{ name := `PSigma', type := ty,
        ctors := [{ name := `PSigma'.mk, type := mkTy }] }] false
 
+/-! ## Exact basis-owner validation
+
+A declaration is exempt because a consumer is expected to implement its
+*particular kernel interface*, not merely because it owns one of four reserved
+names. Validate that interface even when no generated model happens to use the
+declaration later in the stream.
+
+The expected record is minted by this same kernel from the canonical
+declaration under a disposable fresh alias. Renaming it back gives every piece
+of metadata the export carries: the inductive, constructor and recursor types,
+their order and counts, recursor rules, flags, and safety bits. -/
+
+private def basisCanonicalDecl? : Name → Option Declaration
+  | `Eq => some eqDecl
+  | `Nat => some natDecl
+  | `PUnit => some punitDecl
+  | `PSigma' => some psigmaPrimeDecl
+  | _ => none
+
+private def basisRecordFromEnv (env : Environment) (root : Name) : Except String EDecl := do
+  let some (.inductInfo type) := env.constants.find? root
+    | throw s!"{root} is not an inductive type"
+  let mut constructors : Array ECtor := #[]
+  for constructorName in type.ctors do
+    let some (.ctorInfo constructor) := env.constants.find? constructorName
+      | throw s!"{constructorName} is not a constructor"
+    constructors := constructors.push
+      { name := constructor.name, levelParams := constructor.levelParams,
+        type := constructor.type, cidx := constructor.cidx,
+        numParams := constructor.numParams, numFields := constructor.numFields,
+        induct := constructor.induct, isUnsafe := constructor.isUnsafe }
+  let recursorName := Name.str root "rec"
+  let some (.recInfo recursor) := env.constants.find? recursorName
+    | throw s!"{recursorName} is not a recursor"
+  let exportedRecursor : ERec :=
+    { name := recursor.name, levelParams := recursor.levelParams, type := recursor.type,
+      all := recursor.all, numParams := recursor.numParams,
+      numIndices := recursor.numIndices, numMotives := recursor.numMotives,
+      numMinors := recursor.numMinors,
+      rules := recursor.rules.map fun rule =>
+        { ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs },
+      k := recursor.k, isUnsafe := recursor.isUnsafe }
+  let exportedType : EIndType :=
+    { name := type.name, levelParams := type.levelParams, type := type.type,
+      all := type.all, ctors := type.ctors, numParams := type.numParams,
+      numIndices := type.numIndices, numNested := type.numNested,
+      isRec := type.isRec, isReflexive := type.isReflexive,
+      isUnsafe := type.isUnsafe }
+  return .induct [exportedType] constructors.toList [exportedRecursor]
+
+private def basisAliasNames (root alias : Name) : Name → Option Name := fun name =>
+  if root.isPrefixOf name then some (name.replacePrefix root alias) else none
+
+private def aliasBasisDeclaration (root alias : Name) : Declaration → Declaration
+  | .inductDecl levelParams numParams types isUnsafe =>
+    let rename := fun name => (basisAliasNames root alias name).getD name
+    let rewrite := mapConstsE (basisAliasNames root alias)
+    .inductDecl levelParams numParams (types.map fun type =>
+      { name := rename type.name, type := rewrite type.type,
+        ctors := type.ctors.map fun constructor =>
+          { name := rename constructor.name, type := rewrite constructor.type } }) isUnsafe
+  | declaration => declaration
+
+private partial def freshBasisAlias (env : Environment) (root : Name)
+    (canonical : Declaration) (attempt : Nat := 0) : Name :=
+  let stem := (`_modelgen_basis_validation).mkNum attempt
+  let alias := stem ++ root
+  let declarationNames := canonical.getNames.map fun name =>
+    if root.isPrefixOf name then name.replacePrefix root alias else name
+  let names := Name.str alias "rec" :: declarationNames
+  if names.any env.constants.contains then
+    freshBasisAlias env root canonical (attempt + 1)
+  else alias
+
+private def alignBasisLevelParams (declaration : Declaration) (actual : List Name) : Declaration :=
+  match declaration with
+  | .inductDecl expected numParams types isUnsafe =>
+    if expected.length != actual.length then declaration else
+      let levels := actual.map Level.param
+      .inductDecl actual numParams (types.map fun type =>
+        { type with
+          type := type.type.instantiateLevelParams expected levels,
+          ctors := type.ctors.map fun constructor =>
+            { constructor with
+              type := constructor.type.instantiateLevelParams expected levels } }) isUnsafe
+  | _ => declaration
+
+/-- Require an encountered basis owner to be the exact canonical declaration
+family before it may be reported as an exemption. A noncanonical but
+kernel-valid declaration is an unsupported-generation decline, not a kernel
+rejection and never a successful exemption. -/
+def validateBasisOwner (owner : EDecl) : GenM Unit := do
+  let .induct (type :: _) _ _ := owner
+    | declineWith (.malformed "the basis owner is not a nonempty inductive record")
+  let root := type.name
+  let some canonical := basisCanonicalDecl? root
+    | declineWith (.malformed s!"{root} is not a basis owner")
+  let env ← getEnv
+  let canonical := alignBasisLevelParams canonical type.levelParams
+  let alias := freshBasisAlias env root canonical
+  let canonical := aliasBasisDeclaration root alias canonical
+  let expectedEnv ← match env.addDeclCore 0 canonical none true with
+    | .ok next => pure next
+    | .error exception =>
+      badShape s!"cannot mint the canonical {root} interface: \
+        {← (exception.toMessageData {}).toString}"
+  let expectedAlias ← match basisRecordFromEnv expectedEnv alias with
+    | .ok record => pure record
+    | .error message => badShape s!"cannot read the canonical {root} interface: {message}"
+  let expected := EDecl.mapNames
+    (fun name => if alias.isPrefixOf name then name.replacePrefix alias root else name)
+    (mapConstsE fun name =>
+      if alias.isPrefixOf name then some (name.replacePrefix alias root) else none)
+    expectedAlias
+  unless owner == expected do
+    declineWith (.notLeans root
+      "its complete inductive, constructor, and recursor metadata is not canonical")
+
 def psigmaPrimeT (u v : Level) (α β : Expr) : Expr :=
   mkAppN (.const `PSigma' [u, v]) #[α, β]
 
