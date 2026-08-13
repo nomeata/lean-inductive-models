@@ -37,6 +37,22 @@ def seek (handle : IO.FS.Handle) (offset : UInt64) : IO Unit := do
     throw <| IO.userError "spool seek offset exceeds signed 64-bit range"
   seekHandle handle offset
 
+@[extern "modelgen_spool_mkdir_private_at"]
+private opaque mkdirPrivateAtNative (parent leaf : @& String) : IO Unit
+
+/-- Linux production boundary. Open the trusted parent without following a
+symlink, verify by file descriptor that it is owned by the effective user and
+not group/world-writable, and create `leaf` atomically with mode 0700 via
+`mkdirat`. The leaf must be one freshly randomized path component. -/
+def mkdirPrivateAt (parent : System.FilePath) (leaf : String) : IO System.FilePath := do
+  unless System.Platform.target.contains "linux" do
+    throw <| IO.userError "secure spool workspaces are currently supported only on Linux"
+  unless !leaf.isEmpty && leaf != "." && leaf != ".." &&
+      !leaf.contains '/' && !leaf.contains '\\' do
+    throw <| IO.userError "private spool leaf must be one non-special path component"
+  mkdirPrivateAtNative parent.toString leaf
+  return parent / leaf
+
 private def copyBufferSize : Nat := 4194304
 
 /-- Copy exactly one validated span. A short read is an error rather than a
