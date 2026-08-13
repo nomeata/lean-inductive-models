@@ -368,6 +368,39 @@ def main : IO UInt32 := do
       !containsConst `PSigma' value && !containsConst `PUnit value &&
         !containsConst `PULiftP value
 
+  -- A genuine proposition has a stronger projection contract than an
+  -- arbitrary maybe-zero carrier. Every kernel-projectable field is itself a
+  -- proof, so proof irrelevance identifies both an earlier projected proof
+  -- with its constructor local and the selected proof with the projection
+  -- result. `PropRecIdx` is recursive and indexed, ensuring this does not pass
+  -- merely because a direct nonrecursive selector reduces.
+  let propRaw ← readExport
+    "test/fixtures/inductive-models/prop_recursive_projections.ndjson"
+  let (propDeclarations, propReport) ← runExport propRaw
+  let propGenerated := outputExport propRaw propDeclarations
+  let propProjectionNames := (Array.range 3).map (Naming.projectionName `PropRecIdx)
+  let propProjectionRules := (Array.range 3).map (Naming.projectionIotaName `PropRecIdx)
+  state := state.check "recursive indexed Prop exposes every proof field" <|
+    intrinsicFieldsFor propRaw `PropRecIdx == #[0, 1, 2] &&
+      propReport.generated.any (fun row => row.1 == `PropRecIdx) &&
+      !propReport.declined.any (fun row => row.1 == `PropRecIdx) &&
+      (propProjectionNames ++ propProjectionRules).all fun name =>
+        (declaration? propGenerated name).isSome
+  state := state.check "recursive indexed Prop projection iotas have literal fields" <|
+    propProjectionRules.all fun rule =>
+      (declarationType? propGenerated rule).any (!containsConst ``Eq.rec ·) &&
+        (theoremValue? propGenerated rule).any (containsConst ``Eq.refl)
+  state := state.check "dependent Prop projection retains the source default wrapper" <|
+    (declarationType? propGenerated propProjectionRules[1]!).any
+      (containsConst `optParam)
+  state := state.check "recursive indexed Prop projections use the nontrivial recursor path" <|
+    propProjectionNames.all fun projection =>
+      (definitionValue? propGenerated projection).any
+        (containsConst (Naming.modelName `PropRecIdx.rec))
+  state := state.check "checker accepts recursive indexed Prop literal projection rules" <|
+    propReport.stmtErrors.isEmpty &&
+      (Check.check propGenerated).all (fun violation => violation.familyOwner != `PropRecIdx)
+
   -- A recursive Type with no base constructor is empty, including when arm C
   -- obtains it as the erasure skeleton of an indexed family.  `NoBase` checks
   -- both layers: the eight-slot skeleton interface (including its two
