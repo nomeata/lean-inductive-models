@@ -958,6 +958,12 @@ private structure RawCertState where
   certificate : RawCertificate := {}
   declarationBytes : Nat := 0
 
+private def addUInt64Bytes (current : UInt64) (bytes : Nat) : UInt64 × Bool :=
+  if bytes < UInt64.size && current.toNat ≤ UInt64.size - 1 - bytes then
+    (current + bytes.toUInt64, true)
+  else
+    (current, false)
+
 private def exactRawBytes (line : String) (terminated : Bool) : ByteArray :=
   if terminated then line.toUTF8.push 10 else line.toUTF8
 
@@ -975,15 +981,24 @@ private def rawArenaId? (j : Json) : Option (RawArenaAxis × Nat) :=
 
 private def RawCertState.addBytes (state : RawCertState) (kind : RawRecordKind)
     (bytes : Nat) : RawCertState :=
-  let add (current : UInt64) := current + bytes.toUInt64
   match kind with
-  | .metadata => { state with certificate.metadataBytes := add state.certificate.metadataBytes }
-  | .arena => { state with certificate.arenaBytes := add state.certificate.arenaBytes }
+  | .metadata =>
+      let (total, valid) := addUInt64Bytes state.certificate.metadataBytes bytes
+      { state with certificate := { state.certificate with
+          canonical := state.certificate.canonical && valid, metadataBytes := total } }
+  | .arena =>
+      let (total, valid) := addUInt64Bytes state.certificate.arenaBytes bytes
+      { state with certificate := { state.certificate with
+          canonical := state.certificate.canonical && valid, arenaBytes := total } }
   | .declaration =>
+      let (total, validTotal) := addUInt64Bytes state.certificate.declarationBytes bytes
+      let validOffset := state.declarationBytes < UInt64.size
+      let offset := if validOffset then state.declarationBytes.toUInt64 else 0
       { certificate := { state.certificate with
-          declarationBytes := add state.certificate.declarationBytes
+          canonical := state.certificate.canonical && validTotal && validOffset
+          declarationBytes := total
           declarations := state.certificate.declarations.push
-            { offset := state.declarationBytes.toUInt64, bytes } }
+            { offset, bytes } }
         declarationBytes := state.declarationBytes + bytes }
   | .ignored => state
 
@@ -1151,10 +1166,11 @@ def parseHandleWithSink (h : IO.FS.Handle) (sink : RawSink)
 
 /-! ### Project-local spool lifecycle
 
-Production callers choose explicit paths below a project-local scratch
-directory.  The helper refuses to overwrite any existing path and removes all
-three files on success, parse failure, or exception.  It is intentionally not
-wired into `Main` yet; this tranche establishes the parser contract only.
+Production callers choose an explicit project-local scratch root.  The helper
+atomically creates a randomly named, owner-only directory below that root and
+removes only that directory on success, parse failure, or exception.  It is
+intentionally not wired into `Main` yet; this tranche establishes the parser
+contract only.
 -/
 
 structure RawSpoolPaths where
@@ -1181,20 +1197,42 @@ def RawSpool.flush (spool : RawSpool) : IO Unit := do
   spool.arenaHandle.flush
   spool.declarationHandle.flush
 
-private def removeSpoolPath (path : System.FilePath) : IO Unit := do
-  if ← path.pathExists then IO.FS.removeFile path
+private def randomSpoolSuffix : IO String := do
+  let bytes ← IO.getRandomBytes 16
+  return bytes.foldl (fun suffix byte => suffix ++ hexDigitRepr byte.toNat) ""
 
-/-- Open three new caller-chosen spool files and remove them unconditionally
-after `action`.  Reusing a path or naming an existing file fails before the
-first file is opened. -/
-def withRawSpool (paths : RawSpoolPaths) (action : RawSpool → IO α) : IO α := do
-  let distinct := paths.metadata != paths.arena && paths.metadata != paths.declarations &&
-    paths.arena != paths.declarations
-  unless distinct do
-    throw <| IO.userError "raw spool paths must be distinct"
-  for path in [paths.metadata, paths.arena, paths.declarations] do
-    if ← path.pathExists then
-      throw <| IO.userError s!"refusing to overwrite raw spool {path}"
+private partial def createSpoolDirectory (root : System.FilePath) : IO System.FilePath := do
+  let directory := root / s!"modelgen-spool-{← randomSpoolSuffix}"
+  try
+    IO.FS.createDir directory
+  catch error =>
+    -- A 128-bit collision is fantastically unlikely, but only an existing
+    -- candidate justifies retrying. Permission and filesystem errors escape.
+    if ← directory.pathExists then return ← createSpoolDirectory root else throw error
+  try
+    IO.setAccessRights directory
+      { user := { read := true, write := true, execution := true } }
+    return directory
+  catch error =>
+    -- `directory` is ours once `createDir` succeeds. Do not leak it if the
+    -- owner-only permission boundary cannot be established.
+    if ← directory.pathExists then IO.FS.removeDirAll directory
+    throw error
+
+/-- Create an owner-only spool directory immediately below the caller's
+project-local scratch root, open its three fresh files, and remove that owned
+directory unconditionally after `action`.  The root must already exist and be
+a directory; this helper never follows a caller-chosen leaf or deletes a path
+which existed before the call. -/
+def withRawSpoolIn (root : System.FilePath) (action : RawSpool → IO α) : IO α := do
+  unless ← root.isDir do
+    throw <| IO.userError s!"raw spool root is not a directory: {root}"
+  let root ← IO.FS.realPath root
+  let directory ← createSpoolDirectory root
+  let paths : RawSpoolPaths :=
+    { metadata := directory / "metadata.ndjson"
+      arena := directory / "arena.ndjson"
+      declarations := directory / "declarations.ndjson" }
   try
     let metadataHandle ← IO.FS.Handle.mk paths.metadata .write
     let arenaHandle ← IO.FS.Handle.mk paths.arena .write
@@ -1202,9 +1240,9 @@ def withRawSpool (paths : RawSpoolPaths) (action : RawSpool → IO α) : IO α :
     let spool : RawSpool := { paths, metadataHandle, arenaHandle, declarationHandle }
     action spool
   finally
-    removeSpoolPath paths.metadata
-    removeSpoolPath paths.arena
-    removeSpoolPath paths.declarations
+    -- The directory was atomically created by this call and made owner-only;
+    -- no pre-existing or caller-selected leaf is ever a cleanup target.
+    if ← directory.pathExists then IO.FS.removeDirAll directory
 
 /-! ## Writing
 
