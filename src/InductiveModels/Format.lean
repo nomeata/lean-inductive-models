@@ -878,6 +878,79 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
       (← (← jArr o "recs").toList.mapM (readRec c)))
   .error s!"unrecognised record: {j.compress}"
 
+/-- Complete name/level/expression tables sufficient to decode declaration
+records in any order.  The context is opaque so callers cannot mutate or
+observe parser implementation tables. -/
+structure DeclarationArena where private context : RCtx
+
+/-- Decode one exact declaration-spool record against a completed arena.  A
+span must contain exactly one UTF-8 JSON declaration and its terminating LF;
+arena or metadata records fail closed. -/
+def DeclarationArena.decode (arena : DeclarationArena)
+    (bytes : ByteArray) : Except String EDecl := do
+  unless !bytes.isEmpty && bytes[bytes.size - 1]! == 10 do
+    throw "declaration span is not LF-terminated"
+  let some line := String.fromUTF8? (bytes.extract 0 (bytes.size - 1))
+    | throw "declaration span is not valid UTF-8"
+  if line.isEmpty || line.contains '\n' || line.contains '\r' then
+    throw "declaration span does not contain exactly one canonical line"
+  let json ← Json.parse line
+  let (_, declaration?) ← readLine arena.context json
+  let some declaration := declaration?
+    | throw "declaration span decoded as an arena record"
+  return declaration
+
+/-- Build the random-decode arena from an arena-only stream using the same
+bounded chunk/UTF-8 boundary discipline as the full streaming parser.  This
+retains the completed interning tables, but no declaration value. -/
+def DeclarationArena.ofStream (stream : IO.FS.Stream) : IO (Except String DeclarationArena) := do
+  let context ← IO.mkRef ({ analyse := false } : RCtx)
+  let mut carry : ByteArray := .empty
+  let mut eof := false
+  let mut err : Option String := none
+  while !eof && err.isNone do
+    let chunk ← stream.read 4194304
+    if chunk.size == 0 then eof := true
+    let block := if carry.isEmpty then chunk else carry ++ chunk
+    let mut cut := block.size
+    if !eof then
+      cut := 0
+      let mut i := block.size
+      while i > 0 && cut == 0 do
+        i := i - 1
+        if block[i]! == 10 then cut := i + 1
+      if cut == 0 then
+        carry := block
+        continue
+    carry := block.extract cut block.size
+    match String.fromUTF8? (block.extract 0 cut) with
+    | none => err := some "the declaration arena is not valid UTF-8"
+    | some text =>
+      let lines := (text.splitOn "\n").toArray
+      for lineIndex in [:lines.size] do
+        let line := lines[lineIndex]!
+        if line.isEmpty then continue
+        match Json.parse line with
+        | .error error => err := some error; break
+        | .ok json =>
+          match ← context.modifyGet fun current =>
+              match readLine current json with
+              | .error error => (Except.error error, ({} : RCtx))
+              | .ok (_, some _) =>
+                  (Except.error "declaration record found in arena spool", ({} : RCtx))
+              | .ok (next, none) => (Except.ok (), next) with
+          | .error error => err := some error; break
+          | .ok () => pure ()
+  match err with
+  | some error => return .error error
+  | none =>
+    let completed ← context.modifyGet fun current => (current, {})
+    return .ok { context := completed }
+
+/-- Handle-specialized completed-arena loader. -/
+def DeclarationArena.ofHandle (handle : IO.FS.Handle) : IO (Except String DeclarationArena) :=
+  DeclarationArena.ofStream (IO.FS.Stream.ofHandle handle)
+
 /-- Parse a whole export.
 
 `analyse` fills [`Export.projNodes`] and **defaults to on**, because an empty

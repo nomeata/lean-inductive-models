@@ -240,6 +240,73 @@ def ParseTee.finish (tee : ParseTee) : IO RawSpoolSizes := do
     arena := ← tee.arena.finish
     declarations := ← tee.declarations.finish }
 
+/-- Random-access source decoder over one completed raw tee.  The immutable
+arena is shared by every read; only the declaration handle cursor is mutable.
+No decoded declaration is retained by the reader. -/
+structure PlannedSourceReader where
+  private arena : DeclarationArena
+  private declarations : IO.FS.Handle
+  private position : IO.Ref UInt64
+  private declarationSize : UInt64
+  private spans : Array RawSpan
+
+/-- Validate and open a complete tee for declaration-wise reads.  The caller
+must have finished all three tee files; certificate validation preserves the
+full parser's count/contiguity/canonicality gate before any span is decoded. -/
+def PlannedSourceReader.create (tee : ParseTee) (certificate : RawCertificate)
+    (sizes : RawSpoolSizes) (declarationCount : Nat) : IO (Except String PlannedSourceReader) := do
+  match certificate.validate sizes declarationCount with
+  | .error error => return .error error
+  | .ok _ => pure ()
+  try
+    let arenaMetadata ← tee.arena.path.symlinkMetadata
+    let declarationMetadata ← tee.declarations.path.symlinkMetadata
+    unless arenaMetadata.type == .file && declarationMetadata.type == .file do
+      return .error "planned source spool is not backed by physical files"
+    unless arenaMetadata.byteSize == sizes.arena &&
+        declarationMetadata.byteSize == sizes.declarations do
+      return .error "planned source spool changed after completion"
+    let arenaResult ← IO.FS.withFile tee.arena.path .read DeclarationArena.ofHandle
+    let arena ← match arenaResult with
+      | .ok arena => pure arena
+      | .error error => return .error error
+    let declarations ← IO.FS.Handle.mk tee.declarations.path .read
+    let position ← IO.mkRef 0
+    return .ok <| PlannedSourceReader.mk arena declarations position
+      sizes.declarations certificate.declarations
+  catch error =>
+    return .error s!"cannot open planned source spool: {error}"
+
+/-- Number of source declaration records certified for this reader. -/
+def PlannedSourceReader.size (reader : PlannedSourceReader) : Nat := reader.spans.size
+
+/-- Decode one declaration ordinal. Reads are valid in arbitrary order; a
+backward request rewinds the handle, while each result becomes unreachable as
+soon as its caller finishes the declaration transition. -/
+def PlannedSourceReader.read (reader : PlannedSourceReader)
+    (ordinal : Nat) : IO (Except String EDecl) := do
+  let some rawSpan := reader.spans[ordinal]?
+    | return .error s!"planned source ordinal {ordinal} is out of range"
+  let span : ByteSpan := { offset := rawSpan.offset, length := rawSpan.bytes }
+  match span.validate reader.declarationSize with
+  | .error error => return .error error
+  | .ok () => pure ()
+  try
+    moveTo reader.declarations (← reader.position.get) span.offset
+    let mut remaining := span.length
+    let mut bytes : ByteArray := .empty
+    while remaining != 0 do
+      let requested := min remaining.toNat copyBufferSize
+      let chunk ← reader.declarations.read requested.toUSize
+      if chunk.size != requested then
+        return .error s!"short planned source read: wanted {requested} bytes, got {chunk.size}"
+      bytes := bytes ++ chunk
+      remaining := remaining - requested.toUInt64
+    reader.position.set ((span.end?).getD span.offset)
+    return reader.arena.decode bytes
+  catch error =>
+    return .error s!"cannot read planned source declaration {ordinal}: {error}"
+
 /-- String-only prepared declaration. Once prepared, no generated `EDecl` or
 `Expr` is needed to commit the island. -/
 structure PreparedDecl where private mk ::
