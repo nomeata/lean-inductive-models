@@ -994,7 +994,8 @@ fields in a dependent result become applications of the corresponding earlier
 intrinsic projections. -/
 private def checkProjection (x : Export) (structures : StructureOwners)
     (normalizer : ExactNormalizationEnv) (family : Family)
-    (declarations : DeclarationTypes) (projection : Naming.Projection) : Array Violation := Id.run do
+    (declarations : DeclarationTypes) (oneLayerCertificate : Phase1OneLayerCertificate)
+    (projection : Naming.Projection) : Array Violation := Id.run do
   let projectionModels := declarations.getD projection.name #[]
   if projectionModels.isEmpty then
     return #[.missingPublic projection.owner projection.name]
@@ -1018,8 +1019,6 @@ private def checkProjection (x : Export) (structures : StructureOwners)
     | return #[.declarationType projection.owner projection.name]
   let model := projectionModels[0]!
   let ruleModel := ruleModels[0]!
-  let oneLayerCertificate :=
-    phase1DirectTypeOneLayerCertificate declarations ownerType family
   if let .malformed slot := oneLayerCertificate then
     return #[.declarationType projection.owner slot]
   if ownerType.levelParams.length != model.levelParams.length then
@@ -1249,9 +1248,16 @@ private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
     violations := violations ++ checkPair family.correspondence index.declarations pair
   for pair in family.correspondence.recursors do
     violations := violations ++ checkPair family.correspondence index.declarations pair
+  let ownerTypes : Array EIndType := match x.decls[family.ownerDecl]! with
+    | .induct types _ _ => types.toArray
+    | _ => #[]
   for projection in family.correspondence.projections do
+    let certificate := match ownerTypes.find? fun type => type.name == projection.owner with
+      | some ownerType =>
+        phase1DirectTypeOneLayerCertificate index.declarations ownerType family
+      | none => .malformed projection.owner
     violations := violations ++ checkProjection
-      x index.structures index.normalizer family index.declarations projection
+      x index.structures index.normalizer family index.declarations certificate projection
   for iota in family.correspondence.iotas do
     violations := violations ++ checkIota x index.constructors family index.declarations iota
   for metadata in family.correspondence.metadata do
