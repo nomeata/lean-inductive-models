@@ -63,6 +63,12 @@ def main : IO UInt32 := do
     ["--type-check-input", "--no-check", "--check", "in.ndjson"] fun config =>
       config.checkInput && config.checkOutput && config.typeCheckInput &&
         !config.typeCheckOutput
+  state ← state.expect "Arena CI keeps generation and every verdict gate enabled" [
+      "--inductives", "--check-input", "--check-output", "--type-check-input",
+      "--type-check-output", "--no-output", "in.ndjson"] fun config =>
+    config.nested && config.mutualModels && config.simple && config.basic &&
+      config.checkInput && config.checkOutput &&
+      config.typeCheckInput && config.typeCheckOutput && !config.output
   state ← state.expect "positive option restores default-on boolean"
     ["--no-mutual", "--mutual", "in.ndjson"] fun config => config.mutualModels
   state ← state.expect "mono levels is opt-in and reversible"

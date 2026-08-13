@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   arena:
-    name: Lean Kernel Arena corpus
+    name: Arena corpus with model generation
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -31,7 +31,7 @@ jobs:
           test: false
           use-mathlib-cache: false
 
-      - name: Build modelgen and check the Arena corpus
+      - name: Build models and validate the Arena corpus
         shell: bash
         run: |
           set -euo pipefail
@@ -40,8 +40,10 @@ jobs:
           ulimit -Sv 12582912
           ulimit -Hv 12582912
 
+          PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
+            python3 -m py_compile test/scripts/check_arena_corpus.py
           lake -Kjobs=1 build modelgen
-          test/scripts/check-arena-corpus.sh
+          test/scripts/check_arena_corpus.py
 
   test:
     name: ${{ matrix.suite }}

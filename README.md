@@ -85,17 +85,18 @@ structurally without generating models or writing an export:
 modelgen --check --no-inductives --no-output IN.ndjson
 ```
 
-For a Lean Kernel Arena-style whole-stream verdict, pass the supplied path or
+For the full model-building Lean Kernel Arena job, pass the supplied path or
 pipe the same NDJSON on standard input:
 
 ```console
-modelgen --no-inductives --no-check --type-check-input --no-output "$IN"
-modelgen --no-inductives --no-check --type-check-input --no-output - < "$IN"
+modelgen --inductives --check-input --check-output --type-check-input --type-check-output --no-output "$IN"
+modelgen --inductives --check-input --check-output --type-check-input --type-check-output --no-output - < "$IN"
 ```
 
-With generation and `--mono-levels` disabled, this mode does not apply the
-model generator's ordering policy: the input and output kernel gates receive
-the same parsed declaration stream. `--no-output` suppresses only writing it.
+All four generation branches remain enabled. The input is checked structurally
+and by Lean's kernel before generation; the generated, ordered result is then
+checked structurally and by Lean's kernel. `--no-output` suppresses only the
+final write, so generation and every requested verdict gate still run.
 
 The process exit codes follow the
 [Lean Kernel Arena checker contract](https://github.com/leanprover/lean-kernel-arena#contributing-checkers):
@@ -634,7 +635,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe transparentowneraliasestest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe exportsyntaxnormalizationtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe basisvalidationtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe stagedwritertest "$PWD"
-TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-arena-corpus.sh
+TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check_arena_corpus.py
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-a.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-c.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-mathlib-result.sh
@@ -643,10 +644,11 @@ test/scripts/check-ci-serialized-builds.sh
 
 `mainclitest` executes the built `modelgen` binary and covers the complete
 `--mono-levels` process path. `monotest` exercises the underlying pass directly.
-`check-arena-corpus.sh` downloads the published Lean Kernel Arena corpus and
+`check_arena_corpus.py` downloads the published Lean Kernel Arena corpus and
 requires every `good/` case to exit 0 and every `bad/` case to exit 1 in the
-whole-stream checking mode documented above. Its counts follow the live corpus
-and are not hard-coded.
+full generation-and-validation mode documented above. It checks both the input
+and generated output structurally and through Lean's kernel without publishing
+the output. Its counts follow the live corpus and are not hard-coded.
 The `memoryprobe` target compares whole-file and streaming parser retention in
 fresh processes. It and the `envprobe` and `levelfuzz` targets under `tools/`
 are diagnostics, not correctness suites.

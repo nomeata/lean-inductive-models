@@ -13,6 +13,19 @@ expected_direct_builds=(
   'lake -Kjobs=1 build modelgen'
   'lake -Kjobs=1 build "$target"'
 )
+
+arena_script="$root/test/scripts/check_arena_corpus.py"
+for arena_flag in \
+    --inductives --check-input --check-output --type-check-input --type-check-output --no-output; do
+  if ! grep -Fq "\"$arena_flag\"" "$arena_script"; then
+    echo "Arena corpus checker is missing $arena_flag" >&2
+    exit 1
+  fi
+done
+if grep -Fq '"--no-inductives"' "$arena_script" || grep -Fq '"--no-check"' "$arena_script"; then
+  echo "Arena corpus checker disables generation or structural checks" >&2
+  exit 1
+fi
 sorted_direct_builds="$(printf '%s\n' "${direct_builds[@]}" | LC_ALL=C sort)"
 sorted_expected_builds="$(
   printf '%s\n' "${expected_direct_builds[@]}" | LC_ALL=C sort
@@ -127,15 +140,20 @@ for matrix_name in readme_run_targets ci_run_targets; do
 done
 
 mapfile -t check_scripts < <(
-  find "$root/test/scripts" -maxdepth 1 -type f -name 'check-*.sh' \
+  find "$root/test/scripts" -maxdepth 1 -type f \
+    \( -name 'check-*.sh' -o -name 'check_*.py' \) \
     -printf 'test/scripts/%f\n' | LC_ALL=C sort
 )
 mapfile -t readme_check_scripts < <(
-  sed -nE 's|^(TMPDIR="[^\"]+" )?(test/scripts/check-[^[:space:]]+\.sh).*|\2|p' \
+  sed -nE \
+    -e 's|^(TMPDIR="[^\"]+" )?(test/scripts/check-[^[:space:]]+\.sh).*|\2|p' \
+    -e 's|^(TMPDIR="[^\"]+" )?(test/scripts/check_[^[:space:]]+\.py).*|\2|p' \
     "$readme" | LC_ALL=C sort
 )
 mapfile -t ci_check_scripts < <(
-  sed -nE 's|^[[:space:]]*(test/scripts/check-[^[:space:]]+\.sh).*|\1|p' \
+  sed -nE \
+    -e 's|^[[:space:]]*(test/scripts/check-[^[:space:]]+\.sh).*|\1|p' \
+    -e 's|^[[:space:]]*(test/scripts/check_[^[:space:]]+\.py).*|\1|p' \
     "$workflow" | LC_ALL=C sort
 )
 expected_scripts="$(printf '%s\n' "${check_scripts[@]}")"

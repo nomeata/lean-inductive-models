@@ -143,21 +143,28 @@ def main (args : List String) : IO UInt32 := do
     malformedBasisRun.exitCode == 2 && malformedBasisRun.stdout.isEmpty &&
       (malformedBasisRun.stderr.splitOn "input's Eq is not Lean's").length > 1
 
-  -- Lean Kernel Arena compatibility.  A checker can receive its NDJSON path
-  -- as `$IN`, or read the same bytes from stdin.  Whole-stream kernel verdict
-  -- gates are independent of generation and of the structural model checks.
+  -- The Arena CI path exercises the complete tool: all generation branches,
+  -- both structural checks, and both whole-stream kernel verdict gates. A
+  -- checker can receive its NDJSON path as `$IN`, or read the same bytes from
+  -- stdin; `--no-output` suppresses only publication.
   let arenaPath ← runModelgen binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
-    "--no-output", nested]
-  state := state.check "arena path input is accepted with exit 0" <|
+    "--inductives", "--check-input", "--check-output", "--type-check-input",
+    "--type-check-output", "--no-output", nested]
+  state := state.check "arena path generates models and validates input and output" <|
     arenaPath.exitCode == 0 && arenaPath.stdout.isEmpty &&
+      hasDiagnostic arenaPath.stderr "input check: 0 model families checked" &&
+      arenaPath.stderr.contains "model of" && arenaPath.stderr.contains "output check:" &&
+      !arenaPath.stderr.contains "output check: 0 model families checked" &&
       hasDiagnostic arenaPath.stderr "input kernel check: accepted" &&
       hasDiagnostic arenaPath.stderr "output kernel check: accepted"
   let arenaStdin ← runModelgenStdin binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] nestedText
-  state := state.check "arena stdin input is accepted with exit 0" <|
+    "--inductives", "--check-input", "--check-output", "--type-check-input",
+    "--type-check-output", "--no-output", "-"] nestedText
+  state := state.check "arena stdin runs the same complete pipeline" <|
     arenaStdin.exitCode == 0 && arenaStdin.stdout.isEmpty &&
-      hasDiagnostic arenaStdin.stderr "input kernel check: accepted"
+      arenaStdin.stderr.contains "model of" && arenaStdin.stderr.contains "output check:" &&
+      hasDiagnostic arenaStdin.stderr "input kernel check: accepted" &&
+      hasDiagnostic arenaStdin.stderr "output kernel check: accepted"
 
   -- Pure kernel-check mode does not impose this tool's model-before-owner
   -- ordering policy. This export is kernel-valid even though its model-shaped
