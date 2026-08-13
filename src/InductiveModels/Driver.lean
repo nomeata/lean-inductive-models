@@ -2507,18 +2507,23 @@ def SourceCensus.familyCertificateRecords (census : SourceCensus)
       rows := rows.set! i (byOwner.getD type.name #[])
   return rows
 
-/-- Produce today's complete scheduled `Export` from frozen summaries.  The
-historical value-retaining scheduler remains as a property oracle; both use
-the same owner-major/model-major stable graph algorithm. -/
-def SourceCensus.schedule (census : SourceCensus) (source : Export)
-    (generation : Cli.Config) : Except Order.Error Export := do
+/-- Produce today's exact dependency order from frozen summaries. -/
+def SourceCensus.scheduleOrder (census : SourceCensus) (source : Export)
+    (generation : Cli.Config) : Except Order.Error (Array Nat) := do
   let preferSupport := sourceNeedsSupportScheduling source generation census.reserved
   let summaries := if preferSupport then
       census.summaries.map fun summary =>
         { summary with support :=
             scheduledSupportRecord generation source.decls[summary.ordinal]! }
     else census.summaries
-  let order ← Order.summaryRecordOrderPrioritizing summaries
+  Order.summaryRecordOrderPrioritizing summaries
+
+/-- Produce today's complete scheduled `Export` from frozen summaries.  The
+historical value-retaining scheduler remains as a property oracle; both use
+the same owner-major/model-major stable graph algorithm. -/
+def SourceCensus.schedule (census : SourceCensus) (source : Export)
+    (generation : Cli.Config) : Except Order.Error Export := do
+  let order ← census.scheduleOrder source generation
   return { source with decls := order.map fun ordinal => source.decls[ordinal]! }
 
 private structure FilterContext where
@@ -2961,12 +2966,14 @@ its close boundary. Spool modes additionally serialize it; oracle modes retain
 the historical full declaration array for exact A/B comparison. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (retention : RetentionMode)
-    (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false) :
+    (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false)
+    (plannedSource? : Option Spool.PlannedSourceReader := none) :
     MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep) := do
   let sourceCensus := SourceCensus.ofSource x
-  let scheduled ← match sourceCensus.schedule x generation with
-    | .ok scheduled => pure scheduled
+  let sourceOrder ← match sourceCensus.scheduleOrder x generation with
+    | .ok order => pure order
     | .error error => throwError "cannot schedule shared support: {repr error}"
+  let scheduled := { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
   match validateScheduledSupport scheduled generation with
   | .ok () => pure ()
   | .error message => throwError "invalid shared-support schedule: {message}"
@@ -2986,7 +2993,17 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     sourceSyntax, sourceNormalizer, sourceSummaries, sourceGlobalExtras,
     sourceFamilyRecords, rawOrdinals, reserved, collectTrace }
   let mut state : FilterState := { mainEnv, persistentSyntax := sourceSyntax }
-  for declaration in scheduled.decls do
+  for rawOrdinal in sourceOrder do
+    let oracle := x.decls[rawOrdinal]!
+    let declaration ← match plannedSource? with
+      | none => pure oracle
+      | some reader => do
+        match ← reader.read rawOrdinal with
+        | .error error => throwError "cannot decode planned source record {rawOrdinal}: {error}"
+        | .ok declaration =>
+          unless declaration == oracle do
+            throwError "planned source record {rawOrdinal} differs from the validated parse"
+          pure declaration
     match ← state.feedSource context declaration with
     | .next next => state := next
     | .unreplayable report =>
@@ -3035,6 +3052,16 @@ def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.C
     MetaM (Report × CompactPlan) := do
   let (_, report, compact, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard
+  return (report, compact)
+
+/-- Phase-three declaration-span driver.  The complete parsed export remains
+the validation/census oracle in this tranche; each separately decoded source
+record is nevertheless the value consumed by `feedSource`, and compact mode
+does not retain it after that transition. -/
+def runFilterDiscardingPlanned (x : Export) (reader : Spool.PlannedSourceReader)
+    (checkRecursors : Bool) (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
+  let (_, report, compact, _, _) ←
+    runFilterCore x checkRecursors generation .compactDiscard (plannedSource? := some reader)
   return (report, compact)
 
 /-- AST-dropping staged generation. Accepted generated records are committed at
