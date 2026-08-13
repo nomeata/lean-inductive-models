@@ -1281,6 +1281,26 @@ def scheduledModelOwner (generation : Cli.Config) (reserved : Std.HashSet Name) 
             generation.modelsSimpleInput first.name))
   | _ => false
 
+/-- A deliberately independent over-approximation of the inductive records a
+generation branch can attempt.
+
+Unlike [`scheduledModelOwner`], this does not inspect whether a public model
+name is already reserved.  That distinction is essential for the scheduling
+certificate: reusing the optimized pre-scan as both classifier and proof would
+let the same false negative justify itself.  Basis/support owners are removed
+separately by [`scheduledSupportRecord`]; noncanonical basis declarations are
+therefore still validated by their existing strict path. -/
+def generationMayAttemptOwner (generation : Cli.Config) : EDecl → Bool
+  | .induct types _ _ =>
+    match types with
+    | [] => false
+    | first :: _ =>
+      (generation.nested && types.any (·.numNested > 0)) ||
+        (generation.mutualModels && types.length > 1 && !types.any (·.numNested > 0)) ||
+        (types.length == 1 && first.numNested == 0 &&
+          generation.modelsSimpleInput first.name)
+  | _ => false
+
 /-- Whether any model-generation branch is enabled.  Kept local to the driver
 so the library scheduler has the same boundary as the command-line driver. -/
 def generationEnabled (generation : Cli.Config) : Bool :=
@@ -1311,19 +1331,18 @@ ordering pass already carries each support record's complete predecessor
 closure; this check makes a regression in either selection or prioritization a
 fail-fast internal error instead of eighteen unrelated model declines.
 
-Already-modelled owners are excluded by [`scheduledModelOwner`], exactly as in
-the generation verdict: their attempted duplicate interface is fulfilled by
-the input and does not need a new construction. -/
+The owner classifier is intentionally [`generationMayAttemptOwner`], not
+[`scheduledModelOwner`]: an optimized model-presence pre-scan cannot certify
+its own completeness.  This slightly over-approximates attempted generation,
+which is harmless because fixed support has already been prioritized globally. -/
 def validateScheduledSupport (scheduled : Export) (generation : Cli.Config) : Except String Unit := do
   unless generationEnabled generation do return
-  let reserved := scheduled.decls.foldl (fun names declaration =>
-    declaration.names.foldl (·.insert ·) names) {}
   let support := (Array.range scheduled.decls.size).filter fun index =>
     scheduledSupportRecord generation scheduled.decls[index]!
   for ownerIndex in [:scheduled.decls.size] do
     let owner := scheduled.decls[ownerIndex]!
     if scheduledSupportRecord generation owner then continue
-    unless scheduledModelOwner generation reserved owner do continue
+    unless generationMayAttemptOwner generation owner do continue
     for supportIndex in support do
       unless supportIndex < ownerIndex do
         throw s!"fixed support {scheduled.decls[supportIndex]!.names} remains at record \
