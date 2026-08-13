@@ -249,14 +249,27 @@ def summaryRecordOrderPrioritizing (summaries : Array DeclSummary) :
       if let some provider := ownership[name]? then
         (outgoing, indegree) := addEdge outgoing indegree provider consumer
 
-  -- Match `Check.discover`'s owner-record order and each family's sorted model
-  -- record order exactly. Edge insertion order is normally observationally
-  -- irrelevant, but on a malformed graph it determines which concrete cycle
-  -- the established diagnostic reports.
+  -- Index the sparse model relations without changing their observable scan
+  -- order. Owners are still consumed in record order and each per-owner list
+  -- is in model-record order. This preserves the first immediate-cycle error
+  -- and the later residual-cycle predecessor history of the former nested
+  -- owner × model scan, while making construction output-sensitive linear.
+  let mut ownerIndices : Std.HashMap Name (Array Nat) := {}
   for owner in [0:n] do
-    let some ownerName := summaries[owner]!.owner | continue
-    for model in [0:n] do
-      unless summaries[model]!.modelBefore.contains ownerName do continue
+    if let some ownerName := summaries[owner]!.owner then
+      ownerIndices := ownerIndices.insert ownerName
+        ((ownerIndices.getD ownerName #[]).push owner)
+  let mut modelsByOwnerRev : Array (List Nat) := Array.replicate n []
+  for model in [0:n] do
+    let mut seenOwners : Std.HashSet Name := {}
+    for ownerName in summaries[model]!.modelBefore do
+      if seenOwners.contains ownerName then continue
+      seenOwners := seenOwners.insert ownerName
+      for owner in ownerIndices.getD ownerName #[] do
+        modelsByOwnerRev := modelsByOwnerRev.set! owner
+          (model :: modelsByOwnerRev[owner]!)
+  for owner in [0:n] do
+    for model in modelsByOwnerRev[owner]!.reverse do
       if outgoing[owner]!.contains model then
         let records := #[owner, model].qsort (· < ·)
         let declarations := records.map fun i => summaries[i]!.introduced

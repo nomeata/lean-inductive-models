@@ -101,6 +101,144 @@ def summary (ordinal : Nat) (introduced : Array Name)
     referenced := referenced.foldl (fun names name => names.insert name) {}
     owner, support, modelSlots, modelBefore, origin }
 
+/-! A deliberately quadratic copy of the pre-index compact graph builder.
+It is test-local so the optimized implementation cannot accidentally share
+its owner/model indexing mistake with the equivalence oracle. -/
+
+private def referenceAddEdge (outgoing : Array (Std.HashSet Nat)) (indegree : Array Nat)
+    (before after : Nat) : Array (Std.HashSet Nat) × Array Nat :=
+  if before == after || outgoing[before]!.contains after then
+    (outgoing, indegree)
+  else
+    (outgoing.set! before (outgoing[before]!.insert after),
+      indegree.set! after (indegree[after]! + 1))
+
+def quadraticSummaryOrder (input : Array Order.DeclSummary) :
+    Except Order.Error (Array Nat) := do
+  let summaries := Order.resolveModelEdges input
+  let n := summaries.size
+  let mut ownership : Std.HashMap Name Nat := Std.HashMap.emptyWithCapacity (n * 2)
+  for i in [0:n] do
+    for name in summaries[i]!.introduced do
+      if let some first := ownership[name]? then
+        throw (.duplicateName name first i)
+      ownership := ownership.insert name i
+
+  let mut outgoing : Array (Std.HashSet Nat) := Array.replicate n {}
+  let mut indegree : Array Nat := Array.replicate n 0
+  for consumer in [0:n] do
+    for name in summaries[consumer]!.referenced do
+      if let some provider := ownership[name]? then
+        (outgoing, indegree) := referenceAddEdge outgoing indegree provider consumer
+
+  for owner in [0:n] do
+    let some ownerName := summaries[owner]!.owner | continue
+    for model in [0:n] do
+      unless summaries[model]!.modelBefore.contains ownerName do continue
+      if outgoing[owner]!.contains model then
+        let records := #[owner, model].qsort (· < ·)
+        let declarations := records.map fun i => summaries[i]!.introduced
+        throw (.cycle records declarations)
+      (outgoing, indegree) := referenceAddEdge outgoing indegree model owner
+
+  let mut incoming : Array (Array Nat) := Array.replicate n #[]
+  for before in [0:n] do
+    for after in outgoing[before]! do
+      incoming := incoming.set! after (incoming[after]!.push before)
+  let mut preferred := summaries.map (·.support)
+  let mut work := (Array.range n).filter fun i => preferred[i]!
+  while !work.isEmpty do
+    let node := work.back!
+    work := work.pop
+    for before in incoming[node]! do
+      unless preferred[before]! do
+        preferred := preferred.set! before true
+        work := work.push before
+
+  let mut readyPreferred : Std.TreeSet Nat := {}
+  let mut readyOrdinary : Std.TreeSet Nat := {}
+  for i in [0:n] do
+    if indegree[i]! == 0 then
+      if preferred[i]! then readyPreferred := readyPreferred.insert i
+      else readyOrdinary := readyOrdinary.insert i
+  let mut order : Array Nat := #[]
+  repeat
+    match readyPreferred.min? <|> readyOrdinary.min? with
+    | none => break
+    | some before =>
+      if preferred[before]! then readyPreferred := readyPreferred.erase before
+      else readyOrdinary := readyOrdinary.erase before
+      order := order.push before
+      for after in outgoing[before]! do
+        let degree := indegree[after]! - 1
+        indegree := indegree.set! after degree
+        if degree == 0 then
+          if preferred[after]! then readyPreferred := readyPreferred.insert after
+          else readyOrdinary := readyOrdinary.insert after
+  unless order.size == n do
+    let blocked := (Array.range n).filter fun i => indegree[i]! > 0
+    let mut predecessor : Array (Option Nat) := Array.replicate n none
+    for before in blocked do
+      for after in outgoing[before]! do
+        if indegree[after]! > 0 && predecessor[after]!.isNone then
+          predecessor := predecessor.set! after (some before)
+    let mut path : Array Nat := #[]
+    let mut position : Std.HashMap Nat Nat := {}
+    let mut current := blocked[0]!
+    repeat
+      if let some start := position[current]? then
+        let records := (path.extract start path.size).qsort (· < ·)
+        let declarations := records.map fun i => summaries[i]!.introduced
+        throw (.cycle records declarations)
+      position := position.insert current path.size
+      path := path.push current
+      let some before := predecessor[current]!
+        | throw (.cycle blocked (blocked.map fun i => summaries[i]!.introduced))
+      current := before
+  return order
+
+def compactOrderAgreesWithQuadratic (summaries : Array Order.DeclSummary) : Bool :=
+  sameOutcome (quadraticSummaryOrder summaries)
+    (Order.summaryRecordOrderPrioritizing summaries)
+
+def isExactIndexOrder (outcome : Except Order.Error (Array Nat))
+    (expected : Array Nat) : Bool :=
+  match outcome with
+  | .ok order => order == expected
+  | .error _ => false
+
+def isExactError (outcome : Except Order.Error (Array Nat))
+    (expected : Order.Error) : Bool :=
+  match outcome with
+  | .error error => error == expected
+  | .ok _ => false
+
+private def pseudo (seed index salt modulus : Nat) : Nat :=
+  if modulus == 0 then 0
+  else (seed * 1664525 + index * 1013904223 + salt * 2246822519) % modulus
+
+def randomSummary (seed size index : Nat) : Order.DeclSummary :=
+  let introduced := #[Name.mkSimple s!"random_{seed}_{index}"]
+  let referenced := (Array.range (pseudo seed index 1 3)).map fun offset =>
+    if pseudo seed index (offset + 10) 5 == 0 then
+      Name.mkSimple s!"absent_{seed}_{index}_{offset}"
+    else
+      Name.mkSimple s!"random_{seed}_{pseudo seed index (offset + 20) size}"
+  let ownerRoot := Name.mkSimple s!"owner_{pseudo seed index 30 4}"
+  let owner := if pseudo seed index 31 4 == 0 then some ownerRoot else none
+  let modelBefore := (Array.range (pseudo seed index 32 4)).map fun offset =>
+    -- Deliberately repeat roots: the old `.contains` scan treats duplicates as
+    -- one relation and the index must do the same.
+    Name.mkSimple s!"owner_{pseudo seed index (offset + 40) 4}"
+  let modelSlots := (Array.range (pseudo seed index 50 3)).map fun offset =>
+    Name.mkSimple s!"random_{seed}_{pseudo seed index (offset + 60) size}"
+  summary index introduced referenced owner (pseudo seed index 70 5 == 0)
+    modelSlots modelBefore
+
+def randomSummaries (seed : Nat) : Array Order.DeclSummary :=
+  let size := pseudo seed 0 80 25
+  (Array.range size).map (randomSummary seed size)
+
 def run (root : String) : IO UInt32 := do
   let mut state : TestState := {}
   let configs : Array (String × Cli.Config) := #[
@@ -175,6 +313,61 @@ def run (root : String) : IO UInt32 := do
   state := state.check "a public slot after its owner is not a fixed point"
     (!Order.summariesAreOrdered misplaced &&
       isExactOrder (Order.summaryNameOrder misplaced) (composed.map (·.introduced)))
+
+  -- The production implementation indexes sparse model relations. Compare it
+  -- with the deliberately quadratic pre-index algorithm, including malformed
+  -- summaries where concrete error choice exposes traversal order.
+  let multiOwner : Array Order.DeclSummary := #[
+    summary 0 #[`OwnerA] (owner := some `OwnerA),
+    summary 1 #[`OwnerB] (owner := some `OwnerB),
+    summary 2 #[`ModelA] (modelBefore := #[`OwnerA]),
+    summary 3 #[`SharedModel] (modelBefore := #[`OwnerA, `OwnerB]),
+    summary 4 #[`ModelB] (modelBefore := #[`OwnerB])]
+  state := state.check "indexed multiple-owner model insertion is owner-major" <|
+    compactOrderAgreesWithQuadratic multiOwner &&
+      isExactIndexOrder (Order.summaryRecordOrderPrioritizing multiOwner) #[2, 3, 0, 4, 1]
+
+  let duplicateOwnerMarkers : Array Order.DeclSummary := #[
+    summary 0 #[`OwnerMarker0] (owner := some `SharedOwner),
+    summary 1 #[`OwnerMarker1] (owner := some `SharedOwner),
+    summary 2 #[`SharedOwnerModel]
+      (modelBefore := #[`SharedOwner, `SharedOwner])]
+  state := state.check "duplicate owner markers and repeated roots preserve old semantics" <|
+    compactOrderAgreesWithQuadratic duplicateOwnerMarkers
+
+  let ownerMajorError : Array Order.DeclSummary := #[
+    summary 0 #[`OwnerA] (owner := some `OwnerA),
+    summary 1 #[`OwnerB] (owner := some `OwnerB),
+    summary 2 #[`ModelB] #[`OwnerB] (modelBefore := #[`OwnerB]),
+    summary 3 #[`ModelA] #[`OwnerA] (modelBefore := #[`OwnerA])]
+  state := state.check "immediate contradiction remains owner-major then model-major" <|
+    compactOrderAgreesWithQuadratic ownerMajorError &&
+      isExactError (Order.summaryRecordOrderPrioritizing ownerMajorError)
+        (.cycle #[0, 3] #[#[`OwnerA], #[`ModelA]])
+
+  let dependencyCycle : Array Order.DeclSummary := #[
+    summary 0 #[`CycleA] #[`CycleC],
+    summary 1 #[`CycleB] #[`CycleA],
+    summary 2 #[`CycleC] #[`CycleB]]
+  state := state.check "residual dependency-cycle diagnostic is unchanged" <|
+    compactOrderAgreesWithQuadratic dependencyCycle
+
+  let duplicateWithin : Array Order.DeclSummary := #[
+    summary 0 #[`First, `First] #[`Cycle],
+    summary 1 #[`Cycle] #[`First]]
+  let duplicateAcross : Array Order.DeclSummary := #[
+    summary 0 #[`First], summary 1 #[`Second, `First]]
+  state := state.check "duplicate errors retain priority and exact ordinals" <|
+      compactOrderAgreesWithQuadratic duplicateWithin &&
+      compactOrderAgreesWithQuadratic duplicateAcross &&
+      isExactError (Order.summaryRecordOrderPrioritizing duplicateWithin)
+        (.duplicateName `First 0 0) &&
+      isExactError (Order.summaryRecordOrderPrioritizing duplicateAcross)
+        (.duplicateName `First 0 1)
+
+  state := state.check "random compact graphs match the quadratic reference exactly" <|
+    (Array.range 512).all fun seed =>
+      compactOrderAgreesWithQuadratic (randomSummaries seed)
 
   IO.println s!"compact order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
