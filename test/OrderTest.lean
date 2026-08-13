@@ -875,6 +875,10 @@ def run (root : String) : IO UInt32 := do
   -- per-owner implementation forest remain confined to this island.
   let wRun ← generatedFixtureState s!"{root}/test/fixtures/inductive-models/prim_w.ndjson"
     { noGeneration with simple := true }
+  let wStaged ← runFilterStagedState s!"{root}/_tmp" wRun.input
+    { noGeneration with simple := true }
+  let wDropped ← runFilterDroppedState s!"{root}/_tmp" wRun.input
+    { noGeneration with simple := true }
   let wCensus := isolationCensus wRun
   state := state.check
       s!"W core support persists without retaining its model island: {repr wCensus}" <|
@@ -883,6 +887,12 @@ def run (root : String) : IO UInt32 := do
       wRun.env.constants.contains wCoreSelf &&
       !wRun.env.constants.contains (Naming.modelName `Tree) &&
       finalEnvironmentIsIsolated wRun
+  state := state.check "one-layer W output is identical across legacy and staged drivers" <|
+    wStaged.output.decls == wRun.output.decls && wStaged.report == wRun.report &&
+      wStaged.plan.checkReport == Check.checkReport wRun.output && wStaged.planValid &&
+      wDropped.report == wRun.report && wDropped.planValid &&
+      wDropped.plan.declarations == wStaged.plan.declarations &&
+      wDropped.plan.islands == wStaged.plan.islands
 
   -- Scheduling moves the input's exact PUnit bundle before the owner that
   -- needs it. It is source state, not a generated splice, and remains present
