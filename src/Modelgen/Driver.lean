@@ -1265,10 +1265,10 @@ def scheduledSupportRecord (generation : Cli.Config) (declaration : EDecl) : Boo
 
 /-- Whether this input record reaches any enabled model-generation branch.
 
-Support scheduling is global so that one fixed, dependency-closed support
-class moves atomically ahead of every selected owner.  It must nevertheless be
-inactive when the export has no selected owner: generation flags alone do not
-justify moving independent source records. -/
+This predicate is an audit surface, not the switch for support scheduling.
+Fixed source support is prioritized whenever generation is enabled: deciding
+that no owner needs it is a global negative claim, and one false negative
+turns every earlier owner into a misleading `name taken` decline. -/
 def scheduledModelOwner (generation : Cli.Config) (reserved : Std.HashSet Name) : EDecl → Bool
   | .induct types _ _ =>
     match types with
@@ -1281,15 +1281,53 @@ def scheduledModelOwner (generation : Cli.Config) (reserved : Std.HashSet Name) 
             generation.modelsSimpleInput first.name))
   | _ => false
 
-/-- Dependency-order source records, hoisting the fixed support class exactly
-when at least one input owner reaches an enabled generation branch. -/
+/-- Whether any model-generation branch is enabled.  Kept local to the driver
+so the library scheduler has the same boundary as the command-line driver. -/
+def generationEnabled (generation : Cli.Config) : Bool :=
+  generation.nested || generation.mutualModels || generation.simple || generation.basic
+
+/-- Dependency-order source records, hoisting the fixed support class whenever
+generation is enabled.
+
+The previous selected-owner pre-scan made a correctness invariant depend on a
+negative global classification: if it missed every owner, a source-owned `Eq`
+or `Quot` stayed after consumers, while the reserved-name guards correctly
+refused to splice over it.  Prioritizing fixed support unconditionally is
+conservative and idempotent.  With generation disabled, ordinary stable
+dependency order remains byte-for-byte the old path. -/
 def scheduleSource (x : Export) (generation : Cli.Config) : Except Order.Error Export :=
-  let reserved := x.decls.foldl (fun names declaration =>
-    declaration.names.foldl (·.insert ·) names) {}
-  if x.decls.any (scheduledModelOwner generation reserved) then
+  if generationEnabled generation then
     Order.reorderPrioritizing x (scheduledSupportRecord generation)
   else
     Order.reorder x
+
+/-- Certify the fixed-support scheduling invariant before constructing a
+model.
+
+Every selected owner outside the support class must follow every source record
+in that class.  Support owners themselves are excluded: requiring `Eq` before
+`Quot` and `Quot` before `Eq` would turn the atomic class into a cycle.  The
+ordering pass already carries each support record's complete predecessor
+closure; this check makes a regression in either selection or prioritization a
+fail-fast internal error instead of eighteen unrelated model declines.
+
+Already-modelled owners are excluded by [`scheduledModelOwner`], exactly as in
+the generation verdict: their attempted duplicate interface is fulfilled by
+the input and does not need a new construction. -/
+def validateScheduledSupport (scheduled : Export) (generation : Cli.Config) : Except String Unit := do
+  unless generationEnabled generation do return
+  let reserved := scheduled.decls.foldl (fun names declaration =>
+    declaration.names.foldl (·.insert ·) names) {}
+  let support := (Array.range scheduled.decls.size).filter fun index =>
+    scheduledSupportRecord generation scheduled.decls[index]!
+  for ownerIndex in [:scheduled.decls.size] do
+    let owner := scheduled.decls[ownerIndex]!
+    if scheduledSupportRecord generation owner then continue
+    unless scheduledModelOwner generation reserved owner do continue
+    for supportIndex in support do
+      unless supportIndex < ownerIndex do
+        throw s!"fixed support {scheduled.decls[supportIndex]!.names} remains at record \
+          {supportIndex} after selected owner {owner.names} at record {ownerIndex}"
 
 /-- Read a generated model back from the construction environment, register
 every name Lean minted for its inductive blocks, and serialize through exact
@@ -2115,6 +2153,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let scheduled ← match scheduleSource x generation with
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
+  match validateScheduledSupport scheduled generation with
+  | .ok () => pure ()
+  | .error message => throwError "invalid shared-support schedule: {message}"
   let mut mainEnv ← getEnv
   -- Built once. Each island overlays only its generated records, avoiding the
   -- former full-source declaration/constructor/rule/normalizer rebuild.
