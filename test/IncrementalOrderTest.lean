@@ -82,11 +82,12 @@ def fixturePaths (root : String) : IO (Array System.FilePath) := do
 
 def summary (ordinal : Nat) (introduced : Array Name)
     (referenced : Array Name := #[]) (owner : Option Name := none)
-    (support := false) (modelBefore : Array Name := #[])
+    (support := false) (modelSlots : Array Name := #[])
+    (modelBefore : Array Name := #[])
     (origin : Order.SummaryOrigin := .source) : Order.DeclSummary :=
   { ordinal, introduced
     referenced := referenced.foldl (fun names name => names.insert name) {}
-    owner, support, modelBefore, origin }
+    owner, support, modelSlots, modelBefore, origin }
 
 def run (root : String) : IO UInt32 := do
   let mut state : TestState := {}
@@ -152,8 +153,9 @@ def run (root : String) : IO UInt32 := do
     summary 3 #[`Owner._model.impl] #[`Support]
       (origin := .island 7),
     summary 4 #[Naming.modelName `Owner] #[`Owner._model.impl]
-      (modelBefore := #[`Owner]) (origin := .island 7),
-    summary 5 #[`Owner] #[`Support] (owner := some `Owner),
+      (origin := .island 7),
+    summary 5 #[`Owner] #[`Support] (owner := some `Owner)
+      (modelSlots := #[Naming.modelName `Owner]),
     summary 6 #[`Later] #[`Owner]]
   state := state.check "scheduled source plus ordered island is a final fixed point"
     (Order.summariesAreOrdered composed)
