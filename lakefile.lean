@@ -2,7 +2,7 @@ import Lake
 
 open System Lake DSL
 
-package «lean-inductive-models» where testDriver := "test"
+package lean_inductive_models where testDriver := "test"
 
 /-- Native filesystem primitives used by the bounded spool copier. Kept in one
 small archive so every executable importing `InductiveModels.Spool` resolves the same
