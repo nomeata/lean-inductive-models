@@ -626,6 +626,25 @@ def main (args : List String) : IO UInt32 := do
       hasDiagnostic discarded.stderr "output backend: compact-discard" &&
       !(← System.FilePath.pathExists (discardCwd / "_tmp"))
   IO.FS.removeDir discardCwd
+  let discardedPlain ← runInductiveModels binary
+    ["--no-output", "--no-type-check-output", nested]
+  let discardedLegacy ← runInductiveModelsLegacy binary
+    ["--no-output", "--no-type-check-output", nested]
+  state := state.check "compact discard preserves the legacy report and exit" <|
+    discardedPlain.exitCode == discardedLegacy.exitCode && discardedPlain.stdout.isEmpty &&
+      discardedLegacy.stdout.isEmpty && discardedPlain.stderr == discardedLegacy.stderr
+  let discardedStdin ← runInductiveModelsStdin binary
+    ["--no-output", "--no-type-check-output", "-"] nestedText
+  state := state.check "compact discard stdin preserves the path verdict" <|
+    discardedStdin.exitCode == discardedPlain.exitCode && discardedStdin.stdout.isEmpty &&
+      discardedStdin.stderr == discardedPlain.stderr.replace nested "-"
+  let discardedOverride ← runInductiveModelsWithEnv binary
+    ["--no-output", "--no-type-check-output", nested] #[
+      ("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1"),
+      ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "legacy override excludes compact discard" <|
+    discardedOverride.exitCode == discardedPlain.exitCode && discardedOverride.stdout.isEmpty &&
+      hasDiagnostic discardedOverride.stderr "output backend: legacy"
   let stagedNamedPath := s!"{scratch}/main-cli-staged-opt-out.ndjson"
   removeIfPresent stagedNamedPath
   let stagedNamed ← runInductiveModelsWithEnv binary
@@ -655,6 +674,12 @@ def main (args : List String) : IO UInt32 := do
     noncanonicalDefault.exitCode == noncanonicalLegacy.exitCode &&
       hasDiagnostic noncanonicalDefault.stderr "output backend: legacy" &&
       sameSemanticExport noncanonicalDefault.stdout noncanonicalLegacy.stdout
+  let noncanonicalDiscard ← runInductiveModelsWithEnv binary
+    ["--no-output", "--no-type-check-output", "-"]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")] (some noncanonicalInput)
+  state := state.check "noncanonical no-output input needs no raw staging certificate" <|
+    noncanonicalDiscard.exitCode == defaults.exitCode && noncanonicalDiscard.stdout.isEmpty &&
+      hasDiagnostic noncanonicalDiscard.stderr "output backend: compact-discard"
 
   let traceMode ← runInductiveModelsWithEnv binary
     ["--no-check-output", "--no-type-check-output", nested]
@@ -662,6 +687,13 @@ def main (args : List String) : IO UInt32 := do
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "planner trace mode selects legacy output" <|
     traceMode.exitCode == 0 && hasDiagnostic traceMode.stderr "output backend: legacy"
+  let discardTraceMode ← runInductiveModelsWithEnv binary
+    ["--no-output", "--no-check-output", "--no-type-check-output", nested]
+    #[("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", some "1"),
+      ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "planner trace excludes compact discard" <|
+    discardTraceMode.exitCode == 0 && discardTraceMode.stdout.isEmpty &&
+      hasDiagnostic discardTraceMode.stderr "output backend: legacy"
 
   let kernelOutputMode ← runInductiveModelsWithEnv binary
     ["--no-check", "--type-check-output", nested]
