@@ -460,6 +460,7 @@ def main : IO UInt32 := do
     wtyShape.any fun type => oneLayerProjectionFamily #[type] type
   state := state.check "dependent recursive singleton emits every intrinsic field" <|
     wReport.generated.any (·.1 == `Wty) && !wReport.declined.any (·.1 == `Wty) &&
+      wReport.unreplayable.isNone && wReport.stmtErrors.isEmpty &&
       #[wtyProjection0, wtyProjection1, wtyRule0, wtyRule1].all wNames.contains
   state := state.check "dependent recursive singleton projection interface is exact" <|
     (Check.check wGenerated).all fun violation =>
@@ -468,6 +469,20 @@ def main : IO UInt32 := do
     (declarationType? wGenerated wtyRule0).any fun type => !containsConst ``Eq.rec type
   state := state.check "dependent infinitary recursive field retains the literal rule" <|
     (declarationType? wGenerated wtyRule1).any fun type => !containsConst ``Eq.rec type
+  let wtyPublicStatements := #[Naming.modelName `Wty, Naming.modelName `Wty.mk,
+    Naming.modelName `Wty.rec, Naming.iotaName `Wty.rec 0,
+    wtyProjection0, wtyProjection1, wtyRule0, wtyRule1]
+  state := state.check "complete direct one-layer public interface introduces no Eq.rec" <|
+    wtyPublicStatements.all fun name =>
+      (declarationType? wGenerated name).any fun type => !containsConst ``Eq.rec type
+  let treePrivateRoot := `Tree._model._impl
+  let treeOneLayerCertificate := #[Name.str treePrivateRoot "self",
+    Name.str treePrivateRoot "ctor_0", Name.str treePrivateRoot "rec",
+    Name.str treePrivateRoot "rec_iota_0", Name.str treePrivateRoot "roll",
+    Name.str treePrivateRoot "unroll", Name.str treePrivateRoot "unroll_roll",
+    Name.str treePrivateRoot "roll_unroll"]
+  state := state.check "multi-constructor and multi-recursive Tree stays outside phase one" <|
+    treeOneLayerCertificate.all fun name => !wNames.contains name
   let missingOneLayerLaw := Check.check <|
     withoutDeclaration wGenerated (Name.str wtyPrivateRoot "roll_unroll")
   state := state.check "partial one-layer certificate is rejected, not treated as legacy" <|
