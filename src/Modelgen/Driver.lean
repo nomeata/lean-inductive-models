@@ -4,6 +4,7 @@ import Modelgen.Naming
 import Modelgen.Projection
 import Modelgen.Check
 import Modelgen.Order
+import Modelgen.Spool
 
 /-!
 # The filter
@@ -99,6 +100,37 @@ retaining it here would keep every generated declaration and construction
 expression alive until owner-free replay. -/
 structure PendingModel where
   spliced : Array Name
+
+/-- Value-free information captured while one accepted island's declarations
+are still live. The arrays remain aligned with the island's checked record
+order and therefore with a later `Spool.IslandCommit.declarations`. -/
+structure CompactIsland where
+  summaries : Array Order.DeclSummary
+  globalExtras : Array Check.GlobalExtraRecord
+  diagnosticOwners : Std.HashSet Name
+
+/-- One staged island after its generated expressions have been serialized.
+The commit contains byte spans; `compact` contains names and dependency facts
+only, so this value cannot retain the generated expression graph. -/
+structure StagedIsland where
+  compact : CompactIsland
+  commit : Spool.IslandCommit
+
+/-- Origin of one declaration in the eventual compact record schedule. Source
+indices address the parser certificate's declaration spans; generated indices
+address an accepted island and its declaration span within that island. -/
+inductive StagedLocator where
+  | source (index : Nat)
+  | generated (island declaration : Nat)
+  deriving Inhabited, Repr, BEq
+
+/-- Atomic value-free scheduling row. `summary` and `globalExtra` are captured
+together with their byte locator and must always be permuted as one value. -/
+structure StagedRecord where
+  summary : Order.DeclSummary
+  globalExtra : Check.GlobalExtraRecord
+  locator : StagedLocator
+  deriving Inhabited, Repr
 
 /-- The unique minor-premise position belonging to `constructorName` in a
 mutual recursor telescope.  Each exported recursor record carries only its
@@ -946,7 +978,8 @@ Only fixed shared support is copied back. -/
 def closeModelIsland (template : Export) (main : Environment)
     (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
     (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name) :
-    MetaM (Except String (Array EDecl × Environment × Check.StatementReport)) := do
+    MetaM (Except String
+      (Array EDecl × CompactIsland × Environment × Check.StatementReport)) := do
   let island := { template with decls := records.push owner }
   let ordered ← match Order.reorder island with
     | .ok ordered => pure ordered
@@ -962,29 +995,38 @@ def closeModelIsland (template : Export) (main : Environment)
   -- owners use family templates indexed once; generated owners use the island
   -- records plus an overlay carrying source transparent aliases and exact
   -- projection metadata. The final aggregate remains the equivalence oracle.
-  let statementReport ←
+  let index ← match sourceSyntax.prependRecords generated with
+    | .ok index => pure index
+    | .error message => return .error s!"cannot index generated island: {message}"
+  let sourceRoot? : Option Name := match owner with
+    | .induct (type :: _) _ _ => some type.name
+    | _ => none
+  let generatedOnlyOwners := sourceRoot?.elim generatedOwners generatedOwners.erase
+  let generatedView := { template with decls := generated }
+  let generatedFamilies :=
+    Check.statementFamiliesForRecordsWithIndex generatedView index generatedOnlyOwners
+  let sourceFamilies := sourceRoot?.elim #[] fun root =>
+    if generatedOwners.contains root then sourceSyntax.sourceStatementFamilies root else #[]
+  let allFamilies := generatedFamilies ++ sourceFamilies
+  let diagnosticOwners := allFamilies.foldl
+    (fun result family => family.correspondence.diagnosticOwners.foldl
+      (fun result owner => result.insert owner) result)
+    ({} : Std.HashSet Name)
+  let compact : CompactIsland :=
+    { summaries := Order.summaries generatedView
+      globalExtras := Check.globalExtraRecordsWithIndex index generated
+      diagnosticOwners }
+  let statementReport :=
     if generatedOwners.isEmpty then
-      pure { statementsChecked := 0, violations := #[] }
-    else do
-      let index ← match sourceSyntax.prependRecords generated with
-        | .ok index => pure index
-        | .error message => return .error s!"cannot index generated island: {message}"
-      let sourceRoot? : Option Name := match owner with
-        | .induct (type :: _) _ _ => some type.name
-        | _ => none
-      let generatedOnlyOwners := sourceRoot?.elim generatedOwners generatedOwners.erase
-      let generatedView := { template with decls := generated }
-      let generatedFamilies :=
-        Check.statementFamiliesForRecordsWithIndex generatedView index generatedOnlyOwners
+      { statementsChecked := 0, violations := #[] }
+    else
       let generatedReport :=
         Check.checkStatementFamiliesLocalWithIndex generatedView index generatedFamilies
-      let sourceFamilies := sourceRoot?.elim #[] fun root =>
-        if generatedOwners.contains root then sourceSyntax.sourceStatementFamilies root else #[]
       let sourceReport :=
         Check.checkStatementFamiliesLocalWithIndex template index sourceFamilies
       let checkedCount := generatedReport.statementsChecked + sourceReport.statementsChecked
       let combinedViolations := generatedReport.violations ++ sourceReport.violations
-      pure ({ statementsChecked := checkedCount, violations := combinedViolations } :
+      ({ statementsChecked := checkedCount, violations := combinedViolations } :
         Check.StatementReport)
   -- Drop the construction fork before reconstructing any declaration.  The
   -- exact serialized records and compact splice witnesses above are the only
@@ -995,7 +1037,7 @@ def closeModelIsland (template : Export) (main : Environment)
   | .ok _ =>
     match ← installGeneratedSupportIn main generated models with
     | .error message => return .error message
-    | .ok supported => return .ok (generated, supported, statementReport)
+    | .ok supported => return .ok (generated, compact, supported, statementReport)
 
 /-- Source declarations which must be replayed before any owner that can need
 them. This is deliberately wider than [`Modelgen.persistentSupportName`]:
@@ -2089,7 +2131,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         maxLiveIslandRecords := max rep.maxLiveIslandRecords generated.size }
       let islandOwners := (rep.generated.extract reportedBefore rep.generated.size).foldl
         (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
-      let (orderedGenerated, mainWithSupport, statementReport) ← match
+      let (orderedGenerated, _, mainWithSupport, statementReport) ← match
           ← closeModelIsland x mainBefore generated islandModels d sourceSyntax islandOwners with
         | .ok result => pure result
         | .error message => throwError
