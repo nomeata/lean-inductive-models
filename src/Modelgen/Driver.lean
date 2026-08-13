@@ -2088,7 +2088,11 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
   let finalExport := { x with decls := out }
   let finalFamilies := Check.statementFamiliesFor finalExport generatedOwners
-  let finalIndex := Check.SyntaxIndex.ofExport finalExport
+  let generatedRecords := out.filter fun declaration =>
+    declaration.names.any fun name => !reserved.contains name
+  let finalIndex ← match sourceSyntax.prependRecords generatedRecords with
+    | .error message => throwError "cannot index final generated records: {message}"
+    | .ok index => pure (index.withGlobalExtras finalExport)
   let finalLocal := Check.checkStatementFamiliesLocalWithIndex finalExport finalIndex finalFamilies
   unless islandStatements == finalLocal do
     throwError "per-island statement checks disagree with the final family-local aggregate: \

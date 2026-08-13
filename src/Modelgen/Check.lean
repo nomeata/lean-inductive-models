@@ -1132,6 +1132,13 @@ the final aggregate constructs an `ofExport` index and runs that sweep once. -/
 def SyntaxIndex.ofSource (x : Export) : SyntaxIndex :=
   SyntaxIndex.coreOfExport x
 
+/-- Attach the one whole-export unexpected-slot sweep to an already complete
+overlay. The caller is responsible for having overlaid every declaration not
+present in the source snapshot; collision rejection makes that requirement
+fail closed. -/
+def SyntaxIndex.withGlobalExtras (x : Export) (index : SyntaxIndex) : SyntaxIndex :=
+  { index with globalExtras := computeGlobalExtras x index }
+
 /-- Overlay an island in front of a persistent source index without rescanning
 the source export. Any name collision fails closed before first/last-map
 semantics could hide it. Declaration and rule arrays are prefixed, generated
