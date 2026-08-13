@@ -2,6 +2,7 @@ import Modelgen.Driver
 import Modelgen.Check
 import Modelgen.Mono
 import Modelgen.Order
+import Modelgen.Output
 import Modelgen.Spool
 
 /-!
@@ -33,16 +34,12 @@ def exitRejected : UInt32 := 1
 def exitDeclined : UInt32 := 2
 def exitToolError : UInt32 := 3
 
-/-- Write the parsed export rather than reopening the input path.  This keeps
+/-- Write the parsed export rather than reopening the input path. This keeps
 the output tied to the bytes that passed parsing and checking even if the
-input is replaced or mutated while a long generation pass is running. -/
-def writeExport (target : String) (x : Export) : IO Unit := do
-  let stream ← if target == "-" then
-      IO.getStdout
-    else
-      pure (IO.FS.Stream.ofHandle (← IO.FS.Handle.mk target .write))
-  x.writeTo stream
-  stream.flush
+input is replaced or mutated while a long generation pass is running. Named
+paths are installed transactionally by [`Modelgen.Output.write`]. -/
+def writeExport (target : String) (x : Export) : IO Unit :=
+  Modelgen.Output.write target x.writeTo
 
 def reportGeneration (config : Modelgen.Cli.Config) (rep : Modelgen.Report) : IO Unit := do
   if config.quiet then return
@@ -285,14 +282,19 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       return exitRejected
     | .ok (.ok ()) => reportTypeCheckSuccess config "output"
 
+  -- Force the final semantic verdict before opening an output sibling. The
+  -- useful partial candidate is still written for a supported exit-2 decline,
+  -- but no analysis remains which could fail after a named output is committed.
+  let outcome :=
+    if (unsupportedDeclines parsed generationReport).isEmpty then exitAccepted
+    else exitDeclined
   if config.output then
     try
       writeExport config.outputTarget finalExport
     catch error =>
       IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
       return exitToolError
-  if !(unsupportedDeclines parsed generationReport).isEmpty then return exitDeclined
-  return exitAccepted
+  return outcome
 
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   -- Until staged generated islands can replace the cumulative output AST,
@@ -306,9 +308,10 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
     runWithWorkspace config none
 
 def main (args : List String) : IO UInt32 := do
-  match Modelgen.Cli.parseArgs args with
-  | .error error =>
-      IO.eprintln error
-      IO.eprintln Modelgen.Cli.usage
-      return exitToolError
-  | .ok config => run config
+  Modelgen.Output.containToolErrors do
+    match Modelgen.Cli.parseArgs args with
+    | .error error =>
+        IO.eprintln error
+        IO.eprintln Modelgen.Cli.usage
+        return exitToolError
+    | .ok config => run config
