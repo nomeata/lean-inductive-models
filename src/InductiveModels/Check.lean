@@ -754,7 +754,7 @@ the checker to validating the whole certificate; a partial family is never
 interpreted as legacy mutual output. -/
 private def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
     (ownerTypes : Array EIndType) (constructors : Array ECtor) (recursors : Array ERec)
-    (family : Family) : Phase1OneLayerCertificate := Id.run do
+    (normalizer : ExactNormalizationEnv) (family : Family) : Phase1OneLayerCertificate := Id.run do
   let some first := ownerTypes[0]? | return .absent
   let root := Name.str (Naming.modelName first.name) "_impl"
   let support := #[Name.str root "tag", Name.str root "aux"]
@@ -792,6 +792,40 @@ private def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
       ownerType.all.toArray == all && ownerType.numIndices == 0 && ownerType.numNested == 0 &&
         ownerType.isRec && !ownerType.isUnsafe && ownerType.numParams == first.numParams do
     return .malformed root
+  let mut anyChanged := false
+  for ownerType in ownerTypes do
+    let (_, carrierResult) := openForalls
+      ((`_check.mutualOneLayerShape).append ownerType.name) ownerType.type
+    let .sort carrierLevel := carrierResult | return .malformed (privateSelf ownerType.name)
+    unless carrierLevel.normalize.isNeverZero do
+      return .malformed (privateSelf ownerType.name)
+    let ownerConstructors := constructors.filter (·.induct == ownerType.name)
+    unless ownerConstructors.size == ownerType.ctors.length do
+      return .malformed (privateSelf ownerType.name)
+    let mut changed := false
+    for constructor in ownerConstructors do
+      let (binders, _) := openForalls
+        ((`_check.mutualOneLayerFields).append constructor.name) constructor.type
+      unless binders.size == constructor.numParams + constructor.numFields do
+        return .malformed (privateConstructor ownerType.name constructor.name)
+      let fields := binders.extract constructor.numParams binders.size
+      let fieldTypes := fields.map (·.type)
+      let fieldValues := fields.map (·.value)
+      for fieldIndex in [:fields.size] do
+        let normalized := normalizer.whnf fieldTypes[fieldIndex]!
+        let target? := all.find? fun candidate =>
+          normalized.getAppFn.constName? == some candidate &&
+            normalized.getAppArgs.size == first.numParams
+        if target?.isNone && all.any (fieldTypes[fieldIndex]!.getUsedConstants.contains ·) then
+          return .malformed (privateConstructor ownerType.name constructor.name)
+        if target?.isSome then
+          let fieldId := fieldValues[fieldIndex]!.fvarId!
+          for later in [fieldIndex + 1:fields.size] do
+            if fieldTypes[later]!.containsFVar fieldId then
+              return .malformed (privateConstructor ownerType.name constructor.name)
+          changed := true
+    anyChanged := anyChanged || (ownerType.ctors.length == 1 && changed)
+  unless anyChanged do return .malformed root
   let unique := fun name => match declarations.getD name #[] with
     | #[declaration] => some declaration
     | _ => none
@@ -1467,7 +1501,7 @@ private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
     | .induct _ _ recursors => recursors.toArray
     | _ => #[]
   let mutualCertificate := phase1MutualOneLayerCertificate index.declarations
-    ownerTypes ownerConstructors ownerRecursors family
+    ownerTypes ownerConstructors ownerRecursors index.normalizer family
   let certificates := ownerTypes.map fun ownerType =>
     let singleton := phase1OneLayerCertificate index.declarations ownerType family
     (ownerType.name, if singleton matches .absent then mutualCertificate else singleton)
