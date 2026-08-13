@@ -366,8 +366,64 @@ def referenceGlobalExtrasFromRecords (records : Array GlobalExtraRecord) : Array
             violations := violations.push (.extraMetadata owner name .ruleK)
   return violations
 
+/-! Keep family discovery's former whole-export reconstruction as a second
+test-only specification. Production discovery now shares one `SyntaxIndex`;
+this oracle deliberately calls `correspondenceAt?` independently for every
+owner, preserving the previous algorithm and observable family order. -/
+
+private def referenceAppendUnique (names : Array Name) (more : List Name) : Array Name :=
+  more.foldl (fun out name => if out.contains name then out else out.push name) names
+
+def referenceDiscover (x : Export) : Array Family := Id.run do
+  let mut declarations : Std.HashMap Name (Array Nat) := {}
+  for i in [0:x.decls.size] do
+    for name in x.decls[i]!.names do
+      declarations := declarations.insert name ((declarations.getD name #[]).push i)
+  let mut families : Array Family := #[]
+  for ownerDecl in [0:x.decls.size] do
+    let .induct types _ _ := x.decls[ownerDecl]! | continue
+    let some root := types.head?.map (·.name) | continue
+    let some correspondence := correspondenceAt? x ownerDecl | continue
+    let publicNames := correspondence.publicNames
+    unless publicNames.any (fun name => !(declarations.getD name #[]).isEmpty) do continue
+    let mut modelDecls : Array Nat := #[]
+    for name in publicNames do
+      for i in declarations.getD name #[] do
+        unless modelDecls.contains i do modelDecls := modelDecls.push i
+    modelDecls := modelDecls.qsort (· < ·)
+    let modelNames := modelDecls.foldl
+      (fun names i => referenceAppendUnique names x.decls[i]!.names) #[]
+    let modelRoot := Naming.modelName root
+    families := families.push
+      { owner := root, modelRoot, carrier := modelRoot, ownerDecl, correspondence,
+        decls := modelDecls, names := modelNames }
+  return families
+
 private def propertyMix (seed index : Nat) : Nat :=
   (seed * 1103515245 + index * 12345 + index * index * 97) % 2147483647
+
+private structure PropertyDecl where
+  key : Nat
+  ordinal : Nat
+  declaration : EDecl
+
+/-- Deterministic randomized permutations plus missing/duplicate declaration
+mutations. Family discovery is order-sensitive in its indices, so both the
+indexed implementation and the former reference run on the same mutation. -/
+def propertyDiscoveryExport (x : Export) (seed : Nat) : Export :=
+  let declarations :=
+    if x.decls.isEmpty then x.decls
+    else
+      let selected := propertyMix seed 17 % x.decls.size
+      match seed % 4 with
+      | 0 => x.decls.push x.decls[selected]!
+      | 1 => x.decls.extract 0 selected ++ x.decls.extract (selected + 1) x.decls.size
+      | _ => x.decls
+  let keyed := declarations.mapIdx fun ordinal declaration =>
+    { key := propertyMix seed (ordinal + 211), ordinal, declaration : PropertyDecl }
+  let ordered := keyed.qsort fun left right =>
+    left.key < right.key || (left.key == right.key && left.ordinal < right.ordinal)
+  { x with decls := ordered.map (·.declaration) }
 
 private def propertyOwner (seed index : Nat) : Name :=
   let base := Name.str `GlobalExtraProperty s!"owner_{propertyMix seed index % 11}"
@@ -429,6 +485,14 @@ def run (root : String) : IO UInt32 := do
     let validOwnerDecl := rawOwnerDecl + models.size
     let families := discover valid
     let mut state : TestState := {}
+    state ← state.check "indexed family discovery equals the former implementation" <|
+      families == referenceDiscover valid
+    state ← state.check "indexed discovery preserves randomized adversarial families" <|
+      (Array.range 128).all fun seed =>
+        let candidate := propertyDiscoveryExport valid seed
+        let index := SyntaxIndex.ofSource candidate
+        discoverWithIndex candidate index == referenceDiscover candidate &&
+          discover candidate == referenceDiscover candidate
     let interleavedAProjection := Naming.projectionName `Interleave.A 3
     let interleavedBProjection := Naming.projectionName `Interleave.B 7
     let interleavedGlobal : Array GlobalExtraRecord := #[
@@ -525,6 +589,9 @@ def run (root : String) : IO UInt32 := do
       IO.eprintln "checktest: valid island overlay was rejected"
       return 1
     let overlaidFamilies := sourceIndex.sourceStatementFamilies owner
+    let combinedView := { raw with decls := models ++ raw.decls }
+    state ← state.check "island overlay exposes generated family occurrences" <|
+      discoverWithIndex combinedView overlaidIndex == discover combinedView
     state ← state.check "persistent source index plus island overlay equals whole-export indexing" <|
       checkStatementFamiliesLocalWithIndex raw overlaidIndex overlaidFamilies ==
         checkStatementFamiliesLocalWithIndex valid (.ofExport valid)

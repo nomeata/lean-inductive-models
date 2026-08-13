@@ -1139,13 +1139,24 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
   for declaration in records.reverse do
     if let .defn name levelParams _ value .. := declaration then
       definitions := definitions.insert name { levelParams, value }
+  -- `discoverWithIndex` may consume the resulting index together with the
+  -- literal combined view `records ++ source`. Shift every retained source
+  -- ordinal and bind generated names to their new prefix positions. Collision
+  -- rejection above guarantees these insertions cannot hide a source slot.
+  let mut recordOccurrences : Std.HashMap Name (Array Nat) := {}
+  for (name, occurrences) in source.records do
+    recordOccurrences := recordOccurrences.insert name
+      (occurrences.map fun ordinal => records.size + ordinal)
+  for ordinal in [0:records.size] do
+    for name in records[ordinal]!.names do
+      recordOccurrences := recordOccurrences.insert name #[ordinal]
   return .ok {
     declarations := declarations
     constructors := constructors
     structures := structures
     ruleSlots := ruleSlots
     normalizer := { definitions := definitions }
-    records := source.records
+    records := recordOccurrences
     globalExtras := source.globalExtras
     sourceFamilies := source.sourceFamilies
     names := names }
