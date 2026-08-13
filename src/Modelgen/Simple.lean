@@ -352,10 +352,9 @@ private def alignBasisLevelParams (declaration : Declaration) (actual : List Nam
 family before it may be reported as an exemption. A noncanonical but
 kernel-valid declaration is an unsupported-generation decline, not a kernel
 rejection and never a successful exemption. -/
-def validateBasisOwner (owner : EDecl) : GenM Unit := do
+def validateBasisOwner (root : Name) (owner : EDecl) : GenM Unit := do
   let .induct (type :: _) _ _ := owner
     | declineWith (.malformed "the basis owner is not a nonempty inductive record")
-  let root := type.name
   let some canonical := basisCanonicalDecl? root
     | declineWith (.malformed s!"{root} is not a basis owner")
   let env ← getEnv

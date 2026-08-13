@@ -1855,11 +1855,20 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   -- exact generated names for support persistence, this keeps recursive
   -- splice closure and nested → mutual → simple composition atomic.
   let mut pending : Array PendingModel := #[]
+  -- A noncanonical declaration under a basis name makes generation
+  -- unsupported for this stream. Support scheduling puts basis owners before
+  -- their consumers; suppressing later islands prevents a weak, route-local
+  -- prerequisite check from accidentally building against the wrong basis.
+  let mut invalidBasis : Std.HashSet Name := {}
   -- Every name the input declares anywhere, so that a model cannot collide
   -- with one the file itself introduces *later*.
   let reserved : Std.HashSet Name :=
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
   for d in scheduled.decls do
+    let basisRoot? := match d with
+      | .induct types _ _ => types.findSome? fun type =>
+          if primBasis.contains type.name then some type.name else none
+      | _ => none
     -- No model declaration is ever installed in `mainEnv`. All constructors
     -- below work in the ambient disposable fork; closing an inductive record
     -- restores this exact source prefix plus accepted reusable support.
@@ -1877,7 +1886,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       -- — so the model does too, under the first member's `_model` namespace
       -- and with one carrier per real member.
       if let t :: _ := ts then
-        if generation.nested && ts.any (·.numNested > 0) then
+        if generation.nested && ts.any (·.numNested > 0) &&
+            basisRoot?.isNone && invalidBasis.isEmpty then
           let all := ts.toArray.map (·.name)
           let ctorsOfMember := fun (n : Name) =>
             (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
@@ -1990,6 +2000,17 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
       | .error ex =>
         let msg ← (ex.toMessageData {}).toString
         return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" })
+    -- Basis exemption is granted only after the complete exported interface
+    -- has been compared with one freshly minted by the kernel. The disposable
+    -- alias environment used by the validator is never installed here.
+    if let some root := basisRoot? then
+      match ← (validateBasisOwner root d).run with
+      | .ok () =>
+        rep := { rep with
+          exempt := rep.exempt.push (root, Decline.basisExempt.labelAs "prim") }
+      | .error decline =>
+        invalidBasis := invalidBasis.insert root
+        rep := { rep with declined := rep.declined.push (root, decline.labelAs "prim") }
     -- **The model of a plain mutual block, and it is generated *after* the
     -- replay** where the nested one is generated before it. The reason is that
     -- there is nothing else to read the statements off: a nested declaration's
@@ -2011,7 +2032,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         -- file and the name guard says so. Idempotence is carried by the same
         -- mechanism that carries it for a nested declaration, which is
         -- one mechanism rather than two things to keep in step.
-        if generation.mutualModels && ts.length > 1 && !ts.any (·.numNested > 0) then
+        if generation.mutualModels && ts.length > 1 && !ts.any (·.numNested > 0) &&
+            basisRoot?.isNone && invalidBasis.isEmpty then
           let all := ts.toArray.map (·.name)
           let ctors := all.map fun n =>
             (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
@@ -2030,7 +2052,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
         -- Generated after replay because route construction reads the owner's
         -- installed recursor metadata. Acceptance later replays the serialized
         -- model owner-free, and statement correspondence uses export syntax.
-        if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 then
+        if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
+            basisRoot?.isNone && invalidBasis.isEmpty then
           let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
           -- Ask the selected route, rather than requiring the whole basis in
           -- advance. A reusable non-basis support declaration such as
