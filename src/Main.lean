@@ -546,6 +546,9 @@ private def freshProducerMain (args : List String) : IO UInt32 := do
       config.typeCheckOutput && !config.monoLevels do
     IO.eprintln "lean-inductive-models: fresh output-kernel producer received an ineligible invocation"
     return exitToolError
+  if ← candidate.pathExists then
+    IO.eprintln "lean-inductive-models: fresh output-kernel candidate was not exclusively reserved"
+    return exitToolError
   let producerConfig := { config with typeCheckOutput := false }
   let producerConfig := { producerConfig with
     output := true, outputTarget := candidate.toString }
@@ -565,6 +568,12 @@ private def freshCheckerMain (args : List String) : IO UInt32 := do
   let .ok config ← parseConfig args
     | return exitToolError
   let input := config.input.getD "<input>"
+  let candidateMetadata ← try candidate.symlinkMetadata catch error =>
+    IO.eprintln s!"{input}: output kernel replay candidate is unavailable: {error}"
+    return exitToolError
+  unless candidateMetadata.type == .file do
+    IO.eprintln s!"{input}: output kernel replay candidate is not a physical file"
+    return exitToolError
   let parsedResult : Except String Export ← try
       IO.FS.withFile candidate .read fun handle => do
         let result ← InductiveModels.parseHandle handle
@@ -624,6 +633,10 @@ private def runFreshKernelPipeline (args : List String) : IO UInt32 := do
         return producer
       unless ← candidate.pathExists do
         IO.eprintln "lean-inductive-models: fresh producer returned without a kernel candidate"
+        return exitToolError
+      let metadata ← candidate.symlinkMetadata
+      unless metadata.type == .file do
+        IO.eprintln "lean-inductive-models: fresh producer did not install a physical kernel candidate"
         return exitToolError
       let checker ← InductiveModels.Supervisor.runWorkerWithEnv args
         (freshPhaseEnvironment .check canonicalDirectory token)
