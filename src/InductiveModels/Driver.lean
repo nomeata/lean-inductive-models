@@ -809,7 +809,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         normalizedFields := normalizedFields.push
           { name := Name.mkSimple s!"field_{index}", info := .default,
             value, type := fieldType, level, projected, iota? }
-      let legacyLiteral := projectionIotaUsesLiteralField types type
+      let propositionLiteral := propositionProjectionIotaUsesLiteralField type
+      let legacyLiteral := projectionIotaUsesLiteralField types type || propositionLiteral
       let rhs ←
         if legacyLiteral || phase1OneLayer then
           pure fields[fieldIndex]!
@@ -850,7 +851,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           -- rewrite.  Its projection iota must retain even definitionally
           -- trivial source-authored binder syntax; the legacy structure
           -- routes continue to use their beta-only constructor telescope.
-          let telescope := if phase1OneLayer then modelConstructorType
+          let telescope := if phase1OneLayer || propositionLiteral then modelConstructorType
             else betaForallDomains normalizer modelConstructorType
           let fallback ← mkForallFVars arguments body
           pure ((closeForallsExact? telescope arguments body).getD fallback)

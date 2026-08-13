@@ -1035,7 +1035,8 @@ private def checkProjection (x : Export) (structures : StructureOwners)
   -- binder type. Mirror exactly that step for the theorem's outer binders, but
   -- retain written `let`s and named model constants so the public statement
   -- remains literal. The unnormalized binders below still drive the RHS.
-  let theoremBinders := if oneLayerCertificate matches .valid then
+  let propositionLiteral := propositionProjectionIotaUsesLiteralField ownerType
+  let theoremBinders := if oneLayerCertificate matches .valid || propositionLiteral then
       constructorBinders
     else constructorBinders.map fun binder =>
       { binder with type := normalizer.beta binder.type }
@@ -1119,7 +1120,7 @@ private def checkProjection (x : Export) (structures : StructureOwners)
       { name := Name.mkSimple s!"field_{index}", info := .default,
         value := fields[index]!, type := mappedField.type, level, projected, iota? }
   let rhs? := if projectionIotaUsesLiteralField ownerTypes.toArray ownerType ||
-      oneLayerCertificate matches .valid then
+      propositionLiteral || oneLayerCertificate matches .valid then
       fields[projection.fieldIndex]?
     else
       let eqi : EqInfo := { eqN := ``Eq, reflN := ``Eq.refl, recN := ``Eq.rec }

@@ -34,6 +34,31 @@ def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType) : 
     ((types.size > 1 && types.all (·.numNested == 0)) ||
       (types.size == 1 && type.numNested == 0 && !type.isRec))
 
+/-- Whether the exact exported former ends in the literal sort `Prop`.
+
+This deliberately performs no unfolding or level normalization. Generation
+and checking both receive the same exported `EIndType`, so a reducible alias or
+a maybe-zero `Sort u` cannot make one side opt into the proof-irrelevant
+projection contract while the other does not. -/
+private partial def exactFormerEndsInProp : Expr → Bool
+  | .forallE _ _ body _ => exactFormerEndsInProp body
+  | .sort .zero => true
+  | _ => false
+
+/-- A kernel-projectable field of a one-constructor proposition has a literal
+projection rule, independently of recursion, indices, nesting, or mutuality.
+
+Callers invoke this only for fields accepted by the intrinsic-projection
+predicate. Such a field is itself proposition-valued. Proof irrelevance then
+identifies every earlier projected proof with its constructor local in the
+dependent field type, and identifies the selected projection with the literal
+constructor proof. Thus `Eq.refl` checks without a generated transport.
+
+Maybe-zero formers are intentionally excluded: at a positive instantiation
+their fields and values need not be proof-irrelevant. -/
+def propositionProjectionIotaUsesLiteralField (type : EIndType) : Bool :=
+  type.ctors.length == 1 && exactFormerEndsInProp type.type
+
 /-- The first production one-layer carrier tranche: one recursive member, one
 constructor, no indices and no nested occurrences.  Generation and checking
 share this predicate so a failed/collision fallback can never make the checker
