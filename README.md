@@ -594,7 +594,7 @@ not the complete correctness matrix. The complete matrix is:
 correctness_targets=(
   test monotest clitest generationflagstest checktest ordertest
   incrementalordertest namingtest drivernamingtest privatealiastest
-  simplenamingtest rulektest mainclitest projectiontest structureetatest
+  simplenamingtest rulektest defaultctoriotatest mainclitest projectiontest structureetatest
   deepimaxboxtest psigmaprimetest exactsortlifttest
   tightpsigmaprimeroutetest vanishingerasuretest
   transparentowneraliasestest exportsyntaxnormalizationtest
@@ -613,6 +613,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe drivernamingtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe privatealiastest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe simplenamingtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe rulektest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe defaultctoriotatest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe mainclitest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe projectiontest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe structureetatest
@@ -625,6 +626,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe transparentowneraliasestest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe exportsyntaxnormalizationtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe basisvalidationtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe stagedwritertest "$PWD"
+TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-arena-corpus.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-a.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-c.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-mathlib-result.sh
@@ -633,6 +635,10 @@ test/scripts/check-ci-serialized-builds.sh
 
 `mainclitest` executes the built `modelgen` binary and covers the complete
 `--mono-levels` process path. `monotest` exercises the underlying pass directly.
+`check-arena-corpus.sh` downloads the published Lean Kernel Arena corpus and
+requires every `good/` case to exit 0 and every `bad/` case to exit 1 in the
+whole-stream checking mode documented above. Its counts follow the live corpus
+and are not hard-coded.
 The `memoryprobe` target compares whole-file and streaming parser retention in
 fresh processes. It and the `envprobe` and `levelfuzz` targets under `tools/`
 are diagnostics, not correctness suites.
@@ -650,7 +656,8 @@ TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-mono.sh mono_proj
 All scratch data is kept under the repository-local `_tmp/` directory.
 
 The focused workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
-runs the fixture and universe-level suites with a per-process memory limit. The
+runs the fixture and universe-level suites and the published Arena corpus with
+a per-process memory limit. The
 full-Mathlib workflow
 [`.github/workflows/mathlib.yml`](.github/workflows/mathlib.yml) generates and
 checks a pinned Mathlib export under a cgroup memory limit and records
