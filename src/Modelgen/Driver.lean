@@ -1561,11 +1561,13 @@ private def kernelReplayDeclaration (declaration : EDecl) : Except String (Optio
 /-- Expressions the official kernel must validate for one active export record.
 
 `Environment.addDeclCore` is the final authority, but the Arena corpus also
-tracks bugs in that implementation.  `Meta.check` independently walks every
-serialized expression, including constructor parameters erased by nested
-inductive compilation and projections whose proposition sort is only visible
-after level normalization.  For an inductive record these expressions are
-checked after insertion so references to the block being defined are in scope.
+tracks bugs in inductive compilation. `Meta.check` independently walks the
+serialized inductive types and constructor types, including parameters erased
+by nested-inductive compilation and projections whose proposition sort is only
+visible after level normalization. These expressions are checked after atomic
+insertion so references to the block being defined are in scope. Ordinary
+declarations stay on the official-kernel path; walking their potentially huge
+proof terms again would defeat the Arena performance corpus.
 -/
 private def kernelReplayExpressions : EDecl → Array Expr
   | .ax _ _ type _ => #[type]
@@ -1655,10 +1657,6 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
           if first != name then
             return .error s!"normalized declaration-name collision: {first} and {name}"
         normalizedNames := normalizedNames.insert normalized name
-      unless record matches .induct .. do
-        setEnv analysis
-        if let .error message ← checkKernelReplayExpressions record then
-          return .error message
     match checked.addDeclCore 0 declaration none with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
