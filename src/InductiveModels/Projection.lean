@@ -34,6 +34,15 @@ def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType) : 
     ((types.size > 1 && types.all (·.numNested == 0)) ||
       (types.size == 1 && type.numNested == 0 && !type.isRec))
 
+/-- The first production one-layer carrier tranche: one recursive member, one
+constructor, no indices and no nested occurrences.  Generation and checking
+share this predicate so a failed/collision fallback can never make the checker
+silently accept the new literal contract from an old transported model. -/
+def oneLayerProjectionFamily (types : Array EIndType) (type : EIndType) : Bool :=
+  types.size == 1 && type.all == [type.name] && type.ctors.length == 1 &&
+    type.numIndices == 0 && type.numNested == 0 && type.isRec &&
+    !type.isUnsafe && !type.isReflexive
+
 /-- One opened constructor field, together with the corresponding modeled
 projection and (for an earlier field) its constructor iota proof.
 

@@ -3402,12 +3402,36 @@ def PrimInterfaceNames.standard (tname root : Name)
     iotas := (Array.range exportCtors.size).map fun index =>
       Naming.iotaName (Naming.relocateSource tname root recursor) index }
 
+/-- Private fixpoint names for the one-layer adapter.  Every name is below the
+collision-safe build model, so the ordinary whole-prefix alias registration
+renames it independently of raw/private source constructor spellings. -/
+def PrimInterfaceNames.oneLayerImplementation (root : Name)
+    (exportCtors : Array (Name × Expr)) : PrimInterfaceNames :=
+  let model := Naming.modelName root
+  let impl := Name.str model "_impl"
+  { model, impl
+    self := Name.str impl "self"
+    ctors := (Array.range exportCtors.size).map fun index => Name.str impl s!"ctor_{index}"
+    recursor := Name.str impl "rec"
+    iotas := (Array.range exportCtors.size).map fun index => Name.str impl s!"rec_iota_{index}" }
+
+/-- Source/kernel metadata boundary for the first one-layer production route.
+Capability checks which can fail (support, exact recursor layout and carrier
+level) still run before this predicate is committed to emission. -/
+def oneLayerSimpleEligible (tname : Name) (exportCtors : Array (Name × Expr))
+    (sourceRecursor? : Option ERec) : MetaM Bool := do
+  let env ← getEnv
+  let some (.inductInfo type) := env.constants.find? tname | return false
+  return sourceRecursor?.isSome && exportCtors.size == 1 && type.all == [tname] &&
+    type.ctors.length == 1 && type.numIndices == 0 && type.numNested == 0 && type.isRec &&
+    !type.isUnsafe && !type.isReflexive
+
 set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
 recursor this restates is the one Lean minted for it, and the ι rules are
 its own, restored — exactly [`InductiveModels.mutualIso`]'s arrangement. -/
-private def primIsoCore (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
+def primIsoWithInterface (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
     (sourceRecursor? : Option ERec := none)
     (interface? : Option PrimInterfaceNames := none) : GenM Iso := do
@@ -5724,6 +5748,6 @@ the historical call, including collision retry and declaration order. -/
 def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
     (sourceRecursor? : Option ERec := none) : GenM Iso :=
-  primIsoCore tname root lparams np memberTy exportCtors reserved sourceRecursor?
+  primIsoWithInterface tname root lparams np memberTy exportCtors reserved sourceRecursor?
 
 end InductiveModels
