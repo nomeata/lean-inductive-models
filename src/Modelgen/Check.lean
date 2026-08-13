@@ -512,6 +512,66 @@ private def ownerReference? (targets : Std.HashSet Name) : EDecl → Option (Nam
         recursors.findSome? (recReference? targets)
   | _ => none
 
+/-! ## Name-only owner-reference certificates
+
+The compact whole-output checker no longer retains an inductive record's
+expressions when final model-family discovery runs.  Capture the exact ordered
+reference traversal while that record is live, so intersecting this array with
+one discovered family's names later reproduces [`ownerReference?`] without an
+`EDecl` or `Expr` root. -/
+
+private partial def appendExpressionReferences (references : Array (Name × Name))
+    (owner : Name) : Expr → Array (Name × Name)
+  | .const name _ => references.push (owner, name)
+  | .proj typeName _ struct =>
+      appendExpressionReferences (references.push (owner, typeName)) owner struct
+  | .app fn arg =>
+      appendExpressionReferences (appendExpressionReferences references owner fn) owner arg
+  | .lam _ type body _ | .forallE _ type body _ =>
+      appendExpressionReferences (appendExpressionReferences references owner type) owner body
+  | .letE _ type value body _ =>
+      appendExpressionReferences
+        (appendExpressionReferences (appendExpressionReferences references owner type) owner value)
+        owner body
+  | .mdata _ body => appendExpressionReferences references owner body
+  | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => references
+
+private def appendNameReferences (references : Array (Name × Name)) (owner : Name)
+    (names : List Name) : Array (Name × Name) :=
+  names.foldl (fun references name => references.push (owner, name)) references
+
+/-- Ordered `(referring declaration, referenced declaration)` pairs from one
+inductive export record.  The order deliberately mirrors [`ownerReference?`]:
+types, constructors, and recursors in record order, and every direct-name field
+before the expression field which follows it.  Duplicates remain observable. -/
+def ownerReferenceCertificate : EDecl → Array (Name × Name)
+  | .induct types constructors recursors => Id.run do
+      let mut references : Array (Name × Name) := #[]
+      for type in types do
+        references := appendNameReferences references type.name type.all
+        references := appendNameReferences references type.name type.ctors
+        references := appendExpressionReferences references type.name type.type
+      for constructor in constructors do
+        references := references.push (constructor.name, constructor.induct)
+        references := appendExpressionReferences references constructor.name constructor.type
+      for recursor in recursors do
+        references := appendNameReferences references recursor.name recursor.all
+        references := appendExpressionReferences references recursor.name recursor.type
+        for rule in recursor.rules do
+          references := references.push (recursor.name, rule.ctor)
+          references := appendExpressionReferences references recursor.name rule.rhs
+      return references
+  | _ => #[]
+
+/-- First owner backreference selected by the same traversal as the full
+checker, using only a retained name certificate and the final model-family
+record names. -/
+def ownerBackreferenceFromCertificate? (references : Array (Name × Name))
+    (familyNames : Array Name) : Option (Name × Name) :=
+  let targets := familyNames.foldl (fun targets name => targets.insert name)
+    ({} : Std.HashSet Name)
+  references.find? (fun reference => targets.contains reference.2)
+
 /-- The type-bearing view of one public constant introduced by an export
 record.  Values are intentionally absent: this tranche checks the interface,
 not how a model implements it. -/

@@ -538,6 +538,10 @@ def run (root : String) : IO UInt32 := do
     let constantBackref := withOwnerType valid validOwnerDecl (.const carrier [])
     state ← state.check "constant backreference is rejected" <|
       (check constantBackref).any (isBackreference owner carrier)
+    state ← state.check "constant backreference survives a name-only owner certificate" <|
+      ownerBackreferenceFromCertificate?
+          (ownerReferenceCertificate constantBackref.decls[validOwnerDecl]!) families[0]!.names ==
+        some (owner, carrier)
 
     -- `Expr.getUsedConstants` does not include this name: it lives in the
     -- projection node's `typeName` field, so this pins the checker's explicit
@@ -549,6 +553,10 @@ def run (root : String) : IO UInt32 := do
       withOwnerType valid validOwnerDecl (.proj firstCtor.model 0 (.bvar 0))
     state ← state.check "projection type-name public backreference is rejected" <|
       (check projectionBackref).any (isBackreference owner firstCtor.model)
+    state ← state.check "projection backreference survives a name-only owner certificate" <|
+      ownerBackreferenceFromCertificate?
+          (ownerReferenceCertificate projectionBackref.decls[validOwnerDecl]!)
+          families[0]!.names == some (owner, firstCtor.model)
 
     let missingCtor := withoutDeclaration valid firstCtor.model
     state ← state.check "missing constructor slot is rejected" <|
