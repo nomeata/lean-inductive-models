@@ -136,6 +136,22 @@ def main (args : List String) : IO UInt32 := do
   let parsed := InductiveModels.parse reordered (analyse := false)
 
   let mut state : TestState := {}
+  let secureWorkspacePath ← IO.mkRef (none : Option System.FilePath)
+  let secureWorkspaceBoundary ← Spool.withWorkspace scratch fun workspace => do
+    secureWorkspacePath.set (some workspace.directory)
+    let canonicalRoot ← IO.FS.realPath scratch
+    let canonicalDirectory ← IO.FS.realPath workspace.directory
+    let rootParts := canonicalRoot.components
+    let directoryParts := canonicalDirectory.components
+    let metadata ← workspace.directory.symlinkMetadata
+    return metadata.type == .dir && rootParts.length < directoryParts.length &&
+      directoryParts.take rootParts.length == rootParts
+  let secureWorkspacePath? ← secureWorkspacePath.get
+  let secureWorkspaceCleaned ← if let some path := secureWorkspacePath? then
+      path.pathExists.map Bool.not
+    else pure false
+  state := state.check "runtime workspace is a secure physical child of project _tmp" <|
+    secureWorkspaceBoundary && secureWorkspaceCleaned
   let suffixProbe := rawSpoolSuffixOfBytes <| ByteArray.mk #[
     0x00, 0x0f, 0x10, 0x2a, 0x34, 0x4b, 0x56, 0x67,
     0x78, 0x89, 0x9a, 0xab, 0xbc, 0xcd, 0xde, 0xff]
@@ -250,7 +266,9 @@ def main (args : List String) : IO UInt32 := do
     (← stagedPaths.allM fun path => return !(← path.pathExists))
 
   -- The general spool layer validates one exact payload, hoists every arena
-  -- range, and follows an arbitrary compact declaration permutation.
+  -- range, and follows an arbitrary compact declaration permutation.  The
+  -- reverse declaration order also exercises a backward cursor move after the
+  -- forward metadata/arena/second-declaration reads.
   let workspaceDirectoryRef ← IO.mkRef (none : Option System.FilePath)
   let compositionResult ← Spool.withWorkspace scratch fun workspace => do
     workspaceDirectoryRef.set (some workspace.directory)

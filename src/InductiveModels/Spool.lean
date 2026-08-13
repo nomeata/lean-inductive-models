@@ -40,43 +40,37 @@ def ByteSpan.validate (span : ByteSpan) (fileSize : UInt64) : Except String Unit
   unless endpoint ≤ fileSize do
     throw "spool span extends beyond end of file"
 
-/-- Portable absolute seek supplied by the small native spool shim. The Lean
-wrapper rejects offsets outside the common signed-64 range before FFI. -/
-@[extern "lean_inductive_models_spool_seek"]
-private opaque seekHandle (handle : @& IO.FS.Handle) (offset : UInt64) : IO Unit
-
-def seek (handle : IO.FS.Handle) (offset : UInt64) : IO Unit := do
-  unless offset.toNat ≤ maxSeekOffset do
-    throw <| IO.userError "spool seek offset exceeds signed 64-bit range"
-  seekHandle handle offset
-
-@[extern "lean_inductive_models_spool_mkdir_private_at"]
-private opaque mkdirPrivateAtNative (parent leaf : @& String) : IO Unit
-
-/-- Linux production boundary. Open the trusted parent without following a
-symlink, verify by file descriptor that it is owned by the effective user and
-not group/world-writable, and create `leaf` atomically with mode 0700 via
-`mkdirat`. The leaf must be one freshly randomized path component. -/
-def mkdirPrivateAt (parent : System.FilePath) (leaf : String) : IO System.FilePath := do
-  unless System.Platform.target.contains "linux" do
-    throw <| IO.userError "secure spool workspaces are currently supported only on Linux"
-  unless !leaf.isEmpty && leaf != "." && leaf != ".." &&
-      !leaf.contains '/' && !leaf.contains '\\' do
-    throw <| IO.userError "private spool leaf must be one non-special path component"
-  mkdirPrivateAtNative parent.toString leaf
-  return parent / leaf
-
 private def copyBufferSize : Nat := 4194304
+
+/-- Move a pinned handle to `target` using only Lean's portable file API.
+Forward movement discards bytes from the current cursor; backward movement
+rewinds first.  Keeping the cursor beside the handle avoids rescanning the
+large source spool for the overwhelmingly forward compact order. -/
+private def moveTo (source : IO.FS.Handle) (current target : UInt64) : IO Unit := do
+  unless target.toNat ≤ maxSeekOffset do
+    throw <| IO.userError "spool seek offset exceeds signed 64-bit range"
+  let mut position := current
+  if target < position then
+    source.rewind
+    position := 0
+  let mut remaining := target - position
+  while remaining != 0 do
+    let requested := min remaining.toNat copyBufferSize
+    let chunk ← source.read requested.toUSize
+    if chunk.size != requested then
+      throw <| IO.userError s!"short spool seek: wanted {requested} bytes, got {chunk.size}"
+    remaining := remaining - requested.toUInt64
 
 /-- Copy exactly one validated span. A short read is an error rather than a
 silently truncated output. The caller supplies the completed source size so
 validation never depends on the handle's mutable current position. -/
-private def copySpanWith (source : IO.FS.Handle) (write : ByteArray → IO Unit)
+private def copySpanWith (source : IO.FS.Handle) (position : IO.Ref UInt64)
+    (write : ByteArray → IO Unit)
     (fileSize : UInt64) (span : ByteSpan) : IO Unit := do
   match span.validate fileSize with
   | .error error => throw <| IO.userError error
   | .ok _ => pure ()
-  seek source span.offset
+  moveTo source (← position.get) span.offset
   let mut remaining := span.length
   while remaining != 0 do
     let requested := min remaining.toNat copyBufferSize
@@ -85,17 +79,22 @@ private def copySpanWith (source : IO.FS.Handle) (write : ByteArray → IO Unit)
       throw <| IO.userError s!"short spool read: wanted {requested} bytes, got {chunk.size}"
     write chunk
     remaining := remaining - requested.toUInt64
+  position.set ((span.end?).getD span.offset)
 
 def copySpan (source destination : IO.FS.Handle) (fileSize : UInt64)
-    (span : ByteSpan) : IO Unit :=
-  copySpanWith source destination.write fileSize span
+    (span : ByteSpan) : IO Unit := do
+  source.rewind
+  let position ← IO.mkRef 0
+  copySpanWith source position destination.write fileSize span
 
 /-- Copy a validated spool span to the stream abstraction used by transactional
 output. This performs the same bounded reads and short-read checks as the
 handle-to-handle copier. -/
 def copySpanToStream (source : IO.FS.Handle) (destination : IO.FS.Stream)
-    (fileSize : UInt64) (span : ByteSpan) : IO Unit :=
-  copySpanWith source destination.write fileSize span
+    (fileSize : UInt64) (span : ByteSpan) : IO Unit := do
+  source.rewind
+  let position ← IO.mkRef 0
+  copySpanWith source position destination.write fileSize span
 
 /-- One append-only spool payload. The handle is deliberately private: only a
 successful full write publishes the new position and returned span. -/
@@ -142,22 +141,21 @@ structure Workspace where
   directory : System.FilePath
   private ownedFiles : IO.Ref (Array System.FilePath)
 
-private def maxWorkspaceAttempts : Nat := 64
-
 def Workspace.create (root : System.FilePath) : IO Workspace := do
   unless root.fileName == some "_tmp" do
     throw <| IO.userError s!"spool workspace root must be the project _tmp directory: {root}"
-  let rec attempt : Nat → IO System.FilePath
-    | 0 => throw <| IO.userError
-        s!"could not reserve a spool workspace after {maxWorkspaceAttempts} attempts"
-    | remaining + 1 => do
-      let suffix := rawSpoolSuffixOfBytes (← IO.getRandomBytes 16)
-      let leaf := s!"lean-inductive-models-spool-{suffix}"
-      try mkdirPrivateAt root leaf
-      catch error =>
-        let candidate := root / leaf
-        if ← candidate.pathExists then attempt remaining else throw error
-  let directory ← attempt maxWorkspaceAttempts
+  let rootMetadata ← root.symlinkMetadata
+  unless rootMetadata.type == .dir do
+    throw <| IO.userError s!"spool workspace root is not a physical directory: {root}"
+  let canonicalRoot ← IO.FS.realPath root
+  let directory ← IO.FS.createTempDir
+  let canonicalDirectory ← IO.FS.realPath directory
+  let rootParts := canonicalRoot.components
+  let directoryParts := canonicalDirectory.components
+  unless rootParts.length < directoryParts.length &&
+      directoryParts.take rootParts.length == rootParts do
+    try IO.FS.removeDir directory catch _ => pure ()
+    throw <| IO.userError s!"secure temporary directory {directory} is outside project root {root}; set TMPDIR below {root}"
   let ownedFiles ← IO.mkRef #[]
   return { root, directory, ownedFiles }
 
@@ -492,12 +490,13 @@ def Composition.emit (composition : Composition) (source destination : IO.FS.Han
   match composition.validate fileSize with
   | .error error => throw <| IO.userError error
   | .ok _ => pure ()
+  let position ← IO.mkRef 0
   if let some metadata := composition.metadata then
-    copySpan source destination fileSize metadata
+    copySpanWith source position destination.write fileSize metadata
   for arena in composition.arenas do
-    copySpan source destination fileSize arena
+    copySpanWith source position destination.write fileSize arena
   for index in composition.declarationOrder do
-    copySpan source destination fileSize composition.declarations[index]!
+    copySpanWith source position destination.write fileSize composition.declarations[index]!
 
 /-! ## Mixed source/generated composition
 
@@ -585,22 +584,30 @@ def MixedComposition.emit (composition : MixedComposition)
       IO.FS.withFile composition.sourceDeclarationPath .read fun sourceDeclarations =>
         IO.FS.withFile composition.generatedArenaPath .read fun generatedArena =>
           IO.FS.withFile composition.generatedDeclarationPath .read fun generatedDeclarations => do
+            let sourceMetadataPosition ← IO.mkRef 0
+            let sourceArenaPosition ← IO.mkRef 0
+            let generatedArenaPosition ← IO.mkRef 0
+            let sourceDeclarationPosition ← IO.mkRef 0
+            let generatedDeclarationPosition ← IO.mkRef 0
             unless composition.sourceSizes.metadata == 0 do
-              copySpanToStream sourceMetadata destination composition.sourceSizes.metadata
+              copySpanWith sourceMetadata sourceMetadataPosition destination.write
+                composition.sourceSizes.metadata
                 { offset := 0, length := composition.sourceSizes.metadata }
             unless composition.sourceSizes.arena == 0 do
-              copySpanToStream sourceArena destination composition.sourceSizes.arena
+              copySpanWith sourceArena sourceArenaPosition destination.write
+                composition.sourceSizes.arena
                 { offset := 0, length := composition.sourceSizes.arena }
             unless composition.generatedArenaSize == 0 do
-              copySpanToStream generatedArena destination composition.generatedArenaSize
+              copySpanWith generatedArena generatedArenaPosition destination.write
+                composition.generatedArenaSize
                 { offset := 0, length := composition.generatedArenaSize }
             for declaration in composition.declarations do
               match declaration with
               | .source span =>
-                copySpanToStream sourceDeclarations destination
+                copySpanWith sourceDeclarations sourceDeclarationPosition destination.write
                   composition.sourceSizes.declarations span
               | .generated span =>
-                copySpanToStream generatedDeclarations destination
+                copySpanWith generatedDeclarations generatedDeclarationPosition destination.write
                   composition.generatedDeclarationSize span
 
 end InductiveModels.Spool

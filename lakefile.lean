@@ -4,14 +4,6 @@ open System Lake DSL
 
 package lean_inductive_models where testDriver := "test"
 
-/-- Native filesystem primitives used by the bounded spool copier. Kept in one
-small archive so every executable importing `InductiveModels.Spool` resolves the same
-portable seek and secure-workspace implementation. -/
-extern_lib lean_inductive_models_spool (pkg : NPackage __name__) := do
-  let source ← inputFile (pkg.dir / "c/InductiveModelsSpool.c") true
-  let object ← buildLeanO (pkg.buildDir / "ir/InductiveModelsSpool.c.o") source
-  buildStaticLib (pkg.staticLibDir / "liblean_inductive_models_spool.a") #[object]
-
 lean_lib InductiveModels where
   srcDir := "src"
   globs := #[`InductiveModels.+]
