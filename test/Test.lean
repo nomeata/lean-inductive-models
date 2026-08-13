@@ -575,7 +575,7 @@ def expectedPrim : List Row :=
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4),
        ("Cf", 8), ("Cf._model._impl.skel", 12), ("Inf2", 8), ("Inf2._model._impl.skel", 12),
        ("Vec", 8), ("Vec._model._impl.skel", 6), ("Bl", 10),
-       ("Bl._model._impl.skel", 8), ("IBox", 8), ("IBox._model._impl.skel", 7),
+       ("Bl._model._impl.skel", 8), ("IBox", 16), ("IBox._model._impl.skel", 7),
        ("Vc", 8), ("Vc._model._impl.skel", 6),
        ("Mx", 8), ("Mx._model._impl.skel", 12),
        ("Two2", 8), ("Two2._model._impl.skel", 6), ("Fn", 8), ("Fn._model._impl.skel", 6),
@@ -805,6 +805,23 @@ def runOne (root : String) (a : TAcc) (r : Row)
       (rep.generated.any (·.1 == `Triple) && emittedNames.contains `Triple._model &&
         certificate.all fun name => !emittedNames.contains name)
       "prim_w: Triple did not generate on the legacy route without a one-layer certificate"
+  if name == "prim_carve" then
+    -- `IBox` is the indexed-fibre occupant in this mixed route fixture.  Its
+    -- count grew from the eight public/implementation records to sixteen only
+    -- because the indexed adapter adds this complete eight-record structural
+    -- certificate; pin the names as well as the census so an unrelated record
+    -- increase cannot bless a partial or legacy family.
+    let emittedNames := decls.flatMap (·.names.toArray)
+    let privateRoot := `IBox._model._impl
+    let certificate := #[Name.str privateRoot "self", Name.str privateRoot "ctor_0",
+      Name.str privateRoot "rec", Name.str privateRoot "rec_iota_0",
+      Name.str privateRoot "roll", Name.str privateRoot "unroll",
+      Name.str privateRoot "unroll_roll", Name.str privateRoot "roll_unroll"]
+    a := check a
+      (rep.generated.find? (·.1 == `IBox) == some (`IBox, 16) &&
+        certificate.all emittedNames.contains &&
+        !rep.declined.any (·.1 == `IBox))
+      "prim_carve: IBox did not generate with the complete indexed-fibre certificate"
   -- **Exempt then declined.** The basis primitives are their own row in the
   -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a
