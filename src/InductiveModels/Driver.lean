@@ -990,7 +990,7 @@ def addStructureModels (types : Array EIndType) (constructors : Array ECtor)
   let is ← addStructureEtaTheorems types constructors recursors reserved is
   addUnitlikeTheorems types constructors recursors reserved is
 
-private abbrev FilterState := Array EDecl × Report × Array PendingModel
+private abbrev ModelIslandState := Array EDecl × Report × Array PendingModel
 
 /-- Read one inductive block back out of the environment, including the
 recursors the **kernel** generated for it. -/
@@ -2060,10 +2060,10 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (basicModels : Bool)
     (canWait : Bool)
-    (st : FilterState) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none)
+    (st : ModelIslandState) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none)
     (exactTransform : EDecl → EDecl := id)
     (selectPublicOneLayer : Bool := false) :
-    MetaM (FilterState × Option PrimReadiness) := do
+    MetaM (ModelIslandState × Option PrimReadiness) := do
   let (out, rep, pending) := st
   let saved ← getEnv
   -- **The retry under an alias root**, and it is a retry rather than a
@@ -2228,8 +2228,8 @@ environment as the mutual model; retaining a job after its generated owner
 would retain precisely the ownerful state this pass is designed to discard. -/
 def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     (reserved : Std.HashSet Name) (basicModels : Bool)
-    (blocks : ExactGeneratedBlocks) (st : FilterState)
-    (exactTransform : EDecl → EDecl := id) : MetaM FilterState := do
+    (blocks : ExactGeneratedBlocks) (st : ModelIslandState)
+    (exactTransform : EDecl → EDecl := id) : MetaM ModelIslandState := do
   let mut st := st
   -- Asked once, of the environment as it stands at the block: every member of
   -- one block is at the same point in the replay.
@@ -2262,8 +2262,8 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (tys : Array Expr) (ctors : Array (Array (Name × Expr)))
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (simpleModels basicModels : Bool)
-    (st : FilterState) (sourceBlock? : Option EDecl := none)
-    (exactTransform : EDecl → EDecl := id) : MetaM FilterState := do
+    (st : ModelIslandState) (sourceBlock? : Option EDecl := none)
+    (exactTransform : EDecl → EDecl := id) : MetaM ModelIslandState := do
   let (out, rep, pending) := st
   let saved ← getEnv
   let mut result ← (do
@@ -2302,381 +2302,340 @@ together. -/
 def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
   { simple := primModels, basic := primModels }
 
-/-- Shared generation loop. With a sink, every accepted island is serialized
-and compacted at its close boundary. The full declaration array is retained
-only by callers which explicitly request the legacy final-order/report oracle. -/
-private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
-    (sink? : Option IslandSink) (retainOracle : Bool)
-    (exactTransform : EDecl → EDecl := id) :
-    MetaM (Array EDecl × Report × StagedPlan) := do
-  let scheduled ← match scheduleSource x generation with
-    | .ok scheduled => pure scheduled
-    | .error error => throwError "cannot schedule shared support: {repr error}"
-  match validateScheduledSupport scheduled generation with
-  | .ok () => pure ()
-  | .error message => throwError "invalid shared-support schedule: {message}"
-  let mut mainEnv ← getEnv
-  -- Built once. Each island overlays only its generated records, avoiding the
-  -- former full-source declaration/constructor/rule/normalizer rebuild.
-  let sourceSyntax := Check.SyntaxIndex.ofSource x
-  let sourceNormalizer := sourceSyntax.exactNormalizer
-  let mut persistentSyntax := sourceSyntax
-  let sourceSummaries := Order.summaries scheduled
-  let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
-  let sourceFamilyRecords := Check.compactFamilyCertificateRecordsWithIndex
-    scheduled sourceSyntax (Check.discover scheduled)
-  let mut rawOrdinals : Std.HashMap Name Nat := {}
-  for ordinal in [0:x.decls.size] do
-    rawOrdinals := x.decls[ordinal]!.names.foldl
-      (fun ordinals name => ordinals.insert name ordinal) rawOrdinals
-  let mut legacyOut : Array EDecl := #[]
-  let mut rep : Report := {}
-  let mut staged : Array StagedIsland := #[]
-  let mut stagedRecords : Array StagedRecord := #[]
-  let mut scheduledOrdinal := 0
-  let mut islandStatements : Check.StatementReport :=
+/-! ## Declaration-wise filter state
+
+The source scheduler still materialises a complete `Export` in this phase, but
+the generation loop below no longer owns its mutable state as local variables.
+`FilterState.feedSource` is the one-record logical transition and
+`FilterState.finalize` consumes only its accumulated compact/output state.
+This is the boundary a later census/span reader can drive without changing an
+owner's pre-replay generation, source replay, post-replay generation, or atomic
+island close. -/
+
+private structure FilterContext where
+  source : Export
+  checkRecursors : Bool
+  generation : Cli.Config
+  sink? : Option IslandSink
+  retainOracle : Bool
+  exactTransform : EDecl → EDecl
+  sourceSyntax : Check.SyntaxIndex
+  sourceNormalizer : ExactNormalizationEnv
+  sourceSummaries : Array Order.DeclSummary
+  sourceGlobalExtras : Array Check.GlobalExtraRecord
+  sourceFamilyRecords : Array (Array Check.CompactFamilyCertificate)
+  rawOrdinals : Std.HashMap Name Nat
+  reserved : Std.HashSet Name
+
+private structure FilterState where
+  mainEnv : Environment
+  persistentSyntax : Check.SyntaxIndex
+  legacyOut : Array EDecl := #[]
+  report : Report := {}
+  staged : Array StagedIsland := #[]
+  stagedRecords : Array StagedRecord := #[]
+  scheduledOrdinal : Nat := 0
+  islandStatements : Check.StatementReport :=
     { statementsChecked := 0, violations := #[] }
-  -- The declarations built inside the current model island. Besides staging
-  -- exact generated names for support persistence, this keeps recursive
-  -- splice closure and nested → mutual → simple composition atomic.
-  -- A noncanonical declaration under a basis name makes generation
-  -- unsupported for this stream. Support scheduling puts basis owners before
-  -- their consumers; suppressing later islands prevents a weak, route-local
-  -- prerequisite check from accidentally building against the wrong basis.
-  let mut invalidBasis : Std.HashSet Name := {}
-  -- Every name the input declares anywhere, so that a model cannot collide
-  -- with one the file itself introduces *later*.
-  let reserved : Std.HashSet Name :=
-    x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
-  let mut persistentSupportOrigins : Std.HashMap Name Nat := {}
-  for d in scheduled.decls do
-    -- Construction state is island-local. Nothing generated for an earlier
-    -- owner remains in this buffer after that island has closed.
-    let mut out : Array EDecl := #[]
-    let mut pending : Array PendingModel := #[]
-    let mut modeledSourceFamilies : Array Check.CompactFamilyCertificate := #[]
-    let mut modeledSourceGlobalExtra? : Option Check.GlobalExtraRecord := none
-    let basisRoot? := match d with
-      | .induct types _ _ => types.findSome? fun type =>
-          if inductiveBasis.contains type.name then some type.name else none
-      | _ => none
-    -- No model declaration is ever installed in `mainEnv`. All constructors
-    -- below work in the ambient disposable fork; closing an inductive record
-    -- restores this exact source prefix plus accepted reusable support.
-    setEnv mainEnv
-    let mainBefore := mainEnv
-    let mut replayedOwnerEnv? : Option Environment := none
-    let reportedBefore := rep.generated.size
-    -- The model, if this is a nested declaration. Generated **before** the
-    -- declaration is added: nothing in the model mentions `T`.
-    if let .induct ts cs inputRecursors := d then
-      -- **A mutual block whose members nest is one block, not several.** Lean
-      -- specialises the whole block at once — `nest_mutual_both`'s `A`/`B`
-      -- become four members with four recursors over one shared motive vector
-      -- — so the model does too, under the first member's `_model` namespace
-      -- and with one carrier per real member.
-      if let t :: _ := ts then
-        if generation.nested && ts.any (·.numNested > 0) &&
-            basisRoot?.isNone && invalidBasis.isEmpty then
-          let all := ts.toArray.map (·.name)
-          let ctorsOfMember := fun (n : Name) =>
-            (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
-          let ptypes : Array PType := ts.toArray.map fun m =>
-            { name := m.name, type := m.type, ctors := ctorsOfMember m.name }
-          match plan (← getEnv) t.levelParams t.numParams ptypes with
-          | .error e => rep := { rep with declined := rep.declined.push (t.name, e) }
-          | .ok none => pure ()
-          | .ok (some pl) =>
-            let saved ← getEnv
-            let ctors := all.map ctorsOfMember
-            let mut result ← (do
-              let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray
-                pl reserved
+  invalidBasis : Std.HashSet Name := {}
+  persistentSupportOrigins : Std.HashMap Name Nat := {}
+
+private inductive FilterFeedResult where
+  | next (state : FilterState)
+  | unreplayable (report : Report)
+
+/-- Consume one declaration from the already dependency-ordered logical source
+stream.  Every mutable field which survives this call is explicit in
+`FilterState`; `out`, `pending`, and the replay fork remain owner-local. -/
+private def FilterState.feedSource (state : FilterState) (context : FilterContext)
+    (d : EDecl) : MetaM FilterFeedResult := do
+  let x := context.source
+  let generation := context.generation
+  let sink? := context.sink?
+  let retainOracle := context.retainOracle
+  let exactTransform := context.exactTransform
+  let sourceSyntax := context.sourceSyntax
+  let sourceNormalizer := context.sourceNormalizer
+  let sourceSummaries := context.sourceSummaries
+  let sourceGlobalExtras := context.sourceGlobalExtras
+  let sourceFamilyRecords := context.sourceFamilyRecords
+  let rawOrdinals := context.rawOrdinals
+  let reserved := context.reserved
+  let mut mainEnv := state.mainEnv
+  let mut persistentSyntax := state.persistentSyntax
+  let mut legacyOut := state.legacyOut
+  let mut rep := state.report
+  let mut staged := state.staged
+  let mut stagedRecords := state.stagedRecords
+  let scheduledOrdinal := state.scheduledOrdinal
+  let mut islandStatements := state.islandStatements
+  let mut invalidBasis := state.invalidBasis
+  let mut persistentSupportOrigins := state.persistentSupportOrigins
+  -- Construction state is island-local. Nothing generated for an earlier
+  -- owner remains in this buffer after that island has closed.
+  let mut out : Array EDecl := #[]
+  let mut pending : Array PendingModel := #[]
+  let mut modeledSourceFamilies : Array Check.CompactFamilyCertificate := #[]
+  let mut modeledSourceGlobalExtra? : Option Check.GlobalExtraRecord := none
+  let basisRoot? := match d with
+    | .induct types _ _ => types.findSome? fun type =>
+        if inductiveBasis.contains type.name then some type.name else none
+    | _ => none
+  -- No model declaration is ever installed in `mainEnv`. All constructors
+  -- below work in the ambient disposable fork; closing an inductive record
+  -- restores this exact source prefix plus accepted reusable support.
+  setEnv mainEnv
+  let mainBefore := mainEnv
+  let mut replayedOwnerEnv? : Option Environment := none
+  let reportedBefore := rep.generated.size
+  -- The model, if this is a nested declaration. Generated **before** the
+  -- declaration is added: nothing in the model mentions `T`.
+  if let .induct ts cs inputRecursors := d then
+    -- **A mutual block whose members nest is one block, not several.** Lean
+    -- specialises the whole block at once — `nest_mutual_both`'s `A`/`B`
+    -- become four members with four recursors over one shared motive vector
+    -- — so the model does too, under the first member's `_model` namespace
+    -- and with one carrier per real member.
+    if let t :: _ := ts then
+      if generation.nested && ts.any (·.numNested > 0) &&
+          basisRoot?.isNone && invalidBasis.isEmpty then
+        let all := ts.toArray.map (·.name)
+        let ctorsOfMember := fun (n : Name) =>
+          (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
+        let ptypes : Array PType := ts.toArray.map fun m =>
+          { name := m.name, type := m.type, ctors := ctorsOfMember m.name }
+        match plan (← getEnv) t.levelParams t.numParams ptypes with
+        | .error e => rep := { rep with declined := rep.declined.push (t.name, e) }
+        | .ok none => pure ()
+        | .ok (some pl) =>
+          let saved ← getEnv
+          let ctors := all.map ctorsOfMember
+          let mut result ← (do
+            let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray
+              pl reserved
+            addStructureModels ts.toArray cs.toArray inputRecursors.toArray
+              #[] reserved is).run
+          if let .error (.nameLost _) := result then
+            setEnv saved
+            result ← (do
+              let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray pl reserved
+                (some (Naming.retryRoot t.name))
               addStructureModels ts.toArray cs.toArray inputRecursors.toArray
                 #[] reserved is).run
-            if let .error (.nameLost _) := result then
-              setEnv saved
-              result ← (do
-                let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray pl reserved
-                  (some (Naming.retryRoot t.name))
-                addStructureModels ts.toArray cs.toArray inputRecursors.toArray
-                  #[] reserved is).run
-            match result with
-            | .error dec =>
-              setEnv saved
-              rep := { rep with declined := rep.declined.push (t.name, dec.label) }
-            | .ok is =>
-              let serialised ← serialiseIso is exactTransform
-              let records := serialised.records
-              let is := serialised.model
-              out := out ++ records
-              rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
-              unless is.spliced.isEmpty do
-                rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
-              pending := pending.push { spliced := is.spliced }
-              -- ── the model of the model ────────────────────────────────────
-              --
-              -- **What has just been emitted is a `mutual … end` block**, and
-              -- the second construction is the one that models exactly that.
-              -- So it runs here, on `T._model.0 … T._model.{n−1}`, and the
-              -- output carries a nested declaration's development twice over:
-              -- the mutual model of `T`, and the *simple* model of that.
-              --
-              -- The block is still written — a model is emitted **beside** the
-              -- thing it models and never in place of it — so what this
-              -- buys is not that the output has no mutual block in it, but
-              -- that **every** mutual block in the output has a model beside
-              -- it, the ones this tool wrote included. A consumer that can add
-              -- only a single inductive can now skip all of them.
-              --
-              -- **Here and not by re-running the filter.** The composition is
-              -- one pass by construction; this is the composition boundary,
-              -- and the prelude splice's
-              -- idempotence is unaffected, because on an already-filtered
-              -- input every name below is taken and the name guard declines.
-              --
-              -- `Eq` is certainly present: `InductiveModels.iso` above went through
-              -- `ensureEq`, which either found the input's or spliced Lean's.
-              -- The composed step therefore satisfies its Eq prerequisite in
-              -- this same island.
-              if generation.mutualModels && is.members.size > 1 then
-                let saved2 ← getEnv
-                let (tys2, ctors2) ← blockOf is.members
-                let composedRoot := is.members[0]!
-                let exactBlock ← serialised.exactBlocks.require composedRoot
-                let mut mutualResult ← (do
+          match result with
+          | .error dec =>
+            setEnv saved
+            rep := { rep with declined := rep.declined.push (t.name, dec.label) }
+          | .ok is =>
+            let serialised ← serialiseIso is exactTransform
+            let records := serialised.records
+            let is := serialised.model
+            out := out ++ records
+            rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
+            unless is.spliced.isEmpty do
+              rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
+            pending := pending.push { spliced := is.spliced }
+            -- The model of the generated mutual block remains in this same
+            -- atomic owner transition.
+            if generation.mutualModels && is.members.size > 1 then
+              let saved2 ← getEnv
+              let (tys2, ctors2) ← blockOf is.members
+              let composedRoot := is.members[0]!
+              let exactBlock ← serialised.exactBlocks.require composedRoot
+              let mut mutualResult ← (do
+                let is2 ← mutualIso is.members is.levelParams t.numParams
+                  tys2 ctors2 reserved (sourceBlock? := some exactBlock)
+                addInstalledStructureModels is.members #[] reserved is2).run
+              if let .error (.nameLost _) := mutualResult then
+                setEnv saved2
+                mutualResult ← (do
                   let is2 ← mutualIso is.members is.levelParams t.numParams
-                    tys2 ctors2 reserved (sourceBlock? := some exactBlock)
+                    tys2 ctors2 reserved (some (Naming.retryRoot composedRoot))
+                      (sourceBlock? := some exactBlock)
                   addInstalledStructureModels is.members #[] reserved is2).run
-                if let .error (.nameLost _) := mutualResult then
-                  setEnv saved2
-                  mutualResult ← (do
-                    let is2 ← mutualIso is.members is.levelParams t.numParams
-                      tys2 ctors2 reserved (some (Naming.retryRoot composedRoot))
-                        (sourceBlock? := some exactBlock)
-                    addInstalledStructureModels is.members #[] reserved is2).run
-                match mutualResult with
-                | .error dec =>
-                  setEnv saved2
-                  rep := { rep with
-                    declined := rep.declined.push (is.members[0]!, dec.labelAs "mutual") }
-                | .ok is2 =>
-                  let serialised2 ← serialiseIso is2 exactTransform
-                  let records := serialised2.records
-                  let is2 := serialised2.model
-                  out := out ++ records
-                  rep := { rep with
-                    generated := rep.generated.push (is.members[0]!, is2.decls.size) }
-                  pending := pending.push { spliced := is2.spliced }
-                  -- ── the third step of the chain (`--simple`) ──────────────
-                  -- The mutual model's own single inductives, modelled from
-                  -- the primitives — nested → mutual → primitives, one pass.
-                  if generation.simple then
-                    let st3 ← primCompose is2.members is2.levelParams
-                      t.numParams reserved generation.basic serialised2.exactBlocks
-                        (out, rep, pending) exactTransform
-                    (out, rep, pending) ← pure st3
-    -- Replay, unchecked: the input is trusted. Lean's kernel still runs the
-    -- *inductive* elaboration, which is not skippable, so a deliberately
-    -- ill-formed inductive stops the replay here. Nothing has been spliced yet
-    -- when that happens, so the file passes through untouched.
-    if let some dcl := toDeclaration (← getEnv) d then
-      -- `Environment.addDeclCore` and not `Kernel.Environment.
-      -- addDeclWithoutChecking`, even though the elaborator-side bookkeeping is
-      -- unwanted here: `Environment.find?` — which `MetaM`'s `inferType` goes
-      -- through — reads the *imported* half of the constant map and then the
-      -- **async** map, so a constant added at the kernel level is invisible to
-      -- it and the generator cannot so much as name `List.rec`. The price is
-      -- one `panic!` from `AsyncConsts.add` on a large export where two private
-      -- names from different modules normalise alike — normal in an export,
-      -- which is many modules flattened into one file, and impossible during
-      -- elaboration. It is not fatal: the entry is dropped from an index this
-      -- tool never reads, so it does not affect model generation or checking.
-      match (← getEnv).addDeclCore 0 dcl none false with
-      | .ok e =>
-        replayedOwnerEnv? := some e
-        setEnv e
-      | .error ex =>
-        let msg ← (ex.toMessageData {}).toString
-        return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" },
-          { islands := #[], declarations := #[] })
-    -- Basis exemption is granted only after the complete exported interface
-    -- has been compared with one freshly minted by the kernel. The disposable
-    -- alias environment used by the validator is never installed here.
-    if let some root := basisRoot? then
-      match ← (validateBasisOwner root d).run with
-      | .ok () =>
-        -- Preserve the report's route semantics: a valid basis owner is an
-        -- exemption row only when simple generation selected it. Validation
-        -- itself is unconditional, so an invalid unused owner still declines.
-        if generation.modelsSimpleInput root then
-          rep := { rep with
-            exempt := rep.exempt.push (root, Decline.basisExempt.labelAs "prim") }
-      | .error decline =>
-        invalidBasis := invalidBasis.insert root
-        rep := { rep with declined := rep.declined.push (root, decline.labelAs "prim") }
-    -- **The model of a plain mutual block, and it is generated *after* the
-    -- replay** where the nested one is generated before it. The reason is that
-    -- there is nothing else to read the statements off: a nested declaration's
-    -- model restates the recursors of the *specialised* block, which this tool
-    -- builds itself, and a plain mutual block has no such second inductive —
-    -- the implementation auxiliary's recursor is not `R_k.rec` at any
-    -- renaming. So `InductiveModels.mutualIso` reads the recursors Lean minted for the
-    -- input's own block, which exist only once it is installed
-    -- (`src/InductiveModels/Mutual.lean`'s header).
-    --
-    -- The **records** still go out ahead of the declaration's whenever they
-    -- can, because `out` has not been pushed yet.
-    if let .induct ts cs _ := d then
-      if let t :: _ := ts then
-        -- **No "is this a block I wrote?" test here**, and that is deliberate.
-        -- On this tool's own output the block `T._model.0 … T._model.{n−1}` is
-        -- an input record like any other and does reach this branch — and
-        -- declines, because every name its model would want is already in the
-        -- file and the name guard says so. Idempotence is carried by the same
-        -- mechanism that carries it for a nested declaration, which is
-        -- one mechanism rather than two things to keep in step.
-        if generation.mutualModels && ts.length > 1 && !ts.any (·.numNested > 0) &&
-            basisRoot?.isNone && invalidBasis.isEmpty then
-          let all := ts.toArray.map (·.name)
-          let ctors := all.map fun n =>
-            (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
-          let tys := ts.toArray.map (·.type)
-          let mut needsExactSortLift := hasIntrinsicProjectionFields sourceSyntax ts cs
-          unless needsExactSortLift do
-            for type in ts do
-              if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then
-                needsExactSortLift := true
-          unless ← mutualReady needsExactSortLift reserved do
-            throwError "plain mutual model prerequisites remained late after support scheduling"
-          let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
-            generation.simple generation.basic (out, rep, pending) (some d) exactTransform
-          (out, rep, pending) ← pure st3
-        -- ── a simple inductive (`--simple`) ──────────────────────────────
-        -- Generated after replay because route construction reads the owner's
-        -- installed recursor metadata. Acceptance later replays the serialized
-        -- model owner-free, and statement correspondence uses export syntax.
-        if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
-            basisRoot?.isNone && invalidBasis.isEmpty then
-          let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
-          -- Ask the selected route, rather than requiring the whole basis in
-          -- advance. A reusable non-basis support declaration such as
-          -- `Nonempty` may itself precede an independent input-owned ordinary
-          -- `PSigma`, while its Church model does not mention
-          -- that independent declaration at all.
-          -- Any route that actually reaches a late splice still returns its
-          -- exact readiness class below; fixed basis consumers are hoisted by
-          -- `scheduledSupportRecord` before ordinary owners.
-          let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
-            #[] reserved generation.basic true (out, rep, pending)
-            (some (d, sourceNormalizer)) exactTransform true
-          if wait?.isSome then
-            throwError "simple model prerequisite remained late after support scheduling"
-          (out, rep, pending) ← pure st
-    if d matches .induct .. then
-      let generated := out
-      let islandModels := pending
-      rep := { rep with
-        maxLivePendingModels := max rep.maxLivePendingModels islandModels.size
-        maxLiveIslandRecords := max rep.maxLiveIslandRecords generated.size }
-      let islandOwners := (rep.generated.extract reportedBefore rep.generated.size).foldl
-        (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
-      if generated.isEmpty && islandOwners.isEmpty then
-        -- The first replay above already installed this owner into the exact
-        -- persistent source environment. With no generated records there is
-        -- no disposable fork to check, order, persist, or replay around.
-        unless islandModels.isEmpty do
-          throwError "empty generated island for {d.names} retained model witnesses"
-        let ownerEnv := replayedOwnerEnv?.getD mainBefore
-        mainEnv := ownerEnv
-        setEnv ownerEnv
-      else
-        let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
-            ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners with
-          | .ok result => pure result
-          | .error message => throwError
-              "owner-free generated declaration rejected for {d.names}: {message}"
-        islandStatements :=
-          { statementsChecked := islandStatements.statementsChecked +
-              statementReport.statementsChecked
-            violations := islandStatements.violations ++ statementReport.violations }
-        unless compact.summaries.size == orderedGenerated.size &&
-            compact.globalExtras.size == orderedGenerated.size &&
-            compact.families.size == orderedGenerated.size do
-          throwError "accepted island cardinality mismatch for {d.names}: \
-            records={orderedGenerated.size}, summaries={compact.summaries.size}, \
-            extras={compact.globalExtras.size}, families={compact.families.size}"
-        modeledSourceFamilies := compact.sourceFamilies
-        modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
-        if let some sink := sink? then
-          let commit ← sink.commit orderedGenerated
-          unless orderedGenerated.size == commit.declarations.size do
-            throwError "staged island cardinality mismatch for {d.names}: \
-              records={orderedGenerated.size}, summaries={compact.summaries.size}, \
-              extras={compact.globalExtras.size}, \
-              spans={commit.declarations.size}"
-          let islandNumber := staged.size
-          let tagged := Order.tagIsland islandNumber compact.summaries
-          for localOrdinal in [:tagged.size] do
-            stagedRecords := stagedRecords.push {
-              summary := tagged[localOrdinal]!
-              globalExtra := compact.globalExtras[localOrdinal]!
-              families := compact.families[localOrdinal]!.map (·.inIsland islandNumber)
-              checkIsland? := some islandNumber
-              locator := .generated islandNumber localOrdinal }
-          staged := staged.push {
-            compact := { compact with summaries := tagged }
-            commit }
-        let persistentRecords := generatedSupportRecords orderedGenerated islandModels
-        if sink?.isSome then
-          let islandNumber := staged.size - 1
-          for record in persistentRecords do
-            for name in record.names do
-              persistentSupportOrigins := persistentSupportOrigins.insert name islandNumber
-        persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
-          | .ok index => pure index
-          | .error message => throwError
-              "cannot index accepted persistent support for {d.names}: {message}"
-        if retainOracle then legacyOut := legacyOut ++ orderedGenerated
-        setEnv mainWithSupport
-        if let some ownerDeclaration := toDeclaration mainWithSupport d then
-          match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
-          | .ok env =>
-            mainEnv := env
-            setEnv env
-          | .error exception =>
-            let message ← (exception.toMessageData {}).toString
-            return (x.decls,
-              { rep with unreplayable := some s!"{d.names}: {message}" },
-              { islands := #[], declarations := #[] })
+              match mutualResult with
+              | .error dec =>
+                setEnv saved2
+                rep := { rep with
+                  declined := rep.declined.push (is.members[0]!, dec.labelAs "mutual") }
+              | .ok is2 =>
+                let serialised2 ← serialiseIso is2 exactTransform
+                let records := serialised2.records
+                let is2 := serialised2.model
+                out := out ++ records
+                rep := { rep with
+                  generated := rep.generated.push (is.members[0]!, is2.decls.size) }
+                pending := pending.push { spliced := is2.spliced }
+                if generation.simple then
+                  let st3 ← primCompose is2.members is2.levelParams
+                    t.numParams reserved generation.basic serialised2.exactBlocks
+                      (out, rep, pending) exactTransform
+                  (out, rep, pending) ← pure st3
+  -- Replay the source record between its pre-owner and post-owner generation
+  -- phases.  An unreplayable source record terminates the complete machine and
+  -- discards every private island, matching the historical loop return.
+  if let some dcl := toDeclaration (← getEnv) d then
+    match (← getEnv).addDeclCore 0 dcl none false with
+    | .ok e =>
+      replayedOwnerEnv? := some e
+      setEnv e
+    | .error ex =>
+      let msg ← (ex.toMessageData {}).toString
+      return .unreplayable
+        { rep with unreplayable := some s!"{d.names}: {msg}" }
+  if let some root := basisRoot? then
+    match ← (validateBasisOwner root d).run with
+    | .ok () =>
+      if generation.modelsSimpleInput root then
+        rep := { rep with
+          exempt := rep.exempt.push (root, Decline.basisExempt.labelAs "prim") }
+    | .error decline =>
+      invalidBasis := invalidBasis.insert root
+      rep := { rep with declined := rep.declined.push (root, decline.labelAs "prim") }
+  -- Plain mutual and direct-simple routes read recursor metadata installed by
+  -- the replay above and therefore remain the post-owner half of this single
+  -- transition.
+  if let .induct ts cs _ := d then
+    if let t :: _ := ts then
+      if generation.mutualModels && ts.length > 1 && !ts.any (·.numNested > 0) &&
+          basisRoot?.isNone && invalidBasis.isEmpty then
+        let all := ts.toArray.map (·.name)
+        let ctors := all.map fun n =>
+          (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
+        let tys := ts.toArray.map (·.type)
+        let mut needsExactSortLift := hasIntrinsicProjectionFields sourceSyntax ts cs
+        unless needsExactSortLift do
+          for type in ts do
+            if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then
+              needsExactSortLift := true
+        unless ← mutualReady needsExactSortLift reserved do
+          throwError "plain mutual model prerequisites remained late after support scheduling"
+        let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
+          generation.simple generation.basic (out, rep, pending) (some d) exactTransform
+        (out, rep, pending) ← pure st3
+      if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
+          basisRoot?.isNone && invalidBasis.isEmpty then
+        let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
+        let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
+          #[] reserved generation.basic true (out, rep, pending)
+          (some (d, sourceNormalizer)) exactTransform true
+        if wait?.isSome then
+          throwError "simple model prerequisite remained late after support scheduling"
+        (out, rep, pending) ← pure st
+  if d matches .induct .. then
+    let generated := out
+    let islandModels := pending
+    rep := { rep with
+      maxLivePendingModels := max rep.maxLivePendingModels islandModels.size
+      maxLiveIslandRecords := max rep.maxLiveIslandRecords generated.size }
+    let islandOwners := (rep.generated.extract reportedBefore rep.generated.size).foldl
+      (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
+    if generated.isEmpty && islandOwners.isEmpty then
+      unless islandModels.isEmpty do
+        throwError "empty generated island for {d.names} retained model witnesses"
+      let ownerEnv := replayedOwnerEnv?.getD mainBefore
+      mainEnv := ownerEnv
+      setEnv ownerEnv
     else
-      mainEnv ← getEnv
-    if retainOracle then legacyOut := legacyOut.push d
-    if sink?.isSome then
-      let some firstName := d.names.head? | throwError "source declaration has no name"
-      let some rawOrdinal := rawOrdinals[firstName]?
-        | throwError "scheduled source declaration {firstName} lost its raw ordinal"
-      let modeledIsland? ← if modeledSourceFamilies.isEmpty then pure none else
-        match staged.size with
-        | 0 => throwError "modeled source family {d.names} has no committed generated island"
-        | size + 1 => pure (some size)
-      stagedRecords := stagedRecords.push {
-        summary := sourceSummaries[scheduledOrdinal]!
-        globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtras[scheduledOrdinal]!
-        families := sourceFamilyRecords[scheduledOrdinal]! ++
-          (modeledSourceFamilies.map fun family =>
-            modeledIsland?.elim family family.inIsland)
-        checkIsland? := modeledIsland?
-        locator := .source rawOrdinal }
-    scheduledOrdinal := scheduledOrdinal + 1
-    -- Statement correspondence is deliberately postponed until every emitted
-    -- record is available.  It is an exact export-level comparison and does
-    -- not consult this replay environment or the recursors the kernel minted
-    -- for the owner.
-    if checkRecursors then
-      if let .induct _ _ rs := d then
-        let (n, b) ← checkRecs rs
-        rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
+      let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
+          ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners with
+        | .ok result => pure result
+        | .error message => throwError
+            "owner-free generated declaration rejected for {d.names}: {message}"
+      islandStatements :=
+        { statementsChecked := islandStatements.statementsChecked +
+            statementReport.statementsChecked
+          violations := islandStatements.violations ++ statementReport.violations }
+      unless compact.summaries.size == orderedGenerated.size &&
+          compact.globalExtras.size == orderedGenerated.size &&
+          compact.families.size == orderedGenerated.size do
+        throwError "accepted island cardinality mismatch for {d.names}: \
+          records={orderedGenerated.size}, summaries={compact.summaries.size}, \
+          extras={compact.globalExtras.size}, families={compact.families.size}"
+      modeledSourceFamilies := compact.sourceFamilies
+      modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
+      if let some sink := sink? then
+        let commit ← sink.commit orderedGenerated
+        unless orderedGenerated.size == commit.declarations.size do
+          throwError "staged island cardinality mismatch for {d.names}: \
+            records={orderedGenerated.size}, summaries={compact.summaries.size}, \
+            extras={compact.globalExtras.size}, spans={commit.declarations.size}"
+        let islandNumber := staged.size
+        let tagged := Order.tagIsland islandNumber compact.summaries
+        for localOrdinal in [:tagged.size] do
+          stagedRecords := stagedRecords.push {
+            summary := tagged[localOrdinal]!
+            globalExtra := compact.globalExtras[localOrdinal]!
+            families := compact.families[localOrdinal]!.map (·.inIsland islandNumber)
+            checkIsland? := some islandNumber
+            locator := .generated islandNumber localOrdinal }
+        staged := staged.push {
+          compact := { compact with summaries := tagged }
+          commit }
+      let persistentRecords := generatedSupportRecords orderedGenerated islandModels
+      if sink?.isSome then
+        let islandNumber := staged.size - 1
+        for record in persistentRecords do
+          for name in record.names do
+            persistentSupportOrigins := persistentSupportOrigins.insert name islandNumber
+      persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
+        | .ok index => pure index
+        | .error message => throwError
+            "cannot index accepted persistent support for {d.names}: {message}"
+      if retainOracle then legacyOut := legacyOut ++ orderedGenerated
+      setEnv mainWithSupport
+      if let some ownerDeclaration := toDeclaration mainWithSupport d then
+        match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
+        | .ok env =>
+          mainEnv := env
+          setEnv env
+        | .error exception =>
+          let message ← (exception.toMessageData {}).toString
+          return .unreplayable
+            { rep with unreplayable := some s!"{d.names}: {message}" }
+  else
+    mainEnv ← getEnv
+  if retainOracle then legacyOut := legacyOut.push d
+  if sink?.isSome then
+    let some firstName := d.names.head? | throwError "source declaration has no name"
+    let some rawOrdinal := rawOrdinals[firstName]?
+      | throwError "scheduled source declaration {firstName} lost its raw ordinal"
+    let modeledIsland? ← if modeledSourceFamilies.isEmpty then pure none else
+      match staged.size with
+      | 0 => throwError "modeled source family {d.names} has no committed generated island"
+      | size + 1 => pure (some size)
+    stagedRecords := stagedRecords.push {
+      summary := sourceSummaries[scheduledOrdinal]!
+      globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtras[scheduledOrdinal]!
+      families := sourceFamilyRecords[scheduledOrdinal]! ++
+        (modeledSourceFamilies.map fun family =>
+          modeledIsland?.elim family family.inIsland)
+      checkIsland? := modeledIsland?
+      locator := .source rawOrdinal }
+  if context.checkRecursors then
+    if let .induct _ _ rs := d then
+      let (n, b) ← checkRecs rs
+      rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
+  return .next {
+    mainEnv, persistentSyntax, legacyOut, report := rep, staged, stagedRecords,
+    scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
+    persistentSupportOrigins }
+
+/-- Complete compact ordering and checking after the logical source stream has
+been exhausted.  No source `EDecl` is consumed here. -/
+private def FilterState.finalize (state : FilterState) (context : FilterContext) :
+    MetaM (Array EDecl × Report × StagedPlan) := do
+  let x := context.source
+  let sink? := context.sink?
+  let retainOracle := context.retainOracle
+  let sourceSyntax := context.sourceSyntax
+  let reserved := context.reserved
+  let legacyOut := state.legacyOut
+  let staged := state.staged
+  let stagedRecords := state.stagedRecords
+  let islandStatements := state.islandStatements
+  let persistentSupportOrigins := state.persistentSupportOrigins
+  let mut rep := state.report
   let stagedOrder ← if sink?.isSome then
       match Order.summaryRecordOrder (stagedRecords.map (·.summary)) with
       | .ok order => pure order
@@ -2752,6 +2711,48 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     checkReport := compactCheckReport
     unavailable? := compactUnavailable? }
   return (legacyOut, rep, emissionPlan)
+
+/-- Shared generation loop. With a sink, every accepted island is serialized
+and compacted at its close boundary. The full declaration array is retained
+only by callers which explicitly request the legacy final-order/report oracle. -/
+private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
+    (sink? : Option IslandSink) (retainOracle : Bool)
+    (exactTransform : EDecl → EDecl := id) :
+    MetaM (Array EDecl × Report × StagedPlan) := do
+  let scheduled ← match scheduleSource x generation with
+    | .ok scheduled => pure scheduled
+    | .error error => throwError "cannot schedule shared support: {repr error}"
+  match validateScheduledSupport scheduled generation with
+  | .ok () => pure ()
+  | .error message => throwError "invalid shared-support schedule: {message}"
+  let mainEnv ← getEnv
+  -- Build the immutable source products once.  They are deliberately still
+  -- derived from today's complete scheduled Export; only the logical
+  -- declaration transition is extracted in this phase.
+  let sourceSyntax := Check.SyntaxIndex.ofSource x
+  let sourceNormalizer := sourceSyntax.exactNormalizer
+  let sourceSummaries := Order.summaries scheduled
+  let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
+  let sourceFamilyRecords := Check.compactFamilyCertificateRecordsWithIndex
+    scheduled sourceSyntax (Check.discover scheduled)
+  let mut rawOrdinals : Std.HashMap Name Nat := {}
+  for ordinal in [0:x.decls.size] do
+    rawOrdinals := x.decls[ordinal]!.names.foldl
+      (fun ordinals name => ordinals.insert name ordinal) rawOrdinals
+  let reserved : Std.HashSet Name :=
+    x.decls.foldl (fun names declaration =>
+      declaration.names.foldl (·.insert ·) names) {}
+  let context : FilterContext := {
+    source := x, checkRecursors, generation, sink?, retainOracle, exactTransform,
+    sourceSyntax, sourceNormalizer, sourceSummaries, sourceGlobalExtras,
+    sourceFamilyRecords, rawOrdinals, reserved }
+  let mut state : FilterState := { mainEnv, persistentSyntax := sourceSyntax }
+  for declaration in scheduled.decls do
+    match ← state.feedSource context declaration with
+    | .next next => state := next
+    | .unreplayable report =>
+      return (x.decls, report, { islands := #[], declarations := #[] })
+  state.finalize context
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
