@@ -807,13 +807,13 @@ def main : IO UInt32 := do
   state := state.check "indexed one-constructor fields are intrinsic projections" <|
     intrinsicFieldsFor raw `Indexed == #[0] && indexedProjections.all names.contains &&
       (Check.check generated).all (·.familyOwner != `Indexed)
-  state := state.check "dependent indexed field keeps canonical transport" <|
+  state := state.check "dependent indexed fibre uses literal projection rules" <|
     intrinsicFieldsFor raw `IndexedDep == #[0, 1] &&
       indexedDepProjections.all names.contains &&
       (declarationType? generated (Naming.projectionIotaName `IndexedDep 0)).any
         (!containsConst ``Eq.rec ·) &&
       (declarationType? generated (Naming.projectionIotaName `IndexedDep 1)).any
-        (containsConst ``Eq.rec) &&
+        (!containsConst ``Eq.rec ·) &&
       (Check.check generated).all (·.familyOwner != `IndexedDep)
   state := state.check "recursive one-constructor fields are intrinsic projections" <|
     intrinsicFieldsFor raw `Recursive == #[0, 1] && recursiveProjections.all names.contains &&
