@@ -1590,26 +1590,30 @@ private def checkKernelReplayExpressions (record : EDecl) : MetaM (Except String
         {← exception.toMessageData.toString}"
 
 private partial def firstBadConstantLevelArity
-    (constants : Std.HashMap Name ConstantInfo) (expression : Expr) : Option String :=
+    (constants : Std.HashMap Name ConstantInfo) (expression : Expr) :
+    StateM (Std.HashSet Expr) (Option String) := do
+  let visited ← get
+  if visited.contains expression then return none
+  set (visited.insert expression)
   match expression with
   | .const name levels =>
       match constants[name]? with
-      | none => none
+      | none => return none
       | some info =>
-        if levels.length == info.levelParams.length then none
-        else some s!"{name} expects {info.levelParams.length} universe levels, got {levels.length}"
+        if levels.length == info.levelParams.length then return none
+        return some s!"{name} expects {info.levelParams.length} universe levels, got {levels.length}"
   | .app fn arg =>
-      firstBadConstantLevelArity constants fn <|>
-        firstBadConstantLevelArity constants arg
+      if let some message ← firstBadConstantLevelArity constants fn then return some message
+      firstBadConstantLevelArity constants arg
   | .lam _ type body _ | .forallE _ type body _ =>
-      firstBadConstantLevelArity constants type <|>
-        firstBadConstantLevelArity constants body
+      if let some message ← firstBadConstantLevelArity constants type then return some message
+      firstBadConstantLevelArity constants body
   | .letE _ type value body _ =>
-      firstBadConstantLevelArity constants type <|>
-        firstBadConstantLevelArity constants value <|>
-        firstBadConstantLevelArity constants body
+      if let some message ← firstBadConstantLevelArity constants type then return some message
+      if let some message ← firstBadConstantLevelArity constants value then return some message
+      firstBadConstantLevelArity constants body
   | .mdata _ body | .proj _ _ body => firstBadConstantLevelArity constants body
-  | _ => none
+  | _ => return none
 
 /-- Reject malformed universe applications before entering the official
 kernel. This prevents the `lazy_delta_reduction_step` memory-corruption path
@@ -1617,10 +1621,14 @@ tracked by lean4#10577. `constants` includes the complete export, so self,
 mutual, and forward references are checked as well as the current replay
 prefix. -/
 private def checkKernelReplayLevelArities (constants : Std.HashMap Name ConstantInfo)
-    (record : EDecl) : Except String Unit := do
+    (record : EDecl) (visited : Std.HashSet Expr) : Except String (Std.HashSet Expr) := do
+  let mut visited := visited
   for expression in kernelReplayExpressions record do
-    if let some message := firstBadConstantLevelArity constants expression then
+    let (bad?, nextVisited) := (firstBadConstantLevelArity constants expression).run visited
+    visited := nextVisited
+    if let some message := bad? then
       throw s!"{record.names}: {message}"
+  return visited
 
 /-- Replay grouped export records directly into a kernel environment.
 
@@ -1636,6 +1644,7 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
   -- the authoritative environment produced by the kernel.
   let mut analysis := base
   let mut normalizedNames : Std.HashMap Name Name := {}
+  let mut arityVisited : Std.HashSet Expr := {}
   for index in order do
     let record := x.decls[index]!
     let declaration? ← match kernelReplayDeclaration record with
@@ -1643,8 +1652,9 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
       | .error message => return .error message
     let some declaration := declaration? | continue
     if arenaCheck then
-      if let .error message := checkKernelReplayLevelArities constants record then
-        return .error message
+      arityVisited ← match checkKernelReplayLevelArities constants record arityVisited with
+        | .ok visited => pure visited
+        | .error message => return .error message
       -- `AsyncConsts.add` panics and drops the second entry when distinct raw
       -- private names normalize to the same user name. Detect that condition
       -- before touching the supplemental full-environment mirror. The kernel
