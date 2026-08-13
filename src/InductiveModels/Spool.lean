@@ -255,7 +255,7 @@ must have finished all three tee files; certificate validation preserves the
 full parser's count/contiguity/canonicality gate before any span is decoded. -/
 def PlannedSourceReader.create (tee : ParseTee) (certificate : RawCertificate)
     (sizes : RawSpoolSizes) (declarationCount : Nat) : IO (Except String PlannedSourceReader) := do
-  match certificate.validate sizes declarationCount with
+  match certificate.validateDeclarationSpans sizes declarationCount with
   | .error error => return .error error
   | .ok _ => pure ()
   try

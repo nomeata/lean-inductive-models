@@ -1051,13 +1051,11 @@ structure RawSpoolSizes where
   declarations : UInt64
   deriving Inhabited, Repr, BEq
 
-/-- Validate all persistent offsets against the completed files before any raw
-composition may consume them. In particular, declaration spans must form one
-exact contiguous partition; a count mismatch or trailing/unindexed byte fails
-closed. -/
-def RawCertificate.validate (certificate : RawCertificate) (sizes : RawSpoolSizes)
-    (declarationCount : Nat) : Except String RawArenaCursor := do
-  unless certificate.canonical do throw "raw input is not canonical"
+/-- Validate completed spool totals and the exact declaration partition.  This
+is sufficient for random declaration decoding even when a parser-compatible
+sparse/repeated arena is ineligible for raw output composition. -/
+def RawCertificate.validateDeclarationSpans (certificate : RawCertificate)
+    (sizes : RawSpoolSizes) (declarationCount : Nat) : Except String Unit := do
   let expectedSizes : RawSpoolSizes :=
     { metadata := certificate.metadataBytes
       arena := certificate.arenaBytes
@@ -1075,6 +1073,13 @@ def RawCertificate.validate (certificate : RawCertificate) (sizes : RawSpoolSize
     endpoint := next
   unless endpoint == sizes.declarations do
     throw "raw declaration spans do not cover the completed spool"
+
+/-- Validate all persistent offsets and canonical arena evidence before any
+raw composition may consume them. -/
+def RawCertificate.validate (certificate : RawCertificate) (sizes : RawSpoolSizes)
+    (declarationCount : Nat) : Except String RawArenaCursor := do
+  unless certificate.canonical do throw "raw input is not canonical"
+  certificate.validateDeclarationSpans sizes declarationCount
   return certificate.cursor
 
 private structure RawCertState where

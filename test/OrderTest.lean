@@ -250,6 +250,33 @@ def runFilterDiscardedState (input : Export)
       (runFilterDiscarding input checkRecursors generation)) context { env }
   return { report, plan }
 
+def runFilterPlannedDiscardedState (scratch : String) (input : Export)
+    (generation : InductiveModels.Cli.Config)
+    (checkRecursors : Bool := false) : IO DiscardedFilterRun :=
+  Spool.withWorkspace scratch fun workspace => do
+    let inputFile ← workspace.createFile "planned-input.ndjson"
+    discard <| inputFile.append input.render.toUTF8
+    discard <| inputFile.finish
+    let tee ← Spool.ParseTee.create workspace
+    let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
+      parseHandleWithSink handle tee.sink
+        (analyse := false) (allowDuplicateNames := true)
+    let (parsed, certificate) ← match parsedResult with
+      | .ok parsed => pure parsed
+      | .error error => throw <| IO.userError s!"planned source parse failed: {error}"
+    let sizes ← tee.finish
+    let reader ← match ← Spool.PlannedSourceReader.create tee certificate sizes parsed.decls.size with
+      | .ok reader => pure reader
+      | .error error => throw <| IO.userError s!"planned source reader failed: {error}"
+    let env ← importModules #[] {}
+    let context : Core.Context :=
+      { fileName := "<planned-order-test>", fileMap := default,
+        maxHeartbeats := 0, maxRecDepth := 8192 }
+    let ((report, plan), _) ← Lean.Core.CoreM.toIO
+      (Lean.Meta.MetaM.run'
+        (runFilterDiscardingPlanned parsed reader checkRecursors generation)) context { env }
+    return { report, plan }
+
 def generatedFixtureState (path : String) (generation : InductiveModels.Cli.Config) :
     IO FilterRun := do
   let text ← IO.FS.readFile path
@@ -802,6 +829,8 @@ def run (root : String) : IO UInt32 := do
   let feedInput := exportOf #[feedConsumer, feedProvider]
   let feedRun ← runFilterState feedInput noGeneration
   let feedTrace ← runFilterTraceState feedInput noGeneration
+  let feedDiscarded ← runFilterDiscardedState feedInput noGeneration
+  let feedPlanned ← runFilterPlannedDiscardedState s!"{root}/_tmp" feedInput noGeneration
   state := state.check "filter consumes one dependency-ordered source record at a time" <|
     feedRun.output.decls == #[feedProvider, feedConsumer] &&
       feedRun.report == ({} : Report) &&
@@ -815,6 +844,15 @@ def run (root : String) : IO UInt32 := do
       feedTrace.steps.all fun step =>
         !step.sourceIsInductive && step.sourceInstalled &&
           step.generated.isEmpty && step.generatedRecords == 0
+  state := state.check "planned source spans drive the same frozen dependency order" <|
+    feedPlanned.report == feedDiscarded.report &&
+      feedPlanned.plan.declarations == feedDiscarded.plan.declarations &&
+      feedPlanned.plan.checkReport == feedDiscarded.plan.checkReport &&
+      feedPlanned.plan.unavailable? == feedDiscarded.plan.unavailable? &&
+      feedPlanned.plan.retainedGeneratedRecords ==
+        feedDiscarded.plan.retainedGeneratedRecords &&
+      feedPlanned.plan.declarations == #[.source 1, .source 0] &&
+      feedPlanned.plan.retainedGeneratedRecords == 0
 
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,
