@@ -1,4 +1,4 @@
-import InductiveModels.Simple
+import InductiveModels.OneLayer
 import InductiveModels.Cli
 import InductiveModels.Naming
 import InductiveModels.Projection
@@ -696,7 +696,6 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     if (← getEnv).constants.contains modelRule then declineWith (.nameTaken publicRule)
     let override? := is.projectionOverrides.find? fun entry =>
       entry.1 == type.name && entry.2.1 == fieldIndex
-
     let modelConstructorInfo ← generatedDeclInfo is modelConstructor
     let modelConstructorType := modelConstructorInfo.type
     let modelTypeInfo ← generatedDeclInfo is modelType
@@ -2030,7 +2029,8 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (reserved : Std.HashSet Name) (basicModels : Bool)
     (canWait : Bool)
     (st : FilterState) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none)
-    (exactTransform : EDecl → EDecl := id) :
+    (exactTransform : EDecl → EDecl := id)
+    (selectPublicOneLayer : Bool := false) :
     MetaM (FilterState × Option PrimReadiness) := do
   let (out, rep, pending) := st
   let saved ← getEnv
@@ -2052,20 +2052,37 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     | some (block, normalizer) =>
       addSourceStructureModels block projections normalizer reserved is
     | none => addInstalledStructureModels #[tname] projections reserved is
+  let selectOneLayer ← if selectPublicOneLayer then
+      oneLayerSimpleEligible tname np ty ctors sourceRecursor?
+    else pure false
   let exactTaken ← exactPrimNameTaken? tname ctors projections
   let initial ← match exactTaken with
     | some n => pure (.error (.nameTaken n))
     | none => (do
-        let is ← primIso tname root lparams np ty ctors reserved
-          (sourceRecursor? := sourceRecursor?)
+        let is ← if selectOneLayer then
+            let some sourceRecursor := sourceRecursor?
+              | badShape s!"{tname}'s selected one-layer family has no exact recursor"
+            let some sourceConstructor := ctors[0]?
+              | badShape s!"{tname}'s selected one-layer family has no constructor"
+            oneLayerIso tname root lparams np ty sourceConstructor sourceRecursor reserved
+          else
+            primIso tname root lparams np ty ctors reserved
+              (sourceRecursor? := sourceRecursor?)
         attachStructureModels is).run
   let mut res := initial
   if let .error (.nameLost _) := res then
     setEnv saved
     root := aliasRoot
     res ← (do
-      let is ← primIso tname root lparams np ty ctors reserved
-        (sourceRecursor? := sourceRecursor?)
+      let is ← if selectOneLayer then
+          let some sourceRecursor := sourceRecursor?
+            | badShape s!"{tname}'s selected one-layer family has no exact recursor"
+          let some sourceConstructor := ctors[0]?
+            | badShape s!"{tname}'s selected one-layer family has no constructor"
+          oneLayerIso tname root lparams np ty sourceConstructor sourceRecursor reserved
+        else
+          primIso tname root lparams np ty ctors reserved
+            (sourceRecursor? := sourceRecursor?)
       attachStructureModels is).run
   match res with
   | .error dec =>

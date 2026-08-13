@@ -3418,11 +3418,15 @@ def PrimInterfaceNames.oneLayerImplementation (root : Name)
 /-- Source/kernel metadata boundary for the first one-layer production route.
 Capability checks which can fail (support, exact recursor layout and carrier
 level) still run before this predicate is committed to emission. -/
-def oneLayerSimpleEligible (tname : Name) (exportCtors : Array (Name × Expr))
+def oneLayerSimpleEligible (tname : Name) (np : Nat) (memberTy : Expr)
+    (exportCtors : Array (Name × Expr))
     (sourceRecursor? : Option ERec) : MetaM Bool := do
   let env ← getEnv
   let some (.inductInfo type) := env.constants.find? tname | return false
-  return sourceRecursor?.isSome && exportCtors.size == 1 && type.all == [tname] &&
+  let neverZero ← forallBoundedTelescope memberTy (some np) fun _ result => match result with
+    | .sort level => pure level.normalize.isNeverZero
+    | _ => pure false
+  return neverZero && sourceRecursor?.isSome && exportCtors.size == 1 && type.all == [tname] &&
     type.ctors.length == 1 && type.numIndices == 0 && type.numNested == 0 && type.isRec &&
     !type.isUnsafe && !type.isReflexive
 

@@ -59,19 +59,24 @@ structure OneLayerPublicRecursor where
   iotas : Array (Nat × Name × Name)
   deriving Inhabited
 
-private def proveOneLayerIota (names : OneLayerNames) (proposition : Expr) : GenM Expr := do
-  let mut theorems : SimpTheorems := {}
-  for name in #[names.publicNames.recursor, names.publicNames.ctors[0]!, names.roll,
-      names.unroll] do
-    theorems := ← theorems.addDeclToUnfold name
-  for name in #[names.implementation.iotas[0]!, names.unrollRoll, names.rollUnroll] do
-    theorems := ← theorems.addConst name
-  let context ← Simp.mkContext (simpTheorems := #[theorems])
-  let goal ← mkFreshExprMVar proposition
-  let (result, _) ← simpGoal goal.mvarId! context
-  unless result.isNone do
-    badShape s!"{names.publicNames.iotas[0]!}'s private computation and round-trip laws do not prove its exact public rule"
-  instantiateMVars goal
+private def proveOneLayerIota (names : OneLayerNames) (roundTrips : Array Expr)
+    (proposition : Expr) : GenM Expr := do
+    let mut reductions : SimpTheorems := {}
+    for name in #[names.publicNames.recursor, names.publicNames.ctors[0]!, names.roll,
+        names.unroll] do
+      reductions := reductions.addDeclToUnfoldCore name
+    reductions := ← reductions.addConst names.implementation.iotas[0]!
+    for index in [0:roundTrips.size] do
+      reductions := ← reductions.add (.other (Name.appendIndexAfter `oneLayerRoundTrip index))
+        #[] roundTrips[index]!
+    let defaults ← Meta.getSimpTheorems
+    let context ← Simp.mkContext (simpTheorems := #[reductions, defaults])
+    let goal ← mkFreshExprMVar proposition
+    let (result, _) ← simpGoal goal.mvarId! context
+    unless result.isNone do
+      let pending := result.map (·.2) |>.getD goal.mvarId!
+      badShape s!"{names.publicNames.iotas[0]!}'s equivalence laws do not prove its exact public rule: {(← pending.getType)}"
+    instantiateMVars goal
 
 private structure OneLayerUnrollPlan where
   motive : Expr
@@ -366,8 +371,12 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
           pure (eqi.mk' level privateCarrier (rollAt source) (rollAt value))
       mkLambdaFVars binders proof
     withLocalDeclD `value (privateSelfAt parameters) fun value =>
+      let equalityRecLevels :=
+        if implementationRecursorInfo.levelParams.length == lparams.length + 1 then
+          .zero :: us
+        else us
       mkLambdaFVars (parameters.push value)
-        (mkAppN (.const names.implementation.recursor recLevels)
+        (mkAppN (.const names.implementation.recursor equalityRecLevels)
           (parameters ++ #[motive, minor, value]))
   let rollUnroll := Declaration.thmDecl
     { name := names.rollUnroll, levelParams := lparams, type := rollUnrollType
@@ -497,11 +506,7 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
   let some (.defnInfo privateRecursorInfo) := (← getEnv).constants.find?
       names.implementation.recursor
     | badShape s!"{names.implementation.recursor} is not a generated definition"
-  let motiveLevel :=
-    if privateRecursorInfo.levelParams.length == lparams.length + 1 then
-      Level.param privateRecursorInfo.levelParams[0]!
-    else level
-  let recLevels := privateRecursorInfo.levelParams.map Level.param
+  let publicRecLevels := sourceRecursor.levelParams.map Level.param
   let fieldShape ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
     let telescope ← instForall publicConstructorType parameters
     classifyCtor names.publicNames.self (numForalls telescope) telescope
@@ -512,6 +517,11 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
     let publicMotive := publicBinders[np]!
     let publicMinor := publicBinders[np + 1]!
     let publicMajor := publicBinders[publicBinders.size - 1]!
+    let motiveLevel ← ilevel (mkApp publicMotive publicMajor)
+    let recLevels :=
+      if privateRecursorInfo.levelParams.length == lparams.length + 1 then
+        motiveLevel :: us
+      else us
     let privateCarrier := mkAppN (.const names.implementation.self us) parameters
     let publicCarrier := mkAppN (.const names.publicNames.self us) parameters
     let privateMotive ← withLocalDeclD `value privateCarrier fun value =>
@@ -528,8 +538,12 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
         (some (numForalls privateMinorType)) fun binders _ => do
       let privateFields := binders.extract 0 fieldCount
       let hypotheses := binders.extract fieldCount binders.size
+      let layerRecLevels :=
+        if privateRecursorInfo.levelParams.length == lparams.length + 1 then
+          level :: us
+        else us
       let (mappedFields, agreement) ← oneLayerConstructorAgreement np names eqi
-        publicFields.fx? us recLevels level parameters privateFields fieldShape
+        publicFields.fx? us layerRecLevels level parameters privateFields fieldShape
         privateConstructorType privateRecursorType
       let targetMajor := mkAppN (.const names.unroll us)
         (parameters.push (mkAppN (.const names.implementation.ctors[0]! us)
@@ -567,16 +581,29 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
     let fieldCount := numForalls constructorTelescope
     forallBoundedTelescope constructorTelescope (some fieldCount) fun fields _ => do
       let major := mkAppN (.const names.publicNames.ctors[0]! us) (parameters ++ fields)
-      let lhs := mkAppN (.const names.publicNames.recursor recLevels) (pre.push major)
+      let lhs := mkAppN (.const names.publicNames.recursor publicRecLevels) (pre.push major)
       let rhs := (restore publicTable sourceRule.rhs).beta (pre ++ fields)
-      let proposition := eqi.mk' motiveLevel (mkApp motive major) lhs rhs
+      let alpha := mkApp motive major
+      let proposition := eqi.mk' (← ilevel alpha) alpha lhs rhs
       let some exactFields := exactRecursorFieldTelescope? sourceRecursor 0 pre
         | badShape s!"{sourceRecursor.name}'s exported rule has no exact field telescope"
       let some fieldsType := closeForallsExact? (restore publicTable exactFields) fields proposition
         | badShape s!"{sourceConstructor.1}'s exact field telescope is too short"
       let some theoremType := closeForallsExact? publicRecursorType pre fieldsType
         | badShape s!"{sourceRecursor.name}'s exact prefix is too short"
-      let proof ← proveOneLayerIota names proposition
+      let mut roundTrips := #[]
+      for index in [0:fields.size] do
+        if fieldShape[index]!.rec?.isSome then
+          roundTrips := roundTrips.push (← oneLayerOccurrenceRoundTrip
+            names.publicNames.self names.implementation.self np names.roll names.unroll
+            names.unrollRoll publicFields.fx? us (← inferType fields[index]!) fields[index]!)
+          let stored ← mapOneLayerOccurrence names.publicNames.self np names.roll us
+            (← inferType fields[index]!) fields[index]!
+          roundTrips := roundTrips.push (← oneLayerOccurrenceRoundTrip
+            names.implementation.self names.publicNames.self np names.unroll names.roll
+            names.rollUnroll publicFields.fx? us (← inferType stored) stored)
+      roundTrips := roundTrips.push (mkAppN (.const names.unrollRoll us) (parameters.push major))
+      let proof ← proveOneLayerIota names roundTrips proposition
       pure <| Declaration.thmDecl
         { name := names.publicNames.iotas[0]!, levelParams := sourceRecursor.levelParams
           type := theoremType, value := ← mkLambdaFVars (pre ++ fields) proof }
@@ -585,5 +612,47 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
   let iotas : Array (Nat × Name × Name) :=
     #[(0, sourceConstructor.1, names.publicNames.iotas[0]!)]
   return { declarations, recursorName := publicRecursorName, iotas }
+
+/-- Build the selected first production one-layer family.  The ordinary simple
+generator remains the private recursion oracle; only this adapter's exact
+source-shaped interface is published to correspondence and serialization. -/
+def oneLayerIso (tname root : Name) (lparams : List Name) (np : Nat)
+    (memberTy : Expr) (sourceConstructor : Name × Expr) (sourceRecursor : ERec)
+    (reserved : Std.HashSet Name) : GenM Iso := do
+  if sourceRecursor.k then
+    badShape s!"{tname}'s recursive one-layer recursor unexpectedly carries rule K"
+  let names := OneLayerNames.forBuild tname root #[sourceConstructor]
+  let implementation ← primIsoWithInterface tname root lparams np memberTy
+    #[sourceConstructor] reserved (sourceRecursor? := some sourceRecursor)
+    (interface? := some names.implementation)
+  let base ← buildOneLayerBase tname root lparams np memberTy sourceConstructor
+    reserved implementation
+  let fields ← buildOneLayerPublicFields tname lparams np memberTy sourceConstructor
+    reserved implementation base
+  let recursor ← buildOneLayerPublicRecursor tname lparams np memberTy sourceConstructor
+    sourceRecursor implementation base fields
+  let declarations := implementation.decls ++ base.declarations ++ fields.declarations ++
+    recursor.declarations
+  let mut aliases := if root == tname then Naming.AliasMap.empty else
+    Naming.AliasMap.forRetry names.publicNames.model (Naming.modelName tname)
+      (declarations.flatMap (·.getNames.toArray))
+  if root != tname then
+    aliases := aliases.insert names.publicNames.ctors[0]!
+      (Naming.modelName sourceConstructor.1)
+    aliases := aliases.insert names.publicNames.recursor
+      (Naming.modelName sourceRecursor.name)
+    aliases := aliases.insert names.publicNames.iotas[0]!
+      (Naming.iotaName sourceRecursor.name 0)
+  return { implementation with
+    decls := declarations
+    selfNames := #[names.publicNames.self]
+    ctors := #[(sourceConstructor.1, names.publicNames.ctors[0]!)]
+    recs := #[recursor.recursorName]
+    iotas := recursor.iotas
+    implementation? := some base.implementationNames
+    ruleKs := #[]
+    projectionOverrides := fields.projectionOverrides
+    spliced := implementation.spliced ++ base.spliced ++ fields.spliced
+    aliases }
 
 end InductiveModels
