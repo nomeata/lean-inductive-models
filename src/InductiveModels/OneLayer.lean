@@ -1218,26 +1218,104 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
       if recursiveFields.isEmpty then
         badShape s!"{tname}'s phase-1 one-layer family has no recursive fields"
       if recursiveFields.size > 1 then do
-        let mut roundTrips : Array Expr := #[]
-        for index in [0:fields.size] do
-          let field := fields[index]!
-          let proof ← if fieldShape[index]!.rec?.isSome then
-              oneLayerOccurrenceRoundTrip names.publicNames.self names.implementation.self np
-                names.roll names.unroll names.unrollRoll publicFields.fx? us
-                (← inferType field) field
-            else
-              let type ← inferType field
-              pure (eqi.refl' (← ilevel type) type field)
-          roundTrips := roundTrips.push proof
-        let proof ← proveOneLayerIota names roundTrips proposition
-        let forbidden := proof.getUsedConstants.filter fun name =>
-          (`InductiveModels).isPrefixOf name || name == ``HEq || name == ``HEq.refl
-        unless forbidden.isEmpty do
-          badShape s!"{names.publicNames.iotas[0]!}'s multi-field proof retains unavailable constants {forbidden}"
-        let actual ← inferType proof
-        unless ← withTransparency .all <| isDefEq actual proposition do
-          badShape s!"{names.publicNames.iotas[0]!}'s multi-field proof has type {actual}, expected {proposition}"
-        check proof
+        unless recursiveFields.size == 2 do
+          badShape s!"{tname}'s multi-field one-layer family does not have exactly two recursive fields"
+        let i₁ := recursiveFields[0]!
+        let i₂ := recursiveFields[1]!
+        let p₁ := fields[i₁]!
+        let p₂ := fields[i₂]!
+        let R₁ ← inferType p₁
+        let R₂ ← inferType p₂
+        let mkMap := fun owner operation type => withLocalDeclD `field type fun field => do
+          mkLambdaFVars #[field] (← mapOneLayerOccurrence owner np operation us type field)
+        let roll₁ ← mkMap names.publicNames.self names.roll R₁
+        let roll₂ ← mkMap names.publicNames.self names.roll R₂
+        let q₁ := mkApp roll₁ p₁
+        let q₂ := mkApp roll₂ p₂
+        let Q₁ ← inferType q₁
+        let Q₂ ← inferType q₂
+        let unroll₁ ← mkMap names.implementation.self names.unroll Q₁
+        let unroll₂ ← mkMap names.implementation.self names.unroll Q₂
+        let mkSection := fun type => withLocalDeclD `field type fun field => do
+          mkLambdaFVars #[field] (← oneLayerOccurrenceRoundTrip names.publicNames.self
+            names.implementation.self np names.roll names.unroll names.unrollRoll
+            publicFields.fx? us type field)
+        let section₁ ← mkSection R₁
+        let section₂ ← mkSection R₂
+        let plan ← oneLayerRecursorPlan tname lparams np parameters motive pre[np + 1]!
+          (← ilevel alpha) level privateConstructorType privateRecursorType privateRecursorInfo
+          fieldShape eqi base publicFields
+        let publicRec := plan.publicRec
+        let mkH := fun type => withLocalDeclD `field type fun field => do
+          mkLambdaFVars #[field] (← oneLayerHypothesisType names.publicNames.self np motive type field)
+        let H₁ ← mkH R₁
+        let H₂ ← mkH R₂
+        let mkIH := fun owner rec type => withLocalDeclD `field type fun field => do
+          mkLambdaFVars #[field] (← oneLayerHypothesisValue owner np rec type field)
+        let privateIH₁ ← mkIH names.implementation.self plan.core Q₁
+        let privateIH₂ ← mkIH names.implementation.self plan.core Q₂
+        let publicIH₁ ← mkIH names.publicNames.self publicRec R₁
+        let publicIH₂ ← mkIH names.publicNames.self publicRec R₂
+        let mkIHAgreement := fun type => withLocalDeclD `field type fun field => do
+          mkLambdaFVars #[field] (← oneLayerHypothesisAgreement names.implementation.self np eqi
+            publicFields.fx? names us parameters motive plan.core publicRec type field)
+        let ihAgreement₁ ← mkIHAgreement Q₁
+        let ihAgreement₂ ← mkIHAgreement Q₂
+        let publicCtor ← withLocalDeclD `p₁ R₁ fun a => withLocalDeclD `p₂ R₂ fun b =>
+          mkLambdaFVars #[a,b] (mkAppN (.const names.publicNames.ctors[0]! us)
+            (parameters ++ (fields.set! i₁ a |>.set! i₂ b)))
+        let mut stored := fields
+        stored := stored.set! i₁ q₁ |>.set! i₂ q₂
+        let privateCtor ← withLocalDeclD `q₁ Q₁ fun a => withLocalDeclD `q₂ Q₂ fun b =>
+          mkLambdaFVars #[a,b] (mkAppN (.const names.implementation.ctors[0]! us)
+            (parameters ++ (stored.set! i₁ a |>.set! i₂ b)))
+        let rollCtor ← withLocalDeclD `p₁ R₁ fun a => withLocalDeclD `p₂ R₂ fun b => do
+          let lhs := mkAppN (.const names.roll us) (parameters.push (mkApp2 publicCtor a b))
+          let rhs := mkApp2 privateCtor (mkApp roll₁ a) (mkApp roll₂ b)
+          unless ← isDefEq lhs rhs do badShape "two-field roll compatibility is not definitional"
+          mkLambdaFVars #[a,b] (eqi.refl' level
+            (mkAppN (.const names.implementation.self us) parameters) lhs)
+        let minor ← withLocalDeclD `p₁ R₁ fun a => withLocalDeclD `p₂ R₂ fun b =>
+          withLocalDeclD `ih₁ (mkApp H₁ a) fun ha => withLocalDeclD `ih₂ (mkApp H₂ b) fun hb =>
+            mkLambdaFVars #[a,b,ha,hb] (mkAppN pre[np+1]!
+              ((fields.set! i₁ a |>.set! i₂ b) ++ #[ha,hb]))
+        let recLevels := if privateRecursorInfo.levelParams.length == lparams.length + 1 then level :: us else us
+        let agreement ← withLocalDeclD `q₁ Q₁ fun a => withLocalDeclD `q₂ Q₂ fun b => do
+          let (_, proof) ← oneLayerConstructorAgreement "two-field iota" np names eqi
+            publicFields.fx? us recLevels level parameters (stored.set! i₁ a |>.set! i₂ b)
+            fieldShape privateConstructorType privateRecursorType
+          mkLambdaFVars #[a,b] proof
+        let coreIota ← withLocalDeclD `q₁ Q₁ fun a => withLocalDeclD `q₂ Q₂ fun b => do
+          let fs := stored.set! i₁ a |>.set! i₂ b
+          let proof := mkAppN (.const names.implementation.iotas[0]! plan.recLevels)
+            (parameters ++ #[plan.privateMotive, plan.privateMinor] ++ fs)
+          unless (← inferType proof) == (← instantiateForall plan.coreIotaProposition fs) do
+            badShape "two-field private iota changed syntax"
+          mkLambdaFVars #[a,b] proof
+        let localRhs := rhs.replace fun sub => Id.run do
+          unless sub.getAppFn.constName? == some names.publicNames.recursor do return none
+          let args := sub.getAppArgs
+          unless args.size == pre.size + 1 do return none
+          for j in [:pre.size] do unless args[j]! == pre[j]! do return none
+          return some (mkApp publicRec args[pre.size]!)
+        unless recursorApplicationCount names.publicNames.recursor none rhs == 2 &&
+            recursorApplicationCount names.publicNames.recursor (some publicRec) localRhs == 0 do
+          badShape "two-field source rule has unexpected recursive calls"
+        let localProp := eqi.mk' equalityLevel alpha (mkApp publicRec major) localRhs
+        let args := #[mkAppN (.const names.implementation.self us) parameters,
+          mkAppN (.const names.publicNames.self us) parameters, Q₁, R₁, Q₂, R₂,
+          motive, H₁, H₂, mkAppN (.const names.roll us) parameters,
+          mkAppN (.const names.unroll us) parameters, mkAppN (.const names.unrollRoll us) parameters,
+          roll₁, unroll₁, section₁, roll₂, unroll₂, section₂,
+          privateCtor, publicCtor, rollCtor, privateIH₁, publicIH₁, ihAgreement₁,
+          privateIH₂, publicIH₂, ihAgreement₂, minor, plan.core, agreement, coreIota, p₁, p₂]
+        let levels := [level.normalize.dec.getD .zero, (← ilevel R₁).normalize.dec.getD .zero,
+          (← ilevel R₂).normalize.dec.getD .zero, ← ilevel alpha,
+          ← ilevel (mkApp H₁ p₁), ← ilevel (mkApp H₂ p₂)]
+        let proof ← match ← applyTwoFieldOneLayerCompatibility levels args localProp with
+          | .ok proof => pure proof | .error message => badShape message
+        unless ← withTransparency .all <| isDefEq (← inferType proof) proposition do
+          badShape "two-field proof does not unfold to exact source statement"
         return Declaration.thmDecl
           { name := names.publicNames.iotas[0]!, levelParams := sourceRecursor.levelParams
             type := theoremType, value := ← mkLambdaFVars (pre ++ fields) proof }

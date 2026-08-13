@@ -3434,7 +3434,7 @@ def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
           let shape : Array PField ← classifyCtor tname (numForalls telescope) telescope
           let recursive := (Array.range shape.size).filter fun index =>
             (PField.rec? shape[index]!).isSome
-          if recursive.isEmpty then return false
+          if recursive.isEmpty || recursive.size > 2 then return false
           forallBoundedTelescope telescope (some shape.size) fun fields _ => do
             for recursiveIndex in recursive do
               let .fvar recursiveId := fields[recursiveIndex]!
