@@ -103,6 +103,10 @@ structure StagedFilterRun extends FilterRun where
   records : Array StagedRecord
   order : Array Nat
 
+structure DroppedFilterRun where
+  report : Report
+  plan : StagedPlan
+
 def cursorAfter (records : Array EDecl) : Writer.Cursor :=
   let writer := records.foldl (fun writer record => (writer.splitDecl record).1) (Writer.fromCursor {})
   writer.cursor
@@ -135,6 +139,20 @@ def runFilterStagedState (scratch : String) (input : Export)
     return {
       input, output := { input with decls }, report, env := finalState.env,
       islands := plan.islands, records := plan.records, order := plan.order }
+
+def runFilterDroppedState (scratch : String) (input : Export)
+    (generation : Modelgen.Cli.Config) : IO DroppedFilterRun :=
+  Spool.withWorkspace scratch fun workspace => do
+    let stage ← Spool.IslandStage.create workspace (cursorAfter input.decls)
+    let env ← importModules #[] {}
+    let context : Core.Context :=
+      { fileName := "<order-dropped-test>", fileMap := default,
+        maxHeartbeats := 0, maxRecDepth := 8192 }
+    let ((report, plan), _) ← Lean.Core.CoreM.toIO
+      (Lean.Meta.MetaM.run'
+        (runFilterStaged input false generation (.ofStage stage))) context { env }
+    discard <| stage.finish
+    return { report, plan }
 
 def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
     IO FilterRun := do
@@ -531,6 +549,7 @@ def run (root : String) : IO UInt32 := do
   let aliasRun ← generatedFixtureState
     s!"{root}/test/fixtures/modelgen/transparent_owner_aliases.ndjson" {}
   let aliasStaged ← runFilterStagedState s!"{root}/_tmp" aliasRun.input {}
+  let aliasDropped ← runFilterDroppedState s!"{root}/_tmp" aliasRun.input {}
   state := state.check "staged island sink preserves exact output and report" <|
     aliasStaged.output.decls == aliasRun.output.decls &&
       aliasStaged.report == aliasRun.report &&
@@ -540,6 +559,12 @@ def run (root : String) : IO UInt32 := do
       aliasStaged.islands.all fun island =>
         island.compact.summaries.size == island.commit.declarations.size &&
           island.compact.globalExtras.size == island.commit.declarations.size
+  state := state.check "AST-dropping staged path preserves report and compact schedule" <|
+    aliasDropped.report == aliasRun.report &&
+      aliasDropped.plan.records.map (·.summary.introduced) ==
+        aliasStaged.records.map (·.summary.introduced) &&
+      aliasDropped.plan.order == aliasStaged.order &&
+      aliasDropped.plan.islands.size == aliasStaged.islands.size
   let inputNames := aliasRun.input.decls.flatMap fun declaration => declaration.names.toArray
   let generatedNames := aliasRun.output.decls.flatMap fun declaration =>
     declaration.names.toArray |>.filter (!inputNames.contains ·)

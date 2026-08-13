@@ -1922,7 +1922,8 @@ def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
 and compacted at its close boundary; the legacy declaration array remains for
 the moment as an independent final-order/report oracle. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
-    (sink? : Option IslandSink) : MetaM (Array EDecl × Report × StagedPlan) := do
+    (sink? : Option IslandSink) (retainOracle : Bool) :
+    MetaM (Array EDecl × Report × StagedPlan) := do
   let scheduled ← match scheduleSource x generation with
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
@@ -2204,7 +2205,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         | .ok index => pure index
         | .error message => throwError
             "cannot index accepted persistent support for {d.names}: {message}"
-      legacyOut := legacyOut ++ orderedGenerated
+      if retainOracle then legacyOut := legacyOut ++ orderedGenerated
       setEnv mainWithSupport
       if let some ownerDeclaration := toDeclaration mainWithSupport d then
         match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
@@ -2235,47 +2236,52 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       if let .induct _ _ rs := d then
         let (n, b) ← checkRecs rs
         rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
-  let generatedOwners := rep.generated.foldl
-    (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
-  let finalExport := { x with decls := legacyOut }
-  let finalFamilies := Check.statementFamiliesFor finalExport generatedOwners
-  let generatedRecords := legacyOut.filter fun declaration =>
-    declaration.names.any fun name => !reserved.contains name
-  let finalIndex ← match sourceSyntax.prependRecords generatedRecords with
-    | .error message => throwError "cannot index final generated records: {message}"
-    | .ok index => pure (index.withGlobalExtras finalExport)
-  let finalLocal := Check.checkStatementFamiliesLocalWithIndex finalExport finalIndex finalFamilies
-  unless islandStatements == finalLocal do
-    throwError "per-island statement checks disagree with the final family-local aggregate: \
-      islands={repr islandStatements}, aggregate={repr finalLocal}"
-  let statementReport :=
-    Check.checkStatementFamiliesWithIndex finalExport finalIndex finalFamilies
   let stagedOrder ← if sink?.isSome then
       match Order.summaryRecordOrder (stagedRecords.map (·.summary)) with
       | .ok order => pure order
       | .error error => throwError "cannot compactly order staged records: {repr error}"
     else pure #[]
-  if sink?.isSome then
-    let fullOrder ← match Order.recordOrder finalExport with
-      | .ok order => pure order
-      | .error error => throwError "full oracle cannot order staged records: {repr error}"
-    let compactNames := stagedOrder.map fun i => stagedRecords[i]!.summary.introduced
-    let fullNames := fullOrder.map fun i => finalExport.decls[i]!.names.toArray
-    unless compactNames == fullNames do
-      throwError "compact staged order disagrees with full export: \
-        compact={repr compactNames}, full={repr fullNames}"
+  let compactStatementReport := if sink?.isSome then
     let orderedGlobals := stagedOrder.map fun i => stagedRecords[i]!.globalExtra
     let diagnosticOwners := staged.foldl (init := ({} : Std.HashSet Name))
       fun owners island => island.compact.diagnosticOwners.toArray.foldl
         (fun owners owner => owners.insert owner) owners
     let compactGlobal := Check.globalExtrasFromRecords orderedGlobals |>.filter fun violation =>
       diagnosticOwners.contains violation.familyOwner
-    let compactStatementReport : Check.StatementReport :=
-      { islandStatements with
-        violations := islandStatements.violations ++ compactGlobal }
-    unless compactStatementReport == statementReport do
-      throwError "compact staged statements disagree with full export: \
-        compact={repr compactStatementReport}, full={repr statementReport}"
+    ({ islandStatements with
+      violations := islandStatements.violations ++ compactGlobal } : Check.StatementReport)
+  else islandStatements
+  let statementReport ← if retainOracle then do
+      let generatedOwners := rep.generated.foldl
+        (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
+      let finalExport := { x with decls := legacyOut }
+      let finalFamilies := Check.statementFamiliesFor finalExport generatedOwners
+      let generatedRecords := legacyOut.filter fun declaration =>
+        declaration.names.any fun name => !reserved.contains name
+      let finalIndex ← match sourceSyntax.prependRecords generatedRecords with
+        | .error message => throwError "cannot index final generated records: {message}"
+        | .ok index => pure (index.withGlobalExtras finalExport)
+      let finalLocal :=
+        Check.checkStatementFamiliesLocalWithIndex finalExport finalIndex finalFamilies
+      unless islandStatements == finalLocal do
+        throwError "per-island statement checks disagree with the final family-local aggregate: \
+          islands={repr islandStatements}, aggregate={repr finalLocal}"
+      let fullReport :=
+        Check.checkStatementFamiliesWithIndex finalExport finalIndex finalFamilies
+      if sink?.isSome then
+        let fullOrder ← match Order.recordOrder finalExport with
+          | .ok order => pure order
+          | .error error => throwError "full oracle cannot order staged records: {repr error}"
+        let compactNames := stagedOrder.map fun i => stagedRecords[i]!.summary.introduced
+        let fullNames := fullOrder.map fun i => finalExport.decls[i]!.names.toArray
+        unless compactNames == fullNames do
+          throwError "compact staged order disagrees with full export: \
+            compact={repr compactNames}, full={repr fullNames}"
+        unless compactStatementReport == fullReport do
+          throwError "compact staged statements disagree with full export: \
+            compact={repr compactStatementReport}, full={repr fullReport}"
+      pure fullReport
+    else pure compactStatementReport
   rep := { rep with stmtChecked := statementReport.statementsChecked }
   rep := { rep with
     stmtErrors := statementReport.violations.map fun violation => violation.message }
@@ -2284,7 +2290,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _) ← runFilterCore x checkRecursors generation none
+  let (decls, report, _) ← runFilterCore x checkRecursors generation none true
   return (decls, report)
 
 /-- Transitional staged oracle. Accepted islands are committed immediately,
@@ -2293,6 +2299,15 @@ The AST-dropping entry point is enabled only after compact equivalence tests
 cover the full fixture matrix. -/
 def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) :=
-  runFilterCore x checkRecursors generation (some sink)
+  runFilterCore x checkRecursors generation (some sink) true
+
+/-- AST-dropping staged generation. Accepted generated records are committed at
+island close and never appended to a cumulative declaration array. The result
+contains only compact scheduling/checking rows and spool spans. Main does not
+select this path until end-to-end staged composition is the output backend. -/
+def runFilterStaged (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
+    (sink : IslandSink) : MetaM (Report × StagedPlan) := do
+  let (_, report, plan) ← runFilterCore x checkRecursors generation (some sink) false
+  return (report, plan)
 
 end Modelgen
