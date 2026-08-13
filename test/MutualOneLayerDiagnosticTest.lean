@@ -142,7 +142,7 @@ def sourceBlock? (x : Export) (owner : Name) : Option (List EIndType × List ECt
 /-- Exact source-name projection faces, reconstructed from the raw constructor
 telescope. This is intentionally stricter than opening an installed telescope:
 the payload binder retains its source head beta-redex. -/
-def exactProjectionFaces (family : Check.Family) (ownerType : EIndType)
+def exactProjectionFaces (x : Export) (family : Check.Family) (ownerType : EIndType)
     (constructor : ECtor) (modelParams : List Name) : Array (Name × Expr) := Id.run do
   let mappedConstructorType := family.correspondence.expectedType
     constructor.levelParams modelParams constructor.type
@@ -187,8 +187,12 @@ def exactProjectionFaces (family : Check.Family) (ownerType : EIndType)
       let some alpha := instantiateForalls? projectionType (params ++ indices ++ #[major])
         | return #[]
       let lhs := mkAppN (.const projection.name levels) (params ++ indices ++ #[major])
+      -- Reuse only the actual equality universe. The oracle below is about the
+      -- exact source telescope and literal RHS, not duplicating sort inference.
+      let some (_, actualRule) := declarationType? x projection.iota | return #[]
+      let some (equalityLevel, _, _, _) := equalityRhs? actualRule | return #[]
       let ruleType := closeForalls constructorBinders <|
-        mkAppN (.const ``Eq [Level.max .zero .zero])
+        mkAppN (.const ``Eq [equalityLevel])
           #[alpha, lhs, fields[projection.fieldIndex]!.value]
       result := result.push (projection.iota, ruleType)
   return result
@@ -211,7 +215,7 @@ def run (root : String) : IO UInt32 := do
     | throw <| IO.userError "MutualLayerA has no modeled carrier"
   let some (modelParams, _) := declarationType? generated typePair.model
     | throw <| IO.userError "MutualLayerA modeled carrier is absent"
-  let exactFaces := exactProjectionFaces family ownerType constructor modelParams
+  let exactFaces := exactProjectionFaces generated family ownerType constructor modelParams
   let expected := fun name => exactFaces.find? (·.1 == name) |>.map (·.2)
   let actual := fun name => declarationType? generated name |>.map (·.2)
   let keyProjection := Naming.projectionName `MutualLayerA 0
