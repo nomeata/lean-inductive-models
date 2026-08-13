@@ -39,7 +39,7 @@ open Lean Meta Modelgen
 abbrev Row := String × List (String × Nat) × List (String × String)
 
 /-- Nested fixtures whose filtered outputs are also committed under
-`test/fixtures/modelgen/filtered`. `cross := true` checks that generation from
+`test/fixtures/lean-inductive-models/filtered`. `cross := true` checks that generation from
 the raw export produces the filtered export and that filtering it again is an
 identity. -/
 def expectedShared : List Row :=
@@ -62,7 +62,7 @@ def expectedShared : List Row :=
 
 /-- **Accepted routing boundaries, each with a fixture that reaches it.** These
 fixtures keep accepted input shapes attached to the exact generator guard that
-handles them. `test/scripts/export-modelgen.sh` rebuilds their exports.
+handles them. `test/scripts/export-lean-inductive-models.sh` rebuilds their exports.
 
 **A decline is compared by prefix**, so that a fixture may pin *which shape*
 stopped the generator without pinning the wording of a kernel diagnostic
@@ -161,7 +161,7 @@ def expectedOwn : List Row :=
     -- in it instantiates `PTree.{u}` or `QTree.{u,v}`, so the monomorphization pass
     -- downstream gives every group in it exactly one copy and the pipeline's
     -- per-instantiation behaviour is unobservable. Here `PTree.{u}` is used at
-    -- 0, 1 and 2. For `modelgen` alone it is one more polymorphic nested shape;
+    -- 0, 1 and 2. For `lean-inductive-models` alone it is one more polymorphic nested shape;
     -- it exists to verify that a model does **not** survive monomorphization.
   , ("poly_nested_used", [("PTree", 15), ("PTree._model._impl.0", 14)], [])
   , ("indexed_decl",
@@ -436,7 +436,7 @@ def expectedPrim : List Row :=
        ("BoxF", 7), ("SvIx", 4)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The index axis**, as the explicit grid documented by
-  -- `test/fixtures/modelgen/prim_idx.lean`.
+  -- `test/fixtures/lean-inductive-models/prim_idx.lean`.
   -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
   -- two index positions, `Fdep` a non-pivot whose type mentions a pivot,
   -- `Fall3` every index a pivot and therefore no equation at all, `Fxh` an
@@ -760,7 +760,7 @@ def check (a : TAcc) (ok : Bool) (msg : String) : TAcc :=
 /-- One fixture, all four axes. With `cross`, compare the generated declaration
 array with the committed filtered export and verify idempotence structurally. -/
 def runOne (root : String) (a : TAcc) (r : Row)
-    (dir := "test/fixtures/modelgen")
+    (dir := "test/fixtures/lean-inductive-models")
     (cross := false) (prim := false) : IO TAcc := do
   let (name, want, wantDeclined) := r
   let path := s!"{root}/{dir}/{name}.ndjson"
@@ -861,7 +861,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
     a := check a (y.decls.size == decls.size) s!"{name}: declaration count changed on the round trip"
   -- Compare the committed filtered export with what this run produced.
   if cross then
-    let fpath := s!"{root}/test/fixtures/modelgen/filtered/{name}.ndjson"
+    let fpath := s!"{root}/test/fixtures/lean-inductive-models/filtered/{name}.ndjson"
     let ftext ← IO.FS.readFile fpath
     match Modelgen.parse ftext with
     | .error e => a := check a false s!"{name}: filtered fixture does not parse: {e}"
@@ -899,7 +899,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
            {rep.generated.size + rep.declined.size}"
       a := check a (d3 == f.decls) s!"{name}: the filter is not the identity on its output"
   -- axis 4b: the identity on a file with nothing to splice
-  let plainPath := s!"{root}/test/fixtures/modelgen/filtered/nat_char_equations.ndjson"
+  let plainPath := s!"{root}/test/fixtures/lean-inductive-models/filtered/nat_char_equations.ndjson"
   if ← System.FilePath.pathExists plainPath then
     let t ← IO.FS.readFile plainPath
     let .ok p := Modelgen.parse t | return check a false "nat_char_equations does not parse"
@@ -929,7 +929,7 @@ so that day is a test failure with a name on it.
 
 `tools/EnvProbe.lean` runs the same two probes at larger scale. -/
 def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
-  let path := s!"{root}/test/fixtures/modelgen/prim_carve.ndjson"
+  let path := s!"{root}/test/fixtures/lean-inductive-models/prim_carve.ndjson"
   let text ← IO.FS.readFile path
   let .ok x := Modelgen.parse text | return check a false "prim_carve does not parse"
   let env0 ← importModules #[] {}
@@ -948,7 +948,7 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
   -- Lake hashes content and the content is `Model.lean`'s. Every other check in
   -- this function runs against `wCoreText`, so without this one they all pass
   -- on a stale tool and say nothing about the fragment that was committed.
-  let onDisk ← IO.FS.readFile s!"{root}/test/fixtures/modelgen/w_core.ndjson"
+  let onDisk ← IO.FS.readFile s!"{root}/test/fixtures/lean-inductive-models/w_core.ndjson"
   let a := check a (onDisk == Modelgen.wCoreText)
     s!"the compiled-in W core fragment is {Modelgen.wCoreText.length} bytes and \
        the w_core fixture is {onDisk.length} — the fragment was re-exported and \
@@ -1020,7 +1020,7 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
   return cs.foldl (fun a (ok, msg) => check a ok msg) a
 
 def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
-  let path := s!"{root}/test/fixtures/modelgen/nested_iota.ndjson"
+  let path := s!"{root}/test/fixtures/lean-inductive-models/nested_iota.ndjson"
   let text ← IO.FS.readFile path
   let .ok x := Modelgen.parse text | return check a false "nested_iota does not parse"
   let env0 ← importModules #[] {}
@@ -1070,7 +1070,7 @@ An export is many modules flattened into one file, so it holds both
 keys on `privateToUserName`, and the second model's carrier is added to the
 kernel and lost to the environment. `runCollisionProbe` above pins that Lean
 behaves that way and that a differently-normalizing root escapes it; this pins
-that `modelgen` *takes* the escape.
+that `lean-inductive-models` *takes* the escape.
 
 **The input is built here rather than checked in as a fixture, because no
 `.lean` source can produce the pair.** A private `X` and a public `X` in one
@@ -1094,7 +1094,7 @@ Three checks, and the third is the one that would catch a half-done renaming:
    statement oracle nor the kernel would see it: both read the *environment*,
    which keeps the alias on purpose. -/
 def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
-  let path := s!"{root}/test/fixtures/modelgen/prim_shapes.ndjson"
+  let path := s!"{root}/test/fixtures/lean-inductive-models/prim_shapes.ndjson"
   let text ← IO.FS.readFile path
   let .ok x := Modelgen.parse text | return check a false "prim_shapes does not parse"
   let tgt : Name := `Sv
@@ -1127,7 +1127,7 @@ def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
   a := check a (outD.any (·.names.contains modelN))
     s!"alias: the output does not carry {modelN}, so the declaration-local contract moved"
   let leaked := outD.flatMap edeclNames |>.filter fun n =>
-    n.components.any (· == `_modelgen_alias)
+    n.components.any (· == `_inductive_models_alias)
   a := check a leaked.isEmpty
     s!"alias: the alias root leaked into the output on {leaked.toList.take 4}"
   return a
@@ -1251,14 +1251,14 @@ them: it has models *and* declines, so the report is non-empty while the export
 is a whole file, and a report leaking into stdout would be a byte difference
 against `-o FILE` rather than a wording difference.
 
-It needs `.lake/build/bin/modelgen`, and reports a **failure** rather
+It needs `.lake/build/bin/lean-inductive-models`, and reports a **failure** rather
 than a skip when it is absent: the suite claims the CLI contract and cannot
 check it from an unbuilt binary. `lake build` first. -/
 def runCli (root : String) (a : TAcc) : IO TAcc := do
-  let bin := s!"{root}/.lake/build/bin/modelgen"
+  let bin := s!"{root}/.lake/build/bin/lean-inductive-models"
   unless ← System.FilePath.pathExists bin do
     return check a false s!"{bin} is not built (`lake build`): the CLI contract is unchecked"
-  let input := s!"{root}/test/fixtures/modelgen/infinitary.ndjson"
+  let input := s!"{root}/test/fixtures/lean-inductive-models/infinitary.ndjson"
   let mg := fun (args : List String) => IO.Process.output { cmd := bin, args := args.toArray }
   let mut a := a
   -- `-o -` is stdout, first class.  This older process-boundary test isolates
@@ -1299,10 +1299,10 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
   a := check a (r.exitCode == 0) "CLI: a decline is not exit 0"
   let u ← mg ["--no-such-flag"]
   a := check a (u.exitCode == 3) s!"CLI: an unknown flag exited {u.exitCode}, expected 3"
-  let m ← mg [s!"{root}/test/scripts/export-modelgen.sh", "-o", "-"]
+  let m ← mg [s!"{root}/test/scripts/export-lean-inductive-models.sh", "-o", "-"]
   a := check a (m.exitCode == 3) s!"CLI: an unparsable input exited {m.exitCode}, expected 3"
   a := check a m.stdout.isEmpty "CLI: an unparsable input still wrote to stdout"
-  let n ← mg [s!"{root}/test/fixtures/modelgen/no-such-file.ndjson", "-o", "-"]
+  let n ← mg [s!"{root}/test/fixtures/lean-inductive-models/no-such-file.ndjson", "-o", "-"]
   a := check a (n.exitCode == 3) s!"CLI: a missing input exited {n.exitCode}, expected 3"
   return a
 
@@ -1327,7 +1327,7 @@ observation, and a previous seat's claim that the composition worked was vacuous
 for precisely that reason. `copies per group` is the check that says so, and it
 is the first one below. -/
 def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
-  let text ← IO.FS.readFile s!"{root}/test/fixtures/modelgen/poly_nested_used.ndjson"
+  let text ← IO.FS.readFile s!"{root}/test/fixtures/lean-inductive-models/poly_nested_used.ndjson"
   let .ok x := Modelgen.parse text | return check a false "poly_nested_used does not parse"
   let env ← importModules #[] {}
   let ctx : Core.Context :=

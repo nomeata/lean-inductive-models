@@ -37,7 +37,7 @@ private def reserveSibling (target : System.FilePath) : IO (System.FilePath × I
         s!"could not reserve an output sibling after {maxTempAttempts} attempts"
     | remaining + 1 => do
       let suffix := hexSuffix (← IO.getRandomBytes 16)
-      let path := target.withFileName s!".modelgen-output-{suffix}.tmp"
+      let path := target.withFileName s!".lean-inductive-models-output-{suffix}.tmp"
       try
         return (path, ← IO.FS.Handle.mk path .writeNew)
       catch
@@ -112,7 +112,7 @@ def containToolErrors (action : IO UInt32) : IO UInt32 := do
   try
     action
   catch error =>
-    try IO.eprintln s!"modelgen: uncaught tool error: {error}"
+    try IO.eprintln s!"lean-inductive-models: uncaught tool error: {error}"
     catch _ => pure ()
     return (3 : UInt32)
 

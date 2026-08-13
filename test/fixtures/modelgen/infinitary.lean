@@ -13,7 +13,7 @@
      `a : N → List HTree` with `(a_1 : N) → motive_2 (a a_1)`.
 
    A field at a mimic under a binder is the one shape here whose proofs need a
-   `funext`, and **this file declares none** — so `modelgen` derives one from
+   `funext`, and **this file declares none** — so `lean-inductive-models` derives one from
    `Quot.sound` and splices it in beside the model. It has
    **three** witnesses rather than one, at three different proofs, and all three
    are models. Each is a `funext` and Lean accepts all three:

@@ -105,7 +105,7 @@ def main : IO UInt32 := do
         !exactReport.declined.any (·.1 == target)
     state := state.check s!"validation alias for {target} does not escape" <|
       !({ metaLine := .null, decls := exactOutput } : Export).render.contains
-        "_modelgen_basis_validation"
+        "_inductive_models_basis_validation"
 
     let malformed ← makeRawFixture true false target
     let (_, malformedReport) ← runRaw malformed

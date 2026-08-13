@@ -2,21 +2,21 @@ import Lake
 
 open System Lake DSL
 
-package modelgen where testDriver := "test"
+package «lean-inductive-models» where testDriver := "test"
 
 /-- Native filesystem primitives used by the bounded spool copier. Kept in one
 small archive so every executable importing `Modelgen.Spool` resolves the same
 portable seek and secure-workspace implementation. -/
-extern_lib modelgen_spool (pkg : NPackage __name__) := do
-  let source ← inputFile (pkg.dir / "c/ModelgenSpool.c") true
-  let object ← buildLeanO (pkg.buildDir / "ir/ModelgenSpool.c.o") source
-  buildStaticLib (pkg.staticLibDir / "libmodelgen_spool.a") #[object]
+extern_lib lean_inductive_models_spool (pkg : NPackage __name__) := do
+  let source ← inputFile (pkg.dir / "c/InductiveModelsSpool.c") true
+  let object ← buildLeanO (pkg.buildDir / "ir/InductiveModelsSpool.c.o") source
+  buildStaticLib (pkg.staticLibDir / "liblean_inductive_models_spool.a") #[object]
 
 lean_lib Modelgen where
   srcDir := "src"
   globs := #[`Modelgen.+]
 
-@[default_target] lean_exe modelgen where
+@[default_target] lean_exe «lean-inductive-models» where
   srcDir := "src"
   root := `Main
   supportInterpreter := true

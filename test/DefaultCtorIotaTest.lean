@@ -148,7 +148,7 @@ def containsText (text fragment : String) : Bool :=
   (text.splitOn fragment).length > 1
 
 def run (root : String) : IO UInt32 := do
-  let evidence ← collectEvidence s!"{root}/test/fixtures/modelgen/default_ctor_iota.ndjson"
+  let evidence ← collectEvidence s!"{root}/test/fixtures/lean-inductive-models/default_ctor_iota.ndjson"
   IO.println s!"default ctor actual: {evidence.actualPretty}"
   IO.println s!"default ctor checker expected: {evidence.expectedPretty}"
   IO.println s!"default ctor kernel readback: {evidence.kernelPretty}"

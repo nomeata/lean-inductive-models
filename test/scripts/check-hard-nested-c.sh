@@ -3,16 +3,16 @@ set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
-bin="${MODELGEN_BIN:-$root/.lake/build/bin/modelgen}"
-fixture="$root/test/fixtures/modelgen/nested_mutual_indexed_container.ndjson"
+bin="${LEAN_INDUCTIVE_MODELS_BIN:-$root/.lake/build/bin/lean-inductive-models}"
+fixture="$root/test/fixtures/lean-inductive-models/nested_mutual_indexed_container.ndjson"
 
-[[ -x "$bin" ]] || { echo "modelgen is not built: $bin" >&2; exit 2; }
+[[ -x "$bin" ]] || { echo "lean-inductive-models is not built: $bin" >&2; exit 2; }
 
 mkdir -p "$root/_tmp"
 work="$(mktemp -d "$root/_tmp/check-hard-nested-c.XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 
-memory_limit_kib="${MODELGEN_MEMORY_KB:-16777216}"
+memory_limit_kib="${LEAN_INDUCTIVE_MODELS_MEMORY_KB:-16777216}"
 current_memory_limit="$(ulimit -Sv)"
 if [[ "$current_memory_limit" == unlimited ]] ||
     ((current_memory_limit > memory_limit_kib)); then

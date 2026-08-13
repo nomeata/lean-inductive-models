@@ -1895,7 +1895,7 @@ They form one post-scheduling readiness class:
   transport — `PUnit`'s and the derived exact-sort lift's shapes.
 * `Nonempty` and `Classical.choice`, which **arm G** splices and which the W
   core's fragment now also carries. An input that declares `Acc` before
-  `Nonempty` — `test/fixtures/modelgen/w_core.ndjson`
+  `Nonempty` — `test/fixtures/lean-inductive-models/w_core.ndjson`
   is one, since the fragment's `Acc` comes in through `WellFounded.fix` and its
   `Nonempty` only through `Classical.propDecidable` — used to lose `Acc`'s model
   to `prim model name taken (Nonempty)`. That is an uninstalled reserved-support

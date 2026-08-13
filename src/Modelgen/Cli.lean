@@ -54,7 +54,7 @@ def Config.modelsSimpleInput (config : Config) (name : Lean.Name) : Bool :=
   if isBasicInputName name then config.basic else config.simple
 
 def usage : String := String.intercalate "\n" [
-  "usage: modelgen [OPTIONS] IN.ndjson   (`-` reads standard input)",
+  "usage: lean-inductive-models [OPTIONS] IN.ndjson   (`-` reads standard input)",
   "  -o PATH              write the export to PATH (`-` means stdout)",
   "  --[no-]output        enable or disable output",
   "  --[no-]nested        model nested inductives",

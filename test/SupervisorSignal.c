@@ -3,7 +3,7 @@
 #include <stdlib.h>
 
 /* Test-only: terminate the calling synthetic worker with a real native signal. */
-void *modelgen_test_raise_signal(uint32_t selector) {
+void *lean_inductive_models_test_raise_signal(uint32_t selector) {
     int sig = selector == 0 ? SIGTERM : SIGSEGV;
     /* Lean installs a SIGSEGV handler, so restore the native disposition this
        helper is meant to exercise before delivering the selected signal. */

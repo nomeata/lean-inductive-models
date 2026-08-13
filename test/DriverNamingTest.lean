@@ -94,7 +94,7 @@ def main : IO UInt32 := do
     ("nested_shapes.ndjson", legacyGenerationConfig false),
     ("nat_char_equations.ndjson", legacyGenerationConfig false)]
   for (fixture, generation) in passThrough do
-    let path := s!"test/fixtures/modelgen/filtered/{fixture}"
+    let path := s!"test/fixtures/lean-inductive-models/filtered/{fixture}"
     let text ← IO.FS.readFile path
     let .ok input := Modelgen.parse text (analyse := false)
       | throw <| IO.userError s!"cannot parse {path}"
@@ -110,7 +110,7 @@ def main : IO UInt32 := do
   -- branches. Enabling simple/basic generation is deliberately not an
   -- idempotence check: the missing ordinary models must still be added.
   let partialText ← IO.FS.readFile
-    "test/fixtures/modelgen/filtered/nested_iota.ndjson"
+    "test/fixtures/lean-inductive-models/filtered/nested_iota.ndjson"
   let .ok partialInput := Modelgen.parse partialText (analyse := false)
     | throw <| IO.userError "cannot parse the partially filtered nested_iota fixture"
   let allBranches ← runExport "partially filtered nested_iota with every branch"
@@ -120,16 +120,16 @@ def main : IO UInt32 := do
   state := state.check "all branches add the missing ordinary simple models"
     ([`N, `List, `Box].all allBranches.generated)
 
-  let safetyText ← IO.FS.readFile "test/fixtures/modelgen/nested_iota_arm.ndjson"
+  let safetyText ← IO.FS.readFile "test/fixtures/lean-inductive-models/nested_iota_arm.ndjson"
   let .ok safetyInput := Modelgen.parse safetyText (analyse := false)
-    | throw <| IO.userError "cannot parse test/fixtures/modelgen/nested_iota_arm.ndjson"
+    | throw <| IO.userError "cannot parse test/fixtures/lean-inductive-models/nested_iota_arm.ndjson"
   let some (wrongSafety, recursorName) := flipFirstRecursorSafety safetyInput
-    | throw <| IO.userError "no recursor to mutate in test/fixtures/modelgen/nested_iota_arm.ndjson"
+    | throw <| IO.userError "no recursor to mutate in test/fixtures/lean-inductive-models/nested_iota_arm.ndjson"
   let safetyResult ← runExport "mutated recursor safety" wrongSafety true noGeneration
   state := state.check "kernel-regenerated recursor safety is checked"
     (safetyResult.report.recMismatch.contains recursorName)
 
-  let carve ← runFixture "test/fixtures/modelgen/prim_carve.ndjson"
+  let carve ← runFixture "test/fixtures/lean-inductive-models/prim_carve.ndjson"
     { noGeneration with simple := true, basic := true }
   let skeleton := `Bif._model._impl.skel
   state := state.check "arm-C parent survives exact support closure"
@@ -138,7 +138,7 @@ def main : IO UInt32 := do
     (carve.generated skeleton && carve.hasExactCarrier skeleton &&
       !carve.hasLegacyCarrier skeleton)
 
-  let w ← runFixture "test/fixtures/modelgen/prim_w.ndjson"
+  let w ← runFixture "test/fixtures/lean-inductive-models/prim_w.ndjson"
     { noGeneration with simple := true, basic := true }
   state := state.check "W parent survives exact support closure"
     (w.generated `Wt && !w.declined `Wt && w.hasExactCarrier `Wt)
@@ -148,9 +148,9 @@ def main : IO UInt32 := do
   -- The W target is replayed before the input's exact Iff block and propext.
   -- Its first basis wait drains at Eq; the late wait must remain atomic until
   -- Iff, both of its kernel-owned declarations, and propext are all installed.
-  let lateText ← IO.FS.readFile "test/fixtures/modelgen/w_late_iff.ndjson"
+  let lateText ← IO.FS.readFile "test/fixtures/lean-inductive-models/w_late_iff.ndjson"
   let .ok lateInput := Modelgen.parse lateText (analyse := false)
-    | throw <| IO.userError "cannot parse test/fixtures/modelgen/w_late_iff.ndjson"
+    | throw <| IO.userError "cannot parse test/fixtures/lean-inductive-models/w_late_iff.ndjson"
   let lateW ← runExport "late W logical basis" lateInput false
     { noGeneration with simple := true, basic := true }
   let lateOutput : Export := { lateInput with decls := lateW.output }
@@ -176,7 +176,7 @@ def main : IO UInt32 := do
     ([`LateW, `Eq, `Iff, `propext].all fun name =>
       (lateOrdered.decls.filter (·.names.contains name)).size == 1)
 
-  let graph ← runFixture "test/fixtures/modelgen/prim_graph.ndjson"
+  let graph ← runFixture "test/fixtures/lean-inductive-models/prim_graph.ndjson"
     { noGeneration with simple := true, basic := true }
   state := state.check "spliced Nonempty is modeled once at its exact carrier"
     (graph.generated `Nonempty && graph.hasExactCarrier `Nonempty &&
@@ -185,7 +185,7 @@ def main : IO UInt32 := do
   -- This mutual export deliberately orders its recursor records MC, MA, MB,
   -- rather than member order. Exact-name alignment must still match each model
   -- recursor with its own ordered rule list.
-  let mutualResult ← runFixture "test/fixtures/modelgen/prim_late_basis.ndjson"
+  let mutualResult ← runFixture "test/fixtures/lean-inductive-models/prim_late_basis.ndjson"
     { noGeneration with mutualModels := true, simple := true }
   let tag := `MA._model._impl.tag
   state := state.check "export recursor order is aligned by exact name"
@@ -197,7 +197,7 @@ def main : IO UInt32 := do
   -- Put canonical Eq physically behind the direct, mutual, nested and
   -- composed owners. The reserved-name guards must remain strict; source
   -- scheduling, not a prelude splice, is what makes every construction work.
-  let lateEqText ← IO.FS.readFile "test/fixtures/modelgen/prim_late_basis.ndjson"
+  let lateEqText ← IO.FS.readFile "test/fixtures/lean-inductive-models/prim_late_basis.ndjson"
   let .ok lateEqSource := Modelgen.parse lateEqText (analyse := false)
     | throw <| IO.userError "cannot parse the late-Eq source fixture"
   let lateEqInput := postponeRecords lateEqSource fun declaration =>
@@ -215,10 +215,10 @@ def main : IO UInt32 := do
   -- fixture, physically after every graph owner.  With no source `funext` to
   -- short-circuit the route, recursive support closure must use the scheduled
   -- quotient while ensureFunext's reserved-name checks remain untouched.
-  let graphText ← IO.FS.readFile "test/fixtures/modelgen/prim_graph.ndjson"
+  let graphText ← IO.FS.readFile "test/fixtures/lean-inductive-models/prim_graph.ndjson"
   let .ok graphSource := Modelgen.parse graphText (analyse := false)
     | throw <| IO.userError "cannot parse the graph source fixture"
-  let quotientText ← IO.FS.readFile "test/fixtures/modelgen/prim_graph_pre.ndjson"
+  let quotientText ← IO.FS.readFile "test/fixtures/lean-inductive-models/prim_graph_pre.ndjson"
   let .ok quotientSource := Modelgen.parse quotientText (analyse := false)
     | throw <| IO.userError "cannot parse the quotient support fixture"
   let quotientSupport := quotientSource.decls.filter fun declaration =>
@@ -240,7 +240,7 @@ def main : IO UInt32 := do
       declarationBefore lateQuotOutput `Quot `Ac &&
       !lateQuot.report.declined.any fun (_, reason) => reason.endsWith "name taken (Quot)")
 
-  let composed ← runFixture "test/fixtures/modelgen/nested_iota.ndjson"
+  let composed ← runFixture "test/fixtures/lean-inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true, simple := true }
   state := state.check "nested-mutual-simple composition reaches every stage"
     (composed.report.generated.size ≥ 3)

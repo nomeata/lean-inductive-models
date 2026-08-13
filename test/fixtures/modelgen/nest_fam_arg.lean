@@ -2,7 +2,7 @@
    formerly missing head-normalization case that is now covered. `Lean.Json`
    and `Lean.PrefixTreeNode` are
    this shape and were the only two of Mathlib's 41 nested declarations
-   `modelgen` refused before that case was implemented.
+   `lean-inductive-models` refused before that case was implemented.
 
    `RB α β`'s second parameter is a **family**, so specialising it leaves the
    constructor field `β k` as the redex `(fun _ => B₀) k` in the block. Three

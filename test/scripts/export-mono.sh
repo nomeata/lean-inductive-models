@@ -15,6 +15,6 @@ else
 fi
 
 for name in "${NAMES[@]}"; do
-  FIXTURE_DIR="$FIXTURES" OUT_DIR="$FIXTURES" MODELGEN_FILTER=0 \
+  FIXTURE_DIR="$FIXTURES" OUT_DIR="$FIXTURES" LEAN_INDUCTIVE_MODELS_FILTER=0 \
     bash "$ROOT/scripts/export-fixture.sh" "$name.lean"
 done

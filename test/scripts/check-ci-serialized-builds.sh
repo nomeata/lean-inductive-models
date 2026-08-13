@@ -10,7 +10,7 @@ mapfile -t direct_builds < <(
   sed -nE 's/^[[:space:]]*(lake .*build .*)$/\1/p' "$workflow"
 )
 expected_direct_builds=(
-  'lake -Kjobs=1 build modelgen'
+  'lake -Kjobs=1 build lean-inductive-models'
   'lake -Kjobs=1 build "$target"'
 )
 

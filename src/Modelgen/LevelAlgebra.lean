@@ -268,15 +268,15 @@ fires at all. An **escape** is a pair the complete procedure accepts and
 possibly alter behaviour. Zero escapes on representative exports means the
 change is a measured null there, and that is a result, not a failure. -/
 
-/-- The control: `MODELGEN_PLANNER_STOCK_LEVELS=1` restores the elaborator's
+/-- The control: `LEAN_INDUCTIVE_MODELS_PLANNER_STOCK_LEVELS=1` restores the elaborator's
 answer exactly, widening disabled. -/
 initialize stockLevels : Bool ←
-  return (← IO.getEnv "MODELGEN_PLANNER_STOCK_LEVELS") == some "1"
+  return (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_STOCK_LEVELS") == some "1"
 
-/-- `MODELGEN_PLANNER_LEVEL_TRACE=1` prints every escaping pair. An escape is
+/-- `LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE=1` prints every escaping pair. An escape is
 rare enough that naming each one is the right granularity. -/
 initialize traceLevels : Bool ←
-  return (← IO.getEnv "MODELGEN_PLANNER_LEVEL_TRACE") == some "1"
+  return (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") == some "1"
 
 /-- Calls, and escapes: pairs where the complete procedure said yes and the
 elaborator said no. -/

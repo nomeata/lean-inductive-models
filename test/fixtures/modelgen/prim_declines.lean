@@ -6,7 +6,7 @@
      field whose type mentions it. **No longer a refusal.** The packed-equation
      model substitutes the recursor's own index argument for such a field and
      equates only at the positions that are not pivots, so `MixI` is a model
-     and `test/fixtures/modelgen/prim_idx.lean` is the grid that whole axis is measured on. What
+     and `test/fixtures/lean-inductive-models/prim_idx.lean` is the grid that whole axis is measured on. What
      it still pins is the *promotion* fact its old header recorded: Lean's
      front end turns a leading bare-variable index into a parameter, so a pivot
      is only reachable behind a position that cannot be promoted, and here the
@@ -20,7 +20,7 @@
      first W target in the file, so it is the one that carries the spliced W
      core and the eighteen models of the fragment's own inductives that follow
      it; `Binder` behind it is its own dozen declarations.
-     `test/fixtures/modelgen/prim_w.lean` is the arm's own fixture and carries
+     `test/fixtures/lean-inductive-models/prim_w.lean` is the arm's own fixture and carries
      the shapes these two do not — data on both sides of a child, a dependent
      data tower, a parameter and a level parameter, and the untagged `Bad`
      case whose branch type factors through the complete label rather than its

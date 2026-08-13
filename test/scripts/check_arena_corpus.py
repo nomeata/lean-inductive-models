@@ -35,7 +35,7 @@ class CorpusError(Exception):
 
 def download(url: str, destination: Path) -> None:
     last_error: Exception | None = None
-    request = urllib.request.Request(url, headers={"User-Agent": "modelgen-arena-ci/1"})
+    request = urllib.request.Request(url, headers={"User-Agent": "lean-inductive-models-arena-ci/1"})
     for attempt in range(5):
         try:
             with urllib.request.urlopen(request, timeout=30) as response:
@@ -183,9 +183,9 @@ def main(argv: list[str]) -> int:
         print(f"usage: {argv[0]} [lean-arena-tests.tar.gz]", file=sys.stderr)
         return 2
     root = Path(__file__).resolve().parents[2]
-    binary = Path(os.environ.get("MODELGEN_BIN", root / ".lake/build/bin/modelgen"))
+    binary = Path(os.environ.get("LEAN_INDUCTIVE_MODELS_BIN", root / ".lake/build/bin/lean-inductive-models"))
     if not binary.is_file() or not os.access(binary, os.X_OK):
-        print(f"modelgen is not built: {binary}", file=sys.stderr)
+        print(f"lean-inductive-models is not built: {binary}", file=sys.stderr)
         return 2
     scratch = root / "_tmp"
     scratch.mkdir(exist_ok=True)

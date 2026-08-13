@@ -1,4 +1,4 @@
-/- The W core, as a module, so that `lean4export` can emit it and `modelgen`
+/- The W core, as a module, so that `lean4export` can emit it and `lean-inductive-models`
 can splice it. `--#export` lists the six roots and the exporter takes their
 transitive closure — which is what makes this a fragment of ~250 declarations
 rather than the whole of `Init`.

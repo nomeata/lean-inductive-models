@@ -60,23 +60,23 @@ def main : IO UInt32 := do
 
   -- Input `Nonempty` is basic, while `Ac` and its generated `.below` family
   -- are ordinary simple declarations.
-  let basicOnly ← runFixture "test/fixtures/modelgen/prim_graph_pre.ndjson" { noGeneration with basic := true }
+  let basicOnly ← runFixture "test/fixtures/lean-inductive-models/prim_graph_pre.ndjson" { noGeneration with basic := true }
   state := state.check "basic selects input Nonempty"
     ((generatedNames basicOnly).contains `Nonempty)
   state := state.check "basic excludes ordinary Ac"
     (!(generatedNames basicOnly).contains `Ac)
-  let simpleOnly ← runFixture "test/fixtures/modelgen/prim_graph_pre.ndjson" { noGeneration with simple := true }
+  let simpleOnly ← runFixture "test/fixtures/lean-inductive-models/prim_graph_pre.ndjson" { noGeneration with simple := true }
   state := state.check "simple selects ordinary Ac" ((generatedNames simpleOnly).contains `Ac)
   state := state.check "simple excludes input Nonempty"
     (!(generatedNames simpleOnly).contains `Nonempty)
 
   -- The graph arm splices Nonempty. It is present in both outputs, but only
   -- the basic closure recursively models it.
-  let graphSimple ← runFixture "test/fixtures/modelgen/prim_graph.ndjson" { noGeneration with simple := true }
+  let graphSimple ← runFixture "test/fixtures/lean-inductive-models/prim_graph.ndjson" { noGeneration with simple := true }
   state := state.check "simple alone leaves spliced Nonempty unmodelled"
     (!(generatedNames graphSimple).contains `Nonempty &&
       graphSimple.spliced.any fun (_, names) => names.contains `Nonempty)
-  let graphClosed ← runFixture "test/fixtures/modelgen/prim_graph.ndjson"
+  let graphClosed ← runFixture "test/fixtures/lean-inductive-models/prim_graph.ndjson"
     { noGeneration with simple := true, basic := true }
   state := state.check "basic closes a simple model's spliced Nonempty"
     ((generatedNames graphClosed).contains `Nonempty)
@@ -84,7 +84,7 @@ def main : IO UInt32 := do
   -- Arm C marks its spliced skeleton as `Iso.requires`. Without basic, the
   -- parent model remains valid and is not withdrawn merely because the
   -- skeleton itself has no model.
-  let carveSimple ← runFixture "test/fixtures/modelgen/prim_carve.ndjson" { noGeneration with simple := true }
+  let carveSimple ← runFixture "test/fixtures/lean-inductive-models/prim_carve.ndjson" { noGeneration with simple := true }
   state := state.check "simple without basic keeps the arm-C parent"
     ((generatedNames carveSimple).contains `Bif)
   state := state.check "simple without basic leaves the required skeleton unmodelled"
@@ -93,12 +93,12 @@ def main : IO UInt32 := do
 
   -- Nested, mutual and simple are separate stages. A later stage cannot fire
   -- when the stage producing its input is disabled.
-  let nestedOnly ← runFixture "test/fixtures/modelgen/nested_iota.ndjson" { noGeneration with nested := true }
+  let nestedOnly ← runFixture "test/fixtures/lean-inductive-models/nested_iota.ndjson" { noGeneration with nested := true }
   state := state.check "nested models the input" ((generatedNames nestedOnly).contains `Tree)
   state := state.check "nested alone does not model its mutual output"
     (!hasGeneratedSuffix nestedOnly "._model._impl.0")
 
-  let nestedMutual ← runFixture "test/fixtures/modelgen/nested_iota.ndjson"
+  let nestedMutual ← runFixture "test/fixtures/lean-inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true }
   state := state.check "mutual models the nested model"
     (hasGeneratedSuffix nestedMutual "._model._impl.0")
@@ -106,13 +106,13 @@ def main : IO UInt32 := do
     (!hasGeneratedSuffix nestedMutual "._model._impl.tag" &&
       !hasGeneratedSuffix nestedMutual "._model._impl.aux")
 
-  let nestedSimpleWithoutMutual ← runFixture "test/fixtures/modelgen/nested_iota.ndjson"
+  let nestedSimpleWithoutMutual ← runFixture "test/fixtures/lean-inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true, simple := true }
   state := state.check "simple cannot skip the disabled mutual stage"
     (!hasGeneratedSuffix nestedSimpleWithoutMutual "._model._impl.tag" &&
       !hasGeneratedSuffix nestedSimpleWithoutMutual "._model._impl.aux")
 
-  let nestedThroughSimple ← runFixture "test/fixtures/modelgen/nested_iota.ndjson"
+  let nestedThroughSimple ← runFixture "test/fixtures/lean-inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true, simple := true }
   state := state.check "simple models mutual tag output"
     (hasGeneratedSuffix nestedThroughSimple "._model._impl.tag")
@@ -120,17 +120,17 @@ def main : IO UInt32 := do
     (hasGeneratedSuffix nestedThroughSimple "._model._impl.aux")
 
   -- A plain mutual input is independently controlled by `mutualModels`.
-  let mutualOff ← runFixture "test/fixtures/modelgen/mutual_nonrec.ndjson" { noGeneration with simple := true }
+  let mutualOff ← runFixture "test/fixtures/lean-inductive-models/mutual_nonrec.ndjson" { noGeneration with simple := true }
   state := state.check "simple does not model a disabled mutual input"
     (!(generatedNames mutualOff).contains `OA)
-  let mutualOnly ← runFixture "test/fixtures/modelgen/mutual_nonrec.ndjson"
+  let mutualOnly ← runFixture "test/fixtures/lean-inductive-models/mutual_nonrec.ndjson"
     { noGeneration with mutualModels := true }
   state := state.check "mutual models a plain mutual input"
     ((generatedNames mutualOnly).contains `OA)
   state := state.check "plain mutual alone leaves tag and aux unmodelled"
     (!hasGeneratedSuffix mutualOnly "._model._impl.tag" &&
       !hasGeneratedSuffix mutualOnly "._model._impl.aux")
-  let mutualSimple ← runFixture "test/fixtures/modelgen/mutual_nonrec.ndjson"
+  let mutualSimple ← runFixture "test/fixtures/lean-inductive-models/mutual_nonrec.ndjson"
     { noGeneration with mutualModels := true, simple := true }
   state := state.check "simple composes over a plain mutual model"
     (hasGeneratedSuffix mutualSimple "._model._impl.tag" &&
@@ -139,7 +139,7 @@ def main : IO UInt32 := do
   -- Public mutual names belong to the exact declaration they model.  They do
   -- not depend on which member happens to head the block or on a flattened
   -- constructor/recursor slot.
-  let (shapeDecls, _) ← runFixtureOutput "test/fixtures/modelgen/mutual_shapes.ndjson"
+  let (shapeDecls, _) ← runFixtureOutput "test/fixtures/lean-inductive-models/mutual_shapes.ndjson"
     { noGeneration with mutualModels := true }
   let shapeNames := outputNames shapeDecls
   state := state.check "mutual exact member/constructor/recursor names"
@@ -161,7 +161,7 @@ def main : IO UInt32 := do
       `A._model.ctor_0, `A._model.rec_0, `A._model.iota_0_0,
       `PA._model.ctor_0, `PA._model.rec_0])
 
-  let (indexDecls, _) ← runFixtureOutput "test/fixtures/modelgen/mutual_index.ndjson"
+  let (indexDecls, _) ← runFixtureOutput "test/fixtures/lean-inductive-models/mutual_index.ndjson"
     { noGeneration with mutualModels := true }
   let indexNames := outputNames indexDecls
   state := state.check "indexed mutual declarations keep declaration-local names"
@@ -177,7 +177,7 @@ def main : IO UInt32 := do
 
   -- A declaration which merely occupies an old implementation-shaped name is
   -- unrelated to the new public contract and must not key or block the model.
-  let (keyDecls, keyReport) ← runFixtureOutput "test/fixtures/modelgen/mutual_keying.ndjson"
+  let (keyDecls, keyReport) ← runFixtureOutput "test/fixtures/lean-inductive-models/mutual_keying.ndjson"
     { noGeneration with mutualModels := true }
   let keyNames := outputNames keyDecls
   state := state.check "old carrier-shaped input does not block mutual modelling"
@@ -193,7 +193,7 @@ def main : IO UInt32 := do
   -- private prefix or derives ownership from the head member's spelling.
   let privateRoot : Name := `OA
   let privateOA := (`_private.MutualNaming).mkNum 0 |>.str "OA"
-  let privateInput ← readFixture "test/fixtures/modelgen/mutual_nonrec.ndjson"
+  let privateInput ← readFixture "test/fixtures/lean-inductive-models/mutual_nonrec.ndjson"
   let privateAliases :=
     privateInput.decls.foldl (init := Naming.AliasMap.empty) fun aliases declaration =>
       declaration.names.foldl (init := aliases) fun aliases name =>
@@ -216,7 +216,7 @@ def main : IO UInt32 := do
   -- The mutual pass also consumes the specialised block emitted by the nested
   -- pass.  Even in that composed route, names are local to the specialised
   -- declarations rather than numbered below the original root.
-  let (composedDecls, _) ← runFixtureOutput "test/fixtures/modelgen/nested_iota.ndjson"
+  let (composedDecls, _) ← runFixtureOutput "test/fixtures/lean-inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true }
   let composedNames := outputNames composedDecls
   let nestedImpl := `Tree._model._impl

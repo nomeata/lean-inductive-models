@@ -76,11 +76,11 @@ checkout_pinned \
 cp "$ROOT/lean-toolchain" "$EXPORTER_DIR/lean-toolchain"
 (cd "$EXPORTER_DIR" && lake build)
 
-(cd "$ROOT" && lake build modelgen)
+(cd "$ROOT" && lake build lean-inductive-models)
 EXPORTER_BIN="$EXPORTER_DIR/.lake/build/bin/lean4export"
-MODELGEN_BIN="$ROOT/.lake/build/bin/modelgen"
+LEAN_INDUCTIVE_MODELS_BIN="$ROOT/.lake/build/bin/lean-inductive-models"
 [[ -x "$EXPORTER_BIN" ]] || fail "exporter binary was not built"
-[[ -x "$MODELGEN_BIN" ]] || fail "model generator binary was not built"
+[[ -x "$LEAN_INDUCTIVE_MODELS_BIN" ]] || fail "model generator binary was not built"
 
 rm -f "$INPUT" "$OUTPUT"
 (cd "$MATHLIB_DIR" &&
@@ -92,7 +92,7 @@ rm -f "$INPUT" "$OUTPUT"
 # including inductive generation and input/output checking. Universe-level
 # monomorphization remains off.
 perf stat -e instructions -o "$PERF_DIR/generate.perf" -- \
-  "$MODELGEN_BIN" "$INPUT" -o "$OUTPUT" \
+  "$LEAN_INDUCTIVE_MODELS_BIN" "$INPUT" -o "$OUTPUT" \
   2> >(tee "$LOG_DIR/generate.log" >&2)
 
 [[ -s "$OUTPUT" ]] || fail "generated export is missing or empty"
@@ -105,7 +105,7 @@ grep -Eq ': model of [1-9][0-9]* declarations' "$LOG_DIR/generate.log" ||
 # Re-read the bytes that were actually written. The positive diagnostic guard
 # prevents a silently inert input checker from turning this into a green run.
 perf stat -e instructions -o "$PERF_DIR/check-input.perf" -- \
-  "$MODELGEN_BIN" "$OUTPUT" \
+  "$LEAN_INDUCTIVE_MODELS_BIN" "$OUTPUT" \
     --no-inductives --check-input --no-check-output --no-output \
   2> >(tee "$LOG_DIR/check-input.log" >&2)
 

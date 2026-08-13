@@ -1530,7 +1530,7 @@ def Export.render (x : Export) : String :=
 
 /-- Serialise a whole export to a stream, in bounded memory.
 
-A `Stream` rather than a `Handle` because `-o -` is stdout, which `modelgen`
+A `Stream` rather than a `Handle` because `-o -` is stdout, which `lean-inductive-models`
 takes first class rather than through `/dev/stdout`.
 
 Lines are gathered into a buffer of at least [`writeChunk`] bytes before each

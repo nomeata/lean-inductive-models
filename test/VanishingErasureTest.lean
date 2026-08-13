@@ -86,7 +86,7 @@ def generatedExactly (report : Report) (owner : Name) (count : Nat) : Bool :=
 
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let raw ← readExport "test/fixtures/modelgen/nest_fam_arg.ndjson"
+  let raw ← readExport "test/fixtures/lean-inductive-models/nest_fam_arg.ndjson"
   let (generated, report) ← runExport raw
   let auxName := fun (owner : Name) =>
     Name.str (Name.str (Name.str (Name.num (Name.str (Name.str owner "_model") "_impl") 0)
@@ -124,7 +124,7 @@ def main : IO UInt32 := do
   -- one genuine recursive child followed by a field whose annotation mentions
   -- `Dead` but whose β-reduct is `N`; the tuple spine must count only the
   -- former.
-  let nonindexedRaw ← readExport "test/fixtures/modelgen/nonindexed_vanishing.ndjson"
+  let nonindexedRaw ← readExport "test/fixtures/lean-inductive-models/nonindexed_vanishing.ndjson"
   let (nonindexedGenerated, nonindexedReport) ← runExport nonindexedRaw
   state := state.check "the raw non-indexed constructor retains a dead owner mention" <|
     (constructorTypes nonindexedRaw `Dead).any (hasVanishingDomain `Dead)
@@ -139,7 +139,7 @@ def main : IO UInt32 := do
   -- reduction. This is a simple (numNested = 0) kernel declaration, so arm C
   -- must expose the binder in its private skeleton while retaining the public
   -- constructor and recursor expressions literally.
-  let hiddenRaw ← readExport "test/fixtures/modelgen/indexed_hidden_erasure.ndjson"
+  let hiddenRaw ← readExport "test/fixtures/lean-inductive-models/indexed_hidden_erasure.ndjson"
   let (hiddenGenerated, hiddenReport) ← runExport hiddenRaw
   let hiddenSkeleton := `Hidden._model._impl.skel
   state := state.check "the raw indexed constructor retains its hidden binder" <|

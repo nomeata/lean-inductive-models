@@ -83,7 +83,7 @@ def run (root : String) : IO UInt32 := do
   state := state.check "normalization does not rewrite declaration types"
     (declarationType? synthetic `Literal == some literalType)
 
-  let prim ← readExport s!"{root}/test/fixtures/modelgen/prim_declines.ndjson"
+  let prim ← readExport s!"{root}/test/fixtures/lean-inductive-models/prim_declines.ndjson"
   let some svIxDecl := prim.decls.findIdx? fun declaration =>
       declaration.names.contains `SvIx
     | throw <| IO.userError "prim_declines does not declare SvIx"
@@ -95,7 +95,7 @@ def run (root : String) : IO UInt32 := do
   state := state.check "SvIx public declaration type stays literal"
     (declarationType? prim `SvIx == svIxType)
 
-  let flatInput ← readExport s!"{root}/test/fixtures/modelgen/nest_fam_arg.ndjson"
+  let flatInput ← readExport s!"{root}/test/fixtures/lean-inductive-models/nest_fam_arg.ndjson"
   let (flatOutput, flatReport) ← generatedExport flatInput
   let flatFamilyOwner := (`Flat._model._impl).mkNum 0
   let flatOwner := (`Flat._model._impl).mkNum 1

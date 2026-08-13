@@ -7,7 +7,7 @@ import Modelgen.Spool
 import Modelgen.Supervisor
 
 /-!
-`modelgen [OPTIONS] IN.ndjson`
+`lean-inductive-models [OPTIONS] IN.ndjson`
 
 The command-line data model and option ordering live in `Modelgen.Cli`.  This
 module owns only the IO boundary and the pipeline between the already separate
@@ -147,7 +147,7 @@ private inductive FilterOutput where
 /-- Optional A/B and test diagnostic. This observes the actual filter result;
 it never enables staging or changes eligibility. -/
 private def reportOutputBackend (output : FilterOutput) : IO Unit := do
-  if (← IO.getEnv "MODELGEN_OUTPUT_BACKEND_TRACE") == some "1" then
+  if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
     IO.eprintln s!"output backend: {match output with
       | .full .. => "legacy"
       | .staged .. => "staged"}"
@@ -234,7 +234,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
   let context : Core.Context :=
-    { fileName := "<modelgen>", fileMap := default,
+    { fileName := "<lean-inductive-models>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
 
   if config.typeCheckInput then
@@ -406,8 +406,8 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   -- The legacy override is retained for deliberate A/B measurements. Statically
   -- ineligible modes never tee their input, and planner trace mode stays on the
   -- full-AST path so a private failed staging attempt cannot duplicate trace lines.
-  if (← IO.getEnv "MODELGEN_LEGACY_OUTPUT") != some "1" &&
-      (← IO.getEnv "MODELGEN_PLANNER_LEVEL_TRACE") != some "1" &&
+  if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
+      (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1" &&
       stagedModeEligible config then
     let scratch := (← IO.currentDir) / "_tmp"
     Modelgen.Spool.withOptionalWorkspace scratch (runWithWorkspace config)

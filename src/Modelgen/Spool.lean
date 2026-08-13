@@ -42,7 +42,7 @@ def ByteSpan.validate (span : ByteSpan) (fileSize : UInt64) : Except String Unit
 
 /-- Portable absolute seek supplied by the small native spool shim. The Lean
 wrapper rejects offsets outside the common signed-64 range before FFI. -/
-@[extern "modelgen_spool_seek"]
+@[extern "lean_inductive_models_spool_seek"]
 private opaque seekHandle (handle : @& IO.FS.Handle) (offset : UInt64) : IO Unit
 
 def seek (handle : IO.FS.Handle) (offset : UInt64) : IO Unit := do
@@ -50,7 +50,7 @@ def seek (handle : IO.FS.Handle) (offset : UInt64) : IO Unit := do
     throw <| IO.userError "spool seek offset exceeds signed 64-bit range"
   seekHandle handle offset
 
-@[extern "modelgen_spool_mkdir_private_at"]
+@[extern "lean_inductive_models_spool_mkdir_private_at"]
 private opaque mkdirPrivateAtNative (parent leaf : @& String) : IO Unit
 
 /-- Linux production boundary. Open the trusted parent without following a
@@ -152,7 +152,7 @@ def Workspace.create (root : System.FilePath) : IO Workspace := do
         s!"could not reserve a spool workspace after {maxWorkspaceAttempts} attempts"
     | remaining + 1 => do
       let suffix := rawSpoolSuffixOfBytes (← IO.getRandomBytes 16)
-      let leaf := s!"modelgen-spool-{suffix}"
+      let leaf := s!"lean-inductive-models-spool-{suffix}"
       try mkdirPrivateAt root leaf
       catch error =>
         let candidate := root / leaf

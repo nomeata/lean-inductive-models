@@ -85,7 +85,7 @@ The cheap guess is `W = 1` and it is right on every shape but one: a constructor
 that binds an index as a field forces `sⱼ ≤ u`, and a `Prop`-valued family's
 indices are usually `N`. The escape is a **`Prop`-valued family indexed by a
 large type**, represented by `SA`/`SB`/`SC` in
-`test/fixtures/modelgen/mutual_index.lean`.
+`test/fixtures/lean-inductive-models/mutual_index.lean`.
 
 ## Where the statements come from, and what that costs the oracle
 
@@ -213,7 +213,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
 
   -- **The whole file, not just the prefix replayed so far.** A model may not
   -- take a name the input introduces later;
-  -- `test/fixtures/modelgen/nested_keying.lean` is why the guard looks at
+  -- `test/fixtures/lean-inductive-models/nested_keying.lean` is why the guard looks at
   -- `reserved` and not only at the
   -- environment.
   let taken : Name → GenM Unit := fun n => do

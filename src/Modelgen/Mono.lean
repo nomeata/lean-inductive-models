@@ -34,7 +34,7 @@ mention one another cyclically and arrive as a single `inductive` record, so a
 group is one node, collects one demand set, and is emitted whole. A mutual
 `def` block is *not* a group — see [`buildGroups`].
 
-**One edge is not in the file.** A `modelgen` model is referenced by nothing —
+**One edge is not in the file.** A `lean-inductive-models` model is referenced by nothing —
 the consumer builds `T._model` off `T` rather than finding it through a use site
 — so the sweep would see no demand on it at all and every model group would
 take the default: one model, however many copies of `T`. [`modelKeying`]
@@ -365,7 +365,7 @@ def buildGroups (x : Export) (models : ModelTable) :
 
 /-! ## The models
 
-A `modelgen` model is the one thing in the file **nothing references**: a
+A `lean-inductive-models` model is the one thing in the file **nothing references**: a
 consumer finds `T._model` by constructing the name off `T`, not through a use
 site. The backward sweep is driven entirely by references, so
 left alone it sees no demand on a model at all and every model group takes the
@@ -429,7 +429,7 @@ declarations has no single `σ` to take; it declines. Public model declarations
 are normally one-name records, while the check also covers grouped emission
 without assuming that all of its names have the same owner.
 
-**The `σ` mapping is the identity**, which is a claim about `modelgen` and so is
+**The `σ` mapping is the identity**, which is a claim about `lean-inductive-models` and so is
 checked: the model's declarations carry exactly `ℓ⃗`, and [`buildGroups`]
 has already lifted the motive's universe out of model
 recursors and iota theorems, so what is left is the owner's own parameter list. A group whose
@@ -488,7 +488,7 @@ def modelKeying (x : Export) (groups : Array Group) (info : Std.HashMap Name Inf
   -- Identify the bridge by three exact facts: this is a type-former model from
   -- `models`, its definition references an inductive group, and that group has
   -- exact public model children of its own. No `_model` or `_impl` component is
-  -- inspected. Ordinary dependencies do not qualify unless modelgen actually
+  -- inspected. Ordinary dependencies do not qualify unless lean-inductive-models actually
   -- emitted a model for them.
   for (modelN, entry) in models.toArray do
     unless entry.role == .typeFormer do continue
@@ -526,13 +526,13 @@ copy that was never emitted. That is not repaired here — it is collected, so
 that it is reported by name instead of being lost.
 
 **Nothing structural rules it out** — a model's groups sit before what they
-model in `modelgen`'s output, but the second layer sits *after* the block it
+model in `lean-inductive-models`'s output, but the second layer sits *after* the block it
 models, so the cascade runs both ways against the file's order. What holds in
 practice is that the whole chain is filled in one step, from the first `σ` to
 reach the root: `T` is the last of the lot in file order, so `T._model.…` and
 `T._model._impl.0._model.…` are both still ahead of the sweep when demand arrives at
 `T`, and every later push repeats a `σ` the chain already has and stops at the
-first line. **Measured at zero** over the modelgen and monomorphization fixture
+first line. **Measured at zero** over the lean-inductive-models and monomorphization fixture
 suites (both modes) and Mathlib. The one nonzero case is why `elimD` is not
 cascaded. -/
 private partial def pushInst (models : Array (Array Nat)) (cutoff : Nat)

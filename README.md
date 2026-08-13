@@ -1,6 +1,6 @@
 # Lean inductive models
 
-`modelgen` is a Lean 4 NDJSON-to-NDJSON filter. It adds a propositional model
+`lean-inductive-models` is a Lean 4 NDJSON-to-NDJSON filter. It adds a propositional model
 of each supported inductive declaration: ordinary Lean declarations for its
 type former, constructors, and recursors, together with equality theorems for
 the recursor reduction rules. The original inductive declaration remains in
@@ -35,12 +35,12 @@ use the standard axioms `Classical.choice` and `propext` when required.
 ## Command line
 
 ```console
-modelgen [OPTIONS] IN.ndjson
+lean-inductive-models [OPTIONS] IN.ndjson
 ```
 
 `IN.ndjson` may be `-` to read standard input.
 
-With no options, `modelgen` generates all supported inductive models, checks
+With no options, `lean-inductive-models` generates all supported inductive models, checks
 models in both the input and final output, and writes the transformed export to
 standard output. Equivalently, its model-generation and checking defaults are
 `--inductives --check`; output is enabled and `--mono-levels` is disabled.
@@ -82,15 +82,15 @@ monomorphization, ordering, and generation still run. This validates an input
 structurally without generating models or writing an export:
 
 ```console
-modelgen --check --no-inductives --no-output IN.ndjson
+lean-inductive-models --check --no-inductives --no-output IN.ndjson
 ```
 
 For the full model-building Lean Kernel Arena job, pass the supplied path or
 pipe the same NDJSON on standard input:
 
 ```console
-modelgen --inductives --check-input --check-output --type-check-input --type-check-output --no-output "$IN"
-modelgen --inductives --check-input --check-output --type-check-input --type-check-output --no-output - < "$IN"
+lean-inductive-models --inductives --check-input --check-output --type-check-input --type-check-output --no-output "$IN"
+lean-inductive-models --inductives --check-input --check-output --type-check-input --type-check-output --no-output - < "$IN"
 ```
 
 All four generation branches remain enabled. The input is checked structurally
@@ -106,7 +106,7 @@ The process exit codes follow the
 | `0` | Accepted. |
 | `1` | Rejected as invalid, including rejection by Lean's kernel or a requested structural check. |
 | `2` | Declined because a requested generation operation does not support an owner. Basis exemptions in a successful run are not declines. |
-| any other code | Parser, I/O, CLI, or internal tool error (`modelgen` uses `3`). |
+| any other code | Parser, I/O, CLI, or internal tool error (`lean-inductive-models` uses `3`). |
 
 The processing order is:
 
@@ -582,7 +582,7 @@ retention; no full-corpus memory bound is claimed without a measured run.
   standard axioms `Classical.choice`, `propext`, and `Quot.sound` when a
   generated development uses them.
 - Universe monomorphization is optional, off by default, and is exposed only
-  through `modelgen --mono-levels`. Its library-level correctness suite is
+  through `lean-inductive-models --mono-levels`. Its library-level correctness suite is
   `monotest`.
 
 ## Build and test
@@ -597,7 +597,7 @@ build_serially() {
     TMPDIR="$PWD/_tmp/build-tmp" lake -Kjobs=1 build "$target"
   done
 }
-build_serially modelgen
+build_serially lean-inductive-models
 ```
 
 Each target is built in its own Lake invocation so their final native links do
@@ -656,7 +656,7 @@ TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-mathlib-result.sh
 test/scripts/check-ci-serialized-builds.sh
 ```
 
-`mainclitest` executes the built `modelgen` binary and covers the complete
+`mainclitest` executes the built `lean-inductive-models` binary and covers the complete
 `--mono-levels` process path. `monotest` exercises the underlying pass directly.
 `check_arena_corpus.py` downloads the published Lean Kernel Arena corpus and
 requires every `good/` case to exit 0. Every `bad/` case must either be rejected
@@ -671,12 +671,12 @@ fresh processes. It and the `envprobe` and `levelfuzz` targets under `tools/`
 are diagnostics, not correctness suites.
 
 Human-readable Lean fixture sources and committed NDJSON exports live under
-[`test/fixtures/modelgen/`](test/fixtures/modelgen/) and
+[`test/fixtures/lean-inductive-models/`](test/fixtures/lean-inductive-models/) and
 [`test/fixtures/mono/`](test/fixtures/mono/). Regenerating a model-generator
 fixture requires the pinned exporter:
 
 ```console
-TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-modelgen.sh prim_shapes
+TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-lean-inductive-models.sh prim_shapes
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-mono.sh mono_proj
 ```
 

@@ -24,7 +24,7 @@ time and memory to obtain.
 
 * **`C`** — parse, then replay through `Environment.addDeclCore` **with
   checking on**, and report how many declarations the kernel *rejected*, with
-  the first few reasons. This is the whole-output oracle: `modelgen` checks
+  the first few reasons. This is the whole-output oracle: `lean-inductive-models` checks
   each declaration it generates as it generates it, against the environment it
   has built so far, and `C` asks the independent question — does the emitted
   file, read back from bytes and replayed from nothing, typecheck end to end.
@@ -71,7 +71,7 @@ does — trusted, checking off — and then runs [`Modelgen.ensureWCore`], which
 the checked side. Reports how many of the fragment's records were added, how
 many the input already had, and what the kernel said. This is the splice's
 oracle at scale: `w_core.ndjson` alone goes in from nothing (that is
-`envprobe test/fixtures/modelgen/w_core.ndjson C`), and this asks the different question of
+`envprobe test/fixtures/lean-inductive-models/w_core.ndjson C`), and this asks the different question of
 whether it goes in *on top of* a real export's own `Eq`, `Iff`, `Quot` and
 `propext`. -/
 def probeW (x : Export) (env0 : Environment) : IO Unit := do

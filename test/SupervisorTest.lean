@@ -9,7 +9,7 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else { state with failed := state.failed.push label }
 
 /-- Test-only native helper linked only into `supervisortest`. -/
-@[extern "modelgen_test_raise_signal"]
+@[extern "lean_inductive_models_test_raise_signal"]
 opaque raiseSyntheticSignal (selector : UInt32) : IO Unit
 
 def syntheticWorker : List String → IO UInt32

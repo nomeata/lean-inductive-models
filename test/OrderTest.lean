@@ -674,7 +674,7 @@ def run (root : String) : IO UInt32 := do
   -- parameters and levels. Discovery must use each declaration's exact name,
   -- and a stable reorder must retain all ordinary implementation dependencies.
   let generatedMutualRun ← generatedFixtureState
-    s!"{root}/test/fixtures/modelgen/mutual_shapes.ndjson"
+    s!"{root}/test/fixtures/lean-inductive-models/mutual_shapes.ndjson"
     { noGeneration with mutualModels := true }
   let generatedMutual := generatedMutualRun.output
   let generatedMutualFamilies := Check.discover generatedMutual
@@ -699,7 +699,7 @@ def run (root : String) : IO UInt32 := do
 
   -- Nested-only generation already emits its family before the owner.  A
   -- stable pass is record-neutral when every dependency is already forward.
-  let nestedRun ← generatedFixtureState s!"{root}/test/fixtures/modelgen/nested_iota.ndjson"
+  let nestedRun ← generatedFixtureState s!"{root}/test/fixtures/lean-inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true }
   let nested := nestedRun.output
   let nested' ← mustReorder "already-before nested output" nested
@@ -729,7 +729,7 @@ def run (root : String) : IO UInt32 := do
   -- intermediate owners or their interfaces may escape into the source replay
   -- environment, even though all remain in the serialized output.
   let composedRun ← generatedFixtureState
-    s!"{root}/test/fixtures/modelgen/nested_iota.ndjson" {}
+    s!"{root}/test/fixtures/lean-inductive-models/nested_iota.ndjson" {}
   let nestedImpl := Name.num `Tree._model._impl 0
   let composedCensus := isolationCensus composedRun
   state := state.check
@@ -741,7 +741,7 @@ def run (root : String) : IO UInt32 := do
       finalEnvironmentIsIsolated composedRun
 
   let simpleRun ← generatedFixtureState
-    s!"{root}/test/fixtures/modelgen/prim_shapes.ndjson"
+    s!"{root}/test/fixtures/lean-inductive-models/prim_shapes.ndjson"
     { noGeneration with simple := true }
   let simple := simpleRun.output
   let simple' ← mustReorder "simple declaration-local output" simple
@@ -783,7 +783,7 @@ def run (root : String) : IO UInt32 := do
     ("composed", "nested_iota.ndjson", {}, true),
     ("late support", "prim_late_basis.ndjson", {}, false)]
   for (label, fixture, generation, checkRecursors) in stagedMatrix do
-    let fixturePath := s!"{root}/test/fixtures/modelgen/{fixture}"
+    let fixturePath := s!"{root}/test/fixtures/lean-inductive-models/{fixture}"
     let text ← IO.FS.readFile fixturePath
     let .ok input := Modelgen.parse text (analyse := false) | do
       state := state.check s!"staged {label} fixture parses" false
@@ -822,7 +822,7 @@ def run (root : String) : IO UInt32 := do
   -- a fixed support name; public interfaces and local implementation support
   -- are absent even though they remain in the emitted export.
   let aliasRun ← generatedFixtureState
-    s!"{root}/test/fixtures/modelgen/transparent_owner_aliases.ndjson" {}
+    s!"{root}/test/fixtures/lean-inductive-models/transparent_owner_aliases.ndjson" {}
   let aliasStaged ← runFilterStagedState s!"{root}/_tmp" aliasRun.input {}
   let aliasDropped ← runFilterDroppedState s!"{root}/_tmp" aliasRun.input {}
   let stagedGeneratedRecords := aliasStaged.plan.declarations.foldl (init := 0) fun count locator =>
@@ -873,7 +873,7 @@ def run (root : String) : IO UInt32 := do
   -- A W model has the largest fixed splice: the reusable `_wcore` fragment.
   -- The core survives for later source owners, while the public W model and its
   -- per-owner implementation forest remain confined to this island.
-  let wRun ← generatedFixtureState s!"{root}/test/fixtures/modelgen/prim_w.ndjson"
+  let wRun ← generatedFixtureState s!"{root}/test/fixtures/lean-inductive-models/prim_w.ndjson"
     { noGeneration with simple := true }
   let wCensus := isolationCensus wRun
   state := state.check
@@ -888,7 +888,7 @@ def run (root : String) : IO UInt32 := do
   -- needs it. It is source state, not a generated splice, and remains present
   -- after the owner's generated interface has been discarded.
   let latePUnitRun ← generatedFixtureState
-    s!"{root}/test/fixtures/modelgen/tight_prop_field_late.ndjson"
+    s!"{root}/test/fixtures/lean-inductive-models/tight_prop_field_late.ndjson"
     { noGeneration with simple := true }
   state := state.check "late input PUnit survives scheduled owner-free generation" <|
     latePUnitRun.report.generated.any (·.1 == `PFP) &&

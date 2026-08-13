@@ -218,7 +218,7 @@ def hasSafetyViolation (owner declaration : Name) (actual : String) :
 
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let wrapperRaw ← readExport "test/fixtures/modelgen/structure_projections.ndjson"
+  let wrapperRaw ← readExport "test/fixtures/lean-inductive-models/structure_projections.ndjson"
   let raw := #[`Dep.key, `Dep.payload, `Dep.witness, `SortFields.carrier,
     `SortFields.family, `SortFields.element, `SortFields.letCarrier,
     `depKey, `depPayload, `depWitness].foldl withoutDeclaration wrapperRaw
@@ -248,7 +248,7 @@ def main : IO UInt32 := do
   -- payload at positive instantiations.  `PI` uses its exact-sort field as the
   -- carrier; `PF` lifts its exactly proposition-valued field with the derived
   -- tight-pair/PUnit construction.
-  let primRaw ← readExport "test/fixtures/modelgen/prim_shapes.ndjson"
+  let primRaw ← readExport "test/fixtures/lean-inductive-models/prim_shapes.ndjson"
   let (primDeclarations, primReport) ← runExport primRaw
   let primGenerated := outputExport primRaw primDeclarations
   let pfProjection := Naming.projectionName `PF 0
@@ -306,7 +306,7 @@ def main : IO UInt32 := do
   -- both layers: the eight-slot skeleton interface (including its two
   -- intrinsic projection pairs) must close before the ten-slot indexed model
   -- is allowed to emit.
-  let noBaseRaw ← readExport "test/fixtures/modelgen/prim_carve.ndjson"
+  let noBaseRaw ← readExport "test/fixtures/lean-inductive-models/prim_carve.ndjson"
   let (noBaseDeclarations, noBaseReport) ← runExport noBaseRaw
   let noBaseGenerated := outputExport noBaseRaw noBaseDeclarations
   let noBaseOrdered ← match Order.reorder noBaseGenerated with
@@ -331,7 +331,7 @@ def main : IO UInt32 := do
 
   -- `Fmid` and the original `FChain` keep the one-pivot path pinned in the
   -- broad index-axis fixture.
-  let fmidRaw ← readExport "test/fixtures/modelgen/prim_idx.ndjson"
+  let fmidRaw ← readExport "test/fixtures/lean-inductive-models/prim_idx.ndjson"
   let (fmidDeclarations, fmidReport) ← runExport fmidRaw
   let fmidGenerated := outputExport fmidRaw fmidDeclarations
   let fmidOrdered ← match Order.reorder fmidGenerated with
@@ -350,7 +350,7 @@ def main : IO UInt32 := do
   -- large recursor and reaches the dependent-pivot scan. Its pivot and the
   -- supplying constructor field are one recorded classifier entry, so the
   -- old "pivot has no data field" state is unrepresentable.
-  let guardRaw ← readExport "test/fixtures/modelgen/arm_f_guards.ndjson"
+  let guardRaw ← readExport "test/fixtures/lean-inductive-models/arm_f_guards.ndjson"
   let (guardDeclarations, guardReport) ← runExport guardRaw
   let guardGenerated := outputExport guardRaw guardDeclarations
   let guardOrdered ← match Order.reorder guardGenerated with
@@ -376,7 +376,7 @@ def main : IO UInt32 := do
 
   -- The focused zipper fixture adds two pivots, a proof after a pivot, and a
   -- final non-pivot endpoint depending on the recovered value.
-  let zipRaw ← readExport "test/fixtures/modelgen/arm_f_zip.ndjson"
+  let zipRaw ← readExport "test/fixtures/lean-inductive-models/arm_f_zip.ndjson"
   let (zipDeclarations, zipReport) ← runExport zipRaw
   let zipGenerated := outputExport zipRaw zipDeclarations
   let zipOrdered ← match Order.reorder zipGenerated with
@@ -413,7 +413,7 @@ def main : IO UInt32 := do
   -- source owner precedes the input's own `PUnit` declaration, so generation has
   -- to wait, use that declaration, and let the stable order pass place the
   -- complete interface back before its owner.
-  let pfpRaw ← readExport "test/fixtures/modelgen/tight_prop_field_late.ndjson"
+  let pfpRaw ← readExport "test/fixtures/lean-inductive-models/tight_prop_field_late.ndjson"
   let (pfpDeclarations, pfpReport) ← runExport pfpRaw
   let pfpGenerated := outputExport pfpRaw pfpDeclarations
   let pfpProjection := Naming.projectionName `PFP 0
@@ -438,7 +438,7 @@ def main : IO UInt32 := do
   -- domain depends on an earlier data field therefore needs the canonical
   -- transport on the rule's right-hand side; the independent first field
   -- remains the literal, uncast rule.
-  let wRaw ← readExport "test/fixtures/modelgen/prim_w.ndjson"
+  let wRaw ← readExport "test/fixtures/lean-inductive-models/prim_w.ndjson"
   let (wDeclarations, wReport) ← runExport wRaw
   let wGenerated := outputExport wRaw wDeclarations
   let wNames := wDeclarations.flatMap (·.names.toArray)
@@ -511,7 +511,7 @@ def main : IO UInt32 := do
     sortFieldProjections.all names.contains &&
       (Check.check generated |>.all (·.familyOwner != `SortFields))
 
-  let wcore ← readExport "test/fixtures/modelgen/w_core.ndjson"
+  let wcore ← readExport "test/fixtures/lean-inductive-models/w_core.ndjson"
   state := state.check "Prop-valued Iff exposes its two proof fields" <|
     intrinsicFieldsFor wcore `Iff == #[0, 1]
   state := state.check "Prop-valued Nonempty cannot expose its data field" <|
@@ -618,7 +618,7 @@ def main : IO UInt32 := do
       privateNames.contains (Naming.projectionName privateDep 1) &&
       privateNames.contains (Naming.projectionIotaName privateDep 1)
   let leakedAliases := privateDecls.flatMap declarationNames |>.filter fun name =>
-    name.components.any (· == `_modelgen_alias)
+    name.components.any (· == `_inductive_models_alias)
   state := state.check "projection retry aliases do not leak into serialized records" <|
     leakedAliases.isEmpty
 
@@ -633,7 +633,7 @@ def main : IO UInt32 := do
     legacyReport.generated.any (·.1 == `Dep) &&
       legacyDecls.any (·.names.contains payloadModel)
 
-  let mutualWrapperRaw ← readExport "test/fixtures/modelgen/mutual_structure_projections.ndjson"
+  let mutualWrapperRaw ← readExport "test/fixtures/lean-inductive-models/mutual_structure_projections.ndjson"
   let mutualRaw := #[`MLeft.value, `MRight.key, `MRight.payload,
     `leftValue, `rightPayload].foldl withoutDeclaration mutualWrapperRaw
   let (mutualDecls, mutualReport) ← runExport mutualRaw

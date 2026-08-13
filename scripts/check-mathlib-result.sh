@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate the durable artifacts produced by the full-Mathlib modelgen run.
+# Validate the durable artifacts produced by the full-Mathlib lean-inductive-models run.
 # Counts are deliberately required to be positive but are not pinned: the
 # corpus revisions, rather than a historical observation, define their values.
 set -euo pipefail

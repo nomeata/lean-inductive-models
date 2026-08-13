@@ -6,7 +6,7 @@ import Modelgen.Supervisor
 set_option maxRecDepth 4096
 
 /-!
-End-to-end tests for the public `modelgen` process boundary.
+End-to-end tests for the public `lean-inductive-models` process boundary.
 
 These deliberately execute the built binary: parser-only tests cannot observe
 the stdout/stderr split, output suppression, pass ordering, or the integrated
@@ -24,9 +24,9 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
     { state with failed := state.failed.push label }
 
 def defaultModelgenEnv : Array (String × Option String) :=
-  #[("MODELGEN_LEGACY_OUTPUT", none), ("MODELGEN_RAW_SPOOL", none),
-    ("MODELGEN_OUTPUT_BACKEND_TRACE", none),
-    ("MODELGEN_PLANNER_LEVEL_TRACE", none),
+  #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", none), ("LEAN_INDUCTIVE_MODELS_RAW_SPOOL", none),
+    ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", none),
+    ("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", none),
     (Modelgen.Supervisor.workerMarker, none)]
 
 def runModelgenWithEnv (binary : String) (args : List String)
@@ -43,7 +43,7 @@ def runModelgen (binary : String) (args : List String) (input? : Option String :
 
 def runModelgenLegacy (binary : String) (args : List String)
     (input? : Option String := none) : IO IO.Process.Output :=
-  runModelgenWithEnv binary args #[("MODELGEN_LEGACY_OUTPUT", some "1")] input?
+  runModelgenWithEnv binary args #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1")] input?
 
 def runModelgenAt (binary : String) (args : List String) (cwd : String)
     (env : Array (String × Option String) := #[]) :
@@ -78,7 +78,7 @@ def removeIfPresent (path : System.FilePath) : IO Unit := do
 
 def hasOutputSibling (directory : System.FilePath) : IO Bool := do
   return (← directory.readDir).any fun entry =>
-    entry.fileName.startsWith ".modelgen-output-" && entry.fileName.endsWith ".tmp"
+    entry.fileName.startsWith ".lean-inductive-models-output-" && entry.fileName.endsWith ".tmp"
 
 def mapInductiveType (inputExport : Modelgen.Export) (target : Lean.Name)
     (f : Modelgen.EIndType → Modelgen.EIndType) : Modelgen.Export :=
@@ -115,14 +115,14 @@ def reverseConstructorsFor (inputExport : Modelgen.Export) (target : Lean.Name) 
 
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
-  let binary := s!"{root}/.lake/build/bin/modelgen"
+  let binary := s!"{root}/.lake/build/bin/lean-inductive-models"
   unless ← System.FilePath.pathExists binary do
-    IO.eprintln s!"mainclitest: missing {binary}; run `lake build modelgen` first"
+    IO.eprintln s!"mainclitest: missing {binary}; run `lake build lean-inductive-models` first"
     return 1
 
   let scratch := s!"{root}/_tmp"
   IO.FS.createDirAll scratch
-  let nested := s!"{root}/test/fixtures/modelgen/nested_iota.ndjson"
+  let nested := s!"{root}/test/fixtures/lean-inductive-models/nested_iota.ndjson"
   let nestedText ← IO.FS.readFile nested
   let .ok nestedExport := Modelgen.parse nestedText (analyse := false) | do
     IO.eprintln "mainclitest: nested fixture did not parse"
@@ -406,7 +406,7 @@ def main (args : List String) : IO UInt32 := do
     duplicateWithoutKernel.exitCode == 1 &&
       duplicateWithoutKernel.stderr.contains "invalid export: duplicate declaration"
 
-  let quotientPath := s!"{root}/test/fixtures/modelgen/prim_graph_pre.ndjson"
+  let quotientPath := s!"{root}/test/fixtures/lean-inductive-models/prim_graph_pre.ndjson"
   let quotientText ← IO.FS.readFile quotientPath
   let unknownQuotient := quotientText.replace "\"kind\":\"type\"" "\"kind\":\"mystery\""
   let badQuotient ← runModelgenStdin binary [
@@ -575,7 +575,7 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "stdout output succeeds" (stdoutRun.exitCode == 0)
   let generationDisabled ← runModelgenWithEnv binary
     ["--no-inductives", "--no-check", "--quiet", nested]
-    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "generation-disabled output selects the legacy backend" <|
     generationDisabled.exitCode == 0 && generationDisabled.stdout == stdoutRun.stdout &&
       hasDiagnostic generationDisabled.stderr "output backend: legacy"
@@ -588,27 +588,27 @@ def main (args : List String) : IO UInt32 := do
   let binaryAbsolute := if binaryPath.isAbsolute then binaryPath else currentDirectory / binaryPath
   let fallbackRun ← runModelgenAt binaryAbsolute.toString
     ["--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
-    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "missing staging root falls back without changing output" <|
     fallbackRun.exitCode == 0 && sameSemanticExport fallbackRun.stdout defaults.stdout &&
       hasDiagnostic fallbackRun.stderr "output backend: legacy"
   IO.FS.removeDir fallbackCwd
   let leakedSpools ← System.FilePath.readDir scratch
   state := state.check "successful staged parse removes its workspace" <|
-    !leakedSpools.any (fun entry => entry.fileName.startsWith "modelgen-spool-")
+    !leakedSpools.any (fun entry => entry.fileName.startsWith "lean-inductive-models-spool-")
 
   -- Eligible canonical generation selects staged output without an enabling
   -- environment variable. The trace observes the actual backend after raw
   -- certification and compact-availability checks; it is not a selector.
   let observedDefault ← runModelgenWithEnv binary [nested]
-    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "ordinary default generation selects staged output" <|
     observedDefault.exitCode == defaults.exitCode &&
       hasDiagnostic observedDefault.stderr "output backend: staged" &&
       sameSemanticExport observedDefault.stdout defaults.stdout
   let observedLegacy ← runModelgenWithEnv binary [nested] #[
-    ("MODELGEN_LEGACY_OUTPUT", some "1"),
-    ("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+    ("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1"),
+    ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "explicit A/B override selects legacy output" <|
     observedLegacy.exitCode == defaults.exitCode &&
       hasDiagnostic observedLegacy.stderr "output backend: legacy" &&
@@ -617,7 +617,7 @@ def main (args : List String) : IO UInt32 := do
   removeIfPresent stagedNamedPath
   let stagedNamed ← runModelgenWithEnv binary
     ["-o", stagedNamedPath, nested]
-    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   let stagedNamedText ← if ← System.FilePath.pathExists stagedNamedPath then
       IO.FS.readFile stagedNamedPath
     else pure ""
@@ -635,7 +635,7 @@ def main (args : List String) : IO UInt32 := do
   let noncanonicalInput := "\n" ++ nestedExport.render
   let noncanonicalDefault ← runModelgenWithEnv binary
     ["--no-check", "--no-type-check-output", "-"]
-    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")] (some noncanonicalInput)
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")] (some noncanonicalInput)
   let noncanonicalLegacy ← runModelgenLegacy binary
     ["--no-check", "--no-type-check-output", "-"] (some noncanonicalInput)
   state := state.check "noncanonical raw input selects legacy output" <|
@@ -645,14 +645,14 @@ def main (args : List String) : IO UInt32 := do
 
   let traceMode ← runModelgenWithEnv binary
     ["--no-check-output", "--no-type-check-output", nested]
-    #[("MODELGEN_PLANNER_LEVEL_TRACE", some "1"),
-      ("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+    #[("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", some "1"),
+      ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "planner trace mode selects legacy output" <|
     traceMode.exitCode == 0 && hasDiagnostic traceMode.stderr "output backend: legacy"
 
   let kernelOutputMode ← runModelgenWithEnv binary
     ["--no-check", "--type-check-output", nested]
-    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "output kernel checking selects legacy output" <|
     kernelOutputMode.exitCode == 0 &&
       hasDiagnostic kernelOutputMode.stderr "output backend: legacy"
@@ -662,7 +662,7 @@ def main (args : List String) : IO UInt32 := do
   -- rather than raw bytes.
   for (label, fixture) in #[
       ("nested multi-model island", nested),
-      ("late scheduled support", s!"{root}/test/fixtures/modelgen/prim_late_basis.ndjson")] do
+      ("late scheduled support", s!"{root}/test/fixtures/lean-inductive-models/prim_late_basis.ndjson")] do
     let args := #["--no-check-output", "--no-type-check-output", "--no-mono-levels", fixture]
     let legacy ← runModelgenLegacy binary args.toList
     let staged ← runModelgen binary args.toList
@@ -696,7 +696,7 @@ def main (args : List String) : IO UInt32 := do
     fallbackStaged.stdout == fallbackLegacy.stdout
   let leakedGeneratedSpools ← System.FilePath.readDir scratch
   state := state.check "staged generated output removes its workspace" <|
-    !leakedGeneratedSpools.any (fun entry => entry.fileName.startsWith "modelgen-spool-")
+    !leakedGeneratedSpools.any (fun entry => entry.fileName.startsWith "lean-inductive-models-spool-")
   let outputPath := s!"{scratch}/main-cli-output.ndjson"
   if ← System.FilePath.pathExists outputPath then IO.FS.removeFile outputPath
   let fileRun ← runModelgen binary
@@ -842,7 +842,7 @@ def main (args : List String) : IO UInt32 := do
   -- runs before inductive generation, and performs Mono's kernel replay.
   let monoRun ← runModelgenWithEnv binary
     ["--no-inductives", "--mono-levels", "--quiet", mono]
-    #[("MODELGEN_OUTPUT_BACKEND_TRACE", some "1")]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "mono-levels mode A succeeds" (monoRun.exitCode == 0)
   state := state.check "mono-levels selects the legacy backend" <|
     hasDiagnostic monoRun.stderr "output backend: legacy"
@@ -853,7 +853,7 @@ def main (args : List String) : IO UInt32 := do
   -- can model its result without asking Mono to infer instantiations for the
   -- generated bootstrap basis.  This fixture has distinct universe use sites
   -- and exercises the full default `--inductives --check` pipeline.
-  let poly := s!"{root}/test/fixtures/modelgen/poly_nested_used.ndjson"
+  let poly := s!"{root}/test/fixtures/lean-inductive-models/poly_nested_used.ndjson"
   let monoModels ← runModelgen binary ["--mono-levels", "--quiet", poly]
   state := state.check "monomorphized generated models pass the final check"
     (monoModels.exitCode == 0 && !monoModels.stdout.isEmpty)

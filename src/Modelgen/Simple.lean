@@ -338,7 +338,7 @@ private def aliasBasisDeclaration (root alias : Name) : Declaration → Declarat
 
 private partial def freshBasisAlias (env : Environment) (root : Name)
     (canonical : Declaration) (attempt : Nat := 0) : Name :=
-  let stem := (`_modelgen_basis_validation).mkNum attempt
+  let stem := (`_inductive_models_basis_validation).mkNum attempt
   let alias := stem ++ root
   let declarationNames := canonical.getNames.map fun name =>
     if root.isPrefixOf name then name.replacePrefix root alias else name
@@ -1310,7 +1310,7 @@ else: an unselected index stays free, which is exactly what the subsingleton
 arms need when some index positions are **pivots** — positions the model
 substitutes rather than equates — whose variables remain in scope while the
 rest are packed around them (`Fmid` in
-`test/fixtures/modelgen/prim_idx.lean` is the shape that
+`test/fixtures/lean-inductive-models/prim_idx.lean` is the shape that
 pins it: a pivot sitting *between* two dependent non-pivots, so the second
 selected type still mentions the first while the pivot between them is
 skipped).
@@ -2666,7 +2666,7 @@ function rather than two lines at each call site: `β` is `fun (x : Xᵢ) => …
 `Xᵢ` mentions the earlier fields, and abstracting the field variable closes the
 *body* over it while leaving the domain pointing at a variable that is no
 longer in scope. A tower whose fields do not depend on each other never notices;
-`test/fixtures/modelgen/prim_w.lean`'s `Dep` is the occupant that does, and it found this as a
+`test/fixtures/lean-inductive-models/prim_w.lean`'s `Dep` is the occupant that does, and it found this as a
 kernel `declaration has free variables`. -/
 def wTowerAt (w : Level) (xs : Array Expr) (boxed : Array Bool) (i : Nat)
     (pre : Array Expr) : GenM (Level × Expr × Expr × Expr) := do
@@ -3550,7 +3550,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- only all-pivot ones, and everything in between — `MixI`, `SvIx`,
   -- `IsHomLift`, every `.below` Lean mints beside a recursive `Prop`, and
   -- `Acc.below` — fell through the gap between them.
-  -- `test/fixtures/modelgen/prim_idx.lean` is the grid.
+  -- `test/fixtures/lean-inductive-models/prim_idx.lean` is the grid.
   let armGRec := (route matches PrimRoute.prop) && large && nc == 1 && isRec
   let armFNonRec := ((route matches PrimRoute.prop) || (route matches PrimRoute.bare)) &&
     large && nc == 1 && ni > 0 && !isRec
@@ -4158,7 +4158,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- At **no** pivots this is exactly what the arm was before — the
     -- subsequence is the whole telescope and `h⃗` is every field — which is
     -- what makes the generalisation additive rather than a rewrite. At **no
-    -- non-pivots** (`Fall` in `test/fixtures/modelgen/prim_idx.lean`) there is
+    -- non-pivots** (`Fall` in `test/fixtures/lean-inductive-models/prim_idx.lean`) there is
     -- nothing left to
     -- equate: the carrier is a bare Church conjunction, the recursor is the
     -- minor applied to the recovered fields, and no `Eq.rec` is built.
@@ -4474,7 +4474,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- the kernel accepts it, and what catches the permutation is `rec_0`, whose
     -- index transport is written against the skeleton term the model
     -- constructor is supposed to reduce to.
-    -- `test/fixtures/modelgen/prim_carve.lean`'s `Sm3` is
+    -- `test/fixtures/lean-inductive-models/prim_carve.lean`'s `Sm3` is
     -- that occupant and its header records the four mutations — including the
     -- association error that two recursive fields cannot see at all.
     let ctorIdxAt := fun (ps gs : Array Expr) (j : Nat) => do

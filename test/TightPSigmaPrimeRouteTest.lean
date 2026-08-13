@@ -73,7 +73,7 @@ def ownerPasses (input : Export) (owner : Name) : Bool :=
 
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let raw ← readExport "test/fixtures/modelgen/tight_psigma_prime.ndjson"
+  let raw ← readExport "test/fixtures/lean-inductive-models/tight_psigma_prime.ndjson"
   let noBasis := withoutDeclaration raw `PSigma'
   let (generated, report) ← runExport noBasis
   let names := generated.decls.flatMap (·.names.toArray)

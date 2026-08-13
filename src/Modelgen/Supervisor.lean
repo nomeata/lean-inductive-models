@@ -34,11 +34,11 @@ def runWorker (args : List String) : IO UInt32 := do
     let status ← child.wait
     if status ≤ 3 then
       return status
-    reportFailure s!"modelgen: worker terminated with native status {status}; \
+    reportFailure s!"lean-inductive-models: worker terminated with native status {status}; \
       reporting internal tool error 3"
     return 3
   catch error =>
-    reportFailure s!"modelgen: cannot supervise worker: {error}"
+    reportFailure s!"lean-inductive-models: cannot supervise worker: {error}"
     return 3
 
 /-- Enter the worker exactly once. A normal worker result is returned byte for

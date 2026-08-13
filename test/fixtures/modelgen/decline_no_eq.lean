@@ -1,5 +1,5 @@
 /- **The export declares no `Eq`.** The round trips are equations, so the model
-   cannot be written without one — and `modelgen` splices Lean's own in rather
+   cannot be written without one — and `lean-inductive-models` splices Lean's own in rather
    than declining: `Tree`'s model is 15 declarations plus
    the `Eq`, `Eq.refl` and `Eq.rec` that come with it. The file is named for
    what its **input** lacks, not for what happens to it. -/

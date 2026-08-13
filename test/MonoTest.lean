@@ -71,7 +71,7 @@ def readExport (p : String) : IO (Option (String × Export)) := do
   | .error e => throw (IO.userError s!"{p}: {e}")
   | .ok x => return some (t, x)
 
-/-- What `modelgen --mono-levels` writes through its output path:
+/-- What `lean-inductive-models --mono-levels` writes through its output path:
 [`Export.writeTo`] through a project-local temporary, read back. -/
 def streamed (root : String) (y : Export) : IO String := do
   let dir := s!"{root}/_tmp"

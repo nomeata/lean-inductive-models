@@ -5,7 +5,7 @@
    recursor's minor and the ι rules all have to transport along
    `(fun x⃗ => pack (unpack (f x⃗))) = f` — which is function extensionality.
    `infinitary.lean` is the same three declarations *without* one, and
-   `modelgen` derives one there and splices it in; this
+   `lean-inductive-models` derives one there and splices it in; this
    file is them **with** one, and is the control that says an input's own
    `funext` beats a derived one — nothing is spliced here and the five counts
    below are unchanged from before the splice existed.
@@ -13,7 +13,7 @@
    `funext` here is Lean's own development, written out: `init_quot`, the
    `Quot.sound` axiom that `Init/Core.lean` declares, and `congrArg` on the
    extensional application of a `Quot`. It is a theorem and not an axiom,
-   exactly as in Lean — which is also what `modelgen` emits when it has to
+   exactly as in Lean — which is also what `lean-inductive-models` emits when it has to
    derive one, and this file is where the two can be read side by side.
 
    The three declarations are the three *places* a binder can sit relative to

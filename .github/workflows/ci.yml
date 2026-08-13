@@ -43,7 +43,7 @@ jobs:
           PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
             python3 -m py_compile test/scripts/check_arena_corpus.py
           PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_arena_corpus_runner.py
-          lake -Kjobs=1 build modelgen
+          lake -Kjobs=1 build lean-inductive-models
           test/scripts/check_arena_corpus.py
 
   test:
@@ -98,7 +98,7 @@ jobs:
 
           case "$SUITE" in
             fixtures)
-              build_serially modelgen test
+              build_serially lean-inductive-models test
               lake exe test "$GITHUB_WORKSPACE" | tee _tmp/fixtures.log
               test/scripts/check-hard-nested-a.sh
               test/scripts/check-hard-nested-c.sh
@@ -143,13 +143,13 @@ jobs:
               count=25
               ;;
             mono)
-              build_serially modelgen monotest mainclitest
+              build_serially lean-inductive-models monotest mainclitest
               lake exe monotest "$GITHUB_WORKSPACE" | tee _tmp/mono.log
               mono_count="$(sed -nE 's/^monotest: ([0-9]+) checks, all pass$/\1/p' _tmp/mono.log | tail -n1)"
               lake exe mainclitest "$GITHUB_WORKSPACE" | tee _tmp/maincli.log
               cli_count="$(sed -nE 's/^main CLI: ([0-9]+) passed, 0 failed$/\1/p' _tmp/maincli.log | tail -n1)"
               if [[ -z "$mono_count" || -z "$cli_count" ]]; then
-                echo "mono suite did not report both library and modelgen CLI checks" >&2
+                echo "mono suite did not report both library and lean-inductive-models CLI checks" >&2
                 exit 1
               fi
               count="$((mono_count + cli_count))"

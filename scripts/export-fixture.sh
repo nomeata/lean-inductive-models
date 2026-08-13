@@ -3,22 +3,22 @@
 #
 #   scripts/export-fixture.sh [NAME[.lean] ...]
 #
-# `FIXTURE_DIR` selects the source directory and defaults to the modelgen
-# fixtures. `OUT_DIR` defaults to the same directory. `MODELGEN_FILTER=0`
+# `FIXTURE_DIR` selects the source directory and defaults to the lean-inductive-models
+# fixtures. `OUT_DIR` defaults to the same directory. `LEAN_INDUCTIVE_MODELS_FILTER=0`
 # retains the raw lean4export result; otherwise the export is passed through
-# modelgen. A source line containing exactly `--#monomorph` additionally
-# enables `modelgen --mono-levels`.
+# lean-inductive-models. A source line containing exactly `--#monomorph` additionally
+# enables `lean-inductive-models --mono-levels`.
 #
 # The exporter checkout, compiler output, and intermediate exports all live
 # below the repository-local `_tmp/` directory. `LEAN4EXPORT_DIR` and
-# `MODELGEN_BIN` may point at existing builds. Every child inherits a 16 GiB
+# `LEAN_INDUCTIVE_MODELS_BIN` may point at existing builds. Every child inherits a 16 GiB
 # virtual-memory limit.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURES="${FIXTURE_DIR:-$ROOT/test/fixtures/modelgen}"
+FIXTURES="${FIXTURE_DIR:-$ROOT/test/fixtures/lean-inductive-models}"
 OUT="${OUT_DIR:-$FIXTURES}"
-FILTER="${MODELGEN_FILTER:-1}"
+FILTER="${LEAN_INDUCTIVE_MODELS_FILTER:-1}"
 TOOLCHAIN="leanprover/lean4:v4.29.1"
 EXPORT_REV="caccfbe"
 EXPORT_DIR="${LEAN4EXPORT_DIR:-$ROOT/_tmp/lean4export}"
@@ -41,16 +41,16 @@ printf '%s\n' "$TOOLCHAIN" > "$EXPORT_DIR/lean-toolchain"
 ( cd "$EXPORT_DIR" && lake build >&2 )
 
 EXPORTER_BIN="$EXPORT_DIR/.lake/build/bin/lean4export"
-MODELGEN_BIN="${MODELGEN_BIN:-$ROOT/.lake/build/bin/modelgen}"
+LEAN_INDUCTIVE_MODELS_BIN="${LEAN_INDUCTIVE_MODELS_BIN:-$ROOT/.lake/build/bin/lean-inductive-models}"
 EXPORT_LEAN_PATH="$(cd "$EXPORT_DIR" && lake env printenv LEAN_PATH)"
 
-ensure_modelgen() {
-  if [[ ! -x "$MODELGEN_BIN" ]]; then
-    echo "building modelgen" >&2
-    ( cd "$ROOT" && lake build modelgen >&2 )
+ensure_inductive_models() {
+  if [[ ! -x "$LEAN_INDUCTIVE_MODELS_BIN" ]]; then
+    echo "building lean-inductive-models" >&2
+    ( cd "$ROOT" && lake build lean-inductive-models >&2 )
   fi
-  [[ -x "$MODELGEN_BIN" ]] || {
-    echo "modelgen is not built: $MODELGEN_BIN" >&2
+  [[ -x "$LEAN_INDUCTIVE_MODELS_BIN" ]] || {
+    echo "lean-inductive-models is not built: $LEAN_INDUCTIVE_MODELS_BIN" >&2
     exit 2
   }
 }
@@ -87,14 +87,14 @@ for source in "${SOURCES[@]}"; do
   MONO=0
   grep -q '^--#monomorph *$' "$source" && MONO=1
   if ((FILTER || MONO)); then
-    ensure_modelgen
-    declare -a MODELGEN_ARGS=()
-    ((MONO)) && MODELGEN_ARGS+=(--mono-levels)
-    ((!FILTER)) && MODELGEN_ARGS+=(--no-inductives)
-    "$MODELGEN_BIN" "${MODELGEN_ARGS[@]}" \
+    ensure_inductive_models
+    declare -a LEAN_INDUCTIVE_MODELS_ARGS=()
+    ((MONO)) && LEAN_INDUCTIVE_MODELS_ARGS+=(--mono-levels)
+    ((!FILTER)) && LEAN_INDUCTIVE_MODELS_ARGS+=(--no-inductives)
+    "$LEAN_INDUCTIVE_MODELS_BIN" "${LEAN_INDUCTIVE_MODELS_ARGS[@]}" \
       "$OUT/$base.ndjson" -o "$WORK/$base.filtered.ndjson"
     mv "$WORK/$base.filtered.ndjson" "$OUT/$base.ndjson"
-    unset MODELGEN_ARGS
+    unset LEAN_INDUCTIVE_MODELS_ARGS
   fi
 
   suffix=""

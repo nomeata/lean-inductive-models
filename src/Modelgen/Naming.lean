@@ -35,7 +35,7 @@ def AliasMap.empty : AliasMap := {}
 /-- The retry namespace for an exact declaration owner.  Appending the raw
 name below a public component keeps an embedded `_private` component from
 being stripped by `privateToUserName`. -/
-def retryRoot (owner : Name) : Name := `_modelgen_alias ++ owner
+def retryRoot (owner : Name) : Name := `_inductive_models_alias ++ owner
 
 /-- Relocate an exact source declaration for a retry.  Descendants retain
 their suffix; declarations outside the owner's namespace (raw private

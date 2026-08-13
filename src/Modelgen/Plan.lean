@@ -35,8 +35,8 @@ inductive B | mk : Box A → B … end` becomes the four-member block `A`, `B`,
 adds every member of `C`'s mutual block at `α` immediately, in `all` order.
 The sweep is over the declared members and then breadth first over those mimic
 families, which is Lean's own motive order — measured against
-`test/fixtures/modelgen/nest_mutual_both.ndjson` and the mutual-container
-closure in `test/fixtures/modelgen/hard_nested_mutual_index.ndjson`.
+`test/fixtures/lean-inductive-models/nest_mutual_both.ndjson` and the mutual-container
+closure in `test/fixtures/lean-inductive-models/hard_nested_mutual_index.ndjson`.
 -/
 
 open Lean
@@ -71,7 +71,7 @@ structure Plan where
   /-- Members `0 … numAll−1` are the declared block's own, in the export's `all`
   order; members `numAll …` are the mimics, in discovery order. **That is Lean's
   own motive order**, measured on
-  `test/fixtures/modelgen/nest_mutual_both.ndjson`:
+  `test/fixtures/lean-inductive-models/nest_mutual_both.ndjson`:
   `A`, `B`, `List B`, `Box A`. -/
   types : Array PType
   /-- How many of `types` are the export's own members. `1` unless the
@@ -217,7 +217,7 @@ private partial def spec (e : Expr) (d : Nat) : SpM Expr := do
     -- body is where the nesting is. `getAppFn` hands back the lambda, so a
     -- sweep over the arguments alone never enters it and an occurrence in
     -- there — `RB N (fun _ => L Deep)`, `RB N (fun k => Vec Idx k)`, both in
-    -- `test/fixtures/modelgen/nest_fam_arg.lean` — gets no mimic at all.
+    -- `test/fixtures/lean-inductive-models/nest_fam_arg.lean` — gets no mimic at all.
     -- Nothing else reaches here with a compound head: a
     -- `bvar`/`fvar`/`sort` head falls through the catch-all unchanged.
     let h ← if h.isConst then pure h else spec h d

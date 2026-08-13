@@ -263,7 +263,7 @@ def containsName (faces : Array Face) (name : Name) : Bool :=
   faces.any (·.name == name)
 
 def run (root : String) : IO UInt32 := do
-  let evidence ← collectEvidence s!"{root}/test/fixtures/modelgen/source_structure_syntax.ndjson"
+  let evidence ← collectEvidence s!"{root}/test/fixtures/lean-inductive-models/source_structure_syntax.ndjson"
   for face in evidence.faces do
     IO.println s!"{face.name} first difference: {face.difference}"
     IO.println s!"{face.name} actual: {repr face.actual}"
