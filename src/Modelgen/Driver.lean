@@ -1587,11 +1587,11 @@ private partial def metaConstantsAvailable (environment : Environment)
     if visited.contains name then
       metaConstantsAvailable environment unavailable pending visited
     else if unavailable.contains name then false
-    else match environment.findConstVal? name with
-      | none => false
-      | some value =>
+    else match environment.find? name, environment.findConstVal? name with
+      | some _, some value =>
         metaConstantsAvailable environment unavailable
           (value.type.getUsedConstants.toList ++ pending) (visited.insert name)
+      | _, _ => false
 
 private def checkKernelReplayExpressions (record : EDecl)
     (only : Option (Std.HashSet Expr) := none)
@@ -1606,7 +1606,8 @@ private def checkKernelReplayExpressions (record : EDecl)
       -- normalized private-name collision, inductive compilation can create
       -- auxiliary constants in the kernel environment which `addDeclCore` on
       -- this mirror does not expose through its async constant map. Check a
-      -- root only when Meta's own constant lookup can resolve every reference
+      -- root only when Meta's constant-info and constant-value lookups can
+      -- both resolve every reference
       -- reached through constant types. (For example, an exported theorem may
       -- mention a generated helper whose type mentions a nested recursor that
       -- exists only in the kernel environment.) The official kernel and
