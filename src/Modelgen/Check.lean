@@ -1481,6 +1481,18 @@ def compactFamilyCertificateWithIndex (x : Export) (index : SyntaxIndex)
       (pair.owner, pair.model,
         (family.correspondence.iotas.filter (·.recursor == pair.owner)).size) }
 
+/-- Bind selected family certificates to their owner records. Empty rows are
+retained so this array can be permuted with declaration summaries and byte
+locators without a separate owner/name lookup. -/
+def compactFamilyCertificateRecordsWithIndex (x : Export) (index : SyntaxIndex)
+    (families : Array Family) : Array (Array CompactFamilyCertificate) := Id.run do
+  let mut records := Array.replicate x.decls.size #[]
+  for family in families do
+    if family.ownerDecl < records.size then
+      records := records.modify family.ownerDecl (·.push
+        (compactFamilyCertificateWithIndex x index family))
+  return records
+
 /-- Capture every currently discoverable family in owner-record order. This is
 the full-export convenience form; staged generation captures source and island
 families separately through `compactFamilyCertificateWithIndex`. -/

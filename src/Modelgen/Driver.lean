@@ -107,6 +107,8 @@ order and therefore with a later `Spool.IslandCommit.declarations`. -/
 structure CompactIsland where
   summaries : Array Order.DeclSummary
   globalExtras : Array Check.GlobalExtraRecord
+  families : Array (Array Check.CompactFamilyCertificate)
+  sourceFamilies : Array Check.CompactFamilyCertificate
   diagnosticOwners : Std.HashSet Name
 
 /-- One staged island after its generated expressions have been serialized.
@@ -144,6 +146,7 @@ together with their byte locator and must always be permuted as one value. -/
 structure StagedRecord where
   summary : Order.DeclSummary
   globalExtra : Check.GlobalExtraRecord
+  families : Array Check.CompactFamilyCertificate := #[]
   locator : StagedLocator
   deriving Inhabited, Repr
 
@@ -153,6 +156,7 @@ addressed by island commits and `declarations` is the final compact order. -/
 structure StagedPlan where
   islands : Array Spool.IslandCommit := #[]
   declarations : Array StagedLocator := #[]
+  checkReport : Check.Report := { familiesChecked := 0, violations := #[] }
 
 /-- Physical declaration payload selected by one compact output row. -/
 inductive StagedDeclarationSpan where
@@ -1107,9 +1111,15 @@ def closeModelIsland (template : Export) (main : Environment)
     match record with
     | .induct (type :: _) _ _ => owners.insert type.name
     | _ => owners
+  let generatedFamilyRecords :=
+    Check.compactFamilyCertificateRecordsWithIndex generatedView index generatedFamilies
+  let sourceFamilyCertificates := sourceFamilies.map
+    (Check.compactFamilyCertificateWithIndex template index)
   let compact : CompactIsland :=
     { summaries := Order.summariesWithIndex generatedView index compactOwners
       globalExtras := Check.globalExtraRecordsWithIndex index generated
+      families := generatedFamilyRecords
+      sourceFamilies := sourceFamilyCertificates
       diagnosticOwners }
   let statementReport :=
     if generatedOwners.isEmpty then
@@ -1999,6 +2009,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let mut persistentSyntax := sourceSyntax
   let sourceSummaries := Order.summaries scheduled
   let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
+  let sourceFamilyRecords := Check.compactFamilyCertificateRecordsWithIndex
+    scheduled sourceSyntax (Check.discover scheduled)
   let mut rawOrdinals : Std.HashMap Name Nat := {}
   for ordinal in [0:x.decls.size] do
     rawOrdinals := x.decls[ordinal]!.names.foldl
@@ -2027,6 +2039,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     -- owner remains in this buffer after that island has closed.
     let mut out : Array EDecl := #[]
     let mut pending : Array PendingModel := #[]
+    let mut modeledSourceFamilies : Array Check.CompactFamilyCertificate := #[]
     let basisRoot? := match d with
       | .induct types _ _ => types.findSome? fun type =>
           if primBasis.contains type.name then some type.name else none
@@ -2251,10 +2264,12 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
             statementReport.statementsChecked
           violations := islandStatements.violations ++ statementReport.violations }
       unless compact.summaries.size == orderedGenerated.size &&
-          compact.globalExtras.size == orderedGenerated.size do
+          compact.globalExtras.size == orderedGenerated.size &&
+          compact.families.size == orderedGenerated.size do
         throwError "accepted island cardinality mismatch for {d.names}: \
           records={orderedGenerated.size}, summaries={compact.summaries.size}, \
-          extras={compact.globalExtras.size}"
+          extras={compact.globalExtras.size}, families={compact.families.size}"
+      modeledSourceFamilies := compact.sourceFamilies
       -- An inductive owner may legitimately produce no model under the active
       -- route configuration. It contributes no generated island; the spool
       -- transaction deliberately rejects empty commits.
@@ -2271,6 +2286,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           stagedRecords := stagedRecords.push {
             summary := tagged[localOrdinal]!
             globalExtra := compact.globalExtras[localOrdinal]!
+            families := compact.families[localOrdinal]!
             locator := .generated islandNumber localOrdinal }
         staged := staged.push {
           compact := { compact with summaries := tagged }
@@ -2302,6 +2318,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       stagedRecords := stagedRecords.push {
         summary := sourceSummaries[scheduledOrdinal]!
         globalExtra := sourceGlobalExtras[scheduledOrdinal]!
+        families := sourceFamilyRecords[scheduledOrdinal]! ++ modeledSourceFamilies
         locator := .source rawOrdinal }
     scheduledOrdinal := scheduledOrdinal + 1
     -- Statement correspondence is deliberately postponed until every emitted
@@ -2317,6 +2334,12 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       | .ok order => pure order
       | .error error => throwError "cannot compactly order staged records: {repr error}"
     else pure #[]
+  let compactCheckReport := if sink?.isSome then
+      let orderedGlobals := stagedOrder.map fun i => stagedRecords[i]!.globalExtra
+      let orderedFamilies := stagedOrder.flatMap fun i => stagedRecords[i]!.families
+      Check.compactOrderedReport orderedGlobals orderedFamilies
+    else
+      ({ familiesChecked := 0, violations := #[] } : Check.Report)
   let compactStatementReport := if sink?.isSome then
     let orderedGlobals := stagedOrder.map fun i => stagedRecords[i]!.globalExtra
     let diagnosticOwners := staged.foldl (init := ({} : Std.HashSet Name))
@@ -2355,6 +2378,12 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         unless compactStatementReport == fullReport do
           throwError "compact staged statements disagree with full export: \
             compact={repr compactStatementReport}, full={repr fullReport}"
+        let orderedExport := { finalExport with
+          decls := fullOrder.map fun index => finalExport.decls[index]! }
+        let fullCheckReport := Check.checkReport orderedExport
+        unless compactCheckReport == fullCheckReport do
+          throwError "compact output check disagrees with full export: \
+            compact={repr compactCheckReport}, full={repr fullCheckReport}"
       pure fullReport
     else pure compactStatementReport
   rep := { rep with stmtChecked := statementReport.statementsChecked }
@@ -2362,7 +2391,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     stmtErrors := statementReport.violations.map fun violation => violation.message }
   let emissionPlan : StagedPlan := {
     islands := staged.map (·.commit)
-    declarations := stagedOrder.map fun index => stagedRecords[index]!.locator }
+    declarations := stagedOrder.map fun index => stagedRecords[index]!.locator
+    checkReport := compactCheckReport }
   return (legacyOut, rep, emissionPlan)
 
 /-- **The filter.** -/

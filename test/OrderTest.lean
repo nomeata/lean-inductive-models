@@ -611,9 +611,10 @@ def run (root : String) : IO UInt32 := do
     let dropped ← runFilterDroppedState s!"{root}/_tmp" input generation checkRecursors
     state := state.check s!"staged {label} shadow equals legacy" <|
       shadow.output.decls == legacy.output.decls && shadow.report == legacy.report &&
-        shadow.planValid
+        shadow.plan.checkReport == Check.checkReport shadow.output && shadow.planValid
     state := state.check s!"staged {label} drop equals shadow" <|
       dropped.report == shadow.report && dropped.planValid &&
+        dropped.plan.checkReport == shadow.plan.checkReport &&
         dropped.plan.declarations == shadow.plan.declarations &&
         dropped.plan.islands == shadow.plan.islands
 
@@ -651,12 +652,14 @@ def run (root : String) : IO UInt32 := do
   state := state.check "staged island sink preserves exact output and report" <|
     aliasStaged.output.decls == aliasRun.output.decls &&
       aliasStaged.report == aliasRun.report &&
+      aliasStaged.plan.checkReport == Check.checkReport aliasStaged.output &&
       aliasStaged.plan.declarations.size == aliasStaged.output.decls.size &&
       aliasStaged.planValid && aliasStaged.malformedPlansRejected &&
       stagedCommittedRecords == stagedGeneratedRecords &&
       aliasStaged.plan.islands.all fun island => !island.declarations.isEmpty
   state := state.check "AST-dropping staged path preserves report and compact schedule" <|
     aliasDropped.report == aliasRun.report &&
+      aliasDropped.plan.checkReport == aliasStaged.plan.checkReport &&
       aliasDropped.planValid &&
       aliasDropped.plan.declarations == aliasStaged.plan.declarations &&
       aliasDropped.plan.islands == aliasStaged.plan.islands
