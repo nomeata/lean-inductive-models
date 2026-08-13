@@ -88,6 +88,19 @@ def main (args : List String) : IO UInt32 := do
   let mono := s!"{root}/test/fixtures/mono/mono_proj.ndjson"
   let mut state : TestState := {}
 
+  -- A kernel-valid declaration under a reserved basis name is unsupported
+  -- unless its complete exported family is canonical. Recursor metadata is
+  -- not consumed by `Declaration.inductDecl`, so this pins exit 2 rather than
+  -- a kernel/internal exit 1.
+  let unusedBasis := { nestedExport with decls := nestedExport.decls.filter (·.names.contains `Eq) }
+  let malformedBasis := mapRecursor unusedBasis `Eq.rec fun recursor =>
+    { recursor with numMinors := recursor.numMinors + 1 }
+  let malformedBasisRun ← runModelgenStdin binary ["--no-check", "--no-output", "-"]
+    malformedBasis.render
+  state := state.check "noncanonical unused basis exits unsupported 2" <|
+    malformedBasisRun.exitCode == 2 && malformedBasisRun.stdout.isEmpty &&
+      (malformedBasisRun.stderr.splitOn "input's Eq is not Lean's").length > 1
+
   -- Lean Kernel Arena compatibility.  A checker can receive its NDJSON path
   -- as `$IN`, or read the same bytes from stdin.  Whole-stream kernel verdict
   -- gates are independent of generation and of the structural model checks.

@@ -29,7 +29,7 @@ def basisNames : Array Name := #[`Eq, `Nat, `PUnit, `PSigma']
 def consumerDeclaration : Declaration :=
   let nat : Expr := .const `Nat []
   let zero : Expr := .const `Nat.zero []
-  let equality := mkAppN (.const `Eq [.zero]) #[nat, zero, zero]
+  let equality := mkAppN (.const `Eq [.succ .zero]) #[nat, zero, zero]
   let punit : Expr := .const `PUnit [.succ .zero]
   let fibre := .lam `n nat nat .default
   let pair := mkAppN (.const `PSigma' [.succ .zero, .succ .zero]) #[nat, fibre]
@@ -48,6 +48,12 @@ def corruptBasisRecord : EDecl → EDecl
   | .induct types (constructor :: constructors) recursors =>
     .induct types ({ constructor with numFields := constructor.numFields + 1 } :: constructors)
       recursors
+  | declaration => declaration
+
+def corruptBasisRecursor : EDecl → EDecl
+  | .induct types constructors (recursor :: recursors) =>
+    .induct types constructors
+      ({ recursor with numMinors := recursor.numMinors + 1 } :: recursors)
   | declaration => declaration
 
 def makeRawFixture (corrupt? used? : Bool) (target : Name) : IO Export := do
@@ -79,10 +85,13 @@ def main : IO UInt32 := do
   let mut state : TestState := {}
   for target in basisNames do
     let exact ← makeRawFixture false false target
-    let (_, exactReport) ← runRaw exact
+    let (exactOutput, exactReport) ← runRaw exact
     state := state.check s!"exact unused {target} is exempt" <|
       exactReport.exempt.any (·.1 == target) &&
         !exactReport.declined.any (·.1 == target)
+    state := state.check s!"validation alias for {target} does not escape" <|
+      !({ metaLine := .null, decls := exactOutput } : Export).render.contains
+        "_modelgen_basis_validation"
 
     let malformed ← makeRawFixture true false target
     let (_, malformedReport) ← runRaw malformed
@@ -96,6 +105,13 @@ def main : IO UInt32 := do
       usedReport.declined.any (·.1 == target) &&
         !usedReport.exempt.any (·.1 == target) &&
         !usedReport.generated.any (·.1 == `BasisConsumer)
+
+  let exactEq ← makeRawFixture false false `Eq
+  let recursorCorrupt := { exactEq with decls := exactEq.decls.map corruptBasisRecursor }
+  let (_, recursorReport) ← runRaw recursorCorrupt
+  state := state.check "malformed unused Eq recursor metadata is unsupported" <|
+    recursorReport.declined.any (·.1 == `Eq) &&
+      !recursorReport.exempt.any (·.1 == `Eq)
 
   let exactUsed ← makeRawFixture false true `Eq
   let (_, exactUsedReport) ← runRaw exactUsed
