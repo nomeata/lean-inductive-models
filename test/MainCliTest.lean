@@ -1,6 +1,8 @@
 import Modelgen.Check
 import Modelgen.Naming
 
+set_option maxRecDepth 4096
+
 /-!
 End-to-end tests for the public `modelgen` process boundary.
 

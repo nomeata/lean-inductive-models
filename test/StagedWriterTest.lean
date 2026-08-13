@@ -20,7 +20,9 @@ def parseHandleAt (path : String) : IO (Except String Export) :=
   IO.FS.withFile path .read fun handle => Modelgen.parseHandle handle
 
 def bothReject (whole streamed : Except String Export) : Bool :=
-  whole.isError && streamed.isError
+  match whole, streamed with
+  | .error _, .error _ => true
+  | _, _ => false
 
 def bothHaveDecls (whole streamed : Except String Export) (expected : Array EDecl) : Bool :=
   match whole, streamed with
