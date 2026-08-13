@@ -102,6 +102,12 @@ published `good/` case and requires each `bad/` case to be rejected or to stop
 at the documented internal-invariant boundary; unsupported exit 2 is a corpus
 failure.
 
+`ordertest` compares four retention policies over the same generation
+fixtures: the full-AST oracle, the test-only full-AST shadow spool, the
+AST-dropping physical spool, and sink-free compact discard. `mainclitest`
+selects compact discard explicitly with `--no-output --no-type-check-output`;
+`--no-output --type-check-output` is intentionally a legacy/full-AST control.
+
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and
 monomorphization jobs and limits each process to 12 GiB. The Mathlib workflow

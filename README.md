@@ -151,7 +151,11 @@ structural-check certificates. Operations that need the complete transformed
 AST—currently universe monomorphization and output kernel replay—use the
 full-memory path. Consequently the default output kernel check favors the
 stronger final verdict; `--no-type-check-output` also makes otherwise eligible
-runs available to the staged backend.
+runs available to the compact backends. With both `--no-output` and
+`--no-type-check-output`, accepted islands are checked and summarized while
+live and then discarded: no workspace is opened and no cumulative generated
+declaration array is retained. The default `--type-check-output` remains the
+full-memory path until serialized replay can run in a fresh worker.
 
 Unsupported shapes pass through unchanged and are reported as declines. A
 consumer using models as an inductive front end must implement the five-member
