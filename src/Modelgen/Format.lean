@@ -623,6 +623,7 @@ default-looking value. -/
 structure ArenaTable (α : Type) where
   dense : Array α := #[]
   sparse : Std.HashMap Nat α := {}
+  deriving Inhabited
 
 namespace ArenaTable
 
@@ -633,10 +634,17 @@ def get? (table : ArenaTable α) (index : Nat) : Option α :=
   if h : index < table.dense.size then some table.dense[index]
   else table.sparse[index]?
 
-private partial def absorb (dense : Array α) (sparse : Std.HashMap Nat α) : ArenaTable α :=
-  match sparse[dense.size]? with
-  | none => { dense, sparse }
-  | some value => absorb (dense.push value) (sparse.erase dense.size)
+private def absorb (dense : Array α) (sparse : Std.HashMap Nat α) : ArenaTable α := Id.run do
+  let mut dense := dense
+  let mut sparse := sparse
+  let mut done := false
+  while !done do
+    match sparse[dense.size]? with
+    | none => done := true
+    | some value =>
+      sparse := sparse.erase dense.size
+      dense := dense.push value
+  return { dense, sparse }
 
 /-- Write one explicit arena ID. Repeated IDs overwrite, matching the export
 parser used by the Lean Kernel Arena. -/
