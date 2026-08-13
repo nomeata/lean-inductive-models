@@ -268,7 +268,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       pure parsed
 
   let (filterOutput, generationReport) ← if generationEnabled config then do
-      let generated ← try
+      let generated : Except String (FilterOutput × Modelgen.Report) ← try
           if let some raw := rawStage? then
             let stage ← Modelgen.Spool.IslandStage.create raw.workspace
               (Modelgen.Writer.Cursor.ofRaw raw.certificate.cursor)
@@ -276,12 +276,12 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
               (Lean.Meta.MetaM.run'
                 (Modelgen.runFilterStaged generationInput false config (.ofStage stage)))
               context { env }
-            pure (Except.ok (.staged raw stage plan, report))
+            pure (Except.ok (FilterOutput.staged raw stage plan, report))
           else
             let ((decls, report), _) ← Lean.Core.CoreM.toIO
               (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config))
               context { env }
-            pure (Except.ok (.full decls, report))
+            pure (Except.ok (FilterOutput.full decls, report))
         catch error =>
           pure (Except.error (toString error))
       match generated with
@@ -290,7 +290,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
           return exitToolError
       | .ok result => pure result
     else
-      pure (.full generationInput.decls, {})
+      pure (FilterOutput.full generationInput.decls, ({} : Modelgen.Report))
 
   reportGeneration config generationReport
   if let some why := generationReport.unreplayable then
