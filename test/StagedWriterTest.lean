@@ -54,6 +54,32 @@ def isExceptError (result : Except ε α) : Bool :=
   | .error _ => true
   | .ok _ => false
 
+def injectedCommitPoisons (scratch : String) (records : Array EDecl)
+    (failure : Spool.Test.CommitFailure) : IO Bool :=
+  Spool.withWorkspace scratch fun workspace => do
+    let stage ← Spool.Test.createFailingIslandStage workspace {} failure
+    let .ok prepared := Spool.prepareIsland {} records | return false
+    let rejected ← try
+        discard <| stage.commit prepared
+        pure false
+      catch _ => pure true
+    let cursorUnpublished := (← stage.cursor) == ({} : Writer.Cursor)
+    let (arenaSize, declarationSize) ← stage.sizes
+    let partialAtExpectedBoundary := match failure with
+      | .afterFirstArena => arenaSize > 0 && declarationSize == 0
+      | .afterArenas => arenaSize > 0 && declarationSize == 0
+      | .afterFirstDeclaration => arenaSize > 0 && declarationSize > 0
+    let retryRejected ← try
+        discard <| stage.commit prepared
+        pure false
+      catch _ => pure true
+    let finishRejected ← try
+        discard <| stage.finish
+        pure false
+      catch _ => pure true
+    return rejected && cursorUnpublished && partialAtExpectedBoundary &&
+      retryRejected && finishRejected
+
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let scratch := s!"{root}/_tmp"
@@ -265,31 +291,25 @@ def main (args : List String) : IO UInt32 := do
   let islandResult ← Spool.withWorkspace scratch fun workspace => do
     islandDirectoryRef.set (some workspace.directory)
     let stage ← Spool.IslandStage.create workspace {}
-    let prepared := Spool.prepareIsland {} #[first, second]
+    let .ok prepared := Spool.prepareIsland {} #[first, second] | throw (IO.userError "prepare")
     let commit ← stage.commit prepared
     let cursorAfterCommit ← stage.cursor
-    let arenaSizeAfterCommit ← stage.arena.size
-    let declarationSizeAfterCommit ← stage.declarations.size
+    let (arenaSizeAfterCommit, declarationSizeAfterCommit) ← stage.sizes
     let staleRejected ← try
         discard <| stage.commit prepared
         pure false
       catch _ => pure true
     let unchangedAfterStale := (← stage.cursor) == cursorAfterCommit &&
-      (← stage.arena.size) == arenaSizeAfterCommit &&
-      (← stage.declarations.size) == declarationSizeAfterCommit
-    let malformed := { prepared with after := {} }
-    let malformedRejected ← try
-        discard <| stage.commit malformed
-        pure false
-      catch _ => pure true
+      (← stage.sizes) == (arenaSizeAfterCommit, declarationSizeAfterCommit)
     let (arenaSize, declarationSize, finalCursor) ← stage.finish
-    let arenaText ← IO.FS.readFile stage.arena.path
-    let declarationText ← IO.FS.readFile stage.declarations.path
+    let (arenaPath, declarationPath) := stage.paths
+    let arenaText ← IO.FS.readFile arenaPath
+    let declarationText ← IO.FS.readFile declarationPath
     return (commit, finalCursor, arenaSize, declarationSize, arenaText,
-      declarationText, staleRejected, unchangedAfterStale, malformedRejected)
+      declarationText, staleRejected, unchangedAfterStale)
   let (islandCommit, islandCursor, islandArenaSize, islandDeclarationSize,
       islandArena, islandDeclarations, staleRejected, unchangedAfterStale,
-      malformedRejected) := islandResult
+      ) := islandResult
   state := state.check "prepared island commits exact parseable payloads" <|
     islandCommit.before == {} && islandCommit.after == islandCursor &&
       islandCommit.declarations.size == 2 &&
@@ -300,12 +320,35 @@ def main (args : List String) : IO UInt32 := do
       | .error _ => false
   state := state.check "stale island transaction writes and publishes nothing" <|
     staleRejected && unchangedAfterStale
-  state := state.check "malformed island transaction is rejected before publication"
-    malformedRejected
+  state := state.check "empty island transaction is rejected" <|
+    isExceptError (Spool.prepareIsland {} #[])
   let islandWorkspaceRemoved ← match ← islandDirectoryRef.get with
     | some directory => pure !(← directory.pathExists)
     | none => pure false
   state := state.check "island stage workspace is removed" islandWorkspaceRemoved
+
+  for (label, failure) in #[
+      ("first arena", Spool.Test.CommitFailure.afterFirstArena),
+      ("all arenas", .afterArenas),
+      ("first declaration", .afterFirstDeclaration)] do
+    state := state.check s!"{label} write failure poisons island transaction" <|
+      ← injectedCommitPoisons scratch #[first, second] failure
+
+  let concurrentCommit ← Spool.withWorkspace scratch fun workspace => do
+    let stage ← Spool.IslandStage.create workspace {}
+    let .ok prepared := Spool.prepareIsland {} #[first, second] | return false
+    let firstTask ← IO.asTask (prio := Task.Priority.dedicated) <| stage.commit prepared
+    let secondTask ← IO.asTask (prio := Task.Priority.dedicated) <| stage.commit prepared
+    let exactlyOne := match firstTask.get, secondTask.get with
+      | .ok _, .error _ | .error _, .ok _ => true
+      | _, _ => false
+    let finished ← try
+        discard <| stage.finish
+        pure true
+      catch _ => pure false
+    return exactlyOne && finished
+  state := state.check "concurrent island commits serialize with one stale rejection"
+    concurrentCommit
 
   -- Starting the second independent writer at the old cursor reuses arena
   -- IDs. The parser must reject that rather than silently binding the later

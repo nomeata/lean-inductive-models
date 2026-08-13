@@ -1,4 +1,5 @@
 import Modelgen.Format
+import Std.Sync.Mutex
 
 namespace Modelgen.Spool
 
@@ -187,28 +188,33 @@ def ParseTee.finish (tee : ParseTee) : IO RawSpoolSizes := do
 
 /-- String-only prepared declaration. Once prepared, no generated `EDecl` or
 `Expr` is needed to commit the island. -/
-structure PreparedDecl where
-  split : Writer.DeclSplit
+structure PreparedDecl where private mk ::
+  private split : Writer.DeclSplit
   deriving Inhabited, Repr, BEq
 
 /-- An island-local serialization transaction. Arena IDs are not published to
 the shared stage until the whole cursor chain validates and every byte writes. -/
-structure PreparedIsland where
-  before : Writer.Cursor
-  declarations : Array PreparedDecl
-  after : Writer.Cursor
+structure PreparedIsland where private mk ::
+  private before : Writer.Cursor
+  private declarations : Array PreparedDecl
+  private after : Writer.Cursor
   deriving Inhabited, Repr, BEq
 
-def prepareIsland (cursor : Writer.Cursor) (records : Array EDecl) : PreparedIsland := Id.run do
+/-- Serialize one nonempty accepted island in memory. The private constructors
+of `PreparedIsland` and `PreparedDecl` make the validated cursor chain the only
+payload the append stage can receive. -/
+def prepareIsland (cursor : Writer.Cursor) (records : Array EDecl) :
+    Except String PreparedIsland := Id.run do
+  if records.isEmpty then return .error "cannot prepare an empty generated island"
   let mut writer := Writer.fromCursor cursor
   let mut declarations : Array PreparedDecl := #[]
   for record in records do
     let (next, split) := writer.splitDecl record
     writer := next
-    declarations := declarations.push { split }
-  return { before := cursor, declarations, after := writer.cursor }
+    declarations := declarations.push (.mk split)
+  return .ok (.mk cursor declarations writer.cursor)
 
-def PreparedIsland.validate (island : PreparedIsland) : Except String Unit := do
+private def PreparedIsland.validate (island : PreparedIsland) : Except String Unit := do
   let mut cursor := island.before
   for declaration in island.declarations do
     declaration.split.validateStart cursor
@@ -225,43 +231,116 @@ structure IslandCommit where
   after : Writer.Cursor
   deriving Inhabited, Repr, BEq
 
-/-- Append-only generated payloads plus the next globally unoccupied arena IDs. -/
+private structure IslandStageState where
+  cursor : Writer.Cursor
+  failed : Bool := false
+
+private inductive CommitFault where
+  | afterFirstArena
+  | afterArenas
+  | afterFirstDeclaration
+  deriving Repr, BEq
+
+/-- Append-only generated payloads plus the next globally unoccupied arena
+IDs. The mutex serializes `commit`, `cursor`, and `finish`; this remains true if
+a future caller prepares islands concurrently. -/
 structure IslandStage where
-  arena : SpoolFile
-  declarations : SpoolFile
-  private cursorRef : IO.Ref Writer.Cursor
+  private arena : SpoolFile
+  private declarations : SpoolFile
+  private state : Std.Mutex IslandStageState
+  private injectedFault : Option CommitFault := none
 
 def IslandStage.create (workspace : Workspace) (cursor : Writer.Cursor) : IO IslandStage := do
   return {
     arena := ← workspace.createFile "generated-arena.ndjson"
     declarations := ← workspace.createFile "generated-declarations.ndjson"
-    cursorRef := ← IO.mkRef cursor }
+    state := ← Std.Mutex.new { cursor } }
 
-def IslandStage.cursor (stage : IslandStage) : IO Writer.Cursor := stage.cursorRef.get
+def IslandStage.cursor (stage : IslandStage) : IO Writer.Cursor :=
+  stage.state.atomically fun state => return (← state.get).cursor
+
+/-- Current append counters for diagnostics. Access is serialized with commit
+so callers never observe the middle of a transaction. -/
+def IslandStage.sizes (stage : IslandStage) : IO (UInt64 × UInt64) :=
+  stage.state.atomically fun _ => return (← stage.arena.size, ← stage.declarations.size)
+
+/-- Read-only locators used by final composition after successful `finish`.
+Handles remain private, so no caller can bypass serialized append state. -/
+def IslandStage.paths (stage : IslandStage) : System.FilePath × System.FilePath :=
+  (stage.arena.path, stage.declarations.path)
+
+private def IslandStage.inject (stage : IslandStage) (point : CommitFault) : IO Unit :=
+  if stage.injectedFault == some point then
+    throw <| IO.userError s!"injected island commit failure at {repr point}"
+  else
+    pure ()
 
 /-- Validate before the first write; publish the new cursor only after every
-append succeeds. A stale/forged transaction cannot write or advance the stage.
-An IO failure may leave unindexed tail bytes, but it cannot publish a cursor or
-composition and therefore aborts the whole output transaction. -/
+append succeeds. A stale transaction cannot write or advance the stage. Any
+write failure permanently poisons this append stage: its old cursor remains
+observable for diagnostics, but subsequent commits and `finish` reject the
+unindexed tail. Bytes become durable/externally publishable only after the
+caller successfully runs `finish`, which flushes and validates both files. -/
 def IslandStage.commit (stage : IslandStage) (island : PreparedIsland) : IO IslandCommit := do
   match island.validate with
   | .error error => throw <| IO.userError error
   | .ok _ => pure ()
-  let current ← stage.cursor
-  unless island.before == current do
-    throw <| IO.userError s!"stale island starts at {repr island.before}, expected {repr current}"
-  let mut arenas : Array ByteSpan := #[]
-  let mut declarations : Array ByteSpan := #[]
-  for declaration in island.declarations do
-    for line in declaration.split.arena do
-      arenas := arenas.push (← stage.arena.append (line ++ "\n").toUTF8)
-    declarations := declarations.push
-      (← stage.declarations.append (declaration.split.declaration ++ "\n").toUTF8)
-  stage.cursorRef.set island.after
-  return { before := island.before, arenas, declarations, after := island.after }
+  stage.state.atomically fun stateRef => do
+    let state ← stateRef.get
+    if state.failed then throw <| IO.userError "island append stage is poisoned"
+    unless island.before == state.cursor do
+      throw <| IO.userError
+        s!"stale island starts at {repr island.before}, expected {repr state.cursor}"
+    try
+      let mut arenas : Array ByteSpan := #[]
+      let mut declarations : Array ByteSpan := #[]
+      let mut wroteArena := false
+      for declaration in island.declarations do
+        for line in declaration.split.arena do
+          arenas := arenas.push (← stage.arena.append (line ++ "\n").toUTF8)
+          if !wroteArena then
+            wroteArena := true
+            stage.inject .afterFirstArena
+      stage.inject .afterArenas
+      for declaration in island.declarations do
+        declarations := declarations.push
+          (← stage.declarations.append (declaration.split.declaration ++ "\n").toUTF8)
+        if declarations.size == 1 then stage.inject .afterFirstDeclaration
+      stateRef.set { cursor := island.after }
+      return { before := island.before, arenas, declarations, after := island.after }
+    catch error =>
+      stateRef.set { state with failed := true }
+      throw error
 
 def IslandStage.finish (stage : IslandStage) : IO (UInt64 × UInt64 × Writer.Cursor) := do
-  return (← stage.arena.finish, ← stage.declarations.finish, ← stage.cursor)
+  stage.state.atomically fun stateRef => do
+    let state ← stateRef.get
+    if state.failed then throw <| IO.userError "cannot finish poisoned island append stage"
+    return (← stage.arena.finish, ← stage.declarations.finish, state.cursor)
+
+/-! Failure injection is kept in a visibly test-only namespace; production
+construction always uses `IslandStage.create` and has no injected fault. -/
+namespace Test
+
+inductive CommitFailure where
+  | afterFirstArena
+  | afterArenas
+  | afterFirstDeclaration
+  deriving Inhabited, Repr, BEq
+
+def createFailingIslandStage (workspace : Workspace) (cursor : Writer.Cursor)
+    (failure : CommitFailure) : IO IslandStage := do
+  let injectedFault := match failure with
+    | .afterFirstArena => CommitFault.afterFirstArena
+    | .afterArenas => CommitFault.afterArenas
+    | .afterFirstDeclaration => CommitFault.afterFirstDeclaration
+  return {
+    arena := ← workspace.createFile "generated-arena.ndjson"
+    declarations := ← workspace.createFile "generated-declarations.ndjson"
+    state := ← Std.Mutex.new { cursor }
+    injectedFault }
+
+end Test
 
 private def Workspace.cleanup (workspace : Workspace) : IO Unit := do
   let mut firstError : Option IO.Error := none
