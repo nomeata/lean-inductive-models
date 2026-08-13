@@ -167,6 +167,8 @@ def main : IO UInt32 := do
     | throw <| IO.userError "cannot parse the late-Eq source fixture"
   let lateEqInput := postponeRecords lateEqSource fun declaration =>
     declaration.names.contains `Eq
+  state := state.check "late-Eq fixture really puts support after every representative owner"
+    ([`Pre, `MA, `Nd].all fun owner => declarationBefore lateEqInput owner `Eq)
   let lateEq ← runExport "canonical Eq after selected owners" lateEqInput false
     { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
   state := state.check "late canonical Eq is scheduled before representative owners"
@@ -186,7 +188,15 @@ def main : IO UInt32 := do
     | throw <| IO.userError "cannot parse the quotient support fixture"
   let quotientSupport := quotientSource.decls.filter fun declaration =>
     declaration.names.any fun name => name == `Quot || (`Quot).isPrefixOf name
+  let quotientSupportNames := quotientSupport.flatMap (·.names.toArray)
+  let graphNames := graphSource.decls.flatMap (·.names.toArray)
+  state := state.check "late-Quot support is exactly the canonical five-record interface"
+    (quotientSupportNames == #[`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound])
+  state := state.check "late-Quot support is disjoint from the graph source"
+    (quotientSupportNames.all fun name => !graphNames.contains name)
   let lateQuotInput := { graphSource with decls := graphSource.decls ++ quotientSupport }
+  state := state.check "late-Quot fixture really puts support after the recursive owner"
+    (declarationBefore lateQuotInput `Ac `Quot)
   let lateQuot ← runExport "canonical Quot after recursive owner" lateQuotInput false
     { noGeneration with simple := true, basic := true }
   let lateQuotOutput : Export := { lateQuotInput with decls := lateQuot.output }
