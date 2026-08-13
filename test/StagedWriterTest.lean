@@ -30,6 +30,18 @@ def withTempDirectoryVariable (value : System.FilePath) (action : IO α) : IO α
 def parseHandleAt (path : String) : IO (Except String Export) :=
   IO.FS.withFile path .read fun handle => InductiveModels.parseHandle handle
 
+/-- Deliberately whole-text random-decode oracle. Phase three replaces this
+quadratic convenience with one retained arena and declaration-span reads. -/
+def referenceDecode (arena declaration : String) : Except String EDecl := do
+  let parsed ← InductiveModels.parse (arena ++ declaration) (analyse := false)
+  let #[result] := parsed.decls | throw "reference declaration did not decode alone"
+  return result
+
+def referenceDecodesTo (arena declaration : String) (expected : EDecl) : Bool :=
+  match referenceDecode arena declaration with
+  | .ok actual => actual == expected
+  | .error _ => false
+
 def rawCertificateAt (path : String) : IO (Except String (Export × RawCertificate)) :=
   IO.FS.withFile path .read fun handle =>
     InductiveModels.parseHandleWithSink handle { emit := fun _ => pure () } (analyse := false)
@@ -234,6 +246,9 @@ def main (args : List String) : IO UInt32 := do
     match parsed with
     | .ok output => output.decls == #[second, first]
     | .error _ => false
+  state := state.check "whole-text random declaration oracle preserves exact records" <|
+    referenceDecodesTo arenaText secondText second &&
+      referenceDecodesTo arenaText firstText first
 
   let largeForwardPath := s!"{scratch}/staged-writer-large-forward.bin"
   removeIfPresent largeForwardPath
