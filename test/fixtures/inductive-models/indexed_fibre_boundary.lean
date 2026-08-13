@@ -26,6 +26,18 @@ inductive FibreIx : Type where
   | here
   | elsewhere
 
+/-- Zero-field indexed `Type`: its malformed certificate must be diagnosed at
+the family boundary even though there is no intrinsic projection loop. -/
+inductive IndexedUnit : FibreIx -> Type where
+  | mk : IndexedUnit FibreIx.here
+
+/-- Reducible result former intentionally hidden in serialized syntax.  The
+generator and checker must both leave this owner on the legacy route. -/
+def HiddenIndexedResult (index : FibreIx) := Type
+
+inductive HiddenIndexed : (index : FibreIx) -> HiddenIndexedResult index where
+  | mk : HiddenIndexed FibreIx.here
+
 /-- This reducible function makes the source declaration kernel-valid while
 retaining the recursive field in the exported result-index syntax. -/
 def erasedResultIndex {alpha : Sort u} (_ : alpha) : FibreIx :=
@@ -41,4 +53,4 @@ inductive FixedRecursiveResult : FibreIx -> Type where
   | mk (child : FixedRecursiveResult FibreIx.here) :
       FixedRecursiveResult FibreIx.here
 
---#export Eq FibreIx erasedResultIndex FixedRecursiveResult
+--#export Eq FibreIx IndexedUnit HiddenIndexedResult HiddenIndexed erasedResultIndex FixedRecursiveResult

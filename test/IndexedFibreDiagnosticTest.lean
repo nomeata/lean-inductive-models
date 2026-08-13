@@ -128,6 +128,9 @@ def withoutDeclaration (x : Export) (name : Name) : Export :=
       if types.isEmpty && constructors.isEmpty && recursors.isEmpty then none
       else some (.induct types constructors recursors) }
 
+def insertCollision (x : Export) (name : Name) : Export :=
+  { x with decls := x.decls.push (.ax name [] (.sort (.succ .zero)) false) }
+
 def declarationValue? (x : Export) (name : Name) : Option Expr :=
   x.decls.findSome? fun declaration => match declaration with
     | .defn got _ _ value .. | .thm got _ _ value .. | .opaq got _ _ value .. =>
@@ -367,16 +370,66 @@ def run (root : String) : IO UInt32 := do
     fixedShape.any fun (type, constructor, _) =>
       type.numIndices == 1 && type.isRec && type.ctors.length == 1 &&
         recursiveResultIndependent constructor
-  let (boundaryGenerated, _) ← runExport boundary
+  let (boundaryGenerated, boundaryReport) ← runExport boundary
+  let boundaryNames := boundaryGenerated.decls.flatMap (·.names.toArray)
+  let indexedUnitRoot := `IndexedUnit._model._impl
+  let indexedUnitCertificate := #[Name.str indexedUnitRoot "self",
+    Name.str indexedUnitRoot "ctor_0", Name.str indexedUnitRoot "rec",
+    Name.str indexedUnitRoot "rec_iota_0", Name.str indexedUnitRoot "roll",
+    Name.str indexedUnitRoot "unroll", Name.str indexedUnitRoot "unroll_roll",
+    Name.str indexedUnitRoot "roll_unroll"]
+  state := state.check "zero-field indexed family carries a complete certificate" <|
+    boundaryReport.generated.any (·.1 == `IndexedUnit) &&
+      indexedUnitCertificate.all boundaryNames.contains
+  let zeroFieldPartial := Check.check <|
+    withoutDeclaration boundaryGenerated (Name.str indexedUnitRoot "roll_unroll")
+  state := state.check "zero-field partial certificate fails at family boundary" <|
+    zeroFieldPartial.any
+      (hasTypeViolation `IndexedUnit (Name.str indexedUnitRoot "roll_unroll"))
+
+  let hiddenRoot := `HiddenIndexed._model._impl
+  let hiddenCertificate := #[Name.str hiddenRoot "self", Name.str hiddenRoot "ctor_0",
+    Name.str hiddenRoot "rec", Name.str hiddenRoot "rec_iota_0",
+    Name.str hiddenRoot "roll", Name.str hiddenRoot "unroll",
+    Name.str hiddenRoot "unroll_roll", Name.str hiddenRoot "roll_unroll"]
+  state := state.check "reducible-hidden result former stays structurally legacy" <|
+    boundaryReport.generated.any (·.1 == `HiddenIndexed) &&
+      hiddenCertificate.all fun name => !boundaryNames.contains name
+  state := state.check "hidden-result legacy model is complete and checked" <|
+    #[Naming.modelName `HiddenIndexed, Naming.modelName `HiddenIndexed.mk,
+      Naming.modelName `HiddenIndexed.rec, Naming.iotaName `HiddenIndexed.rec 0].all
+        boundaryNames.contains &&
+      (Check.check boundaryGenerated).all (·.familyOwner != `HiddenIndexed)
+
   let recursivePrivateRoot := `FixedRecursiveResult._model._impl
   let recursiveCertificate := #[Name.str recursivePrivateRoot "self",
     Name.str recursivePrivateRoot "ctor_0", Name.str recursivePrivateRoot "rec",
     Name.str recursivePrivateRoot "rec_iota_0", Name.str recursivePrivateRoot "roll",
     Name.str recursivePrivateRoot "unroll", Name.str recursivePrivateRoot "unroll_roll",
     Name.str recursivePrivateRoot "roll_unroll"]
-  let boundaryNames := boundaryGenerated.decls.flatMap (·.names.toArray)
   state := state.check "recursive indexed control remains on the legacy route" <|
     recursiveCertificate.all fun name => !boundaryNames.contains name
+  state := state.check "recursive indexed legacy control generates and checks" <|
+    boundaryReport.generated.any (·.1 == `FixedRecursiveResult) &&
+      #[Naming.modelName `FixedRecursiveResult,
+        Naming.modelName `FixedRecursiveResult.mk,
+        Naming.modelName `FixedRecursiveResult.rec,
+        Naming.iotaName `FixedRecursiveResult.rec 0].all boundaryNames.contains &&
+      (Check.check boundaryGenerated).all (·.familyOwner != `FixedRecursiveResult)
+
+  let privateOwner := (`_private.IndexedFibreDiagnostic).mkNum 0 |>.str "IndexedUnit"
+  let sourceNames := boundary.decls.flatMap (·.names.toArray)
+    |>.filter fun name => (`IndexedUnit).isPrefixOf name
+  let privateAliases := sourceNames.foldl (init := Naming.AliasMap.empty)
+    fun aliases name => aliases.insert name (name.replacePrefix `IndexedUnit privateOwner)
+  let privateBoundary := { boundary with
+    decls := boundary.decls.map (·.renameAliases privateAliases) }
+  let exactCollision := Name.str (Name.str (Naming.modelName privateOwner) "_impl") "roll"
+  let (_, collisionReport) ← runExport (insertCollision privateBoundary exactCollision)
+  state := state.check "retry checks exact private certificate collisions" <|
+    !collisionReport.generated.any (·.1 == privateOwner) &&
+      collisionReport.declined.any fun (owner, reason) =>
+        owner == privateOwner && reason == s!"prim model name taken ({exactCollision})"
 
   IO.println s!"indexed fibre diagnostic: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
