@@ -1254,6 +1254,9 @@ structure GlobalExtraRecord where
   templates : Array GlobalExtraTemplate
   deriving Inhabited, Repr, BEq
 
+def GlobalExtraTemplate.owner : GlobalExtraTemplate → Name
+  | .type owner .. | .recursor owner .. => owner
+
 /-- Capture unexpected-slot eligibility for each record without retaining an
 `Expr`.  Projection eligibility and proposition-former tests use the supplied
 overlay index, so generated owners may depend on transparent source aliases.
@@ -1326,6 +1329,17 @@ def globalExtrasFromRecords (records : Array GlobalExtraRecord) : Array Violatio
           if declared.contains name then
             violations := violations.push (.extraMetadata owner name .ruleK)
   return violations
+
+/-- Restrict the expensive unexpected-slot sweep to selected diagnostic
+owners before any template scans the complete final name array. Names from
+unselected records remain visible because a selected owner's unexpected public
+slot may be introduced anywhere in the final stream. This is exactly the
+historical late violation filter, but avoids work for unrelated owners. -/
+def globalExtrasFromRecordsFor (records : Array GlobalExtraRecord)
+    (owners : Std.HashSet Name) : Array Violation :=
+  globalExtrasFromRecords <| records.map fun record =>
+    { record with templates := record.templates.filter fun template =>
+        owners.contains template.owner }
 
 /-- Convenience form for an in-memory export. Staged callers instead retain
 the bound per-record summaries and reorder them with compact declaration

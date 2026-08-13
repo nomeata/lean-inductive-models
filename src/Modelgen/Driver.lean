@@ -2333,8 +2333,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     let diagnosticOwners := staged.foldl (init := ({} : Std.HashSet Name))
       fun owners island => island.compact.diagnosticOwners.toArray.foldl
         (fun owners owner => owners.insert owner) owners
-    let compactGlobal := Check.globalExtrasFromRecords orderedGlobals |>.filter fun violation =>
-      diagnosticOwners.contains violation.familyOwner
+    let compactGlobal := Check.globalExtrasFromRecordsFor orderedGlobals diagnosticOwners
     ({ islandStatements with
       violations := islandStatements.violations ++ compactGlobal } : Check.StatementReport)
   else islandStatements

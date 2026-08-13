@@ -447,6 +447,14 @@ def run (root : String) : IO UInt32 := do
       (Array.range 128).all fun seed =>
         let records := propertyGlobalExtraRecords seed
         globalExtrasFromRecords records == referenceGlobalExtrasFromRecords records
+    let onlyB := ({} : Std.HashSet Name).insert `Interleave.B
+    let lateFiltered := (globalExtrasFromRecords interleavedGlobal).filter fun violation =>
+      onlyB.contains violation.familyOwner
+    state ← state.check "owner-filtered global extras equal the historical late filter" <|
+      globalExtrasFromRecordsFor interleavedGlobal onlyB == lateFiltered &&
+        lateFiltered == #[.extraProjection `Interleave.B interleavedBProjection]
+    state ← state.check "empty owner selection skips every global-extra template" <|
+      (globalExtrasFromRecordsFor interleavedGlobal {}).isEmpty
     state ← state.check "one public family discovered" (families.size == 1)
     if let some family := families[0]? then
       state ← state.check "family key" <|
