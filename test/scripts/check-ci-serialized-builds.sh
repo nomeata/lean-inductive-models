@@ -3,6 +3,8 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 workflow="$root/.github/workflows/ci.yml"
+readme="$root/README.md"
+lakefile="$root/lakefile.lean"
 
 mapfile -t direct_builds < <(
   sed -nE 's/^[[:space:]]*(lake -Kjobs=1 build .*)$/\1/p' "$workflow"
@@ -33,4 +35,102 @@ if [[ "$actual" != "$expected" ]]; then
   exit 1
 fi
 
-echo "CI serialized builds: pass"
+readme_function_source="$(
+  sed -n '/^build_serially() {$/,/^}$/p' "$readme"
+)"
+if [[ -z "$readme_function_source" ]]; then
+  echo "README build_serially function is missing" >&2
+  exit 1
+fi
+
+readme_actual="$({
+  eval "$readme_function_source"
+  lake() { printf '%s\n' "$*"; }
+  build_serially alpha beta gamma
+})"
+if [[ "$readme_actual" != "$expected" ]]; then
+  printf 'README build_serially did not issue one Lake root per invocation:\n%s\n' \
+    "$readme_actual" >&2
+  exit 1
+fi
+
+mapfile -t lake_test_targets < <(
+  current=
+  while IFS= read -r line; do
+    if [[ "$line" =~ ^(\[default_target\][[:space:]]+)?lean_exe[[:space:]]+([^[:space:]]+)[[:space:]]+where$ ]]; then
+      current="${BASH_REMATCH[2]}"
+    elif [[ -n "$current" && "$line" =~ ^[[:space:]]+srcDir[[:space:]]+:=[[:space:]]+\"test\"$ ]]; then
+      if [[ "$current" != memoryprobe ]]; then
+        printf '%s\n' "$current"
+      fi
+      current=
+    fi
+  done < "$lakefile"
+)
+
+readme_targets_source="$(
+  sed -n '/^correctness_targets=($/,/^)/p' "$readme"
+)"
+if [[ -z "$readme_targets_source" ]]; then
+  echo "README correctness_targets array is missing" >&2
+  exit 1
+fi
+mapfile -t readme_targets < <(
+  eval "$readme_targets_source"
+  printf '%s\n' "${correctness_targets[@]}"
+)
+
+sorted_lake_targets="$(printf '%s\n' "${lake_test_targets[@]}" | LC_ALL=C sort)"
+sorted_readme_targets="$(printf '%s\n' "${readme_targets[@]}" | LC_ALL=C sort)"
+if [[ "$sorted_readme_targets" != "$sorted_lake_targets" ]]; then
+  printf '%s\n' "README correctness targets differ from lakefile.lean:" >&2
+  diff -u \
+    <(printf '%s\n' "$sorted_lake_targets") \
+    <(printf '%s\n' "$sorted_readme_targets") >&2 || true
+  exit 1
+fi
+
+mapfile -t readme_run_targets < <(
+  sed -nE 's/^TMPDIR="[^\"]+" lake exe ([^[:space:]]+).*$/\1/p' "$readme"
+)
+mapfile -t ci_run_targets < <(
+  sed -nE 's/^[[:space:]]*lake exe ([^[:space:]]+).*$/\1/p' "$workflow"
+)
+for matrix_name in readme_run_targets ci_run_targets; do
+  declare -n matrix_targets="$matrix_name"
+  sorted_matrix_targets="$(printf '%s\n' "${matrix_targets[@]}" | LC_ALL=C sort)"
+  if [[ "$sorted_matrix_targets" != "$sorted_lake_targets" ]]; then
+    printf '%s\n' "$matrix_name differs from the lakefile.lean correctness targets:" >&2
+    diff -u \
+      <(printf '%s\n' "$sorted_lake_targets") \
+      <(printf '%s\n' "$sorted_matrix_targets") >&2 || true
+    exit 1
+  fi
+done
+
+mapfile -t check_scripts < <(
+  find "$root/test/scripts" -maxdepth 1 -type f -name 'check-*.sh' \
+    -printf 'test/scripts/%f\n' | LC_ALL=C sort
+)
+mapfile -t readme_check_scripts < <(
+  sed -nE 's|^(TMPDIR="[^\"]+" )?(test/scripts/check-[^[:space:]]+\.sh).*|\2|p' \
+    "$readme" | LC_ALL=C sort
+)
+mapfile -t ci_check_scripts < <(
+  sed -nE 's|^[[:space:]]*(test/scripts/check-[^[:space:]]+\.sh).*|\1|p' \
+    "$workflow" | LC_ALL=C sort
+)
+expected_scripts="$(printf '%s\n' "${check_scripts[@]}")"
+for matrix_name in readme_check_scripts ci_check_scripts; do
+  declare -n matrix_scripts="$matrix_name"
+  actual_scripts="$(printf '%s\n' "${matrix_scripts[@]}")"
+  if [[ "$actual_scripts" != "$expected_scripts" ]]; then
+    printf '%s\n' "$matrix_name differs from the repository check scripts:" >&2
+    diff -u \
+      <(printf '%s\n' "$expected_scripts") \
+      <(printf '%s\n' "$actual_scripts") >&2 || true
+    exit 1
+  fi
+done
+
+echo "CI/README serialized builds and correctness matrix: ${#lake_test_targets[@]} targets, ${#check_scripts[@]} scripts"

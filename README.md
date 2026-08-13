@@ -217,7 +217,7 @@ one-constructor families are included. The test is per type former, so a
 mutual block may have several independently eligible members. For every
 zero-based constructor field
 `j` for which the kernel expression `Expr.proj T j self` is well typed,
-`modelgen` adds:
+the public interface has these two entries:
 
 ```text
 T._model.proj_j
@@ -567,18 +567,30 @@ The Lean version is pinned by [`lean-toolchain`](lean-toolchain).
 
 ```console
 mkdir -p _tmp/build-tmp
-TMPDIR="$PWD/_tmp/build-tmp" lake build modelgen
+build_serially() {
+  local target
+  for target in "$@"; do
+    TMPDIR="$PWD/_tmp/build-tmp" lake -Kjobs=1 build "$target"
+  done
+}
+build_serially modelgen
 ```
 
-The correctness executables are:
+Each target is built in its own Lake invocation so their final native links do
+not overlap. `lake test` runs only the fixture-backed `test` executable; it is
+not the complete correctness matrix. The complete matrix is:
 
 ```console
-TMPDIR="$PWD/_tmp/build-tmp" lake build \
-  test monotest clitest generationflagstest checktest ordertest incrementalordertest namingtest \
-  drivernamingtest privatealiastest simplenamingtest rulektest mainclitest \
-  projectiontest structureetatest deepimaxboxtest psigmaprimetest \
-  exactsortlifttest tightpsigmaprimeroutetest vanishingerasuretest \
-  transparentowneraliasestest exportsyntaxnormalizationtest basisvalidationtest stagedwritertest
+correctness_targets=(
+  test monotest clitest generationflagstest checktest ordertest
+  incrementalordertest namingtest drivernamingtest privatealiastest
+  simplenamingtest rulektest mainclitest projectiontest structureetatest
+  deepimaxboxtest psigmaprimetest exactsortlifttest
+  tightpsigmaprimeroutetest vanishingerasuretest
+  transparentowneraliasestest exportsyntaxnormalizationtest
+  basisvalidationtest stagedwritertest
+)
+build_serially "${correctness_targets[@]}"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe clitest
@@ -634,10 +646,10 @@ full-Mathlib workflow
 checks a pinned Mathlib export under a cgroup memory limit and records
 instruction counts with `perf`. Its artifact gate requires positive generation,
 statement-comparison, output-check, universe-planning, and serialized-reread
-work; zero statement differences and universe escapes; exactly the four basis
-members owned by that pinned input as exemptions; a spliced `PSigma'`; and no
-unexpected basis declarations. The observed counts are intentionally not
-hard-coded.
+work; zero statement differences and universe escapes; exemptions for the
+three basis members owned by that pinned input (`Eq`, `Nat`, and `PUnit`); a
+spliced `PSigma'`; and no unexpected basis declarations. The observed counts
+are intentionally not hard-coded.
 
 ## Copyright and license
 
