@@ -109,7 +109,8 @@ AST-dropping physical spool, and sink-free compact discard. `mainclitest`
 selects compact discard explicitly with `--no-output --no-type-check-output`;
 generated `--no-output --type-check-output` is the two-worker serialized
 producer/kernel-replay path and pins exit-2 precedence, noncanonical and
-compact-availability fallback equivalence, plus private cleanup.
+compact-availability fallback equivalence, rooted-workspace behavior, signal
+cleanup, checker failure cleanup, and private-status containment.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and

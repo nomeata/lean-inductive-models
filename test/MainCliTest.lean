@@ -58,6 +58,53 @@ def runInductiveModelsStdin (binary : String) (args : List String) (input : Stri
     IO IO.Process.Output :=
   runInductiveModels binary args (some input)
 
+private structure SignaledFreshOutput where
+  process : IO.Process.Output
+  injector : IO.Process.Output
+
+/-- Stop the real producer at a private-candidate write boundary. The test hook
+only holds that worker at a deterministic point; Python delivers the actual
+SIGTERM to the coordinator's live child. -/
+def runSignaledFreshOutput (binary cwd fixture point : String) : IO SignaledFreshOutput := do
+  let child ← IO.Process.spawn {
+    cmd := binary
+    args := #["--no-output", "--type-check-output", "--no-check", fixture]
+    cwd := some cwd
+    env := defaultInductiveModelsEnv ++ #[
+      ("LEAN_INDUCTIVE_MODELS_TEST_FRESH_SIGNAL_POINT", some point)]
+    stdin := .null
+    stdout := .piped
+    stderr := .piped }
+  let stdout ← IO.asTask child.stdout.readToEnd Task.Priority.dedicated
+  let stderr ← IO.asTask child.stderr.readToEnd Task.Priority.dedicated
+  let script :=
+    "import glob, os, signal, sys, time\n" ++
+    "parent = int(sys.argv[1])\n" ++
+    "scratch = sys.argv[2]\n" ++
+    "point = sys.argv[3]\n" ++
+    "children = f'/proc/{parent}/task/{parent}/children'\n" ++
+    "deadline = time.monotonic() + 20\n" ++
+    "while time.monotonic() < deadline:\n" ++
+    "    try: pids = open(children, encoding='ascii').read().split()\n" ++
+    "    except FileNotFoundError: pids = []\n" ++
+    "    paths = glob.glob(scratch + '/*/output-kernel-candidate.ndjson')\n" ++
+    "    ready = paths and (point == 'during-write' or os.path.getsize(paths[0]) > 0)\n" ++
+    "    if pids and ready:\n" ++
+    "        os.kill(int(pids[0]), signal.SIGTERM)\n" ++
+    "        sys.exit(0)\n" ++
+    "    time.sleep(0.01)\n" ++
+    "sys.exit(4)\n"
+  let injector ← IO.Process.output {
+    cmd := "python3"
+    args := #["-c", script, toString child.pid, s!"{cwd}/_tmp", point] }
+  let exitCode ← child.wait
+  return {
+    process := {
+      exitCode
+      stdout := ← IO.ofExcept stdout.get
+      stderr := ← IO.ofExcept stderr.get }
+    injector }
+
 def hasDiagnostic (stderr diagnostic : String) : Bool :=
   (stderr.splitOn "\n").contains diagnostic
 
@@ -736,6 +783,45 @@ def main (args : List String) : IO UInt32 := do
   let freshSuccessAfter ← System.FilePath.readDir scratch
   state := state.check "successful fresh kernel replay cleans its private candidate workspace" <|
     sameDirectoryEntries freshSuccessBefore freshSuccessAfter
+  let freshCwd : System.FilePath := s!"{scratch}/main-cli-fresh-cwd"
+  let externalFreshTmp : System.FilePath := s!"{scratch}/main-cli-external-fresh-tmp"
+  IO.FS.createDir freshCwd
+  IO.FS.createDir externalFreshTmp
+  let freshCwdRun ← runInductiveModelsAt binaryAbsolute.toString
+    ["--no-output", "--type-check-output", "--no-check", nestedAbsolute.toString]
+    freshCwd.toString #[
+      ("TMPDIR", some externalFreshTmp.toString),
+      ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  let freshCwdScratch := freshCwd / "_tmp"
+  state := state.check "fresh kernel pipeline creates its root despite external TMPDIR" <|
+    freshCwdRun.exitCode == 0 && freshCwdRun.stdout.isEmpty &&
+      hasDiagnostic freshCwdRun.stderr "output backend: staged" &&
+      (← freshCwdScratch.pathExists) && (← freshCwdScratch.readDir).isEmpty &&
+      (← externalFreshTmp.readDir).isEmpty
+  IO.FS.removeDir freshCwdScratch
+  IO.FS.removeDir freshCwd
+  IO.FS.removeDir externalFreshTmp
+
+  for point in ["during-write", "post-write"] do
+    let before ← System.FilePath.readDir scratch
+    let signaled ← runSignaledFreshOutput binary root nested point
+    let after ← System.FilePath.readDir scratch
+    state := state.check s!"real producer signal at {point} is delivered" <|
+      signaled.injector.exitCode == 0 && signaled.injector.stderr.isEmpty
+    state := state.check s!"producer signal at {point} is contained and cleaned" <|
+      signaled.process.exitCode == 3 && signaled.process.stdout.isEmpty &&
+        signaled.process.stderr.contains "producer terminated with native status 143" &&
+        sameDirectoryEntries before after
+
+  let checkerFailureBefore ← System.FilePath.readDir scratch
+  let checkerFailure ← runInductiveModelsWithEnv binary
+    ["--no-output", "--type-check-output", "--no-check", nested] #[
+      ("LEAN_INDUCTIVE_MODELS_TEST_FRESH_CHECKER_FAILURE", some "1")]
+  let checkerFailureAfter ← System.FilePath.readDir scratch
+  state := state.check "fresh checker failure is contained and cleans the candidate" <|
+    checkerFailure.exitCode == 3 && checkerFailure.stdout.isEmpty &&
+      checkerFailure.stderr.contains "injected fresh output-kernel checker failure" &&
+      sameDirectoryEntries checkerFailureBefore checkerFailureAfter
   let freshEntriesBefore ← System.FilePath.readDir scratch
   let failedFreshKernel ← runInductiveModels binary
     ["--no-output", "--no-check", "--type-check-output", "-"]
@@ -751,15 +837,21 @@ def main (args : List String) : IO UInt32 := do
       ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_TOKEN", some "forged")]
   state := state.check "public supervisor strips a forged fresh-worker phase" <|
     spoofedPhase.exitCode == 0 && spoofedPhase.stdout.isEmpty
+  let forgedDirectory : System.FilePath := s!"{scratch}/main-cli-forged-checker"
+  IO.FS.createDir forgedDirectory
+  let forgedCandidate := forgedDirectory / "output-kernel-candidate.ndjson"
+  IO.FS.writeFile forgedCandidate nestedText
   let forgedDirectPhase ← runInductiveModelsWithEnv binary
-    ["--no-inductives", "--no-check", "--no-type-check-output", "--no-output", nested] #[
+    ["--no-output", "--type-check-output", "--no-check", nested] #[
       (InductiveModels.Supervisor.workerMarker, some "1"),
-      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_PHASE", some "produce"),
-      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_DIRECTORY", some "/"),
-      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_TOKEN", some "forged")]
-  state := state.check "direct forged fresh-worker capability fails closed" <|
-    forgedDirectPhase.exitCode == 3 && forgedDirectPhase.stdout.isEmpty &&
-      forgedDirectPhase.stderr.contains "invalid fresh output-kernel producer capability"
+      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_PHASE", some "check"),
+      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_DIRECTORY", some forgedDirectory.toString),
+      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_TOKEN", some "main-cli-forged-checker")]
+  state := state.check "direct forged phase cannot return a public accepted status" <|
+    forgedDirectPhase.exitCode == 4 && forgedDirectPhase.stdout.isEmpty &&
+      hasDiagnostic forgedDirectPhase.stderr "output kernel check: accepted"
+  IO.FS.removeFile forgedCandidate
+  IO.FS.removeDir forgedDirectory
 
   -- Generated arena IDs may differ from the legacy global writer, so compare
   -- parsed exports, exact declaration order, diagnostics, and exit status

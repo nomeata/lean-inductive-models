@@ -154,7 +154,12 @@ default output kernel gate instead stages a private candidate, terminates the
 generation worker, and replays that serialization in a fresh worker. Thus the
 generation and whole-output kernel heaps do not overlap. Inputs unavailable to
 compact staging retain the ordinary full-oracle producer fallback, but that
-producer likewise terminates before replay. With both `--no-output` and
+producer likewise terminates before replay. The coordinator creates its own
+project-local `_tmp` root, pre-registers every fixed spool/candidate leaf, and
+cleans them after success, failure, or a worker signal; caller `TMPDIR` does not
+control this boundary. Internal phase success uses statuses outside the public
+0–3 contract, so directly forging phase environment cannot yield acceptance.
+With both `--no-output` and
 `--no-type-check-output`, accepted islands are checked and summarized while
 live and then discarded: no workspace is opened and no cumulative generated
 declaration array is retained. Monomorphization and deliberate legacy/planner

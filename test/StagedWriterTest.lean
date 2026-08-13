@@ -183,6 +183,25 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "external TMPDIR disables optional staging and cleans its reservation" <|
     externalFallback && externalEntries.isEmpty
 
+  let rootedParent : System.FilePath := s!"{root}/staged-writer-rooted-parent"
+  let rootedScratch := rootedParent / "_tmp"
+  let rootedPath ← IO.mkRef (none : Option System.FilePath)
+  let rootedExternal ← withTempDirectoryVariable externalTmp <|
+    Spool.withRootedWorkspace rootedScratch fun workspace => do
+      rootedPath.set (some workspace.directory)
+      let canonicalRoot ← IO.FS.realPath rootedScratch
+      let canonicalDirectory ← IO.FS.realPath workspace.directory
+      return canonicalDirectory.components.take canonicalRoot.components.length ==
+        canonicalRoot.components
+  let rootedPath? ← rootedPath.get
+  let rootedCleaned ← if let some path := rootedPath? then path.pathExists.map Bool.not
+    else pure false
+  state := state.check "rooted workspace creates missing _tmp and ignores external TMPDIR" <|
+    rootedExternal && rootedCleaned && (← rootedScratch.readDir).isEmpty &&
+      (← externalTmp.readDir).isEmpty
+  IO.FS.removeDir rootedScratch
+  IO.FS.removeDir rootedParent
+
   let symlinkTarget : System.FilePath := s!"{root}/staged-writer-symlink-target"
   let symlinkTmp : System.FilePath := s!"{scratch}/staged-writer-symlink-tmp"
   if ← symlinkTmp.pathExists then IO.FS.removeDirAll symlinkTmp
