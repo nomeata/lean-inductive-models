@@ -2169,7 +2169,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       | .ok e => setEnv e
       | .error ex =>
         let msg ← (ex.toMessageData {}).toString
-        return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" }, {})
+        return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" },
+          { islands := #[], records := #[], order := #[] })
     -- Basis exemption is granted only after the complete exported interface
     -- has been compared with one freshly minted by the kernel. The disposable
     -- alias environment used by the validator is never installed here.
@@ -2291,7 +2292,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         | .error exception =>
           let message ← (exception.toMessageData {}).toString
           return (x.decls,
-            { rep with unreplayable := some s!"{d.names}: {message}" }, {})
+            { rep with unreplayable := some s!"{d.names}: {message}" },
+            { islands := #[], records := #[], order := #[] })
     else
       mainEnv ← getEnv
     legacyOut := legacyOut.push d
