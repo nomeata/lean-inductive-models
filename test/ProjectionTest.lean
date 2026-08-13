@@ -434,10 +434,10 @@ def main : IO UInt32 := do
   state := state.check "ordered late-lift projection interface is exact" <|
     (Check.check pfpOrdered).all (·.familyOwner != `PFP)
 
-  -- Arm W's recursor iota is propositional.  A later recursive field whose
-  -- domain depends on an earlier data field therefore needs the canonical
-  -- transport on the rule's right-hand side; the independent first field
-  -- remains the literal, uncast rule.
+  -- A one-member, unindexed recursive family exposes a public one-layer
+  -- carrier over its private fixpoint.  Both ordinary and infinitary fields
+  -- therefore reduce to the literal mapped constructor field; dependency on
+  -- an earlier field must not reintroduce the old public `Eq.rec` transport.
   let wRaw ← readExport "test/fixtures/inductive-models/prim_w.ndjson"
   let (wDeclarations, wReport) ← runExport wRaw
   let wGenerated := outputExport wRaw wDeclarations
@@ -454,14 +454,8 @@ def main : IO UInt32 := do
       violation.familyOwner != `Wty || violation matches .modelNotBefore ..
   state := state.check "independent recursive field retains the literal rule" <|
     (declarationType? wGenerated wtyRule0).any fun type => !containsConst ``Eq.rec type
-  state := state.check "dependent recursive field has the canonical transport" <|
-    (declarationType? wGenerated wtyRule1).any (containsConst ``Eq.rec)
-  let corruptedTransport := (declarationType? wGenerated wtyRule1).map fun type =>
-    replaceDeclarationType wGenerated wtyRule1 (replaceConst type ``Eq.rec ``Eq.ndrec)
-  state := state.check "checker rejects a corrupted dependent projection transport" <|
-    corruptedTransport.any fun corrupted =>
-      (declarationType? corrupted wtyRule1).any (containsConst ``Eq.ndrec) &&
-        (Check.check corrupted).any (hasTypeViolation `Wty wtyRule1)
+  state := state.check "dependent infinitary recursive field retains the literal rule" <|
+    (declarationType? wGenerated wtyRule1).any fun type => !containsConst ``Eq.rec type
 
   let (wrapperDeclarations, wrapperReport) ← runExport wrapperRaw
   let wrapperGenerated := outputExport wrapperRaw wrapperDeclarations
@@ -543,6 +537,16 @@ def main : IO UInt32 := do
     (Array.range 2).all fun fieldIndex =>
       (definitionValue? generated (Naming.projectionName `Recursive fieldIndex)).any
         (containsConst (Naming.modelName `Recursive.rec))
+
+  let directRecursiveRaw ← readExport "test/fixtures/inductive-models/unitlike.ndjson"
+  let (directRecursiveDeclarations, directRecursiveReport) ← runExport directRecursiveRaw
+  let directRecursiveGenerated := outputExport directRecursiveRaw directRecursiveDeclarations
+  let directRecursiveRule := Naming.projectionIotaName `Recursive 0
+  state := state.check "direct recursive one-layer projection rule is literal" <|
+    directRecursiveReport.generated.any (·.1 == `Recursive) &&
+      directRecursiveReport.stmtErrors.isEmpty &&
+      (declarationType? directRecursiveGenerated directRecursiveRule).any fun type =>
+        !containsConst ``Eq.rec type
   state := state.check "Prop dependency and multi-constructor fields are excluded" <|
     (intrinsicFieldsFor raw `PropDependent).isEmpty &&
       (intrinsicFieldsFor raw `Multi).isEmpty &&
