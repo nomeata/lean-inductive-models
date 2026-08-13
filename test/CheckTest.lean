@@ -309,6 +309,92 @@ def isExtraUnitlike (owner declaration : Name) : Violation → Bool
       gotOwner == owner && gotDeclaration == declaration
   | _ => false
 
+/-! Keep the former quadratic implementation as a test-only specification.
+The production implementation indexes projection-shaped names once; this
+oracle deliberately repeats the full ordered-name scan for every type template
+so randomized equivalence tests exercise two independent algorithms. -/
+
+private def referenceProjectionSlot? (owner name : Name) : Option Nat := do
+  let modelRoot := Naming.modelName owner
+  match name with
+  | .str parent suffix =>
+    if parent == modelRoot && suffix.startsWith "proj_" then
+      (suffix.drop 5).toNat?
+    else if suffix == "iota" then
+      let .str grandParent projectionSuffix := parent | none
+      unless grandParent == modelRoot && projectionSuffix.startsWith "proj_" do none
+      (projectionSuffix.drop 5).toNat?
+    else none
+  | _ => none
+
+def referenceGlobalExtrasFromRecords (records : Array GlobalExtraRecord) : Array Violation :=
+    Id.run do
+  let orderedNames := records.flatMap (·.names)
+  let declared := orderedNames.foldl (fun names name => names.insert name)
+    ({} : Std.HashSet Name)
+  let mut violations : Array Violation := #[]
+  for record in records do
+    for template in record.templates do
+      match template with
+      | .type owner validFields allowsUnitlike allowsEta =>
+        for name in orderedNames do
+          if let some fieldIndex := referenceProjectionSlot? owner name then
+            unless validFields.contains fieldIndex do
+              violations := violations.push (.extraProjection owner name)
+        unless allowsUnitlike do
+          let name := Naming.unitlikeName owner
+          if declared.contains name then
+            violations := violations.push (.extraMetadata owner name .unitlike)
+        unless allowsEta do
+          let name := Naming.etaName owner
+          if declared.contains name then
+            violations := violations.push (.extraMetadata owner name .eta)
+      | .recursor owner allowsRuleK =>
+        unless allowsRuleK do
+          let name := Naming.ruleKName owner
+          if declared.contains name then
+            violations := violations.push (.extraMetadata owner name .ruleK)
+  return violations
+
+private def propertyMix (seed index : Nat) : Nat :=
+  (seed * 1103515245 + index * 12345 + index * index * 97) % 2147483647
+
+private def propertyOwner (seed index : Nat) : Name :=
+  let base := Name.str `GlobalExtraProperty s!"owner_{propertyMix seed index % 11}"
+  if propertyMix seed (index + 31) % 4 == 0 then Name.str base "_model" else base
+
+private def propertyName (seed index : Nat) : Name :=
+  let owner := propertyOwner seed (propertyMix seed (index + 1))
+  let field := propertyMix seed (index + 2) % 9
+  match propertyMix seed (index + 3) % 10 with
+  | 0 | 1 | 9 => Naming.projectionName owner field
+  | 2 => Naming.projectionIotaName owner field
+  | 3 => Naming.unitlikeName owner
+  | 4 => Naming.etaName owner
+  | 5 => Naming.ruleKName owner
+  | 6 => Name.str (Naming.modelName owner) "proj_not_a_number"
+  | 7 => Name.str (Name.str (Naming.modelName owner) "proj_bad") "iota"
+  | _ => Name.str owner s!"ordinary_{field}"
+
+def propertyGlobalExtraRecords (seed : Nat) : Array GlobalExtraRecord :=
+  (Array.range 29).map fun recordIndex =>
+    let names := (Array.range 7).map fun localIndex =>
+      propertyName seed (recordIndex * 7 + localIndex)
+    let owner := propertyOwner seed (recordIndex * 3)
+    let validFields := (Array.range 9).filter fun field =>
+      propertyMix seed (recordIndex * 17 + field) % 3 != 0
+    let templates : Array GlobalExtraTemplate :=
+      #[.type owner validFields
+          (propertyMix seed (recordIndex + 101) % 2 == 0)
+          (propertyMix seed (recordIndex + 103) % 2 == 0),
+        .recursor (propertyOwner seed (recordIndex * 5 + 1))
+          (propertyMix seed (recordIndex + 107) % 2 == 0)] ++
+      (if recordIndex % 5 == 0 then
+        #[.type (propertyOwner seed (recordIndex + 1))
+            (validFields.reverse.extract 0 (validFields.size / 2)) false false]
+      else #[])
+    { names, templates }
+
 def run (root : String) : IO UInt32 := do
   let path := s!"{root}/test/fixtures/modelgen/nested_iota_arm.ndjson"
   let text ← IO.FS.readFile path
@@ -346,6 +432,21 @@ def run (root : String) : IO UInt32 := do
       globalExtrasFromRecords interleavedGlobal == #[
         .extraProjection `Interleave.A interleavedAProjection,
         .extraProjection `Interleave.B interleavedBProjection]
+    let duplicateProjection := Naming.projectionName `Interleave.A 9
+    let duplicateMetadata := Naming.unitlikeName `Interleave.A
+    let duplicateGlobal : Array GlobalExtraRecord := #[
+      { names := #[duplicateProjection, duplicateMetadata, duplicateProjection]
+        templates := #[] },
+      { names := #[Naming.projectionIotaName `Interleave.A 9]
+        templates := #[.type `Interleave.A #[] false true,
+          .type `Interleave.A #[9] false false] }]
+    state ← state.check "global-extra index preserves duplicate names and templates" <|
+      globalExtrasFromRecords duplicateGlobal ==
+        referenceGlobalExtrasFromRecords duplicateGlobal
+    state ← state.check "linear global extras equal the quadratic specification" <|
+      (Array.range 128).all fun seed =>
+        let records := propertyGlobalExtraRecords seed
+        globalExtrasFromRecords records == referenceGlobalExtrasFromRecords records
     state ← state.check "one public family discovered" (families.size == 1)
     if let some family := families[0]? then
       state ← state.check "family key" <|
