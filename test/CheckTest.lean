@@ -468,6 +468,8 @@ def run (root : String) : IO UInt32 := do
       state ← state.check "family key" false
       state ← state.check "only exact public records establish the family" false
     state ← state.check "valid ordering and independence" (check valid).isEmpty
+    state ← state.check "compact ordered report equals the valid full checker" <|
+      compactOrderedCheckReport valid == checkReport valid
     state ← state.check "indexed one-family statements equal the aggregate checker" <|
       indexedFamilyStatements? valid owner == some (checkStatements valid)
     let treeOwners := ({} : Std.HashSet Name).insert owner
@@ -482,6 +484,9 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "compact projection extras retain duplicate order and multiplicity" <|
       compactIndexedStatementsFor duplicateInvalidProjection treeOwners ==
         checkStatementsFor duplicateInvalidProjection treeOwners
+    state ← state.check "compact ordered report retains duplicate projection extras" <|
+      compactOrderedCheckReport duplicateInvalidProjection ==
+        checkReport duplicateInvalidProjection
     let sourceIndex := SyntaxIndex.ofSource raw
     let .ok overlaidIndex := sourceIndex.prependRecords models | do
       IO.eprintln "checktest: valid island overlay was rejected"
@@ -504,6 +509,8 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "unsafe model implementation is rejected" <|
       (check unsafeModel).any
         (isSafetyMismatch owner carrier "unsafe")
+    state ← state.check "compact ordered report retains local interface failures" <|
+      compactOrderedCheckReport unsafeModel == checkReport unsafeModel
     state ← state.check "partial model implementation is rejected" <|
       (check (withDefinitionSafety valid carrier "partial")).any
         (isSafetyMismatch owner carrier "partial")
@@ -561,6 +568,8 @@ def run (root : String) : IO UInt32 := do
     let missingCtor := withoutDeclaration valid firstCtor.model
     state ← state.check "missing constructor slot is rejected" <|
       (check missingCtor).any (isMissing firstCtor.owner firstCtor.model)
+    state ← state.check "compact ordered report retains missing slots" <|
+      compactOrderedCheckReport missingCtor == checkReport missingCtor
 
     -- Constructor slots still claim the family when the carrier is missing,
     -- so exactness cannot disappear with the declaration it must diagnose.
@@ -583,6 +592,8 @@ def run (root : String) : IO UInt32 := do
     let duplicateRec := insertBeforeOwner valid owner firstRecDecl
     state ← state.check "extra recursor occurrence is rejected" <|
       (check duplicateRec).any (isDuplicate firstRec.owner firstRec.model)
+    state ← state.check "compact ordered report retains duplicate slots" <|
+      compactOrderedCheckReport duplicateRec == checkReport duplicateRec
     let some (_, firstRecType) := exportDeclarationType? valid firstRec.model | do
       IO.eprintln "checktest: modeled recursor type missing"
       return 1
@@ -624,6 +635,8 @@ def run (root : String) : IO UInt32 := do
       (.ax extraRuleName [] (.sort .zero) false)
     state ← state.check "out-of-range iota theorem is rejected" <|
       (check extraRule).any (isExtraRule firstRec.owner extraRuleName)
+    state ← state.check "compact ordered report recomputes extra rules" <|
+      compactOrderedCheckReport extraRule == checkReport extraRule
     let some (_, firstRuleType) := exportDeclarationType? valid firstRule.name | do
       IO.eprintln "checktest: first iota type missing"
       return 1

@@ -1446,6 +1446,82 @@ def checkReport (x : Export) : Report :=
   let families := discover x
   { familiesChecked := families.size, violations := checkFamilies x families true }
 
+/-! ## Compact whole-output certificates
+
+Once compact ordering succeeds, model records precede their owners and an
+owner backreference would have formed a dependency cycle. The remaining
+whole-output check can therefore retain each family's already-checked local
+interface diagnostics plus names needed for final discovery and extra-rule
+census, rather than its declarations and expression graph.
+-/
+
+/-- Name-only whole-output certificate captured while one family's source and
+model declarations are live. `localViolations` excludes order/backreference
+checks and the final whole-stream extra-rule census. -/
+structure CompactFamilyCertificate where
+  owner : Name
+  publicNames : Array Name
+  localViolations : Array Violation
+  recursors : Array (Name × Name × Nat)
+  deriving Inhabited, Repr, BEq
+
+private def notExtraRule : Violation → Bool
+  | .extraRule .. => false
+  | _ => true
+
+/-- Capture one family through the exact syntax index used for its local
+structural check. The recursor tuples are `(owner, model, validRuleCount)`. -/
+def compactFamilyCertificateWithIndex (x : Export) (index : SyntaxIndex)
+    (family : Family) : CompactFamilyCertificate :=
+  { owner := family.owner
+    publicNames := family.correspondence.publicNames
+    localViolations :=
+      (checkFamilyWithIndex x index family false).filter notExtraRule
+    recursors := family.correspondence.recursors.map fun pair =>
+      (pair.owner, pair.model,
+        (family.correspondence.iotas.filter (·.recursor == pair.owner)).size) }
+
+/-- Capture every currently discoverable family in owner-record order. This is
+the full-export convenience form; staged generation captures source and island
+families separately through `compactFamilyCertificateWithIndex`. -/
+def compactFamilyCertificates (x : Export) : Array CompactFamilyCertificate :=
+  let index := SyntaxIndex.ofSource x
+  (discover x).map (compactFamilyCertificateWithIndex x index)
+
+/-- Finish the structural report from final ordered names and family-local
+certificates. The caller must already have proved compact dependency/model
+ordering; that proof excludes the two order-only violation classes omitted by
+the certificates. -/
+def compactOrderedReport (records : Array GlobalExtraRecord)
+    (families : Array CompactFamilyCertificate) : Report := Id.run do
+  let orderedNames := records.flatMap (·.names)
+  let declared := orderedNames.foldl (fun names name => names.insert name)
+    ({} : Std.HashSet Name)
+  let ruleSlots := orderedNames.foldl (init :=
+      ({} : Std.HashMap Name (Array (Name × Nat)))) fun slots name =>
+    match iotaSlot? name with
+    | none => slots
+    | some (parent, ruleIndex) =>
+      slots.insert parent ((slots.getD parent #[]).push (name, ruleIndex))
+  let mut familiesChecked := 0
+  let mut violations : Array Violation := #[]
+  for family in families do
+    unless family.publicNames.any declared.contains do continue
+    familiesChecked := familiesChecked + 1
+    violations := violations ++ family.localViolations
+    for (owner, model, validRules) in family.recursors do
+      for (name, ruleIndex) in ruleSlots.getD model #[] do
+        if ruleIndex >= validRules || name != Naming.iotaName owner ruleIndex then
+          violations := violations.push (.extraRule owner name)
+  violations := violations ++ globalExtrasFromRecords records
+  return { familiesChecked, violations }
+
+/-- In-memory equivalence oracle for an already ordered export. -/
+def compactOrderedCheckReport (x : Export) : Report :=
+  let index := SyntaxIndex.ofSource x
+  compactOrderedReport (globalExtraRecordsWithIndex index x.decls)
+    ((discover x).map (compactFamilyCertificateWithIndex x index))
+
 /-- Exact public-interface comparison without an environment or an ordering
 assumption.  This is the generation oracle: all expected declarations and
 theorems are reconstructed from the serialized owner records.  The separate
