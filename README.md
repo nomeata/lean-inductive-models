@@ -687,8 +687,10 @@ runs the fixture and universe-level suites and the published Arena corpus with
 a per-process memory limit. The
 full-Mathlib workflow
 [`.github/workflows/mathlib.yml`](.github/workflows/mathlib.yml) generates and
-checks a pinned Mathlib export on a standard `ubuntu-24.04` hosted runner. Each
-large process tree has a 10 GiB address-space limit. The exporter writes a
+checks a pinned Mathlib export on a standard `ubuntu-24.04` hosted runner.
+Serialized builds, cache extraction, and export have a 12 GiB address-space
+limit; the model generator and kernel reread have the authoritative 10 GiB
+worker limit. The exporter writes a
 compressed stream which is fed to the staged generator through a FIFO; build
 trees, checkouts, and the compressed source are reclaimed before the staged
 spool and final output need the disk. The workflow records instruction counts

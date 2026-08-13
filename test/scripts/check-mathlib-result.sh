@@ -27,6 +27,24 @@ printf '%s\n' \
   'input check: 12001 model families checked' > "$recheck"
 
 checker="$ROOT/scripts/check-mathlib-result.sh"
+ci_harness="$ROOT/scripts/ci-mathlib.sh"
+
+# The native compiler needs more address space than either authoritative model
+# worker. Keep both exact envelopes and their phase assignments explicit.
+grep -Fq 'BUILD_LIMIT_KIB=$((12 * 1024 * 1024))' "$ci_harness"
+grep -Fq 'WORKER_LIMIT_KIB=$((10 * 1024 * 1024))' "$ci_harness"
+for phase in build-generator build-exporter mathlib-cache export; do
+  grep -Eq "run_build_measured([[:space:]]+|.* )$phase" "$ci_harness" || {
+    echo "mathlib CI does not use the 12 GiB envelope for $phase" >&2
+    exit 1
+  }
+done
+for phase in generate check-input; do
+  grep -Eq "run_worker_measured([[:space:]]+|.* )$phase" "$ci_harness" || {
+    echo "mathlib CI does not use the 10 GiB envelope for $phase" >&2
+    exit 1
+  }
+done
 
 # GitHub's stock Ubuntu runner does not provide ripgrep. Shadow any host copy
 # so this regression test also proves the checker has no hidden rg dependency.

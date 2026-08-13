@@ -23,6 +23,7 @@ OUTPUT="$WORK/mathlib.model.ndjson"
 MATHLIB_REV="5e932f97dd25535344f80f9dd8da3aab83df0fe6"
 EXPORTER_REV="caccfbebbc99077962b3321125b2375bb3fa22db"
 WORKER_LIMIT_KIB=$((10 * 1024 * 1024))
+BUILD_LIMIT_KIB=$((12 * 1024 * 1024))
 # The measured staged spool and output are each about 6 GB. This is a
 # generation-phase guard, after all disposable builds and checkouts are gone;
 # it is not a runner-size preflight.
@@ -32,7 +33,17 @@ mkdir -p "$BIN_DIR" "$LOG_DIR" "$PERF_DIR" "$TMP_DIR"
 export TMPDIR="$TMP_DIR"
 export MATHLIB_CACHE_DIR
 exec > >(tee "$LOG_DIR/mathlib-ci.log") 2>&1
-trap 'rm -f "$INPUT_FIFO"' EXIT
+feeder_pid=""
+
+cleanup_input_stream() {
+  if [[ -n "$feeder_pid" ]]; then
+    kill "$feeder_pid" 2>/dev/null || true
+    wait "$feeder_pid" 2>/dev/null || true
+    feeder_pid=""
+  fi
+  rm -f "$INPUT_FIFO" "$INPUT_GZ"
+}
+trap cleanup_input_stream EXIT
 
 fail() {
   echo "mathlib CI: $*" >&2
@@ -43,6 +54,7 @@ for tool in awk df du git grep gzip lake mkfifo stat; do
   command -v "$tool" >/dev/null || fail "required command not found: $tool"
 done
 [[ -x /usr/bin/time ]] || fail "required command not found: /usr/bin/time"
+(( BASH_VERSINFO[0] >= 5 )) || fail "Bash 5 or newer is required for wait -n -p"
 
 disk_census() {
   local phase="$1"
@@ -68,15 +80,20 @@ cleanup_tree() {
   fi
 }
 
-# Each potentially large process tree inherits an exact 10 GiB address-space
-# limit. The public generator's supervised worker inherits this limit too.
+# Every large process tree has an exact address-space ceiling. Serialized Lake
+# builds, cache extraction, and export need 12 GiB (Simple.c exceeds 10 GiB).
+# The public generator and serialized kernel reread use the authoritative
+# 10 GiB worker ceiling; the supervised child inherits its parent's limit.
 run_capped() (
-  ulimit -S -v "$WORKER_LIMIT_KIB"
-  ulimit -H -v "$WORKER_LIMIT_KIB"
-  [[ "$(ulimit -S -v)" == "$WORKER_LIMIT_KIB" ]] ||
-    fail "could not set the 10 GiB soft RLIMIT_AS"
-  [[ "$(ulimit -H -v)" == "$WORKER_LIMIT_KIB" ]] ||
-    fail "could not set the 10 GiB hard RLIMIT_AS"
+  limit_kib="$1"
+  limit_label="$2"
+  shift 2
+  ulimit -S -v "$limit_kib"
+  ulimit -H -v "$limit_kib"
+  [[ "$(ulimit -S -v)" == "$limit_kib" ]] ||
+    fail "could not set the $limit_label soft RLIMIT_AS"
+  [[ "$(ulimit -H -v)" == "$limit_kib" ]] ||
+    fail "could not set the $limit_label hard RLIMIT_AS"
   exec "$@"
 )
 
@@ -96,15 +113,25 @@ else
 fi
 
 run_measured() {
-  local label="$1"
-  shift
+  local limit_kib="$1" limit_label="$2" label="$3"
+  shift 3
   if [[ "$PERF_AVAILABLE" == true ]]; then
-    run_capped /usr/bin/time -v -o "$PERF_DIR/$label.time" \
+    run_capped "$limit_kib" "$limit_label" \
+      /usr/bin/time -v -o "$PERF_DIR/$label.time" \
       perf stat -e instructions -o "$PERF_DIR/$label.perf" -- "$@"
   else
     echo "instructions: unavailable" > "$PERF_DIR/$label.perf"
-    run_capped /usr/bin/time -v -o "$PERF_DIR/$label.time" "$@"
+    run_capped "$limit_kib" "$limit_label" \
+      /usr/bin/time -v -o "$PERF_DIR/$label.time" "$@"
   fi
+}
+
+run_build_measured() {
+  run_measured "$BUILD_LIMIT_KIB" "12 GiB build/export" "$@"
+}
+
+run_worker_measured() {
+  run_measured "$WORKER_LIMIT_KIB" "10 GiB model worker" "$@"
 }
 
 # Hosted runners normally have no configured swap. Try the standard
@@ -140,7 +167,7 @@ checkout_pinned() {
 
 # Build one root per Lake invocation. Copy the standalone executables out of
 # their build trees so every build artifact can be reclaimed before generation.
-(cd "$ROOT" && run_measured build-generator \
+(cd "$ROOT" && run_build_measured build-generator \
   lake -Kjobs=1 build lean-inductive-models)
 cp "$ROOT/.lake/build/bin/lean-inductive-models" \
   "$BIN_DIR/lean-inductive-models"
@@ -152,7 +179,7 @@ checkout_pinned \
   https://github.com/leanprover/lean4export.git \
   "$EXPORTER_REV" "$EXPORTER_DIR"
 cp "$ROOT/lean-toolchain" "$EXPORTER_DIR/lean-toolchain"
-(cd "$EXPORTER_DIR" && run_measured build-exporter lake -Kjobs=1 build)
+(cd "$EXPORTER_DIR" && run_build_measured build-exporter lake -Kjobs=1 build)
 cp "$EXPORTER_DIR/.lake/build/bin/lean4export" "$BIN_DIR/lean4export"
 [[ -x "$BIN_DIR/lean4export" ]] || fail "exporter binary was not built"
 cleanup_tree "$EXPORTER_DIR"
@@ -161,14 +188,14 @@ disk_census exporter-built
 checkout_pinned \
   https://github.com/leanprover-community/mathlib4.git \
   "$MATHLIB_REV" "$MATHLIB_DIR"
-(cd "$MATHLIB_DIR" && run_measured mathlib-cache lake -Kjobs=1 exe cache get)
+(cd "$MATHLIB_DIR" && run_build_measured mathlib-cache lake -Kjobs=1 exe cache get)
 cleanup_tree "$MATHLIB_CACHE_DIR"
 disk_census mathlib-cached
 
 rm -f "$INPUT_GZ" "$INPUT_FIFO" "$OUTPUT"
 set +e
 (cd "$MATHLIB_DIR" &&
-  run_measured export lake env "$BIN_DIR/lean4export" Mathlib) |
+  run_build_measured export lake env "$BIN_DIR/lean4export" Mathlib) |
   gzip -1 > "$INPUT_GZ"
 export_status=("${PIPESTATUS[@]}")
 set -e
@@ -194,30 +221,45 @@ free_kib="$(available_kib)"
 mkfifo "$INPUT_FIFO"
 gzip -dc "$INPUT_GZ" > "$INPUT_FIFO" &
 feeder_pid=$!
+feeder_job="$feeder_pid"
 
 # No selection flags: this deliberately exercises the documented default,
 # including inductive generation and structural input/output checking.
 set +e
 (
   set -o pipefail
-  run_measured generate \
+  run_worker_measured generate \
     env -u LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER \
     "$BIN_DIR/lean-inductive-models" "$INPUT_FIFO" -o "$OUTPUT" \
     2>&1 | tee "$LOG_DIR/generate.log" >&2
 ) &
 generator_pid=$!
-wait "$feeder_pid"
-feeder_status=$?
-if (( feeder_status == 0 )); then
+completed_pid=""
+wait -n -p completed_pid "$feeder_job" "$generator_pid"
+first_status=$?
+if [[ "$completed_pid" == "$feeder_job" ]]; then
+  feeder_status="$first_status"
+  feeder_pid=""
   rm -f "$INPUT_GZ" "$INPUT_FIFO"
   disk_census source-reclaimed
+  wait "$generator_pid"
+  generator_status=$?
+else
+  generator_status="$first_status"
+  if (( generator_status != 0 )); then
+    # The worker may have failed before opening the FIFO. Cancel the exact
+    # blocked gzip child so the hosted job cannot hang in open(2).
+    kill "$feeder_job" 2>/dev/null || true
+  fi
+  wait "$feeder_job"
+  feeder_status=$?
+  feeder_pid=""
+  rm -f "$INPUT_GZ" "$INPUT_FIFO"
 fi
-wait "$generator_pid"
-generator_status=$?
 set -e
-(( feeder_status == 0 )) ||
-  fail "compressed Mathlib input feeder failed: $feeder_status"
+echo "input process statuses: generator=$generator_status feeder=$feeder_status"
 (( generator_status == 0 )) || fail "model generator failed: $generator_status"
+(( feeder_status == 0 )) || fail "compressed Mathlib input feeder failed: $feeder_status"
 
 [[ -s "$OUTPUT" ]] || fail "generated export is missing or empty"
 disk_census generated
@@ -232,7 +274,7 @@ grep -Eq ': model of [1-9][0-9]* declarations' "$LOG_DIR/generate.log" ||
 # This pass is serialized after the first process and its private spool exit.
 (
   set -o pipefail
-  run_measured check-input \
+  run_worker_measured check-input \
     env -u LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER \
     "$BIN_DIR/lean-inductive-models" "$OUTPUT" \
       --no-inductives --check-input --no-check-output \
