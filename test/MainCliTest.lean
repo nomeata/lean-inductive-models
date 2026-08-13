@@ -543,7 +543,8 @@ def main (args : List String) : IO UInt32 := do
     stagedRun.exitCode == 0 && stagedRun.stdout == stdoutRun.stdout
   let fallbackCwd := s!"{scratch}/main-cli-no-spool-root"
   IO.FS.createDirAll fallbackCwd
-  let nestedAbsolute ← System.FilePath.realPath nested
+  let nestedPath : System.FilePath := nested
+  let nestedAbsolute := if nestedPath.isAbsolute then nestedPath else (← IO.currentDir) / nestedPath
   let fallbackRun ← runModelgenAt binary
     ["--no-inductives", "--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
   state := state.check "missing staging root falls back without changing output" <|
