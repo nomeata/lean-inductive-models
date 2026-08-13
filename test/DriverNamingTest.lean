@@ -90,8 +90,8 @@ def main : IO UInt32 := do
   -- plain no-selected-owner export checked once per aggregate fixture.  The
   -- scheduler and the complete filter must both be byte-order fixed points.
   let passThrough : Array (String × Modelgen.Cli.Config) := #[
-    ("nested_iota.ndjson", {}),
-    ("nested_shapes.ndjson", {}),
+    ("nested_iota.ndjson", legacyGenerationConfig false),
+    ("nested_shapes.ndjson", legacyGenerationConfig false),
     ("nat_char_equations.ndjson", legacyGenerationConfig false)]
   for (fixture, generation) in passThrough do
     let path := s!"test/fixtures/modelgen/filtered/{fixture}"
@@ -105,6 +105,20 @@ def main : IO UInt32 := do
     let result ← runExport s!"pass-through {fixture}" input false generation
     state := state.check s!"{fixture} filtering is a byte-order fixed point"
       (result.report.generated.isEmpty && result.output == input.decls)
+
+  -- The committed nested fixture is filtered only for the nested and mutual
+  -- branches. Enabling simple/basic generation is deliberately not an
+  -- idempotence check: the missing ordinary models must still be added.
+  let partialText ← IO.FS.readFile
+    "test/fixtures/modelgen/filtered/nested_iota.ndjson"
+  let .ok partialInput := Modelgen.parse partialText (analyse := false)
+    | throw <| IO.userError "cannot parse the partially filtered nested_iota fixture"
+  let allBranches ← runExport "partially filtered nested_iota with every branch"
+    partialInput false {}
+  state := state.check "partially filtered nested output is not an all-branch fixed point"
+    (allBranches.output != partialInput.decls)
+  state := state.check "all branches add the missing ordinary simple models"
+    ([`N, `List, `Box].all allBranches.generated)
 
   let safetyText ← IO.FS.readFile "test/fixtures/modelgen/nested_iota_arm.ndjson"
   let .ok safetyInput := Modelgen.parse safetyText (analyse := false)
