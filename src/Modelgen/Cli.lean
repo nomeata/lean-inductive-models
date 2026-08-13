@@ -31,6 +31,8 @@ structure Config where
   typeCheckInput : Bool := false
   /-- Submit the complete final transformed stream to Lean's kernel. -/
   typeCheckOutput : Bool := false
+  /-- Apply the Lean Kernel Arena result contract to semantic input failures. -/
+  arenaCheck : Bool := false
   monoLevels : Bool := false
   /-- Whether an export is written. -/
   output : Bool := true
@@ -67,6 +69,7 @@ def usage : String := String.intercalate "\n" [
   "  --[no-]check         set both structural model-check options",
   "  --[no-]type-check-input   submit the parsed input to Lean's kernel",
   "  --[no-]type-check-output  submit the final output to Lean's kernel",
+  "  --arena-check          check input under the Lean Kernel Arena contract",
   "  --[no-]mono-levels   monomorphize universe levels",
   "  --[no-]quiet         enable or disable diagnostics"]
 
@@ -110,6 +113,12 @@ where
       go rest { config with typeCheckOutput := true }
     | "--no-type-check-output" :: rest, config =>
       go rest { config with typeCheckOutput := false }
+    | "--arena-check" :: rest, config =>
+      go rest { config with
+        nested := false, mutualModels := false, simple := false, basic := false,
+        checkInput := false, checkOutput := false, typeCheckInput := true,
+        typeCheckOutput := false, monoLevels := false, output := false,
+        arenaCheck := true }
     | "--mono-levels" :: rest, config => go rest { config with monoLevels := true }
     | "--no-mono-levels" :: rest, config => go rest { config with monoLevels := false }
     | "--output" :: rest, config => go rest { config with output := true }

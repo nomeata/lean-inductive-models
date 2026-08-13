@@ -387,7 +387,7 @@ def main (args : List String) : IO UInt32 := do
   let duplicateText :=
     { nestedExport with decls := nestedExport.decls.push nestedExport.decls[0]! }.render
   let duplicate ← runModelgenStdin binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] duplicateText
+    "--arena-check", "-"] duplicateText
   state := state.check "duplicate declaration is an Arena rejection with exit 1" <|
     duplicate.exitCode == 1 && (duplicate.stderr.splitOn "parse error:").length > 1
   let duplicateOutsideArena ← runModelgenStdin binary [
@@ -448,8 +448,8 @@ def main (args : List String) : IO UInt32 := do
     declined.exitCode == 2 && (declined.stderr.splitOn "declined").length > 1
 
   let malformed ← runModelgenStdin binary
-    ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] "not ndjson\n"
-  state := state.check "malformed stdin is a tool error with exit 3" <|
+    ["--arena-check", "-"] "not ndjson\n"
+  state := state.check "malformed Arena stdin is a tool error with exit 3" <|
     malformed.exitCode == 3 && (malformed.stderr.splitOn "parse error:").length > 1
   let arenaHoles : Array (String × String) := #[
     ("name", "{\"in\":2,\"str\":{\"pre\":0,\"str\":\"Defined\"}}\n" ++
@@ -460,7 +460,7 @@ def main (args : List String) : IO UInt32 := do
       "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}\n")]
   for (kind, arenaHole) in arenaHoles do
     let result ← runModelgenStdin binary
-      ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] arenaHole
+      ["--arena-check", "-"] arenaHole
     state := state.check s!"undefined sparse {kind} ID is a tool error with exit 3" <|
       result.exitCode == 3 && (result.stderr.splitOn "parse error:").length > 1
 
@@ -471,7 +471,7 @@ def main (args : List String) : IO UInt32 := do
     ("invalid natural literal", "{\"ie\":0,\"natVal\":\"not-a-natural\"}\n")]
   for (kind, input) in malformedArenaRecords do
     let result ← runModelgenStdin binary
-      ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] input
+      ["--arena-check", "-"] input
     state := state.check s!"{kind} is a parse/tool error with exit 3" <|
       result.exitCode == 3 && (result.stderr.splitOn "parse error:").length > 1
 
@@ -492,8 +492,7 @@ def main (args : List String) : IO UInt32 := do
       | .ok output => output.decls == #[metadataDecl]
       | .error _ => false
   let missing ← runModelgen binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--no-output",
-    s!"{scratch}/does-not-exist.ndjson"]
+    "--arena-check", s!"{scratch}/does-not-exist.ndjson"]
   state := state.check "missing $IN path is a tool error with exit 3" (missing.exitCode == 3)
   let badOption ← runModelgen binary ["--unknown-arena-option", nested]
   state := state.check "CLI misuse is a tool error with exit 3" (badOption.exitCode == 3)

@@ -1585,21 +1585,61 @@ private def checkKernelReplayExpressions (record : EDecl) : MetaM (Except String
     return .error s!"{record.names}: expression validation failed: \
       {← exception.toMessageData.toString}"
 
+private partial def firstBadConstantLevelArity
+    (constants : Std.HashMap Name ConstantInfo) (expression : Expr) : Option String :=
+  match expression with
+  | .const name levels =>
+      match constants[name]? with
+      | none => none
+      | some info =>
+        if levels.length == info.levelParams.length then none
+        else some s!"{name} expects {info.levelParams.length} universe levels, got {levels.length}"
+  | .app fn arg =>
+      firstBadConstantLevelArity constants fn <|>
+        firstBadConstantLevelArity constants arg
+  | .lam _ type body _ | .forallE _ type body _ =>
+      firstBadConstantLevelArity constants type <|>
+        firstBadConstantLevelArity constants body
+  | .letE _ type value body _ =>
+      firstBadConstantLevelArity constants type <|>
+        firstBadConstantLevelArity constants value <|>
+        firstBadConstantLevelArity constants body
+  | .mdata _ body | .proj _ _ body => firstBadConstantLevelArity constants body
+  | _ => none
+
+/-- Reject malformed universe applications before entering the official
+kernel. This prevents the `lazy_delta_reduction_step` memory-corruption path
+tracked by lean4#10577. `constants` includes the complete export, so self,
+mutual, and forward references are checked as well as the current replay
+prefix. -/
+private def checkKernelReplayLevelArities (constants : Std.HashMap Name ConstantInfo)
+    (record : EDecl) : Except String Unit := do
+  for expression in kernelReplayExpressions record do
+    if let some message := firstBadConstantLevelArity constants expression then
+      throw s!"{record.names}: {message}"
+
 /-- Replay grouped export records directly into a kernel environment.
 
 Using `Lean.Environment.replay` here would split the constant map back into
 individual records.  That loses the export's atomic grouping for nested
 inductives and can fail to expose kernel-generated auxiliary recursors. -/
-private def replayKernelRecords (base : Environment) (x : Export) (order : Array Nat) :
+private def replayKernelRecords (base : Environment) (x : Export) (order : Array Nat)
+    (constants : Std.HashMap Name ConstantInfo) :
     MetaM (Except String Environment) := do
   let mut checked := base.toKernelEnv
+  -- `Environment.ofKernelEnv` intentionally exposes no elaborator constant
+  -- map. Keep an unchecked mirror solely for `Meta.check`; `checked` remains
+  -- the authoritative environment produced by the kernel.
+  let mut analysis := base
   for index in order do
     let record := x.decls[index]!
     let declaration? ← match kernelReplayDeclaration record with
       | .ok declaration => pure declaration
       | .error message => return .error message
     let some declaration := declaration? | continue
-    setEnv (.ofKernelEnv checked)
+    if let .error message := checkKernelReplayLevelArities constants record then
+      return .error message
+    setEnv analysis
     unless record matches .induct .. do
       if let .error message ← checkKernelReplayExpressions record then
         return .error message
@@ -1608,11 +1648,16 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
     | .ok next =>
       checked := next
+      analysis ← match analysis.addDeclCore 0 declaration none false with
+        | .error exception =>
+          return .error s!"{record.names}: cannot construct expression-checking environment: \
+            {← (exception.toMessageData {}).toString}"
+        | .ok next => pure next
       if record matches .induct .. then
-        setEnv (.ofKernelEnv checked)
+        setEnv analysis
         if let .error message ← checkKernelReplayExpressions record then
           return .error message
-  return .ok (.ofKernelEnv checked)
+  return .ok analysis
 
 /-- Submit a complete export to Lean's kernel and verify that its serialized
 inductive, constructor, and recursor metadata agrees with what Lean regenerates.
@@ -1629,7 +1674,7 @@ def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   let order ← match kernelReplayOrder x with
     | .error message => return .error message
     | .ok order => pure order
-  let checked ← match ← replayKernelRecords base x order with
+  let checked ← match ← replayKernelRecords base x order constants with
     | .error message => return .error message
     | .ok checked => pure checked
   setEnv checked

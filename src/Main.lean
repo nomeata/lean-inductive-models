@@ -126,13 +126,6 @@ def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Nam
 def generationEnabled (config : Modelgen.Cli.Config) : Bool :=
   config.nested || config.mutualModels || config.simple || config.basic
 
-/-- The no-transform, no-output invocation used by Lean Kernel Arena.  In this
-mode a syntactically complete duplicate declaration is a semantic rejection,
-not a checker crash. Other parser failures remain tool errors. -/
-def arenaCheckingMode (config : Modelgen.Cli.Config) : Bool :=
-  config.typeCheckInput && !generationEnabled config && !config.checkInput &&
-    !config.checkOutput && !config.monoLevels && !config.output
-
 /-- Initial internal fast-path boundary. Structural output checking consumes
 the compact report certified while each family was live. Output kernel checking
 must still replay the exact final byte stream and therefore retains the legacy
@@ -190,7 +183,8 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       if input == "-" then
         let stdin ← IO.getStdin
         let result ← match tee? with
-          | none => (Modelgen.parseStream stdin (analyse := config.monoLevels)).map (Except.map fun x => (x, none))
+          | none => (Modelgen.parseStream stdin (analyse := config.monoLevels)
+              (allowDuplicateNames := config.arenaCheck)).map (Except.map fun x => (x, none))
           | some tee => (Modelgen.parseStreamWithSink stdin tee.sink
               (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
                 (x, some (tee, certificate)))
@@ -199,7 +193,8 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
         IO.FS.withFile input .read fun handle => do
           let result ← match tee? with
             | none => (Modelgen.parseHandle handle
-                (analyse := config.monoLevels)).map (Except.map fun x => (x, none))
+                (analyse := config.monoLevels)
+                (allowDuplicateNames := config.arenaCheck)).map (Except.map fun x => (x, none))
             | some tee => (Modelgen.parseHandleWithSink handle tee.sink
                 (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
                   (x, some (tee, certificate)))
@@ -211,8 +206,6 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
   let (parsed, rawStage?) ← match parsedResult with
     | .error error =>
         IO.eprintln s!"{input}: parse error: {error}"
-        if arenaCheckingMode config && error.startsWith "duplicate declaration " then
-          return exitRejected
         return exitToolError
     | .ok (parsedExport, stage?) =>
       if let some (tee, certificate) := stage? then

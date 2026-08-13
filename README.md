@@ -61,6 +61,7 @@ lines together with the other successful-pass diagnostics.
 | `--check` | on | Enable both structural model-family checks. |
 | `--type-check-input` | off | Submit the complete parsed input to Lean's kernel. |
 | `--type-check-output` | off | Submit the complete final transformed export to Lean's kernel. |
+| `--arena-check` | off | Select the no-transform input kernel gate and apply the Arena result contract. |
 | `--mono-levels` | off | Run the optional universe-level monomorphization pass. |
 | `--output` | on | Write the transformed export. |
 | `-o PATH` | `-` | Write to `PATH`; `-` means standard output. This also enables output. |
@@ -88,6 +89,7 @@ pipe the same NDJSON on standard input:
 ```console
 modelgen --no-inductives --no-check --type-check-input --no-output "$IN"
 modelgen --no-inductives --no-check --type-check-input --no-output - < "$IN"
+modelgen --arena-check "$IN"
 ```
 
 With generation and `--mono-levels` disabled, this mode does not apply the
@@ -637,7 +639,7 @@ test/scripts/check-ci-serialized-builds.sh
 `--mono-levels` process path. `monotest` exercises the underlying pass directly.
 `check-arena-corpus.sh` downloads the published Lean Kernel Arena corpus and
 requires every `good/` case to exit 0 and every `bad/` case to exit 1 in the
-whole-stream checking mode documented above. Its counts follow the live corpus
+dedicated `--arena-check` mode documented above. Its counts follow the live corpus
 and are not hard-coded.
 The `memoryprobe` target compares whole-file and streaming parser retention in
 fresh processes. It and the `envprobe` and `levelfuzz` targets under `tools/`

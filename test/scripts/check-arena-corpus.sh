@@ -86,7 +86,7 @@ run_group() {
     stdout_log="$work/logs/${relative//\//_}.stdout"
     set +e
     TMPDIR="$work/runtime" "$bin" \
-      --no-inductives --no-check --type-check-input --no-output "$file" \
+      --arena-check "$file" \
       >"$stdout_log" 2>"$stderr_log"
     status=$?
     set -e
