@@ -57,6 +57,45 @@ private def ensureFresh (reserved : Std.HashSet Name) (name : Name) : GenM Unit 
   if reserved.contains name || (← getEnv).constants.contains name then
     declineWith (.nameTaken name)
 
+/-- Map the unique bare recursive occurrence in a direct or infinitary field.
+The field's own Π binders are retained literally; only the terminal carrier
+application moves through `operation`. -/
+partial def mapOneLayerOccurrence (owner : Name) (np : Nat) (operation : Name)
+    (levels : List Level) (type value : Expr) : GenM Expr := do
+  match headNorm type with
+  | .forallE name domain body info =>
+    withLocalDecl name info domain fun argument => do
+      let mapped ← mapOneLayerOccurrence owner np operation levels
+        (body.instantiate1 argument) (mkApp value argument)
+      mkLambdaFVars #[argument] mapped
+  | terminal =>
+    let some arguments ← ownerAppArgs? owner np 0 terminal
+      | badShape s!"a one-layer recursive field does not end in {owner}"
+    pure (mkAppN (.const operation levels)
+      (arguments.extract 0 np |>.push value))
+
+/-- Pointwise section/retraction proof for one direct or infinitary recursive
+field.  A direct occurrence uses no `funext`; each explicit field binder uses
+exactly one application of the supplied theorem. -/
+partial def oneLayerOccurrenceRoundTrip (owner intermediate : Name) (np : Nat)
+    (first second theoremName : Name) (fx? : Option Name) (levels : List Level)
+    (type value : Expr) : GenM Expr := do
+  match headNorm type with
+  | .forallE name domain body info =>
+    withLocalDecl name info domain fun argument => do
+      let resultType := body.instantiate1 argument
+      let applied := mkApp value argument
+      let point ← oneLayerOccurrenceRoundTrip owner intermediate np first second theoremName fx?
+        levels resultType applied
+      let once ← mapOneLayerOccurrence owner np first levels type value
+      let twiceType ← inferType once
+      let twice ← mapOneLayerOccurrence intermediate np second levels twiceType once
+      funextUp fx? #[argument] 1 twice value point
+  | terminal =>
+    let some arguments ← ownerAppArgs? owner np 0 terminal
+      | badShape s!"a one-layer recursive field does not end in {owner}"
+    pure (mkAppN (.const theoremName levels) (arguments.extract 0 np |>.push value))
+
 /-- Build `P`, `roll : P → M`, and `unroll : M → P` over an already checked
 private simple implementation.  No caller selects this helper until the two
 round trips and complete public family have also been built.
