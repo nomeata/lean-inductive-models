@@ -2,6 +2,16 @@ import Modelgen.Format
 
 namespace Modelgen.Spool
 
+/-- Main-side eligibility guard. Stream certification is necessary, but a mode
+which rewrites the whole export (currently universe monomorphization) always
+selects the existing full writer. -/
+def rawFastPathEligible (certificate : RawCertificate) (sizes : RawSpoolSizes)
+    (declarationCount : Nat) (monoLevels : Bool) : Bool :=
+  if monoLevels then false
+  else match certificate.validate sizes declarationCount with
+    | .ok _ => true
+    | .error _ => false
+
 /-- Largest offset accepted by both POSIX `fseeko` and Windows `_fseeki64` in
 the portable shim. The export format uses unsigned counters, but host file
 offsets are signed 64-bit. -/

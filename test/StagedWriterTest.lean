@@ -1,4 +1,4 @@
-import Modelgen.Format
+import Modelgen.Spool
 
 open Lean Modelgen
 
@@ -79,13 +79,14 @@ def main (args : List String) : IO UInt32 := do
   let rawWhitespacePath := s!"{scratch}/raw-spool-whitespace.ndjson"
   let rawBlankPath := s!"{scratch}/raw-spool-blank.ndjson"
   let rawCrlfPath := s!"{scratch}/raw-spool-crlf.ndjson"
+  let compositionPath := s!"{scratch}/raw-spool-composition.ndjson"
   let rawRootSentinel := s!"{scratch}/raw-spool-root-sentinel"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
     nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath,
     projectionOrderPath, projectionOverwritePath, parserCompatibilityPath,
     rawCanonicalPath, rawNameGapPath, rawLevelGapPath, rawExprGapPath,
     rawNameOrderPath, rawNoLfPath, rawWhitespacePath, rawBlankPath, rawCrlfPath,
-    rawRootSentinel]
+    rawRootSentinel, compositionPath]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -204,6 +205,12 @@ def main (args : List String) : IO UInt32 := do
       let malformedCertificate := { certificate with declarations := malformedSpans }
       isExceptError (malformedCertificate.validate spoolSizes 2)
     | .error _ => false
+  state := state.check "monomorphization forces the ordinary writer" <|
+    match stagedParse with
+    | .ok (_, certificate) =>
+      Spool.rawFastPathEligible certificate spoolSizes 2 false &&
+        !Spool.rawFastPathEligible certificate spoolSizes 2 true
+    | .error _ => false
   state := state.check "ordinary and staged streaming parses are identical" <|
     match stagedParse, (← parseHandleAt rawCanonicalPath) with
     | .ok (stagedExport, _), .ok ordinary =>
@@ -213,6 +220,45 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "raw spool files are removed after success" <|
     !(← stagedPaths.metadata.pathExists) && !(← stagedPaths.arena.pathExists) &&
       !(← stagedPaths.declarations.pathExists)
+
+  -- The general spool layer validates one exact payload, hoists every arena
+  -- range, and follows an arbitrary compact declaration permutation.
+  let workspaceDirectoryRef ← IO.mkRef (none : Option System.FilePath)
+  let compositionResult ← Spool.withWorkspace scratch fun workspace => do
+    workspaceDirectoryRef.set (some workspace.directory)
+    let file ← workspace.createFile "composition.ndjson"
+    let metadataSpan ← file.append rawMeta.toUTF8
+    let mut arenaSpans : Array Spool.ByteSpan := #[]
+    for record in firstSplit.arena ++ secondSplit.arena do
+      arenaSpans := arenaSpans.push (← file.append (record ++ "\n").toUTF8)
+    let firstDeclSpan ← file.append rawFirstDecl.toUTF8
+    let secondDeclSpan ← file.append rawSecondDecl.toUTF8
+    let fileSize ← file.finish
+    let composition : Spool.Composition :=
+      { metadata := some metadataSpan
+        arenas := arenaSpans
+        declarations := #[firstDeclSpan, secondDeclSpan]
+        declarationOrder := #[1, 0] }
+    IO.FS.withFile file.path .read fun source =>
+      IO.FS.withFile compositionPath .write fun destination =>
+        composition.emit source destination fileSize
+    return (composition.validate fileSize, fileSize, composition)
+  let (compositionValidation, compositionSize, composition) := compositionResult
+  let compositionText ← IO.FS.readFile compositionPath
+  let expectedComposition := rawMeta ++ expectedArena ++ rawSecondDecl ++ rawFirstDecl
+  state := state.check "spool composition emits exact arenas and reordered declarations" <|
+    !isExceptError compositionValidation && compositionText == expectedComposition &&
+      match Modelgen.parse compositionText (analyse := false) with
+      | .ok output => output.decls == #[second, first]
+      | .error _ => false
+  let workspaceRemoved ← match ← workspaceDirectoryRef.get with
+    | some directory => pure !(← directory.pathExists)
+    | none => pure false
+  state := state.check "spool workspace is removed after composition" workspaceRemoved
+  state := state.check "spool composition rejects malformed compact order" <|
+    isExceptError ({ composition with declarationOrder := #[0, 0] }.validate compositionSize)
+  state := state.check "spool composition rejects an EOF mismatch" <|
+    isExceptError (composition.validate (compositionSize + 1))
 
   -- Starting the second independent writer at the old cursor reuses arena
   -- IDs. The parser must reject that rather than silently binding the later
