@@ -499,8 +499,15 @@ def run (root : String) : IO UInt32 := do
         { noGeneration with simple := true, basic := true }).isOk
     | .error _ => false
   state := state.check "post-schedule support certificate rejects the old order" <|
-    (validateScheduledSupport supportStress
-      { noGeneration with simple := true, basic := true }).isError
+    match validateScheduledSupport supportStress
+        { noGeneration with simple := true, basic := true } with
+    | .error message =>
+      -- Six support records follow the owners; the linear certificate's one
+      -- exact witness is the latest one, not the first collision it happens
+      -- to encounter.
+      message.contains "latest fixed support [Quot.sound]" &&
+        message.contains "after selected owner [LE]"
+    | .ok () => false
 
   -- Hoisting a fixed support record hoists its complete predecessor closure,
   -- not merely the named record. Otherwise the persistent replay environment

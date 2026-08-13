@@ -1337,16 +1337,22 @@ its own completeness.  This slightly over-approximates attempted generation,
 which is harmless because fixed support has already been prioritized globally. -/
 def validateScheduledSupport (scheduled : Export) (generation : Cli.Config) : Except String Unit := do
   unless generationEnabled generation do return
-  let support := (Array.range scheduled.decls.size).filter fun index =>
-    scheduledSupportRecord generation scheduled.decls[index]!
+  -- `every support index < ownerIndex` is equivalent to checking only the
+  -- greatest support index.  Compute that witness once: the certificate stays
+  -- exactly linear even on an export with many selected owners.
+  let mut latestSupport? : Option (Nat × List Name) := none
+  for supportIndex in [:scheduled.decls.size] do
+    let support := scheduled.decls[supportIndex]!
+    if scheduledSupportRecord generation support then
+      latestSupport? := some (supportIndex, support.names)
+  let some (supportIndex, supportNames) := latestSupport? | return
   for ownerIndex in [:scheduled.decls.size] do
     let owner := scheduled.decls[ownerIndex]!
     if scheduledSupportRecord generation owner then continue
     unless generationMayAttemptOwner generation owner do continue
-    for supportIndex in support do
-      unless supportIndex < ownerIndex do
-        throw s!"fixed support {scheduled.decls[supportIndex]!.names} remains at record \
-          {supportIndex} after selected owner {owner.names} at record {ownerIndex}"
+    unless supportIndex < ownerIndex do
+      throw s!"latest fixed support {supportNames} remains at record {supportIndex} \
+        after selected owner {owner.names} at record {ownerIndex}"
 
 /-- Read a generated model back from the construction environment, register
 every name Lean minted for its inductive blocks, and serialize through exact
