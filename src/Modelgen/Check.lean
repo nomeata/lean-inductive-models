@@ -1273,6 +1273,23 @@ def globalExtraRecordsWithIndex (index : SyntaxIndex)
         recursors.toArray.map fun recursor => .recursor recursor.name recursor.k }
     | _ => { names := declaration.names.toArray, templates := #[] }
 
+/-- Recover the modeled-type root and field index from either spelling counted
+by [`projectionSlot?`].  Indexing by the already-modeled root avoids repeating
+the full declaration-name scan for every inductive type while retaining each
+name's original position and multiplicity. -/
+private def projectionSlotRoot? (name : Name) : Option (Name × Nat) := do
+  match name with
+  | .str parent suffix =>
+    if suffix.startsWith "proj_" then
+      return (parent, ← (suffix.drop 5).toNat?)
+    else if suffix == "iota" then
+      let .str grandParent projectionSuffix := parent | none
+      unless projectionSuffix.startsWith "proj_" do none
+      return (grandParent, ← (projectionSuffix.drop 5).toNat?)
+    else
+      none
+  | _ => none
+
 /-- Reproduce the historical global-extra diagnostic order from value-free
 records in final order. The flattened names deliberately remain an array:
 repeated slot names retain projection-diagnostic order and multiplicity, while
@@ -1281,15 +1298,20 @@ def globalExtrasFromRecords (records : Array GlobalExtraRecord) : Array Violatio
   let orderedNames := records.flatMap (·.names)
   let declared := orderedNames.foldl (fun names name => names.insert name)
     ({} : Std.HashSet Name)
+  let projectionSlots := orderedNames.foldl (init :=
+      ({} : Std.HashMap Name (Array (Name × Nat)))) fun slots name =>
+    match projectionSlotRoot? name with
+    | none => slots
+    | some (root, fieldIndex) =>
+      slots.insert root ((slots.getD root #[]).push (name, fieldIndex))
   let mut violations : Array Violation := #[]
   for record in records do
     for template in record.templates do
       match template with
       | .type owner validFields allowsUnitlike allowsEta =>
-        for name in orderedNames do
-          if let some fieldIndex := projectionSlot? owner name then
-            unless validFields.contains fieldIndex do
-              violations := violations.push (.extraProjection owner name)
+        for (name, fieldIndex) in projectionSlots.getD (Naming.modelName owner) #[] do
+          unless validFields.contains fieldIndex do
+            violations := violations.push (.extraProjection owner name)
         unless allowsUnitlike do
           let name := Naming.unitlikeName owner
           if declared.contains name then
