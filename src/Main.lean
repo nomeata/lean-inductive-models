@@ -2,6 +2,7 @@ import Modelgen.Driver
 import Modelgen.Check
 import Modelgen.Mono
 import Modelgen.Order
+import Modelgen.Spool
 
 /-!
 `modelgen [OPTIONS] IN.ndjson`
@@ -128,16 +129,34 @@ def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Nam
 def generationEnabled (config : Modelgen.Cli.Config) : Bool :=
   config.nested || config.mutualModels || config.simple || config.basic
 
-def run (config : Modelgen.Cli.Config) : IO UInt32 := do
+private def runWithWorkspace (config : Modelgen.Cli.Config)
+    (workspace? : Option Modelgen.Spool.Workspace) : IO UInt32 := do
   let input := config.input.getD ""
+  -- Reserve every spool leaf before consuming the input. Failure to establish
+  -- the optional tee selects the historical parser; an error after parsing has
+  -- begun remains a real IO failure and never reruns a consumed stream.
+  let tee? ← match workspace? with
+    | none => pure none
+    | some workspace => try
+        pure (some (← Modelgen.Spool.ParseTee.create workspace))
+      catch _ => pure none
   let parsed? ← try
       if input == "-" then
         let stdin ← IO.getStdin
-        let result ← Modelgen.parseStream stdin (analyse := config.monoLevels)
+        let result ← match tee? with
+          | none => (Modelgen.parseStream stdin (analyse := config.monoLevels)).map (Except.map fun x => (x, none))
+          | some tee => (Modelgen.parseStreamWithSink stdin tee.sink
+              (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
+                (x, some (tee, certificate)))
         pure (some result)
       else
         IO.FS.withFile input .read fun handle => do
-          let result ← Modelgen.parseHandle handle (analyse := config.monoLevels)
+          let result ← match tee? with
+            | none => (Modelgen.parseHandle handle
+                (analyse := config.monoLevels)).map (Except.map fun x => (x, none))
+            | some tee => (Modelgen.parseHandleWithSink handle tee.sink
+                (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
+                  (x, some (tee, certificate)))
           pure (some result)
     catch error =>
       IO.eprintln s!"{input}: {error}"
@@ -147,7 +166,15 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
     | .error error =>
         IO.eprintln s!"{input}: parse error: {error}"
         return exitToolError
-    | .ok parsedExport => pure parsedExport
+    | .ok (parsedExport, stage?) =>
+      -- Certification is deliberately only observed here. Until generated
+      -- island serialization is transactional, all modes retain `Export` and
+      -- use the existing writer even when the source fast path is eligible.
+      if let some (tee, certificate) := stage? then
+        let sizes ← tee.finish
+        let _eligible := Modelgen.Spool.rawFastPathEligible certificate sizes
+          parsedExport.decls.size config.monoLevels
+      pure parsedExport
 
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
@@ -266,6 +293,13 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
       return exitToolError
   if !(unsupportedDeclines parsed generationReport).isEmpty then return exitDeclined
   return exitAccepted
+
+def run (config : Modelgen.Cli.Config) : IO UInt32 := do
+  -- A missing or unsuitable project-local scratch root disables staging before
+  -- any input byte is consumed. This keeps staging an optimization rather than
+  -- a new operational requirement.
+  let scratch := (← IO.currentDir) / "_tmp"
+  Modelgen.Spool.withOptionalWorkspace scratch (runWithWorkspace config)
 
 def main (args : List String) : IO UInt32 := do
   match Modelgen.Cli.parseArgs args with

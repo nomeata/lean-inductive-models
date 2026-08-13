@@ -158,6 +158,33 @@ def Workspace.createFile (workspace : Workspace) (leaf : String) : IO SpoolFile 
   workspace.ownedFiles.modify (fun paths => paths.push path)
   return file
 
+/-- The three logical parser payloads. This is not yet a byte-exact snapshot:
+noncanonical ignored records are intentionally absent, and such a certificate
+always selects the existing full writer. -/
+structure ParseTee where
+  metadata : SpoolFile
+  arena : SpoolFile
+  declarations : SpoolFile
+
+def ParseTee.create (workspace : Workspace) : IO ParseTee := do
+  return {
+    metadata := ← workspace.createFile "metadata.ndjson"
+    arena := ← workspace.createFile "arena.ndjson"
+    declarations := ← workspace.createFile "declarations.ndjson" }
+
+def ParseTee.sink (tee : ParseTee) : RawSink where
+  emit record := match record.kind with
+    | .metadata => discard <| tee.metadata.append record.bytes
+    | .arena => discard <| tee.arena.append record.bytes
+    | .declaration => discard <| tee.declarations.append record.bytes
+    | .ignored => pure ()
+
+def ParseTee.finish (tee : ParseTee) : IO RawSpoolSizes := do
+  return {
+    metadata := ← tee.metadata.finish
+    arena := ← tee.arena.finish
+    declarations := ← tee.declarations.finish }
+
 private def Workspace.cleanup (workspace : Workspace) : IO Unit := do
   let mut firstError : Option IO.Error := none
   for path in ← workspace.ownedFiles.get do
@@ -172,8 +199,7 @@ private def Workspace.cleanup (workspace : Workspace) : IO Unit := do
 /-- Run an action in a fresh workspace and remove only its registered files and
 empty directory. If both the action and cleanup fail, report cleanup separately
 and rethrow the primary action exception. -/
-def withWorkspace (root : System.FilePath) (action : Workspace → IO α) : IO α := do
-  let workspace ← Workspace.create root
+private def Workspace.run (workspace : Workspace) (action : Workspace → IO α) : IO α := do
   let result : Except IO.Error α ← try
       pure (Except.ok (← action workspace))
     catch error => pure (Except.error error)
@@ -188,6 +214,22 @@ def withWorkspace (root : System.FilePath) (action : Workspace → IO α) : IO �
   | .error error, some cleanupError => do
       IO.eprintln s!"spool workspace cleanup also failed: {cleanupError}"
       throw error
+
+def withWorkspace (root : System.FilePath) (action : Workspace → IO α) : IO α := do
+  let workspace ← Workspace.create root
+  workspace.run action
+
+/-- Try to reserve a workspace before calling `action`. Failure to establish
+the optional optimization is represented by `none`; once `action` starts, its
+errors propagate and are never mistaken for a reason to rerun the pipeline. -/
+def withOptionalWorkspace (root : System.FilePath)
+    (action : Option Workspace → IO α) : IO α := do
+  let workspace? ← try
+      pure (some (← Workspace.create root))
+    catch _ => pure none
+  match workspace? with
+  | none => action none
+  | some workspace => workspace.run fun _ => action (some workspace)
 
 /-- A set of byte ranges whose arena ranges are emitted before declarations.
 `declarationOrder` is a permutation of declaration indices, allowing compact
