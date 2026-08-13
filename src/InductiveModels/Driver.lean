@@ -846,7 +846,12 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       let body := eqi.mk' fieldLevel alpha lhs rhs
       let type ← match sourceNormalizer? with
         | some normalizer =>
-          let telescope := betaForallDomains normalizer modelConstructorType
+          -- The selected one-layer public family is an exact source-name
+          -- rewrite.  Its projection iota must retain even definitionally
+          -- trivial source-authored binder syntax; the legacy structure
+          -- routes continue to use their beta-only constructor telescope.
+          let telescope := if phase1OneLayer then modelConstructorType
+            else betaForallDomains normalizer modelConstructorType
           let fallback ← mkForallFVars arguments body
           pure ((closeForallsExact? telescope arguments body).getD fallback)
         | none => mkForallFVars arguments body

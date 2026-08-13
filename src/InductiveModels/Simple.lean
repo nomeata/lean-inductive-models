@@ -5700,9 +5700,20 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
         let lhs := mkAppN (.const recN recLs) (pre ++ isj ++ #[major])
         let rhsSyntax := publicRule.map (·.rhs) |>.getD rule.rhs
         let rhs := (publicSource rhsSyntax).beta (pre ++ fields)
-        let α := mkAppN motive (isj.push major)
+        let α ← match sourceRecursor? with
+          | none => pure (mkAppN motive (isj.push major))
+          | some sourceRecursor =>
+            let some exactResult := exactRecursorMotiveResult? sourceRecursor j pre fields
+              | badShape s!"{sourceRecursor.name}'s exported rule {j} has no exact motive result"
+            pure (publicSource exactResult)
         let tel := pre ++ fields
-        let proposition := eqi.mk' v α lhs rhs
+        let equalityLevel ← match sourceRecursor? with
+          | none => pure v
+          | some sourceRecursor =>
+            let some level := exactRecursorMotiveLevel? sourceRecursor
+              | badShape s!"{sourceRecursor.name}'s exported motive has no exact result sort"
+            pure level
+        let proposition := eqi.mk' equalityLevel α lhs rhs
         let exactFieldTelescope ← match sourceRecursor? with
           | none => pure cty
           | some sourceRecursor =>

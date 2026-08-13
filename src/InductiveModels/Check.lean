@@ -1035,8 +1035,10 @@ private def checkProjection (x : Export) (structures : StructureOwners)
   -- binder type. Mirror exactly that step for the theorem's outer binders, but
   -- retain written `let`s and named model constants so the public statement
   -- remains literal. The unnormalized binders below still drive the RHS.
-  let theoremBinders := constructorBinders.map fun binder =>
-    { binder with type := normalizer.beta binder.type }
+  let theoremBinders := if oneLayerCertificate matches .valid then
+      constructorBinders
+    else constructorBinders.map fun binder =>
+      { binder with type := normalizer.beta binder.type }
   unless constructorBinders.size == constructor.numParams + constructor.numFields do
     return #[.declarationType projection.owner projection.name]
   let constructorArgs := constructorBinders.map fun (binder : OpenBinder) => binder.value

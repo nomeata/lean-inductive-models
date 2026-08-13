@@ -464,6 +464,50 @@ def exactRecursorFieldTelescope? (recursor : ERec) (ruleIndex : Nat)
     unless fields.size == rule.nfields do none
     return closeExactRecForalls fields (.sort .zero)
 
+/-- Recover the exact motive application at one exported recursor minor after
+substituting the generator's current prefix and constructor fields.  This is
+the type of the public iota equality; rebuilding it from installed recursor
+locals would preserve meaning while losing source-authored universe syntax. -/
+def exactRecursorMotiveResult? (recursor : ERec) (ruleIndex : Nat)
+    (pre fields : Array Expr) : Option Expr := do
+  let rule ← recursor.rules[ruleIndex]?
+  unless fields.size == rule.nfields do none
+  let (recBinders, _) := openExactRecForalls ((`_exact_rec_result).append recursor.name)
+    recursor.type
+  let numPre := recursor.numParams + recursor.numMotives + recursor.numMinors
+  unless pre.size == numPre do none
+  let sourcePre := recBinders.extract 0 numPre |>.map (·.value)
+  let minors := recBinders.extract (recursor.numParams + recursor.numMotives) numPre
+  minors.findSome? fun minor => do
+    let minorType := minor.type.replace fun expression =>
+      sourcePre.findIdx? (fun value => value == expression) |>.map fun index => pre[index]!
+    let (minorBinders, motiveResult) :=
+      openExactRecForalls ((`_exact_minor_result).append rule.ctor) minorType
+    let major ← motiveResult.getAppArgs.back?
+    let .const constructor _ := major.getAppFn | none
+    unless constructor == rule.ctor do none
+    let majorArgs := major.getAppArgs
+    unless majorArgs.size >= rule.nfields do none
+    let fieldValues := majorArgs.extract (majorArgs.size - rule.nfields) majorArgs.size
+    let mut sourceFields : Array Expr := #[]
+    for value in fieldValues do
+      let some binder := minorBinders.find? (·.value == value)
+        | sourceFields := #[]; break
+      sourceFields := sourceFields.push binder.value
+    unless sourceFields.size == fields.size do none
+    return motiveResult.replace fun expression =>
+      sourceFields.findIdx? (· == expression) |>.map fun index => fields[index]!
+
+/-- The exact universe in which one exported recursor motive returns. -/
+def exactRecursorMotiveLevel? (recursor : ERec) : Option Level := do
+  let (binders, _) := openExactRecForalls ((`_exact_rec_level).append recursor.name)
+    recursor.type
+  let motive ← binders[recursor.numParams]?
+  let (_, result) := openExactRecForalls ((`_exact_motive_level).append recursor.name)
+    motive.type
+  let .sort level := result | none
+  return level
+
 /-! ## The generator -/
 
 /-- The generator's read-only context. -/

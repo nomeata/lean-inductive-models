@@ -1065,7 +1065,9 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
       let rhs := (exactOneLayerPublicSource tname sourceConstructor.1 sourceRecursor.name
         names sourceRule.rhs).beta (pre ++ fields)
       let alpha := mkApp motive major
-      let proposition := eqi.mk' (← ilevel alpha) alpha lhs rhs
+      let some equalityLevel := exactRecursorMotiveLevel? sourceRecursor
+        | badShape s!"{sourceRecursor.name}'s exported motive has no exact result sort"
+      let proposition := eqi.mk' equalityLevel alpha lhs rhs
       let some exactFields := exactRecursorFieldTelescope? sourceRecursor 0 pre
         | badShape s!"{sourceRecursor.name}'s exported rule has no exact field telescope"
       let exactFields := exactOneLayerPublicSource tname sourceConstructor.1
@@ -1202,7 +1204,7 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
       -- when it instantiates the embedded theorem.  Use their already-checked
       -- exact source forms as the expected result, while the same stored
       -- `publicRec` remains opaque in both sides.
-      let localProposition := eqi.mk' (← ilevel alpha) alpha
+      let localProposition := eqi.mk' equalityLevel alpha
         (mkApp publicRec major) localRhs
       let proof ← match ← applyOneLayerCompatibility
           [carrierUniverse, fieldUniverse, ← ilevel alpha, hypothesisLevel]
