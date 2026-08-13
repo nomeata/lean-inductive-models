@@ -148,10 +148,10 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
     if implementationRecursorInfo.levelParams.length == lparams.length + 1 then
       level :: us
     else us
-  let unrollType ← forallBoundedTelescope memberTy (some np) fun parameters _ =>
-    withLocalDeclD `value (privateSelfAt parameters) fun value =>
-      mkForallFVars (parameters.push value) (publicSelfAt parameters)
-  let unrollValue ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok information => pure information
+    | .error message => badShape s!"{tname}'s one-layer equivalence needs Eq ({message})"
+  let unrollPlan := fun (parameters : Array Expr) => do
     let motive ← withLocalDeclD `value (privateSelfAt parameters) fun value =>
       mkLambdaFVars #[value] (publicSelfAt parameters)
     let afterParameters ← instantiateForall implementationRecursorType parameters
@@ -167,6 +167,12 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
         badShape s!"{names.implementation.recursor}'s minor omits constructor fields"
       let fields := binders.extract 0 fieldCount
       mkLambdaFVars binders (← wTowerMkOf level fields fields)
+    pure (motive, minor, fieldCount)
+  let unrollType ← forallBoundedTelescope memberTy (some np) fun parameters _ =>
+    withLocalDeclD `value (privateSelfAt parameters) fun value =>
+      mkForallFVars (parameters.push value) (publicSelfAt parameters)
+  let unrollValue ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
+    let (motive, minor, _) ← unrollPlan parameters
     withLocalDeclD `value (privateSelfAt parameters) fun value =>
       mkLambdaFVars (parameters.push value)
         (mkAppN (.const names.implementation.recursor recLevels)
@@ -176,6 +182,73 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
       hints := ← hintsFor unrollValue, safety := .safe }
   addChecked unroll
   declarations := declarations.push unroll
+
+  let unrollRollType ← forallBoundedTelescope memberTy (some np) fun parameters _ =>
+    withLocalDeclD `layer (publicSelfAt parameters) fun layer => do
+      let lhs := mkAppN (.const names.unroll us)
+        (parameters ++ #[mkAppN (.const names.roll us) (parameters ++ #[layer])])
+      mkForallFVars (parameters.push layer)
+        (eqi.mk' level (publicSelfAt parameters) lhs layer)
+  let unrollRollValue ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
+    let telescope ← instForall privateConstructorType parameters
+    let fieldCount := numForalls telescope
+    forallBoundedTelescope telescope (some fieldCount) fun fields _ =>
+      withLocalDeclD `layer (publicSelfAt parameters) fun layer => do
+        let values ← wTowerProjsOf level fields layer
+        let (motive, minor, _) ← unrollPlan parameters
+        let proof := mkAppN (.const names.implementation.iotas[0]! recLevels)
+          (parameters ++ #[motive, minor] ++ values)
+        mkLambdaFVars (parameters.push layer) proof
+  let unrollRoll := Declaration.thmDecl
+    { name := names.unrollRoll, levelParams := lparams, type := unrollRollType
+      value := unrollRollValue }
+  addChecked unrollRoll
+  declarations := declarations.push unrollRoll
+
+  let rollUnrollType ← forallBoundedTelescope memberTy (some np) fun parameters _ =>
+    withLocalDeclD `value (privateSelfAt parameters) fun value => do
+      let unrolled := mkAppN (.const names.unroll us) (parameters ++ #[value])
+      let lhs := mkAppN (.const names.roll us) (parameters ++ #[unrolled])
+      mkForallFVars (parameters.push value)
+        (eqi.mk' level (privateSelfAt parameters) lhs value)
+  let rollUnrollValue ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
+    let motive ← withLocalDeclD `value (privateSelfAt parameters) fun value => do
+      let unrolled := mkAppN (.const names.unroll us) (parameters ++ #[value])
+      let lhs := mkAppN (.const names.roll us) (parameters ++ #[unrolled])
+      mkLambdaFVars #[value] (eqi.mk' level (privateSelfAt parameters) lhs value)
+    let afterParameters ← instantiateForall implementationRecursorType parameters
+    let .forallE _ _ afterMotive _ := afterParameters
+      | badShape s!"{names.implementation.recursor} has no motive"
+    let .forallE _ minorType _ _ := afterMotive.instantiate1 motive
+      | badShape s!"{names.implementation.recursor} has no minor"
+    let telescope ← instForall privateConstructorType parameters
+    let fieldCount := numForalls telescope
+    let minor ← forallBoundedTelescope minorType (some (numForalls minorType))
+        fun binders _ => do
+      let fields := binders.extract 0 fieldCount
+      let (unrollMotive, unrollMinor, _) ← unrollPlan parameters
+      let layerEquality := mkAppN (.const names.implementation.iotas[0]! recLevels)
+        (parameters ++ #[unrollMotive, unrollMinor] ++ fields)
+      let layer := publicSelfAt parameters
+      let privateCarrier := privateSelfAt parameters
+      let source := mkAppN (.const names.unroll us)
+        (parameters ++ #[mkAppN (.const names.implementation.ctors[0]! us)
+          (parameters ++ fields)])
+      let target ← wTowerMkOf level fields fields
+      let rollAt := fun value => mkAppN (.const names.roll us) (parameters ++ #[value])
+      let proof ← transportAlong eqi .zero level layer source target layerEquality
+        (eqi.refl' level privateCarrier (rollAt source)) fun value =>
+          pure (eqi.mk' level privateCarrier (rollAt source) (rollAt value))
+      mkLambdaFVars binders proof
+    withLocalDeclD `value (privateSelfAt parameters) fun value =>
+      mkLambdaFVars (parameters.push value)
+        (mkAppN (.const names.implementation.recursor recLevels)
+          (parameters ++ #[motive, minor, value]))
+  let rollUnroll := Declaration.thmDecl
+    { name := names.rollUnroll, levelParams := lparams, type := rollUnrollType
+      value := rollUnrollValue }
+  addChecked rollUnroll
+  declarations := declarations.push rollUnroll
 
   let implementationNames := implementationIso.publicInterface
   return { declarations, spliced, names, implementationNames }
