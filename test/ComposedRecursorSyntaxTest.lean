@@ -1,14 +1,14 @@
 import Modelgen.Driver
 
 /-!
-# Composed exact-recursor syntax diagnostic
+# Composed exact-recursor syntax regression
 
 The three composition seams consume inductives generated earlier in the same
 island: nested to mutual, mutual auxiliary to simple, and arm-C skeleton to
-simple splice closure.  This diagnostic perturbs the exact recursor rule in
-the serialized owner record after current generation.  The statement checker
-then demonstrates that each already-generated iota theorem followed installed
-metadata instead of that exact record.
+simple splice closure. The focused transform perturbs the exact recursor minor
+domain at its serialization boundary, before the immediate composed consumer.
+Every generated public statement must follow that syntax while proof terms
+continue to use installed kernel metadata.
 -/
 
 open Lean Meta Modelgen
@@ -63,6 +63,18 @@ def perturbRuleSyntax (owner : Name) (declaration : EDecl) : EDecl :=
     else declaration
   | _ => declaration
 
+def breakRuleLayout (owner : Name) (declaration : EDecl) : EDecl :=
+  match declaration with
+  | .induct types constructors recursors =>
+    if types.any (·.name == owner) then
+      .induct types constructors (recursors.map fun recursor =>
+        if recursor.all.contains owner then
+          { recursor with rules := recursor.rules.mapIdx fun index rule =>
+              if index == 0 then { rule with nfields := rule.nfields + 1 } else rule }
+        else recursor)
+    else declaration
+  | _ => declaration
+
 def runRoute (root : String) (route : Route) : IO Bool := do
   let path := s!"{root}/test/fixtures/modelgen/{route.fixture}"
   let .ok input := Modelgen.parse (← IO.FS.readFile path) (analyse := false)
@@ -72,33 +84,49 @@ def runRoute (root : String) (route : Route) : IO Bool := do
     { fileName := s!"<composed-recursor-syntax-{route.label}>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let action : MetaM Bool := do
-    let (declarations, report) ← runFilter input false route.generation
-    unless report.stmtErrors.isEmpty do
-      throwError "unperturbed {route.label} already differs: {report.stmtErrors}"
+    let (declarations, report) ← runFilterWithExactBlockTransform input false
+      route.generation (perturbRuleSyntax route.owner)
     unless report.generated.any (·.1 == route.owner) do
-      throwError "{route.label} did not generate a model for {route.owner}"
+      throwError "{route.label} did not generate a model for {route.owner}: \
+        generated={report.generated}, declined={report.declined}"
     let output : Export := { input with decls := declarations }
-    let perturbed : Export :=
-      { output with decls := output.decls.map (perturbRuleSyntax route.owner) }
     let owners : Std.HashSet Name := ({} : Std.HashSet Name).insert route.owner
-    let checked := Check.checkStatementsFor perturbed owners
-    let recursor := Name.str route.owner "rec"
-    let witnessed := checked.violations.any fun violation => match violation with
-      | .declarationType owner declaration =>
-        owner == recursor && (Array.range 64).any fun index =>
-          declaration == Naming.iotaName recursor index
-      | _ => false
-    IO.println s!"{route.label}: {checked.violations.size} perturbed violations; \
-      exact iota mismatch={witnessed}"
-    return witnessed
+    let checked := Check.checkStatementsFor output owners
+    let exact := report.stmtErrors.isEmpty && checked.violations.isEmpty
+    IO.println s!"{route.label}: report={report.stmtErrors.size}, \
+      independent-check={checked.violations.size}"
+    return exact
   return (← Core.CoreM.toIO (MetaM.run' action) context { env }).1
 
+def runLayoutFailure (root : String) (route : Route) : IO Bool := do
+  let path := s!"{root}/test/fixtures/modelgen/{route.fixture}"
+  let .ok input := Modelgen.parse (← IO.FS.readFile path) (analyse := false)
+    | throw <| IO.userError s!"cannot parse {path}"
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := s!"<composed-recursor-layout-{route.label}>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let action : MetaM Unit := do
+    discard <| runFilterWithExactBlockTransform input false route.generation
+      (breakRuleLayout route.owner)
+  try
+    discard <| Core.CoreM.toIO (MetaM.run' action) context { env }
+    IO.println s!"{route.label}: malformed layout was not rejected"
+    return false
+  catch exception =>
+    let rejected := exception.toString.contains "exact rule"
+    IO.println s!"{route.label}: malformed layout internal failure={rejected}"
+    return rejected
+
 def run (root : String) : IO UInt32 := do
-  let mut passed := 0
+  let mut exactPassed := 0
+  let mut layoutPassed := 0
   for route in routes do
-    if ← runRoute root route then passed := passed + 1
-  IO.println s!"composed recursor diagnostic: {passed}/{routes.size} routes witnessed"
-  return if passed == routes.size then 0 else 1
+    if ← runRoute root route then exactPassed := exactPassed + 1
+    if ← runLayoutFailure root route then layoutPassed := layoutPassed + 1
+  IO.println s!"composed exact recursors: syntax {exactPassed}/{routes.size}; \
+    fail-closed {layoutPassed}/{routes.size}"
+  return if exactPassed == routes.size && layoutPassed == routes.size then 0 else 1
 
 def main (args : List String) : IO UInt32 :=
   run (args.head?.getD ".")

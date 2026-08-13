@@ -396,7 +396,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     else if arv.levelParams.length == lparams.length then pure false
     else badShape s!"{auxRecN} carries the level parameters {arv.levelParams}"
   let nc := ctors.size
-  let mut recInfos : Array (Nat × Level × List Name × Expr × Expr × Option ERec) := #[]
+  let mut recInfos : Array (Nat × Level × List Name × Expr × Option ERec) := #[]
   for k in [0:r] do
     let ern := exportRecName all k
     let .recInfo rv ← constInfo ern | badShape s!"{ern} is not a recursor"
@@ -421,7 +421,11 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       badShape s!"{ern} carries the level parameters {rv.levelParams}"
     let installedTy := restore tbl rv.type
     let publicTy := restore tbl (sourceRecursor?.map (·.type) |>.getD rv.type)
-    let val ← forallBoundedTelescope installedTy
+    -- The installed recursor remains the metadata/layout oracle, but these
+    -- locals must be introduced from the literal public telescope. Otherwise
+    -- a normalized motive domain can leak into the value and fail against the
+    -- exact exported declaration type after a composed carrier is renamed.
+    let val ← forallBoundedTelescope publicTy
         (some (np + r + nc + nidx[k]! + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let motives := bs.extract np (np + r)
@@ -450,7 +454,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
         hints := ← hintsFor val, safety := .safe }
     addChecked d
     out := out.push d
-    recInfos := recInfos.push (k, v, rv.levelParams, installedTy, publicTy, sourceRecursor?)
+    recInfos := recInfos.push (k, v, rv.levelParams, publicTy, sourceRecursor?)
 
   -- ── 6. the ι rules ─────────────────────────────────────────────────────
   --
@@ -463,7 +467,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   -- own right-hand side reach the same normal form by δ and ι alone, so the
   -- generator proves nothing and the kernel decides everything.
   let mut iotas : Array (Nat × Name × Name) := #[]
-  for (k, v, rlp, installedTy, publicTy, sourceRecursor?) in recInfos do
+  for (k, v, rlp, publicTy, sourceRecursor?) in recInfos do
     let ern := exportRecName all k
     let .recInfo rv ← constInfo ern | badShape s!"{ern} is not a recursor"
     let recLs := if rlp.length == lparams.length + 1 then v :: us else us
@@ -484,7 +488,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       -- type, so walk the restored export constructor rather than reading the
       -- model constructor back from the environment.
       let modelCTy := restore tbl exportCtors[k]![j]!.2
-      let d ← forallBoundedTelescope installedTy
+      let d ← forallBoundedTelescope publicTy
           (some (np + r + rv.numMinors)) fun pre _ => do
         let ps := pre.extract 0 np
         let motiveK := pre[np + k]!
@@ -520,7 +524,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       iotas := iotas.push (k, cn, nm)
 
   let mut ruleKs : Array (Name × Name) := #[]
-  for (k, _, rlp, _, _, _) in recInfos do
+  for (k, _, rlp, _, _) in recInfos do
     let ern := exportRecs[k]!
     let .recInfo rv ← constInfo ern | badShape s!"{ern} is not a recursor"
     if rv.k then

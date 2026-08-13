@@ -384,6 +384,7 @@ partial def restore (heads : Std.HashMap Name (Nat × Expr)) (e : Expr) : Expr :
       | some (0, .const name _) => name
       | _ => tn
     .proj restoredType i (restore heads s)
+  | .mdata data body => .mdata data (restore heads body)
   | _ => e
 
 /-- Close `body` over the already-opened `values`, taking each binder's name,
@@ -437,28 +438,31 @@ oracle; this syntax is used only to close a public iota statement. -/
 def exactRecursorFieldTelescope? (recursor : ERec) (ruleIndex : Nat)
     (pre : Array Expr) : Option Expr := do
   let rule ← recursor.rules[ruleIndex]?
+  if rule.nfields == 0 then
+    return .sort .zero
   let (recBinders, _) := openExactRecForalls ((`_exact_rec).append recursor.name)
     recursor.type
   let numPre := recursor.numParams + recursor.numMotives + recursor.numMinors
   unless pre.size == numPre do none
-  let minor ← recBinders[recursor.numParams + recursor.numMotives + ruleIndex]?
   let sourcePre := recBinders.extract 0 numPre |>.map (·.value)
-  let minorType := minor.type.replace fun expression =>
-    sourcePre.findIdx? (fun value => value == expression) |>.map fun index => pre[index]!
-  let (minorBinders, motiveResult) :=
-    openExactRecForalls ((`_exact_minor).append rule.ctor) minorType
-  let major ← motiveResult.getAppArgs.back?
-  let .const constructor _ := major.getAppFn | none
-  unless constructor == rule.ctor do none
-  let majorArgs := major.getAppArgs
-  unless majorArgs.size >= rule.nfields do none
-  let fieldValues := majorArgs.extract (majorArgs.size - rule.nfields) majorArgs.size
-  let mut fields : Array ExactRecBinder := #[]
-  for value in fieldValues do
-    let some binder := minorBinders.find? (·.value == value) | fields := #[]; break
-    fields := fields.push binder
-  unless fields.size == rule.nfields do none
-  return closeExactRecForalls fields (.sort .zero)
+  let minors := recBinders.extract (recursor.numParams + recursor.numMotives) numPre
+  minors.findSome? fun minor => do
+    let minorType := minor.type.replace fun expression =>
+      sourcePre.findIdx? (fun value => value == expression) |>.map fun index => pre[index]!
+    let (minorBinders, motiveResult) :=
+      openExactRecForalls ((`_exact_minor).append rule.ctor) minorType
+    let major ← motiveResult.getAppArgs.back?
+    let .const constructor _ := major.getAppFn | none
+    unless constructor == rule.ctor do none
+    let majorArgs := major.getAppArgs
+    unless majorArgs.size >= rule.nfields do none
+    let fieldValues := majorArgs.extract (majorArgs.size - rule.nfields) majorArgs.size
+    let mut fields : Array ExactRecBinder := #[]
+    for value in fieldValues do
+      let some binder := minorBinders.find? (·.value == value) | fields := #[]; break
+      fields := fields.push binder
+    unless fields.size == rule.nfields do none
+    return closeExactRecForalls fields (.sort .zero)
 
 /-! ## The generator -/
 

@@ -1371,9 +1371,10 @@ def validateScheduledSupport (scheduled : Export) (generation : Cli.Config) : Ex
       throw s!"latest fixed support {supportNames} remains at record {supportIndex} \
         after selected owner {owner.names} at record {ownerIndex}"
 
-/-- Value-free exact inductive records retained only until the immediately
-following composed generation step. Every build member maps to exactly one
-raw, pre-alias block; ambiguity is rejected while the snapshot is built. -/
+/-- Proof-value-free exact inductive records retained only until the
+immediately following composed generation step. They still carry public types
+and recursor RHS expressions. Every build member maps to exactly one raw,
+pre-alias block; ambiguity is rejected while the snapshot is built. -/
 structure ExactGeneratedBlocks where
   private byMember : Std.HashMap Name EDecl := {}
 
@@ -1385,9 +1386,8 @@ def ExactGeneratedBlocks.require (blocks : ExactGeneratedBlocks) (member : Name)
     | throwError "exact generated block snapshot has no member {member}"
   return block
 
-/-- Serialization result. `exactBlocks` contains no declaration values and is
-consumed inside the current island; it is never copied into pending/report
-state. -/
+/-- Serialization result. `exactBlocks` is consumed inside the current island;
+it is never copied into pending/report state. -/
 structure SerialisedIso where
   records : Array EDecl
   exactBlocks : ExactGeneratedBlocks
@@ -2096,6 +2096,9 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
         for cn in iv.ctors do
           if let some ci := (← getEnv).constants.find? cn then cts := cts.push (cn, ci.type)
         let exactBlock ← serialised.exactBlocks.require n
+        -- Generated projection-iota closing uses only `ExactNormalizationEnv.beta`;
+        -- that operation deliberately consults no named definition, so a
+        -- one-block normalizer cannot lose persistent/source aliases.
         let normalizer := ({ metaLine := .null, decls := #[exactBlock] } : Export).exactNormalizationEnv
         st2 :=
           (← genPrim n iv.levelParams iv.numParams iv.type cts #[] reserved
