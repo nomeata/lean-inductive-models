@@ -599,6 +599,7 @@ correctness_targets=(
   test monotest clitest generationflagstest checktest ordertest
   incrementalordertest namingtest drivernamingtest privatealiastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
+  composedrecursorsyntaxtest
   mainclitest projectiontest structureetatest
   deepimaxboxtest psigmaprimetest exactsortlifttest
   tightpsigmaprimeroutetest vanishingerasuretest
@@ -620,6 +621,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe simplenamingtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe rulektest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe defaultctoriotatest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe sourcestructuresyntaxtest "$PWD"
+TMPDIR="$PWD/_tmp/build-tmp" lake exe composedrecursorsyntaxtest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe mainclitest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe projectiontest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe structureetatest

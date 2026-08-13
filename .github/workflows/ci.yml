@@ -103,7 +103,7 @@ jobs:
               build_serially \
                 clitest generationflagstest checktest ordertest incrementalordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
-                defaultctoriotatest sourcestructuresyntaxtest \
+                defaultctoriotatest sourcestructuresyntaxtest composedrecursorsyntaxtest \
                 projectiontest structureetatest deepimaxboxtest \
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
                 vanishingerasuretest transparentowneraliasestest \
@@ -120,6 +120,7 @@ jobs:
               lake exe rulektest
               lake exe defaultctoriotatest "$GITHUB_WORKSPACE"
               lake exe sourcestructuresyntaxtest "$GITHUB_WORKSPACE"
+              lake exe composedrecursorsyntaxtest "$GITHUB_WORKSPACE"
               lake exe projectiontest
               lake exe structureetatest
               lake exe deepimaxboxtest
@@ -131,7 +132,7 @@ jobs:
               lake exe exportsyntaxnormalizationtest
               lake exe basisvalidationtest
               lake exe stagedwritertest "$GITHUB_WORKSPACE"
-              count=23
+              count=24
               ;;
             mono)
               build_serially modelgen monotest mainclitest
