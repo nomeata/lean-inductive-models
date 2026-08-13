@@ -2543,7 +2543,8 @@ Each comes back as `(the export's constructor, the theorem's name, the
 theorem)`. The constructor is the key the *installed* `T.rec_k` files its rule
 under — `Tree.node` at the root, `List.cons` at a mimic — so a consumer can line
 the two up without knowing how the block was named. -/
-def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name × Expr)) :
+def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name × Expr))
+    (sourceRecursor? : Option ERec := none) (exactSource : Expr → Expr := id) :
     GenM (Array (Name × Name × Declaration)) := do
   let minorBase := (Array.range sh.k).foldl (fun a i => a + g.blockCtors[i]!.size) 0
   -- The export's constructors are flattened in `all` order, so a **real**
@@ -2605,11 +2606,31 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
             head, headLevels := hls, headPrefix := hpre
             fields, extTys, bcn, blkTys, mem, packed, ihAt, ihTys, moving }
         let tel := pre ++ fields
-        let statement ← r.statement
-        let some fieldsType := closeForallsExact? ectorTy fields statement
-          | badShape s!"{head}'s exported telescope has fewer fields than its installed type"
-        let some ty := closeForallsExact? sh.ty pre fieldsType
-          | badShape s!"{sh.src}'s exported telescope is shorter than its recursor prefix"
+        let installedStatement ← r.statement
+        let (statement, fieldTelescope, recursorTelescope) ← match sourceRecursor? with
+          | none => pure (installedStatement, ectorTy, sh.ty)
+          | some sourceRecursor => do
+            let some sourceRule := sourceRecursor.rules[j]?
+              | badShape s!"{sourceRecursor.name} has no exported rule {j}"
+            unless sourceRule.ctor == exportKey do
+              badShape s!"{sourceRecursor.name}'s exported rule {j} is for {
+                sourceRule.ctor}, not {exportKey}"
+            unless sourceRule.nfields == fields.size do
+              badShape s!"{sourceRecursor.name}'s exported rule {j} has {
+                sourceRule.nfields} fields, not {fields.size}"
+            let some exactFields := exactRecursorFieldTelescope? sourceRecursor j pre
+              | badShape s!"{sourceRecursor.name}'s exported rule {j} has no exact field telescope"
+            let equality := installedStatement.getAppFn
+            let arguments := installedStatement.getAppArgs
+            unless arguments.size == 3 do
+              badShape s!"{g.iotaName sh.k j}'s installed statement is not a binary equality"
+            let rhs := (exactSource sourceRule.rhs).beta (pre ++ fields)
+            pure (mkAppN equality #[arguments[0]!, arguments[1]!, rhs],
+              exactSource exactFields, exactSource sourceRecursor.type)
+        let some fieldsType := closeForallsExact? fieldTelescope fields statement
+          | badShape s!"{head}'s exact exported telescope has fewer fields than its installed type"
+        let some ty := closeForallsExact? recursorTelescope pre fieldsType
+          | badShape s!"{sh.src}'s exact exported telescope is shorter than its recursor prefix"
         let val ← mkLambdaFVars tel (← r.value)
         let nm := g.iotaName sh.k j
         return (exportKey, nm,
@@ -2875,6 +2896,17 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     out := out.push d
     spliced := spliced ++ d.getNames.toArray
   let g : Gen := { g0 with fx := fxName? }
+  -- Raw public recursor syntax names the original declaration.  Rewrite only
+  -- those constant names: unlike `restore`, `mapConstsE` retains every level
+  -- expression on the occurrence itself. Installed block names remain the
+  -- proof/layout oracle and never enter this public statement map.
+  let mut sourceNames : Std.HashMap Name Name := {}
+  for k in [0:r] do sourceNames := sourceNames.insert all[k]! selfNames[k]!
+  for j in [0:exportCtorNames.size] do
+    sourceNames := sourceNames.insert exportCtorNames[j]! (g.ctorName j)
+  for k in [0:exportRecs.size] do
+    sourceNames := sourceNames.insert exportRecs[k]! (g.recName k)
+  let exactSource := mapConstsE (fun name => sourceNames[name]?)
 
   -- ── 3. pack, unpack, and the two round trips, group by group ───────────
   --
@@ -3021,7 +3053,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- ── 7. the ι rules themselves ──────────────────────────────────────────
   let mut iotas : Array (Nat × Name × Name) := #[]
   for k in [0:shapes.size] do
-    for (key, nm, d) in ← g.iotaDecls shapes[k]! ctorTys do
+    let sourceRecursor? := exportRecursors.find? (·.name == exportRecs[k]!)
+    for (key, nm, d) in ← g.iotaDecls shapes[k]! ctorTys sourceRecursor? exactSource do
       taken nm
       addChecked d
       out := out.push d

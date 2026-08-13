@@ -41,6 +41,11 @@ def mapForallDomainAt (expression : Expr) (target : Nat) (f : Expr → Expr) : E
     .forallE name domain (mapForallDomainAt body index f) info
   | _, _ => expression
 
+partial def containsConstant (target : Name) (expression : Expr) : Bool :=
+  expression.find? (fun subexpression => match subexpression with
+    | .const name _ => name == target
+    | _ => false) |>.isSome
+
 def perturbRecursor (recursor : ERec) : ERec :=
   let type := Id.run do
     let mut type := recursor.type
@@ -118,15 +123,48 @@ def runLayoutFailure (root : String) (route : Route) : IO Bool := do
     IO.println s!"{route.label}: malformed layout internal failure={rejected}"
     return rejected
 
+def runPublicRawRecursor (root : String) : IO Bool := do
+  let path := s!"{root}/test/fixtures/inductive-models/nested_default_iota.ndjson"
+  let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
+    | throw <| IO.userError s!"cannot parse {path}"
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<public-raw-recursor-syntax>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let action : MetaM Bool := do
+    let sourceSeam := input.decls.any fun declaration => match declaration with
+      | .induct _ constructors recursors =>
+        let constructorWrapped := constructors.any fun constructor =>
+          constructor.induct == `NestedDefault && containsConstant `optParam constructor.type
+        let recursorReduced := recursors.any fun recursor =>
+          recursor.all.contains `NestedDefault && !containsConstant `optParam recursor.type
+        constructorWrapped && recursorReduced
+      | _ => false
+    unless sourceSeam do
+      throwError "public raw-recursor fixture does not separate constructor and recursor syntax"
+    let (declarations, report) ← runFilter input false
+      { noGeneration with nested := true, mutualModels := true }
+    unless report.generated.any (·.1 == `NestedDefault) do
+      throwError "public raw-recursor fixture did not generate NestedDefault: generated={
+        report.generated}, declined={report.declined}"
+    let output : Export := { input with decls := declarations }
+    let owners : Std.HashSet Name := ({} : Std.HashSet Name).insert `NestedDefault
+    let checked := Check.checkStatementsFor output owners
+    IO.println s!"public raw recursor: report={report.stmtErrors.size}, \
+      independent-check={checked.violations.size}"
+    return report.stmtErrors.isEmpty && checked.violations.isEmpty
+  return (← Core.CoreM.toIO (MetaM.run' action) context { env }).1
+
 def run (root : String) : IO UInt32 := do
   let mut exactPassed := 0
   let mut layoutPassed := 0
   for route in routes do
     if ← runRoute root route then exactPassed := exactPassed + 1
     if ← runLayoutFailure root route then layoutPassed := layoutPassed + 1
+  let publicRawPassed ← runPublicRawRecursor root
   IO.println s!"composed exact recursors: syntax {exactPassed}/{routes.size}; \
-    fail-closed {layoutPassed}/{routes.size}"
-  return if exactPassed == routes.size && layoutPassed == routes.size then 0 else 1
+    fail-closed {layoutPassed}/{routes.size}; public-raw={publicRawPassed}"
+  return if exactPassed == routes.size && layoutPassed == routes.size && publicRawPassed then 0 else 1
 
 def main (args : List String) : IO UInt32 :=
   run (args.head?.getD ".")
