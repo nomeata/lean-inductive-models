@@ -2777,10 +2777,8 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
     declarations
     checkReport := compactCheckReport
     unavailable? := compactUnavailable?
-    retainedGeneratedRecords := if retainOracle then
-      legacyOut.foldl (fun count declaration =>
-        if declaration.names.any fun name => !reserved.contains name then count + 1 else count) 0
-    else 0 }
+    retainedGeneratedRecords := legacyOut.foldl (fun count declaration =>
+      if declaration.names.any fun name => !reserved.contains name then count + 1 else count) 0 }
   let emissionPlan : StagedPlan := {
     islands := commits
     declarations
