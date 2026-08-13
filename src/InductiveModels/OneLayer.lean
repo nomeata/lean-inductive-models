@@ -323,6 +323,19 @@ def OneLayerNames.forBuild (tname root : Name)
     unrollRoll := Name.str implementation.impl "unroll_roll"
     rollUnroll := Name.str implementation.impl "roll_unroll" }
 
+/-- Rename an exact source face into the public one-layer interface without
+rebuilding its constant applications.  In particular, the universe argument
+syntax on every occurrence (and every `Expr.proj.typeName`) remains exactly as
+the exporter supplied it; installed declarations remain the separate proof
+and layout oracle. -/
+private def exactOneLayerPublicSource (tname sourceConstructor sourceRecursor : Name)
+    (names : OneLayerNames) (expression : Expr) : Expr :=
+  mapConstsE (fun name =>
+    if name == tname then some names.publicNames.self
+    else if name == sourceConstructor then some names.publicNames.ctors[0]!
+    else if name == sourceRecursor then some names.publicNames.recursor
+    else none) expression
+
 /-- The checked carrier boundary, before the public declaration family is
 attached.  `storageFields` are represented structurally in the generated
 definitions and are therefore not retained here. -/
@@ -742,15 +755,9 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
   let level ← exactCarrierLevel memberTy np
   let privateTable := modelTable (← getEnv) #[tname] implementationIso
   let privateConstructorType := restore privateTable sourceConstructor.2
-  let publicSelfName := names.publicNames.self
-  let publicConstructorName := names.publicNames.ctors[0]!
-  let publicRecursorName := names.publicNames.recursor
-  let publicModel : Iso := { implementationIso with
-      selfNames := #[publicSelfName]
-      ctors := #[(sourceConstructor.1, publicConstructorName)]
-      recs := #[publicRecursorName], iotas := #[] }
-  let publicTable := modelTable (← getEnv) #[tname] publicModel
-  let publicSelfType := restore publicTable memberTy
+  let sourceRecursorName := Name.str tname "rec"
+  let publicSelfType := exactOneLayerPublicSource tname sourceConstructor.1
+    sourceRecursorName names memberTy
 
   -- Establish the exact carrier level before installing any extra support.
   forallBoundedTelescope memberTy (some np) fun parameters _ => do
@@ -912,14 +919,9 @@ def buildOneLayerPublicFields (tname : Name) (lparams : List Name) (np : Nat)
   let names := base.names
   let us := lparams.map Level.param
   let privateTable := modelTable (← getEnv) #[tname] implementationIso
-  let publicIso : Iso := { implementationIso with
-    selfNames := #[names.publicNames.self]
-    ctors := #[(sourceConstructor.1, names.publicNames.ctors[0]!)]
-    recs := #[names.publicNames.recursor]
-    iotas := #[] }
-  let publicTable := modelTable (← getEnv) #[tname] publicIso
   let privateConstructorType := restore privateTable sourceConstructor.2
-  let publicConstructorType := restore publicTable sourceConstructor.2
+  let publicConstructorType := exactOneLayerPublicSource tname sourceConstructor.1
+    (Name.str tname "rec") names sourceConstructor.2
   let constructorValueType := publicConstructorType
   let level ← exactCarrierLevel memberTy np
   let eqi ← match EqInfo.check (← getEnv) with
@@ -1009,16 +1011,12 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
   let names := base.names
   let us := lparams.map Level.param
   let privateTable := modelTable (← getEnv) #[tname] implementationIso
-  let publicIso : Iso := { implementationIso with
-    selfNames := #[names.publicNames.self]
-    ctors := #[(sourceConstructor.1, names.publicNames.ctors[0]!)]
-    recs := #[names.publicNames.recursor]
-    iotas := #[(0, sourceConstructor.1, names.publicNames.iotas[0]!)] }
-  let publicTable := modelTable (← getEnv) #[tname] publicIso
   let privateConstructorType := restore privateTable sourceConstructor.2
-  let publicConstructorType := restore publicTable sourceConstructor.2
+  let publicConstructorType := exactOneLayerPublicSource tname sourceConstructor.1
+    sourceRecursor.name names sourceConstructor.2
   let privateRecursorType ← generatedType names.implementation.recursor
-  let publicRecursorType := restore publicTable sourceRecursor.type
+  let publicRecursorType := exactOneLayerPublicSource tname sourceConstructor.1
+    sourceRecursor.name names sourceRecursor.type
   let level ← exactCarrierLevel memberTy np
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
@@ -1064,12 +1062,15 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
     forallBoundedTelescope constructorTelescope (some fieldCount) fun fields _ => do
       let major := mkAppN (.const names.publicNames.ctors[0]! us) (parameters ++ fields)
       let lhs := mkAppN (.const names.publicNames.recursor publicRecLevels) (pre.push major)
-      let rhs := (restore publicTable sourceRule.rhs).beta (pre ++ fields)
+      let rhs := (exactOneLayerPublicSource tname sourceConstructor.1 sourceRecursor.name
+        names sourceRule.rhs).beta (pre ++ fields)
       let alpha := mkApp motive major
       let proposition := eqi.mk' (← ilevel alpha) alpha lhs rhs
       let some exactFields := exactRecursorFieldTelescope? sourceRecursor 0 pre
         | badShape s!"{sourceRecursor.name}'s exported rule has no exact field telescope"
-      let some fieldsType := closeForallsExact? (restore publicTable exactFields) fields proposition
+      let exactFields := exactOneLayerPublicSource tname sourceConstructor.1
+        sourceRecursor.name names exactFields
+      let some fieldsType := closeForallsExact? exactFields fields proposition
         | badShape s!"{sourceConstructor.1}'s exact field telescope is too short"
       let some theoremType := closeForallsExact? publicRecursorType pre fieldsType
         | badShape s!"{sourceRecursor.name}'s exact prefix is too short"

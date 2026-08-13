@@ -3728,7 +3728,20 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     { decls := #[], levelParams := lparams, members := #[], selfNames := #[selfN]
       numAll := 1, ctors := ctorPairs, recs := #[recN], iotas := #[], spliced := #[] }
   let installedRecTy := restore tbl rv.type
-  let publicRecTy := restore tbl (sourceRecursor?.map (·.type) |>.getD rv.type)
+  -- The one-layer adapter publishes the source interface verbatim modulo
+  -- names.  Unlike `restore`, this map retains every source occurrence's
+  -- exact universe arguments; installed metadata remains the proof/layout
+  -- oracle in `installedRecTy`.
+  let exactSource? := interface?.map fun _ => fun expression =>
+    mapConstsE (fun name =>
+      if name == tname then some selfN
+      else if name == ern then some recN
+      else ctorPairs.findSome? fun (source, target) =>
+        if name == source then some target else none) expression
+  let publicSource := fun expression => match exactSource? with
+    | some exact => exact expression
+    | none => restore tbl expression
+  let publicRecTy := publicSource (sourceRecursor?.map (·.type) |>.getD rv.type)
 
   -- **Arm E**: a linearly recursive, non-indexed `Type` with no base
   -- constructor is empty.  The tuple tower below deliberately starts from a
@@ -4189,7 +4202,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
 
   if let some directRoute := directRoute? then
     let (_, cty0) := exportCtors[0]!
-    let modelCtorTy := restore tbl cty0
+    let modelCtorTy := publicSource cty0
     let (directDecls, directSpliced, overrides) ← emitDirectModel directRoute eqi tname
       lparams np memberTy cty0 modelCtorTy declaredMemberTy selfN (ctorN 0) recN
       rv.levelParams installedRecTy publicRecTy w v reserved
@@ -4332,7 +4345,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- Its own index vector is `ι⃗_ctor` at its own fields, so the pivots the
     -- carrier substitutes come back as exactly those fields and the stored
     -- equation is `Eq.refl`.
-    let ty := restore tbl cty0
+    let ty := publicSource cty0
     let cval ← withParams fun ps => do
       let rtele ← instForall ty ps
       let nf := numForalls rtele
@@ -4675,7 +4688,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
 
     -- ── the constructors ──
     for j in [0:nc] do
-      let ty := restore tbl exportCtors[j]!.2
+      let ty := publicSource exportCtors[j]!.2
       let val ← withParams fun ps => do
         let (pk, ℓpk) ← pkAt ps
         let rtele ← instForall ty ps
@@ -4850,7 +4863,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- field already inhabits the empty carrier, so return it.
     for j in [0:nc] do
       let (_, cty) := exportCtors[j]!
-      let ty := restore tbl cty
+      let ty := publicSource cty
       let nfj ← withParams fun ps => do pure (numForalls (← instForall cty ps))
       let val ← withParams fun ps => do
         let rtele ← instForall ty ps
@@ -5065,7 +5078,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
 
     -- ── the constructors ──
     for j in [0:nc] do
-      let ty := restore tbl exportCtors[j]!.2
+      let ty := publicSource exportCtors[j]!.2
       let val ← withParams fun ps => do
         let rtele ← instForall ty ps
         forallBoundedTelescope rtele (some (numForalls rtele)) fun fs _ => do
@@ -5272,7 +5285,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- ── the constructors ──
     for j in [0:nc] do
       let (_, cty) := exportCtors[j]!
-      let ty := restore tbl cty
+      let ty := publicSource cty
       let val ← withParams fun ps => do
         if !isRec then
           let (cs, fib) ← fibreAt ps
@@ -5472,7 +5485,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- read off the export's telescope.
     for j in [0:nc] do
       let (_, cty) := exportCtors[j]!
-      let ty := restore tbl cty
+      let ty := publicSource cty
       let nfj ← withParams fun ps => do pure (numForalls (← instForall cty ps))
       let flds ← withParams fun ps => do classifyCtor tname nfj (← instForall cty ps)
       let val ← withParams fun ps => do
@@ -5645,7 +5658,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
           grInvTN := Name.str impl "graph_inv_ty", grInvN := Name.str impl "graph_inv"
           grUniqN := Name.str impl "graph_unique", grExN := Name.str impl "graph_exists"
           recGrN := Name.str impl "rec_graph"
-          memberTy, ctorTy := restore tbl exportCtors[0]!.2
+          memberTy, ctorTy := publicSource exportCtors[0]!.2
           isData := gIsData, idxPos := gIdxPos, nonPiv := gNonPiv
           recNb := gRecNb, eqi, fx? := gFx? }
       for d in ← graphArm ctx publicRecTy do out := out.push d
@@ -5671,7 +5684,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- the kernel may βζ-normalise a field domain while storing it. The public
     -- constructor declaration still carries the exported redex literally, and
     -- the iota theorem's telescope is part of the same literal interface.
-    let modelCTy := restore tbl exportCtors[j]!.2
+    let modelCTy := publicSource exportCtors[j]!.2
     let d ← forallBoundedTelescope installedRecTy (some (np + 1 + nc)) fun pre _ => do
       let ps := pre.extract 0 np
       let motive := pre[np]!
@@ -5686,7 +5699,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
         let isj := args.extract np args.size
         let lhs := mkAppN (.const recN recLs) (pre ++ isj ++ #[major])
         let rhsSyntax := publicRule.map (·.rhs) |>.getD rule.rhs
-        let rhs := (restore tbl rhsSyntax).beta (pre ++ fields)
+        let rhs := (publicSource rhsSyntax).beta (pre ++ fields)
         let α := mkAppN motive (isj.push major)
         let tel := pre ++ fields
         let proposition := eqi.mk' v α lhs rhs
@@ -5695,7 +5708,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
           | some sourceRecursor =>
             let some telescope := exactRecursorFieldTelescope? sourceRecursor j pre
               | badShape s!"{sourceRecursor.name}'s exported rule {j} has no exact field telescope"
-            pure (restore tbl telescope)
+            pure (publicSource telescope)
         let some fieldsType := closeForallsExact? exactFieldTelescope fields proposition
           | badShape s!"{modelC}'s public recursor telescope has fewer fields than its installed type"
         let some theoremType := closeForallsExact? publicRecTy pre fieldsType
