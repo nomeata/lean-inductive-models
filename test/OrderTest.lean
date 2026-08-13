@@ -115,8 +115,10 @@ def cursorAfter (records : Array EDecl) : Writer.Cursor :=
   writer.cursor
 
 def syntheticCertificate (cursor : Writer.Cursor) (count : Nat) : RawCertificate :=
-  { cursor := { nextName := cursor.nextName, nextLevel := cursor.nextLevel,
+  let rawCursor : RawArenaCursor :=
+    { nextName := cursor.nextName, nextLevel := cursor.nextLevel,
       nextExpr := cursor.nextExpr }
+  { cursor := rawCursor
     declarationBytes := count.toUInt64
     declarations := (Array.range count).map fun ordinal =>
       { offset := ordinal.toUInt64, bytes := 1 } }
@@ -157,11 +159,15 @@ def runFilterStagedState (scratch : String) (input : Export)
     let duplicateOrder := if plan.order.size < 2 then plan.order.push 0
       else plan.order.set! 1 plan.order[0]!
     let duplicateRejected := if plan.records.isEmpty then true else
-      ({ plan with order := duplicateOrder }.declarationSpans certificate sourceSizes sealed).isError
+      match { plan with order := duplicateOrder }.declarationSpans certificate sourceSizes sealed with
+      | .ok _ => false
+      | .error _ => true
     let badCursor : Writer.Cursor :=
       { sealed.cursor with nextExpr := sealed.cursor.nextExpr + 1 }
     let cursorRejected :=
-      (plan.declarationSpans certificate sourceSizes { sealed with cursor := badCursor }).isError
+      match plan.declarationSpans certificate sourceSizes { sealed with cursor := badCursor } with
+      | .ok _ => false
+      | .error _ => true
     return {
       input, output := { input with decls }, report, env := finalState.env,
       islands := plan.islands, records := plan.records, order := plan.order, planValid,
