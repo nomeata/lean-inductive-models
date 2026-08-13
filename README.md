@@ -135,10 +135,10 @@ recursor whose actual name is `R`, the model declarations are:
 | eligible zero-based field `j` of `T` | `T._model.proj_j` |
 | constructor reduction of field `j` | `T._model.proj_j.iota` |
 
-For example, `C` may be named `Vec.nil` or `Vec.cons`; it is not the word
-`ctor` followed by an index. Likewise, `R` is the exported recursor name—for
-the example below, `Vec.rec`. Only `j` is numeric: it is the zero-based
-position in that recursor's exported rule array.
+Constructor and recursor model names preserve their exact exported declaration
+names, such as `Vec.nil`, `Vec.cons`, and `Vec.rec`. Numeric suffixes identify
+only intrinsic slots: `j` is a zero-based position in a recursor's exported
+rule array or in a type former's eligible projection fields.
 
 This contract does not expose mutual-group bookkeeping. If `Even` and `Odd`
 are declared together, their carriers are still named independently as
@@ -608,8 +608,9 @@ TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-mathlib-result.sh
 
 `mainclitest` executes the built `modelgen` binary and covers the complete
 `--mono-levels` process path. `monotest` exercises the underlying pass directly.
-The `envprobe` and `levelfuzz` targets live under `tools/`; they are diagnostics,
-not correctness suites.
+The `memoryprobe` target compares whole-file and streaming parser retention in
+fresh processes. It and the `envprobe` and `levelfuzz` targets under `tools/`
+are diagnostics, not correctness suites.
 
 Human-readable Lean fixture sources and committed NDJSON exports live under
 [`test/fixtures/modelgen/`](test/fixtures/modelgen/) and
