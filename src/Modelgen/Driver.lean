@@ -2006,8 +2006,12 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     if let some root := basisRoot? then
       match ← (validateBasisOwner root d).run with
       | .ok () =>
-        rep := { rep with
-          exempt := rep.exempt.push (root, Decline.basisExempt.labelAs "prim") }
+        -- Preserve the report's route semantics: a valid basis owner is an
+        -- exemption row only when simple generation selected it. Validation
+        -- itself is unconditional, so an invalid unused owner still declines.
+        if generation.modelsSimpleInput root then
+          rep := { rep with
+            exempt := rep.exempt.push (root, Decline.basisExempt.labelAs "prim") }
       | .error decline =>
         invalidBasis := invalidBasis.insert root
         rep := { rep with declined := rep.declined.push (root, decline.labelAs "prim") }
