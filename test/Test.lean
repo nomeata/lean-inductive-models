@@ -818,6 +818,18 @@ def runOne (root : String) (a : TAcc) (r : Row)
   -- those Lean reconstructs from the source inductive record.
   a := check a rep.recMismatch.isEmpty
     s!"{name}: the export's recursors differ from Lean's own: {rep.recMismatch}"
+  -- The source was globally scheduled and each generated island was ordered
+  -- before being appended ahead of its owner.  Therefore the combined stream
+  -- must already be the ordinary stable dependency order.  This assertion is
+  -- deliberately summary-only: once built, the compact graph retains no
+  -- declaration values and is the evidence needed to remove the final
+  -- value-retaining `Order.reorder` pass.
+  let compact := Order.summaries { x with decls }
+  a := check a (Order.summariesAreOrdered compact)
+    s!"{name}: scheduled source plus locally ordered model islands is not a final fixed point"
+  a := check a
+    (Order.summaryRecordOrder compact == Order.recordOrder { x with decls })
+    s!"{name}: compact ordering differs from the full-export oracle"
   -- axis 4: the round trip
   let out := ({ x with decls }).render
   match Modelgen.parse out with

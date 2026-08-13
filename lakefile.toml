@@ -50,6 +50,12 @@ root = "OrderTest"
 supportInterpreter = true
 
 [[lean_exe]]
+name = "incrementalordertest"
+srcDir = "test"
+root = "IncrementalOrderTest"
+supportInterpreter = true
+
+[[lean_exe]]
 name = "namingtest"
 srcDir = "test"
 root = "NamingTest"
