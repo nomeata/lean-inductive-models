@@ -164,6 +164,26 @@ private structure MutualUnrollPlan where
   minors : Array Expr
   deriving Inhabited
 
+/-- Open a private mutual minor and recover its constructor fields by reading
+the constructor application in the result.  Every remaining binder is an
+induction hypothesis.  This mirrors Lean's recursor layout without assuming
+that hypotheses are all after the fields: Lean interleaves a hypothesis after
+its recursive field. -/
+private def withMutualMinorBinders (minorType : Expr) (constructor : Name)
+    (numFields : Nat)
+    (k : Array Expr → Array Expr → Array Expr → Expr → GenM α) : GenM α := do
+  forallBoundedTelescope minorType (some (numForalls minorType)) fun binders result => do
+    let some major := result.getAppArgs.back?
+      | badShape s!"{constructor}'s private minor has no constructor major"
+    unless major.getAppFn.constName? == some constructor do
+      badShape s!"{constructor}'s private minor ends at {major.getAppFn}, not its constructor"
+    let majorArgs := major.getAppArgs
+    unless majorArgs.size >= numFields do
+      badShape s!"{constructor}'s private minor major has too few fields"
+    let fields := majorArgs.extract (majorArgs.size - numFields) majorArgs.size
+    let hypotheses := binders.filter fun binder => !fields.contains binder
+    k binders fields hypotheses result
+
 private def mutualUnrollPlan (all : Array Name) (constructors : Array ECtor)
     (members : Array MutualMemberShape) (certificate : IsoFamilyImplementation)
     (target : Name) (parameters : Array Expr) (level : Level) (levels : List Level) :
@@ -189,10 +209,11 @@ private def mutualUnrollPlan (all : Array Name) (constructors : Array ECtor)
   for constructor in constructors do
     let .forallE _ minorType body _ := current
       | badShape s!"{targetCertificate.privateRecursor} has too few minors"
-    let minor ← forallBoundedTelescope minorType (some (numForalls minorType))
-        fun binders _ => do
+    let ownerCertificate := familyCertificateMember! certificate constructor.induct
+    let privateConstructor := privateConstructor! ownerCertificate constructor.name
+    let minor ← withMutualMinorBinders minorType privateConstructor constructor.numFields
+        fun binders fields _ _ => do
       let value ← if constructor.induct == target then
-          let fields := binders.extract 0 constructor.numFields
           wTowerMkOf targetMember.level fields fields
         else pure (unitAtCanon level)
       mkLambdaFVars binders value
@@ -233,10 +254,9 @@ private def mutualRollUnrollPlan (all : Array Name) (constructors : Array ECtor)
       | badShape s!"{targetCertificate.privateRecursor} has too few equality minors"
     let ownerCertificate := familyCertificateMember! certificate constructor.induct
     let privateConstructor := privateConstructor! ownerCertificate constructor.name
-    let minor ← forallBoundedTelescope minorType (some (numForalls minorType))
-        fun binders _ => do
+    let minor ← withMutualMinorBinders minorType privateConstructor constructor.numFields
+        fun binders fields _ _ => do
       let value ← if constructor.induct == target then
-          let fields := binders.extract 0 constructor.numFields
           let major := mkAppN (.const privateConstructor levels) (parameters ++ fields)
           pure (eqi.refl' targetMember.level privateTarget major)
         else pure (unitAtCanon .zero)
@@ -445,6 +465,165 @@ private def mapMutualField (certificate : IsoFamilyImplementation) (operation : 
     let member := familyCertificateMember! certificate target
     let name := if operation then member.roll else member.unroll
     mkAppN (.const name levels) (parameters.push value)
+
+/-- Equality between a public constructor at fields read through `unroll` and
+`unroll` of the corresponding private constructor.  Recursive slots are
+changed one at a time with the callee owner's retraction. -/
+private def mutualConstructorAgreement (all : Array Name) (constructors : Array ECtor)
+    (members : Array MutualMemberShape) (certificate : IsoFamilyImplementation)
+    (eqi : EqInfo) (owner : Name) (constructor : ECtor) (parameters privateFields : Array Expr)
+    (levels : List Level) : GenM Expr := do
+  let shape := familyMember! members owner
+  let member := familyCertificateMember! certificate owner
+  let fieldShape := shape.constructorFields.find? (·.1 == constructor.name)
+    |>.map (·.2) |>.getD #[]
+  unless fieldShape.size == privateFields.size do
+    badShape s!"{constructor.name}'s agreement has the wrong field arity"
+  let publicFields := privateFields.mapIdx fun index field =>
+    mapMutualField certificate false levels parameters fieldShape[index]! field
+  let storedFields := publicFields.mapIdx fun index field =>
+    mapMutualField certificate true levels parameters fieldShape[index]! field
+  let mut proofs := #[]
+  let mut changed := #[]
+  for index in [0:privateFields.size] do
+    match fieldShape[index]!.target? with
+    | some target =>
+      let targetMember := familyCertificateMember! certificate target
+      proofs := proofs.push <| mkAppN (.const targetMember.rollUnroll levels)
+        (parameters.push privateFields[index]!)
+      changed := changed.push true
+    | none =>
+      let fieldType ← inferType privateFields[index]!
+      proofs := proofs.push <| eqi.refl' (← ilevel fieldType) fieldType privateFields[index]!
+      changed := changed.push false
+  let publicCarrier := mkAppN (.const member.publicSelf levels) parameters
+  let privateConstructor := privateConstructor! member constructor.name
+  let mkStep := if shape.changed then
+      fun values => wTowerMkOf shape.level values values
+    else fun values => pure <| mkAppN (.const privateConstructor levels) (parameters ++ values)
+  let storageEquality ← familyCongrChain eqi shape.level publicCarrier mkStep
+    storedFields privateFields proofs changed
+  if !shape.changed then return storageEquality
+  let plan ← mutualUnrollPlan all constructors members certificate owner
+    parameters shape.level levels
+  let unrollEquality := mkAppN (.const (privateIota! member constructor.name)
+      (shape.level :: levels))
+    (parameters ++ plan.motives ++ plan.minors ++ privateFields)
+  let privateMajor := mkAppN (.const privateConstructor levels) (parameters ++ privateFields)
+  let unrolledMajor := mkAppN (.const member.unroll levels) (parameters.push privateMajor)
+  let storedMajor ← mkStep privateFields
+  let reverse ← symmOf eqi shape.level publicCarrier unrolledMajor storedMajor unrollEquality
+  transOf eqi shape.level publicCarrier (← mkStep storedFields) storedMajor unrolledMajor
+    storageEquality reverse
+
+private structure MutualRecursorPlan where
+  privateMotives : Array Expr
+  privateMinors : Array Expr
+  cores : Array Expr
+  publicRecursors : Array Expr
+  recLevels : List Level
+  deriving Inhabited
+
+/-- One source recursor prefix interpreted simultaneously over the private
+mutual fixpoint.  Public minors are pulled back along every member's `unroll`;
+their results are transported only across the owner-keyed constructor
+agreement. -/
+private def mutualRecursorPlan (types : Array EIndType) (constructors : Array ECtor)
+    (members : Array MutualMemberShape) (certificate : IsoFamilyImplementation)
+    (eqi : EqInfo) (sourceRecursor : ERec) (parameters publicMotives publicMinors : Array Expr)
+    (levels : List Level) : GenM MutualRecursorPlan := do
+  let all := types.map (·.name)
+  let lparams := types[0]!.levelParams
+  let motiveLevel := if sourceRecursor.levelParams.length == lparams.length + 1 then
+      Level.param sourceRecursor.levelParams[0]!
+    else .zero
+  let recLevels := if sourceRecursor.levelParams.length == lparams.length + 1 then
+      motiveLevel :: levels
+    else levels
+  unless publicMotives.size == all.size && publicMinors.size == constructors.size do
+    badShape s!"{sourceRecursor.name}'s public prefix has inconsistent cardinalities"
+  let mut privateMotives := #[]
+  for index in [0:all.size] do
+    let owner := all[index]!
+    let member := familyCertificateMember! certificate owner
+    let privateCarrier := mkAppN (.const member.privateSelf levels) parameters
+    let motive ← withLocalDeclD `value privateCarrier fun value =>
+      mkLambdaFVars #[value] <| mkApp publicMotives[index]!
+        (mkAppN (.const member.unroll levels) (parameters.push value))
+    privateMotives := privateMotives.push motive
+  let targetOwner := (types.find? fun type => Name.str type.name "rec" == sourceRecursor.name)
+    |>.map (·.name) |>.getD (panic! s!"no owner for {sourceRecursor.name}")
+  let targetMember := familyCertificateMember! certificate targetOwner
+  let privateRecursorType ← generatedType targetMember.privateRecursor
+  let mut current ← instantiateForall privateRecursorType parameters
+  for motive in privateMotives do
+    let .forallE _ _ body _ := current
+      | badShape s!"{targetMember.privateRecursor} has too few motives"
+    current := body.instantiate1 motive
+  let mut privateMinors := #[]
+  for constructorIndex in [0:constructors.size] do
+    let constructor := constructors[constructorIndex]!
+    let .forallE _ privateMinorType body _ := current
+      | badShape s!"{targetMember.privateRecursor} has too few minors"
+    let ownerShape := familyMember! members constructor.induct
+    let ownerMember := familyCertificateMember! certificate constructor.induct
+    let privateConstructor := privateConstructor! ownerMember constructor.name
+    let fieldShape := ownerShape.constructorFields.find? (·.1 == constructor.name)
+      |>.map (·.2) |>.getD #[]
+    let minor ← withMutualMinorBinders privateMinorType privateConstructor constructor.numFields
+        fun binders fields hypotheses _ => do
+      let recursiveCount := fieldShape.filter (·.target?.isSome) |>.size
+      unless hypotheses.size == recursiveCount do
+        badShape s!"{constructor.name}'s direct recursive fields and hypotheses differ"
+      let publicFields := fields.mapIdx fun index field =>
+        mapMutualField certificate false levels parameters fieldShape[index]! field
+      let mut mappedBinders := #[]
+      let mut hypothesisIndex := 0
+      for binder in binders do
+        if let some fieldIndex := fields.findIdx? (· == binder) then
+          mappedBinders := mappedBinders.push publicFields[fieldIndex]!
+        else
+          mappedBinders := mappedBinders.push hypotheses[hypothesisIndex]!
+          hypothesisIndex := hypothesisIndex + 1
+      let publicResult := mkAppN publicMinors[constructorIndex]! mappedBinders
+      let agreement ← mutualConstructorAgreement all constructors members certificate eqi
+        constructor.induct constructor parameters fields levels
+      let ownerCarrier := mkAppN (.const ownerMember.publicSelf levels) parameters
+      let publicMajor := mkAppN (.const (publicConstructor constructor.name) levels)
+        (parameters ++ publicFields)
+      let privateMajor := mkAppN (.const privateConstructor levels) (parameters ++ fields)
+      let privatePublicMajor := mkAppN (.const ownerMember.unroll levels)
+        (parameters.push privateMajor)
+      let transported ← transportMotiveAlong eqi motiveLevel ownerShape.level ownerCarrier
+        publicMajor privatePublicMajor agreement publicResult
+        (fun value => pure <| mkApp publicMotives[all.idxOf constructor.induct]! value)
+      mkLambdaFVars binders transported
+    privateMinors := privateMinors.push minor
+    current := body.instantiate1 minor
+  let mut cores := #[]
+  for owner in all do
+    let member := familyCertificateMember! certificate owner
+    let privateCarrier := mkAppN (.const member.privateSelf levels) parameters
+    let core ← withLocalDeclD `value privateCarrier fun value =>
+      mkLambdaFVars #[value] <| mkAppN (.const member.privateRecursor recLevels)
+        (parameters ++ privateMotives ++ privateMinors ++ #[value])
+    cores := cores.push core
+  let mut publicRecursors := #[]
+  for index in [0:all.size] do
+    let owner := all[index]!
+    let shape := familyMember! members owner
+    let member := familyCertificateMember! certificate owner
+    let publicCarrier := mkAppN (.const member.publicSelf levels) parameters
+    let publicRec ← withLocalDeclD `value publicCarrier fun value => do
+      let rolled := mkAppN (.const member.roll levels) (parameters.push value)
+      let base := mkApp cores[index]! rolled
+      let equality := mkAppN (.const member.unrollRoll levels) (parameters.push value)
+      let source := mkAppN (.const member.unroll levels) (parameters.push rolled)
+      let transported ← transportMotiveAlong eqi motiveLevel shape.level publicCarrier
+        source value equality base (fun result => pure <| mkApp publicMotives[index]! result)
+      mkLambdaFVars #[value] transported
+    publicRecursors := publicRecursors.push publicRec
+  return { privateMotives, privateMinors, cores, publicRecursors, recLevels }
 
 /-- Attach exact public constructors and direct layer-projection
 implementations.  `operation = true` above denotes public-to-private `roll`;

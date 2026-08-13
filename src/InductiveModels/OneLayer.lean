@@ -383,8 +383,8 @@ private partial def firstDifferencePath? (actual expected : Expr)
 
 def applyZeroFieldOneLayerCompatibility (levels : List Level) (arguments : Array Expr)
     (expected : Expr) : MetaM (Except String Expr) := do
-  unless arguments.size == 12 do
-    return .error s!"zero-field compatibility needs 12 arguments, got {arguments.size}"
+  unless arguments.size == 13 do
+    return .error s!"zero-field compatibility needs 13 arguments, got {arguments.size}"
   let levelParams := (collectLevelParams {} zeroFieldOneLayerCompatibilityProof).params
   unless levels.length == levelParams.size do
     return .error s!"zero-field compatibility needs {levelParams.size} universes, got {levels.length}"
