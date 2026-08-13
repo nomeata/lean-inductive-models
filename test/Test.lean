@@ -818,15 +818,15 @@ def runOne (root : String) (a : TAcc) (r : Row)
   -- those Lean reconstructs from the source inductive record.
   a := check a rep.recMismatch.isEmpty
     s!"{name}: the export's recursors differ from Lean's own: {rep.recMismatch}"
-  -- The source was globally scheduled and each generated island was ordered
-  -- before being appended ahead of its owner.  Therefore the combined stream
-  -- must already be the ordinary stable dependency order.  This assertion is
-  -- deliberately summary-only: once built, the compact graph retains no
-  -- declaration values and is the evidence needed to remove the final
-  -- value-retaining `Order.reorder` pass.
+  -- The compact graph retains no declaration values.  It must nevertheless
+  -- select exactly the same final order (or error) as the full export pass.
+  -- Source scheduling plus island-local ordering is *not* generally a fixed
+  -- point: `prim_graph_pre`'s input quotient bundle is one kernel declaration
+  -- split over four export records, so owner-free checking can see `Quot.lift`
+  -- before its record has reached the stream.  That fixture below pins why a
+  -- compact final pass, rather than no final pass, is required.
   let compact := Order.summaries { x with decls }
-  a := check a (Order.summariesAreOrdered compact)
-    s!"{name}: scheduled source plus locally ordered model islands is not a final fixed point"
+  let compactFixed := Order.summariesAreOrdered compact
   let compactOrder := Order.summaryRecordOrder compact
   let fullOrder := Order.recordOrder { x with decls }
   let sameOrder := match compactOrder, fullOrder with
@@ -834,6 +834,24 @@ def runOne (root : String) (a : TAcc) (r : Row)
     | .error compact, .error full => compact == full
     | _, _ => false
   a := check a sameOrder s!"{name}: compact ordering differs from the full-export oracle"
+  if name == "prim_graph_pre" then
+    let indexOf := fun target => compact.findIdx? fun summary => summary.introduced.contains target
+    let positionIn := fun order target => do
+      let source ← indexOf target
+      order.findIdx? (· == source)
+    let quotientBoundary := match compactOrder with
+      | .ok order =>
+        match indexOf `Ac._model._impl.funext, indexOf `Ac, indexOf `Quot.lift,
+            positionIn order `Ac._model._impl.funext, positionIn order `Ac,
+            positionIn order `Quot.lift with
+        | some rawFunext, some rawOwner, some rawLift,
+            some finalFunext, some finalOwner, some finalLift =>
+          rawFunext < rawOwner && rawOwner < rawLift &&
+            finalLift < finalFunext && finalFunext < finalOwner
+        | _, _, _, _, _, _ => false
+      | .error _ => false
+    a := check a (!compactFixed && quotientBoundary)
+      "prim_graph_pre: split quotient replay no longer demonstrates the required compact final pass"
   -- axis 4: the round trip
   let out := ({ x with decls }).render
   match Modelgen.parse out with
