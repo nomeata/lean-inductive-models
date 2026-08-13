@@ -173,15 +173,20 @@ def main : IO UInt32 := do
     (lateEq.generated `Pre && lateEq.generated `MA && lateEq.generated `Nd &&
       !lateEq.report.declined.any fun (_, reason) => reason.endsWith "name taken (Eq)")
 
-  -- The graph fixture's infinitary recursive field needs a derived funext.
-  -- Move the complete source quotient interface behind `Ac`: the scheduler
-  -- must hoist the exact kernel bundle and Quot.sound, while ensureFunext's
-  -- reserved-name checks remain untouched.
-  let lateQuotText ← IO.FS.readFile "test/fixtures/modelgen/prim_graph_pre.ndjson"
-  let .ok lateQuotSource := Modelgen.parse lateQuotText (analyse := false)
-    | throw <| IO.userError "cannot parse the late-Quot source fixture"
-  let lateQuotInput := postponeRecords lateQuotSource fun declaration =>
+  -- The graph fixture's infinitary recursive field derives its own funext.
+  -- Supply only the exact quotient bundle and Quot.sound from the companion
+  -- fixture, physically after every graph owner.  With no source `funext` to
+  -- short-circuit the route, recursive support closure must use the scheduled
+  -- quotient while ensureFunext's reserved-name checks remain untouched.
+  let graphText ← IO.FS.readFile "test/fixtures/modelgen/prim_graph.ndjson"
+  let .ok graphSource := Modelgen.parse graphText (analyse := false)
+    | throw <| IO.userError "cannot parse the graph source fixture"
+  let quotientText ← IO.FS.readFile "test/fixtures/modelgen/prim_graph_pre.ndjson"
+  let .ok quotientSource := Modelgen.parse quotientText (analyse := false)
+    | throw <| IO.userError "cannot parse the quotient support fixture"
+  let quotientSupport := quotientSource.decls.filter fun declaration =>
     declaration.names.any fun name => name == `Quot || (`Quot).isPrefixOf name
+  let lateQuotInput := { graphSource with decls := graphSource.decls ++ quotientSupport }
   let lateQuot ← runExport "canonical Quot after recursive owner" lateQuotInput false
     { noGeneration with simple := true, basic := true }
   let lateQuotOutput : Export := { lateQuotInput with decls := lateQuot.output }
