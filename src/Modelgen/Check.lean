@@ -1177,8 +1177,15 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
   for declaration in records.reverse do
     if let .defn name levelParams _ value .. := declaration then
       definitions := definitions.insert name { levelParams, value }
-  return .ok { source with declarations, constructors, structures, ruleSlots,
-    normalizer := { definitions }, names }
+  return .ok {
+    declarations := declarations
+    constructors := constructors
+    structures := structures
+    ruleSlots := ruleSlots
+    normalizer := { definitions := definitions }
+    globalExtras := source.globalExtras
+    sourceFamilies := source.sourceFamilies
+    names := names }
 
 /-- Fail-closed family templates for one owner from the persistent source
 snapshot.  They are built once with the source `SyntaxIndex`; island checks do
@@ -1301,10 +1308,10 @@ def checkStatementFamiliesWithIndex (x : Export) (index : SyntaxIndex)
     (fun result family => family.correspondence.diagnosticOwners.foldl
       (fun result owner => result.insert owner) result)
     ({} : Std.HashSet Name)
-  let local := checkStatementFamiliesLocalWithIndex x index families
+  let localReport := checkStatementFamiliesLocalWithIndex x index families
   let global := index.globalExtras.filter fun violation =>
     diagnosticOwners.contains violation.familyOwner
-  { local with violations := local.violations ++ global }
+  { localReport with violations := localReport.violations ++ global }
 
 def checkStatements (x : Export) : StatementReport :=
   let families := discover x
