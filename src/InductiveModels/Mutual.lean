@@ -167,6 +167,10 @@ def MutualFamilyNames.privateIota (names : MutualFamilyNames)
     (recursorOwner constructor : Name) : Name :=
   Name.str (Name.str (names.memberRoot recursorOwner) "rec_iota") (lastStr constructor)
 
+def MutualFamilyNames.privateRule (names : MutualFamilyNames)
+    (recursorOwner constructor : Name) : Name :=
+  Name.str (Name.str (names.memberRoot recursorOwner) "rule") (lastStr constructor)
+
 def MutualFamilyNames.roll (names : MutualFamilyNames) (owner : Name) : Name :=
   Name.str (names.memberRoot owner) "roll"
 

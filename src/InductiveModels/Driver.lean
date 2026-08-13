@@ -653,7 +653,8 @@ private def mutualOneLayerProjectionCertificate (types : Array EIndType)
   unless certificate.support == #[names.tag, names.aux] do
     badShape s!"{type.name}'s mutual one-layer support certificate is malformed"
   for name in certificate.support do
-    let _ ← generatedDeclInfo is name
+    unless is.decls.any fun declaration => declaration.getNames.contains name do
+      badShape s!"{type.name}'s mutual one-layer support declaration {name} is absent"
   for memberIndex in [:types.size] do
     let sourceType := types[memberIndex]!
     let matching := certificate.members.filter fun member => member.owner == sourceType.name
@@ -677,7 +678,8 @@ private def mutualOneLayerProjectionCertificate (types : Array EIndType)
     let ownerConstructors := constructors.filter fun constructor =>
       constructor.induct == sourceType.name
     unless member.privateConstructors.size == ownerConstructors.size &&
-        member.privateIotas.size == sourceRecursor.rules.length do
+        member.privateIotas.size == sourceRecursor.rules.length &&
+        member.privateRules.size == sourceRecursor.rules.length do
       badShape s!"{sourceType.name}'s mutual one-layer constructor/rule certificate is incomplete"
     for constructor in ownerConstructors do
       let expected := names.privateConstructor sourceType.name constructor.name
@@ -696,6 +698,12 @@ private def mutualOneLayerProjectionCertificate (types : Array EIndType)
           #[(sourceRecursor.name, rule.ctor, expected)] do
         badShape s!"{sourceRecursor.name}/{rule.ctor}'s mutual rule key is malformed"
       let _ ← generatedDeclInfo is expected
+      let expectedRule := names.privateRule sourceType.name rule.ctor
+      unless member.privateRules.filter (fun entry =>
+          entry.1 == sourceRecursor.name && entry.2.1 == rule.ctor) ==
+          #[(sourceRecursor.name, rule.ctor, expectedRule)] do
+        badShape s!"{sourceRecursor.name}/{rule.ctor}'s mutual rule declaration is malformed"
+      let _ ← generatedDeclInfo is expectedRule
     for name in #[member.publicSelf, member.privateSelf, member.privateRecursor,
         member.roll, member.unroll, member.unrollRoll, member.rollUnroll,
         is.recs[memberIndex]!] do

@@ -256,7 +256,7 @@ def run (root : String) : IO UInt32 := do
   let memberImpl := fun owner => Name.str familyImpl (lastStr owner)
   let memberCertificate := fun owner =>
     let root := memberImpl owner
-    let sourceRecursor := recursors.find? (·.all.contains owner)
+    let sourceRecursor := recursors.find? (·.name == Name.str owner "rec")
     let ownerConstructors := constructors.filter (·.induct == owner)
     #[Name.str root "self", Name.str root "rec", Name.str root "roll",
       Name.str root "unroll", Name.str root "unroll_roll", Name.str root "roll_unroll"] ++

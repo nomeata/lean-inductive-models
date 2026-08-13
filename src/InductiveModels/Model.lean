@@ -2137,6 +2137,7 @@ structure IsoFamilyMember where
   privateRecursor : Name
   privateConstructors : Array (Name × Name)
   privateIotas : Array (Name × Name × Name)
+  privateRules : Array (Name × Name × Name)
   roll : Name
   unroll : Name
   unrollRoll : Name

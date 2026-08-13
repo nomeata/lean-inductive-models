@@ -313,18 +313,41 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
         (constructor.name, familyNames.privateConstructor owner constructor.name)
       privateIotas := recursor.rules.toArray.map fun rule =>
         (recursor.name, rule.ctor, familyNames.privateIota owner rule.ctor)
+      privateRules := recursor.rules.toArray.map fun rule =>
+        (recursor.name, rule.ctor, familyNames.privateRule owner rule.ctor)
       roll := familyNames.roll owner, unroll := familyNames.unroll owner
       unrollRoll := familyNames.unrollRoll owner
       rollUnroll := familyNames.rollUnroll owner }
   let certificate : IsoFamilyImplementation :=
     { root := familyNames.familyRoot, support := #[familyNames.tag, familyNames.aux]
       members := certificateMembers }
+  let exactFamilyNames := MutualFamilyNames.forBuild root
   for member in certificate.members do
     for name in #[member.publicSelf, member.roll, member.unroll,
         member.unrollRoll, member.rollUnroll] do
       ensureFresh reserved name
+    for (_, _, name) in member.privateRules do ensureFresh reserved name
+    if buildRoot != root then
+      for name in #[exactFamilyNames.roll member.owner, exactFamilyNames.unroll member.owner,
+          exactFamilyNames.unrollRoll member.owner, exactFamilyNames.rollUnroll member.owner] do
+        ensureFresh reserved name
+      for (_, constructor, _) in member.privateRules do
+        ensureFresh reserved (exactFamilyNames.privateRule member.owner constructor)
+  let mut declarations := privateIso.decls
+  for member in certificate.members do
+    for (recursor, constructor, ruleName) in member.privateRules do
+      let iotaName := member.privateIotas.find? (fun entry =>
+          entry.1 == recursor && entry.2.1 == constructor) |>.map (·.2.2) |>.getD
+        (panic! s!"missing private iota for {recursor}/{constructor}")
+      let some sourceRule := privateIso.decls.findSome? fun declaration => match declaration with
+          | .thmDecl value => if value.name == iotaName then some value else none
+          | _ => none
+        | badShape s!"private mutual rule {iotaName} is absent"
+      let declaration := Declaration.thmDecl { sourceRule with name := ruleName }
+      addChecked declaration
+      declarations := declarations.push declaration
   let support ← ensureExactSortLift reserved
-  let mut declarations := privateIso.decls ++ support
+  declarations := declarations ++ support
   let mut spliced := privateIso.spliced ++ support.flatMap (·.getNames.toArray)
   let levels := lparams.map Level.param
   let publicSkeleton : Iso := { privateIso with
@@ -343,14 +366,14 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
     let privateCarrier := fun parameters =>
       mkAppN (.const member.privateSelf levels) parameters
     let value ← forallBoundedTelescope type.type (some np) fun parameters _ => do
-      let body ← if shape.changed then
-          let constructor := constructors.find? (·.induct == type.name) |>.get!
-          let privateConstructorType ← generatedType (privateConstructor! member constructor.name)
-          let telescope ← instForall privateConstructorType parameters
-          forallBoundedTelescope telescope (some constructor.numFields) fun fields _ =>
-            wTowerTyOf shape.level fields
-        else pure (privateCarrier parameters)
-      mkLambdaFVars parameters body
+      if shape.changed then
+        let constructor := constructors.find? (·.induct == type.name) |>.get!
+        let privateConstructorType ← generatedType (privateConstructor! member constructor.name)
+        let telescope ← instForall privateConstructorType parameters
+        forallBoundedTelescope telescope (some constructor.numFields) fun fields _ => do
+          mkLambdaFVars parameters (← wTowerTyOf shape.level fields)
+      else
+        mkLambdaFVars parameters (privateCarrier parameters)
     let declaration := Declaration.defnDecl
       { name := member.publicSelf, levelParams := lparams, type := exact type.type
         value, hints := .abbrev, safety := .safe }
@@ -367,19 +390,22 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
       withLocalDeclD `value (mkAppN (.const member.publicSelf levels) parameters) fun value =>
         mkForallFVars (parameters.push value)
           (mkAppN (.const member.privateSelf levels) parameters)
-    let rollValue ← forallBoundedTelescope type.type (some np) fun parameters _ =>
-      withLocalDeclD `value (mkAppN (.const member.publicSelf levels) parameters) fun value => do
-        let body ← if shape.changed then
-            let constructor := constructors.find? (·.induct == type.name) |>.get!
-            let privateConstructorType ← generatedType
-              (privateConstructor! member constructor.name)
-            let telescope ← instForall privateConstructorType parameters
-            forallBoundedTelescope telescope (some constructor.numFields) fun fields _ => do
-              let values ← wTowerProjsOf shape.level fields value
-              pure <| mkAppN (.const (privateConstructor! member constructor.name) levels)
+    let rollValue ← forallBoundedTelescope type.type (some np) fun parameters _ => do
+      if shape.changed then
+        let constructor := constructors.find? (·.induct == type.name) |>.get!
+        let privateConstructorType ← generatedType
+          (privateConstructor! member constructor.name)
+        let telescope ← instForall privateConstructorType parameters
+        forallBoundedTelescope telescope (some constructor.numFields) fun fields _ =>
+          withLocalDeclD `value (mkAppN (.const member.publicSelf levels) parameters)
+              fun value => do
+            let values ← wTowerProjsOf shape.level fields value
+            mkLambdaFVars (parameters.push value) <|
+              mkAppN (.const (privateConstructor! member constructor.name) levels)
                 (parameters ++ values)
-          else pure value
-        mkLambdaFVars (parameters.push value) body
+      else
+        withLocalDeclD `value (mkAppN (.const member.publicSelf levels) parameters) fun value =>
+          mkLambdaFVars (parameters.push value) value
     let declaration := Declaration.defnDecl
       { name := member.roll, levelParams := lparams, type := rollType, value := rollValue
         hints := ← hintsFor rollValue, safety := .safe }
@@ -419,22 +445,25 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
         let lhs := mkAppN (.const member.unroll levels) (parameters.push rolled)
         mkForallFVars (parameters.push value)
           (eqi.mk' shape.level (publicCarrierAt parameters) lhs value)
-    let unrollRollValue ← forallBoundedTelescope type.type (some np) fun parameters _ =>
-      withLocalDeclD `value (publicCarrierAt parameters) fun value => do
-        let proof ← if shape.changed then
-            let constructor := constructors.find? (·.induct == type.name) |>.get!
-            let privateConstructorType ← generatedType
-              (privateConstructor! member constructor.name)
-            let telescope ← instForall privateConstructorType parameters
-            forallBoundedTelescope telescope (some constructor.numFields) fun fields _ => do
-              let values ← wTowerProjsOf shape.level fields value
-              let plan ← mutualUnrollPlan all constructors members certificate type.name
-                parameters shape.level levels
-              pure <| mkAppN (.const (privateIota! member constructor.name)
-                (shape.level :: levels))
-                (parameters ++ plan.motives ++ plan.minors ++ values)
-          else pure (eqi.refl' shape.level (publicCarrierAt parameters) value)
-        mkLambdaFVars (parameters.push value) proof
+    let unrollRollValue ← forallBoundedTelescope type.type (some np) fun parameters _ => do
+      if shape.changed then
+        let constructor := constructors.find? (·.induct == type.name) |>.get!
+        let privateConstructorType ← generatedType
+          (privateConstructor! member constructor.name)
+        let telescope ← instForall privateConstructorType parameters
+        forallBoundedTelescope telescope (some constructor.numFields) fun fields _ =>
+          withLocalDeclD `value (publicCarrierAt parameters) fun value => do
+            let values ← wTowerProjsOf shape.level fields value
+            let plan ← mutualUnrollPlan all constructors members certificate type.name
+              parameters shape.level levels
+            let proof := mkAppN (.const (privateIota! member constructor.name)
+              (shape.level :: levels))
+              (parameters ++ plan.motives ++ plan.minors ++ values)
+            mkLambdaFVars (parameters.push value) proof
+      else
+        withLocalDeclD `value (publicCarrierAt parameters) fun value =>
+          mkLambdaFVars (parameters.push value)
+            (eqi.refl' shape.level (publicCarrierAt parameters) value)
     let unrollRoll := Declaration.thmDecl
       { name := member.unrollRoll, levelParams := lparams, type := unrollRollType
         value := unrollRollValue }
@@ -465,7 +494,8 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
     implementation? := none
     familyImplementation? := some certificate
     projectionOverrides := #[]
-    spliced := spliced }
+    spliced := spliced
+    aliases := privateIso.aliases.register (declarations.flatMap (·.getNames.toArray)) }
   return (result, members)
 
 private def mapMutualField (certificate : IsoFamilyImplementation) (operation : Bool)
@@ -477,6 +507,32 @@ private def mapMutualField (certificate : IsoFamilyImplementation) (operation : 
     let member := familyCertificateMember! certificate target
     let name := if operation then member.roll else member.unroll
     mkAppN (.const name levels) (parameters.push value)
+
+/-- Build a public layer against the carrier that was already installed.
+Unlike `wTowerMkOf`, the stored recursive values need not themselves be free
+variables: they have crossed the callee owner's `roll` map. -/
+private def mutualTowerValue (stage : String) (level : Level) (carrier : Expr)
+    (values : Array Expr) : GenM Expr := do
+  let rec build (index : Nat) (current : Expr) : GenM Expr := do
+    if index < values.size then
+      let current ← withTransparency .all <| whnf current
+      let .const name _ := current.getAppFn
+        | badShape s!"{stage}: a mutual one-layer carrier is not a PSigma'"
+      unless name == `PSigma' do
+        badShape s!"{stage}: a mutual one-layer carrier is not a PSigma'"
+      let arguments := current.getAppArgs
+      unless arguments.size == 2 do
+        badShape s!"{stage}: a mutual one-layer PSigma' is malformed"
+      let alpha := arguments[0]!
+      let beta := arguments[1]!
+      unless ← isDefEq (← inferType values[index]!) alpha do
+        badShape s!"{stage}: stored field {index} has type {← inferType values[index]!}, expected {alpha}"
+      let tail ← build (index + 1) (mkApp beta values[index]!)
+      return psigmaMk (← ilevel alpha) level alpha beta values[index]! tail
+    unless ← withTransparency .all <| isDefEq current (unitAt level) do
+      badShape s!"{stage}: a mutual one-layer carrier does not terminate in PUnit"
+    return unitAtCanon level
+  build 0 carrier
 
 /-- Equality between a public constructor at fields read through `unroll` and
 `unroll` of the corresponding private constructor.  Recursive slots are
@@ -511,7 +567,8 @@ private def mutualConstructorAgreement (all : Array Name) (constructors : Array 
   let publicCarrier := mkAppN (.const member.publicSelf levels) parameters
   let privateConstructor := privateConstructor! member constructor.name
   let mkStep := if shape.changed then
-      fun values => wTowerMkOf shape.level values values
+      fun values => mutualTowerValue s!"{constructor.name}'s agreement" shape.level
+        publicCarrier values
     else fun values => pure <| mkAppN (.const privateConstructor levels) (parameters ++ values)
   let storageEquality ← familyCongrChain eqi shape.level publicCarrier mkStep
     storedFields privateFields proofs changed
@@ -676,13 +733,15 @@ def buildMutualOneLayerFields (source : EDecl) (reserved : Std.HashSet Name)
       let stored := fields.mapIdx fun index field =>
         mapMutualField certificate true levels parameters fieldsShape[index]! field
       let body ← if shape.changed then
-          wTowerMkOf shape.level stored stored
+          mutualTowerValue s!"{constructor.name}'s public constructor" shape.level
+            (mkAppN (.const member.publicSelf levels) parameters) stored
         else pure (mkAppN (.const (privateConstructor! member constructor.name) levels)
           (parameters ++ stored))
       mkLambdaFVars binders body
+    let hints ← hintsFor value
     let declaration := Declaration.defnDecl
       { name, levelParams := lparams, type, value
-        hints := ← hintsFor value, safety := .safe }
+        hints, safety := .safe }
     addChecked declaration
     declarations := declarations.push declaration
   -- A changed member's projections read the public tower directly.  The
@@ -696,17 +755,16 @@ def buildMutualOneLayerFields (source : EDecl) (reserved : Std.HashSet Name)
     let fieldsShape := shape.constructorFields.find? (·.1 == constructor.name)
       |>.map (·.2) |>.getD #[]
     let privateConstructorType ← generatedType (privateConstructor! member constructor.name)
-    let projectionValues ← forallBoundedTelescope type.type (some np) fun parameters _ => do
-      let telescope ← instForall privateConstructorType parameters
-      forallBoundedTelescope telescope (some constructor.numFields) fun fields _ =>
-        withLocalDeclD `self (mkAppN (.const member.publicSelf levels) parameters) fun self => do
-          let stored ← wTowerProjsOf shape.level fields self
-          let values := stored.mapIdx fun index field =>
-            mapMutualField certificate false levels parameters fieldsShape[index]! field
-          pure (parameters, self, values)
-    let (parameters, self, values) := projectionValues
     for index in [0:constructor.numFields] do
-      let projectionValue ← mkLambdaFVars (parameters.push self) values[index]!
+      let projectionValue ← forallBoundedTelescope type.type (some np) fun parameters _ => do
+        let telescope ← instForall privateConstructorType parameters
+        forallBoundedTelescope telescope (some constructor.numFields) fun fields _ =>
+          withLocalDeclD `self (mkAppN (.const member.publicSelf levels) parameters)
+              fun self => do
+            let stored ← wTowerProjsOf shape.level fields self
+            let value := mapMutualField certificate false levels parameters
+              fieldsShape[index]! stored[index]!
+            mkLambdaFVars (parameters.push self) value
       let projectionProof ← forallBoundedTelescope (exact constructor.type)
           (some (np + constructor.numFields)) fun binders _ => do
         let ps := binders.extract 0 np
@@ -919,8 +977,9 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
               let publicIH ← withLocalDeclD `field publicFieldType fun field =>
                 mkLambdaFVars #[field] (mkApp plan.publicRecursors[targetIndex]! field)
               let ihAgreement ← withLocalDeclD `field privateFieldType fun field => do
-                let expected := eqi.mk' (← ilevel (mkApp privateIH field))
-                  (← inferType (mkApp privateIH field))
+                let ihResultType ← inferType (mkApp privateIH field)
+                let ihLevel ← ilevel ihResultType
+                let expected := eqi.mk' ihLevel ihResultType
                   (mkApp publicIH (mkApp unrollField field)) (mkApp privateIH field)
                 let arguments := #[
                   mkAppN (.const targetMember.privateSelf levels) parameters,
@@ -929,7 +988,7 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
                   mkAppN (.const targetMember.rollUnroll levels) parameters,
                   plan.cores[targetIndex]!, field]
                 let proof ← match ← applyOneLayerIHCompatibility
-                    [targetShape.level.normalize.dec.getD .zero, ← ilevel (mkApp privateIH field)]
+                    [targetShape.level.normalize.dec.getD .zero, ihLevel]
                     arguments expected with
                   | .ok proof => pure proof
                   | .error message => badShape s!"{name}'s IH compatibility failed: {message}"
@@ -973,7 +1032,7 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
                 | .error message => badShape s!"{name}'s compatibility failed: {message}"
               pure proof
           let body := eqi.mk' equalityLevel alpha lhs rhs
-          let some fieldsType := closeForallsExact? constructorType fields body
+          let some fieldsType := closeForallsExact? telescope fields body
             | badShape s!"{constructor.name}'s exact field telescope is too short"
           let some theoremType := closeForallsExact? recursorType pre fieldsType
             | badShape s!"{sourceRecursor.name}'s exact prefix is too short"
