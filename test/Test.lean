@@ -820,11 +820,11 @@ def runOne (root : String) (a : TAcc) (r : Row)
     s!"{name}: the export's recursors differ from Lean's own: {rep.recMismatch}"
   -- The compact graph retains no declaration values.  It must nevertheless
   -- select exactly the same final order (or error) as the full export pass.
-  -- Source scheduling plus island-local ordering is *not* generally a fixed
-  -- point: `prim_graph_pre`'s input quotient bundle is one kernel declaration
-  -- split over four export records, so owner-free checking can see `Quot.lift`
-  -- before its record has reached the stream.  That fixture below pins why a
-  -- compact final pass, rather than no final pass, is required.
+  -- Source scheduling hoists `prim_graph_pre`'s exact quotient support before
+  -- the owner which derives `funext`.  Island-local ordering must preserve that
+  -- boundary: `Quot.lift`, then the derived `funext`, then its source owner.
+  -- The compact sequence is consequently already an ordinary-order fixed
+  -- point; the full-export oracle below independently checks the same order.
   let compact := Order.summaries { x with decls }
   let compactFixed := Order.summariesAreOrdered compact
   let compactOrder := Order.summaryRecordOrder compact
@@ -846,12 +846,12 @@ def runOne (root : String) (a : TAcc) (r : Row)
             positionIn order `Quot.lift with
         | some rawFunext, some rawOwner, some rawLift,
             some finalFunext, some finalOwner, some finalLift =>
-          rawFunext < rawOwner && rawOwner < rawLift &&
+          rawLift < rawFunext && rawFunext < rawOwner &&
             finalLift < finalFunext && finalFunext < finalOwner
         | _, _, _, _, _, _ => false
       | .error _ => false
-    a := check a (!compactFixed && quotientBoundary)
-      "prim_graph_pre: split quotient replay no longer demonstrates the required compact final pass"
+    a := check a (compactFixed && quotientBoundary)
+      "prim_graph_pre: scheduled quotient support does not precede derived funext and its owner"
   -- axis 4: the round trip
   let out := ({ x with decls }).render
   match Modelgen.parse out with
