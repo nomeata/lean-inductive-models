@@ -605,6 +605,10 @@ private def freshCheckerMain (args : List String) : IO UInt32 := do
       return exitToolError
   let .ok config ← parseConfig args
     | return exitToolError
+  unless InductiveModels.generationEnabled config && !config.output &&
+      config.typeCheckOutput && !config.monoLevels do
+    IO.eprintln "lean-inductive-models: fresh output-kernel checker received an ineligible invocation"
+    return exitToolError
   let input := config.input.getD "<input>"
   if (← IO.getEnv freshCheckerFailureVariable) == some "1" then
     IO.eprintln s!"{input}: injected fresh output-kernel checker failure"
