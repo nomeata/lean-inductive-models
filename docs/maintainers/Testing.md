@@ -40,7 +40,7 @@ correctness_targets=(
   incrementalordertest namingtest drivernamingtest privatealiastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
   composedrecursorsyntaxtest mainclitest projectiontest indexedfibrediagnostictest
-  structureetatest
+  mutualonelayerdiagnostictest structureetatest
   deepimaxboxtest psigmaprimetest exactsortlifttest
   tightpsigmaprimeroutetest vanishingerasuretest
   transparentowneraliasestest exportsyntaxnormalizationtest
@@ -77,6 +77,7 @@ lake exe composedrecursorsyntaxtest "$PWD"
 lake exe mainclitest "$PWD"
 lake exe projectiontest
 lake exe indexedfibrediagnostictest "$PWD"
+lake exe mutualonelayerdiagnostictest "$PWD"
 lake exe structureetatest
 lake exe deepimaxboxtest
 lake exe psigmaprimetest

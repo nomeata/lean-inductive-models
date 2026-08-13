@@ -117,6 +117,11 @@ lean_exe indexedfibrediagnostictest where
   root := `IndexedFibreDiagnosticTest
   supportInterpreter := true
 
+lean_exe mutualonelayerdiagnostictest where
+  srcDir := "test"
+  root := `MutualOneLayerDiagnosticTest
+  supportInterpreter := true
+
 lean_exe structureetatest where
   srcDir := "test"
   root := `StructureEtaTest

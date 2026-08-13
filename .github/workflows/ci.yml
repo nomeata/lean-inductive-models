@@ -113,7 +113,8 @@ jobs:
                 clitest supervisortest generationflagstest checktest ordertest incrementalordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
                 defaultctoriotatest sourcestructuresyntaxtest composedrecursorsyntaxtest \
-                projectiontest indexedfibrediagnostictest structureetatest deepimaxboxtest \
+                projectiontest indexedfibrediagnostictest mutualonelayerdiagnostictest \
+                structureetatest deepimaxboxtest \
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
                 vanishingerasuretest transparentowneraliasestest \
                 exportsyntaxnormalizationtest basisvalidationtest stagedwritertest
@@ -133,6 +134,7 @@ jobs:
               lake exe composedrecursorsyntaxtest "$GITHUB_WORKSPACE"
               lake exe projectiontest
               lake exe indexedfibrediagnostictest "$GITHUB_WORKSPACE"
+              lake exe mutualonelayerdiagnostictest "$GITHUB_WORKSPACE"
               lake exe structureetatest
               lake exe deepimaxboxtest
               lake exe psigmaprimetest
@@ -143,7 +145,7 @@ jobs:
               lake exe exportsyntaxnormalizationtest
               lake exe basisvalidationtest
               lake exe stagedwritertest "$GITHUB_WORKSPACE"
-              count=26
+              count=27
               ;;
             mono)
               build_serially lean-inductive-models monotest mainclitest
