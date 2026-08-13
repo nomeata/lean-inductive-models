@@ -50,9 +50,10 @@ def main (args : List String) : IO UInt32 := do
   let overwritePath := s!"{scratch}/staged-writer-overwrite.ndjson"
   let projectionOrderPath := s!"{scratch}/staged-writer-projection-order.ndjson"
   let projectionOverwritePath := s!"{scratch}/staged-writer-projection-overwrite.ndjson"
+  let parserCompatibilityPath := s!"{scratch}/staged-writer-parser-compatibility.ndjson"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
     nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath,
-    projectionOrderPath, projectionOverwritePath]
+    projectionOrderPath, projectionOverwritePath, parserCompatibilityPath]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -191,6 +192,71 @@ def main (args : List String) : IO UInt32 := do
     bothProjectionFacts (Modelgen.parse projectionOverwrite)
       (← parseHandleAt projectionOverwritePath) #[projection, projectionParent]
       #[replacement, replacementParent]
+
+  -- Top-level dispatch follows the Kernel Arena parser's complete-key match.
+  -- Pin every recognized record spelling: no variant may silently accept an
+  -- extra tag or an arbitrary extension field.
+  let taggedRecords : Array String := #[
+    "{\"extra\":null,\"in\":1,\"str\":{\"pre\":0,\"str\":\"N\"}}",
+    "{\"extra\":null,\"in\":1,\"num\":{\"i\":1,\"pre\":0}}",
+    "{\"extra\":null,\"il\":1,\"succ\":0}",
+    "{\"extra\":null,\"il\":1,\"param\":0}",
+    "{\"extra\":null,\"il\":1,\"max\":[0,0]}",
+    "{\"extra\":null,\"il\":1,\"imax\":[0,0]}",
+    "{\"bvar\":0,\"extra\":null,\"ie\":0}",
+    "{\"extra\":null,\"ie\":0,\"sort\":0}",
+    "{\"const\":{\"name\":0,\"us\":[]},\"extra\":null,\"ie\":0}",
+    "{\"app\":{\"arg\":0,\"fn\":0},\"extra\":null,\"ie\":0}",
+    "{\"extra\":null,\"ie\":0,\"lam\":{\"binderInfo\":\"default\",\"body\":0,\"name\":0,\"type\":0}}",
+    "{\"extra\":null,\"forallE\":{\"binderInfo\":\"default\",\"body\":0,\"name\":0,\"type\":0},\"ie\":0}",
+    "{\"extra\":null,\"ie\":0,\"letE\":{\"body\":0,\"name\":0,\"nondep\":false,\"type\":0,\"value\":0}}",
+    "{\"extra\":null,\"ie\":0,\"proj\":{\"idx\":0,\"struct\":0,\"typeName\":0}}",
+    "{\"extra\":null,\"ie\":0,\"natVal\":\"0\"}",
+    "{\"extra\":null,\"ie\":0,\"strVal\":\"s\"}",
+    "{\"extra\":null,\"ie\":0,\"mdata\":{\"data\":{},\"expr\":0}}",
+    "{\"axiom\":{},\"extra\":null}",
+    "{\"def\":{},\"extra\":null}",
+    "{\"extra\":null,\"thm\":{}}",
+    "{\"extra\":null,\"opaque\":{}}",
+    "{\"extra\":null,\"quot\":{}}",
+    "{\"extra\":null,\"inductive\":{}}"]
+  for (record, index) in taggedRecords.toList.zipIdx do
+    let input := record ++ "\n"
+    IO.FS.writeFile parserCompatibilityPath input
+    state := state.check s!"top-level record variant {index} rejects extra keys" <|
+      bothReject (Modelgen.parse input) (← parseHandleAt parserCompatibilityPath)
+
+  let malformedPayloads : Array (String × String) := #[
+    ("combined expression tags", "{\"bvar\":0,\"ie\":0,\"sort\":0}\n"),
+    ("short max level", "{\"il\":1,\"max\":[0]}\n"),
+    ("long imax level", "{\"il\":1,\"imax\":[0,0,0]}\n"),
+    ("nonnumeric natural literal", "{\"ie\":0,\"natVal\":\"12x\"}\n"),
+    ("nonobject metadata", "{\"ie\":0,\"mdata\":{\"data\":false,\"expr\":0}}\n")]
+  for (label, input) in malformedPayloads do
+    IO.FS.writeFile parserCompatibilityPath input
+    state := state.check s!"{label} fails cleanly in both readers" <|
+      bothReject (Modelgen.parse input) (← parseHandleAt parserCompatibilityPath)
+
+  let metadata := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"MetadataOwner\"}}",
+    "{\"ie\":0,\"sort\":0}",
+    "{\"ie\":1,\"mdata\":{\"data\":{\"synthetic\":true},\"expr\":0}}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}"]
+  IO.FS.writeFile parserCompatibilityPath metadata
+  let metadataDecl : EDecl := .ax `MetadataOwner [] (.mdata {} (.sort .zero)) false
+  state := state.check "metadata expressions parse in both readers" <|
+    bothHaveDecls (Modelgen.parse metadata) (← parseHandleAt parserCompatibilityPath)
+      #[metadataDecl]
+
+  let legacyOpaque := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"LegacyOpaque\"}}",
+    "{\"ie\":0,\"sort\":0}",
+    "{\"opaque\":{\"all\":[],\"levelParams\":[],\"name\":1,\"type\":0,\"value\":0}}"]
+  IO.FS.writeFile parserCompatibilityPath legacyOpaque
+  let legacyOpaqueDecl : EDecl := .opaq `LegacyOpaque [] (.sort .zero) (.sort .zero) false []
+  state := state.check "opaque records may omit isUnsafe for arena compatibility" <|
+    bothHaveDecls (Modelgen.parse legacyOpaque) (← parseHandleAt parserCompatibilityPath)
+      #[legacyOpaqueDecl]
 
   for path in paths do removeIfPresent path
   IO.println s!"staged writer: {state.passed} passed, {state.failed.size} failed"
