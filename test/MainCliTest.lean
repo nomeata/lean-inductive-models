@@ -388,8 +388,43 @@ def main (args : List String) : IO UInt32 := do
     { nestedExport with decls := nestedExport.decls.push nestedExport.decls[0]! }.render
   let duplicate ← runModelgenStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] duplicateText
-  state := state.check "duplicate declaration is a parse/tool error with exit 3" <|
-    duplicate.exitCode == 3 && (duplicate.stderr.splitOn "parse error:").length > 1
+  state := state.check "duplicate declaration is an Arena rejection with exit 1" <|
+    duplicate.exitCode == 1 &&
+      duplicate.stderr.contains "invalid export: duplicate declaration"
+  let duplicateWithoutKernel ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--no-type-check-input", "--no-output", "-"] duplicateText
+  state := state.check "duplicate declaration without kernel checking is rejected" <|
+    duplicateWithoutKernel.exitCode == 1 &&
+      duplicateWithoutKernel.stderr.contains "invalid export: duplicate declaration"
+
+  -- A flattened export can contain distinct private/public names which Lean's
+  -- full Environment indexes under one normalized key. Kernel checking keeps the
+  -- colliding record out of its supplemental mirror without weakening the
+  -- authoritative kernel replay or panicking.
+  let publicCollision : Lean.Name := `ArenaCollision.X
+  let privateCollision : Lean.Name :=
+    (`_private.ArenaCollision).mkNum 0 |>.str "ArenaCollision" |>.str "X"
+  let normalizedCollision : Modelgen.Export := { metaLine := .null, decls := #[
+    .ax publicCollision [] (.sort (.succ .zero)) false,
+    .ax privateCollision [] (.sort (.succ .zero)) false] }
+  let normalizedArena ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    normalizedCollision.render
+  state := state.check "Arena accepts a valid normalized private-name collision without panic" <|
+    Lean.privateToUserName privateCollision == publicCollision &&
+    normalizedArena.exitCode == 0 && !normalizedArena.stderr.contains "PANIC"
+  let normalizedOrdinary ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    normalizedCollision.render
+  state := state.check "ordinary kernel gate preserves normalized private-name behavior" <|
+    normalizedOrdinary.exitCode == 0
+
+  let imaxProjection ← runModelgen binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output",
+    s!"{root}/test/fixtures/arena/proj-imax-prop.ndjson"]
+  state := state.check "Arena rejects a data projection from normalized Prop" <|
+    imaxProjection.exitCode == 1 &&
+      imaxProjection.stderr.contains "expression validation failed: invalid projection"
 
   let quotientPath := s!"{root}/test/fixtures/modelgen/prim_graph_pre.ndjson"
   let quotientText ← IO.FS.readFile quotientPath
@@ -444,7 +479,7 @@ def main (args : List String) : IO UInt32 := do
 
   let malformed ← runModelgenStdin binary
     ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] "not ndjson\n"
-  state := state.check "malformed stdin is a tool error with exit 3" <|
+  state := state.check "malformed Arena stdin is a tool error with exit 3" <|
     malformed.exitCode == 3 && (malformed.stderr.splitOn "parse error:").length > 1
   let arenaHoles : Array (String × String) := #[
     ("name", "{\"in\":2,\"str\":{\"pre\":0,\"str\":\"Defined\"}}\n" ++

@@ -183,19 +183,30 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       if input == "-" then
         let stdin ← IO.getStdin
         let result ← match tee? with
-          | none => (Modelgen.parseStream stdin (analyse := config.monoLevels)).map (Except.map fun x => (x, none))
-          | some tee => (Modelgen.parseStreamWithSink stdin tee.sink
-              (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
-                (x, some (tee, certificate)))
+          | none => do
+            let result ← Modelgen.parseStream stdin
+              (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+              (allowDuplicateNames := true)
+            pure (result.map fun x => (x, none))
+          | some tee => do
+            let result ← Modelgen.parseStreamWithSink stdin tee.sink
+              (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+              (allowDuplicateNames := true)
+            pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
         pure (some result)
       else
         IO.FS.withFile input .read fun handle => do
           let result ← match tee? with
-            | none => (Modelgen.parseHandle handle
-                (analyse := config.monoLevels)).map (Except.map fun x => (x, none))
-            | some tee => (Modelgen.parseHandleWithSink handle tee.sink
-                (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
-                  (x, some (tee, certificate)))
+            | none => do
+              let result ← Modelgen.parseHandle handle
+                (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+                (allowDuplicateNames := true)
+              pure (result.map fun x => (x, none))
+            | some tee => do
+              let result ← Modelgen.parseHandleWithSink handle tee.sink
+                (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+                (allowDuplicateNames := true)
+              pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
           pure (some result)
     catch error =>
       IO.eprintln s!"{input}: {error}"
@@ -217,6 +228,10 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
           pure (parsedExport, none)
       else
         pure (parsedExport, none)
+
+  if let .error message := parsed.validateUniqueDeclarationNames then
+    IO.eprintln s!"{input}: invalid export: {message}"
+    return exitRejected
 
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}

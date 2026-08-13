@@ -76,7 +76,8 @@ def parseArgs (args : List String) : Except String Config :=
 where
   go : List String → Config → Except String Config
     | [], config =>
-      if config.input.isSome then .ok config else .error "no input file"
+      if config.input.isNone then .error "no input file"
+      else .ok config
     | "-o" :: [], _ => .error "missing operand after -o"
     | "-o" :: path :: rest, config =>
       go rest { config with output := true, outputTarget := path }

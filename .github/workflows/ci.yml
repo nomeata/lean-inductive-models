@@ -10,6 +10,39 @@ permissions:
   contents: read
 
 jobs:
+  arena:
+    name: Lean Kernel Arena corpus
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TMPDIR: ${{ github.workspace }}/_tmp
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare project-local temporary directory
+        run: mkdir -p _tmp
+
+      - name: Set up Lean
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          build: false
+          test: false
+          use-mathlib-cache: false
+
+      - name: Build modelgen and check the Arena corpus
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Each process is capped at 12 GiB and cannot raise its own limit.
+          ulimit -Sv 12582912
+          ulimit -Hv 12582912
+
+          lake -Kjobs=1 build modelgen
+          test/scripts/check-arena-corpus.sh
+
   test:
     name: ${{ matrix.suite }}
     runs-on: ubuntu-24.04
@@ -70,6 +103,7 @@ jobs:
               build_serially \
                 clitest generationflagstest checktest ordertest incrementalordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
+                defaultctoriotatest \
                 projectiontest structureetatest deepimaxboxtest \
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
                 vanishingerasuretest transparentowneraliasestest \
@@ -84,6 +118,7 @@ jobs:
               lake exe privatealiastest
               lake exe simplenamingtest
               lake exe rulektest
+              lake exe defaultctoriotatest "$GITHUB_WORKSPACE"
               lake exe projectiontest
               lake exe structureetatest
               lake exe deepimaxboxtest
@@ -95,7 +130,7 @@ jobs:
               lake exe exportsyntaxnormalizationtest
               lake exe basisvalidationtest
               lake exe stagedwritertest "$GITHUB_WORKSPACE"
-              count=21
+              count=22
               ;;
             mono)
               build_serially modelgen monotest mainclitest

@@ -9,10 +9,19 @@ lakefile="$root/lakefile.lean"
 mapfile -t direct_builds < <(
   sed -nE 's/^[[:space:]]*(lake .*build .*)$/\1/p' "$workflow"
 )
-if [[ "${#direct_builds[@]}" -ne 1 ||
-      "${direct_builds[0]}" != 'lake -Kjobs=1 build "$target"' ]]; then
+expected_direct_builds=(
+  'lake -Kjobs=1 build modelgen'
+  'lake -Kjobs=1 build "$target"'
+)
+sorted_direct_builds="$(printf '%s\n' "${direct_builds[@]}" | LC_ALL=C sort)"
+sorted_expected_builds="$(
+  printf '%s\n' "${expected_direct_builds[@]}" | LC_ALL=C sort
+)"
+if [[ "$sorted_direct_builds" != "$sorted_expected_builds" ]]; then
   printf '%s\n' "CI contains a Lake build outside the one-target loop:" >&2
   printf '  %s\n' "${direct_builds[@]}" >&2
+  printf '%s\n' "Expected only the serialized Arena build and target loop:" >&2
+  printf '  %s\n' "${expected_direct_builds[@]}" >&2
   exit 1
 fi
 
