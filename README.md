@@ -698,8 +698,8 @@ hash map's per-entry nodes and table-doubling peak. The pinned Mathlib input has
 changing the export format. The patch revision and SHA-256 are checked before
 application. Setting `LEAN4EXPORT_DIFFERENTIAL=1` for the patch-check command
 compares a stock and patched small
-export byte for byte. The single full-environment exporter retains a 14 GiB
-limit; and the model generator
+export byte for byte. The single full-environment exporter returns to the 12 GiB
+build envelope; and the model generator
 and kernel reread retain the authoritative 10 GiB worker limit. The exporter
 writes a
 compressed stream which is fed to the staged generator through a FIFO; build

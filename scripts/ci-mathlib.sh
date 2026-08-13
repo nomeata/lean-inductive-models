@@ -23,10 +23,10 @@ OUTPUT="$WORK/mathlib.model.ndjson"
 MATHLIB_REV="5e932f97dd25535344f80f9dd8da3aab83df0fe6"
 EXPORTER_REV="caccfbebbc99077962b3321125b2375bb3fa22db"
 EXPORTER_PATCH="$ROOT/vendor/lean4export/compact-expr-interner.patch"
-EXPORTER_PATCH_SHA="6f3ea993887612d4e7417c7fc23efe0f8777e05cda992ec90aa22d6afe60e1bc"
+EXPORTER_PATCH_SHA="151c25f6adbfd915ce62786da33352c089653f62d5d3445cc3b38879de19deeb"
 WORKER_LIMIT_KIB=$((10 * 1024 * 1024))
 BUILD_LIMIT_KIB=$((12 * 1024 * 1024))
-EXPORT_LIMIT_KIB=$((14 * 1024 * 1024))
+EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))
 # The measured staged spool and output are each about 6 GB. This is a
 # generation-phase guard, after all disposable builds and checkouts are gone;
 # it is not a runner-size preflight.
@@ -84,12 +84,12 @@ cleanup_tree() {
 }
 
 # Every large process tree has an exact address-space ceiling. Serialized Lake
-# builds and cache extraction need 12 GiB (Simple.c exceeds 10 GiB). The
-# exporter imports all of Mathlib and retains the format's global expression
-# index, so it alone gets 14 GiB while gzip streams beside it, leaving 2 GiB
-# of the standard runner's 16 GiB for the compressor and runner services. The
-# public generator and serialized kernel reread retain the authoritative
-# 10 GiB worker ceiling; the supervised child inherits its parent's limit.
+# builds and cache extraction need 12 GiB (Simple.c exceeds 10 GiB). The pinned
+# exporter patch shrinks its retained global expression index enough to restore
+# that same 12 GiB ceiling, leaving 4 GiB of the standard runner's 16 GiB for
+# gzip and runner services. The public generator and serialized kernel reread
+# retain the authoritative 10 GiB worker ceiling; the supervised child inherits
+# its parent's limit.
 run_capped() (
   limit_kib="$1"
   limit_label="$2"
@@ -137,7 +137,7 @@ run_build_measured() {
 }
 
 run_export_measured() {
-  run_measured "$EXPORT_LIMIT_KIB" "14 GiB Mathlib export" "$@"
+  run_measured "$EXPORT_LIMIT_KIB" "12 GiB Mathlib export" "$@"
 }
 
 run_worker_measured() {

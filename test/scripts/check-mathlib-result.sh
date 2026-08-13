@@ -32,7 +32,7 @@ ci_harness="$ROOT/scripts/ci-mathlib.sh"
 # The native compiler needs more address space than either authoritative model
 # worker. Keep both exact envelopes and their phase assignments explicit.
 grep -Fq 'BUILD_LIMIT_KIB=$((12 * 1024 * 1024))' "$ci_harness"
-grep -Fq 'EXPORT_LIMIT_KIB=$((14 * 1024 * 1024))' "$ci_harness"
+grep -Fq 'EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))' "$ci_harness"
 grep -Fq 'WORKER_LIMIT_KIB=$((10 * 1024 * 1024))' "$ci_harness"
 for phase in build-generator build-exporter mathlib-cache; do
   grep -Eq "run_build_measured([[:space:]]+|.* )$phase" "$ci_harness" || {
@@ -41,7 +41,7 @@ for phase in build-generator build-exporter mathlib-cache; do
   }
 done
 grep -Eq 'run_export_measured([[:space:]]+|.* )export' "$ci_harness" || {
-  echo "mathlib CI does not use the 14 GiB envelope for export" >&2
+  echo "mathlib CI does not use the 12 GiB envelope for export" >&2
   exit 1
 }
 for phase in generate check-input; do

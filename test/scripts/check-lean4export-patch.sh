@@ -6,7 +6,7 @@ ci="$root/scripts/ci-mathlib.sh"
 patch="$root/vendor/lean4export/compact-expr-interner.patch"
 vendor_readme="$root/vendor/lean4export/README.md"
 revision="caccfbebbc99077962b3321125b2375bb3fa22db"
-patch_sha="6f3ea993887612d4e7417c7fc23efe0f8777e05cda992ec90aa22d6afe60e1bc"
+patch_sha="151c25f6adbfd915ce62786da33352c089653f62d5d3445cc3b38879de19deeb"
 
 fail() {
   echo "lean4export patch check: $*" >&2

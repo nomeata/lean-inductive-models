@@ -6,7 +6,7 @@ index 2054d47..3ae3e84 100644
  import Lean
  import Std.Data.HashMap.Basic
 +import Export.CompactExprInterner
- 
+
  open Lean
  open Std (HashMap)
 @@ -35,7 +36,7 @@ structure Context where
@@ -38,11 +38,11 @@ index 2054d47..3ae3e84 100644
 +    visitedExprs
      recursorMap
    }
- 
-@@ -90,6 +102,28 @@ def getIdx [Hashable α] [BEq α] (x : α) (namespaced: String) (getM : State 
+
+@@ -90,6 +102,28 @@ def getIdx [Hashable α] [BEq α] (x : α) (namespaced: String) (getM : State
    modify fun st => setM st ((getM st).insert x idx)
    return idx
- 
+
 +/-- Expression-specialized `getIdx` backed by the compact exact interner. -/
 +@[inline]
 +def getExprIdx (x : Expr) (rec : M Json) : M Nat := do
@@ -70,7 +70,7 @@ index 2054d47..3ae3e84 100644
    | .anonymous => unreachable!
 @@ -153,7 +187,7 @@ def removeMData (e : Expr) : M Expr := do
  mutual
- 
+
  partial def dumpExprAux (e : Expr) : M Nat := do
 -  getIdx e "ie" (·.visitedExprs) ({ · with visitedExprs := · }) do
 +  getExprIdx e do
