@@ -718,4 +718,265 @@ def mutualOneLayerFields (source : EDecl) (reserved : Std.HashSet Name)
   let (base, members) ← mutualOneLayerBase source reserved buildRoot?
   return (← buildMutualOneLayerFields source reserved base members, members)
 
+private def sourceRecursorOwner! (types : Array EIndType) (recursor : ERec) : Name :=
+  (types.find? fun type => Name.str type.name "rec" == recursor.name)
+    |>.map (·.name) |>.getD (panic! s!"no source owner for {recursor.name}")
+
+private partial def mutualRecursorApplicationCount (all : Array Name)
+    (expression : Expr) : Nat :=
+  if all.any fun owner => expression.getAppFn.constName? == some (publicRecursor owner) then
+    expression.getAppArgs.foldl
+      (fun total argument => total + mutualRecursorApplicationCount all argument) 1
+  else
+    match expression with
+    | .app function argument =>
+      mutualRecursorApplicationCount all function + mutualRecursorApplicationCount all argument
+    | .lam _ type body _ | .forallE _ type body _ =>
+      mutualRecursorApplicationCount all type + mutualRecursorApplicationCount all body
+    | .letE _ type value body _ =>
+      mutualRecursorApplicationCount all type + mutualRecursorApplicationCount all value +
+        mutualRecursorApplicationCount all body
+    | .mdata _ body => mutualRecursorApplicationCount all body
+    | .proj _ _ projected => mutualRecursorApplicationCount all projected
+    | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => 0
+
+private def replaceMutualRecursorCalls (all : Array Name) (pre : Array Expr)
+    (locals : Array Expr) (expression : Expr) : Expr × Nat :=
+  let replaced := mutualRecursorApplicationCount all expression
+  let result := expression.replace fun subexpression => Id.run do
+    let .const name _ := subexpression.getAppFn | return none
+    let some ownerIndex := all.findIdx? fun owner => publicRecursor owner == name
+      | return none
+    let arguments := subexpression.getAppArgs
+    unless arguments.size == pre.size + 1 do return none
+    for index in [:pre.size] do
+      unless arguments[index]! == pre[index]! do return none
+    return some (mkApp locals[ownerIndex]! arguments[pre.size]!)
+  (result, replaced)
+
+/-- Attach exact public mutual recursors and source-shaped iota theorems.  The
+definitions and proofs share one `MutualRecursorPlan`, so no installed public
+recursor is used as a syntax oracle. -/
+def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
+    (fieldsIso : Iso) (members : Array MutualMemberShape) : GenM Iso := do
+  let .induct sourceTypes sourceConstructors sourceRecursors := source
+    | badShape "mutual public recursors need an exact inductive block"
+  let types := sourceTypes.toArray
+  let constructors := sourceConstructors.toArray
+  let recursors := sourceRecursors.toArray
+  let all := types.map (·.name)
+  let some certificate := fieldsIso.familyImplementation?
+    | badShape "mutual public recursors have no family certificate"
+  let lparams := types[0]!.levelParams
+  let levels := lparams.map Level.param
+  let np := types[0]!.numParams
+  let env ← getEnv
+  let exact := exactFamilySource env all fieldsIso
+  let eqi ← match EqInfo.check env with
+    | .ok info => pure info
+    | .error message => badShape message
+  let mut declarations := fieldsIso.decls
+  -- Install all public recursors before any exact source rule can refer to a
+  -- sibling recursor.
+  for sourceRecursor in recursors do
+    let owner := sourceRecursorOwner! types sourceRecursor
+    let ownerIndex := all.idxOf owner
+    let name := publicRecursor owner
+    ensureFresh reserved name
+    let type := exact sourceRecursor.type
+    let numPre := sourceRecursor.numParams + sourceRecursor.numMotives +
+      sourceRecursor.numMinors
+    let value ← forallBoundedTelescope type (some (numPre + 1)) fun binders _ => do
+      let parameters := binders.extract 0 np
+      let motives := binders.extract sourceRecursor.numParams
+        (sourceRecursor.numParams + sourceRecursor.numMotives)
+      let minors := binders.extract (sourceRecursor.numParams + sourceRecursor.numMotives)
+        numPre
+      let major := binders[numPre]!
+      let plan ← mutualRecursorPlan types constructors members certificate eqi sourceRecursor
+        parameters motives minors levels
+      mkLambdaFVars binders (mkApp plan.publicRecursors[ownerIndex]! major)
+    let declaration := Declaration.defnDecl
+      { name, levelParams := sourceRecursor.levelParams, type, value
+        hints := ← hintsFor value, safety := .safe }
+    addChecked declaration
+    declarations := declarations.push declaration
+  let recursorIso := { fieldsIso with decls := declarations }
+  let exact := exactFamilySource (← getEnv) all recursorIso
+  let mut iotas := #[]
+  for sourceRecursor in recursors do
+    let owner := sourceRecursorOwner! types sourceRecursor
+    let ownerIndex := all.idxOf owner
+    let ownerShape := familyMember! members owner
+    let ownerMember := familyCertificateMember! certificate owner
+    let recursorType := exact sourceRecursor.type
+    let numPre := sourceRecursor.numParams + sourceRecursor.numMotives +
+      sourceRecursor.numMinors
+    let recLevels := sourceRecursor.levelParams.map Level.param
+    for ruleIndex in [0:sourceRecursor.rules.length] do
+      let rule := sourceRecursor.rules[ruleIndex]!
+      let some constructor := constructors.find? (·.name == rule.ctor)
+        | badShape s!"{sourceRecursor.name}'s rule names absent constructor {rule.ctor}"
+      unless constructor.induct == owner do
+        badShape s!"{sourceRecursor.name}'s rule {ruleIndex} belongs to {constructor.induct}"
+      let name := publicIota owner ruleIndex
+      ensureFresh reserved name
+      let declaration ← forallBoundedTelescope recursorType (some numPre) fun pre _ => do
+        let parameters := pre.extract 0 np
+        let motives := pre.extract sourceRecursor.numParams
+          (sourceRecursor.numParams + sourceRecursor.numMotives)
+        let minors := pre.extract (sourceRecursor.numParams + sourceRecursor.numMotives) numPre
+        let plan ← mutualRecursorPlan types constructors members certificate eqi sourceRecursor
+          parameters motives minors levels
+        let constructorType := exact constructor.type
+        let telescope ← instForall constructorType parameters
+        forallBoundedTelescope telescope (some constructor.numFields) fun fields _ => do
+          let fieldShape := ownerShape.constructorFields.find? (·.1 == constructor.name)
+            |>.map (·.2) |>.getD #[]
+          let recursiveFields := (Array.range fieldShape.size).filter fun index =>
+            fieldShape[index]!.target?.isSome
+          unless recursiveFields.size ≤ 1 do
+            badShape s!"{constructor.name} has more than one direct recursive field"
+          let privateFields := fields.mapIdx fun index field =>
+            mapMutualField certificate true levels parameters fieldShape[index]! field
+          let publicMajor := mkAppN (.const (publicConstructor constructor.name) levels)
+            (parameters ++ fields)
+          let lhs := mkAppN (.const (publicRecursor owner) recLevels) (pre.push publicMajor)
+          let rhs := exact rule.rhs |>.beta (pre ++ fields)
+          let (localRhs, replaced) := replaceMutualRecursorCalls all pre
+            plan.publicRecursors rhs
+          unless replaced == recursiveFields.size do
+            badShape s!"{name}'s source rule has {replaced} recursive calls, expected \
+              {recursiveFields.size}"
+          let some alphaSyntax := exactRecursorMotiveResult? sourceRecursor ruleIndex pre fields
+            | badShape s!"{name}'s exact source rule has no motive result"
+          let alpha := exact alphaSyntax
+          let equalityLevel ← ilevel alpha
+          let localProposition := eqi.mk' equalityLevel alpha
+            (mkApp plan.publicRecursors[ownerIndex]! publicMajor) localRhs
+          let ownerPrivateCarrier := mkAppN (.const ownerMember.privateSelf levels) parameters
+          let ownerPublicCarrier := mkAppN (.const ownerMember.publicSelf levels) parameters
+          let roll := mkAppN (.const ownerMember.roll levels) parameters
+          let unroll := mkAppN (.const ownerMember.unroll levels) parameters
+          let unrollRoll := mkAppN (.const ownerMember.unrollRoll levels) parameters
+          let privateConstructor := privateConstructor! ownerMember constructor.name
+          let privateMajor := mkAppN (.const privateConstructor levels)
+            (parameters ++ privateFields)
+          let publicMinor := minors[constructors.findIdx? (·.name == constructor.name) |>.get!]!
+          let proof ← if recursiveFields.isEmpty then do
+              let publicResult := mkAppN publicMinor fields
+              let rollCtor := eqi.refl' ownerShape.level ownerPrivateCarrier
+                (mkApp roll publicMajor)
+              let agreement ← mutualConstructorAgreement all constructors members certificate eqi
+                owner constructor parameters privateFields levels
+              let coreIota := mkAppN (.const (privateIota! ownerMember constructor.name)
+                  plan.recLevels)
+                (parameters ++ plan.privateMotives ++ plan.privateMinors ++ privateFields)
+              let arguments := #[ownerPrivateCarrier, ownerPublicCarrier, motives[ownerIndex]!,
+                roll, unroll, unrollRoll, privateMajor, publicMajor, rollCtor,
+                publicResult, plan.cores[ownerIndex]!, agreement, coreIota]
+              match ← applyZeroFieldOneLayerCompatibility
+                  [ownerShape.level.normalize.dec.getD .zero, equalityLevel]
+                  arguments localProposition with
+              | .ok proof => pure proof
+              | .error message => badShape s!"{name}'s zero-field compatibility failed: {message}"
+            else do
+              let recursiveIndex := recursiveFields[0]!
+              let target := fieldShape[recursiveIndex]!.target?.get!
+              let targetIndex := all.idxOf target
+              let targetShape := familyMember! members target
+              let targetMember := familyCertificateMember! certificate target
+              let publicField := fields[recursiveIndex]!
+              let privateField := privateFields[recursiveIndex]!
+              let publicFieldType ← inferType publicField
+              let privateFieldType ← inferType privateField
+              let rollField := mkAppN (.const targetMember.roll levels) parameters
+              let unrollField := mkAppN (.const targetMember.unroll levels) parameters
+              let sectionField := mkAppN (.const targetMember.unrollRoll levels) parameters
+              let privateCtor ← withLocalDeclD `field privateFieldType fun field =>
+                mkLambdaFVars #[field] <| mkAppN (.const privateConstructor levels)
+                  (parameters ++ privateFields.set! recursiveIndex field)
+              let publicCtor ← withLocalDeclD `field publicFieldType fun field =>
+                mkLambdaFVars #[field] <| mkAppN (.const (publicConstructor constructor.name) levels)
+                  (parameters ++ fields.set! recursiveIndex field)
+              let rollCtor ← withLocalDeclD `field publicFieldType fun field => do
+                let lhs := mkApp roll (mkApp publicCtor field)
+                mkLambdaFVars #[field] <| eqi.refl' ownerShape.level ownerPrivateCarrier lhs
+              let privateIH ← withLocalDeclD `field privateFieldType fun field =>
+                mkLambdaFVars #[field] (mkApp plan.cores[targetIndex]! field)
+              let publicIH ← withLocalDeclD `field publicFieldType fun field =>
+                mkLambdaFVars #[field] (mkApp plan.publicRecursors[targetIndex]! field)
+              let ihAgreement ← withLocalDeclD `field privateFieldType fun field => do
+                let expected := eqi.mk' (← ilevel (mkApp privateIH field))
+                  (← inferType (mkApp privateIH field))
+                  (mkApp publicIH (mkApp unrollField field)) (mkApp privateIH field)
+                let arguments := #[
+                  mkAppN (.const targetMember.privateSelf levels) parameters,
+                  mkAppN (.const targetMember.publicSelf levels) parameters,
+                  motives[targetIndex]!, rollField, unrollField, sectionField,
+                  mkAppN (.const targetMember.rollUnroll levels) parameters,
+                  plan.cores[targetIndex]!, field]
+                let proof ← match ← applyOneLayerIHCompatibility
+                    [targetShape.level.normalize.dec.getD .zero, ← ilevel (mkApp privateIH field)]
+                    arguments expected with
+                  | .ok proof => pure proof
+                  | .error message => badShape s!"{name}'s IH compatibility failed: {message}"
+                mkLambdaFVars #[field] proof
+              let minor ← withMutualMinorBinders (← inferType publicMinor)
+                  (publicConstructor constructor.name) constructor.numFields
+                  fun binders minorFields hypotheses _ => do
+                unless hypotheses.size == 1 do
+                  badShape s!"{constructor.name}'s public minor has {hypotheses.size} hypotheses"
+                withLocalDeclD `field publicFieldType fun field => do
+                  let ihType ← inferType (mkApp publicIH field)
+                  withLocalDeclD `ih ihType fun ih => do
+                    let mut arguments := #[]
+                    for binder in binders do
+                      if let some fieldIndex := minorFields.findIdx? (· == binder) then
+                        arguments := arguments.push <|
+                          if fieldIndex == recursiveIndex then field else fields[fieldIndex]!
+                      else arguments := arguments.push ih
+                    mkLambdaFVars #[field, ih] (mkAppN publicMinor arguments)
+              let agreement ← withLocalDeclD `field privateFieldType fun field => do
+                let proof ← mutualConstructorAgreement all constructors members certificate eqi
+                  owner constructor parameters (privateFields.set! recursiveIndex field) levels
+                mkLambdaFVars #[field] proof
+              let coreIota ← withLocalDeclD `field privateFieldType fun field =>
+                mkLambdaFVars #[field] <| mkAppN
+                  (.const (privateIota! ownerMember constructor.name) plan.recLevels)
+                  (parameters ++ plan.privateMotives ++ plan.privateMinors ++
+                    privateFields.set! recursiveIndex field)
+              let H := motives[targetIndex]!
+              let arguments := #[ownerPrivateCarrier, ownerPublicCarrier,
+                privateFieldType, publicFieldType, motives[ownerIndex]!, H,
+                roll, unroll, unrollRoll, rollField, unrollField, sectionField,
+                privateCtor, publicCtor, rollCtor, privateIH, publicIH, ihAgreement,
+                minor, plan.cores[ownerIndex]!, agreement, coreIota, publicField]
+              let proof ← match ← applyOneLayerCompatibility
+                  [ownerShape.level.normalize.dec.getD .zero,
+                    targetShape.level.normalize.dec.getD .zero,
+                    equalityLevel, ← ilevel (mkApp H publicField)]
+                  arguments localProposition with
+                | .ok proof => pure proof
+                | .error message => badShape s!"{name}'s compatibility failed: {message}"
+              pure proof
+          let body := eqi.mk' equalityLevel alpha lhs rhs
+          let some fieldsType := closeForallsExact? constructorType fields body
+            | badShape s!"{constructor.name}'s exact field telescope is too short"
+          let some theoremType := closeForallsExact? recursorType pre fieldsType
+            | badShape s!"{sourceRecursor.name}'s exact prefix is too short"
+          let value ← mkLambdaFVars (pre ++ fields) proof
+          pure <| Declaration.thmDecl
+            { name, levelParams := sourceRecursor.levelParams, type := theoremType, value }
+      addChecked declaration
+      declarations := declarations.push declaration
+      iotas := iotas.push (ownerIndex, constructor.name, name)
+  return { recursorIso with decls := declarations, iotas }
+
+/-- Complete bounded plain-mutual one-layer adapter. -/
+def mutualOneLayerIso (source : EDecl) (reserved : Std.HashSet Name)
+    (buildRoot? : Option Name := none) : GenM Iso := do
+  let (fields, members) ← mutualOneLayerFields source reserved buildRoot?
+  buildMutualOneLayerRecursors source reserved fields members
+
 end InductiveModels
