@@ -104,7 +104,7 @@ jobs:
             focused)
               test/scripts/check-mathlib-result.sh
               build_serially \
-                clitest generationflagstest checktest ordertest incrementalordertest namingtest \
+                clitest supervisortest generationflagstest checktest ordertest incrementalordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
                 defaultctoriotatest sourcestructuresyntaxtest composedrecursorsyntaxtest \
                 projectiontest structureetatest deepimaxboxtest \
@@ -112,6 +112,7 @@ jobs:
                 vanishingerasuretest transparentowneraliasestest \
                 exportsyntaxnormalizationtest basisvalidationtest stagedwritertest
               lake exe clitest
+              lake exe supervisortest --run-tests "$GITHUB_WORKSPACE/.lake/build/bin/supervisortest"
               lake exe generationflagstest
               lake exe checktest "$GITHUB_WORKSPACE"
               lake exe ordertest "$GITHUB_WORKSPACE"
@@ -135,7 +136,7 @@ jobs:
               lake exe exportsyntaxnormalizationtest
               lake exe basisvalidationtest
               lake exe stagedwritertest "$GITHUB_WORKSPACE"
-              count=24
+              count=25
               ;;
             mono)
               build_serially modelgen monotest mainclitest

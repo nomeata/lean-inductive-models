@@ -4,6 +4,7 @@ import Modelgen.Mono
 import Modelgen.Order
 import Modelgen.Output
 import Modelgen.Spool
+import Modelgen.Supervisor
 
 /-!
 `modelgen [OPTIONS] IN.ndjson`
@@ -413,7 +414,7 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
   else
     runWithWorkspace config none
 
-def main (args : List String) : IO UInt32 := do
+def workerMain (args : List String) : IO UInt32 := do
   Modelgen.Output.containToolErrors do
     match Modelgen.Cli.parseArgs args with
     | .error error =>
@@ -421,3 +422,6 @@ def main (args : List String) : IO UInt32 := do
         IO.eprintln Modelgen.Cli.usage
         return exitToolError
     | .ok config => run config
+
+def main (args : List String) : IO UInt32 :=
+  Modelgen.Supervisor.supervise workerMain args

@@ -597,7 +597,7 @@ not the complete correctness matrix. The complete matrix is:
 
 ```console
 correctness_targets=(
-  test monotest clitest generationflagstest checktest ordertest
+  test monotest clitest supervisortest generationflagstest checktest ordertest
   incrementalordertest namingtest drivernamingtest privatealiastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
   composedrecursorsyntaxtest
@@ -611,6 +611,7 @@ build_serially "${correctness_targets[@]}"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe test "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe monotest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe clitest
+TMPDIR="$PWD/_tmp/build-tmp" lake exe supervisortest --run-tests "$PWD/.lake/build/bin/supervisortest"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe generationflagstest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe checktest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe ordertest "$PWD"

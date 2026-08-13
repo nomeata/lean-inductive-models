@@ -1,6 +1,7 @@
 import Modelgen.Check
 import Modelgen.Naming
 import Modelgen.Output
+import Modelgen.Supervisor
 
 set_option maxRecDepth 4096
 
@@ -25,7 +26,8 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
 def defaultModelgenEnv : Array (String × Option String) :=
   #[("MODELGEN_LEGACY_OUTPUT", none), ("MODELGEN_RAW_SPOOL", none),
     ("MODELGEN_OUTPUT_BACKEND_TRACE", none),
-    ("MODELGEN_PLANNER_LEVEL_TRACE", none)]
+    ("MODELGEN_PLANNER_LEVEL_TRACE", none),
+    (Modelgen.Supervisor.workerMarker, none)]
 
 def runModelgenWithEnv (binary : String) (args : List String)
     (env : Array (String × Option String)) (input? : Option String := none) :
@@ -530,6 +532,11 @@ def main (args : List String) : IO UInt32 := do
   -- This succeeds once all generated model families precede their owners; it
   -- is the integration seam between the CLI and the ordering repair.
   let defaults ← runModelgen binary [nested]
+  let directWorker ← runModelgenWithEnv binary [nested]
+    #[(Modelgen.Supervisor.workerMarker, some "1")]
+  state := state.check "supervisor preserves an ordinary CLI run byte-for-byte" <|
+    defaults.exitCode == directWorker.exitCode && defaults.stdout == directWorker.stdout &&
+      defaults.stderr == directWorker.stderr
   state := state.check "defaults succeed" (defaults.exitCode == 0)
   state := state.check "defaults write an export to stdout" (!defaults.stdout.isEmpty)
   state := state.check "diagnostics stay off stdout"
