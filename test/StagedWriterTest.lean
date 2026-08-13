@@ -52,6 +52,19 @@ def rawFastPathRejected (path text : String) : IO Bool := do
   | .ok (_, certificate) => return !certificate.canonical
   | .error _ => return false
 
+def plannedSourceRejected (scratch path text : String) : IO Bool := do
+  IO.FS.writeFile path text
+  let ordinary ← parseHandleAt path
+  unless ordinary matches .ok _ do return false
+  Spool.withWorkspace scratch fun workspace => do
+    let tee ← Spool.ParseTee.create workspace
+    let staged ← IO.FS.withFile path .read fun handle =>
+      parseHandleWithSink handle tee.sink (analyse := false) (allowDuplicateNames := true)
+    let .ok (output, certificate) := staged | return false
+    let sizes ← tee.finish
+    return (← Spool.PlannedSourceReader.create tee certificate sizes output.decls.size) matches
+      .error _
+
 def bothReject (whole streamed : Except String Export) : Bool :=
   match whole, streamed with
   | .error _, .error _ => true
@@ -666,6 +679,14 @@ def main (args : List String) : IO UInt32 := do
     (← rawFastPathRejected sparsePath sparse)
   state := state.check "raw certification rejects arena overwrites"
     (← rawFastPathRejected overwritePath overwrite)
+  let interleavedOverwrite := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"Before\"}}",
+    "{\"ie\":0,\"sort\":0}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":0}}",
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"After\"}}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":0}}"]
+  state := state.check "planned source rejects interleaved arena snapshots" <|
+    ← plannedSourceRejected scratch parserCompatibilityPath interleavedOverwrite
 
   let rawNoLf := (rawCanonical.dropEnd 1).toString
   let rawWhitespace := " " ++ rawCanonical
@@ -679,6 +700,10 @@ def main (args : List String) : IO UInt32 := do
     (← rawFastPathRejected rawBlankPath rawBlank)
   state := state.check "raw certification rejects CRLF records"
     (← rawFastPathRejected rawCrlfPath rawCrlf)
+  state := state.check "planned source falls back for missing final LF" <|
+    ← plannedSourceRejected scratch rawNoLfPath rawNoLf
+  state := state.check "planned source falls back for CRLF input" <|
+    ← plannedSourceRejected scratch rawCrlfPath rawCrlf
 
   let exceptionPathsRef ← IO.mkRef (none : Option (Array System.FilePath))
   let cleanupAfterException ← try
