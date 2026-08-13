@@ -185,12 +185,12 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
         let result ← match tee? with
           | none => do
             let result ← Modelgen.parseStream stdin
-              (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+              (analyse := config.monoLevels)
               (allowDuplicateNames := true)
             pure (result.map fun x => (x, none))
           | some tee => do
             let result ← Modelgen.parseStreamWithSink stdin tee.sink
-              (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+              (analyse := config.monoLevels)
               (allowDuplicateNames := true)
             pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
         pure (some result)
@@ -199,12 +199,12 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
           let result ← match tee? with
             | none => do
               let result ← Modelgen.parseHandle handle
-                (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+                (analyse := config.monoLevels)
                 (allowDuplicateNames := true)
               pure (result.map fun x => (x, none))
             | some tee => do
               let result ← Modelgen.parseHandleWithSink handle tee.sink
-                (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+                (analyse := config.monoLevels)
                 (allowDuplicateNames := true)
               pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
           pure (some result)

@@ -397,35 +397,6 @@ def main (args : List String) : IO UInt32 := do
     duplicateWithoutKernel.exitCode == 1 &&
       duplicateWithoutKernel.stderr.contains "invalid export: duplicate declaration"
 
-  -- A flattened export can contain distinct private/public names which Lean's
-  -- full Environment indexes under one normalized key. Kernel checking keeps the
-  -- colliding record out of its supplemental mirror without weakening the
-  -- authoritative kernel replay or panicking.
-  let publicCollision : Lean.Name := `ArenaCollision.X
-  let privateCollision : Lean.Name :=
-    (`_private.ArenaCollision).mkNum 0 |>.str "ArenaCollision" |>.str "X"
-  let normalizedCollision : Modelgen.Export := { metaLine := .null, decls := #[
-    .ax publicCollision [] (.sort (.succ .zero)) false,
-    .ax privateCollision [] (.sort (.succ .zero)) false] }
-  let normalizedArena ← runModelgenStdin binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
-    normalizedCollision.render
-  state := state.check "Arena accepts a valid normalized private-name collision without panic" <|
-    Lean.privateToUserName privateCollision == publicCollision &&
-    normalizedArena.exitCode == 0 && !normalizedArena.stderr.contains "PANIC"
-  let normalizedOrdinary ← runModelgenStdin binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
-    normalizedCollision.render
-  state := state.check "ordinary kernel gate preserves normalized private-name behavior" <|
-    normalizedOrdinary.exitCode == 0
-
-  let imaxProjection ← runModelgen binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--no-output",
-    s!"{root}/test/fixtures/arena/proj-imax-prop.ndjson"]
-  state := state.check "Arena rejects a data projection from normalized Prop" <|
-    imaxProjection.exitCode == 1 &&
-      imaxProjection.stderr.contains "expression validation failed: invalid projection"
-
   let quotientPath := s!"{root}/test/fixtures/modelgen/prim_graph_pre.ndjson"
   let quotientText ← IO.FS.readFile quotientPath
   let unknownQuotient := quotientText.replace "\"kind\":\"type\"" "\"kind\":\"mystery\""

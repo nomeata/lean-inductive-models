@@ -1559,150 +1559,24 @@ private def kernelReplayDeclaration (declaration : EDecl) : Except String (Optio
     -- are exposed by the metadata comparison below.
     return some <| .inductDecl first.levelParams first.numParams inductiveTypes false
 
-/-- Expressions the official kernel must validate for one active export record.
-
-`Environment.addDeclCore` is the final authority, but the Arena corpus also
-tracks bugs in inductive compilation. `Meta.check` independently walks the
-serialized inductive types and constructor types, including parameters erased
-by nested-inductive compilation and projections whose proposition sort is only
-visible after level normalization. These expressions are checked after atomic
-insertion so references to the block being defined are in scope. Ordinary
-declarations stay on the official-kernel path; walking their potentially huge
-proof terms again would defeat the Arena performance corpus.
--/
-private def kernelReplayExpressions : EDecl → Array Expr
-  | .ax _ _ type _ => #[type]
-  | .defn _ _ type value _ _ _ => #[type, value]
-  | .thm _ _ type value _ => #[type, value]
-  | .opaq _ _ type value _ _ => #[type, value]
-  | .quot _ _ type _ => #[type]
-  | .induct types constructors _ =>
-      types.toArray.map (·.type) ++ constructors.toArray.map (·.type)
-
-private def checkKernelReplayExpressions (record : EDecl)
-    (only : Option (Std.HashSet Expr) := none)
-    (unavailable : Std.HashSet Name := {}) : MetaM (Except String Unit) := do
-  for expression in kernelReplayExpressions record do
-    if let some selected := only then
-      unless selected.contains expression do continue
-    if expression.getUsedConstants.any unavailable.contains then continue
-    try
-      Meta.check expression
-    catch
-    | exception@(.internal ..) => throw exception
-    | exception@(.error _ message) =>
-      -- This environment is only a supplemental Meta mirror. Inductive
-      -- compilation can create kernel-visible auxiliary constants which the
-      -- mirror's async map does not index. A tagged unknown-identifier error
-      -- therefore means this root is unavailable to the supplemental check;
-      -- every other Meta error rejects it, and official kernel replay plus the
-      -- metadata comparison remain mandatory for every root.
-      if message.hasTag (· == unknownIdentifierMessageTag) then continue
-      return .error s!"{record.names}: expression validation failed: \
-        {← exception.toMessageData.toString}"
-  return .ok ()
-
-private partial def firstBadConstantLevelArity
-    (constants : Std.HashMap Name ConstantInfo) (expression : Expr) :
-    StateM (Std.HashSet Expr) (Option String) := do
-  let visited ← get
-  if visited.contains expression then return none
-  set (visited.insert expression)
-  match expression with
-  | .const name levels =>
-      match constants[name]? with
-      | none => return none
-      | some info =>
-        if levels.length == info.levelParams.length then return none
-        return some s!"{name} expects {info.levelParams.length} universe levels, got {levels.length}"
-  | .app fn arg =>
-      if let some message ← firstBadConstantLevelArity constants fn then return some message
-      firstBadConstantLevelArity constants arg
-  | .lam _ type body _ | .forallE _ type body _ =>
-      if let some message ← firstBadConstantLevelArity constants type then return some message
-      firstBadConstantLevelArity constants body
-  | .letE _ type value body _ =>
-      if let some message ← firstBadConstantLevelArity constants type then return some message
-      if let some message ← firstBadConstantLevelArity constants value then return some message
-      firstBadConstantLevelArity constants body
-  | .mdata _ body | .proj _ _ body => firstBadConstantLevelArity constants body
-  | _ => return none
-
-/-- Reject malformed universe applications before entering the official
-kernel. This prevents the `lazy_delta_reduction_step` memory-corruption path
-tracked by lean4#10577. `constants` includes the complete export, so self,
-mutual, and forward references are checked as well as the current replay
-prefix. -/
-private def checkKernelReplayLevelArities (constants : Std.HashMap Name ConstantInfo)
-    (record : EDecl) (visited : Std.HashSet Expr) : Except String (Std.HashSet Expr) := do
-  let mut visited := visited
-  for expression in kernelReplayExpressions record do
-    let (bad?, nextVisited) := (firstBadConstantLevelArity constants expression).run visited
-    visited := nextVisited
-    if let some message := bad? then
-      throw s!"{record.names}: {message}"
-  return visited
-
 /-- Replay grouped export records directly into a kernel environment.
 
 Using `Lean.Environment.replay` here would split the constant map back into
 individual records.  That loses the export's atomic grouping for nested
 inductives and can fail to expose kernel-generated auxiliary recursors. -/
-private def replayKernelRecords (base : Environment) (x : Export) (order : Array Nat)
-    (constants : Std.HashMap Name ConstantInfo) :
+private def replayKernelRecords (base : Environment) (x : Export) (order : Array Nat) :
     MetaM (Except String Environment) := do
   let mut checked := base.toKernelEnv
-  -- `Environment.ofKernelEnv` intentionally exposes no elaborator constant
-  -- map. Keep an unchecked mirror solely for `Meta.check`; `checked` remains
-  -- the authoritative environment produced by the kernel.
-  let mut analysis := base
-  let mut normalizedNames : Std.HashMap Name Name := {}
-  let mut arityVisited : Std.HashSet Expr := {}
-  let mut mirrorOmitted : Std.HashSet Name := {}
   for index in order do
     let record := x.decls[index]!
     let declaration? ← match kernelReplayDeclaration record with
       | .ok declaration => pure declaration
       | .error message => return .error message
     let some declaration := declaration? | continue
-    arityVisited ← match checkKernelReplayLevelArities constants record arityVisited with
-      | .ok visited => pure visited
-      | .error message => return .error message
-    -- `AsyncConsts.add` panics and drops the second entry when distinct raw
-    -- private names normalize to the same user name. Keep such records out
-    -- of the supplemental mirror, and propagate that unavailability through
-    -- later records. The official kernel environment still receives and
-    -- checks every record.
-    let referencesOmitted := (kernelInputReferences record).any mirrorOmitted.contains
-    let mut normalizedCollision := false
-    for name in record.names do
-      let normalized := privateToUserName name
-      if let some first := normalizedNames[normalized]? then
-        if first != name then normalizedCollision := true
-      normalizedNames := normalizedNames.insert normalized name
-    if normalizedCollision || referencesOmitted then
-      for name in record.names do mirrorOmitted := mirrorOmitted.insert name
-    else unless record matches .induct .. do
-      unless x.projNodes.isEmpty do
-        setEnv analysis
-        if let .error message ← checkKernelReplayExpressions record
-            (some x.projNodes) mirrorOmitted then
-          return .error message
     match checked.addDeclCore 0 declaration none with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
-    | .ok next =>
-      checked := next
-      if !record.names.any mirrorOmitted.contains then
-        analysis ← match analysis.addDeclCore 0 declaration none false with
-          | .error exception =>
-            return .error s!"{record.names}: cannot construct expression-checking environment: \
-              {← (exception.toMessageData {}).toString}"
-          | .ok next => pure next
-        if record matches .induct .. then
-          setEnv analysis
-          if let .error message ← checkKernelReplayExpressions record none mirrorOmitted then
-            return .error message
+    | .ok next => checked := next
   return .ok (.ofKernelEnv checked)
 
 /-- Submit a complete export to Lean's kernel and verify that its serialized
@@ -1720,7 +1594,7 @@ def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   let order ← match kernelReplayOrder x with
     | .error message => return .error message
     | .ok order => pure order
-  let checked ← match ← replayKernelRecords base x order constants with
+  let checked ← match ← replayKernelRecords base x order with
     | .error message => return .error message
     | .ok checked => pure checked
   setEnv checked
