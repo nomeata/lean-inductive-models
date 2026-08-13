@@ -154,13 +154,6 @@ structure CompactIsland where
   sourceGlobalExtra? : Option Check.GlobalExtraRecord
   diagnosticOwners : Std.HashSet Name
 
-/-- One staged island after its generated expressions have been serialized.
-The commit contains byte spans; `compact` contains names and dependency facts
-only, so this value cannot retain the generated expression graph. -/
-structure StagedIsland where
-  compact : CompactIsland
-  commit : Spool.IslandCommit
-
 /-- Transaction endpoint for accepted generated islands. The Driver calls this
 only after ordering, exact statement checking, owner-free kernel replay, and
 support installation have all succeeded. -/
@@ -236,6 +229,17 @@ structure StagedPlan where
   /-- A semantic condition made AST-dropping unavailable. The private stage
   has not been published; callers must rerun the ordinary full-AST filter. -/
   unavailable? : Option String := none
+
+/-- Value-only shadow of a compact generation pass. It contains the same final
+schedule and structural verdict as `StagedPlan`, but no physical spool commits
+and no generated declaration expressions. -/
+structure CompactPlan where
+  declarations : Array StagedLocator := #[]
+  checkReport : Check.Report := { familiesChecked := 0, violations := #[] }
+  unavailable? : Option String := none
+  /-- A regression counter for the payload-retention contract. Compact discard
+  never appends generated declarations to a cumulative output array. -/
+  retainedGeneratedRecords : Nat := 0
 
 /-- Physical declaration payload selected by one compact output row. -/
 inductive StagedDeclarationSpan where
@@ -2325,12 +2329,33 @@ structure FilterSourceStep where
   generatedRecords : Nat
   deriving Inhabited, Repr, BEq
 
+/-- Output retention is an explicit policy, not an accidental consequence of
+whether a physical sink happens to exist. `shadowSpool` is the test-only mode
+which retains both the historical full output and compact physical commits so
+the two implementations can be compared in one generation pass. -/
+private inductive RetentionMode where
+  | fullOracle
+  | shadowSpool (sink : IslandSink)
+  | compactDiscard
+  | compactSpool (sink : IslandSink)
+
+private def RetentionMode.isCompact : RetentionMode → Bool
+  | .fullOracle => false
+  | .shadowSpool .. | .compactDiscard | .compactSpool .. => true
+
+private def RetentionMode.retainsOracle : RetentionMode → Bool
+  | .fullOracle | .shadowSpool .. => true
+  | .compactDiscard | .compactSpool .. => false
+
+private def RetentionMode.sink? : RetentionMode → Option IslandSink
+  | .shadowSpool sink | .compactSpool sink => some sink
+  | .fullOracle | .compactDiscard => none
+
 private structure FilterContext where
   source : Export
   checkRecursors : Bool
   generation : Cli.Config
-  sink? : Option IslandSink
-  retainOracle : Bool
+  retention : RetentionMode
   exactTransform : EDecl → EDecl
   sourceSyntax : Check.SyntaxIndex
   sourceNormalizer : ExactNormalizationEnv
@@ -2346,7 +2371,8 @@ private structure FilterState where
   persistentSyntax : Check.SyntaxIndex
   legacyOut : Array EDecl := #[]
   report : Report := {}
-  staged : Array StagedIsland := #[]
+  compactIslands : Array CompactIsland := #[]
+  commits : Array Spool.IslandCommit := #[]
   stagedRecords : Array StagedRecord := #[]
   scheduledOrdinal : Nat := 0
   islandStatements : Check.StatementReport :=
@@ -2366,8 +2392,10 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     (d : EDecl) : MetaM FilterFeedResult := do
   let x := context.source
   let generation := context.generation
-  let sink? := context.sink?
-  let retainOracle := context.retainOracle
+  let retention := context.retention
+  let sink? := retention.sink?
+  let compactMode := retention.isCompact
+  let retainOracle := retention.retainsOracle
   let exactTransform := context.exactTransform
   let sourceSyntax := context.sourceSyntax
   let sourceNormalizer := context.sourceNormalizer
@@ -2380,7 +2408,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut persistentSyntax := state.persistentSyntax
   let mut legacyOut := state.legacyOut
   let mut rep := state.report
-  let mut staged := state.staged
+  let mut compactIslands := state.compactIslands
+  let mut commits := state.commits
   let mut stagedRecords := state.stagedRecords
   let scheduledOrdinal := state.scheduledOrdinal
   let mut islandStatements := state.islandStatements
@@ -2570,14 +2599,17 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           extras={compact.globalExtras.size}, families={compact.families.size}"
       modeledSourceFamilies := compact.sourceFamilies
       modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
-      if let some sink := sink? then
-        let commit ← sink.commit orderedGenerated
-        unless orderedGenerated.size == commit.declarations.size do
-          throwError "staged island cardinality mismatch for {d.names}: \
-            records={orderedGenerated.size}, summaries={compact.summaries.size}, \
-            extras={compact.globalExtras.size}, spans={commit.declarations.size}"
-        let islandNumber := staged.size
+      if compactMode then
+        let islandNumber := compactIslands.size
         let tagged := Order.tagIsland islandNumber compact.summaries
+        let compact := { compact with summaries := tagged }
+        if let some sink := sink? then
+          let commit ← sink.commit orderedGenerated
+          unless orderedGenerated.size == commit.declarations.size do
+            throwError "staged island cardinality mismatch for {d.names}: \
+              records={orderedGenerated.size}, summaries={compact.summaries.size}, \
+              extras={compact.globalExtras.size}, spans={commit.declarations.size}"
+          commits := commits.push commit
         for localOrdinal in [:tagged.size] do
           stagedRecords := stagedRecords.push {
             summary := tagged[localOrdinal]!
@@ -2585,12 +2617,10 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             families := compact.families[localOrdinal]!.map (·.inIsland islandNumber)
             checkIsland? := some islandNumber
             locator := .generated islandNumber localOrdinal }
-        staged := staged.push {
-          compact := { compact with summaries := tagged }
-          commit }
+        compactIslands := compactIslands.push compact
       let persistentRecords := generatedSupportRecords orderedGenerated islandModels
-      if sink?.isSome then
-        let islandNumber := staged.size - 1
+      if compactMode then
+        let islandNumber := compactIslands.size - 1
         for record in persistentRecords do
           for name in record.names do
             persistentSupportOrigins := persistentSupportOrigins.insert name islandNumber
@@ -2612,12 +2642,12 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   else
     mainEnv ← getEnv
   if retainOracle then legacyOut := legacyOut.push d
-  if sink?.isSome then
+  if compactMode then
     let some firstName := d.names.head? | throwError "source declaration has no name"
     let some rawOrdinal := rawOrdinals[firstName]?
       | throwError "scheduled source declaration {firstName} lost its raw ordinal"
     let modeledIsland? ← if modeledSourceFamilies.isEmpty then pure none else
-      match staged.size with
+      match compactIslands.size with
       | 0 => throwError "modeled source family {d.names} has no committed generated island"
       | size + 1 => pure (some size)
     stagedRecords := stagedRecords.push {
@@ -2645,31 +2675,34 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       generated := rep.generated.extract reportedBefore rep.generated.size
       generatedRecords := out.size }
   return .next {
-    mainEnv, persistentSyntax, legacyOut, report := rep, staged, stagedRecords,
+    mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, commits, stagedRecords,
     scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
     persistentSupportOrigins, sourceSteps }
 
 /-- Complete compact ordering and checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
 private def FilterState.finalize (state : FilterState) (context : FilterContext) :
-    MetaM (Array EDecl × Report × StagedPlan) := do
+    MetaM (Array EDecl × Report × CompactPlan × StagedPlan) := do
   let x := context.source
-  let sink? := context.sink?
-  let retainOracle := context.retainOracle
+  let retention := context.retention
+  let sink? := retention.sink?
+  let compactMode := retention.isCompact
+  let retainOracle := retention.retainsOracle
   let sourceSyntax := context.sourceSyntax
   let reserved := context.reserved
   let legacyOut := state.legacyOut
-  let staged := state.staged
+  let compactIslands := state.compactIslands
+  let commits := state.commits
   let stagedRecords := state.stagedRecords
   let islandStatements := state.islandStatements
   let persistentSupportOrigins := state.persistentSupportOrigins
   let mut rep := state.report
-  let stagedOrder ← if sink?.isSome then
+  let stagedOrder ← if compactMode then
       match Order.summaryRecordOrder (stagedRecords.map (·.summary)) with
       | .ok order => pure order
       | .error error => throwError "cannot compactly order staged records: {repr error}"
     else pure #[]
-  let compactCheckReport : Check.Report ← if sink?.isSome then
+  let compactCheckReport : Check.Report ← if compactMode then
       let orderedRecords := stagedOrder.map fun i =>
         { owner := stagedRecords[i]!.summary.owner
           modelSlots := stagedRecords[i]!.summary.modelSlots
@@ -2680,13 +2713,13 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
       | .error message => throwError "invalid compact output certificate: {message}"
     else
       pure ({ familiesChecked := 0, violations := #[] } : Check.Report)
-  let compactUnavailable? := if sink?.isSome then
+  let compactUnavailable? := if compactMode then
       compactAvailabilityError? stagedRecords persistentSupportOrigins
     else none
-  let compactStatementReport := if sink?.isSome then
+  let compactStatementReport := if compactMode then
     let orderedGlobals := stagedOrder.map fun i => stagedRecords[i]!.globalExtra
-    let diagnosticOwners := staged.foldl (init := ({} : Std.HashSet Name))
-      fun owners island => island.compact.diagnosticOwners.toArray.foldl
+    let diagnosticOwners := compactIslands.foldl (init := ({} : Std.HashSet Name))
+      fun owners island => island.diagnosticOwners.toArray.foldl
         (fun owners owner => owners.insert owner) owners
     let compactGlobal := Check.globalExtrasFromRecordsFor orderedGlobals diagnosticOwners
     ({ islandStatements with
@@ -2709,7 +2742,7 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
           islands={repr islandStatements}, aggregate={repr finalLocal}"
       let fullReport :=
         Check.checkStatementFamiliesWithIndex finalExport finalIndex finalFamilies
-      if sink?.isSome then
+      if compactMode then
         let fullOrder ← match Order.recordOrder finalExport with
           | .ok order => pure order
           | .error error => throwError "full oracle cannot order staged records: {repr error}"
@@ -2733,20 +2766,35 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
   rep := { rep with stmtChecked := statementReport.statementsChecked }
   rep := { rep with
     stmtErrors := statementReport.violations.map fun violation => violation.message }
+  unless retainOracle || legacyOut.isEmpty do
+    throwError "compact filter retained {legacyOut.size} cumulative declaration records"
+  if sink?.isNone && !commits.isEmpty then
+    throwError "sink-free compact filter retained {commits.size} physical island commits"
+  if sink?.isSome && commits.size != compactIslands.size then
+    throwError "compact spool committed {commits.size} of {compactIslands.size} islands"
+  let declarations := stagedOrder.map fun index => stagedRecords[index]!.locator
+  let compactPlan : CompactPlan := {
+    declarations
+    checkReport := compactCheckReport
+    unavailable? := compactUnavailable?
+    retainedGeneratedRecords := if retainOracle then
+      legacyOut.foldl (fun count declaration =>
+        if declaration.names.any fun name => !reserved.contains name then count + 1 else count) 0
+    else 0 }
   let emissionPlan : StagedPlan := {
-    islands := staged.map (·.commit)
-    declarations := stagedOrder.map fun index => stagedRecords[index]!.locator
+    islands := commits
+    declarations
     checkReport := compactCheckReport
     unavailable? := compactUnavailable? }
-  return (legacyOut, rep, emissionPlan)
+  return (legacyOut, rep, compactPlan, emissionPlan)
 
-/-- Shared generation loop. With a sink, every accepted island is serialized
-and compacted at its close boundary. The full declaration array is retained
-only by callers which explicitly request the legacy final-order/report oracle. -/
+/-- Shared generation loop. Compact modes summarize every accepted island at
+its close boundary. Spool modes additionally serialize it; oracle modes retain
+the historical full declaration array for exact A/B comparison. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
-    (sink? : Option IslandSink) (retainOracle : Bool)
+    (retention : RetentionMode)
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false) :
-    MetaM (Array EDecl × Report × StagedPlan × Array FilterSourceStep) := do
+    MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep) := do
   let scheduled ← match scheduleSource x generation with
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
@@ -2771,7 +2819,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     x.decls.foldl (fun names declaration =>
       declaration.names.foldl (·.insert ·) names) {}
   let context : FilterContext := {
-    source := x, checkRecursors, generation, sink?, retainOracle, exactTransform,
+    source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, sourceNormalizer, sourceSummaries, sourceGlobalExtras,
     sourceFamilyRecords, rawOrdinals, reserved, collectTrace }
   let mut state : FilterState := { mainEnv, persistentSyntax := sourceSyntax }
@@ -2779,14 +2827,14 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     match ← state.feedSource context declaration with
     | .next next => state := next
     | .unreplayable report =>
-      return (x.decls, report, { islands := #[], declarations := #[] }, state.sourceSteps)
-  let (decls, report, plan) ← state.finalize context
-  return (decls, report, plan, state.sourceSteps)
+      return (x.decls, report, {}, {}, state.sourceSteps)
+  let (decls, report, compact, plan) ← state.finalize context
+  return (decls, report, compact, plan, state.sourceSteps)
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _) ← runFilterCore x checkRecursors generation none true
+  let (decls, report, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
   return (decls, report)
 
 /-- Test-facing observer for the declaration-wise transition.  The generated
@@ -2794,8 +2842,8 @@ output and report are produced by the same core invocation as the snapshots;
 ordinary production callers collect no snapshots. -/
 def runFilterWithSourceTrace (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Array EDecl × Report × Array FilterSourceStep) := do
-  let (decls, report, _, steps) ←
-    runFilterCore x checkRecursors generation none true (collectTrace := true)
+  let (decls, report, _, _, steps) ←
+    runFilterCore x checkRecursors generation .fullOracle (collectTrace := true)
   return (decls, report, steps)
 
 /-- Focused exact-syntax regression seam. The transform is applied only to
@@ -2804,8 +2852,8 @@ composed consumer sees them; ordinary production callers use [`runFilter`]. -/
 def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) (transform : EDecl → EDecl) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _) ←
-    runFilterCore x checkRecursors generation none true transform
+  let (decls, report, _, _, _) ←
+    runFilterCore x checkRecursors generation .fullOracle transform
   return (decls, report)
 
 /-- Transitional test oracle. Accepted islands are committed immediately, but
@@ -2813,15 +2861,26 @@ the full output remains live for comparison with final Order/Check. The
 returned plan has already discarded the compact checking summaries. -/
 def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) := do
-  let (decls, report, plan, _) ← runFilterCore x checkRecursors generation (some sink) true
+  let (decls, report, _, plan, _) ←
+    runFilterCore x checkRecursors generation (.shadowSpool sink)
   return (decls, report, plan)
+
+/-- AST-dropping no-output generation. Accepted generated records are checked
+and summarized at island close, then discarded without opening a workspace or
+retaining any physical span. -/
+def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
+    MetaM (Report × CompactPlan) := do
+  let (_, report, compact, _, _) ←
+    runFilterCore x checkRecursors generation .compactDiscard
+  return (report, compact)
 
 /-- AST-dropping staged generation. Accepted generated records are committed at
 island close and never appended to a cumulative declaration array. The result
 contains only ordered declaration locators and spool spans. -/
 def runFilterStaged (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Report × StagedPlan) := do
-  let (_, report, plan, _) ← runFilterCore x checkRecursors generation (some sink) false
+  let (_, report, _, plan, _) ←
+    runFilterCore x checkRecursors generation (.compactSpool sink)
   return (report, plan)
 
 end InductiveModels

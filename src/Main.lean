@@ -124,14 +124,22 @@ def unsupportedDeclines (input : Export) (report : InductiveModels.Report) : Arr
     report.declined.filter fun entry =>
       InductiveModels.declineIsUnsupported alreadyCovered generated entry.1
 
-/-- Initial internal fast-path boundary. Structural output checking consumes
+/-- Shared compact-generation boundary. Structural output checking consumes
 the compact report certified while each family was live. Output kernel checking
 must still replay the exact final byte stream and therefore retains the legacy
-in-memory path. Monomorphization rewrites source declarations, while a no-output
-or no-generation invocation has no staged payload to compose. -/
-def stagedModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  config.output && InductiveModels.generationEnabled config && !config.monoLevels &&
+in-memory path. Monomorphization rewrites source declarations. -/
+def compactModeEligible (config : InductiveModels.Cli.Config) : Bool :=
+  InductiveModels.generationEnabled config && !config.monoLevels &&
     !config.typeCheckOutput
+
+/-- Physical staging is needed only when compact generation must emit bytes. -/
+def stagedModeEligible (config : InductiveModels.Cli.Config) : Bool :=
+  config.output && compactModeEligible config
+
+/-- No-output compact generation retains the same value-only verdict
+certificates but deliberately has no workspace or physical spool. -/
+def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
+  !config.output && compactModeEligible config
 
 private structure RawStage where
   workspace : InductiveModels.Spool.Workspace
@@ -141,6 +149,7 @@ private structure RawStage where
 
 private inductive FilterOutput where
   | full (declarations : Array InductiveModels.EDecl)
+  | discarded (plan : InductiveModels.CompactPlan)
   | staged (raw : RawStage) (stage : InductiveModels.Spool.IslandStage)
       (plan : InductiveModels.StagedPlan)
 
@@ -150,6 +159,7 @@ private def reportOutputBackend (output : FilterOutput) : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
     IO.eprintln s!"output backend: {match output with
       | .full .. => "legacy"
+      | .discarded .. => "compact-discard"
       | .staged .. => "staged"}"
 
 private def mixedComposition (raw : RawStage) (sealed : InductiveModels.Spool.SealedIsland)
@@ -167,7 +177,8 @@ private def mixedComposition (raw : RawStage) (sealed : InductiveModels.Spool.Se
       | .generated span => .generated span }
 
 private def runWithWorkspace (config : InductiveModels.Cli.Config)
-    (workspace? : Option InductiveModels.Spool.Workspace) : IO UInt32 := do
+    (workspace? : Option InductiveModels.Spool.Workspace)
+    (compactEnabled : Bool) : IO UInt32 := do
   let input := config.input.getD ""
   -- Reserve every spool leaf before consuming the input. Failure to establish
   -- the optional tee selects the historical parser; an error after parsing has
@@ -290,7 +301,23 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
 
   let (filterOutput, generationReport) ← if InductiveModels.generationEnabled config then do
       let generated : Except String (FilterOutput × InductiveModels.Report) ← try
-          if let some raw := rawStage? then
+          if compactEnabled && discardModeEligible config then
+            let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
+            let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
+            let ((report, plan), _) ← Lean.Core.CoreM.toIO
+              (Lean.Meta.MetaM.run'
+                (InductiveModels.runFilterDiscarding generationInput false config))
+              context { env }
+            match plan.unavailable? with
+            | none => pure (Except.ok (FilterOutput.discarded plan, report))
+            | some _ =>
+              InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
+              InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
+              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
+                (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
+                context { env }
+              pure (Except.ok (FilterOutput.full decls, fallbackReport))
+          else if let some raw := rawStage? then
             let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
             let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
             let stage ← InductiveModels.Spool.IslandStage.create raw.workspace
@@ -341,6 +368,13 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
     if (unsupportedDeclines parsed generationReport).isEmpty then exitAccepted
     else exitDeclined
   match filterOutput with
+  | .discarded plan =>
+    if config.checkOutput then
+      unless plan.checkReport.violations.isEmpty do
+        reportViolations input "output" plan.checkReport.violations
+        return exitRejected
+      reportCheckSuccess config "output" plan.checkReport
+    return outcome
   | .staged raw stage plan =>
     if config.checkOutput then
       unless plan.checkReport.violations.isEmpty do
@@ -406,13 +440,15 @@ def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   -- The legacy override is retained for deliberate A/B measurements. Statically
   -- ineligible modes never tee their input, and planner trace mode stays on the
   -- full-AST path so a private failed staging attempt cannot duplicate trace lines.
-  if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
-      (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1" &&
-      stagedModeEligible config then
+  let compactEnabled :=
+    (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
+      (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1"
+  if compactEnabled && stagedModeEligible config then
     let scratch := (← IO.currentDir) / "_tmp"
-    InductiveModels.Spool.withOptionalWorkspace scratch (runWithWorkspace config)
+    InductiveModels.Spool.withOptionalWorkspace scratch fun workspace? =>
+      runWithWorkspace config workspace? compactEnabled
   else
-    runWithWorkspace config none
+    runWithWorkspace config none compactEnabled
 
 def workerMain (args : List String) : IO UInt32 := do
   InductiveModels.Output.containToolErrors do
