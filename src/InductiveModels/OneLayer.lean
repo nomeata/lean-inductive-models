@@ -50,6 +50,63 @@ theorem oneLayerRecursorCompatibility
   exact compat (rollField p) (roll (publicCtor p)) p
     (unrollRollField p) (rollCtor p) (unrollRoll (publicCtor p))
 
+/-! The filter replaces its elaboration environment with the input export, so
+tool declarations are deliberately unavailable while models are generated.
+Capture the closed oracle proof as data when this module is elaborated; the
+generator instantiates and inlines this expression, never its declaration
+name. -/
+
+private partial def quoteLevelValue : Level → Expr
+  | .zero => mkConst ``Level.zero
+  | .succ level => mkApp (mkConst ``Level.succ) (quoteLevelValue level)
+  | .max first second => mkApp2 (mkConst ``Level.max)
+      (quoteLevelValue first) (quoteLevelValue second)
+  | .imax first second => mkApp2 (mkConst ``Level.imax)
+      (quoteLevelValue first) (quoteLevelValue second)
+  | .param name => mkApp (mkConst ``Level.param) (toExpr name)
+  | .mvar _ => panic! "a closed theorem contains a universe metavariable"
+
+private def quoteBinderInfoValue : BinderInfo → Expr
+  | .default => mkConst ``BinderInfo.default
+  | .implicit => mkConst ``BinderInfo.implicit
+  | .strictImplicit => mkConst ``BinderInfo.strictImplicit
+  | .instImplicit => mkConst ``BinderInfo.instImplicit
+
+private def quoteLevelListValue : List Level → Expr
+  | [] => mkApp (mkConst ``List.nil [0]) (mkConst ``Level)
+  | level :: levels => mkApp3 (mkConst ``List.cons [0]) (mkConst ``Level)
+      (quoteLevelValue level) (quoteLevelListValue levels)
+
+private partial def quoteClosedExprValue : Expr → Expr
+  | .bvar index => mkApp (mkConst ``Expr.bvar) (toExpr index)
+  | .fvar _ => panic! "a closed theorem contains a free variable"
+  | .mvar _ => panic! "a closed theorem contains a metavariable"
+  | .sort level => mkApp (mkConst ``Expr.sort) (quoteLevelValue level)
+  | .const name levels => mkApp2 (mkConst ``Expr.const) (toExpr name)
+      (quoteLevelListValue levels)
+  | .app function argument => mkApp2 (mkConst ``Expr.app)
+      (quoteClosedExprValue function) (quoteClosedExprValue argument)
+  | .lam name type body info => mkApp4 (mkConst ``Expr.lam) (toExpr name)
+      (quoteClosedExprValue type) (quoteClosedExprValue body) (quoteBinderInfoValue info)
+  | .forallE name type body info => mkApp4 (mkConst ``Expr.forallE) (toExpr name)
+      (quoteClosedExprValue type) (quoteClosedExprValue body) (quoteBinderInfoValue info)
+  | .letE name type value body nondep => mkAppN (mkConst ``Expr.letE) #[toExpr name,
+      quoteClosedExprValue type, quoteClosedExprValue value,
+      quoteClosedExprValue body, toExpr nondep]
+  | .lit literal => mkApp (mkConst ``Expr.lit) (toExpr literal)
+  | .mdata _ body => quoteClosedExprValue body
+  | .proj typeName index subject => mkApp3 (mkConst ``Expr.proj) (toExpr typeName)
+      (toExpr index) (quoteClosedExprValue subject)
+
+open Elab Term in
+elab "oneLayerCompatibilityProof%" : term => do
+  let info ← getConstInfo ``oneLayerRecursorCompatibility
+  let .thmInfo theoremInfo := info
+    | throwError "oneLayerRecursorCompatibility is not a theorem"
+  return quoteClosedExprValue theoremInfo.value
+
+private def oneLayerCompatibilityProof : Expr := oneLayerCompatibilityProof%
+
 /-- Names internal to one private/public one-layer equivalence. -/
 structure OneLayerNames where
   publicNames : PrimInterfaceNames
