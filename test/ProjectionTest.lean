@@ -445,9 +445,13 @@ def main : IO UInt32 := do
     intrinsicFieldsFor propBoundaryRaw `NestedProp == #[0, 1, 2] &&
       intrinsicFieldsFor propBoundaryRaw `MutualPropA == #[0, 1, 2] &&
       intrinsicFieldsFor propBoundaryRaw `MutualPropB == #[0]
+  state := state.check "nested Prop control is generated rather than declined" <|
+    propBoundaryReport.generated.any (fun row => row.1 == `NestedProp) &&
+      !propBoundaryReport.declined.any (fun row => row.1 == `NestedProp)
   state := state.check "nested and mutual Prop controls retain their legacy rule contracts" <|
-    (declarationType? propBoundaryGenerated nestedBoundaryRule).bind outerEqualityRhs? !=
-        some (.bvar 1) &&
+    (declarationType? propBoundaryGenerated nestedBoundaryRule).any fun type =>
+      (outerEqualityRhs? type).any fun rhs =>
+        rhs != .bvar 1 && containsConst ``Eq.rec rhs &&
       (declarationType? propBoundaryGenerated mutualBoundaryRule).bind outerEqualityRhs? ==
         some (.bvar 1) &&
       (declarationType? propBoundaryGenerated mutualBoundaryRule).any (containsConst `optParam)
