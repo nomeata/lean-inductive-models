@@ -432,15 +432,19 @@ def run (root : String) : IO UInt32 := do
   state := state.check "original order breaks ready-node ties"
     (stable'.decls == #[independent, constantProvider, constantUser])
 
-  -- Enabling the nested and mutual branches does not make their fixed support
-  -- relevant when the file contains only a simple owner.  In that case the
-  -- source remains under ordinary stable dependency ordering.  Once a plain
-  -- mutual owner is present, the same support class still hoists atomically.
+  -- Fixed source support is conservative: whenever generation is enabled it
+  -- moves atomically, even if a pre-scan would call every owner unselected.
+  -- Disabling generation entirely retains ordinary stable ordering.
   let nestedMutualOnly := { noGeneration with nested := true, mutualModels := true }
   let unrelatedSupport := exportOf
     #[inductiveRecord [`UnselectedSimple], axDecl `Eq, axDecl `PUnit]
-  state := state.check "support scheduler leaves unrelated records unchanged" <|
+  state := state.check "enabled generation conservatively hoists fixed support" <|
     match scheduleSource unrelatedSupport nestedMutualOnly with
+    | .ok scheduled =>
+      scheduled.decls == #[axDecl `Eq, axDecl `PUnit, inductiveRecord [`UnselectedSimple]]
+    | .error _ => false
+  state := state.check "disabled generation retains ordinary stable order" <|
+    match scheduleSource unrelatedSupport noGeneration with
     | .ok scheduled => scheduled.decls == unrelatedSupport.decls
     | .error _ => false
   let selectedOwner := inductiveRecord [`SelectedA, `SelectedB]
@@ -458,10 +462,45 @@ def run (root : String) : IO UInt32 := do
     | .error _ => false
   let alreadyModeled := exportOf
     #[axDecl (Naming.modelName `SelectedA), selectedOwner, axDecl `Eq, axDecl `PUnit]
-  state := state.check "support scheduler leaves an already-modeled export unchanged" <|
+  state := state.check "fixed support also precedes an already-modeled owner" <|
     match scheduleSource alreadyModeled nestedMutualOnly with
-    | .ok scheduled => scheduled.decls == alreadyModeled.decls
+    | .ok scheduled =>
+      scheduled.decls == #[axDecl `Eq, axDecl `PUnit,
+        axDecl (Naming.modelName `SelectedA), selectedOwner]
     | .error _ => false
+
+  -- The exact eighteen declarations which the full Mathlib run used to reach
+  -- before its late `Eq`.  Their shapes are irrelevant to scheduling; keeping
+  -- the real owner names makes the regression report line up with the census.
+  -- A long independent tail pins that support selection cannot depend on a
+  -- small-prefix accident.
+  let earlyNames : Array Name := #[`LE, `LT, `List, `Array, `Nat.le, `Fin,
+    `HPow, `Pow, `NatPow, `PProd, `OfNat, `BitVec, `UInt8, `ByteArray,
+    `UInt32, `Or, `And, `Char]
+  let earlyOwners := earlyNames.map fun name => inductiveRecord [name]
+  let lateSupport : Array EDecl :=
+    #[axDecl `Eq, axDecl `Nat, axDecl `PSigma', axDecl `PUnit,
+      axDecl `Quot, axDecl `Quot.sound]
+  let irrelevantTail := (Array.range 256).map fun index =>
+    axDecl ((`IrrelevantTail).mkNum index)
+  let supportStress := exportOf (earlyOwners ++ lateSupport ++ irrelevantTail)
+  let supportStress' := scheduleSource supportStress
+    { noGeneration with simple := true, basic := true }
+  state := state.check "all Mathlib early owners follow late fixed support" <|
+    match supportStress' with
+    | .ok scheduled =>
+      [`Eq, `Nat, `PSigma', `PUnit, `Quot, `Quot.sound].all fun support =>
+        earlyNames.all fun owner => before scheduled support owner
+    | .error _ => false
+  state := state.check "post-schedule support certificate accepts the stress order" <|
+    match supportStress' with
+    | .ok scheduled =>
+      (validateScheduledSupport scheduled
+        { noGeneration with simple := true, basic := true }).isOk
+    | .error _ => false
+  state := state.check "post-schedule support certificate rejects the old order" <|
+    (validateScheduledSupport supportStress
+      { noGeneration with simple := true, basic := true }).isError
 
   -- Hoisting a fixed support record hoists its complete predecessor closure,
   -- not merely the named record. Otherwise the persistent replay environment
