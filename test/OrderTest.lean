@@ -490,11 +490,27 @@ def run (root : String) : IO UInt32 := do
 
   -- With generation disabled, scheduling has no preferred class. The filter
   -- is byte/order neutral even when the original order is not alphabetical.
-  let neutralInput := exportOf #[axDecl `NeutralB, axDecl `NeutralA]
-  let neutral ← runFilterState neutralInput noGeneration
+  let neutralOwner := inductiveRecord [`NeutralOwner]
+  let neutralDependent := axDecl `NeutralDependent (.const `NeutralOwner [])
+  let neutralInput := exportOf #[axDecl `NeutralB, neutralOwner,
+    neutralDependent, axDecl `NeutralA]
+  let neutral ← runFilterState neutralInput noGeneration true
   state := state.check "no-generation preserves exact records and rendering" <|
     neutral.output.decls == neutralInput.decls && neutral.output.render == neutralInput.render &&
-      neutral.report.generated.isEmpty && neutral.report.spliced.isEmpty
+      neutral.report.generated.isEmpty && neutral.report.spliced.isEmpty &&
+      neutral.report.maxLivePendingModels == 0 && neutral.report.maxLiveIslandRecords == 0 &&
+      neutral.env.constants.contains `NeutralOwner &&
+      neutral.env.constants.contains `NeutralDependent
+  let neutralShadow ← runFilterStagedState s!"{root}/_tmp" neutralInput noGeneration true
+  let neutralDropped ← runFilterDroppedState s!"{root}/_tmp" neutralInput noGeneration true
+  state := state.check "empty generation skips physical islands in every filter path" <|
+    neutralShadow.output.decls == neutralInput.decls && neutralShadow.report == neutral.report &&
+      neutralDropped.report == neutral.report && neutralShadow.plan.islands.isEmpty &&
+      neutralDropped.plan.islands.isEmpty && neutralShadow.planValid && neutralDropped.planValid &&
+      neutralShadow.plan.declarations.size == neutralInput.decls.size &&
+      neutralDropped.plan.declarations == neutralShadow.plan.declarations &&
+      neutralShadow.env.constants.contains `NeutralOwner &&
+      neutralShadow.env.constants.contains `NeutralDependent
 
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,

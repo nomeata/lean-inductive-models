@@ -2093,6 +2093,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     -- restores this exact source prefix plus accepted reusable support.
     setEnv mainEnv
     let mainBefore := mainEnv
+    let mut replayedOwnerEnv? : Option Environment := none
     let reportedBefore := rep.generated.size
     -- The model, if this is a nested declaration. Generated **before** the
     -- declaration is added: nothing in the model mentions `T`.
@@ -2213,7 +2214,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       -- elaboration. It is not fatal: the entry is dropped from an index this
       -- tool never reads, so it does not affect model generation or checking.
       match (← getEnv).addDeclCore 0 dcl none false with
-      | .ok e => setEnv e
+      | .ok e =>
+        replayedOwnerEnv? := some e
+        setEnv e
       | .error ex =>
         let msg ← (ex.toMessageData {}).toString
         return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" },
@@ -2298,67 +2301,74 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         maxLiveIslandRecords := max rep.maxLiveIslandRecords generated.size }
       let islandOwners := (rep.generated.extract reportedBefore rep.generated.size).foldl
         (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
-      let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
-          ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners with
-        | .ok result => pure result
-        | .error message => throwError
-            "owner-free generated declaration rejected for {d.names}: {message}"
-      islandStatements :=
-        { statementsChecked := islandStatements.statementsChecked +
-            statementReport.statementsChecked
-          violations := islandStatements.violations ++ statementReport.violations }
-      unless compact.summaries.size == orderedGenerated.size &&
-          compact.globalExtras.size == orderedGenerated.size &&
-          compact.families.size == orderedGenerated.size do
-        throwError "accepted island cardinality mismatch for {d.names}: \
-          records={orderedGenerated.size}, summaries={compact.summaries.size}, \
-          extras={compact.globalExtras.size}, families={compact.families.size}"
-      modeledSourceFamilies := compact.sourceFamilies
-      modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
-      -- An inductive owner may legitimately produce no model under the active
-      -- route configuration. It contributes no generated island; the spool
-      -- transaction deliberately rejects empty commits.
-      if let some sink := sink? then if !orderedGenerated.isEmpty then
-        let commit ← sink.commit orderedGenerated
-        unless orderedGenerated.size == commit.declarations.size do
-          throwError "staged island cardinality mismatch for {d.names}: \
+      if generated.isEmpty && islandOwners.isEmpty then
+        -- The first replay above already installed this owner into the exact
+        -- persistent source environment. With no generated records there is
+        -- no disposable fork to check, order, persist, or replay around.
+        unless islandModels.isEmpty do
+          throwError "empty generated island for {d.names} retained model witnesses"
+        let ownerEnv := replayedOwnerEnv?.getD mainBefore
+        mainEnv := ownerEnv
+        setEnv ownerEnv
+      else
+        let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
+            ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners with
+          | .ok result => pure result
+          | .error message => throwError
+              "owner-free generated declaration rejected for {d.names}: {message}"
+        islandStatements :=
+          { statementsChecked := islandStatements.statementsChecked +
+              statementReport.statementsChecked
+            violations := islandStatements.violations ++ statementReport.violations }
+        unless compact.summaries.size == orderedGenerated.size &&
+            compact.globalExtras.size == orderedGenerated.size &&
+            compact.families.size == orderedGenerated.size do
+          throwError "accepted island cardinality mismatch for {d.names}: \
             records={orderedGenerated.size}, summaries={compact.summaries.size}, \
-            extras={compact.globalExtras.size}, \
-            spans={commit.declarations.size}"
-        let islandNumber := staged.size
-        let tagged := Order.tagIsland islandNumber compact.summaries
-        for localOrdinal in [:tagged.size] do
-          stagedRecords := stagedRecords.push {
-            summary := tagged[localOrdinal]!
-            globalExtra := compact.globalExtras[localOrdinal]!
-            families := compact.families[localOrdinal]!.map (·.inIsland islandNumber)
-            checkIsland? := some islandNumber
-            locator := .generated islandNumber localOrdinal }
-        staged := staged.push {
-          compact := { compact with summaries := tagged }
-          commit }
-      let persistentRecords := generatedSupportRecords orderedGenerated islandModels
-      if sink?.isSome && !orderedGenerated.isEmpty then
-        let islandNumber := staged.size - 1
-        for record in persistentRecords do
-          for name in record.names do
-            persistentSupportOrigins := persistentSupportOrigins.insert name islandNumber
-      persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
-        | .ok index => pure index
-        | .error message => throwError
-            "cannot index accepted persistent support for {d.names}: {message}"
-      if retainOracle then legacyOut := legacyOut ++ orderedGenerated
-      setEnv mainWithSupport
-      if let some ownerDeclaration := toDeclaration mainWithSupport d then
-        match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
-        | .ok env =>
-          mainEnv := env
-          setEnv env
-        | .error exception =>
-          let message ← (exception.toMessageData {}).toString
-          return (x.decls,
-            { rep with unreplayable := some s!"{d.names}: {message}" },
-            { islands := #[], declarations := #[] })
+            extras={compact.globalExtras.size}, families={compact.families.size}"
+        modeledSourceFamilies := compact.sourceFamilies
+        modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
+        if let some sink := sink? then
+          let commit ← sink.commit orderedGenerated
+          unless orderedGenerated.size == commit.declarations.size do
+            throwError "staged island cardinality mismatch for {d.names}: \
+              records={orderedGenerated.size}, summaries={compact.summaries.size}, \
+              extras={compact.globalExtras.size}, \
+              spans={commit.declarations.size}"
+          let islandNumber := staged.size
+          let tagged := Order.tagIsland islandNumber compact.summaries
+          for localOrdinal in [:tagged.size] do
+            stagedRecords := stagedRecords.push {
+              summary := tagged[localOrdinal]!
+              globalExtra := compact.globalExtras[localOrdinal]!
+              families := compact.families[localOrdinal]!.map (·.inIsland islandNumber)
+              checkIsland? := some islandNumber
+              locator := .generated islandNumber localOrdinal }
+          staged := staged.push {
+            compact := { compact with summaries := tagged }
+            commit }
+        let persistentRecords := generatedSupportRecords orderedGenerated islandModels
+        if sink?.isSome then
+          let islandNumber := staged.size - 1
+          for record in persistentRecords do
+            for name in record.names do
+              persistentSupportOrigins := persistentSupportOrigins.insert name islandNumber
+        persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
+          | .ok index => pure index
+          | .error message => throwError
+              "cannot index accepted persistent support for {d.names}: {message}"
+        if retainOracle then legacyOut := legacyOut ++ orderedGenerated
+        setEnv mainWithSupport
+        if let some ownerDeclaration := toDeclaration mainWithSupport d then
+          match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
+          | .ok env =>
+            mainEnv := env
+            setEnv env
+          | .error exception =>
+            let message ← (exception.toMessageData {}).toString
+            return (x.decls,
+              { rep with unreplayable := some s!"{d.names}: {message}" },
+              { islands := #[], declarations := #[] })
     else
       mainEnv ← getEnv
     if retainOracle then legacyOut := legacyOut.push d
