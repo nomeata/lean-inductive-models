@@ -46,7 +46,8 @@ private partial def exactFormerEndsInProp : Expr → Bool
   | _ => false
 
 /-- A kernel-projectable field of a one-constructor proposition has a literal
-projection rule, independently of recursion, indices, nesting, or mutuality.
+projection rule on the source-simple route, independently of recursion or
+indices.
 
 Callers invoke this only for fields accepted by the intrinsic-projection
 predicate. Such a field is itself proposition-valued. Proof irrelevance then
@@ -54,10 +55,19 @@ identifies every earlier projected proof with its constructor local in the
 dependent field type, and identifies the selected projection with the literal
 constructor proof. Thus `Eq.refl` checks without a generated transport.
 
-Maybe-zero formers are intentionally excluded: at a positive instantiation
-their fields and values need not be proof-irrelevant. -/
+The first tranche is deliberately limited to a single, unnested source block.
+Those owners reach [`InductiveModels.addSourceStructureModels`] with their raw
+constructor telescope. Nested and plain-mutual builders currently expose an
+installed telescope instead; selecting the exact literal contract there would
+discard a source head beta-redex before the theorem is stated. They remain on
+the legacy transported contract until those routes carry the raw source
+telescope too.
+
+Maybe-zero formers are also intentionally excluded: at a positive
+instantiation their fields and values need not be proof-irrelevant. -/
 def propositionProjectionIotaUsesLiteralField (type : EIndType) : Bool :=
-  type.ctors.length == 1 && exactFormerEndsInProp type.type
+  type.all == [type.name] && type.ctors.length == 1 && type.numNested == 0 &&
+    exactFormerEndsInProp type.type
 
 /-- The first production one-layer carrier tranche: one recursive member, one
 constructor, no indices and no nested occurrences.  Generation and checking
