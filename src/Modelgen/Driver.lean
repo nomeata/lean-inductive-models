@@ -147,12 +147,12 @@ structure StagedRecord where
   locator : StagedLocator
   deriving Inhabited, Repr
 
-/-- Compact shadow of the final transformed declaration stream. `order` is a
-permutation of `records`; generated payloads live only in `islands` as spans. -/
+/-- Emission-only shadow of the final transformed declaration stream. The
+ordering/checking summaries have already been consumed: generated payloads are
+addressed by island commits and `declarations` is the final compact order. -/
 structure StagedPlan where
-  islands : Array StagedIsland := #[]
-  records : Array StagedRecord := #[]
-  order : Array Nat := #[]
+  islands : Array Spool.IslandCommit := #[]
+  declarations : Array StagedLocator := #[]
 
 /-- Physical declaration payload selected by one compact output row. -/
 inductive StagedDeclarationSpan where
@@ -177,26 +177,15 @@ def StagedPlan.declarationSpans (plan : StagedPlan) (certificate : RawCertificat
     (sealed : Spool.SealedIsland) :
     Except String (Array StagedDeclarationSpan) := do
   discard <| certificate.validate sourceSizes sourceDeclarationCount
-  unless plan.order.size == plan.records.size do
-    throw "staged order length does not match staged records"
-  let mut seenOrder : Std.HashSet Nat := {}
-  for index in plan.order do
-    unless index < plan.records.size do throw "staged order contains an out-of-range record"
-    if seenOrder.contains index then throw "staged order contains a duplicate record"
-    seenOrder := seenOrder.insert index
-
   let mut expectedCursor := Writer.Cursor.ofRaw certificate.cursor
   let mut generatedArenaSpans : Array Spool.ByteSpan := #[]
   let mut generatedDeclarationSpans : Array Spool.ByteSpan := #[]
   for island in plan.islands do
-    unless island.compact.summaries.size == island.compact.globalExtras.size &&
-        island.compact.summaries.size == island.commit.declarations.size do
-      throw "staged island compact/span cardinality mismatch"
-    unless island.commit.before == expectedCursor do
+    unless island.before == expectedCursor do
       throw "staged island cursor chain has a gap or overlap"
-    expectedCursor := island.commit.after
-    generatedArenaSpans := generatedArenaSpans ++ island.commit.arenas
-    generatedDeclarationSpans := generatedDeclarationSpans ++ island.commit.declarations
+    expectedCursor := island.after
+    generatedArenaSpans := generatedArenaSpans ++ island.arenas
+    generatedDeclarationSpans := generatedDeclarationSpans ++ island.declarations
   unless expectedCursor == sealed.cursor do
     throw "sealed cursor does not match staged island cursor chain"
   unless spansPartition generatedArenaSpans sealed.arenaSize do
@@ -207,8 +196,8 @@ def StagedPlan.declarationSpans (plan : StagedPlan) (certificate : RawCertificat
   let mut seenSource : Std.HashSet Nat := {}
   let mut seenGenerated : Std.HashSet (Nat × Nat) := {}
   let mut result : Array StagedDeclarationSpan := #[]
-  for index in plan.order do
-    match plan.records[index]!.locator with
+  for locator in plan.declarations do
+    match locator with
     | .source ordinal =>
       let some span := certificate.declarations[ordinal]?
         | throw "staged source locator is outside the parser certificate"
@@ -218,7 +207,7 @@ def StagedPlan.declarationSpans (plan : StagedPlan) (certificate : RawCertificat
     | .generated island declaration =>
       let some artifact := plan.islands[island]?
         | throw "staged generated locator has an invalid island"
-      let some span := artifact.commit.declarations[declaration]?
+      let some span := artifact.declarations[declaration]?
         | throw "staged generated locator has an invalid declaration"
       let key := (island, declaration)
       if seenGenerated.contains key then throw "staged generated locator is duplicated"
@@ -2171,7 +2160,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       | .error ex =>
         let msg ← (ex.toMessageData {}).toString
         return (x.decls, { rep with unreplayable := some s!"{d.names}: {msg}" },
-          { islands := #[], records := #[], order := #[] })
+          { islands := #[], declarations := #[] })
     -- Basis exemption is granted only after the complete exported interface
     -- has been compared with one freshly minted by the kernel. The disposable
     -- alias environment used by the validator is never installed here.
@@ -2302,7 +2291,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           let message ← (exception.toMessageData {}).toString
           return (x.decls,
             { rep with unreplayable := some s!"{d.names}: {message}" },
-            { islands := #[], records := #[], order := #[] })
+            { islands := #[], declarations := #[] })
     else
       mainEnv ← getEnv
     legacyOut := legacyOut.push d
@@ -2371,7 +2360,10 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   rep := { rep with stmtChecked := statementReport.statementsChecked }
   rep := { rep with
     stmtErrors := statementReport.violations.map fun violation => violation.message }
-  return (legacyOut, rep, { islands := staged, records := stagedRecords, order := stagedOrder })
+  let emissionPlan : StagedPlan := {
+    islands := staged.map (·.commit)
+    declarations := stagedOrder.map fun index => stagedRecords[index]!.locator }
+  return (legacyOut, rep, emissionPlan)
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
@@ -2381,16 +2373,14 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
 
 /-- Transitional staged oracle. Accepted islands are committed immediately,
 but the full output remains live for the established final Order/Check oracle.
-The AST-dropping entry point is enabled only after compact equivalence tests
-cover the full fixture matrix. -/
+The returned plan has already discarded the compact checking summaries. -/
 def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) :=
   runFilterCore x checkRecursors generation (some sink) true
 
 /-- AST-dropping staged generation. Accepted generated records are committed at
 island close and never appended to a cumulative declaration array. The result
-contains only compact scheduling/checking rows and spool spans. Main does not
-select this path until end-to-end staged composition is the output backend. -/
+contains only ordered declaration locators and spool spans. -/
 def runFilterStaged (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Report × StagedPlan) := do
   let (_, report, plan) ← runFilterCore x checkRecursors generation (some sink) false

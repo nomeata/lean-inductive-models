@@ -99,9 +99,7 @@ structure FilterRun where
   env : Environment
 
 structure StagedFilterRun extends FilterRun where
-  islands : Array StagedIsland
-  records : Array StagedRecord
-  order : Array Nat
+  plan : StagedPlan
   planValid : Bool
   malformedPlansRejected : Bool
 
@@ -154,12 +152,12 @@ def runFilterStagedState (scratch : String) (input : Export)
     let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
     let sourceSizes := syntheticRawSizes input.decls.size
     let planValid := match plan.declarationSpans certificate sourceSizes input.decls.size sealed with
-      | .ok spans => spans.size == plan.records.size
+      | .ok spans => spans.size == plan.declarations.size
       | .error _ => false
-    let duplicateOrder := if plan.order.size < 2 then plan.order.push 0
-      else plan.order.set! 1 plan.order[0]!
-    let duplicateRejected := if plan.records.isEmpty then true else
-      match { plan with order := duplicateOrder }.declarationSpans certificate sourceSizes
+    let duplicateDeclarations := if plan.declarations.size < 2 then plan.declarations.push (.source 0)
+      else plan.declarations.set! 1 plan.declarations[0]!
+    let duplicateRejected := if plan.declarations.isEmpty then true else
+      match { plan with declarations := duplicateDeclarations }.declarationSpans certificate sourceSizes
           input.decls.size sealed with
       | .ok _ => false
       | .error _ => true
@@ -176,7 +174,7 @@ def runFilterStagedState (scratch : String) (input : Export)
       | .error _ => true
     return {
       input, output := { input with decls }, report, env := finalState.env,
-      islands := plan.islands, records := plan.records, order := plan.order, planValid,
+      plan, planValid,
       malformedPlansRejected := duplicateRejected && cursorRejected && sourceCountRejected }
 
 def runFilterDroppedState (scratch : String) (input : Export)
@@ -194,7 +192,7 @@ def runFilterDroppedState (scratch : String) (input : Export)
     let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
     let planValid := match plan.declarationSpans certificate
         (syntheticRawSizes input.decls.size) input.decls.size sealed with
-      | .ok spans => spans.size == plan.records.size
+      | .ok spans => spans.size == plan.declarations.size
       | .error _ => false
     return { report, plan, planValid }
 
@@ -594,30 +592,24 @@ def run (root : String) : IO UInt32 := do
     s!"{root}/test/fixtures/modelgen/transparent_owner_aliases.ndjson" {}
   let aliasStaged ← runFilterStagedState s!"{root}/_tmp" aliasRun.input {}
   let aliasDropped ← runFilterDroppedState s!"{root}/_tmp" aliasRun.input {}
-  let stagedGeneratedRecords := aliasStaged.records.foldl (init := 0) fun count record =>
-    match record.locator with
+  let stagedGeneratedRecords := aliasStaged.plan.declarations.foldl (init := 0) fun count locator =>
+    match locator with
     | .generated .. => count + 1
     | .source _ => count
-  let stagedCommittedRecords := aliasStaged.islands.foldl (init := 0) fun count island =>
-    count + island.commit.declarations.size
+  let stagedCommittedRecords := aliasStaged.plan.islands.foldl (init := 0) fun count island =>
+    count + island.declarations.size
   state := state.check "staged island sink preserves exact output and report" <|
     aliasStaged.output.decls == aliasRun.output.decls &&
       aliasStaged.report == aliasRun.report &&
-      aliasStaged.records.size == aliasStaged.output.decls.size &&
-      aliasStaged.order.size == aliasStaged.records.size &&
+      aliasStaged.plan.declarations.size == aliasStaged.output.decls.size &&
       aliasStaged.planValid && aliasStaged.malformedPlansRejected &&
       stagedCommittedRecords == stagedGeneratedRecords &&
-      aliasStaged.islands.all (fun island => !island.commit.declarations.isEmpty) &&
-      aliasStaged.islands.all fun island =>
-        island.compact.summaries.size == island.commit.declarations.size &&
-          island.compact.globalExtras.size == island.commit.declarations.size
+      aliasStaged.plan.islands.all fun island => !island.declarations.isEmpty
   state := state.check "AST-dropping staged path preserves report and compact schedule" <|
     aliasDropped.report == aliasRun.report &&
       aliasDropped.planValid &&
-      aliasDropped.plan.records.map (·.summary.introduced) ==
-        aliasStaged.records.map (·.summary.introduced) &&
-      aliasDropped.plan.order == aliasStaged.order &&
-      aliasDropped.plan.islands.size == aliasStaged.islands.size
+      aliasDropped.plan.declarations == aliasStaged.plan.declarations &&
+      aliasDropped.plan.islands == aliasStaged.plan.islands
   let inputNames := aliasRun.input.decls.flatMap fun declaration => declaration.names.toArray
   let generatedNames := aliasRun.output.decls.flatMap fun declaration =>
     declaration.names.toArray |>.filter (!inputNames.contains ·)
