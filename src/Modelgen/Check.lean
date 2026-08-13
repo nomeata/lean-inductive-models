@@ -297,11 +297,12 @@ def ruleKProposition? (x : Export) (ownerDecl : Nat) (recursorName : Name) :
     { name := `major, type := majorType, info := .default, value := arbitrary }
   return (levelParams, closeForalls (pre.push majorBinder) result)
 
-/-- The correspondence table determined by an inductive record, independent
-of whether any model declarations are present. -/
-def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := do
-  let .induct types ctors recursors ← x.decls[ownerDecl]?
-    | none
+/-- The correspondence table determined by one inductive record and its exact
+syntax context, independent of whether any model declarations are present. -/
+private def correspondenceFor? (normalizer : ExactNormalizationEnv)
+    (projectionFields : EIndType → List ECtor → Array Nat)
+    (declaration : EDecl) : Option Correspondence := do
+  let .induct types ctors recursors := declaration | none
   let typeFormers := types.toArray.map fun type =>
     { owner := type.name, model := Naming.modelName type.name }
   let constructors := ctors.toArray.map fun ctor =>
@@ -318,15 +319,21 @@ def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := 
     if recursor.k then some (Naming.Metadata.ofOwner .ruleK recursor.name) else none
   let etaMetadata := types.toArray.filterMap fun type =>
     if type.isKernelStructureLike ctors &&
-        !x.exactNormalizationEnv.isPropositionFormer type.type then
+        !normalizer.isPropositionFormer type.type then
       some (Naming.Metadata.ofOwner .eta type.name)
     else none
   let mut projections : Array Naming.Projection := #[]
   for type in types do
-    for fieldIndex in x.intrinsicProjectionFieldsFor type ctors do
+    for fieldIndex in projectionFields type ctors do
       projections := projections.push (.ofField type.name fieldIndex)
   let metadata := unitlikeMetadata ++ etaMetadata ++ ruleKMetadata
   return { typeFormers, constructors, recursors, projections, iotas, metadata }
+
+/-- The correspondence table determined by an inductive record, independent
+of whether any model declarations are present. -/
+def correspondenceAt? (x : Export) (ownerDecl : Nat) : Option Correspondence := do
+  let declaration ← x.decls[ownerDecl]?
+  correspondenceFor? x.exactNormalizationEnv x.intrinsicProjectionFieldsFor declaration
 
 /-- A public model family discovered in an export.
 
@@ -1017,6 +1024,7 @@ structure SyntaxIndex where
   private normalizer : ExactNormalizationEnv
   private globalExtras : Array Violation := #[]
   private sourceFamilies : Std.HashMap Name (Array Family) := {}
+  private names : Std.HashSet Name := {}
 
 private def familyTable (x : Export) : Std.HashMap Name (Array Family) :=
   (discoverWith x fun _ => true).foldl (init := {}) fun table family =>
@@ -1025,7 +1033,9 @@ private def familyTable (x : Export) : Std.HashMap Name (Array Family) :=
 private def SyntaxIndex.coreOfExport (x : Export) : SyntaxIndex :=
   { declarations := declarationTypes x, constructors := constructorRecords x,
     structures := structureOwners x, ruleSlots := iotaSlots x,
-    normalizer := x.exactNormalizationEnv, sourceFamilies := familyTable x }
+    normalizer := x.exactNormalizationEnv, sourceFamilies := familyTable x,
+    names := x.decls.foldl (fun names declaration =>
+      declaration.names.foldl (·.insert ·) names) {} }
 
 private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
     (family : Family) (checkOrder : Bool) : Array Violation := Id.run do
@@ -1108,14 +1118,19 @@ def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
   { index with globalExtras := computeGlobalExtras x index }
 
 /-- Overlay an island in front of a persistent source index without rescanning
-the source export.  This has exactly the first-occurrence/duplicate semantics
-of indexing `{ source with decls := records ++ source.decls }`: declaration and
-rule arrays are prefixed, generated transparent definitions win, while a
-source constructor/owner record (which occurs later in that synthetic view)
-wins the maps whose historical scan keeps the last occurrence.  Global extras
-remain a final-export concern and are intentionally not recomputed here. -/
-def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) : SyntaxIndex :=
-    Id.run do
+the source export. Any name collision fails closed before first/last-map
+semantics could hide it. Declaration and rule arrays are prefixed, generated
+transparent definitions win, and generated constructor/owner records extend
+the source maps. Global extras remain a final-export concern and are
+intentionally not recomputed here. -/
+def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
+    Except String SyntaxIndex := Id.run do
+  let mut names := source.names
+  for declaration in records do
+    for name in declaration.names do
+      if names.contains name then
+        return .error s!"island overlay redeclares {name}"
+      names := names.insert name
   let mut declarations := source.declarations
   let mut ruleSlots := source.ruleSlots
   for declaration in records.reverse do
@@ -1140,14 +1155,68 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) : 
   for declaration in records.reverse do
     if let .defn name levelParams _ value .. := declaration then
       definitions := definitions.insert name { levelParams, value }
-  return { source with declarations, constructors, structures, ruleSlots,
-    normalizer := { definitions } }
+  return .ok { source with declarations, constructors, structures, ruleSlots,
+    normalizer := { definitions }, names }
 
 /-- Fail-closed family templates for one owner from the persistent source
 snapshot.  They are built once with the source `SyntaxIndex`; island checks do
 not rediscover them by scanning the complete input. -/
 def SyntaxIndex.sourceStatementFamilies (index : SyntaxIndex) (owner : Name) : Array Family :=
   index.sourceFamilies.getD owner #[]
+
+private partial def projectionFieldEligibleWithIndex (index : SyntaxIndex)
+    (ownerIsProp : Bool) (fieldIndex : Nat) (current : Expr)
+    (locals : ExactLocals) : Option Bool := do
+  let .forallE _ fieldType body _ := index.normalizer.whnf current | none
+  let fieldIsProp := inferExactSortLevel? index.structures index.normalizer
+    index.declarations locals fieldType == some .zero
+  if fieldIndex == 0 then return !ownerIsProp || fieldIsProp
+  if ownerIsProp && body.hasLooseBVars && !fieldIsProp then return false
+  let value := mkFVar (FVarId.mk ((`_check.projectionField).mkNum locals.size))
+  projectionFieldEligibleWithIndex index ownerIsProp (fieldIndex - 1)
+    (body.instantiate1 value) (locals.push (value.fvarId!, fieldType))
+
+private def intrinsicProjectionFieldsWithIndex (index : SyntaxIndex)
+    (type : EIndType) (constructors : List ECtor) : Array Nat := Id.run do
+  let [constructorName] := type.ctors | return #[]
+  let some constructor := constructors.find? fun constructor =>
+      constructor.name == constructorName && constructor.induct == type.name
+    | return #[]
+  let mut ownerType := type.type
+  while ownerType.isForall do ownerType := ownerType.bindingBody!
+  let ownerIsProp := index.normalizer.isPropositionFormer ownerType
+  let mut current := constructor.type
+  let mut locals : ExactLocals := #[]
+  for parameterIndex in [:type.numParams] do
+    let .forallE _ parameterType body _ := index.normalizer.whnf current | return #[]
+    let value := mkFVar (FVarId.mk ((`_check.projectionParam).mkNum parameterIndex))
+    locals := locals.push (value.fvarId!, parameterType)
+    current := body.instantiate1 value
+  let mut fields : Array Nat := #[]
+  for fieldIndex in [:constructor.numFields] do
+    if projectionFieldEligibleWithIndex index ownerIsProp fieldIndex current locals == some true then
+      fields := fields.push fieldIndex
+  return fields
+
+/-- Discover selected families whose owner records belong to one generated
+island, using its overlay for transparent aliases and projection eligibility.
+Declaration indices are island-local; statement checking never interprets
+them as positions in the source export. -/
+def statementFamiliesForRecordsWithIndex (island : Export) (index : SyntaxIndex)
+    (owners : Std.HashSet Name) : Array Family := Id.run do
+  let mut families : Array Family := #[]
+  for ownerDecl in [0:island.decls.size] do
+    let .induct types _ _ := island.decls[ownerDecl]! | continue
+    let some root := types.head?.map (·.name) | continue
+    unless owners.contains root do continue
+    let some correspondence := correspondenceFor? index.normalizer
+        (intrinsicProjectionFieldsWithIndex index) island.decls[ownerDecl]!
+      | continue
+    families := families.push
+      { owner := root, modelRoot := Naming.modelName root,
+        carrier := Naming.modelName root, ownerDecl, correspondence,
+        decls := #[], names := #[] }
+  return families
 
 private def checkFamiliesWithIndex (x : Export) (index : SyntaxIndex)
     (families : Array Family) (checkOrder : Bool) : Array Violation :=

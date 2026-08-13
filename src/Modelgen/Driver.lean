@@ -949,22 +949,24 @@ def closeModelIsland (template : Export) (main : Environment)
     else generated := generated.push record
   unless removedOwner do return .error s!"source owner {owner.names} disappeared from its island"
   -- Statement correspondence is an export-syntax check, so it can run while
-  -- the owner is still absent from the persistent replay environment.  Keep
-  -- all source declarations in the view: transparent aliases and exact
-  -- projection metadata outside this island remain legitimate dependencies
-  -- of the generated interface.  The final aggregate check below remains an
-  -- independent oracle for the per-island result.
+  -- the owner is still absent from the persistent replay environment. Source
+  -- owners use family templates indexed once; generated owners use the island
+  -- records plus an overlay carrying source transparent aliases and exact
+  -- projection metadata. The final aggregate remains the equivalence oracle.
   let statementReport :=
     if generatedOwners.isEmpty then
       { statementsChecked := 0, violations := #[] }
     else
-      let index := sourceSyntax.prependRecords generated
+      let index ← match sourceSyntax.prependRecords generated with
+        | .ok index => pure index
+        | .error message => return .error s!"cannot index generated island: {message}"
       let sourceRoot? := match owner with
         | .induct types _ _ => types.head?.map (·.name)
         | _ => none
       let generatedOnlyOwners := sourceRoot?.elim generatedOwners generatedOwners.erase
       let generatedView := { template with decls := generated }
-      let generatedFamilies := Check.statementFamiliesFor generatedView generatedOnlyOwners
+      let generatedFamilies :=
+        Check.statementFamiliesForRecordsWithIndex generatedView index generatedOnlyOwners
       let generatedReport :=
         Check.checkStatementFamiliesLocalWithIndex generatedView index generatedFamilies
       let sourceFamilies := sourceRoot?.elim #[] fun root =>

@@ -338,19 +338,19 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "indexed nested generated view equals aggregate selection" <|
       indexedFamilyUnionFor valid treeOwners == checkStatementsFor valid treeOwners
     let sourceIndex := SyntaxIndex.ofExport raw
-    let overlaidIndex := sourceIndex.prependRecords models
+    let .ok overlaidIndex := sourceIndex.prependRecords models | do
+      IO.eprintln "checktest: valid island overlay was rejected"
+      return 1
     let overlaidFamilies := sourceIndex.sourceStatementFamilies owner
     state ← state.check "persistent source index plus island overlay equals whole-export indexing" <|
       checkStatementFamiliesLocalWithIndex raw overlaidIndex overlaidFamilies ==
         checkStatementFamiliesLocalWithIndex valid (.ofExport valid)
           (statementFamiliesFor valid treeOwners)
     let duplicateIsland := models.push models[0]!
-    let duplicateValid := withValidModel raw rawOwnerDecl duplicateIsland
-    state ← state.check "island overlay preserves duplicate declaration diagnostics" <|
-      checkStatementFamiliesLocalWithIndex raw
-          (sourceIndex.prependRecords duplicateIsland) overlaidFamilies ==
-        checkStatementFamiliesLocalWithIndex duplicateValid (.ofExport duplicateValid)
-          (statementFamiliesFor duplicateValid treeOwners)
+    state ← state.check "island overlay rejects duplicate declaration names" <|
+      match sourceIndex.prependRecords duplicateIsland with
+      | .error _ => true
+      | .ok _ => false
     state ← state.check "unsafe owner may have an independently safe model" <|
       (check (withUnsafeOwner valid validOwnerDecl)).isEmpty
     let unsafeModel := withDefinitionSafety valid carrier "unsafe"
@@ -573,9 +573,11 @@ def run (root : String) : IO UInt32 := do
       indexedFamilyUnionFor privateValid privateOwners ==
         checkStatementsFor privateValid privateOwners
     let privateSourceIndex := SyntaxIndex.ofExport privateRaw
+    let .ok privateOverlay := privateSourceIndex.prependRecords privateModels | do
+      IO.eprintln "checktest: private-alias island overlay was rejected"
+      return 1
     state ← state.check "private-alias island overlay equals whole-export indexing" <|
-      checkStatementFamiliesLocalWithIndex privateRaw
-          (privateSourceIndex.prependRecords privateModels)
+      checkStatementFamiliesLocalWithIndex privateRaw privateOverlay
           (privateSourceIndex.sourceStatementFamilies privateOwner) ==
         checkStatementFamiliesLocalWithIndex privateValid (.ofExport privateValid)
           (statementFamiliesFor privateValid privateOwners)
