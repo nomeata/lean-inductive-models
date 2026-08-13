@@ -31,7 +31,7 @@ def main : IO UInt32 := do
     config.input == some "in.ndjson" &&
     config.nested && config.mutualModels && config.simple && config.basic &&
     config.checkInput && config.checkOutput &&
-    !config.typeCheckInput && !config.typeCheckOutput && !config.monoLevels &&
+    !config.typeCheckInput && config.typeCheckOutput && !config.monoLevels &&
     config.output && config.outputTarget == "-" && !config.quiet
 
   state ← state.expect "all individual negative forms" [
@@ -59,10 +59,13 @@ def main : IO UInt32 := do
   state ← state.expect "kernel verdict gates are independent"
     ["--type-check-input", "--type-check-output", "--no-type-check-input", "in.ndjson"]
     fun config => !config.typeCheckInput && config.typeCheckOutput
+  state ← state.expect "output kernel default has an explicit reversible opt-out"
+    ["--no-type-check-output", "--type-check-output", "--no-type-check-output",
+      "in.ndjson"] fun config => !config.typeCheckOutput
   state ← state.expect "structural check bundle does not enable kernel verdicts"
     ["--type-check-input", "--no-check", "--check", "in.ndjson"] fun config =>
       config.checkInput && config.checkOutput && config.typeCheckInput &&
-        !config.typeCheckOutput
+        config.typeCheckOutput
   state ← state.expect "Arena CI keeps generation and every verdict gate enabled" [
       "--inductives", "--check-input", "--check-output", "--type-check-input",
       "--type-check-output", "--no-output", "in.ndjson"] fun config =>

@@ -139,7 +139,8 @@ def main (args : List String) : IO UInt32 := do
   let unusedBasis := { nestedExport with decls := nestedExport.decls.filter (·.names.contains `Eq) }
   let malformedBasis := mapRecursor unusedBasis `Eq.rec fun recursor =>
     { recursor with numMinors := recursor.numMinors + 1 }
-  let malformedBasisRun ← runInductiveModelsStdin binary ["--no-check", "--no-output", "-"]
+  let malformedBasisRun ← runInductiveModelsStdin binary
+    ["--no-check", "--no-type-check-output", "--no-output", "-"]
     malformedBasis.render
   state := state.check "noncanonical unused basis exits unsupported 2" <|
     malformedBasisRun.exitCode == 2 && malformedBasisRun.stdout.isEmpty &&
@@ -195,8 +196,8 @@ def main (args : List String) : IO UInt32 := do
       (invalidInput.stderr.splitOn "input kernel check rejected:").length > 1
   let invalidOutput ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input",
-    "--type-check-output", "--no-output", "-"] invalidText
-  state := state.check "kernel-invalid stdin output is rejected with exit 1" <|
+    "--no-output", "-"] invalidText
+  state := state.check "default output kernel gate rejects invalid stdin with exit 1" <|
     invalidOutput.exitCode == 1 &&
       (invalidOutput.stderr.splitOn "output kernel check rejected:").length > 1
   let gatedOutputPath : System.FilePath := s!"{scratch}/main-cli-gated-output.ndjson"
@@ -453,7 +454,7 @@ def main (args : List String) : IO UInt32 := do
   let collision : InductiveModels.EDecl := .ax collisionName [] (.sort (.succ .zero)) false
   let declinedText := { nestedExport with decls := nestedExport.decls.push collision }.render
   let declined ← runInductiveModelsStdin binary
-    ["--no-check", "--no-output", "-"] declinedText
+    ["--no-check", "--no-type-check-output", "--no-output", "-"] declinedText
   state := state.check "unsupported generation declines with exit 2" <|
     declined.exitCode == 2 && (declined.stderr.splitOn "declined").length > 1
 
@@ -528,7 +529,8 @@ def main (args : List String) : IO UInt32 := do
     | .ok stdinExport, .ok fileExport => stdinExport.decls == fileExport.decls
     | _, _ => false
 
-  -- All defaults are exercised here, including stdout output and both checks.
+  -- All defaults are exercised here, including stdout output, both structural
+  -- checks, and the final whole-stream kernel verdict.
   -- This succeeds once all generated model families precede their owners; it
   -- is the integration seam between the CLI and the ordering repair.
   let defaults ← runInductiveModels binary [nested]
@@ -549,6 +551,8 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "default output check reports its exact nonempty family count" <|
     defaultOutputFamilies > 0 && hasDiagnostic defaults.stderr
       s!"output check: {defaultOutputFamilies} model families checked"
+  state := state.check "default output kernel check reports acceptance" <|
+    hasDiagnostic defaults.stderr "output kernel check: accepted"
 
   -- Feed the generated result back through the default checker.  This is an
   -- actual input-side model family, rather than the vacuous check of an
@@ -597,14 +601,13 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "successful staged parse removes its workspace" <|
     !leakedSpools.any (fun entry => entry.fileName.startsWith "lean-inductive-models-spool-")
 
-  -- Eligible canonical generation selects staged output without an enabling
-  -- environment variable. The trace observes the actual backend after raw
-  -- certification and compact-availability checks; it is not a selector.
+  -- The default final kernel gate requires a complete AST and therefore uses
+  -- the legacy backend. The explicit opt-out remains the staged-mode boundary.
   let observedDefault ← runInductiveModelsWithEnv binary [nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "ordinary default generation selects staged output" <|
+  state := state.check "ordinary default output kernel gate selects legacy output" <|
     observedDefault.exitCode == defaults.exitCode &&
-      hasDiagnostic observedDefault.stderr "output backend: staged" &&
+      hasDiagnostic observedDefault.stderr "output backend: legacy" &&
       sameSemanticExport observedDefault.stdout defaults.stdout
   let observedLegacy ← runInductiveModelsWithEnv binary [nested] #[
     ("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1"),
@@ -613,15 +616,15 @@ def main (args : List String) : IO UInt32 := do
     observedLegacy.exitCode == defaults.exitCode &&
       hasDiagnostic observedLegacy.stderr "output backend: legacy" &&
       sameSemanticExport observedLegacy.stdout defaults.stdout
-  let stagedNamedPath := s!"{scratch}/main-cli-staged-default.ndjson"
+  let stagedNamedPath := s!"{scratch}/main-cli-staged-opt-out.ndjson"
   removeIfPresent stagedNamedPath
   let stagedNamed ← runInductiveModelsWithEnv binary
-    ["-o", stagedNamedPath, nested]
+    ["--no-type-check-output", "-o", stagedNamedPath, nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   let stagedNamedText ← if ← System.FilePath.pathExists stagedNamedPath then
       IO.FS.readFile stagedNamedPath
     else pure ""
-  state := state.check "ordinary named output selects staged output" <|
+  state := state.check "output-kernel opt-out named output selects staged output" <|
     stagedNamed.exitCode == defaults.exitCode && stagedNamed.stdout.isEmpty &&
       hasDiagnostic stagedNamed.stderr "output backend: staged" &&
       sameSemanticExport stagedNamedText defaults.stdout
@@ -666,16 +669,16 @@ def main (args : List String) : IO UInt32 := do
     let args := #["--no-check-output", "--no-type-check-output", "--no-mono-levels", fixture]
     let legacy ← runInductiveModelsLegacy binary args.toList
     let staged ← runInductiveModels binary args.toList
-    state := state.check s!"default staged {label} preserves report and exit" <|
+    state := state.check s!"opt-out staged {label} preserves report and exit" <|
       staged.exitCode == legacy.exitCode && staged.stderr == legacy.stderr
-    state := state.check s!"default staged {label} preserves semantic output and order" <|
+    state := state.check s!"opt-out staged {label} preserves semantic output and order" <|
       sameSemanticExport staged.stdout legacy.stdout
-  let checkedLegacy ← runInductiveModelsLegacy binary [nested]
-  let checkedStaged ← runInductiveModels binary [nested]
-  state := state.check "default staged compact output check preserves report and exit" <|
+  let checkedLegacy ← runInductiveModelsLegacy binary ["--no-type-check-output", nested]
+  let checkedStaged ← runInductiveModels binary ["--no-type-check-output", nested]
+  state := state.check "opt-out staged compact output check preserves report and exit" <|
     checkedStaged.exitCode == checkedLegacy.exitCode &&
       checkedStaged.stderr == checkedLegacy.stderr
-  state := state.check "default staged compact output check preserves semantic output and order" <|
+  state := state.check "opt-out staged compact output check preserves semantic output and order" <|
     sameSemanticExport checkedStaged.stdout checkedLegacy.stdout
   -- The source snapshot can mention a public name which this run will only
   -- generate later. Its early compact syntax certificate is deliberately

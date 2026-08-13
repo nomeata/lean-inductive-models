@@ -29,8 +29,10 @@ structure Config where
   checkOutput : Bool := true
   /-- Submit the complete parsed input stream to Lean's kernel. -/
   typeCheckInput : Bool := false
-  /-- Submit the complete final transformed stream to Lean's kernel. -/
-  typeCheckOutput : Bool := false
+  /-- Submit the complete final transformed stream to Lean's kernel. Enabled by
+  default so an ordinary CLI run never publishes a stream the official kernel
+  rejects; `--no-type-check-output` is the explicit bounded-memory opt-out. -/
+  typeCheckOutput : Bool := true
   monoLevels : Bool := false
   /-- Whether an export is written. -/
   output : Bool := true
@@ -66,7 +68,7 @@ def usage : String := String.intercalate "\n" [
   "  --[no-]check-output  check generated models",
   "  --[no-]check         set both structural model-check options",
   "  --[no-]type-check-input   submit the parsed input to Lean's kernel",
-  "  --[no-]type-check-output  submit the final output to Lean's kernel",
+  "  --[no-]type-check-output  submit the final output to Lean's kernel (default: on)",
   "  --[no-]mono-levels   monomorphize universe levels",
   "  --[no-]quiet         enable or disable diagnostics"]
 
