@@ -80,6 +80,10 @@ def hasOutputSibling (directory : System.FilePath) : IO Bool := do
   return (← directory.readDir).any fun entry =>
     entry.fileName.startsWith ".lean-inductive-models-output-" && entry.fileName.endsWith ".tmp"
 
+def sameDirectoryEntries (left right : Array IO.FS.DirEntry) : Bool :=
+  left.size == right.size && left.all fun entry =>
+    right.any (·.fileName == entry.fileName)
+
 def mapInductiveType (inputExport : InductiveModels.Export) (target : Lean.Name)
     (f : InductiveModels.EIndType → InductiveModels.EIndType) : InductiveModels.Export :=
   { inputExport with decls := inputExport.decls.map fun declaration => match declaration with
@@ -707,12 +711,40 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "output kernel checking selects legacy output" <|
     kernelOutputMode.exitCode == 0 &&
       hasDiagnostic kernelOutputMode.stderr "output backend: legacy"
+  let freshSuccessBefore ← System.FilePath.readDir scratch
   let kernelDiscardMode ← runInductiveModelsWithEnv binary
     ["--no-output", "--no-check", "--type-check-output", nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "no-output kernel checking stages for a fresh worker" <|
     kernelDiscardMode.exitCode == 0 && kernelDiscardMode.stdout.isEmpty &&
       hasDiagnostic kernelDiscardMode.stderr "output backend: staged"
+  let freshSuccessAfter ← System.FilePath.readDir scratch
+  state := state.check "successful fresh kernel replay cleans its private candidate workspace" <|
+    sameDirectoryEntries freshSuccessBefore freshSuccessAfter
+  let freshEntriesBefore ← System.FilePath.readDir scratch
+  let failedFreshKernel ← runInductiveModels binary
+    ["--no-output", "--no-check", "--type-check-output", "-"]
+    (some lateReplayCorruption.render)
+  let freshEntriesAfter ← System.FilePath.readDir scratch
+  state := state.check "failed fresh producer cleans its private candidate workspace" <|
+    failedFreshKernel.exitCode == 1 && failedFreshKernel.stdout.isEmpty &&
+      sameDirectoryEntries freshEntriesBefore freshEntriesAfter
+  let spoofedPhase ← runInductiveModelsWithEnv binary
+    ["--no-inductives", "--no-check", "--no-type-check-output", "--no-output", nested] #[
+      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_PHASE", some "produce"),
+      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_DIRECTORY", some "/"),
+      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_TOKEN", some "forged")]
+  state := state.check "public supervisor strips a forged fresh-worker phase" <|
+    spoofedPhase.exitCode == 0 && spoofedPhase.stdout.isEmpty
+  let forgedDirectPhase ← runInductiveModelsWithEnv binary
+    ["--no-inductives", "--no-check", "--no-type-check-output", "--no-output", nested] #[
+      (InductiveModels.Supervisor.workerMarker, some "1"),
+      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_PHASE", some "produce"),
+      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_DIRECTORY", some "/"),
+      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_TOKEN", some "forged")]
+  state := state.check "direct forged fresh-worker capability fails closed" <|
+    forgedDirectPhase.exitCode == 3 && forgedDirectPhase.stdout.isEmpty &&
+      forgedDirectPhase.stderr.contains "invalid fresh output-kernel producer capability"
 
   -- Generated arena IDs may differ from the legacy global writer, so compare
   -- parsed exports, exact declaration order, diagnostics, and exit status

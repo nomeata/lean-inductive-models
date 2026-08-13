@@ -31,7 +31,7 @@ structure Config where
   typeCheckInput : Bool := false
   /-- Submit the complete final transformed stream to Lean's kernel. Enabled by
   default so an ordinary CLI run never publishes a stream the official kernel
-  rejects; `--no-type-check-output` is the explicit bounded-memory opt-out. -/
+  rejects. Generated no-output runs serialize and replay in a fresh worker. -/
   typeCheckOutput : Bool := true
   monoLevels : Bool := false
   /-- Whether an export is written. -/

@@ -148,14 +148,15 @@ owner and rejects dependency cycles or ambiguous ownership.
 
 Canonical generation can stage model islands and retain compact ordering and
 structural-check certificates. Operations that need the complete transformed
-AST—currently universe monomorphization and output kernel replay—use the
-full-memory path. Consequently the default output kernel check favors the
-stronger final verdict; `--no-type-check-output` also makes otherwise eligible
-runs available to the compact backends. With both `--no-output` and
+AST—currently universe monomorphization and published named/stdout output
+kernel replay—use the full-memory path. With generated `--no-output`, the
+default output kernel gate instead stages a private candidate, terminates the
+generation worker, and replays that serialization in a fresh worker. Thus the
+generation and whole-output kernel heaps do not overlap. With both `--no-output` and
 `--no-type-check-output`, accepted islands are checked and summarized while
 live and then discarded: no workspace is opened and no cumulative generated
-declaration array is retained. The default `--type-check-output` remains the
-full-memory path until serialized replay can run in a fresh worker.
+declaration array is retained. Monomorphization and deliberate legacy/planner
+diagnostic modes remain on the full-memory path.
 
 Unsupported shapes pass through unchanged and are reported as declines. A
 consumer using models as an inductive front end must implement the five-member

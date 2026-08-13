@@ -107,7 +107,8 @@ failure.
 fixtures: the full-AST oracle, the test-only full-AST shadow spool, the
 AST-dropping physical spool, and sink-free compact discard. `mainclitest`
 selects compact discard explicitly with `--no-output --no-type-check-output`;
-`--no-output --type-check-output` is intentionally a legacy/full-AST control.
+generated `--no-output --type-check-output` is the two-worker serialized
+producer/kernel-replay path and pins exit-2 precedence plus private cleanup.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and

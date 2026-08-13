@@ -20,7 +20,7 @@ passes:
 5. put the resulting records in dependency and model-before-owner order;
 6. generate the selected inductive models;
 7. order the generated records;
-8. structurally check and optionally kernel-check the final in-memory export;
+8. structurally check and optionally kernel-check the final export;
 9. emit it, unless output was disabled.
 
 The export is the only stream written to stdout.  Reports and errors go to
@@ -125,9 +125,10 @@ def unsupportedDeclines (input : Export) (report : InductiveModels.Report) : Arr
       InductiveModels.declineIsUnsupported alreadyCovered generated entry.1
 
 /-- Shared compact-generation boundary. Structural output checking consumes
-the compact report certified while each family was live. Output kernel checking
-must still replay the exact final byte stream and therefore retains the legacy
-in-memory path. Monomorphization rewrites source declarations. -/
+the compact report certified while each family was live. A worker doing kernel
+replay itself still needs the complete AST; the public generated no-output path
+instead gives this worker `typeCheckOutput = false`, serializes privately, and
+starts a fresh checker. Monomorphization rewrites source declarations. -/
 def compactModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   InductiveModels.generationEnabled config && !config.monoLevels &&
     !config.typeCheckOutput
