@@ -446,6 +446,11 @@ def run (root : String) : IO UInt32 := do
     | .ok scheduled => scheduled.decls == unrelatedSupport.decls
     | .error _ => false
   let selectedOwner := inductiveRecord [`SelectedA, `SelectedB]
+  let selectedWithoutSupport := exportOf #[selectedOwner, axDecl `IndependentTail]
+  state := state.check "selected owner without source support retains ordinary order" <|
+    match scheduleSource selectedWithoutSupport nestedMutualOnly with
+    | .ok scheduled => scheduled.decls == selectedWithoutSupport.decls
+    | .error _ => false
   let selectedSupport := exportOf #[selectedOwner, axDecl `Eq, axDecl `PUnit]
   state := state.check "support scheduler retains the atomic fixed-support hoist" <|
     match scheduleSource selectedSupport nestedMutualOnly with

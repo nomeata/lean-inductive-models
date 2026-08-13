@@ -1327,13 +1327,30 @@ so the library scheduler has the same boundary as the command-line driver. -/
 def generationEnabled (generation : Cli.Config) : Bool :=
   generation.nested || generation.mutualModels || generation.simple || generation.basic
 
+/-- Whether the source contains an actual late-support ordering hazard.
+
+An absent public carrier is not sufficient: already-filtered files retain
+permanently declined owners, and prioritizing support which already precedes
+all of them changes independent byte order without enabling any construction.
+Scan once in source order and request prioritization only when an exact
+unmodelled candidate has already occurred before a later fixed-support record. -/
+def sourceNeedsSupportScheduling (x : Export) (generation : Cli.Config)
+    (reserved : Std.HashSet Name) : Bool := Id.run do
+  let mut candidateSeen := false
+  for declaration in x.decls do
+    if scheduledModelOwner generation reserved declaration then
+      candidateSeen := true
+    if candidateSeen && scheduledSupportRecord generation declaration then
+      return true
+  return false
+
 /-- Dependency-order source records.  Preserve ordinary stable order unless
-there is an exact unmodelled owner; only then hoist the exact fixed interface
-and its dependency closure. -/
+an exact unmodelled owner precedes later source-owned support; only then hoist
+the exact fixed interface and its dependency closure. -/
 def scheduleSource (x : Export) (generation : Cli.Config) : Except Order.Error Export :=
   let reserved := x.decls.foldl (fun names declaration =>
     declaration.names.foldl (·.insert ·) names) {}
-  if x.decls.any (scheduledModelOwner generation reserved) then
+  if sourceNeedsSupportScheduling x generation reserved then
     Order.reorderPrioritizing x (scheduledSupportRecord generation)
   else
     Order.reorder x
