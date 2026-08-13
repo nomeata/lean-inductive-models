@@ -41,7 +41,7 @@ def auditLift : MetaM (Except Decline (Array Name × Bool × Bool × Bool × Boo
     return (eqDecls.flatMap (fun (declaration : Declaration) =>
         declaration.getNames.toArray) ++ names,
       checkPUnit (← getEnv) |>.isOk, second.isEmpty, noLegacy,
-      downIota && recIota && eta, !primBasis.contains `PULiftP)).run
+      downIota && recIota && eta, !basis.contains `PULiftP)).run
 
 def main : IO UInt32 := do
   let env ← importModules #[] {}

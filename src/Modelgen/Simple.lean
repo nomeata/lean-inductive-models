@@ -185,16 +185,28 @@ nothing; and arm W applies the W core's propositional ι theorem.
   a checked decline rather than a level-normalizer relaxation.
 * a field mentioning `T` other than as `∀ z⃗, T p⃗ e⃗` — a **nested**
   occurrence, which is layer 1's business.
-* the four **basis primitives themselves** — the exemption that makes the
-  construction well-founded.
+* the four ordinary **inductive-basis primitives themselves** — the exemption
+  that makes the construction well-founded. `Quot` is the fifth basis member,
+  but is a kernel-special quotient declaration rather than an ordinary
+  inductive owner.
 -/
 
 open Lean Meta
 
 namespace Modelgen
 
-/-- The four, by name. A declaration in this set is the basis and is not
-modelled — the exemption that makes the construction well-founded.
+/-- The complete trusted basis, by principal name.
+
+`Quot` denotes Lean's kernel-special quotient bundle (`Quot`, `Quot.mk`,
+`Quot.lift`, and `Quot.ind`), not an ordinary inductive declaration. It is
+nevertheless part of the advertised basis: generated proofs may use it to
+derive `funext` from `Quot.sound`. -/
+def basis : List Name := [`Eq, `PSigma', `Nat, `PUnit, `Quot]
+
+/-- The ordinary inductive subset of [`Modelgen.basis`]. Declarations in this
+set are not modelled — the exemption that makes the construction
+well-founded. `Quot` is handled by the kernel's quotient declaration path
+instead, so it does not participate in this owner-exemption test.
 
 **`Acc` was the fifth and is not here any more.** Its one grant — the
 subsingleton-recursive large eliminator — is derived by
@@ -206,7 +218,7 @@ one. `Nonempty` never joins this list either, though the graph arm names it:
 its `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
 transport along — [`Modelgen.cfalseElim`]), so `False` models like any other
 declaration. The tight pair and `PUnit` together take its place. -/
-def primBasis : List Name := [`Eq, `PSigma', `Nat, `PUnit]
+def inductiveBasis : List Name := [`Eq, `PSigma', `Nat, `PUnit]
 
 /-- **Lean's `PUnit`**, exactly as `Init/Prelude.lean` declares it:
 `inductive PUnit.{u} : Sort u | unit : PUnit`.
@@ -484,7 +496,7 @@ def checkPSigmaPrimeCore (env : Environment) : Except String Unit := do
 /-- **Lean's `Nonempty`**, as `Init/Prelude.lean` declares it:
 `inductive Nonempty (α : Sort u) : Prop | intro (val : α) : Nonempty α`.
 
-**It is not a basis primitive** and it is not on [`Modelgen.primBasis`]'s list.
+**It is not a basis primitive** and it is not on [`Modelgen.basis`]'s list.
 It is here for one reason: `Classical.choice`'s *own domain* is `Nonempty`, so
 the graph arm ([`Modelgen.graphArm`]) cannot state totality without naming it.
 Unlike the five it does not need an exemption to keep the construction
@@ -2573,7 +2585,7 @@ max exactly `w` for free at every arity including zero.
 
 `Σ'` is `PSigma'` rather than the fragment's `Sigma` for a second reason beside
 the levels: a non-recursive field may sit at `Prop`, and `Sigma`'s domain may
-not. `PSigma'` is on [`Modelgen.primBasis`] and its eta is the kernel's
+not. `PSigma'` is on [`Modelgen.inductiveBasis`] and its eta is the kernel's
 structure eta.
 
 **The junk is uninhabited in both directions and that is load-bearing for
@@ -3492,7 +3504,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   let skelCtorN := fun (j : Nat) => Name.str skelN s!"c_{j}"
   let nc := exportCtors.size
 
-  if primBasis.contains tname then declineWith .basisExempt
+  if inductiveBasis.contains tname then declineWith .basisExempt
 
   -- The guard runs on the **emitted** name and, where the two differ, on the
   -- built one too: the first is the contract this run must not break and the
@@ -4931,7 +4943,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     let wRequires : Array Name := core.flatMap fun d =>
       match d with
       | .inductDecl _ _ types _ =>
-        (types.map (·.name)).toArray.filter (!primBasis.contains ·)
+        (types.map (·.name)).toArray.filter (!inductiveBasis.contains ·)
       | _ => #[]
 
     let unitMot : Expr := .lam `x wNatT (.sort wW) .default

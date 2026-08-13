@@ -2324,7 +2324,7 @@ The fragment holds two `Expr.lit (.natVal _)`, and a literal's type is the
 kernel's own `Nat` by fiat — nothing renames it. A prefixed `_wcore.Nat` leaves
 `_wcore.Bool.ctorIdx` returning it while the literal in its body is at `Nat`,
 and that is `(kernel) unknown constant 'Nat'`. Sharing costs nothing anyone
-was counting on: `Nat` is already one of [`Modelgen.primBasis`]'s four, so it
+was counting on: `Nat` is already one of [`Modelgen.inductiveBasis`]'s four, so it
 was never going to be modelled, and sharing it takes an unmodelled inductive
 *out* of the output rather than putting one in. `Nat.beq` and the rest of the
 namespace stay prefixed — they are ordinary definitions and only the type

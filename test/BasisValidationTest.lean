@@ -25,7 +25,9 @@ def basisDeclarations : Array Declaration :=
 
 def basisNames : Array Name := #[`Eq, `Nat, `PUnit, `PSigma']
 
-/-- One raw owner which really consumes all four basis interfaces. -/
+/-- One raw owner which consumes all four ordinary inductive basis interfaces.
+The fifth member, `Quot`, is a kernel-special declaration rather than a type
+former used by this fixture. -/
 def consumerDeclaration : Declaration :=
   let nat : Expr := .const `Nat []
   let zero : Expr := .const `Nat.zero []
@@ -127,7 +129,7 @@ def main : IO UInt32 := do
 
   let exactUsed ← makeRawFixture false true `Eq
   let (_, exactUsedReport) ← runRaw exactUsed
-  state := state.check "canonical four-basis consumer generates" <|
+  state := state.check "canonical four-inductive-basis consumer generates" <|
     basisNames.all fun target => exactUsedReport.exempt.any (·.1 == target)
   state := state.check "canonical basis is not declined" <|
     basisNames.all fun target => !exactUsedReport.declined.any (·.1 == target)

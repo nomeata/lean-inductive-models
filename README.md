@@ -14,20 +14,23 @@ There are two reasons to use these models:
 - A checker that does not implement general inductive declarations can use the
   models as a front end, while implementing only a small trusted basis.
 
-The basis is:
+The trusted basis is:
 
 ```text
-Eq  Nat  PUnit  PSigma'
+Eq  Nat  PUnit  PSigma'  Quot
 ```
 
-These four inductives are not modeled. `PSigma'` is the tight dependent pair
+The first four are ordinary inductive owners and are not modeled. `PSigma'` is
+the tight dependent pair
 `{α : Sort u} → (α → Sort v) → Sort (max u v)`; its named projections and
 arbitrary-sort `rec'` are ordinary definitions derived from primitive
 projections. Together with `PUnit`, it derives the exact-sort propositional
-lift `PSigma'.{0,u} (fun _ : P => PUnit.{u})`. Generated developments may also use
-Lean's kernel quotient declarations `Quot`, `Quot.mk`, `Quot.lift`, and
-`Quot.ind`, together with the standard axioms `Classical.choice`, `propext`,
-and `Quot.sound`.
+lift `PSigma'.{0,u} (fun _ : P => PUnit.{u})`. `Quot` is the special fifth
+member: it denotes Lean's kernel quotient bundle `Quot`, `Quot.mk`,
+`Quot.lift`, and `Quot.ind`, rather than an ordinary inductive owner. Generated
+developments use it only on routes that derive function extensionality from
+the standard axiom `Quot.sound`; other routes need no quotient. They may also
+use the standard axioms `Classical.choice` and `propext` when required.
 
 ## Command line
 
@@ -564,7 +567,8 @@ retention; no full-corpus memory bound is claimed without a measured run.
 - Unsupported inductive shapes are reported as declines and pass through
   without a model.
 - A checker consuming the models as an inductive front end must implement the
-  four basis inductives and Lean's kernel quotient declarations, and admit the
+  five-member basis: its four ordinary inductives and the special kernel
+  quotient bundle. It must also admit the
   standard axioms `Classical.choice`, `propext`, and `Quot.sound` when a
   generated development uses them.
 - Universe monomorphization is optional, off by default, and is exposed only
@@ -657,8 +661,9 @@ checks a pinned Mathlib export under a cgroup memory limit and records
 instruction counts with `perf`. Its artifact gate requires positive generation,
 statement-comparison, output-check, universe-planning, and serialized-reread
 work; zero statement differences and universe escapes; exemptions for the
-three basis members owned by that pinned input (`Eq`, `Nat`, and `PUnit`); a
-spliced `PSigma'`; and no unexpected basis declarations. The observed counts
+three ordinary-inductive basis members owned by that pinned input (`Eq`, `Nat`,
+and `PUnit`); a spliced `PSigma'`; the kernel `Quot` bundle when required; and
+no unexpected basis declarations. The observed counts
 are intentionally not hard-coded.
 
 ## Copyright and license

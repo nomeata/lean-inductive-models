@@ -794,7 +794,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
   -- names `Eq` still pins it; the extra claim below is that nothing but a
   -- basis primitive ever lands in the exempt row.
   let gotD := (rep.exempt ++ rep.declined).toList.map fun (n, w) => (n.toString, w)
-  a := check a (rep.exempt.all fun (n, _) => Modelgen.primBasis.contains n)
+  a := check a (rep.exempt.all fun (n, _) => Modelgen.inductiveBasis.contains n)
     s!"{name}: the exempt row holds a non-basis name: {rep.exempt.map (·.1)}"
   -- By **prefix**: which shape stopped the generator is the claim, and a
   -- kernel diagnostic quoted inside the message is not.

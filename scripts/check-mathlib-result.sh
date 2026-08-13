@@ -37,9 +37,11 @@ grep -Eq '^levels: [1-9][0-9]* planner comparisons, 0 escapes$' "$GENERATE_LOG" 
 [[ "$(grep -Ec '^levels: ' "$GENERATE_LOG")" == 1 ]] ||
   fail "generation reported more than one universe-planning result"
 
-# This set follows from the pinned input: it owns three of the four basis
-# inductives. PSigma' is absent there and must instead be spliced below;
-# ordinary PSigma is modelled like any other source inductive.
+# This set follows from the pinned input: it owns three of the four ordinary
+# inductive members of the five-member basis. PSigma' is absent there and must
+# instead be spliced below; Quot is the special kernel member and is not an
+# inductive-owner exemption. Ordinary PSigma is modelled like any other source
+# inductive.
 expected_exemptions=$'Eq\nNat\nPUnit'
 actual_exemptions="$({
   sed -nE 's/^([^:]+): exempt — .*$/\1/p' "$GENERATE_LOG" || true

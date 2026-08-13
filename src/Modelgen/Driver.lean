@@ -52,7 +52,8 @@ namespace Modelgen
 structure Report where
   generated : Array (Name × Nat) := #[]
   declined : Array (Name × String) := #[]
-  /-- **The basis exemption, which is not a decline** ([`Modelgen.primBasis`]).
+  /-- **The inductive-basis exemption, which is not a decline**
+  ([`Modelgen.inductiveBasis`]).
   `Eq`, `Nat`, `PSigma'`, and `PUnit` are the primitives
   the third construction is written in, so a run leaves them unmodelled *by
   definition*; counting them among the declines makes every coverage report
@@ -91,7 +92,7 @@ owner is always unsupported: neither a model-shaped input family nor another
 route may turn the reserved-name validation failure into success. -/
 def declineIsUnsupported (alreadyCovered generated : Std.HashSet Name)
     (owner : Name) : Bool :=
-  primBasis.contains owner ||
+  inductiveBasis.contains owner ||
     (!alreadyCovered.contains owner && !generated.contains owner)
 
 /-- The compact support-persistence witness retained until an island closes.
@@ -1840,7 +1841,7 @@ show it, because a spliced declaration was never a candidate to begin with.
 Earlier coverage figures therefore measured only declarations from the input.
 
 Only *non-basis* splices are modelled: the four on
-[`Modelgen.primBasis`] are the exemption that makes the construction
+[`Modelgen.inductiveBasis`] are the exemption that makes the construction
 well-founded and must stay unmodelled. That is also what bounds the recursion
 — a model's own splices are basis members or already present.
 
@@ -1908,7 +1909,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let mut st2 := (out, rep, pending.push { spliced := is.spliced })
     if basicModels then
       for n in is.spliced do
-        if primBasis.contains n then continue
+        if inductiveBasis.contains n then continue
         let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
         -- the block's own name only, and only a simple one
         unless iv.all == [n] && iv.numNested == 0 do continue
@@ -2089,7 +2090,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     let mut modeledSourceGlobalExtra? : Option Check.GlobalExtraRecord := none
     let basisRoot? := match d with
       | .induct types _ _ => types.findSome? fun type =>
-          if primBasis.contains type.name then some type.name else none
+          if inductiveBasis.contains type.name then some type.name else none
       | _ => none
     -- No model declaration is ever installed in `mainEnv`. All constructors
     -- below work in the ambient disposable fork; closing an inductive record

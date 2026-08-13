@@ -62,8 +62,11 @@ def main : IO UInt32 := do
     ("exact support bundle", complete),
     ("tight primitive shape", coreOk),
     ("idempotent validation", idempotent),
+    ("trusted basis includes the special kernel quotient",
+      basis == [`Eq, `PSigma', `Nat, `PUnit, `Quot]),
     ("tight pair is the sole dependent-pair basis primitive",
-      primBasis == [`Eq, `PSigma', `Nat, `PUnit] && !primBasis.contains `PSigma),
+      inductiveBasis == [`Eq, `PSigma', `Nat, `PUnit] &&
+        !basis.contains `PSigma && basis.contains `Quot),
     ("custom recursor uses both projection-derived definitions", projections)]
   for (label, passed) in checks do
     unless passed do IO.eprintln s!"FAIL: {label}"
