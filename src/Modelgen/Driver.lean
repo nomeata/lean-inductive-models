@@ -2260,12 +2260,20 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         { statementsChecked := islandStatements.statementsChecked +
             statementReport.statementsChecked
           violations := islandStatements.violations ++ statementReport.violations }
-      if let some sink := sink? then
+      unless compact.summaries.size == orderedGenerated.size &&
+          compact.globalExtras.size == orderedGenerated.size do
+        throwError "accepted island cardinality mismatch for {d.names}: \
+          records={orderedGenerated.size}, summaries={compact.summaries.size}, \
+          extras={compact.globalExtras.size}"
+      -- An inductive owner may legitimately produce no model under the active
+      -- route configuration. It contributes no generated island; the spool
+      -- transaction deliberately rejects empty commits.
+      if let some sink := sink? then if !orderedGenerated.isEmpty then
         let commit ← sink.commit orderedGenerated
-        unless compact.summaries.size == compact.globalExtras.size &&
-            compact.summaries.size == commit.declarations.size do
+        unless orderedGenerated.size == commit.declarations.size do
           throwError "staged island cardinality mismatch for {d.names}: \
-            summaries={compact.summaries.size}, extras={compact.globalExtras.size}, \
+            records={orderedGenerated.size}, summaries={compact.summaries.size}, \
+            extras={compact.globalExtras.size}, \
             spans={commit.declarations.size}"
         let islandNumber := staged.size
         let tagged := Order.tagIsland islandNumber compact.summaries
