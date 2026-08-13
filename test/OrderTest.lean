@@ -887,12 +887,19 @@ def run (root : String) : IO UInt32 := do
       wRun.env.constants.contains wCoreSelf &&
       !wRun.env.constants.contains (Naming.modelName `Tree) &&
       finalEnvironmentIsIsolated wRun
+  let wParity := #[
+    ("staged output", wStaged.output.decls == wRun.output.decls),
+    ("staged report", wStaged.report == wRun.report),
+    ("compact check", wStaged.plan.checkReport == Check.checkReport wRun.output),
+    ("staged plan", wStaged.planValid),
+    ("dropped report", wDropped.report == wRun.report),
+    ("dropped plan", wDropped.planValid),
+    ("dropped declarations", wDropped.plan.declarations == wStaged.plan.declarations),
+    ("dropped islands", wDropped.plan.islands == wStaged.plan.islands)]
+  unless wParity.all (·.2) do
+    IO.eprintln s!"one-layer W parity: {repr wParity}"
   state := state.check "one-layer W output is identical across legacy and staged drivers" <|
-    wStaged.output.decls == wRun.output.decls && wStaged.report == wRun.report &&
-      wStaged.plan.checkReport == Check.checkReport wRun.output && wStaged.planValid &&
-      wDropped.report == wRun.report && wDropped.planValid &&
-      wDropped.plan.declarations == wStaged.plan.declarations &&
-      wDropped.plan.islands == wStaged.plan.islands
+    wParity.all (·.2)
 
   -- Scheduling moves the input's exact PUnit bundle before the owner that
   -- needs it. It is source state, not a generated splice, and remains present
