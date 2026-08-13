@@ -674,6 +674,20 @@ def run (root : String) : IO UInt32 := do
       neutralShadow.env.constants.contains `NeutralOwner &&
       neutralShadow.env.constants.contains `NeutralDependent
 
+  -- The declaration-wise filter seam consumes the logical dependency stream,
+  -- not raw file order.  Pin that existing contract before extracting the
+  -- loop: a source consumer may occur first in the export, but its provider is
+  -- replayed first and both exact records remain otherwise unchanged.
+  let feedConsumer := axDecl `FeedConsumer (.const `FeedProvider [])
+  let feedProvider := axDecl `FeedProvider
+  let feedInput := exportOf #[feedConsumer, feedProvider]
+  let feedRun ← runFilterState feedInput noGeneration
+  state := state.check "filter consumes one dependency-ordered source record at a time" <|
+    feedRun.output.decls == #[feedProvider, feedConsumer] &&
+      feedRun.report == ({} : Report) &&
+      feedRun.env.constants.contains `FeedProvider &&
+      feedRun.env.constants.contains `FeedConsumer
+
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,
   -- and a stable reorder must retain all ordinary implementation dependencies.
