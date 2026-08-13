@@ -498,16 +498,6 @@ def exactRecursorMotiveResult? (recursor : ERec) (ruleIndex : Nat)
     return motiveResult.replace fun expression =>
       sourceFields.findIdx? (· == expression) |>.map fun index => fields[index]!
 
-/-- The exact universe in which one exported recursor motive returns. -/
-def exactRecursorMotiveLevel? (recursor : ERec) : Option Level := do
-  let (binders, _) := openExactRecForalls ((`_exact_rec_level).append recursor.name)
-    recursor.type
-  let motive ← binders[recursor.numParams]?
-  let (_, result) := openExactRecForalls ((`_exact_motive_level).append recursor.name)
-    motive.type
-  let .sort level := result | none
-  return level
-
 /-! ## The generator -/
 
 /-- The generator's read-only context. -/

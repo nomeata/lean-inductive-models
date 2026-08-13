@@ -5707,13 +5707,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
               | badShape s!"{sourceRecursor.name}'s exported rule {j} has no exact motive result"
             pure (publicSource exactResult)
         let tel := pre ++ fields
-        let equalityLevel ← match sourceRecursor? with
-          | none => pure v
-          | some sourceRecursor =>
-            let some level := exactRecursorMotiveLevel? sourceRecursor
-              | badShape s!"{sourceRecursor.name}'s exported motive has no exact result sort"
-            pure level
-        let proposition := eqi.mk' equalityLevel α lhs rhs
+        let proposition := eqi.mk' v α lhs rhs
         let exactFieldTelescope ← match sourceRecursor? with
           | none => pure cty
           | some sourceRecursor =>

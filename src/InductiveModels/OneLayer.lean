@@ -1065,8 +1065,9 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
       let rhs := (exactOneLayerPublicSource tname sourceConstructor.1 sourceRecursor.name
         names sourceRule.rhs).beta (pre ++ fields)
       let alpha := mkApp motive major
-      let some equalityLevel := exactRecursorMotiveLevel? sourceRecursor
-        | badShape s!"{sourceRecursor.name}'s exported motive has no exact result sort"
+      let equalityLevel := if sourceRecursor.levelParams.length == lparams.length + 1 then
+          sourceRecursor.levelParams.head?.map Level.param |>.getD .zero
+        else .zero
       let proposition := eqi.mk' equalityLevel alpha lhs rhs
       let some exactFields := exactRecursorFieldTelescope? sourceRecursor 0 pre
         | badShape s!"{sourceRecursor.name}'s exported rule has no exact field telescope"
