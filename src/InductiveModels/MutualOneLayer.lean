@@ -45,7 +45,7 @@ private def directMutualTarget? (all : Array Name) (np : Nat) (type : Expr) :
   return none
 
 private def mutualFieldShape (all : Array Name) (np : Nat) (constructorType : Expr) :
-    GenM (Array MutualFieldShape) := do
+    GenM (Option (Array MutualFieldShape)) := do
   forallBoundedTelescope constructorType (some np) fun parameters _ => do
     let telescope ← instForall constructorType parameters
     let fieldCount := numForalls telescope
@@ -55,15 +55,15 @@ private def mutualFieldShape (all : Array Name) (np : Nat) (constructorType : Ex
         let fieldType ← inferType fields[index]!
         let target? ← directMutualTarget? all np fieldType
         if target?.isNone && mentionsAny all fieldType then
-          badShape "a mutual recursive field is not a direct unindexed occurrence"
+          return none
         if target?.isSome then
           let .fvar fieldId := fields[index]!
-            | badShape "a mutual recursive field is not constructor-local"
+            | return none
           for later in [index + 1:fields.size] do
             if (← inferType fields[later]!).containsFVar fieldId then
-              badShape "a later constructor field depends on a mutual recursive field"
+              return none
         result := result.push { target? }
-      return result
+      return some result
 
 /-- Select the bounded production tranche symmetrically across a source SCC.
 Every member is unindexed, unnested, safe, and never-zero.  A changed member
@@ -87,7 +87,7 @@ private def classifyMutualOneLayer (types : Array EIndType)
       let some constructor := constructors.find? fun constructor =>
           constructor.name == constructorName && constructor.induct == type.name
         | badShape s!"{constructorName} has no exact constructor record"
-      let shape ← mutualFieldShape all np constructor.type
+      let some shape ← mutualFieldShape all np constructor.type | return none
       constructorFields := constructorFields.push (constructor.name, shape)
     let changed := type.ctors.length == 1 &&
       constructorFields.any fun (_, fields) => fields.any (·.target?.isSome)
