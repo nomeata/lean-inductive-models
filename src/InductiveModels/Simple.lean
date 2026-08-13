@@ -3475,10 +3475,18 @@ def primIsoWithInterface (tname : Name) (root : Name) (lparams : List Name) (np 
   let model := interface.model
   let impl := interface.impl
   let selfN := interface.self
-  let ctorN := fun (j : Nat) => interface.ctors[j]!
   let ern := Name.str tname "rec"
   let recN := interface.recursor
-  let iotaN := fun (j : Nat) => interface.iotas[j]!
+  -- `primRuleK` asks for iota slot zero even for a constructorless
+  -- declaration, where it immediately observes that K is disabled.  The
+  -- historical name function was total; keep this refactoring boundary total
+  -- as well so an ordinary declined attempt never emits a caught bounds panic
+  -- (and its address-bearing native backtrace) on stderr.
+  let ctorN := fun (j : Nat) => interface.ctors[j]?.getD
+    (Naming.modelName (Naming.relocateSource tname root
+      (exportCtors[j]?.map (·.1) |>.getD (Name.str tname s!"ctor_{j}"))))
+  let iotaN := fun (j : Nat) => interface.iotas[j]?.getD
+    (Naming.iotaName (Naming.relocateSource tname root ern) j)
   let indN := Name.str impl "ind"
   -- Arm G's **internal** names, guarded exactly like the interface's — but
   -- only when the arm is taken, so a file that declares
