@@ -747,6 +747,154 @@ private def phase1OneLayerCertificate (declarations : DeclarationTypes)
     return .malformed rollUnrollName
   return .valid
 
+/-- Recognize the complete serialized simultaneous family boundary.  The
+family root comes from the first source owner, but every member, constructor,
+and rule slot is recovered by its source owner/key.  Seeing any prefix commits
+the checker to validating the whole certificate; a partial family is never
+interpreted as legacy mutual output. -/
+private def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
+    (ownerTypes : Array EIndType) (constructors : Array ECtor) (recursors : Array ERec)
+    (family : Family) : Phase1OneLayerCertificate := Id.run do
+  let some first := ownerTypes[0]? | return .absent
+  let root := Name.str (Naming.modelName first.name) "_impl"
+  let support := #[Name.str root "tag", Name.str root "aux"]
+  let memberRoot := fun owner => Name.str root (lastStr owner)
+  let privateSelf := fun owner => Name.str (memberRoot owner) "self"
+  let privateRecursor := fun owner => Name.str (memberRoot owner) "rec"
+  let privateConstructor := fun owner constructor =>
+    Name.str (Name.str (memberRoot owner) "ctor") (lastStr constructor)
+  let privateIota := fun owner constructor =>
+    Name.str (Name.str (memberRoot owner) "rec_iota") (lastStr constructor)
+  let privateRule := fun owner constructor =>
+    Name.str (Name.str (memberRoot owner) "rule") (lastStr constructor)
+  let roll := fun owner => Name.str (memberRoot owner) "roll"
+  let unroll := fun owner => Name.str (memberRoot owner) "unroll"
+  let unrollRoll := fun owner => Name.str (memberRoot owner) "unroll_roll"
+  let rollUnroll := fun owner => Name.str (memberRoot owner) "roll_unroll"
+  let mut certificateNames := support
+  for ownerType in ownerTypes do
+    certificateNames := certificateNames ++ #[privateSelf ownerType.name,
+      privateRecursor ownerType.name, roll ownerType.name, unroll ownerType.name,
+      unrollRoll ownerType.name, rollUnroll ownerType.name]
+    for constructor in constructors do
+      if constructor.induct == ownerType.name then
+        certificateNames := certificateNames.push
+          (privateConstructor ownerType.name constructor.name)
+    if let some recursor := recursors.find? fun recursor =>
+        recursor.name == Name.str ownerType.name "rec" then
+      for rule in recursor.rules do
+        certificateNames := certificateNames ++ #[privateIota ownerType.name rule.ctor,
+          privateRule ownerType.name rule.ctor]
+  unless certificateNames.any declarations.contains do return .absent
+  unless ownerTypes.size ≥ 2 do return .malformed root
+  let all := ownerTypes.map (·.name)
+  unless ownerTypes.all fun ownerType =>
+      ownerType.all.toArray == all && ownerType.numIndices == 0 && ownerType.numNested == 0 &&
+        ownerType.isRec && !ownerType.isUnsafe && ownerType.numParams == first.numParams do
+    return .malformed root
+  let unique := fun name => match declarations.getD name #[] with
+    | #[declaration] => some declaration
+    | _ => none
+  for name in support do
+    let some declaration := unique name | return .malformed name
+    unless declaration.kind == .induct do return .malformed name
+  for memberIndex in [:ownerTypes.size] do
+    let ownerType := ownerTypes[memberIndex]!
+    let owner := ownerType.name
+    let publicCarrierName := Naming.modelName owner
+    let some publicCarrier := unique publicCarrierName
+      | return .malformed publicCarrierName
+    let some privateCarrier := unique (privateSelf owner)
+      | return .malformed (privateSelf owner)
+    let some privateRec := unique (privateRecursor owner)
+      | return .malformed (privateRecursor owner)
+    let some rollDecl := unique (roll owner) | return .malformed (roll owner)
+    let some unrollDecl := unique (unroll owner) | return .malformed (unroll owner)
+    let some sectionDecl := unique (unrollRoll owner)
+      | return .malformed (unrollRoll owner)
+    let some retractionDecl := unique (rollUnroll owner)
+      | return .malformed (rollUnroll owner)
+    unless privateCarrier.kind == .defn && privateCarrier.safety? == some "safe" &&
+        privateRec.kind == .defn && privateRec.safety? == some "safe" &&
+        rollDecl.kind == .defn && rollDecl.safety? == some "safe" &&
+        unrollDecl.kind == .defn && unrollDecl.safety? == some "safe" &&
+        sectionDecl.kind == .thm && retractionDecl.kind == .thm do
+      return .malformed (privateSelf owner)
+    unless privateCarrier.levelParams == publicCarrier.levelParams &&
+        privateCarrier.type == publicCarrier.type do
+      return .malformed (privateSelf owner)
+    let some publicRecPair := family.correspondence.recursors.find? fun pair =>
+        pair.owner == Name.str owner "rec"
+      | return .malformed (privateRecursor owner)
+    let some publicRec := unique publicRecPair.model
+      | return .malformed publicRecPair.model
+    unless privateRec.levelParams == publicRec.levelParams do
+      return .malformed (privateRecursor owner)
+    let ownerConstructors := constructors.filter (·.induct == owner)
+    unless ownerConstructors.size == ownerType.ctors.length do
+      return .malformed (privateSelf owner)
+    for constructor in ownerConstructors do
+      let privateName := privateConstructor owner constructor.name
+      let some privateCtor := unique privateName | return .malformed privateName
+      let some publicCtorPair := family.correspondence.constructors.find? fun pair =>
+          pair.owner == constructor.name
+        | return .malformed privateName
+      let some publicCtor := unique publicCtorPair.model | return .malformed publicCtorPair.model
+      unless privateCtor.kind == .defn && privateCtor.safety? == some "safe" &&
+          privateCtor.levelParams == publicCtor.levelParams do
+        return .malformed privateName
+    let some sourceRec := recursors.find? fun recursor =>
+        recursor.name == Name.str owner "rec"
+      | return .malformed (privateRecursor owner)
+    for ruleIndex in [0:sourceRec.rules.length] do
+      let sourceRule := sourceRec.rules[ruleIndex]!
+      let iotaName := privateIota owner sourceRule.ctor
+      let ruleName := privateRule owner sourceRule.ctor
+      let some iotaDecl := unique iotaName | return .malformed iotaName
+      let some ruleDecl := unique ruleName | return .malformed ruleName
+      let some publicIota := family.correspondence.iotas.find? fun iota =>
+          iota.recursor == sourceRec.name && iota.ruleIndex == ruleIndex
+        | return .malformed iotaName
+      let some publicIotaDecl := unique publicIota.name | return .malformed publicIota.name
+      unless iotaDecl.kind == .thm && ruleDecl.kind == .thm &&
+          iotaDecl.levelParams == publicIotaDecl.levelParams &&
+          ruleDecl.levelParams == iotaDecl.levelParams && ruleDecl.type == iotaDecl.type do
+        return .malformed ruleName
+    let (parameters, result) := openForalls
+      ((`_check.mutualOneLayerCertificate).append owner) publicCarrier.type
+    unless parameters.size == ownerType.numParams do return .malformed publicCarrierName
+    let .sort carrierLevel := result | return .malformed publicCarrierName
+    let levels := publicCarrier.levelParams.map Level.param
+    let parameterValues := parameters.map (·.value)
+    let publicCarrierType := mkAppN (.const publicCarrierName levels) parameterValues
+    let privateCarrierType := mkAppN (.const (privateSelf owner) levels) parameterValues
+    let publicValue : OpenBinder :=
+      { name := `public, type := publicCarrierType, info := .default
+        value := mkFVar (FVarId.mk ((`_check.mutualPublic).append owner)) }
+    let privateValue : OpenBinder :=
+      { name := `private, type := privateCarrierType, info := .default
+        value := mkFVar (FVarId.mk ((`_check.mutualPrivate).append owner)) }
+    let expectedRoll := closeForalls (parameters.push publicValue) privateCarrierType
+    let expectedUnroll := closeForalls (parameters.push privateValue) publicCarrierType
+    unless rollDecl.type == expectedRoll do return .malformed (roll owner)
+    unless unrollDecl.type == expectedUnroll do return .malformed (unroll owner)
+    let rollApp := mkAppN (.const (roll owner) levels) (parameterValues.push publicValue.value)
+    let unrollRollApp := mkAppN (.const (unroll owner) levels)
+      (parameterValues.push rollApp)
+    let sectionBody := mkAppN (.const ``Eq [carrierLevel])
+      #[publicCarrierType, unrollRollApp, publicValue.value]
+    unless sectionDecl.type == closeForalls (parameters.push publicValue) sectionBody do
+      return .malformed (unrollRoll owner)
+    let unrollApp := mkAppN (.const (unroll owner) levels)
+      (parameterValues.push privateValue.value)
+    let rollUnrollApp := mkAppN (.const (roll owner) levels)
+      (parameterValues.push unrollApp)
+    let retractionBody := mkAppN (.const ``Eq [carrierLevel])
+      #[privateCarrierType, rollUnrollApp, privateValue.value]
+    unless retractionDecl.type == closeForalls (parameters.push privateValue) retractionBody do
+      return .malformed (rollUnroll owner)
+  return .valid
+
 private def checkPair (table : Correspondence) (declarations : DeclarationTypes)
     (pair : ConstantPair) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
@@ -1312,8 +1460,17 @@ private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
   let ownerTypes : Array EIndType := match x.decls[family.ownerDecl]! with
     | .induct types _ _ => types.toArray
     | _ => #[]
+  let ownerConstructors : Array ECtor := match x.decls[family.ownerDecl]! with
+    | .induct _ constructors _ => constructors.toArray
+    | _ => #[]
+  let ownerRecursors : Array ERec := match x.decls[family.ownerDecl]! with
+    | .induct _ _ recursors => recursors.toArray
+    | _ => #[]
+  let mutualCertificate := phase1MutualOneLayerCertificate index.declarations
+    ownerTypes ownerConstructors ownerRecursors family
   let certificates := ownerTypes.map fun ownerType =>
-    (ownerType.name, phase1OneLayerCertificate index.declarations ownerType family)
+    let singleton := phase1OneLayerCertificate index.declarations ownerType family
+    (ownerType.name, if singleton matches .absent then mutualCertificate else singleton)
   for (owner, certificate) in certificates do
     if let .malformed slot := certificate then
       violations := violations.push (.declarationType owner slot)

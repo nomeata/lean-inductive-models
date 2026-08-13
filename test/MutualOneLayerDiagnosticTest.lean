@@ -95,6 +95,9 @@ def replaceDeclarationType (x : Export) (name : Name) (type : Expr) : Export :=
       if got == name then .opaq got params type value isUnsafe all else declaration
     | _ => declaration }
 
+def removeDeclaration (x : Export) (name : Name) : Export :=
+  { x with decls := x.decls.filter fun declaration => !declaration.names.contains name }
+
 partial def containsConst (target : Name) : Expr -> Bool
   | .const name _ => name == target
   | .proj _ _ subject => containsConst target subject
@@ -303,6 +306,17 @@ def run (root : String) : IO UInt32 := do
     actual payloadRule == expected payloadRule
   state := state.check "partial mutual family carries complete owner-keyed certificate" <|
     certificate.all generatedNames.contains
+
+  let memberARoot := memberImpl `MutualLayerA
+  let privateRuleA := Name.str (Name.str memberARoot "rule") "mk"
+  let rollA := Name.str memberARoot "roll"
+  let missingCertificate := removeDeclaration generated privateRuleA
+  state := state.check "partial mutual family certificate fails closed" <|
+    (Check.check missingCertificate).any (hasTypeViolation `MutualLayerA privateRuleA)
+  let malformedCertificate := (declarationType? generated privateRuleA).map (fun (_, type) =>
+      replaceDeclarationType generated rollA type) |>.getD generated
+  state := state.check "malformed mutual family certificate fails closed" <|
+    (Check.check malformedCertificate).any (hasTypeViolation `MutualLayerA rollA)
 
   let transportedCandidate := (actual payloadRule).bind transportOuterEqualityRhs?
     |>.map (replaceDeclarationType generated payloadRule ·) |>.getD generated
