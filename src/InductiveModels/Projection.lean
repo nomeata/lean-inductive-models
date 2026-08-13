@@ -78,10 +78,17 @@ def oneLayerProjectionFamily (types : Array EIndType) (type : EIndType) : Bool :
     type.numIndices == 0 && type.numNested == 0 && type.isRec &&
     !type.isUnsafe
 
-private partial def endsInNeverZeroSort : Expr → Bool
-  | .forallE _ _ body _ => endsInNeverZeroSort body
-  | .sort level => level.normalize.isNeverZero
-  | _ => false
+/-- The literal serialized telescope boundary shared by generation and
+checking.  Deliberately does not unfold a reducible result former: selection
+must not depend on an environment the serialized certificate cannot replay. -/
+def indexedFibreOneLayerTypeShape (numParams numIndices : Nat)
+    (type : Expr) : Bool := Id.run do
+  let mut type := type
+  for _ in [0:numParams + numIndices] do
+    let .forallE _ _ body _ := type | return false
+    type := body
+  let .sort level := type | return false
+  return level.normalize.isNeverZero
 
 /-- The first indexed fibre adapter: one nonrecursive, one-constructor member
 at one index in a genuine `Type`.  The generated private/public certificate,
@@ -90,7 +97,8 @@ def indexedFibreOneLayerProjectionFamily (types : Array EIndType)
     (type : EIndType) : Bool :=
   types.size == 1 && type.all == [type.name] && type.ctors.length == 1 &&
     type.numIndices == 1 && type.numNested == 0 && !type.isRec &&
-    !type.isUnsafe && endsInNeverZeroSort type.type
+    !type.isUnsafe && indexedFibreOneLayerTypeShape
+      type.numParams type.numIndices type.type
 
 /-- One opened constructor field, together with the corresponding modeled
 projection and (for an earlier field) its constructor iota proof.

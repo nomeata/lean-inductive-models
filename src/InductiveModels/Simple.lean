@@ -1,5 +1,6 @@
 import InductiveModels.Mutual
 import InductiveModels.Naming
+import InductiveModels.Projection
 
 /-!
 # The model of a **simple inductive from four primitives**, generated
@@ -3458,11 +3459,8 @@ def phase1IndexedFibreOneLayerEligible (tname : Name) (np : Nat)
     (memberTy : Expr) (exportCtors : Array (Name × Expr))
     (sourceRecursor? : Option ERec) : MetaM Bool := do
   let some (.inductInfo type) := (← getEnv).constants.find? tname | return false
-  let neverZero ← forallBoundedTelescope memberTy (some (np + type.numIndices))
-    fun _ result => match result with
-      | .sort level => pure level.normalize.isNeverZero
-      | _ => pure false
-  return neverZero && sourceRecursor?.isSome && exportCtors.size == 1 &&
+  return indexedFibreOneLayerTypeShape np type.numIndices memberTy &&
+    sourceRecursor?.isSome && exportCtors.size == 1 &&
     type.all == [tname] && type.ctors.length == 1 && type.numIndices == 1 &&
     type.numNested == 0 && !type.isRec && !type.isUnsafe
 

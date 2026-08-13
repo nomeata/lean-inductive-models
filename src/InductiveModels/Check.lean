@@ -1256,10 +1256,15 @@ private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
   let ownerTypes : Array EIndType := match x.decls[family.ownerDecl]! with
     | .induct types _ _ => types.toArray
     | _ => #[]
+  let certificates := ownerTypes.map fun ownerType =>
+    (ownerType.name, phase1OneLayerCertificate index.declarations ownerType family)
+  for (owner, certificate) in certificates do
+    if let .malformed slot := certificate then
+      violations := violations.push (.declarationType owner slot)
   for projection in family.correspondence.projections do
-    let certificate := match ownerTypes.find? fun type => type.name == projection.owner with
-      | some ownerType =>
-        phase1OneLayerCertificate index.declarations ownerType family
+    let certificate := match certificates.find? fun entry => entry.1 == projection.owner with
+      | some (_, .malformed _) => .absent
+      | some (_, certificate) => certificate
       | none => .malformed projection.owner
     violations := violations ++ checkProjection
       x index.structures index.normalizer family index.declarations certificate projection

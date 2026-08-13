@@ -853,6 +853,12 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
     (memberTy : Expr) (sourceConstructor : Name × Expr)
     (reserved : Std.HashSet Name) (implementationIso : Iso) : GenM OneLayerBase := do
   let names := OneLayerNames.forBuild tname root #[sourceConstructor]
+  if root != tname then
+    let exact := OneLayerNames.forBuild tname tname #[sourceConstructor]
+    for name in #[exact.implementation.self, exact.implementation.ctors[0]!,
+        exact.implementation.recursor, exact.implementation.iotas[0]!,
+        exact.roll, exact.unroll, exact.unrollRoll, exact.rollUnroll] do
+      ensureFresh reserved name
   unless implementationIso.selfNames == #[names.implementation.self] &&
       implementationIso.ctors == #[(sourceConstructor.1, names.implementation.ctors[0]!)] &&
       implementationIso.recs == #[names.implementation.recursor] &&
