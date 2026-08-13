@@ -468,6 +468,19 @@ def main : IO UInt32 := do
     (declarationType? wGenerated wtyRule0).any fun type => !containsConst ``Eq.rec type
   state := state.check "dependent infinitary recursive field retains the literal rule" <|
     (declarationType? wGenerated wtyRule1).any fun type => !containsConst ``Eq.rec type
+  let missingOneLayerLaw := Check.check <|
+    withoutDeclaration wGenerated (Name.str wtyPrivateRoot "roll_unroll")
+  state := state.check "partial one-layer certificate is rejected, not treated as legacy" <|
+    missingOneLayerLaw.any
+      (hasTypeViolation `Wty (Name.str wtyPrivateRoot "roll_unroll"))
+  let malformedOneLayerMap := Check.check <|
+    replaceDeclarationType wGenerated (Name.str wtyPrivateRoot "roll")
+      (.sort (.succ .zero))
+  state := state.check "malformed one-layer map is rejected structurally" <|
+    malformedOneLayerMap.any (hasTypeViolation `Wty (Name.str wtyPrivateRoot "roll"))
+  let noOneLayerCertificate := wtyCertificate.foldl withoutDeclaration wGenerated
+  state := state.check "literal recursive rules require the complete certificate" <|
+    (Check.check noOneLayerCertificate).any (hasTypeViolation `Wty wtyRule1)
 
   let (wrapperDeclarations, wrapperReport) ← runExport wrapperRaw
   let wrapperGenerated := outputExport wrapperRaw wrapperDeclarations
@@ -545,6 +558,9 @@ def main : IO UInt32 := do
   state := state.check "recursive one-constructor fields are intrinsic projections" <|
     intrinsicFieldsFor raw `Recursive == #[0, 1] && recursiveProjections.all names.contains &&
       (Check.check generated).all (·.familyOwner != `Recursive)
+  state := state.check "legacy generated recursive skeleton remains on its legacy contract" <|
+    !#[`Recursive._model._impl.self, `Recursive._model._impl.ctor_0,
+        `Recursive._model._impl.rec, `Recursive._model._impl.rec_iota_0].any names.contains
   state := state.check "recursive projections retain the recursor fallback" <|
     (Array.range 2).all fun fieldIndex =>
       (definitionValue? generated (Naming.projectionName `Recursive fieldIndex)).any

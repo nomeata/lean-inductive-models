@@ -626,6 +626,125 @@ private def checkTheoremSlot (declarations : DeclarationTypes) (owner name : Nam
   | #[declaration] => checkTheoremDecl owner declaration
   | _ => #[]
 
+private inductive Phase1OneLayerCertificate where
+  | absent
+  | valid
+  | malformed (slot : Name)
+
+private def rewriteCertificateNames (mapping : Array (Name × Name)) (type : Expr) : Expr :=
+  type.replace fun expression => match expression with
+    | .const name levels => mapping.findSome? fun (source, target) =>
+        if name == source then some (.const target levels) else none
+    | _ => none
+
+/-- Recognize the complete first-tranche private/public interface from the
+serialized declarations.  Names alone do not select the new contract: every
+private public-facing type, both directions of the equivalence, and both laws
+must be uniquely present and exact.  A partial prefix is malformed rather
+than a request to reinterpret the family as legacy output. -/
+private def phase1DirectTypeOneLayerCertificate (declarations : DeclarationTypes)
+    (ownerType : EIndType) (family : Family) :
+    Phase1OneLayerCertificate := Id.run do
+  let publicCarrierName := Naming.modelName ownerType.name
+  let impl := Name.str publicCarrierName "_impl"
+  let privateCarrierName := Name.str impl "self"
+  let privateConstructorName := Name.str impl "ctor_0"
+  let privateRecursorName := Name.str impl "rec"
+  let privateIotaName := Name.str impl "rec_iota_0"
+  let rollName := Name.str impl "roll"
+  let unrollName := Name.str impl "unroll"
+  let unrollRollName := Name.str impl "unroll_roll"
+  let rollUnrollName := Name.str impl "roll_unroll"
+  let certificateNames := #[privateCarrierName, privateConstructorName,
+    privateRecursorName, privateIotaName, rollName, unrollName,
+    unrollRollName, rollUnrollName]
+  unless certificateNames.any declarations.contains do return .absent
+  unless oneLayerProjectionFamily #[ownerType] ownerType do
+    return .malformed privateCarrierName
+  let some constructorPair := family.correspondence.constructors[0]?
+    | return .malformed privateConstructorName
+  let some recursorPair := family.correspondence.recursors[0]?
+    | return .malformed privateRecursorName
+  let some iota := family.correspondence.iotas[0]?
+    | return .malformed privateIotaName
+  let unique := fun name => match declarations.getD name #[] with
+    | #[declaration] => some declaration
+    | _ => none
+  let some publicCarrier := unique publicCarrierName | return .malformed publicCarrierName
+  let some publicConstructor := unique constructorPair.model
+    | return .malformed constructorPair.model
+  let some publicRecursor := unique recursorPair.model
+    | return .malformed recursorPair.model
+  let some publicIota := unique iota.name | return .malformed iota.name
+  let some privateCarrier := unique privateCarrierName | return .malformed privateCarrierName
+  let some privateConstructor := unique privateConstructorName
+    | return .malformed privateConstructorName
+  let some privateRecursor := unique privateRecursorName | return .malformed privateRecursorName
+  let some privateIota := unique privateIotaName | return .malformed privateIotaName
+  let some roll := unique rollName | return .malformed rollName
+  let some unroll := unique unrollName | return .malformed unrollName
+  let some unrollRoll := unique unrollRollName | return .malformed unrollRollName
+  let some rollUnroll := unique rollUnrollName | return .malformed rollUnrollName
+  unless publicCarrier.name == publicCarrierName do return .malformed publicCarrierName
+  unless privateCarrier.kind == .defn && privateCarrier.safety? == some "safe" do
+    return .malformed privateCarrierName
+  unless privateConstructor.kind == .defn && privateConstructor.safety? == some "safe" do
+    return .malformed privateConstructorName
+  unless privateRecursor.kind == .defn && privateRecursor.safety? == some "safe" do
+    return .malformed privateRecursorName
+  unless privateIota.kind == .thm do return .malformed privateIotaName
+  unless roll.kind == .defn && roll.safety? == some "safe" do return .malformed rollName
+  unless unroll.kind == .defn && unroll.safety? == some "safe" do return .malformed unrollName
+  unless unrollRoll.kind == .thm do return .malformed unrollRollName
+  unless rollUnroll.kind == .thm do return .malformed rollUnrollName
+  unless #[privateCarrier, privateConstructor, roll, unroll, unrollRoll, rollUnroll].all
+      (·.levelParams == publicCarrier.levelParams) &&
+      privateRecursor.levelParams == publicRecursor.levelParams &&
+      privateIota.levelParams == publicIota.levelParams do
+    return .malformed (Name.str privateCarrierName "levels")
+  let mapping := #[(publicCarrierName, privateCarrierName),
+    (constructorPair.model, privateConstructorName),
+    (recursorPair.model, privateRecursorName), (iota.name, privateIotaName)]
+  unless privateCarrier.type == publicCarrier.type do
+    return .malformed (Name.str privateCarrierName "type")
+  unless privateConstructor.type == rewriteCertificateNames mapping publicConstructor.type do
+    return .malformed privateConstructorName
+  unless privateRecursor.type == rewriteCertificateNames mapping publicRecursor.type do
+    return .malformed privateRecursorName
+  unless privateIota.type == rewriteCertificateNames mapping publicIota.type do
+    return .malformed privateIotaName
+  let (parameters, result) := openForalls
+    ((`_check.oneLayerCertificate).append ownerType.name) publicCarrier.type
+  unless parameters.size == ownerType.numParams do return .malformed publicCarrierName
+  let .sort carrierLevel := result | return .malformed publicCarrierName
+  let levels := publicCarrier.levelParams.map Level.param
+  let parameterValues := parameters.map (fun binder => binder.value)
+  let publicCarrierType := mkAppN (.const publicCarrierName levels) parameterValues
+  let privateCarrierType := mkAppN (.const privateCarrierName levels) parameterValues
+  let publicValue : OpenBinder :=
+    { name := `public, type := publicCarrierType, info := .default
+      value := mkFVar (FVarId.mk ((`_check.oneLayerPublic).append ownerType.name)) }
+  let privateValue : OpenBinder :=
+    { name := `private, type := privateCarrierType, info := .default
+      value := mkFVar (FVarId.mk ((`_check.oneLayerPrivate).append ownerType.name)) }
+  let expectedRoll := closeForalls (parameters.push publicValue) privateCarrierType
+  let expectedUnroll := closeForalls (parameters.push privateValue) publicCarrierType
+  unless roll.type == expectedRoll do return .malformed rollName
+  unless unroll.type == expectedUnroll do return .malformed unrollName
+  let rollApp := mkAppN (.const rollName levels) (parameterValues.push publicValue.value)
+  let unrollRollApp := mkAppN (.const unrollName levels) (parameterValues.push rollApp)
+  let unrollRollBody := mkAppN (.const ``Eq [carrierLevel])
+    #[publicCarrierType, unrollRollApp, publicValue.value]
+  unless unrollRoll.type == closeForalls (parameters.push publicValue) unrollRollBody do
+    return .malformed unrollRollName
+  let unrollApp := mkAppN (.const unrollName levels) (parameterValues.push privateValue.value)
+  let rollUnrollApp := mkAppN (.const rollName levels) (parameterValues.push unrollApp)
+  let rollUnrollBody := mkAppN (.const ``Eq [carrierLevel])
+    #[privateCarrierType, rollUnrollApp, privateValue.value]
+  unless rollUnroll.type == closeForalls (parameters.push privateValue) rollUnrollBody do
+    return .malformed rollUnrollName
+  return .valid
+
 private def checkPair (table : Correspondence) (declarations : DeclarationTypes)
     (pair : ConstantPair) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
@@ -899,6 +1018,10 @@ private def checkProjection (x : Export) (structures : StructureOwners)
     | return #[.declarationType projection.owner projection.name]
   let model := projectionModels[0]!
   let ruleModel := ruleModels[0]!
+  let oneLayerCertificate :=
+    phase1DirectTypeOneLayerCertificate declarations ownerType family
+  if let .malformed slot := oneLayerCertificate then
+    return #[.declarationType projection.owner slot]
   if ownerType.levelParams.length != model.levelParams.length then
     return #[.universeArity projection.owner projection.name
       ownerType.levelParams.length model.levelParams.length]
@@ -994,7 +1117,8 @@ private def checkProjection (x : Export) (structures : StructureOwners)
     normalizedFields := normalizedFields.push
       { name := Name.mkSimple s!"field_{index}", info := .default,
         value := fields[index]!, type := mappedField.type, level, projected, iota? }
-  let rhs? := if projectionIotaUsesLiteralField ownerTypes.toArray ownerType then
+  let rhs? := if projectionIotaUsesLiteralField ownerTypes.toArray ownerType ||
+      oneLayerCertificate matches .valid then
       fields[projection.fieldIndex]?
     else
       let eqi : EqInfo := { eqN := ``Eq, reflN := ``Eq.refl, recN := ``Eq.rec }
