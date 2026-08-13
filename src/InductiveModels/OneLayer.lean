@@ -563,6 +563,17 @@ private def ensureFresh (reserved : Std.HashSet Name) (name : Name) : GenM Unit 
   if reserved.contains name || (← getEnv).constants.contains name then
     declineWith (.nameTaken name)
 
+/-- A retry builds below an alias root, but the serialized certificate lands
+at these exact names.  Check them before generation so aliasing cannot turn a
+reserved exact helper into a late duplicate or replay failure. -/
+private def ensureExactOneLayerRetryFresh (tname : Name)
+    (sourceConstructor : Name × Expr) (reserved : Std.HashSet Name) : GenM Unit := do
+  let exact := OneLayerNames.forBuild tname tname #[sourceConstructor]
+  for name in #[exact.implementation.self, exact.implementation.ctors[0]!,
+      exact.implementation.recursor, exact.implementation.iotas[0]!,
+      exact.roll, exact.unroll, exact.unrollRoll, exact.rollUnroll] do
+    ensureFresh reserved name
+
 /-- Map the unique bare recursive occurrence in a direct or infinitary field.
 The field's own Π binders are retained literally; only the terminal carrier
 application moves through `operation`. -/
@@ -854,11 +865,7 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
     (reserved : Std.HashSet Name) (implementationIso : Iso) : GenM OneLayerBase := do
   let names := OneLayerNames.forBuild tname root #[sourceConstructor]
   if root != tname then
-    let exact := OneLayerNames.forBuild tname tname #[sourceConstructor]
-    for name in #[exact.implementation.self, exact.implementation.ctors[0]!,
-        exact.implementation.recursor, exact.implementation.iotas[0]!,
-        exact.roll, exact.unroll, exact.unrollRoll, exact.rollUnroll] do
-      ensureFresh reserved name
+    ensureExactOneLayerRetryFresh tname sourceConstructor reserved
   unless implementationIso.selfNames == #[names.implementation.self] &&
       implementationIso.ctors == #[(sourceConstructor.1, names.implementation.ctors[0]!)] &&
       implementationIso.recs == #[names.implementation.recursor] &&
@@ -1507,6 +1514,8 @@ def indexedFibreOneLayerIso (tname root : Name) (lparams : List Name)
     (np : Nat) (memberTy : Expr)
     (sourceConstructor : Name × Expr) (sourceRecursor : ERec)
     (reserved : Std.HashSet Name) : GenM Iso := do
+  if root != tname then
+    ensureExactOneLayerRetryFresh tname sourceConstructor reserved
   let publicIso ← primIso tname root lparams np
     memberTy #[sourceConstructor] reserved
     (sourceRecursor? := some sourceRecursor)

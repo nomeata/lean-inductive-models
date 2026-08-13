@@ -411,25 +411,34 @@ def run (root : String) : IO UInt32 := do
     recursiveCertificate.all fun name => !boundaryNames.contains name
   state := state.check "recursive indexed legacy control generates and checks" <|
     boundaryReport.generated.any (·.1 == `FixedRecursiveResult) &&
+      !boundaryReport.declined.any (·.1 == `FixedRecursiveResult) &&
+      boundaryReport.unreplayable.isNone && boundaryReport.stmtErrors.isEmpty &&
       #[Naming.modelName `FixedRecursiveResult,
         Naming.modelName `FixedRecursiveResult.mk,
         Naming.modelName `FixedRecursiveResult.rec,
-        Naming.iotaName `FixedRecursiveResult.rec 0].all boundaryNames.contains &&
+        Naming.iotaName `FixedRecursiveResult.rec 0,
+        Naming.projectionName `FixedRecursiveResult 0,
+        Naming.projectionIotaName `FixedRecursiveResult 0].all boundaryNames.contains &&
       (Check.check boundaryGenerated).all (·.familyOwner != `FixedRecursiveResult)
 
-  let privateOwner := (`_private.IndexedFibreDiagnostic).mkNum 0 |>.str "IndexedUnit"
+  -- Keep the owner exact but give its constructor a raw private spelling.
+  -- The first primitive attempt then fails `nameLost` before it reaches the
+  -- certificate freshness loop; only the alias-root retry can observe this
+  -- reserved exact helper.
+  let privateConstructor := (`_private.IndexedFibreDiagnostic).mkNum 0 |>.str "IndexedUnitMk"
   let sourceNames := boundary.decls.flatMap (·.names.toArray)
-    |>.filter fun name => (`IndexedUnit).isPrefixOf name
+    |>.filter fun name => name == `IndexedUnit.mk
   let privateAliases := sourceNames.foldl (init := Naming.AliasMap.empty)
-    fun aliases name => aliases.insert name (name.replacePrefix `IndexedUnit privateOwner)
+    fun aliases name => aliases.insert name privateConstructor
   let privateBoundary := { boundary with
     decls := boundary.decls.map (·.renameAliases privateAliases) }
-  let exactCollision := Name.str (Name.str (Naming.modelName privateOwner) "_impl") "roll"
+  let exactCollision := `IndexedUnit._model._impl.roll
   let (_, collisionReport) ← runExport (insertCollision privateBoundary exactCollision)
   state := state.check "retry checks exact private certificate collisions" <|
-    !collisionReport.generated.any (·.1 == privateOwner) &&
-      collisionReport.declined.any fun (owner, reason) =>
-        owner == privateOwner && reason == s!"prim model name taken ({exactCollision})"
+    !collisionReport.generated.any (·.1 == `IndexedUnit) &&
+      collisionReport.unreplayable.isNone && collisionReport.stmtErrors.isEmpty &&
+      collisionReport.declined.filter (·.1 == `IndexedUnit) ==
+        #[(`IndexedUnit, s!"prim model name taken ({exactCollision})")]
 
   IO.println s!"indexed fibre diagnostic: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
