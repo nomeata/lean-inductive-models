@@ -148,14 +148,16 @@ def main (args : List String) : IO UInt32 := do
   let rawCanonical := rawMeta ++ lines firstSplit.arena ++ rawFirstDecl ++
     lines secondSplit.arena ++ rawSecondDecl
   IO.FS.writeFile rawCanonicalPath rawCanonical
-  let staged ← withRawSpoolIn scratch fun spool => do
+  let staged ← Spool.withWorkspace scratch fun workspace => do
+    let tee ← Spool.ParseTee.create workspace
     let parsed ← IO.FS.withFile rawCanonicalPath .read fun handle =>
-      parseHandleWithSink handle spool.sink (analyse := false)
-    spool.flush
-    let metadata ← IO.FS.readFile spool.paths.metadata
-    let arena ← IO.FS.readFile spool.paths.arena
-    let declarations ← IO.FS.readFile spool.paths.declarations
-    return (parsed, metadata, arena, declarations, spool.paths)
+      parseHandleWithSink handle tee.sink (analyse := false)
+    discard <| tee.finish
+    let metadata ← IO.FS.readFile tee.metadata.path
+    let arena ← IO.FS.readFile tee.arena.path
+    let declarations ← IO.FS.readFile tee.declarations.path
+    return (parsed, metadata, arena, declarations,
+      #[tee.metadata.path, tee.arena.path, tee.declarations.path])
   let (stagedParse, stagedMetadata, stagedArena, stagedDeclarations, stagedPaths) := staged
   let expectedArena := lines (firstSplit.arena ++ secondSplit.arena)
   let expectedDeclarations := rawFirstDecl ++ rawSecondDecl
@@ -218,8 +220,7 @@ def main (args : List String) : IO UInt32 := do
         stagedExport.projNodes.isEmpty && ordinary.projNodes.isEmpty
     | _, _ => false
   state := state.check "raw spool files are removed after success" <|
-    !(← stagedPaths.metadata.pathExists) && !(← stagedPaths.arena.pathExists) &&
-      !(← stagedPaths.declarations.pathExists)
+    (← stagedPaths.allM fun path => return !(← path.pathExists))
 
   -- The general spool layer validates one exact payload, hoists every arena
   -- range, and follows an arbitrary compact declaration permutation.
@@ -378,31 +379,43 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "raw certification rejects CRLF records"
     (← rawFastPathRejected rawCrlfPath rawCrlf)
 
-  let exceptionPathsRef ← IO.mkRef (none : Option RawSpoolPaths)
+  let exceptionPathsRef ← IO.mkRef (none : Option (Array System.FilePath))
   let cleanupAfterException ← try
-      withRawSpoolIn scratch fun spool => do
-        exceptionPathsRef.set (some spool.paths)
+      Spool.withWorkspace scratch fun workspace => do
+        let tee ← Spool.ParseTee.create workspace
+        exceptionPathsRef.set (some #[tee.metadata.path, tee.arena.path, tee.declarations.path])
         throw <| IO.userError "intentional raw spool failure"
       pure false
     catch _ =>
       match ← exceptionPathsRef.get with
       | none => pure false
       | some paths =>
-        pure (!(← paths.metadata.pathExists) && !(← paths.arena.pathExists) &&
-          !(← paths.declarations.pathExists))
+        paths.allM fun path => return !(← path.pathExists)
   state := state.check "raw spool files are removed after exceptions" cleanupAfterException
-  state := state.check "raw spool cleans a partial exclusive-open failure"
-    (← RawSpool.testPartialOpenCleanup scratch)
+  let partialDirectoryRef ← IO.mkRef (none : Option System.FilePath)
+  let partialOpenCleaned ← try
+      Spool.withWorkspace scratch fun workspace => do
+        partialDirectoryRef.set (some workspace.directory)
+        discard <| workspace.createFile "exclusive.ndjson"
+        discard <| workspace.createFile "exclusive.ndjson"
+      pure false
+    catch _ =>
+      match ← partialDirectoryRef.get with
+      | some directory => pure !(← directory.pathExists)
+      | none => pure false
+  state := state.check "raw spool cleans a partial exclusive-open failure" partialOpenCleaned
 
   -- Two live actions must never share a directory. Promises hold both actions
   -- open until each has observed the other's reserved path.
   let firstReady ← IO.Promise.new (α := System.FilePath)
   let secondReady ← IO.Promise.new (α := System.FilePath)
-  let firstTask ← IO.asTask (prio := Task.Priority.dedicated) <| withRawSpoolIn scratch fun spool => do
-    firstReady.resolve spool.paths.metadata
+  let firstTask ← IO.asTask (prio := Task.Priority.dedicated) <|
+      Spool.withWorkspace scratch fun workspace => do
+    firstReady.resolve workspace.directory
     return (secondReady.result?.get).getD default
-  let secondTask ← IO.asTask (prio := Task.Priority.dedicated) <| withRawSpoolIn scratch fun spool => do
-    secondReady.resolve spool.paths.metadata
+  let secondTask ← IO.asTask (prio := Task.Priority.dedicated) <|
+      Spool.withWorkspace scratch fun workspace => do
+    secondReady.resolve workspace.directory
     return (firstReady.result?.get).getD default
   let concurrentDistinct := match firstTask.get, secondTask.get with
     | .ok pathSeenByFirst, .ok pathSeenBySecond => pathSeenByFirst != pathSeenBySecond
@@ -414,10 +427,9 @@ def main (args : List String) : IO UInt32 := do
   -- explicitly rather than asking production cleanup to recurse.
   let cleanupFailureDirectory ← IO.mkRef (none : Option System.FilePath)
   let primaryPreserved ← try
-      withRawSpoolIn scratch fun spool => do
-        let directory := spool.paths.metadata.parent.getD scratch
-        cleanupFailureDirectory.set (some directory)
-        IO.FS.writeFile (directory / "unexpected-sentinel") "keep"
+      Spool.withWorkspace scratch fun workspace => do
+        cleanupFailureDirectory.set (some workspace.directory)
+        IO.FS.writeFile (workspace.directory / "unexpected-sentinel") "keep"
         throw <| IO.userError "primary-spool-error"
       pure false
     catch error => pure ((toString error).contains "primary-spool-error")
@@ -428,20 +440,20 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "cleanup failures do not mask the primary exception" primaryPreserved
 
   IO.FS.writeFile rawRootSentinel "do-not-delete"
-  withRawSpoolIn scratch fun _ => pure ()
+  Spool.withWorkspace scratch fun _ => pure ()
   state := state.check "raw spool cleanup preserves existing scratch contents" <|
     (← IO.FS.readFile rawRootSentinel) == "do-not-delete"
   let missingRoot := s!"{scratch}/raw-spool-missing-root"
   if ← System.FilePath.pathExists missingRoot then IO.FS.removeDirAll missingRoot
   let missingRootRefused ← try
-      withRawSpoolIn missingRoot fun _ => pure false
+      Spool.withWorkspace missingRoot fun _ => pure false
     catch _ => pure true
   state := state.check "raw spool refuses a missing scratch root without creating it" <|
     missingRootRefused && !(← System.FilePath.pathExists missingRoot)
   let wrongNamedRoot := s!"{root}/raw-spool-not-project-tmp"
   IO.FS.createDirAll wrongNamedRoot
   let wrongNamedRefused ← try
-      withRawSpoolIn wrongNamedRoot fun _ => pure false
+      Spool.withWorkspace wrongNamedRoot fun _ => pure false
     catch _ => pure true
   state := state.check "raw spool refuses arbitrary writable roots" wrongNamedRefused
   IO.FS.removeDir wrongNamedRoot
