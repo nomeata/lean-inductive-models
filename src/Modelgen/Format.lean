@@ -14,10 +14,10 @@ below runs a typechecker.
 
 Two properties the rest of the tool depends on:
 
-* **Back-references must be continuous.** The target parser rejects a record
-  whose index is not the current count. So a model
-  cannot be *spliced* into an existing file with fresh high indices; the whole
-  output has to be re-interned from scratch. [`Writer`] does that.
+* **References must name an explicitly defined arena entry.** Arena IDs may be
+  sparse, out of order, or overwritten, but an absent ID is never an implicit
+  anonymous name, zero level, or bound variable. [`Writer`] emits a fresh dense
+  arena when transforming an export.
 * **Key order is alphabetical and there is no whitespace.** Matching it is
   what makes a no-op run byte-identical to its input, which is
   `Modelgen.Tests`'s cheapest oracle.
@@ -260,14 +260,14 @@ structure Export where
   reader was asked for them (`analyse`), and empty when it was not.
 
   This is here rather than in the consumer because it is **an arena property and
-  the arena is only in scope during the read**. Computed afterwards, over
-  `Expr`s, it needs a visited set spanning every distinct node in the file so
-  that a shared subterm is not walked once per parent — and that set is enormous
-  and almost entirely `false`: at ten million lines of Mathlib, 9,264,612
-  entries of which **90,765 (1.0 %) are `true`**. Computed here it needs no
-  visited set at all, because the format guarantees a child's record precedes
-  its parent's, so one forward pass over the arena in index order sees every
-  child's answer already settled. What is kept is the 1 %.
+  the arena is only in scope during the read**. Computing it afterwards, over
+  `Expr`s, needs a visited set spanning every distinct node in the file so that
+  a shared subterm is not walked once per parent — and that set is enormous and
+  almost entirely `false`: at ten million lines of Mathlib, 9,264,612 entries
+  of which **90,765 (1.0 %) are `true`**. The reader instead computes the bit
+  when each expression record arrives. Every child record precedes its parent,
+  even when their numeric IDs are sparse or out of order, so the retained set
+  contains only the 1 %.
 
   A consumer reads it as a **set membership and not a memo**: `e ∈ projNodes`
   is the whole query, there is nothing to fill in, and a node that is not in it
@@ -602,23 +602,70 @@ private def jBool (j : Json) (k : String) : Except String Bool := do
 private def jArr (j : Json) (k : String) : Except String (Array Json) := do
   (← jField j k).getArr?
 
+/-- A compact arena table with an exact sparse fallback.
+
+The dense prefix is the common exporter case.  An out-of-order entry beyond
+that prefix lives in `sparse`; when the missing boundary arrives, consecutive
+sparse entries are absorbed into the prefix.  Thus an arbitrarily large
+malicious ID allocates one hash entry rather than padding an array up to that
+ID, while lookup still distinguishes an absent hole from an explicitly written
+default-looking value. -/
+structure ArenaTable (α : Type) where
+  dense : Array α := #[]
+  sparse : Std.HashMap Nat α := {}
+
+namespace ArenaTable
+
+def seed (value : α) : ArenaTable α :=
+  { dense := #[value] }
+
+def get? (table : ArenaTable α) (index : Nat) : Option α :=
+  if h : index < table.dense.size then some table.dense[index]
+  else table.sparse[index]?
+
+private partial def absorb (dense : Array α) (sparse : Std.HashMap Nat α) : ArenaTable α :=
+  match sparse[dense.size]? with
+  | none => { dense, sparse }
+  | some value => absorb (dense.push value) (sparse.erase dense.size)
+
+/-- Write one explicit arena ID. Repeated IDs overwrite, matching the export
+parser used by the Lean Kernel Arena. -/
+def set (table : ArenaTable α) (index : Nat) (value : α) : ArenaTable α :=
+  if h : index < table.dense.size then
+    { table with dense := table.dense.set index value }
+  else if index == table.dense.size then
+    absorb (table.dense.push value) (table.sparse.erase index)
+  else
+    { table with sparse := table.sparse.insert index value }
+
+end ArenaTable
+
 /-- The interning tables, grown line by line. -/
 structure RCtx where
-  names : Array Name := #[.anonymous]
-  levels : Array Level := #[.zero]
-  exprs : Array Expr := #[]
+  names : ArenaTable Name := .seed .anonymous
+  levels : ArenaTable Level := .seed .zero
+  exprs : ArenaTable Expr := {}
+  /-- Whether expression records are being classified for monomorphization. -/
+  analyse : Bool := true
+  projNodes : Std.HashSet Expr := {}
   deriving Inhabited
 
 namespace RCtx
 
 def name! (c : RCtx) (i : Nat) : Except String Name :=
-  if h : i < c.names.size then .ok c.names[i] else .error s!"name index {i} out of range"
+  match c.names.get? i with
+  | some name => .ok name
+  | none => .error s!"name index {i} is not defined"
 
 def level! (c : RCtx) (i : Nat) : Except String Level :=
-  if h : i < c.levels.size then .ok c.levels[i] else .error s!"level index {i} out of range"
+  match c.levels.get? i with
+  | some level => .ok level
+  | none => .error s!"level index {i} is not defined"
 
 def expr! (c : RCtx) (i : Nat) : Except String Expr :=
-  if h : i < c.exprs.size then .ok c.exprs[i] else .error s!"expr index {i} out of range"
+  match c.exprs.get? i with
+  | some expression => .ok expression
+  | none => .error s!"expr index {i} is not defined"
 
 def nameF (c : RCtx) (j : Json) (k : String) : Except String Name := do c.name! (← jNat j k)
 def exprF (c : RCtx) (j : Json) (k : String) : Except String Expr := do c.expr! (← jNat j k)
@@ -672,13 +719,18 @@ private def readHints (j : Json) : Except String EHints :=
   | .str "opaque" => .ok .opaque
   | o => do return .regular (← jNat o "regular")
 
-/-- Store `v` at index `i`, growing with `pad`. The exporter usually emits
-back-references densely and in order, but it is not required to:
-Sparse-name-index and out-of-order-level-index fixtures exercise this. The
-**writer** is continuous regardless, because the target format requires that. -/
-def setAt (a : Array α) (i : Nat) (v pad : α) : Array α :=
-  let a := if i < a.size then a else a ++ Array.replicate (i + 1 - a.size) pad
-  a.set! i v
+/-- Whether an expression record contains a primitive projection.  Child
+records have already been parsed, so membership in `known` replaces a recursive
+walk and remains correct when arena IDs are sparse, out of order, or repeated. -/
+private def containsProjection (known : Std.HashSet Expr) : Expr → Bool
+  | .proj .. => true
+  | .app function argument => known.contains function || known.contains argument
+  | .lam _ type body _ | .forallE _ type body _ =>
+      known.contains type || known.contains body
+  | .letE _ type value body _ =>
+      known.contains type || known.contains value || known.contains body
+  | .mdata _ body => known.contains body
+  | _ => false
 
 /-- Read one line into the context, returning a declaration if the line was one. -/
 def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
@@ -690,7 +742,7 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
       else if let .ok o := jField j "num" then
         pure <| Name.num (← c.nameF o "pre") (← jNat o "i")
       else .error "name record with neither str nor num"
-    return ({ c with names := setAt c.names i n .anonymous }, none)
+    return ({ c with names := c.names.set i n }, none)
   -- Level records.
   if let .ok i := jNat j "il" then
     let l ←
@@ -701,7 +753,7 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
       else if let .ok a := jArr j "imax" then
         pure <| Level.imax (← c.level! (← a[0]!.getNat?)) (← c.level! (← a[1]!.getNat?))
       else .error "unknown level record"
-    return ({ c with levels := setAt c.levels i l .zero }, none)
+    return ({ c with levels := c.levels.set i l }, none)
   -- Expression records.
   if let .ok i := jNat j "ie" then
     let e ←
@@ -728,7 +780,10 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
       else if let .ok s := jStr j "strVal" then
         pure <| Expr.lit (.strVal s)
       else .error "unknown expr record"
-    return ({ c with exprs := setAt c.exprs i e (.bvar 0) }, none)
+    let projNodes :=
+      if c.analyse && containsProjection c.projNodes e then c.projNodes.insert e
+      else c.projNodes
+    return ({ c with exprs := c.exprs.set i e, projNodes }, none)
   -- Declaration records.
   if let .ok o := jField j "axiom" then
     return (c, some <| .ax (← c.nameF o "name") (← c.nameL o "levelParams")
@@ -758,26 +813,6 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
       (← (← jArr o "recs").toList.mapM (readRec c)))
   .error s!"unrecognised record: {j.compress}"
 
-/-- [`Export.projNodes`], in one forward pass over the arena.
-
-Sound because the format admits **back-references only** — `RCtx.expr!` refuses
-an index it has not filled yet — so every child of the node at index `i` sits at
-an index below `i` and its answer is already in `s`. Nothing is ever revisited
-and nothing false is stored. -/
-def projNodesOf (exprs : Array Expr) : Std.HashSet Expr := Id.run do
-  let mut s : Std.HashSet Expr := {}
-  for e in exprs do
-    let t :=
-      match e with
-      | .proj .. => true
-      | .app f a => s.contains f || s.contains a
-      | .lam _ t b _ | .forallE _ t b _ => s.contains t || s.contains b
-      | .letE _ t v b _ => s.contains t || s.contains v || s.contains b
-      | .mdata _ b => s.contains b
-      | _ => false
-    if t then s := s.insert e
-  return s
-
 /-- Parse a whole export.
 
 `analyse` fills [`Export.projNodes`] and **defaults to on**, because an empty
@@ -786,7 +821,7 @@ believed it would emit wrong output silently. A caller that does not look at the
 field can turn it off; `monomorphize` refuses a file whose projections it can
 see but whose `projNodes` is empty, so the two cannot disagree unnoticed. -/
 def parse (text : String) (analyse : Bool := true) : Except String Export := do
-  let mut c : RCtx := {}
+  let mut c : RCtx := { analyse }
   let mut decls : Array EDecl := #[]
   let mut metaLine : Json := .null
   let mut first := true
@@ -806,7 +841,7 @@ def parse (text : String) (analyse : Bool := true) : Except String Export := do
     for name in declaration.names do
       if names.contains name then throw s!"duplicate declaration {name}"
       names := names.insert name
-  return { metaLine, decls, projNodes := if analyse then projNodesOf c.exprs else {} }
+  return { metaLine, decls, projNodes := c.projNodes }
 
 /-- **The same parse, off a handle, a chunk at a time.**
 
@@ -840,7 +875,7 @@ def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String 
   --     projection reads the field while the record still holds it: **79.5 s**.
   -- `modifyGet` takes the value out of the ref, so what `readLine` is handed is
   -- the only reference to it.
-  let cRef ← IO.mkRef ({} : RCtx)
+  let cRef ← IO.mkRef ({ analyse } : RCtx)
   let declsRef ← IO.mkRef (#[] : Array EDecl)
   let mut metaLine : Json := .null
   let mut first := true
@@ -899,12 +934,9 @@ def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String 
       for name in declaration.names do
         if names.contains name then return .error s!"duplicate declaration {name}"
         names := names.insert name
-    -- The arena is taken out of the ref rather than read out of it, so that the
-    -- pass below sees the only reference to it and it is released as soon as it
-    -- has been walked.
-    let exprs ← if analyse then cRef.modifyGet fun c => (c.exprs, {}) else pure #[]
-    return .ok { metaLine, decls,
-                 projNodes := if analyse then projNodesOf exprs else {} }
+    -- Take the result out while dropping every arena table held by the ref.
+    let projNodes ← cRef.modifyGet fun c => (c.projNodes, {})
+    return .ok { metaLine, decls, projNodes }
 
 /-- Handle-specialized wrapper around [`parseStream`]. -/
 def parseHandle (h : IO.FS.Handle) (analyse : Bool := true) : IO (Except String Export) :=
