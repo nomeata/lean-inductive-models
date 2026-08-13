@@ -187,11 +187,13 @@ def main (args : List String) : IO UInt32 := do
   -- before sealing the island spool or opening the named output transaction.
   let stagedReplayTarget : System.FilePath := s!"{scratch}/main-cli-staged-replay-output.ndjson"
   IO.FS.writeFile stagedReplayTarget gatedSentinel
+  let lateReplayCorruption := mapConstructor nestedExport `PT.node fun constructor =>
+    { constructor with type := .sort .zero }
   let stagedReplayRejected ← IO.Process.output {
     cmd := binary
     args := #["--no-check", "--no-type-check-output", "-o",
       stagedReplayTarget.toString, "-"]
-    env := #[("MODELGEN_RAW_SPOOL", some "1")] } (some invalidText)
+    env := #[("MODELGEN_RAW_SPOOL", some "1")] } (some lateReplayCorruption.render)
   let stagedReplayUntouched :=
     stagedReplayRejected.exitCode == 1 &&
       (← IO.FS.readFile stagedReplayTarget) == gatedSentinel &&
@@ -544,9 +546,11 @@ def main (args : List String) : IO UInt32 := do
   let fallbackCwd := s!"{scratch}/main-cli-no-spool-root"
   IO.FS.createDirAll fallbackCwd
   let nestedPath : System.FilePath := nested
+  let binaryPath : System.FilePath := binary
   let currentDirectory ← IO.currentDir
   let nestedAbsolute := if nestedPath.isAbsolute then nestedPath else currentDirectory / nestedPath
-  let fallbackRun ← runModelgenAt binary
+  let binaryAbsolute := if binaryPath.isAbsolute then binaryPath else currentDirectory / binaryPath
+  let fallbackRun ← runModelgenAt binaryAbsolute.toString
     ["--no-inductives", "--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
   state := state.check "missing staging root falls back without changing output" <|
     fallbackRun.exitCode == 0 && fallbackRun.stdout == stdoutRun.stdout
