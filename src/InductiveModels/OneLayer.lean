@@ -19,7 +19,7 @@ carrier.  `q` and its private recursive result stay fixed while equality
 elimination changes only the public recursive field.  The generator inlines
 this proof term; generated output never refers to this implementation name. -/
 theorem oneLayerRecursorCompatibility
-    {M P Q R : Type} {C : P → Sort _} {H : R → Sort _}
+    {M P : Type u} {Q R : Type w} {C : P → Sort v} {H : R → Sort x}
     (roll : P → M) (unroll : M → P)
     (unrollRoll : ∀ p, unroll (roll p) = p)
     (rollField : R → Q) (unrollField : Q → R)
@@ -38,15 +38,41 @@ theorem oneLayerRecursorCompatibility
     let publicRec : ∀ p, C p := fun p =>
       Eq.mp (congrArg C (unrollRoll p)) (core (roll p))
     ∀ p, publicRec (publicCtor p) = minor p (publicIH p) := by
+  have cancel {a b : P} (h : a = b) (value : C a) :
+      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value := by
+    exact Eq.rec (motive := fun b h =>
+      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value) rfl h
   intro publicRec p
   unfold publicRec
   have compat (q : Q) (r : M) (p : R)
       (hp : unrollField q = p) (hc : r = privateCtor q)
       (hout : unroll r = publicCtor p) :
       Eq.mp (congrArg C hout) (core r) = minor p (publicIH p) := by
-    subst r
-    subst p
-    simp [coreIota, ihAgreement]
+    let afterCtor : ∀ (r : M), r = privateCtor q →
+        ∀ (p : R) (hp : unrollField q = p)
+          (hout : unroll r = publicCtor p),
+          Eq.mp (congrArg C hout) (core r) = minor p (publicIH p) :=
+      fun r hc => Eq.rec (motive := fun r _ =>
+          ∀ (p : R) (hp : unrollField q = p)
+            (hout : unroll r = publicCtor p),
+            Eq.mp (congrArg C hout) (core r) = minor p (publicIH p))
+        (fun p hp => Eq.rec (motive := fun p _ =>
+            ∀ hout : unroll (privateCtor q) = publicCtor p,
+              Eq.mp (congrArg C hout) (core (privateCtor q)) =
+                minor p (publicIH p))
+          (fun hout => by
+            let move := fun value : C (unroll (privateCtor q)) =>
+              Eq.mp (congrArg C hout) value
+            let first := congrArg move (coreIota q)
+            let privateResult := minor (unrollField q) (privateIH q)
+            let middle : move (Eq.mp (congrArg C (constructorAgreement q)) privateResult) =
+                privateResult := by
+              exact cancel (constructorAgreement q) _
+            let last := congrArg (minor (unrollField q)) (ihAgreement q)
+            exact first.trans (middle.trans last.symm))
+          hp)
+        hc.symm
+    exact afterCtor r hc p hp hout
   exact compat (rollField p) (roll (publicCtor p)) p
     (unrollRollField p) (rollCtor p) (unrollRoll (publicCtor p))
 
@@ -98,12 +124,49 @@ private partial def quoteClosedExprValue : Expr → Expr
   | .proj typeName index subject => mkApp3 (mkConst ``Expr.proj) (toExpr typeName)
       (toExpr index) (quoteClosedExprValue subject)
 
+private partial def inlineCompatibilityConstants (expression : Expr) : MetaM Expr := do
+  let function := expression.getAppFn
+  let arguments := expression.getAppArgs
+  if let .const name levels := function then
+    unless name == ``Eq || name == ``Eq.refl || name == ``Eq.rec do
+      match ← getConstInfo name with
+      | .defnInfo info => do
+          return ← inlineCompatibilityConstants <|
+            mkAppN (info.value.instantiateLevelParams info.levelParams levels) arguments
+      | .thmInfo info => do
+          return ← inlineCompatibilityConstants <|
+            mkAppN (info.value.instantiateLevelParams info.levelParams levels) arguments
+      | _ => pure ()
+  match expression with
+  | .app function argument => do
+      return Expr.app (← inlineCompatibilityConstants function)
+        (← inlineCompatibilityConstants argument)
+  | .lam name type body info => do
+      return Expr.lam name (← inlineCompatibilityConstants type)
+        (← inlineCompatibilityConstants body) info
+  | .forallE name type body info => do
+      return Expr.forallE name (← inlineCompatibilityConstants type)
+        (← inlineCompatibilityConstants body) info
+  | .letE name type value body nondep => do
+      return Expr.letE name (← inlineCompatibilityConstants type)
+        (← inlineCompatibilityConstants value) (← inlineCompatibilityConstants body) nondep
+  | .mdata data body => do
+      return Expr.mdata data (← inlineCompatibilityConstants body)
+  | .proj typeName index subject => do
+      return Expr.proj typeName index (← inlineCompatibilityConstants subject)
+  | other => return other
+
 open Elab Term in
 elab "oneLayerCompatibilityProof%" : term => do
   let info ← getConstInfo ``oneLayerRecursorCompatibility
   let .thmInfo theoremInfo := info
     | throwError "oneLayerRecursorCompatibility is not a theorem"
-  return quoteClosedExprValue theoremInfo.value
+  let value ← inlineCompatibilityConstants theoremInfo.value
+  let extra := value.getUsedConstants.filter fun name =>
+    name != ``Eq && name != ``Eq.refl && name != ``Eq.rec
+  unless extra.isEmpty do
+    throwError "embedded one-layer compatibility proof retains {extra}"
+  return quoteClosedExprValue value
 
 private def oneLayerCompatibilityProof : Expr := oneLayerCompatibilityProof%
 

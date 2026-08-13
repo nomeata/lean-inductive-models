@@ -1,4 +1,4 @@
-import Lean
+import InductiveModels.OneLayer
 
 /-! A handwritten oracle for the equality bookkeeping used by the generated
 one-layer public recursor.  The private recursive result stays fixed while the
@@ -22,6 +22,10 @@ theorem compatibility
     let publicRec : ∀ p, C p := fun p =>
       Eq.mp (congrArg C (unrollRoll p)) (core (roll p))
     ∀ p, publicRec (publicCtor p) = minor p (publicRec p) := by
+  have cancel {a b : P} (h : a = b) (value : C a) :
+      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value := by
+    exact Eq.rec (motive := fun b h =>
+      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value) rfl h
   intro publicRec p
   unfold publicRec
   -- Eliminate only the public endpoint while `q` and its private recursive
@@ -30,9 +34,12 @@ theorem compatibility
       (hc : r = privateCtor q) (hout : unroll r = publicCtor p) :
       Eq.mp (congrArg C hout) (core r) =
         minor p (Eq.mp (congrArg C hp) (core q)) := by
-    subst r
-    subst p
-    simp [coreIota]
+    cases hc
+    cases hp
+    rw [coreIota]
+    have paths : hout = (constructorAgreement q).symm := by rfl
+    rw [paths]
+    exact cancel (constructorAgreement q) _
   exact compat (roll p) (roll (publicCtor p)) p (unrollRoll p)
     (rollCtor p) (unrollRoll (publicCtor p))
 
