@@ -27,7 +27,11 @@ def runModelgen (binary : String) (args : List String) (input? : Option String :
 
 def runModelgenAt (binary : String) (args : List String) (cwd : String) :
     IO IO.Process.Output :=
-  IO.Process.output { cmd := binary, args := args.toArray, cwd := some cwd }
+  IO.Process.output {
+    cmd := binary
+    args := args.toArray
+    cwd := some cwd
+    env := #[("MODELGEN_RAW_SPOOL", some "1")] }
 
 def runModelgenStdin (binary : String) (args : List String) (input : String) :
     IO IO.Process.Output :=
@@ -484,6 +488,12 @@ def main (args : List String) : IO UInt32 := do
   let stdoutRun ← runModelgen binary
     ["--no-inductives", "--no-check", "--quiet", nested]
   state := state.check "stdout output succeeds" (stdoutRun.exitCode == 0)
+  let stagedRun ← IO.Process.output {
+    cmd := binary
+    args := #["--no-inductives", "--no-check", "--quiet", nested]
+    env := #[("MODELGEN_RAW_SPOOL", some "1")] }
+  state := state.check "internal staged parse preserves ordinary output" <|
+    stagedRun.exitCode == 0 && stagedRun.stdout == stdoutRun.stdout
   let fallbackCwd := s!"{scratch}/main-cli-no-spool-root"
   IO.FS.createDirAll fallbackCwd
   let fallbackRun ← runModelgenAt binary

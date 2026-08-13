@@ -295,11 +295,15 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
   return exitAccepted
 
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
-  -- A missing or unsuitable project-local scratch root disables staging before
-  -- any input byte is consumed. This keeps staging an optimization rather than
-  -- a new operational requirement.
-  let scratch := (← IO.currentDir) / "_tmp"
-  Modelgen.Spool.withOptionalWorkspace scratch (runWithWorkspace config)
+  -- Until staged generated islands can replace the cumulative output AST,
+  -- teeing a large source is only a disk/time regression. Keep the integration
+  -- seam testable without enabling it in production; the eventual fast-path
+  -- switch will replace this internal gate with an eligibility decision.
+  if (← IO.getEnv "MODELGEN_RAW_SPOOL") == some "1" then
+    let scratch := (← IO.currentDir) / "_tmp"
+    Modelgen.Spool.withOptionalWorkspace scratch (runWithWorkspace config)
+  else
+    runWithWorkspace config none
 
 def main (args : List String) : IO UInt32 := do
   match Modelgen.Cli.parseArgs args with
