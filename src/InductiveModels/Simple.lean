@@ -3429,12 +3429,22 @@ def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
   let oneRecursiveField ← match exportCtors[0]? with
     | some (_, constructorType) =>
       forallBoundedTelescope constructorType (some np) fun parameters _ => do
-        match ← (instForall constructorType parameters).run with
+        match ← (do
+          let telescope ← instForall constructorType parameters
+          let shape : Array PField ← classifyCtor tname (numForalls telescope) telescope
+          let recursive := (Array.range shape.size).filter fun index =>
+            (PField.rec? shape[index]!).isSome
+          unless recursive.size == 1 do return false
+          let recursiveIndex := recursive[0]!
+          forallBoundedTelescope telescope (some shape.size) fun fields _ => do
+            let .fvar recursiveId := fields[recursiveIndex]!
+              | badShape "a phase-1 recursive field is not constructor-local"
+            for later in [recursiveIndex + 1:fields.size] do
+              if (← inferType fields[later]!).containsFVar recursiveId then
+                return false
+            return true).run with
         | .error _ => pure false
-        | .ok telescope =>
-          match ← (classifyCtor tname (numForalls telescope) telescope).run with
-          | .error _ => pure false
-          | .ok shape => pure ((shape.filter (·.rec?.isSome)).size == 1)
+        | .ok eligible => pure eligible
     | none => pure false
   return neverZero && oneRecursiveField && sourceRecursor?.isSome && exportCtors.size == 1 && type.all == [tname] &&
     type.ctors.length == 1 && type.numIndices == 0 && type.numNested == 0 && type.isRec &&

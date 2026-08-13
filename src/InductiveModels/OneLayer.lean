@@ -512,10 +512,10 @@ private def oneLayerCongrChain (eqi : EqInfo) (v : Level) (α : Expr)
       unless ga[j]! == gb[j]! do
         badShape s!"an unchanged one-layer field {j} was rewritten"
       continue
-    let .fvar fieldId := ga[j]!
+    let .fvar fieldId := gb[j]!
       | badShape s!"a changed one-layer field {j} is not a constructor-local variable"
     for later in [j + 1:n] do
-      if (← inferType ga[later]!).containsFVar fieldId then
+      if (← inferType gb[later]!).containsFVar fieldId then
         badShape s!"a changed one-layer field {j} occurs in later field {later}"
     let A ← ityp ga[j]!
     let ℓA ← ilevel A
