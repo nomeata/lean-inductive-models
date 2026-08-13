@@ -1852,7 +1852,8 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (basicModels : Bool)
     (canWait : Bool)
-    (st : FilterState) : MetaM (FilterState × Option PrimReadiness) := do
+    (st : FilterState) (sourceRecursor? : Option ERec := none) :
+    MetaM (FilterState × Option PrimReadiness) := do
   let (out, rep, pending) := st
   let saved ← getEnv
   -- **The retry under an alias root**, and it is a retry rather than a
@@ -1871,6 +1872,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     | some n => pure (.error (.nameTaken n))
     | none => (do
         let is ← primIso tname root lparams np ty ctors reserved
+          (sourceRecursor? := sourceRecursor?)
         addInstalledStructureModels #[tname] projections reserved is).run
   let mut res := initial
   if let .error (.nameLost _) := res then
@@ -1878,6 +1880,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     root := aliasRoot
     res ← (do
       let is ← primIso tname root lparams np ty ctors reserved
+        (sourceRecursor? := sourceRecursor?)
       addInstalledStructureModels #[tname] projections reserved is).run
   match res with
   | .error dec =>
@@ -2248,7 +2251,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     --
     -- The **records** still go out ahead of the declaration's whenever they
     -- can, because `out` has not been pushed yet.
-    if let .induct ts cs _ := d then
+    if let .induct ts cs inputRecursors := d then
       if let t :: _ := ts then
         -- **No "is this a block I wrote?" test here**, and that is deliberate.
         -- On this tool's own output the block `T._model.0 … T._model.{n−1}` is
@@ -2290,6 +2293,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           -- `scheduledSupportRecord` before ordinary owners.
           let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
             #[] reserved generation.basic true (out, rep, pending)
+            (inputRecursors.find? (·.name == Name.str t.name "rec"))
           if wait?.isSome then
             throwError "simple model prerequisite remained late after support scheduling"
           (out, rep, pending) ← pure st

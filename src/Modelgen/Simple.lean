@@ -2872,7 +2872,7 @@ one-constructor family with at least two fields. -/
 def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorType : Expr) (v : Level) :
+    (recursorProofType recursorPublicType : Expr) (v : Level) :
     GenM (Array Declaration × Array (Name × Nat × Expr × Expr)) := do
   let us := lparams.map Level.param
   let nf := numForalls constructorType - np
@@ -2901,7 +2901,8 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
   addChecked constructorDecl
   declarations := declarations.push constructorDecl
 
-  let recursorValue ← forallBoundedTelescope recursorType (some (np + 3)) fun binders _ => do
+  let recursorValue ← forallBoundedTelescope recursorProofType
+      (some (np + 3)) fun binders _ => do
     let motive := binders[np]!
     let minor := binders[np + 1]!
     let self := binders[binders.size - 1]!
@@ -2910,7 +2911,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     forallBoundedTelescope tele (some nf) fun fields _ => do
       mkLambdaFVars binders (← tightTowerRec v fields motive minor self)
   let recursorDecl := Declaration.defnDecl
-    { name := recursorN, levelParams := recursorLevelParams, type := recursorType,
+    { name := recursorN, levelParams := recursorLevelParams, type := recursorPublicType,
       value := recursorValue, hints := ← hintsFor recursorValue, safety := .safe }
   addChecked recursorDecl
   declarations := declarations.push recursorDecl
@@ -2959,12 +2960,13 @@ projection overrides into its route state. -/
 def emitDirectTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorType : Expr) (v : Level) (reserved : Std.HashSet Name) :
+    (recursorProofType recursorPublicType : Expr) (v : Level)
+    (reserved : Std.HashSet Name) :
     GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
   let support ← ensurePSigmaPrime reserved
   let (declarations, overrides) ← directTightModel eqi tname lparams np memberTy
     constructorType modelConstructorType declaredMemberTy selfN constructorN recursorN
-    recursorLevelParams recursorType v
+    recursorLevelParams recursorProofType recursorPublicType v
   let spliced := support.flatMap fun declaration => declaration.getNames.toArray
   return (support ++ declarations, spliced, overrides)
 
@@ -2975,7 +2977,7 @@ def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
     (lparams : List Name) (np : Nat) (memberTy constructorType modelConstructorType : Expr)
     (declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorType : Expr) (w v : Level) :
+    (recursorProofType recursorPublicType : Expr) (w v : Level) :
     GenM (Array Declaration × (Name × Nat × Expr × Expr)) := do
   let us := lparams.map Level.param
   let withParams := fun {α : Type} (k : Array Expr → GenM α) =>
@@ -3013,7 +3015,8 @@ def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
   addChecked constructorDecl
   declarations := declarations.push constructorDecl
 
-  let recursorValue ← forallBoundedTelescope recursorType (some (np + 3)) fun binders _ => do
+  let recursorValue ← forallBoundedTelescope recursorProofType
+      (some (np + 3)) fun binders _ => do
     let ps := binders.extract 0 np
     let motive := binders[np]!
     let minor := binders[np + 1]!
@@ -3023,7 +3026,7 @@ def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
       | .propLift => do pure (puliftRec v w (← fieldTypeAt ps) motive minor self)
     mkLambdaFVars binders value
   let recursorDecl := Declaration.defnDecl
-    { name := recursorN, levelParams := recursorLevelParams, type := recursorType,
+    { name := recursorN, levelParams := recursorLevelParams, type := recursorPublicType,
       value := recursorValue, hints := ← hintsFor recursorValue, safety := .safe }
   addChecked recursorDecl
   declarations := declarations.push recursorDecl
@@ -3049,20 +3052,21 @@ def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
     (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorType : Expr) (w v : Level) (reserved : Std.HashSet Name) :
+    (recursorProofType recursorPublicType : Expr) (w v : Level)
+    (reserved : Std.HashSet Name) :
     GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
   match route with
   | .field fieldRoute =>
     let support ← if fieldRoute matches .propLift then ensureExactSortLift reserved else pure #[]
     let (declarations, override) ← directFieldModel fieldRoute eqi tname lparams np
       memberTy constructorType modelConstructorType declaredMemberTy selfN constructorN
-      recursorN recursorLevelParams recursorType w v
+      recursorN recursorLevelParams recursorProofType recursorPublicType w v
     let spliced := support.flatMap fun declaration => declaration.getNames.toArray
     return (support ++ declarations, spliced, #[override])
   | .tight =>
     emitDirectTightModel eqi tname lparams np memberTy constructorType modelConstructorType
-      declaredMemberTy selfN constructorN recursorN recursorLevelParams recursorType v
-      reserved
+      declaredMemberTy selfN constructorN recursorN recursorLevelParams
+      recursorProofType recursorPublicType v reserved
 
 /-- Walk arm F's constructor telescope while recovering dependent data fields
 from the caller's index telescope.  Before each moving pivot, a packed equality
@@ -3242,6 +3246,86 @@ structure PrimAnalysis where
   erasureBare : Bool
   erasureLinear : Bool
 
+/-- A binder opened without consulting `MetaM`, so its literal exported domain
+survives.  Direct source models use these binders only to recover the field
+telescope exposed by the source recursor's minor premise; proof construction
+continues to use the installed recursor metadata. -/
+private structure ExactRecBinder where
+  name : Name
+  type : Expr
+  info : BinderInfo
+  value : Expr
+
+private partial def openExactRecForalls (tag : Name) (expression : Expr) :
+    Array ExactRecBinder × Expr :=
+  let rec loop (expression : Expr) (binders : Array ExactRecBinder) :=
+    match expression with
+    | .forallE name type body info =>
+      let value := mkFVar (FVarId.mk (tag.mkNum binders.size))
+      loop (body.instantiate1 value) (binders.push { name, type, info, value })
+    | body => (binders, body)
+  loop expression #[]
+
+private def closeExactRecForalls (binders : Array ExactRecBinder) (body : Expr) : Expr :=
+  binders.reverse.foldl (fun body binder =>
+    .forallE binder.name binder.type (body.abstract #[binder.value]) binder.info) body
+
+/-- The constructor-field telescope as the exact exported recursor minor
+premise presents it.  Kernel recursor generation may deliberately reduce a
+source constructor annotation such as `optParam`; the public iota statement
+models the recursor, so its field binders come from this telescope rather than
+from the source constructor declaration.
+
+`pre` is the installed proof scope.  Only those outer variables are replaced;
+the returned telescope closes its own exact field variables and may therefore
+be instantiated at the proof's field locals with [`closeForallsExact?`]. -/
+private def exactRecursorFieldTelescope? (recursor : ERec) (ruleIndex : Nat)
+    (pre : Array Expr) : Option Expr := do
+  let rule ← recursor.rules[ruleIndex]?
+  let (recBinders, _) := openExactRecForalls ((`_simple_exact_rec).append recursor.name)
+    recursor.type
+  let numPre := recursor.numParams + recursor.numMotives + recursor.numMinors
+  unless pre.size == numPre do none
+  let minor ← recBinders[recursor.numParams + recursor.numMotives + ruleIndex]?
+  let sourcePre := recBinders.extract 0 numPre |>.map (·.value)
+  let minorType := minor.type.replace fun expression =>
+    sourcePre.findIdx? (fun value => value == expression) |>.map fun index => pre[index]!
+  let (minorBinders, motiveResult) :=
+    openExactRecForalls ((`_simple_exact_minor).append rule.ctor) minorType
+  let motiveArgs := motiveResult.getAppArgs
+  let major ← motiveArgs.back?
+  let .const constructor _ := major.getAppFn | none
+  unless constructor == rule.ctor do none
+  let majorArgs := major.getAppArgs
+  unless majorArgs.size >= rule.nfields do none
+  let fieldValues := majorArgs.extract (majorArgs.size - rule.nfields) majorArgs.size
+  let mut fields : Array ExactRecBinder := #[]
+  for value in fieldValues do
+    let some binder := minorBinders.find? (·.value == value) | fields := #[]; break
+    fields := fields.push binder
+  unless fields.size == rule.nfields do none
+  return closeExactRecForalls fields (.sort .zero)
+
+/-- Source export metadata and installed recursor metadata must describe the
+same public slot layout.  Literal type and rule RHS equality is intentionally
+excluded: replay may normalize those expressions, and direct-simple emission
+uses the exported expressions for syntax while using the installed ones to
+construct checked proof terms. -/
+private def validateExactSourceRecursor (expected : ERec) (actual : RecursorVal) :
+    GenM Unit := do
+  unless expected.name == actual.name &&
+      expected.levelParams == actual.levelParams && expected.all == actual.all &&
+      expected.numParams == actual.numParams && expected.numIndices == actual.numIndices &&
+      expected.numMotives == actual.numMotives && expected.numMinors == actual.numMinors &&
+      expected.k == actual.k && expected.isUnsafe == actual.isUnsafe &&
+      expected.rules.length == actual.rules.length do
+    badShape s!"{expected.name}'s exported recursor layout differs from its installed metadata"
+  for index in [0:expected.rules.length] do
+    let exported := expected.rules[index]!
+    let installed := actual.rules[index]!
+    unless exported.ctor == installed.ctor && exported.nfields == installed.nfields do
+      badShape s!"{expected.name}'s exported rule {index} layout differs from its installed metadata"
+
 set_option maxRecDepth 2048 in
 /-- Analyse the installed declaration and its recursor before any support or
 model declarations are installed. -/
@@ -3368,7 +3452,8 @@ stopped it. **The export's declaration must already be installed**: the
 recursor this restates is the one Lean minted for it, and the ι rules are
 its own, restored — exactly [`Modelgen.mutualIso`]'s arrangement. -/
 def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
-    (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name) : GenM Iso := do
+    (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
+    (sourceRecursor? : Option ERec := none) : GenM Iso := do
   let us := lparams.map Level.param
   -- **Where the model is built and where it is emitted can differ.** `root` is
   -- the former and `tname` the latter; they are the same name for every
@@ -3447,6 +3532,8 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   let w := analysis.w
   let isRec := analysis.isRec
   let rv := analysis.rv
+  if let some sourceRecursor := sourceRecursor? then
+    validateExactSourceRecursor sourceRecursor rv
   let large := analysis.large
   let v := analysis.v
   let recLs := analysis.recLs
@@ -3634,6 +3721,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   let tbl := modelTable (← getEnv) #[tname]
     { decls := #[], levelParams := lparams, members := #[], selfNames := #[selfN]
       numAll := 1, ctors := ctorPairs, recs := #[recN], iotas := #[], spliced := #[] }
+  let installedRecTy := restore tbl rv.type
+  let publicRecTy := restore tbl (sourceRecursor?.map (·.type) |>.getD rv.type)
 
   -- **Arm E**: a linearly recursive, non-indexed `Type` with no base
   -- constructor is empty.  The tuple tower below deliberately starts from a
@@ -4095,10 +4184,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   if let some directRoute := directRoute? then
     let (_, cty0) := exportCtors[0]!
     let modelCtorTy := restore tbl cty0
-    let recTy := restore tbl rv.type
     let (directDecls, directSpliced, overrides) ← emitDirectModel directRoute eqi tname
       lparams np memberTy cty0 modelCtorTy declaredMemberTy selfN (ctorN 0) recN
-      rv.levelParams recTy w v reserved
+      rv.levelParams installedRecTy publicRecTy w v reserved
     out := out ++ directDecls
     spliced := spliced ++ directSpliced
     projectionOverrides := projectionOverrides ++ overrides
@@ -4267,8 +4355,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     out := out.push dCtor
 
     -- ── the recursor ──
-    let recTy := restore tbl rv.type
-    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + ni + 1)) fun bs _ => do
+    let recVal ← forallBoundedTelescope installedRecTy
+        (some (np + 1 + nc + ni + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let motive := bs[np]!
       let minor := bs[np + 1]!
@@ -4342,7 +4430,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
             mkLambdaFVars #[y, hy] (← fam y hy)
         mkLambdaFVars bs (eqi.recAt v ℓpk pk pkc motiveE (mkAppN minor es) pki heq)
     let dRec := Declaration.defnDecl
-      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+      { name := recN, levelParams := rv.levelParams, type := publicRecTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
     addChecked dRec
     out := out.push dRec
@@ -4632,8 +4720,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- constructor's own index to the caller's. The index equation is the
     -- first component of the `good` proof the major already carries, so
     -- nothing per-constructor is *proved* here — it is extracted.
-    let recTy := restore tbl rv.type
-    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + ni + 1)) fun bs _ => do
+    let recVal ← forallBoundedTelescope installedRecTy
+        (some (np + 1 + nc + ni + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let motive := bs[np]!
       let minors := bs.extract (np + 1) (np + 1 + nc)
@@ -4733,7 +4821,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       let t2 := psigmaSnd w .zero (skelSelf ps) βi t
       mkLambdaFVars bs (mkAppN (skelRec m ps sMotive sMinors t1) #[pki, t2])
     let dRec := Declaration.defnDecl
-      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+      { name := recN, levelParams := rv.levelParams, type := publicRecTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
     addChecked dRec
     out := out.push dRec
@@ -4772,13 +4860,12 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
 
     -- The major premise is an inhabitant of the empty carrier.  Eliminating
     -- it gives the recursor's motive at any result universe.
-    let recTy := restore tbl rv.type
-    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
+    let recVal ← forallBoundedTelescope installedRecTy (some (np + 1 + nc + 1)) fun bs _ => do
       let motive := bs[np]!
       let major := bs[bs.size - 1]!
       mkLambdaFVars bs (← emptyAtElim eqi v w (mkApp motive major) major)
     let dRec := Declaration.defnDecl
-      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+      { name := recN, levelParams := rv.levelParams, type := publicRecTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
     addChecked dRec
     out := out.push dRec
@@ -4991,8 +5078,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- the constructor count for nothing, and the kernel checks the same
     -- cascade `nc + 1` times. Hoisted, the ι rule's left side and its proof
     -- name the same constant.
-    let recTy := restore tbl rv.type
-    let fTy ← forallBoundedTelescope recTy (some (np + 1 + nc)) fun pre _ => do
+    let fTy ← forallBoundedTelescope installedRecTy (some (np + 1 + nc)) fun pre _ => do
       let ps := pre.extract 0 np
       let motive := pre[np]!
       let selfTy := wLowSelfAt ps
@@ -5004,7 +5090,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
             mkForallFVars #[b] (mkApp coreMotive (mkApp f b))
           withLocalDeclD `ih ihT fun ih =>
             mkForallFVars (pre ++ #[a, f, ih]) (mkApp coreMotive (wSup ps a f))
-    let fVal ← forallBoundedTelescope recTy (some (np + 1 + nc)) fun pre _ => do
+    let fVal ← forallBoundedTelescope installedRecTy (some (np + 1 + nc)) fun pre _ => do
       mkLambdaFVars pre
         (← wMkF (pre.extract 0 np) pre[np]! (pre.extract (np + 1) (np + 1 + nc)))
     let dF := Declaration.defnDecl
@@ -5014,7 +5100,8 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     out := out.push dF
 
     -- ── the recursor ──
-    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
+    let recVal ← forallBoundedTelescope installedRecTy
+        (some (np + 1 + nc + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let major := bs[bs.size - 1]!
       let coreMotive ← wPlan.motive (wLowSelfAt ps) bs[np]!
@@ -5023,7 +5110,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
           mkAppN (.const wFN recLs) (bs.extract 0 (np + 1 + nc)),
           wPlan.unwrap (wLowSelfAt ps) major])
     let dRec := Declaration.defnDecl
-      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+      { name := recN, levelParams := rv.levelParams, type := publicRecTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
     addChecked dRec
     out := out.push dRec
@@ -5221,8 +5308,8 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
       out := out.push d
 
     -- ── the recursor ──
-    let recTy := restore tbl rv.type
-    let recVal ← forallBoundedTelescope recTy (some (np + 1 + nc + 1)) fun bs _ => do
+    let recVal ← forallBoundedTelescope installedRecTy
+        (some (np + 1 + nc + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let motive := bs[np]!
       let minors := bs.extract (np + 1) (np + 1 + nc)
@@ -5292,7 +5379,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
               (mkApp (natRec (mkLevelIMax' w v).normalize nmot zc sc n) x)
         mkLambdaFVars bs (psigmaRec v (.succ .zero) w natT spine motive minor major)
     let dRec := Declaration.defnDecl
-      { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+      { name := recN, levelParams := rv.levelParams, type := publicRecTy, value := recVal
         hints := ← hintsFor recVal, safety := .safe }
     addChecked dRec
     out := out.push dRec
@@ -5421,16 +5508,20 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     if large && nc == 0 then
       for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
       for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
-    let recTy := restore tbl rv.type
     -- **One fold, two consumers.** Arm G's `ind` — the free `Prop`-motive
     -- recursor the graph route folds at — *is* the strong-induction fold
     -- below at `v := 0`, so the arm forces the small-elimination branches and
     -- takes the result as `ind` instead of as `rec_0`. Building it a second
     -- time by hand would be a second thing to keep in step.
-    let indTy :=
-      if armG then recTy.instantiateLevelParams [rv.levelParams[0]!] [.zero] else recTy
+    let installedIndTy :=
+      if armG then installedRecTy.instantiateLevelParams [rv.levelParams[0]!] [.zero]
+      else installedRecTy
+    let publicIndTy :=
+      if armG then publicRecTy.instantiateLevelParams [rv.levelParams[0]!] [.zero]
+      else publicRecTy
     let large := large && !armG
-    let recVal ← forallBoundedTelescope indTy (some (np + 1 + nc + ni + 1)) fun bs _ => do
+    let recVal ← forallBoundedTelescope installedIndTy
+        (some (np + 1 + nc + ni + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let motive := bs[np]!
       let minors := bs.extract (np + 1) (np + 1 + nc)
@@ -5538,7 +5629,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
       -- large eliminator the kernel granted the *declaration* and an emitted
       -- `def` does not inherit.
       let dInd := Declaration.thmDecl
-        { name := indN, levelParams := lparams, type := indTy, value := recVal }
+        { name := indN, levelParams := lparams, type := publicIndTy, value := recVal }
       addChecked dInd
       out := out.push dInd
       let ctx : GraphCtx :=
@@ -5551,21 +5642,21 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
           memberTy, ctorTy := restore tbl exportCtors[0]!.2
           isData := gIsData, idxPos := gIdxPos, nonPiv := gNonPiv
           recNb := gRecNb, eqi, fx? := gFx? }
-      for d in ← graphArm ctx recTy do out := out.push d
+      for d in ← graphArm ctx publicRecTy do out := out.push d
     else
       let dRec := Declaration.defnDecl
-        { name := recN, levelParams := rv.levelParams, type := recTy, value := recVal
+        { name := recN, levelParams := rv.levelParams, type := publicRecTy, value := recVal
           hints := ← hintsFor recVal, safety := .safe }
       addChecked dRec
       out := out.push dRec
 
   -- ── the ι rules ──
-  let recTy := restore tbl rv.type
   let mut iotas : Array (Nat × Name × Name) := #[]
   unless rv.rules.length == nc do
     badShape s!"{ern} has {rv.rules.length} rules where {tname} has {nc} constructors"
   for j in [0:nc] do
     let rule := rv.rules[j]!
+    let publicRule := sourceRecursor?.bind (·.rules[j]?)
     let (cn, modelC) := ctorPairs[j]!
     unless rule.ctor == cn do
       badShape s!"{ern}'s rule {j} is for {rule.ctor}, not {cn}"
@@ -5575,7 +5666,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- constructor declaration still carries the exported redex literally, and
     -- the iota theorem's telescope is part of the same literal interface.
     let modelCTy := restore tbl exportCtors[j]!.2
-    let d ← forallBoundedTelescope recTy (some (np + 1 + nc)) fun pre _ => do
+    let d ← forallBoundedTelescope installedRecTy (some (np + 1 + nc)) fun pre _ => do
       let ps := pre.extract 0 np
       let motive := pre[np]!
       let cty ← instForall modelCTy ps
@@ -5588,13 +5679,20 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
           | badShape s!"{modelC}'s result is not {selfN} at {np} parameters and {ni} indices"
         let isj := args.extract np args.size
         let lhs := mkAppN (.const recN recLs) (pre ++ isj ++ #[major])
-        let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
+        let rhsSyntax := publicRule.map (·.rhs) |>.getD rule.rhs
+        let rhs := (restore tbl rhsSyntax).beta (pre ++ fields)
         let α := mkAppN motive (isj.push major)
         let tel := pre ++ fields
         let proposition := eqi.mk' v α lhs rhs
-        let some fieldsType := closeForallsExact? cty fields proposition
-          | badShape s!"{modelC}'s exported telescope has fewer fields than its installed type"
-        let some theoremType := closeForallsExact? recTy pre fieldsType
+        let exactFieldTelescope ← match sourceRecursor? with
+          | none => pure cty
+          | some sourceRecursor =>
+            let some telescope := exactRecursorFieldTelescope? sourceRecursor j pre
+              | badShape s!"{sourceRecursor.name}'s exported rule {j} has no exact field telescope"
+            pure (restore tbl telescope)
+        let some fieldsType := closeForallsExact? exactFieldTelescope fields proposition
+          | badShape s!"{modelC}'s public recursor telescope has fewer fields than its installed type"
+        let some theoremType := closeForallsExact? publicRecTy pre fieldsType
           | badShape s!"{ern}'s exported telescope is shorter than its recursor prefix"
         -- **Every ι theorem is `Eq.refl` except arms E, G and W.**
         --
