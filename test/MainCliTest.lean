@@ -370,6 +370,34 @@ def main (args : List String) : IO UInt32 := do
       ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] arenaHole
     state := state.check s!"undefined sparse {kind} ID is a tool error with exit 3" <|
       result.exitCode == 3 && (result.stderr.splitOn "parse error:").length > 1
+
+  let malformedArenaRecords : Array (String × String) := #[
+    ("extra top-level key", "{\"bvar\":0,\"extra\":null,\"ie\":0}\n"),
+    ("multiple expression tags", "{\"bvar\":0,\"ie\":0,\"sort\":0}\n"),
+    ("wrong max arity", "{\"il\":1,\"max\":[0]}\n"),
+    ("invalid natural literal", "{\"ie\":0,\"natVal\":\"not-a-natural\"}\n")]
+  for (kind, input) in malformedArenaRecords do
+    let result ← runModelgenStdin binary
+      ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] input
+    state := state.check s!"{kind} is a parse/tool error with exit 3" <|
+      result.exitCode == 3 && (result.stderr.splitOn "parse error:").length > 1
+
+  -- `lean4export --export-mdata` records are valid arena input.  Metadata is
+  -- non-semantic and the ordinary writer intentionally removes it again.
+  let metadataInput :=
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"ArenaMetadata\"}}\n" ++
+    "{\"ie\":0,\"sort\":0}\n" ++
+    "{\"ie\":1,\"mdata\":{\"data\":{\"synthetic\":true},\"expr\":0}}\n" ++
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}\n"
+  let metadataRun ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
+    "--quiet", "-"] metadataInput
+  let metadataDecl : Modelgen.EDecl := .ax `ArenaMetadata [] (.sort .zero) false
+  state := state.check "metadata expression input passes both arena kernel gates" <|
+    metadataRun.exitCode == 0 &&
+      match Modelgen.parse metadataRun.stdout (analyse := false) with
+      | .ok output => output.decls == #[metadataDecl]
+      | .error _ => false
   let missing ← runModelgen binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output",
     s!"{scratch}/does-not-exist.ndjson"]
