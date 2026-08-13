@@ -1012,8 +1012,12 @@ def closeModelIsland (template : Export) (main : Environment)
     (fun result family => family.correspondence.diagnosticOwners.foldl
       (fun result owner => result.insert owner) result)
     ({} : Std.HashSet Name)
+  let compactOwners := generated.foldl (init := ({} : Std.HashSet Name)) fun owners record =>
+    match record with
+    | .induct (type :: _) _ _ => owners.insert type.name
+    | _ => owners
   let compact : CompactIsland :=
-    { summaries := Order.summaries generatedView
+    { summaries := Order.summariesWithIndex generatedView index compactOwners
       globalExtras := Check.globalExtraRecordsWithIndex index generated
       diagnosticOwners }
   let statementReport :=
