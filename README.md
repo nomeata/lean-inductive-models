@@ -260,28 +260,34 @@ T._model.proj_j.iota :
 ```
 
 For a single nonrecursive, unindexed, unnested owner, and for an unindexed
-member of a plain mutual block, every field uses this literal equation,
-including dependent fields: those carrier routes make the modeled projections
-compute definitionally on the modeled constructor. Production also uses a
-one-layer public carrier over its private fixpoint for the current phase-one
-recursive class: a direct source-simple, one-member, one-constructor,
-unindexed, unnested, never-zero `Type` owner with exactly one recursive
-occurrence (direct or infinitary) and no later field depending on that
-recursive slot. Its complete public carrier, constructor, recursor/iota, and
-intrinsic projection family retain the exact source-shaped interface; its
-projection-iota right-hand sides are the literal fields and introduce no
-transport.
+member of a plain mutual block, the existing carrier routes give every field a
+literal equation, including dependent fields.
 
-Other recursive owners—including indexed, nested, composed, mutual,
-propositional/maybe-zero, multi-constructor, multi-recursive, and later-field-
-dependent shapes—remain on the established routes. Those routes may recover
-an earlier field only propositionally. In those cases a dependent
-field's right-hand side is the canonical transport of `fields[j]`, using the
-already generated projection-iota equalities for the minimal transitive set of
-earlier fields on which its type depends, in increasing field order. The
-transport is represented by nested applications of `Eq.rec`. The generator
-and checker construct the same expression; no transport is added when the
-dependency set is empty.
+Production also uses a one-layer public carrier for direct source-simple,
+self-only, one-constructor, unindexed, unnested, safe never-zero `Type` owners
+with one or two independent recursive fields, direct or infinitary. No later
+field may depend on either recursive slot. The complete public family retains
+the exact source-shaped interface; its iota right-hand sides are literal fields
+and add no transport.
+
+Separately, an exact-source simple `Prop` owner uses the literal contract when
+it is self-only, has one constructor, is unnested, and its former ends literally
+in `Prop`. This includes indexed and recursive owners. Proof irrelevance makes
+every kernel-eligible projection iota reflexive with the literal constructor
+proof as its right-hand side. The exact constructor telescope is retained,
+including source-authored `Eq.rec` expressions and default wrappers; the
+generator adds no dependency transport.
+
+Nested and mutual `Prop` owners retain their established per-route legacy
+contracts. Other owners outside the one-layer tranche—including indexed
+`Type`, nested, composed, mutual, maybe-zero, three-or-more-recursive-field,
+and later-dependent shapes—also remain on their prior routes. When such a
+route recovers an earlier field only propositionally, a dependent field uses
+the canonical transport of `fields[j]` through the minimal transitive
+dependency set. This generated transport is represented by nested `Eq.rec`
+applications and is constructed identically by generator and checker. It is
+distinct from source-authored `Eq.rec`, which the exact-source contracts above
+preserve.
 
 The theorem preserves the constructor's complete parameter and field
 telescope, binder information, and declaration universes. Its outer relation
@@ -376,14 +382,16 @@ member.
 
 The one-layer carrier/equivalence design was first compile-checked in
 [`OneLayerProjectionPrototype.lean`](test/OneLayerProjectionPrototype.lean),
-with implementation notes in
+with design notes in
 [`OneLayerProjectionPrototype.md`](test/OneLayerProjectionPrototype.md).
-Production now implements the phase-one direct/infinitary class described
-above, with the embedded recursor compatibility independently compile-checked
-by [`OneLayerRecursorProof.lean`](test/OneLayerRecursorProof.lean). The
-prototype remains compile-only documentation rather than a claim of all-route
-coverage. Extending the one-layer public family to the remaining recursive
-routes is future work; their existing projection transports are intentional.
+Production now implements that carrier for the one- and two-recursive-field
+`Type` tranche above. [`OneLayerRecursorProof.lean`](test/OneLayerRecursorProof.lean)
+remains the independent one-field compatibility oracle; binary compatibility
+is embedded in production and covered by the focused projection regressions.
+The exact-source `Prop` contract is a separate proof-irrelevance route, not an
+extension of the one-layer carrier. Indexed, nested, mutual, and
+three-or-more-field one-layer carriers remain future work; their existing
+contracts are intentional.
 
 ## Unit-like inductives
 

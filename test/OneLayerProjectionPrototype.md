@@ -6,6 +6,12 @@ private `M` represents the recursive model generated today and its public
 projection rule has the literal input function as its right-hand side and its
 elaborated type contains no `Eq.rec`.
 
+Status: production implements the unindexed, unnested, source-simple
+never-zero `Type` subset for one or two independent recursive fields. The
+indexed, nested, and mutual sections below remain prospective design notes.
+Exact-source simple `Prop` projection literals are implemented separately
+through proof irrelevance.
+
 ## Production boundary
 
 Keep the current construction as an implementation fixpoint `M_k`.  Add a
