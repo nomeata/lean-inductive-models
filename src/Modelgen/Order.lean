@@ -222,8 +222,8 @@ private def addEdge (outgoing : Array (Std.HashSet Nat)) (indegree : Array Nat)
   if before == after || outgoing[before]!.contains after then
     (outgoing, indegree)
   else
-    (outgoing.set! before (outgoing[before]!.insert after),
-      indegree.set! after (indegree[after]! + 1))
+    (outgoing.modify before (·.insert after),
+      indegree.modify after (· + 1))
 
 /-- Stable topological ordering over compact declaration summaries.
 
@@ -266,8 +266,7 @@ def summaryRecordOrderPrioritizing (summaries : Array DeclSummary) :
       if seenOwners.contains ownerName then continue
       seenOwners := seenOwners.insert ownerName
       for owner in ownerIndices.getD ownerName #[] do
-        modelsByOwnerRev := modelsByOwnerRev.set! owner
-          (model :: modelsByOwnerRev[owner]!)
+        modelsByOwnerRev := modelsByOwnerRev.modify owner (model :: ·)
   for owner in [0:n] do
     for model in modelsByOwnerRev[owner]!.reverse do
       if outgoing[owner]!.contains model then
@@ -279,7 +278,7 @@ def summaryRecordOrderPrioritizing (summaries : Array DeclSummary) :
   let mut incoming : Array (Array Nat) := Array.replicate n #[]
   for before in [0:n] do
     for after in outgoing[before]! do
-      incoming := incoming.set! after (incoming[after]!.push before)
+      incoming := incoming.modify after (·.push before)
   let mut preferred := summaries.map (·.support)
   let mut work := (Array.range n).filter fun i => preferred[i]!
   while !work.isEmpty do
@@ -394,7 +393,7 @@ def recordOrderPrioritizing (x : Export) (prefer : EDecl → Bool) :
   let mut incoming : Array (Array Nat) := Array.replicate n #[]
   for before in [0:n] do
     for after in outgoing[before]! do
-      incoming := incoming.set! after (incoming[after]!.push before)
+      incoming := incoming.modify after (·.push before)
   let mut preferred : Array Bool := x.decls.map prefer
   let mut work := (Array.range n).filter fun i => preferred[i]!
   while !work.isEmpty do
