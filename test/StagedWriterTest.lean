@@ -2,6 +2,8 @@ import Modelgen.Format
 
 open Lean Modelgen
 
+set_option maxRecDepth 4096
+
 structure TestState where
   passed : Nat := 0
   failed : Array String := #[]
@@ -46,6 +48,11 @@ def bothProjectionFacts (whole streamed : Except String Export)
       present.all (first.projNodes.contains ·) && present.all (second.projNodes.contains ·) &&
         absent.all (!first.projNodes.contains ·) && absent.all (!second.projNodes.contains ·)
   | _, _ => false
+
+def isExceptError (result : Except ε α) : Bool :=
+  match result with
+  | .error _ => true
+  | .ok _ => false
 
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
@@ -101,6 +108,18 @@ def main (args : List String) : IO UInt32 := do
   let parsed := Modelgen.parse reordered (analyse := false)
 
   let mut state : TestState := {}
+  let suffixProbe := rawSpoolSuffixOfBytes <| ByteArray.mk #[
+    0x00, 0x0f, 0x10, 0x2a, 0x34, 0x4b, 0x56, 0x67,
+    0x78, 0x89, 0x9a, 0xab, 0xbc, 0xcd, 0xde, 0xff]
+  let suffixOther := rawSpoolSuffixOfBytes <| ByteArray.mk #[
+    0xff, 0xde, 0xcd, 0xbc, 0xab, 0x9a, 0x89, 0x78,
+    0x67, 0x56, 0x4b, 0x34, 0x2a, 0x10, 0x0f, 0x00]
+  state := state.check "raw spool suffix preserves all 128 entropy bits" <|
+    suffixProbe == "000f102a344b566778899aabbccddeff" &&
+      suffixProbe.utf8ByteSize == 32 && suffixProbe.all fun char =>
+        char.isDigit || ('a' ≤ char && char ≤ 'f')
+  state := state.check "different raw spool bytes have different suffixes" <|
+    suffixProbe != suffixOther
   state := state.check "split arenas plus reordered declarations parse identically" <|
     match parsed with
     | .ok output => output.decls == #[second, first]
@@ -151,9 +170,39 @@ def main (args : List String) : IO UInt32 := do
         certificate.arenaBytes == expectedArena.utf8ByteSize.toUInt64 &&
         certificate.declarationBytes == expectedDeclarations.utf8ByteSize.toUInt64 &&
         certificate.declarations == #[
-          { offset := 0, bytes := rawFirstDecl.utf8ByteSize },
+          { offset := 0, bytes := rawFirstDecl.utf8ByteSize.toUInt64 },
           { offset := rawFirstDecl.utf8ByteSize.toUInt64,
-            bytes := rawSecondDecl.utf8ByteSize }]
+            bytes := rawSecondDecl.utf8ByteSize.toUInt64 }]
+    | .error _ => false
+  let spoolSizes : RawSpoolSizes :=
+    { metadata := stagedMetadata.utf8ByteSize.toUInt64
+      arena := stagedArena.utf8ByteSize.toUInt64
+      declarations := stagedDeclarations.utf8ByteSize.toUInt64 }
+  state := state.check "completed raw spool validates totals, spans and exact cursor" <|
+    match stagedParse with
+    | .ok (_, certificate) =>
+      match certificate.validate spoolSizes 2 with
+      | .ok cursor => cursor == certificate.cursor && Writer.Cursor.ofRaw cursor ==
+          { nextName := 7, nextLevel := 3, nextExpr := 2 }
+      | .error _ => false
+    | .error _ => false
+  state := state.check "raw spool validation rejects declaration-count drift" <|
+    match stagedParse with
+    | .ok (_, certificate) => isExceptError (certificate.validate spoolSizes 1)
+    | .error _ => false
+  state := state.check "raw spool validation rejects file-total drift" <|
+    match stagedParse with
+    | .ok (_, certificate) =>
+      isExceptError <| certificate.validate
+        { spoolSizes with declarations := spoolSizes.declarations + 1 } 2
+    | .error _ => false
+  state := state.check "raw spool validation rejects span endpoint drift" <|
+    match stagedParse with
+    | .ok (_, certificate) =>
+      let malformedSpans := certificate.declarations.set! 1
+        { certificate.declarations[1]! with offset := 0 }
+      let malformedCertificate := { certificate with declarations := malformedSpans }
+      isExceptError (malformedCertificate.validate spoolSizes 2)
     | .error _ => false
   state := state.check "ordinary and staged streaming parses are identical" <|
     match stagedParse, (← parseHandleAt rawCanonicalPath) with
@@ -296,6 +345,42 @@ def main (args : List String) : IO UInt32 := do
         pure (!(← paths.metadata.pathExists) && !(← paths.arena.pathExists) &&
           !(← paths.declarations.pathExists))
   state := state.check "raw spool files are removed after exceptions" cleanupAfterException
+  state := state.check "raw spool cleans a partial exclusive-open failure"
+    (← RawSpool.testPartialOpenCleanup scratch)
+
+  -- Two live actions must never share a directory. Promises hold both actions
+  -- open until each has observed the other's reserved path.
+  let firstReady ← IO.Promise.new (α := System.FilePath)
+  let secondReady ← IO.Promise.new (α := System.FilePath)
+  let firstTask ← IO.asTask (prio := Task.Priority.dedicated) <| withRawSpoolIn scratch fun spool => do
+    firstReady.resolve spool.paths.metadata
+    return (secondReady.result?.get).getD default
+  let secondTask ← IO.asTask (prio := Task.Priority.dedicated) <| withRawSpoolIn scratch fun spool => do
+    secondReady.resolve spool.paths.metadata
+    return (firstReady.result?.get).getD default
+  let concurrentDistinct := match firstTask.get, secondTask.get with
+    | .ok pathSeenByFirst, .ok pathSeenBySecond => pathSeenByFirst != pathSeenBySecond
+    | _, _ => false
+  state := state.check "concurrent raw spools reserve distinct directories" concurrentDistinct
+
+  -- If cleanup itself fails, retain the primary action exception. The extra
+  -- leaf deliberately keeps the directory nonempty; the test then removes it
+  -- explicitly rather than asking production cleanup to recurse.
+  let cleanupFailureDirectory ← IO.mkRef (none : Option System.FilePath)
+  let primaryPreserved ← try
+      withRawSpoolIn scratch fun spool => do
+        let directory := spool.paths.metadata.parent.getD scratch
+        cleanupFailureDirectory.set (some directory)
+        IO.FS.writeFile (directory / "unexpected-sentinel") "keep"
+        throw <| IO.userError "primary-spool-error"
+      pure false
+    catch error => pure ((toString error).contains "primary-spool-error")
+  if let some directory ← cleanupFailureDirectory.get then
+    let unexpected := directory / "unexpected-sentinel"
+    if ← unexpected.pathExists then IO.FS.removeFile unexpected
+    if ← directory.pathExists then IO.FS.removeDir directory
+  state := state.check "cleanup failures do not mask the primary exception" primaryPreserved
+
   IO.FS.writeFile rawRootSentinel "do-not-delete"
   withRawSpoolIn scratch fun _ => pure ()
   state := state.check "raw spool cleanup preserves existing scratch contents" <|
@@ -307,6 +392,13 @@ def main (args : List String) : IO UInt32 := do
     catch _ => pure true
   state := state.check "raw spool refuses a missing scratch root without creating it" <|
     missingRootRefused && !(← System.FilePath.pathExists missingRoot)
+  let wrongNamedRoot := s!"{root}/raw-spool-not-project-tmp"
+  IO.FS.createDirAll wrongNamedRoot
+  let wrongNamedRefused ← try
+      withRawSpoolIn wrongNamedRoot fun _ => pure false
+    catch _ => pure true
+  state := state.check "raw spool refuses arbitrary writable roots" wrongNamedRefused
+  IO.FS.removeDir wrongNamedRoot
 
   -- Projection analysis follows record dependencies, not numeric ID order.
   let projectionOrder := lines #[
@@ -393,6 +485,8 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "metadata expressions parse in both readers" <|
     bothHaveDecls (Modelgen.parse metadata) (← parseHandleAt parserCompatibilityPath)
       #[metadataDecl]
+  state := state.check "raw certification rejects metadata expressions"
+    (← rawFastPathRejected parserCompatibilityPath metadata)
 
   let legacyOpaque := lines #[
     "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"LegacyOpaque\"}}",

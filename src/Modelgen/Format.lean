@@ -923,12 +923,17 @@ structure RawRecord where
 structure RawSink where
   emit : RawRecord → IO Unit
 
-/-- A compact byte span in the declaration-only spool.  Offsets are 64-bit so
-the summary has fixed size; lengths remain `Nat`, matching `ByteArray.size`. -/
+/-- A compact byte span in the declaration-only spool. Both coordinates are
+fixed-width and every conversion/addition is checked before publication. -/
 structure RawSpan where
   offset : UInt64
-  bytes : Nat
+  bytes : UInt64
   deriving Inhabited, Repr, BEq
+
+def RawSpan.end? (span : RawSpan) : Option UInt64 :=
+  if span.offset.toNat + span.bytes.toNat < UInt64.size then
+    some (span.offset + span.bytes)
+  else none
 
 /-- Exclusive upper bounds of a strictly progressive input arena. -/
 structure RawArenaCursor where
@@ -944,6 +949,11 @@ record has canonical compressed JSON spelling and a terminating LF, and name,
 level, and expression IDs progress exactly `1,2,…`, `1,2,…`, and `0,1,…`.
 Sparse, repeated, or out-of-order arenas therefore fall back to full
 re-interning instead of changing the snapshot seen by an earlier declaration.
+
+This is evidence about the byte stream, not permission to use a staged output
+path. A later composition/Main layer must additionally reject modes which
+rewrite the whole export (notably universe monomorphization), validate every
+span against the finished spool size, and validate its generated-writer cursor.
 -/
 structure RawCertificate where
   canonical : Bool := true
@@ -954,9 +964,41 @@ structure RawCertificate where
   declarations : Array RawSpan := #[]
   deriving Inhabited, Repr, BEq
 
+/-- Actual sizes of the three completed logical spool files. -/
+structure RawSpoolSizes where
+  metadata : UInt64
+  arena : UInt64
+  declarations : UInt64
+  deriving Inhabited, Repr, BEq
+
+/-- Validate all persistent offsets against the completed files before any raw
+composition may consume them. In particular, declaration spans must form one
+exact contiguous partition; a count mismatch or trailing/unindexed byte fails
+closed. -/
+def RawCertificate.validate (certificate : RawCertificate) (sizes : RawSpoolSizes)
+    (declarationCount : Nat) : Except String RawArenaCursor := do
+  unless certificate.canonical do throw "raw input is not canonical"
+  let expectedSizes : RawSpoolSizes :=
+    { metadata := certificate.metadataBytes
+      arena := certificate.arenaBytes
+      declarations := certificate.declarationBytes }
+  unless sizes == expectedSizes do
+    throw "raw spool sizes do not match the parser certificate"
+  unless certificate.declarations.size == declarationCount do
+    throw "raw declaration span count does not match the parsed declarations"
+  let mut endpoint : UInt64 := 0
+  for span in certificate.declarations do
+    unless span.offset == endpoint do
+      throw "raw declaration spans are not contiguous"
+    let some next := span.end?
+      | throw "raw declaration span endpoint overflows UInt64"
+    endpoint := next
+  unless endpoint == sizes.declarations do
+    throw "raw declaration spans do not cover the completed spool"
+  return certificate.cursor
+
 private structure RawCertState where
   certificate : RawCertificate := {}
-  declarationBytes : Nat := 0
 
 private def addUInt64Bytes (current : UInt64) (bytes : Nat) : UInt64 × Bool :=
   if bytes < UInt64.size && current.toNat ≤ UInt64.size - 1 - bytes then
@@ -992,14 +1034,13 @@ private def RawCertState.addBytes (state : RawCertState) (kind : RawRecordKind)
           canonical := state.certificate.canonical && valid, arenaBytes := total } }
   | .declaration =>
       let (total, validTotal) := addUInt64Bytes state.certificate.declarationBytes bytes
-      let validOffset := state.declarationBytes < UInt64.size
-      let offset := if validOffset then state.declarationBytes.toUInt64 else 0
+      let validLength := bytes < UInt64.size
       { certificate := { state.certificate with
-          canonical := state.certificate.canonical && validTotal && validOffset
+          canonical := state.certificate.canonical && validTotal && validLength
           declarationBytes := total
           declarations := state.certificate.declarations.push
-            { offset, bytes } }
-        declarationBytes := state.declarationBytes + bytes }
+            { offset := state.certificate.declarationBytes,
+              bytes := if validLength then bytes.toUInt64 else 0 } } }
   | .ignored => state
 
 private def RawCertState.observeArena (state : RawCertState) (j : Json) : RawCertState :=
@@ -1014,7 +1055,12 @@ private def RawCertState.observeArena (state : RawCertState) (j : Json) : RawCer
           cursor.nextLevel := state.certificate.cursor.nextLevel + 1 } }
   | some (.expression, id) =>
       { state with certificate := { state.certificate with
-          canonical := state.certificate.canonical && id == state.certificate.cursor.nextExpr
+          -- The ordinary writer erases expression metadata, so a raw source
+          -- containing `mdata` is not yet eligible for mixed raw/generated
+          -- composition even when its IDs are dense.
+          canonical := state.certificate.canonical &&
+            (jField j "mdata").toOption.isNone &&
+            id == state.certificate.cursor.nextExpr
           cursor.nextExpr := state.certificate.cursor.nextExpr + 1 } }
   | _ => { state with certificate.canonical := false }
 
@@ -1145,9 +1191,9 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
     let certificate := if sink?.isSome then rawState.certificate else {}
     return .ok ({ metaLine, decls, projNodes }, certificate)
 
-/-- Parse while sending exact input records to `sink`.  The compact returned
-certificate says whether the spooled arena is safe to hoist ahead of its
-declaration records; a false certificate requires the ordinary writer. -/
+/-- Parse while sending exact input records to `sink`. The compact returned
+certificate is necessary but not sufficient for a later raw-hoist fast path;
+a false certificate unconditionally requires the ordinary writer. -/
 def parseStreamWithSink (h : IO.FS.Stream) (sink : RawSink)
     (analyse : Bool := true) : IO (Except String (Export × RawCertificate)) :=
   parseStreamCore h analyse (some sink)
@@ -1166,11 +1212,14 @@ def parseHandleWithSink (h : IO.FS.Handle) (sink : RawSink)
 
 /-! ### Project-local spool lifecycle
 
-Production callers choose an explicit project-local scratch root.  The helper
-atomically creates a randomly named, owner-only directory below that root and
-removes only that directory on success, parse failure, or exception.  It is
-intentionally not wired into `Main` yet; this tranche establishes the parser
-contract only.
+Production callers choose an explicit project-local `_tmp` scratch root which
+is writable only by its owner.  The helper creates a randomly named directory,
+makes it owner-only before creating any files in it, and removes only its known
+leaves and that directory on success, parse failure, or exception.  The
+owner-only parent is an important precondition: `IO.FS.createDir` has no atomic
+mode argument, so this deliberately narrow helper is not safe for a shared
+world-writable temporary directory.  It is intentionally not wired into
+`Main` yet; this tranche establishes the parser contract only.
 -/
 
 structure RawSpoolPaths where
@@ -1197,60 +1246,121 @@ def RawSpool.flush (spool : RawSpool) : IO Unit := do
   spool.arenaHandle.flush
   spool.declarationHandle.flush
 
+/-- Lowercase hexadecimal encoding used for random spool leaf names. Exposed
+only so lifecycle tests can pin the entropy-preserving representation. -/
+def rawSpoolSuffixOfBytes (bytes : ByteArray) : String :=
+  bytes.foldl (fun suffix byte =>
+    let value := byte.toNat
+    suffix ++ hexDigitRepr (value / 16) ++ hexDigitRepr (value % 16)) ""
+
 private def randomSpoolSuffix : IO String := do
   let bytes ← IO.getRandomBytes 16
-  return bytes.foldl (fun suffix byte => suffix ++ hexDigitRepr byte.toNat) ""
+  return rawSpoolSuffixOfBytes bytes
 
-private partial def createSpoolDirectory (root : System.FilePath) : IO System.FilePath := do
-  let directory := root / s!"modelgen-spool-{← randomSpoolSuffix}"
-  try
-    IO.FS.createDir directory
-  catch error =>
-    -- A 128-bit collision is fantastically unlikely, but only an existing
-    -- candidate justifies retrying. Permission and filesystem errors escape.
-    if ← directory.pathExists then return ← createSpoolDirectory root else throw error
-  try
-    IO.setAccessRights directory
-      { user := { read := true, write := true, execution := true } }
-    return directory
-  catch error =>
-    -- `directory` is ours once `createDir` succeeds. Do not leak it if the
-    -- owner-only permission boundary cannot be established.
-    if ← directory.pathExists then IO.FS.removeDirAll directory
-    throw error
+private def maxSpoolCreateAttempts : Nat := 64
+
+private def createSpoolDirectory (root : System.FilePath) : IO System.FilePath := do
+  let rec attempt : Nat → IO System.FilePath
+    | 0 => throw <| IO.userError
+        s!"could not reserve a fresh raw spool directory after {maxSpoolCreateAttempts} attempts"
+    | remaining + 1 => do
+      let directory := root / s!"modelgen-spool-{← randomSpoolSuffix}"
+      try
+        IO.FS.createDir directory
+      catch error =>
+        -- Retry only an actual collision. Permission and filesystem errors
+        -- escape, and retries are bounded even if randomness is broken.
+        if ← directory.pathExists then return ← attempt remaining else throw error
+      try
+        IO.setAccessRights directory
+          { user := { read := true, write := true, execution := true } }
+        return directory
+      catch error =>
+        -- No spool leaf exists until the permission boundary is established.
+        if ← directory.pathExists then IO.FS.removeDir directory
+        throw error
+  attempt maxSpoolCreateAttempts
 
 private def removeOwnedSpoolFile (path : System.FilePath) : IO Unit := do
   if ← path.pathExists then IO.FS.removeFile path
 
-/-- Create an owner-only spool directory immediately below the caller's
-project-local scratch root, open its three fresh files, and remove that owned
-directory unconditionally after `action`.  The root must already exist and be
-a directory; this helper never follows a caller-chosen leaf or deletes a path
-which existed before the call. -/
-def withRawSpoolIn (root : System.FilePath) (action : RawSpool → IO α) : IO α := do
+private def cleanupRawSpool (directory : System.FilePath) (paths : RawSpoolPaths) : IO Unit := do
+  let mut firstError : Option IO.Error := none
+  for path in #[paths.metadata, paths.arena, paths.declarations] do
+    try removeOwnedSpoolFile path
+    catch error => if firstError.isNone then firstError := some error
+  try
+    if ← directory.pathExists then IO.FS.removeDir directory
+  catch error =>
+    if firstError.isNone then firstError := some error
+  if let some error := firstError then throw error
+
+/-- Create an owner-only spool directory immediately below a trusted,
+owner-writable project `_tmp` root, open its three fresh files, and remove its
+known leaves and now-empty directory after `action`. The root must already
+exist, resolve to a directory named `_tmp`, and not be group/world-writable.
+The last condition is a caller precondition because Lean's portable filesystem
+metadata does not expose Unix ownership or mode bits.
+
+This provisional lifecycle is supported on Linux, where unlinking the fresh
+files is valid even while Lean's opaque handles await finalization. It refuses
+other platforms until the handles can be closed explicitly. Cleanup errors do
+not mask an exception raised by `action`: the cleanup error is reported and
+the original exception is rethrown. -/
+private def withRawSpoolInCore (root : System.FilePath)
+    (beforeRemainingFiles? : Option (RawSpoolPaths → IO Unit))
+    (action : RawSpool → IO α) : IO α := do
+  unless System.Platform.target.contains "linux" do
+    throw <| IO.userError "raw spool lifecycle is currently supported only on Linux"
   unless ← root.isDir do
     throw <| IO.userError s!"raw spool root is not a directory: {root}"
   let root ← IO.FS.realPath root
+  unless root.fileName == some "_tmp" do
+    throw <| IO.userError s!"raw spool root must be the trusted project _tmp directory: {root}"
   let directory ← createSpoolDirectory root
   let paths : RawSpoolPaths :=
     { metadata := directory / "metadata.ndjson"
       arena := directory / "arena.ndjson"
       declarations := directory / "declarations.ndjson" }
-  try
-    let metadataHandle ← IO.FS.Handle.mk paths.metadata .write
-    let arenaHandle ← IO.FS.Handle.mk paths.arena .write
-    let declarationHandle ← IO.FS.Handle.mk paths.declarations .write
-    let spool : RawSpool := { paths, metadataHandle, arenaHandle, declarationHandle }
-    action spool
-  finally
-    -- The directory was atomically created by this call and made owner-only;
-    -- no pre-existing or caller-selected leaf is ever a cleanup target. Remove
-    -- only the three leaves we created, then the now-empty directory; a path
-    -- replacement cannot turn cleanup into a recursive deletion.
-    removeOwnedSpoolFile paths.metadata
-    removeOwnedSpoolFile paths.arena
-    removeOwnedSpoolFile paths.declarations
-    if ← directory.pathExists then IO.FS.removeDir directory
+  let result : Except IO.Error α ← try
+      let metadataHandle ← IO.FS.Handle.mk paths.metadata .writeNew
+      if let some beforeRemainingFiles := beforeRemainingFiles? then
+        beforeRemainingFiles paths
+      let arenaHandle ← IO.FS.Handle.mk paths.arena .writeNew
+      let declarationHandle ← IO.FS.Handle.mk paths.declarations .writeNew
+      let spool : RawSpool := { paths, metadataHandle, arenaHandle, declarationHandle }
+      pure (Except.ok (← action spool))
+    catch error => pure (Except.error error)
+  let cleanupError : Option IO.Error ← try
+      cleanupRawSpool directory paths
+      pure none
+    catch error => pure (some error)
+  match result, cleanupError with
+  | Except.ok value, none => pure value
+  | Except.ok _, some error => throw error
+  | Except.error error, none => throw error
+  | Except.error error, some cleanupError => do
+      IO.eprintln s!"raw spool cleanup also failed: {cleanupError}"
+      throw error
+
+def withRawSpoolIn (root : System.FilePath) (action : RawSpool → IO α) : IO α :=
+  withRawSpoolInCore root none action
+
+/-- Test-only fault injection for the partial-open cleanup boundary. The hook
+creates the second leaf after the first handle opens, so `.writeNew` must fail;
+the workspace must nevertheless disappear without recursive cleanup. -/
+def RawSpool.testPartialOpenCleanup (root : System.FilePath) : IO Bool := do
+  let pathsRef ← IO.mkRef (none : Option RawSpoolPaths)
+  let failed ← try
+      withRawSpoolInCore root (some fun paths => do
+        pathsRef.set (some paths)
+        IO.FS.writeFile paths.arena "exclusive-open-collision") fun _ => pure ()
+      pure false
+    catch _ => pure true
+  let some paths ← pathsRef.get | return false
+  let directory := paths.metadata.parent.getD root
+  return failed && !(← paths.metadata.pathExists) && !(← paths.arena.pathExists) &&
+    !(← paths.declarations.pathExists) && !(← directory.pathExists)
 
 /-! ## Writing
 
@@ -1294,6 +1404,12 @@ structure Cursor where
   nextLevel : Nat := 1
   nextExpr : Nat := 0
   deriving Inhabited, Repr, BEq
+
+/-- Exact handoff from a validated raw input arena to a generated writer. No
+table size or inferred count is substituted for the certified next IDs. -/
+def Cursor.ofRaw (cursor : RawArenaCursor) : Cursor :=
+  { nextName := cursor.nextName, nextLevel := cursor.nextLevel,
+    nextExpr := cursor.nextExpr }
 
 /-- Start a structurally fresh writer at explicit, non-overlapping arena IDs.
 Only the format's distinguished anonymous name and zero level remain shared
