@@ -111,6 +111,74 @@ def SpoolFile.finish (file : SpoolFile) : IO UInt64 := do
     throw <| IO.userError s!"spool size mismatch: appended {expected} bytes, file has {actual}"
   return actual
 
+/-- A secure project-local workspace which records every leaf it owns. Cleanup
+never recurses and never accepts a caller-selected deletion target. -/
+structure Workspace where
+  root : System.FilePath
+  directory : System.FilePath
+  private ownedFiles : IO.Ref (Array System.FilePath)
+
+private def maxWorkspaceAttempts : Nat := 64
+
+def Workspace.create (root : System.FilePath) : IO Workspace := do
+  unless root.fileName == some "_tmp" do
+    throw <| IO.userError s!"spool workspace root must be the project _tmp directory: {root}"
+  let rec attempt : Nat → IO System.FilePath
+    | 0 => throw <| IO.userError
+        s!"could not reserve a spool workspace after {maxWorkspaceAttempts} attempts"
+    | remaining + 1 => do
+      let suffix := rawSpoolSuffixOfBytes (← IO.getRandomBytes 16)
+      let leaf := s!"modelgen-spool-{suffix}"
+      try mkdirPrivateAt root leaf
+      catch error =>
+        let candidate := root / leaf
+        if ← candidate.pathExists then attempt remaining else throw error
+  let directory ← attempt maxWorkspaceAttempts
+  let ownedFiles ← IO.mkRef #[]
+  return { root, directory, ownedFiles }
+
+private def validLeaf (leaf : String) : Bool :=
+  !leaf.isEmpty && leaf != "." && leaf != ".." &&
+    !leaf.contains '/' && !leaf.contains '\\'
+
+def Workspace.createFile (workspace : Workspace) (leaf : String) : IO SpoolFile := do
+  unless validLeaf leaf do throw <| IO.userError "spool file must be one non-special path component"
+  let path := workspace.directory / leaf
+  let file ← SpoolFile.createNew path
+  workspace.ownedFiles.modify (fun paths => paths.push path)
+  return file
+
+private def Workspace.cleanup (workspace : Workspace) : IO Unit := do
+  let mut firstError : Option IO.Error := none
+  for path in ← workspace.ownedFiles.get do
+    try
+      if ← path.pathExists then IO.FS.removeFile path
+    catch error => if firstError.isNone then firstError := some error
+  try
+    if ← workspace.directory.pathExists then IO.FS.removeDir workspace.directory
+  catch error => if firstError.isNone then firstError := some error
+  if let some error := firstError then throw error
+
+/-- Run an action in a fresh workspace and remove only its registered files and
+empty directory. If both the action and cleanup fail, report cleanup separately
+and rethrow the primary action exception. -/
+def withWorkspace (root : System.FilePath) (action : Workspace → IO α) : IO α := do
+  let workspace ← Workspace.create root
+  let result : Except IO.Error α ← try
+      pure (Except.ok (← action workspace))
+    catch error => pure (Except.error error)
+  let cleanupError : Option IO.Error ← try
+      workspace.cleanup
+      pure none
+    catch error => pure (some error)
+  match result, cleanupError with
+  | .ok value, none => pure value
+  | .ok _, some error => throw error
+  | .error error, none => throw error
+  | .error error, some cleanupError => do
+      IO.eprintln s!"spool workspace cleanup also failed: {cleanupError}"
+      throw error
+
 /-- A set of byte ranges whose arena ranges are emitted before declarations.
 `declarationOrder` is a permutation of declaration indices, allowing compact
 topological scheduling without retaining declaration ASTs. -/
