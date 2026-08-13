@@ -68,7 +68,7 @@ jobs:
             focused)
               test/scripts/check-mathlib-result.sh
               build_serially \
-                clitest generationflagstest checktest ordertest namingtest \
+                clitest generationflagstest checktest ordertest incrementalordertest namingtest \
                 drivernamingtest privatealiastest simplenamingtest rulektest \
                 projectiontest structureetatest deepimaxboxtest \
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
@@ -78,6 +78,7 @@ jobs:
               lake exe generationflagstest
               lake exe checktest "$GITHUB_WORKSPACE"
               lake exe ordertest "$GITHUB_WORKSPACE"
+              lake exe incrementalordertest "$GITHUB_WORKSPACE"
               lake exe namingtest
               lake exe drivernamingtest
               lake exe privatealiastest
@@ -93,7 +94,7 @@ jobs:
               lake exe transparentowneraliasestest
               lake exe exportsyntaxnormalizationtest
               lake exe stagedwritertest "$GITHUB_WORKSPACE"
-              count=19
+              count=20
               ;;
             mono)
               build_serially modelgen monotest mainclitest
