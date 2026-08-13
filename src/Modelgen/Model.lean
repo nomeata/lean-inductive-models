@@ -409,6 +409,57 @@ def closeForallsExact? (telescope : Expr) (values : Array Expr) (body : Expr) : 
       result := .forallE name domain (result.abstract #[value]) info
     return some result
 
+/-- A binder opened without consulting `MetaM`, retaining its exact exported
+domain for public recursor and iota statements. -/
+private structure ExactRecBinder where
+  name : Name
+  type : Expr
+  info : BinderInfo
+  value : Expr
+
+private partial def openExactRecForalls (tag : Name) (expression : Expr) :
+    Array ExactRecBinder × Expr :=
+  let rec loop (expression : Expr) (binders : Array ExactRecBinder) :=
+    match expression with
+    | .forallE name type body info =>
+      let value := mkFVar (FVarId.mk (tag.mkNum binders.size))
+      loop (body.instantiate1 value) (binders.push { name, type, info, value })
+    | body => (binders, body)
+  loop expression #[]
+
+private def closeExactRecForalls (binders : Array ExactRecBinder) (body : Expr) : Expr :=
+  binders.reverse.foldl (fun body binder =>
+    .forallE binder.name binder.type (body.abstract #[binder.value]) binder.info) body
+
+/-- Recover the exact constructor-field telescope presented by one exported
+recursor minor premise. Installed recursor metadata remains the proof/layout
+oracle; this syntax is used only to close a public iota statement. -/
+def exactRecursorFieldTelescope? (recursor : ERec) (ruleIndex : Nat)
+    (pre : Array Expr) : Option Expr := do
+  let rule ← recursor.rules[ruleIndex]?
+  let (recBinders, _) := openExactRecForalls ((`_exact_rec).append recursor.name)
+    recursor.type
+  let numPre := recursor.numParams + recursor.numMotives + recursor.numMinors
+  unless pre.size == numPre do none
+  let minor ← recBinders[recursor.numParams + recursor.numMotives + ruleIndex]?
+  let sourcePre := recBinders.extract 0 numPre |>.map (·.value)
+  let minorType := minor.type.replace fun expression =>
+    sourcePre.findIdx? (fun value => value == expression) |>.map fun index => pre[index]!
+  let (minorBinders, motiveResult) :=
+    openExactRecForalls ((`_exact_minor).append rule.ctor) minorType
+  let major ← motiveResult.getAppArgs.back?
+  let .const constructor _ := major.getAppFn | none
+  unless constructor == rule.ctor do none
+  let majorArgs := major.getAppArgs
+  unless majorArgs.size >= rule.nfields do none
+  let fieldValues := majorArgs.extract (majorArgs.size - rule.nfields) majorArgs.size
+  let mut fields : Array ExactRecBinder := #[]
+  for value in fieldValues do
+    let some binder := minorBinders.find? (·.value == value) | fields := #[]; break
+    fields := fields.push binder
+  unless fields.size == rule.nfields do none
+  return closeExactRecForalls fields (.sort .zero)
+
 /-! ## The generator -/
 
 /-- The generator's read-only context. -/
@@ -484,6 +535,23 @@ missing metadata, or kernel rejection is a tool failure and must reach the
 CLI's exit-3 containment boundary. -/
 def badShape (msg : String) : GenM α :=
   ExceptT.lift (show MetaM α from Lean.throwError msg)
+
+/-- Fail closed unless exact exported syntax and installed kernel metadata
+describe the same recursor slots. Literal types and rule RHSs may differ: the
+former supplies public syntax while the latter supplies checked proofs. -/
+def validateExactRecursorLayout (expected : ERec) (actual : RecursorVal) : GenM Unit := do
+  unless expected.name == actual.name &&
+      expected.levelParams == actual.levelParams && expected.all == actual.all &&
+      expected.numParams == actual.numParams && expected.numIndices == actual.numIndices &&
+      expected.numMotives == actual.numMotives && expected.numMinors == actual.numMinors &&
+      expected.k == actual.k && expected.isUnsafe == actual.isUnsafe &&
+      expected.rules.length == actual.rules.length do
+    badShape s!"{expected.name}'s exact recursor layout differs from its installed metadata"
+  for index in [0:expected.rules.length] do
+    let exported := expected.rules[index]!
+    let installed := actual.rules[index]!
+    unless exported.ctor == installed.ctor && exported.nfields == installed.nfields do
+      badShape s!"{expected.name}'s exact rule {index} layout differs from its installed metadata"
 
 /-- `Meta.inferType`, at the generator's monad. -/
 def ityp (e : Expr) : GenM Expr := inferType e

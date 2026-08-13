@@ -3257,86 +3257,6 @@ structure PrimAnalysis where
   erasureBare : Bool
   erasureLinear : Bool
 
-/-- A binder opened without consulting `MetaM`, so its literal exported domain
-survives.  Direct source models use these binders only to recover the field
-telescope exposed by the source recursor's minor premise; proof construction
-continues to use the installed recursor metadata. -/
-private structure ExactRecBinder where
-  name : Name
-  type : Expr
-  info : BinderInfo
-  value : Expr
-
-private partial def openExactRecForalls (tag : Name) (expression : Expr) :
-    Array ExactRecBinder × Expr :=
-  let rec loop (expression : Expr) (binders : Array ExactRecBinder) :=
-    match expression with
-    | .forallE name type body info =>
-      let value := mkFVar (FVarId.mk (tag.mkNum binders.size))
-      loop (body.instantiate1 value) (binders.push { name, type, info, value })
-    | body => (binders, body)
-  loop expression #[]
-
-private def closeExactRecForalls (binders : Array ExactRecBinder) (body : Expr) : Expr :=
-  binders.reverse.foldl (fun body binder =>
-    .forallE binder.name binder.type (body.abstract #[binder.value]) binder.info) body
-
-/-- The constructor-field telescope as the exact exported recursor minor
-premise presents it.  Kernel recursor generation may deliberately reduce a
-source constructor annotation such as `optParam`; the public iota statement
-models the recursor, so its field binders come from this telescope rather than
-from the source constructor declaration.
-
-`pre` is the installed proof scope.  Only those outer variables are replaced;
-the returned telescope closes its own exact field variables and may therefore
-be instantiated at the proof's field locals with [`closeForallsExact?`]. -/
-private def exactRecursorFieldTelescope? (recursor : ERec) (ruleIndex : Nat)
-    (pre : Array Expr) : Option Expr := do
-  let rule ← recursor.rules[ruleIndex]?
-  let (recBinders, _) := openExactRecForalls ((`_simple_exact_rec).append recursor.name)
-    recursor.type
-  let numPre := recursor.numParams + recursor.numMotives + recursor.numMinors
-  unless pre.size == numPre do none
-  let minor ← recBinders[recursor.numParams + recursor.numMotives + ruleIndex]?
-  let sourcePre := recBinders.extract 0 numPre |>.map (·.value)
-  let minorType := minor.type.replace fun expression =>
-    sourcePre.findIdx? (fun value => value == expression) |>.map fun index => pre[index]!
-  let (minorBinders, motiveResult) :=
-    openExactRecForalls ((`_simple_exact_minor).append rule.ctor) minorType
-  let motiveArgs := motiveResult.getAppArgs
-  let major ← motiveArgs.back?
-  let .const constructor _ := major.getAppFn | none
-  unless constructor == rule.ctor do none
-  let majorArgs := major.getAppArgs
-  unless majorArgs.size >= rule.nfields do none
-  let fieldValues := majorArgs.extract (majorArgs.size - rule.nfields) majorArgs.size
-  let mut fields : Array ExactRecBinder := #[]
-  for value in fieldValues do
-    let some binder := minorBinders.find? (·.value == value) | fields := #[]; break
-    fields := fields.push binder
-  unless fields.size == rule.nfields do none
-  return closeExactRecForalls fields (.sort .zero)
-
-/-- Source export metadata and installed recursor metadata must describe the
-same public slot layout.  Literal type and rule RHS equality is intentionally
-excluded: replay may normalize those expressions, and direct-simple emission
-uses the exported expressions for syntax while using the installed ones to
-construct checked proof terms. -/
-private def validateExactSourceRecursor (expected : ERec) (actual : RecursorVal) :
-    GenM Unit := do
-  unless expected.name == actual.name &&
-      expected.levelParams == actual.levelParams && expected.all == actual.all &&
-      expected.numParams == actual.numParams && expected.numIndices == actual.numIndices &&
-      expected.numMotives == actual.numMotives && expected.numMinors == actual.numMinors &&
-      expected.k == actual.k && expected.isUnsafe == actual.isUnsafe &&
-      expected.rules.length == actual.rules.length do
-    badShape s!"{expected.name}'s exported recursor layout differs from its installed metadata"
-  for index in [0:expected.rules.length] do
-    let exported := expected.rules[index]!
-    let installed := actual.rules[index]!
-    unless exported.ctor == installed.ctor && exported.nfields == installed.nfields do
-      badShape s!"{expected.name}'s exported rule {index} layout differs from its installed metadata"
-
 set_option maxRecDepth 2048 in
 /-- Analyse the installed declaration and its recursor before any support or
 model declarations are installed. -/
@@ -3544,7 +3464,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   let isRec := analysis.isRec
   let rv := analysis.rv
   if let some sourceRecursor := sourceRecursor? then
-    validateExactSourceRecursor sourceRecursor rv
+    validateExactRecursorLayout sourceRecursor rv
   let large := analysis.large
   let v := analysis.v
   let recLs := analysis.recLs

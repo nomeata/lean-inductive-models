@@ -147,7 +147,8 @@ The whole of the checker interaction is [`Modelgen.addChecked`], once per
 generated declaration. Nothing is emitted unchecked. -/
 def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     (memberTys : Array Expr) (exportCtors : Array (Array (Name × Expr)))
-    (reserved : Std.HashSet Name) (buildRoot? : Option Name := none) : GenM Iso := do
+    (reserved : Std.HashSet Name) (buildRoot? : Option Name := none)
+    (sourceBlock? : Option EDecl := none) : GenM Iso := do
   let us := lparams.map Level.param
   let r := all.size
   unless r ≥ 2 && memberTys.size == r && exportCtors.size == r do
@@ -173,6 +174,13 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   let ctorN := fun n =>
     Naming.modelName (Naming.relocateSource root buildRoot n)
   let exportRecs := (Array.range r).map (exportRecName all)
+  let sourceRecursors? ← match sourceBlock? with
+    | none => pure none
+    | some (.induct types _ recursors) =>
+      unless types.map (·.name) == all.toList do
+        badShape s!"exact generated block members {types.map (·.name)} differ from {all}"
+      pure (some recursors.toArray)
+    | some _ => badShape "exact generated mutual source is not an inductive block"
   let recN := fun (k : Nat) =>
     Naming.modelName (Naming.relocateSource root buildRoot exportRecs[k]!)
   let iotaN := fun (k j : Nat) =>
@@ -388,10 +396,15 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     else if arv.levelParams.length == lparams.length then pure false
     else badShape s!"{auxRecN} carries the level parameters {arv.levelParams}"
   let nc := ctors.size
-  let mut recInfos : Array (Nat × Level × List Name × Expr) := #[]
+  let mut recInfos : Array (Nat × Level × List Name × Expr × Expr × Option ERec) := #[]
   for k in [0:r] do
     let ern := exportRecName all k
     let .recInfo rv ← constInfo ern | badShape s!"{ern} is not a recursor"
+    let sourceRecursor? := sourceRecursors?.bind (·.find? (·.name == ern))
+    if sourceRecursors?.isSome && sourceRecursor?.isNone then
+      badShape s!"exact generated block has no recursor {ern}"
+    if let some sourceRecursor := sourceRecursor? then
+      validateExactRecursorLayout sourceRecursor rv
     unless rv.numMotives == r do
       badShape s!"{ern} has {rv.numMotives} motives where the block has {r} members"
     unless rv.numMinors == nc do
@@ -406,8 +419,10 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     let v := if large then Level.param rv.levelParams[0]! else Level.zero
     unless (if large then rv.levelParams.tail! else rv.levelParams) == lparams do
       badShape s!"{ern} carries the level parameters {rv.levelParams}"
-    let ty := restore tbl rv.type
-    let val ← forallBoundedTelescope ty (some (np + r + nc + nidx[k]! + 1)) fun bs _ => do
+    let installedTy := restore tbl rv.type
+    let publicTy := restore tbl (sourceRecursor?.map (·.type) |>.getD rv.type)
+    let val ← forallBoundedTelescope installedTy
+        (some (np + r + nc + nidx[k]! + 1)) fun bs _ => do
       let ps := bs.extract 0 np
       let motives := bs.extract np (np + r)
       let minors := bs.extract (np + r) (np + r + nc)
@@ -431,11 +446,11 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       mkLambdaFVars bs
         (mkAppN (.const auxRecN auxLs) (((ps.push mot) ++ minors).push tagApp |>.push major))
     let d := Declaration.defnDecl
-      { name := recN k, levelParams := rv.levelParams, type := ty, value := val
+      { name := recN k, levelParams := rv.levelParams, type := publicTy, value := val
         hints := ← hintsFor val, safety := .safe }
     addChecked d
     out := out.push d
-    recInfos := recInfos.push (k, v, rv.levelParams, ty)
+    recInfos := recInfos.push (k, v, rv.levelParams, installedTy, publicTy, sourceRecursor?)
 
   -- ── 6. the ι rules ─────────────────────────────────────────────────────
   --
@@ -448,7 +463,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   -- own right-hand side reach the same normal form by δ and ι alone, so the
   -- generator proves nothing and the kernel decides everything.
   let mut iotas : Array (Nat × Name × Name) := #[]
-  for (k, v, rlp, ty) in recInfos do
+  for (k, v, rlp, installedTy, publicTy, sourceRecursor?) in recInfos do
     let ern := exportRecName all k
     let .recInfo rv ← constInfo ern | badShape s!"{ern} is not a recursor"
     let recLs := if rlp.length == lparams.length + 1 then v :: us else us
@@ -469,7 +484,8 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       -- type, so walk the restored export constructor rather than reading the
       -- model constructor back from the environment.
       let modelCTy := restore tbl exportCtors[k]![j]!.2
-      let d ← forallBoundedTelescope ty (some (np + r + rv.numMinors)) fun pre _ => do
+      let d ← forallBoundedTelescope installedTy
+          (some (np + r + rv.numMinors)) fun pre _ => do
         let ps := pre.extract 0 np
         let motiveK := pre[np + k]!
         let cty ← instForall modelCTy ps
@@ -480,13 +496,20 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
           let lhs := mkAppN (.const (recN k) recLs) ((pre ++ idxs).push major)
           -- The rule's own right-hand side, at the model's names. Lean states
           -- it as `fun p⃗ M⃗ S⃗ f⃗ => …`, which is this telescope exactly.
-          let rhs := (restore tbl rule.rhs).beta (pre ++ fields)
+          let rhsSyntax := sourceRecursor?.bind (·.rules[j]?) |>.map (·.rhs) |>.getD rule.rhs
+          let rhs := (restore tbl rhsSyntax).beta (pre ++ fields)
           let α := mkAppN motiveK (idxs.push major)
           let tel := pre ++ fields
           let proposition := eqi.mk' v α lhs rhs
-          let some fieldsType := closeForallsExact? cty fields proposition
+          let exactFieldTelescope ← match sourceRecursor? with
+            | none => pure cty
+            | some sourceRecursor =>
+              let some telescope := exactRecursorFieldTelescope? sourceRecursor j pre
+                | badShape s!"{sourceRecursor.name}'s exact rule {j} has no field telescope"
+              pure (restore tbl telescope)
+          let some fieldsType := closeForallsExact? exactFieldTelescope fields proposition
             | badShape s!"{modelC}'s exported telescope has fewer fields than its installed type"
-          let some theoremType := closeForallsExact? ty pre fieldsType
+          let some theoremType := closeForallsExact? publicTy pre fieldsType
             | badShape s!"{ern}'s exported telescope is shorter than its recursor prefix"
           return Declaration.thmDecl
             { name := nm, levelParams := rlp
@@ -497,7 +520,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       iotas := iotas.push (k, cn, nm)
 
   let mut ruleKs : Array (Name × Name) := #[]
-  for (k, _, rlp, _) in recInfos do
+  for (k, _, rlp, _, _, _) in recInfos do
     let ern := exportRecs[k]!
     let .recInfo rv ← constInfo ern | badShape s!"{ern} is not a recursor"
     if rv.k then

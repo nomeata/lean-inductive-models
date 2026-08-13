@@ -1371,23 +1371,56 @@ def validateScheduledSupport (scheduled : Export) (generation : Cli.Config) : Ex
       throw s!"latest fixed support {supportNames} remains at record {supportIndex} \
         after selected owner {owner.names} at record {ownerIndex}"
 
+/-- Value-free exact inductive records retained only until the immediately
+following composed generation step. Every build member maps to exactly one
+raw, pre-alias block; ambiguity is rejected while the snapshot is built. -/
+structure ExactGeneratedBlocks where
+  private byMember : Std.HashMap Name EDecl := {}
+
+def ExactGeneratedBlocks.find? (blocks : ExactGeneratedBlocks) (member : Name) : Option EDecl :=
+  blocks.byMember[member]?
+
+def ExactGeneratedBlocks.require (blocks : ExactGeneratedBlocks) (member : Name) : MetaM EDecl := do
+  let some block := blocks.find? member
+    | throwError "exact generated block snapshot has no member {member}"
+  return block
+
+/-- Serialization result. `exactBlocks` contains no declaration values and is
+consumed inside the current island; it is never copied into pending/report
+state. -/
+structure SerialisedIso where
+  records : Array EDecl
+  exactBlocks : ExactGeneratedBlocks
+  model : Iso
+
 /-- Read a generated model back from the construction environment, register
 every name Lean minted for its inductive blocks, and serialize through exact
 alias lookups. The returned `Iso` carries the completed alias and splice
 witnesses used for reporting and shared-support persistence. -/
-def serialiseIso (is : Iso) : MetaM (Array EDecl × Iso) := do
-  let mut records : Array EDecl := #[]
+def serialiseIso (is : Iso) (exactTransform : EDecl → EDecl := id) : MetaM SerialisedIso := do
+  let mut rawRecords : Array EDecl := #[]
   for declaration in is.decls do
-    records := records ++ (← toEDecls declaration)
-  let names := records.flatMap fun record => record.names.toArray
+    rawRecords := rawRecords ++ (← toEDecls declaration)
+  rawRecords := rawRecords.map fun record => match record with
+    | .induct .. => exactTransform record
+    | _ => record
+  let mut exactBlocks : ExactGeneratedBlocks := {}
+  for record in rawRecords do
+    if let .induct types _ _ := record then
+      for type in types do
+        if exactBlocks.byMember.contains type.name then
+          throwError "generated member {type.name} occurs in several exact block snapshots"
+        exactBlocks := { byMember := exactBlocks.byMember.insert type.name record }
+  let names := rawRecords.flatMap fun record => record.names.toArray
   let aliases := is.aliases.register names
-  let renamed := records.map (·.renameAliases aliases)
+  let renamed := rawRecords.map (·.renameAliases aliases)
   let spliced := is.spliced.map fun name => aliases.exact name
   -- `Iso` continues to name declarations in the disposable construction
   -- environment. Only serialized records take exact aliases; the completed
   -- map therefore remains available while the exact output identities of
   -- spliced support are recorded for persistence and reporting.
-  return (renamed, { is with aliases := aliases, spliced := spliced })
+  let model := { is with aliases := aliases, spliced := spliced }
+  return { records := renamed, exactBlocks := exactBlocks, model := model }
 
 /-- The exact exported metadata of one inductive record must be what Lean's
 kernel regenerated from that record's type-former and constructor inputs.
@@ -1987,7 +2020,8 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (basicModels : Bool)
     (canWait : Bool)
-    (st : FilterState) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none) :
+    (st : FilterState) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none)
+    (exactTransform : EDecl → EDecl := id) :
     MetaM (FilterState × Option PrimReadiness) := do
   let (out, rep, pending) := st
   let saved ← getEnv
@@ -2041,7 +2075,9 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     return ((out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") },
       pending), none)
   | .ok is =>
-    let (records, is) ← serialiseIso is
+    let serialised ← serialiseIso is exactTransform
+    let records := serialised.records
+    let is := serialised.model
     let mut out := out
     out := out ++ records
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
@@ -2059,9 +2095,11 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
         let mut cts : Array (Name × Expr) := #[]
         for cn in iv.ctors do
           if let some ci := (← getEnv).constants.find? cn then cts := cts.push (cn, ci.type)
+        let exactBlock ← serialised.exactBlocks.require n
+        let normalizer := ({ metaLine := .null, decls := #[exactBlock] } : Export).exactNormalizationEnv
         st2 :=
           (← genPrim n iv.levelParams iv.numParams iv.type cts #[] reserved
-            basicModels false st2).1
+            basicModels false st2 (some (exactBlock, normalizer)) exactTransform).1
     -- **A model may not leave an inductive it introduced unmodelled.** Arm C
     -- splices the index erasure of the family it is
     -- carving, so its output contains an inductive that was in nobody's
@@ -2114,7 +2152,8 @@ environment as the mutual model; retaining a job after its generated owner
 would retain precisely the ownerful state this pass is designed to discard. -/
 def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     (reserved : Std.HashSet Name) (basicModels : Bool)
-    (st : FilterState) : MetaM FilterState := do
+    (blocks : ExactGeneratedBlocks) (st : FilterState)
+    (exactTransform : EDecl → EDecl := id) : MetaM FilterState := do
   let mut st := st
   -- Asked once, of the environment as it stands at the block: every member of
   -- one block is at the same point in the replay.
@@ -2128,8 +2167,11 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     for cn in iv.ctors do
       let some ci := (← getEnv).constants.find? cn | continue
       cts := cts.push (cn, ci.type)
+    let exactBlock ← blocks.require n
+    let normalizer := ({ metaLine := .null, decls := #[exactBlock] } : Export).exactNormalizationEnv
     let (next, wait?) ←
       genPrim n lparams np iv.type cts #[] reserved basicModels true st
+        (some (exactBlock, normalizer)) exactTransform
     if wait?.isSome then
       throwError "composed simple model prerequisite remained late after support scheduling"
     st := next
@@ -2144,17 +2186,18 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (tys : Array Expr) (ctors : Array (Array (Name × Expr)))
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (simpleModels basicModels : Bool)
-    (st : FilterState) : MetaM FilterState := do
+    (st : FilterState) (sourceBlock? : Option EDecl := none)
+    (exactTransform : EDecl → EDecl := id) : MetaM FilterState := do
   let (out, rep, pending) := st
   let saved ← getEnv
   let mut result ← (do
-    let is ← mutualIso all lparams np tys ctors reserved
+    let is ← mutualIso all lparams np tys ctors reserved (sourceBlock? := sourceBlock?)
     addInstalledStructureModels all projections reserved is).run
   if let .error (.nameLost _) := result then
     setEnv saved
     result ← (do
       let is ← mutualIso all lparams np tys ctors reserved
-        (some (Naming.retryRoot all[0]!))
+        (some (Naming.retryRoot all[0]!)) (sourceBlock? := sourceBlock?)
       addInstalledStructureModels all projections reserved is).run
   match result with
   | .error dec =>
@@ -2162,7 +2205,9 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     return (out, { rep with declined := rep.declined.push (all[0]!, dec.labelAs "mutual") },
       pending)
   | .ok is =>
-    let (records, is) ← serialiseIso is
+    let serialised ← serialiseIso is exactTransform
+    let records := serialised.records
+    let is := serialised.model
     let mut out := out
     out := out ++ records
     let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
@@ -2170,7 +2215,8 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
     let st := (out, rep, pending.push { spliced := is.spliced })
     if simpleModels then
-      primCompose is.members is.levelParams np reserved basicModels st
+      primCompose is.members is.levelParams np reserved basicModels serialised.exactBlocks st
+        exactTransform
     else
       return st
 
@@ -2184,7 +2230,8 @@ def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
 and compacted at its close boundary. The full declaration array is retained
 only by callers which explicitly request the legacy final-order/report oracle. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
-    (sink? : Option IslandSink) (retainOracle : Bool) :
+    (sink? : Option IslandSink) (retainOracle : Bool)
+    (exactTransform : EDecl → EDecl := id) :
     MetaM (Array EDecl × Report × StagedPlan) := do
   let scheduled ← match scheduleSource x generation with
     | .ok scheduled => pure scheduled
@@ -2283,7 +2330,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
               setEnv saved
               rep := { rep with declined := rep.declined.push (t.name, dec.label) }
             | .ok is =>
-              let (records, is) ← serialiseIso is
+              let serialised ← serialiseIso is exactTransform
+              let records := serialised.records
+              let is := serialised.model
               out := out ++ records
               rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
               unless is.spliced.isEmpty do
@@ -2318,15 +2367,17 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
                 let saved2 ← getEnv
                 let (tys2, ctors2) ← blockOf is.members
                 let composedRoot := is.members[0]!
+                let exactBlock ← serialised.exactBlocks.require composedRoot
                 let mut mutualResult ← (do
                   let is2 ← mutualIso is.members is.levelParams t.numParams
-                    tys2 ctors2 reserved
+                    tys2 ctors2 reserved (sourceBlock? := some exactBlock)
                   addInstalledStructureModels is.members #[] reserved is2).run
                 if let .error (.nameLost _) := mutualResult then
                   setEnv saved2
                   mutualResult ← (do
                     let is2 ← mutualIso is.members is.levelParams t.numParams
                       tys2 ctors2 reserved (some (Naming.retryRoot composedRoot))
+                        (sourceBlock? := some exactBlock)
                     addInstalledStructureModels is.members #[] reserved is2).run
                 match mutualResult with
                 | .error dec =>
@@ -2334,7 +2385,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
                   rep := { rep with
                     declined := rep.declined.push (is.members[0]!, dec.labelAs "mutual") }
                 | .ok is2 =>
-                  let (records, is2) ← serialiseIso is2
+                  let serialised2 ← serialiseIso is2 exactTransform
+                  let records := serialised2.records
+                  let is2 := serialised2.model
                   out := out ++ records
                   rep := { rep with
                     generated := rep.generated.push (is.members[0]!, is2.decls.size) }
@@ -2344,7 +2397,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
                   -- the primitives — nested → mutual → primitives, one pass.
                   if generation.simple then
                     let st3 ← primCompose is2.members is2.levelParams
-                      t.numParams reserved generation.basic (out, rep, pending)
+                      t.numParams reserved generation.basic serialised2.exactBlocks
+                        (out, rep, pending) exactTransform
                     (out, rep, pending) ← pure st3
     -- Replay, unchecked: the input is trusted. Lean's kernel still runs the
     -- *inductive* elaboration, which is not skippable, so a deliberately
@@ -2420,7 +2474,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           unless ← mutualReady needsExactSortLift reserved do
             throwError "plain mutual model prerequisites remained late after support scheduling"
           let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
-            generation.simple generation.basic (out, rep, pending)
+            generation.simple generation.basic (out, rep, pending) (some d) exactTransform
           (out, rep, pending) ← pure st3
         -- ── a simple inductive (`--simple`) ──────────────────────────────
         -- Generated after replay because route construction reads the owner's
@@ -2439,7 +2493,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           -- `scheduledSupportRecord` before ordinary owners.
           let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
             #[] reserved generation.basic true (out, rep, pending)
-            (some (d, sourceNormalizer))
+            (some (d, sourceNormalizer)) exactTransform
           if wait?.isSome then
             throwError "simple model prerequisite remained late after support scheduling"
           (out, rep, pending) ← pure st
@@ -2627,6 +2681,16 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
   let (decls, report, _) ← runFilterCore x checkRecursors generation none true
+  return (decls, report)
+
+/-- Focused exact-syntax regression seam. The transform is applied only to
+freshly serialized generated inductive records, before their immediate
+composed consumer sees them; ordinary production callers use [`runFilter`]. -/
+def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
+    (generation : Cli.Config) (transform : EDecl → EDecl) :
+    MetaM (Array EDecl × Report) := do
+  let (decls, report, _) ←
+    runFilterCore x checkRecursors generation none true transform
   return (decls, report)
 
 /-- Transitional test oracle. Accepted islands are committed immediately, but
