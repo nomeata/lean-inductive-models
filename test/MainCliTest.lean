@@ -25,6 +25,10 @@ def runModelgen (binary : String) (args : List String) (input? : Option String :
     IO IO.Process.Output :=
   IO.Process.output { cmd := binary, args := args.toArray } input?
 
+def runModelgenAt (binary : String) (args : List String) (cwd : String) :
+    IO IO.Process.Output :=
+  IO.Process.output { cmd := binary, args := args.toArray, cwd := some cwd }
+
 def runModelgenStdin (binary : String) (args : List String) (input : String) :
     IO IO.Process.Output :=
   IO.Process.output { cmd := binary, args := args.toArray } (some input)
@@ -480,6 +484,16 @@ def main (args : List String) : IO UInt32 := do
   let stdoutRun ← runModelgen binary
     ["--no-inductives", "--no-check", "--quiet", nested]
   state := state.check "stdout output succeeds" (stdoutRun.exitCode == 0)
+  let fallbackCwd := s!"{scratch}/main-cli-no-spool-root"
+  IO.FS.createDirAll fallbackCwd
+  let fallbackRun ← runModelgenAt binary
+    ["--no-inductives", "--no-check", "--quiet", nested] fallbackCwd
+  state := state.check "missing staging root falls back without changing output" <|
+    fallbackRun.exitCode == 0 && fallbackRun.stdout == stdoutRun.stdout
+  IO.FS.removeDir fallbackCwd
+  let leakedSpools ← System.FilePath.readDir scratch
+  state := state.check "successful staged parse removes its workspace" <|
+    !leakedSpools.any (fun entry => entry.fileName.startsWith "modelgen-spool-")
   let outputPath := s!"{scratch}/main-cli-output.ndjson"
   if ← System.FilePath.pathExists outputPath then IO.FS.removeFile outputPath
   let fileRun ← runModelgen binary
