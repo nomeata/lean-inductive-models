@@ -84,6 +84,15 @@ structure Report where
   unreplayable : Option String := none
   deriving Inhabited
 
+/-- Whether one reported decline still represents unsupported generation after
+accounting for an existing or newly generated model. A noncanonical basis
+owner is always unsupported: neither a model-shaped input family nor another
+route may turn the reserved-name validation failure into success. -/
+def declineIsUnsupported (alreadyCovered generated : Std.HashSet Name)
+    (owner : Name) : Bool :=
+  primBasis.contains owner ||
+    (!alreadyCovered.contains owner && !generated.contains owner)
+
 /-- The compact support-persistence witness retained until an island closes.
 The complete `Iso` is needed only while composing and serializing a model;
 retaining it here would keep every generated declaration and construction

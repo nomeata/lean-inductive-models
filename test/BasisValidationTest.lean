@@ -83,6 +83,18 @@ def runRaw (input : Export) : IO (Array EDecl × Report) := do
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
+  let covered := ({} : Std.HashSet Name).insert `Eq |>.insert `Ordinary
+  let generated := ({} : Std.HashSet Name).insert `Nat |>.insert `Generated
+  state := state.check "covered malformed basis remains unsupported" <|
+    declineIsUnsupported covered {} `Eq
+  state := state.check "generated malformed basis remains unsupported" <|
+    declineIsUnsupported {} generated `Nat
+  state := state.check "covered ordinary decline is fulfilled" <|
+    !declineIsUnsupported covered {} `Ordinary
+  state := state.check "generated ordinary decline is fulfilled" <|
+    !declineIsUnsupported {} generated `Generated
+  state := state.check "unfulfilled ordinary decline remains unsupported" <|
+    declineIsUnsupported {} {} `Unfulfilled
   for target in basisNames do
     let exact ← makeRawFixture false false target
     let (exactOutput, exactReport) ← runRaw exact

@@ -110,8 +110,8 @@ def reportTypeCheckSuccess (config : Modelgen.Cli.Config) (stage : String) : IO 
 
 /-- A reported generation refusal is fulfilled when the exact owner already
 had a complete, structurally valid public model in the input, or when another
-selected route generated it during this run.  Basis exemptions never enter
-this calculation. -/
+selected route generated it during this run. A noncanonical reserved basis
+owner remains unsupported regardless of either condition. -/
 def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Name × String) :=
   if report.declined.isEmpty then
     #[]
@@ -123,7 +123,7 @@ def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Nam
     let generated := report.generated.foldl (init := ({} : Std.HashSet Name))
       fun owners entry => owners.insert entry.1
     report.declined.filter fun entry =>
-      !alreadyCovered.contains entry.1 && !generated.contains entry.1
+      Modelgen.declineIsUnsupported alreadyCovered generated entry.1
 
 def generationEnabled (config : Modelgen.Cli.Config) : Bool :=
   config.nested || config.mutualModels || config.simple || config.basic
