@@ -159,4 +159,281 @@ private def familyCongrChain (eqi : EqInfo) (level : Level) (carrier : Expr)
       (← mkStep (mixed (j + 1))) acc factor
   return acc
 
+private structure MutualUnrollPlan where
+  motives : Array Expr
+  minors : Array Expr
+  deriving Inhabited
+
+private def mutualUnrollPlan (all : Array Name) (constructors : Array ECtor)
+    (members : Array MutualMemberShape) (certificate : IsoFamilyImplementation)
+    (target : Name) (parameters : Array Expr) (level : Level) (levels : List Level) :
+    GenM MutualUnrollPlan := do
+  let targetMember := familyMember! members target
+  let targetCertificate := familyCertificateMember! certificate target
+  let publicTarget := mkAppN (.const targetCertificate.publicSelf levels) parameters
+  let mut motives := #[]
+  for owner in all do
+    let ownerCertificate := familyCertificateMember! certificate owner
+    let privateCarrier := mkAppN (.const ownerCertificate.privateSelf levels) parameters
+    let motive ← withLocalDeclD `value privateCarrier fun value =>
+      mkLambdaFVars #[value]
+        (if owner == target then publicTarget else unitAt level)
+    motives := motives.push motive
+  let recursorType ← generatedType targetCertificate.privateRecursor
+  let mut current ← instantiateForall recursorType parameters
+  for motive in motives do
+    let .forallE _ _ body _ := current
+      | badShape s!"{targetCertificate.privateRecursor} has too few motives"
+    current := body.instantiate1 motive
+  let mut minors := #[]
+  for constructor in constructors do
+    let .forallE _ minorType body _ := current
+      | badShape s!"{targetCertificate.privateRecursor} has too few minors"
+    let minor ← forallBoundedTelescope minorType (some (numForalls minorType))
+        fun binders _ => do
+      let value ← if constructor.induct == target then
+          let fields := binders.extract 0 constructor.numFields
+          wTowerMkOf targetMember.level fields fields
+        else pure (unitAtCanon level)
+      mkLambdaFVars binders value
+    minors := minors.push minor
+    current := body.instantiate1 minor
+  return { motives, minors }
+
+private def mutualRollUnrollPlan (all : Array Name) (constructors : Array ECtor)
+    (members : Array MutualMemberShape) (certificate : IsoFamilyImplementation)
+    (eqi : EqInfo) (target : Name) (parameters : Array Expr) (levels : List Level) :
+    GenM MutualUnrollPlan := do
+  let targetMember := familyMember! members target
+  let targetCertificate := familyCertificateMember! certificate target
+  let privateTarget := mkAppN (.const targetCertificate.privateSelf levels) parameters
+  let mut motives := #[]
+  for owner in all do
+    let ownerCertificate := familyCertificateMember! certificate owner
+    let privateCarrier := mkAppN (.const ownerCertificate.privateSelf levels) parameters
+    let motive ← withLocalDeclD `value privateCarrier fun value => do
+      let result := if owner == target then
+        let unrolled := mkAppN (.const targetCertificate.unroll levels)
+          (parameters.push value)
+        let rerolled := mkAppN (.const targetCertificate.roll levels)
+          (parameters.push unrolled)
+        eqi.mk' targetMember.level privateTarget rerolled value
+      else unitAt .zero
+      mkLambdaFVars #[value] result
+    motives := motives.push motive
+  let recursorType ← generatedType targetCertificate.privateRecursor
+  let mut current ← instantiateForall recursorType parameters
+  for motive in motives do
+    let .forallE _ _ body _ := current
+      | badShape s!"{targetCertificate.privateRecursor} has too few equality motives"
+    current := body.instantiate1 motive
+  let mut minors := #[]
+  for constructor in constructors do
+    let .forallE _ minorType body _ := current
+      | badShape s!"{targetCertificate.privateRecursor} has too few equality minors"
+    let ownerCertificate := familyCertificateMember! certificate constructor.induct
+    let privateConstructor := privateConstructor! ownerCertificate constructor.name
+    let minor ← forallBoundedTelescope minorType (some (numForalls minorType))
+        fun binders _ => do
+      let value ← if constructor.induct == target then
+          let fields := binders.extract 0 constructor.numFields
+          let major := mkAppN (.const privateConstructor levels) (parameters ++ fields)
+          pure (eqi.refl' targetMember.level privateTarget major)
+        else pure (unitAtCanon .zero)
+      mkLambdaFVars binders value
+    minors := minors.push minor
+    current := body.instantiate1 minor
+  return { motives, minors }
+
+/-- Build only the simultaneous private/public carrier boundary.  Constructor,
+recursor, and projection publication is attached below, after all maps and
+laws exist. -/
+def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
+    (buildRoot? : Option Name := none) : GenM (Iso × Array MutualMemberShape) := do
+  let .induct sourceTypes sourceConstructors sourceRecursors := source
+    | badShape "a mutual one-layer adapter needs an exact inductive block"
+  let types := sourceTypes.toArray
+  let constructors := sourceConstructors.toArray
+  let recursors := sourceRecursors.toArray
+  let some members ← classifyMutualOneLayer types constructors
+    | badShape "the mutual family is outside the bounded one-layer tranche"
+  let all := types.map (·.name)
+  let root := all[0]!
+  let buildRoot := buildRoot?.getD root
+  let lparams := types[0]!.levelParams
+  let np := types[0]!.numParams
+  let memberTys := types.map (·.type)
+  let constructorTys := types.map fun type => type.ctors.toArray.map fun name =>
+    let constructor := constructors.find? (·.name == name) |>.get!
+    (constructor.name, constructor.type)
+  let privateIso ← mutualIso all lparams np memberTys constructorTys reserved
+    buildRoot? (some source) true
+  let familyNames := MutualFamilyNames.forBuild buildRoot
+  let certificateMembers := all.map fun owner =>
+    let shape := familyMember! members owner
+    let recursor := recursors.find? (·.name == Name.str owner "rec") |>.get!
+    let ownerConstructors := constructors.filter (·.induct == owner)
+    { owner, changed := shape.changed
+      publicSelf := publicSelf owner
+      privateSelf := familyNames.privateSelf owner
+      privateRecursor := familyNames.privateRecursor owner
+      privateConstructors := ownerConstructors.map fun constructor =>
+        (constructor.name, familyNames.privateConstructor owner constructor.name)
+      privateIotas := recursor.rules.toArray.map fun rule =>
+        (recursor.name, rule.ctor, familyNames.privateIota owner rule.ctor)
+      roll := familyNames.roll owner, unroll := familyNames.unroll owner
+      unrollRoll := familyNames.unrollRoll owner
+      rollUnroll := familyNames.rollUnroll owner }
+  let certificate : IsoFamilyImplementation :=
+    { root := familyNames.familyRoot, support := #[familyNames.tag, familyNames.aux]
+      members := certificateMembers }
+  for member in certificate.members do
+    for name in #[member.publicSelf, member.roll, member.unroll,
+        member.unrollRoll, member.rollUnroll] do
+      ensureFresh reserved name
+  let support ← ensureExactSortLift reserved
+  let mut declarations := privateIso.decls ++ support
+  let mut spliced := privateIso.spliced ++ support.flatMap (·.getNames.toArray)
+  let levels := lparams.map Level.param
+  let publicSkeleton : Iso := { privateIso with
+    selfNames := all.map publicSelf
+    ctors := constructors.map fun constructor =>
+      (constructor.name, publicConstructor constructor.name)
+    recs := all.map publicRecursor
+    iotas := recursors.flatMap fun recursor => recursor.rules.toArray.mapIdx fun index rule =>
+      (all.idxOf recursor.name.getPrefix, rule.ctor, publicIota recursor.name.getPrefix index) }
+  let env ← getEnv
+  let exact := exactFamilySource env all publicSkeleton
+  -- Public carriers are installed as one batch before any map mentions them.
+  for type in types do
+    let shape := familyMember! members type.name
+    let member := familyCertificateMember! certificate type.name
+    let privateCarrier := fun parameters =>
+      mkAppN (.const member.privateSelf levels) parameters
+    let value ← forallBoundedTelescope type.type (some np) fun parameters _ => do
+      let body ← if shape.changed then
+          let constructor := constructors.find? (·.induct == type.name) |>.get!
+          let privateConstructorType ← generatedType (privateConstructor! member constructor.name)
+          let telescope ← instForall privateConstructorType parameters
+          forallBoundedTelescope telescope (some constructor.numFields) fun fields _ =>
+            wTowerTyOf shape.level fields
+        else pure (privateCarrier parameters)
+      mkLambdaFVars parameters body
+    let declaration := Declaration.defnDecl
+      { name := member.publicSelf, levelParams := lparams, type := exact type.type
+        value, hints := .abbrev, safety := .safe }
+    addChecked declaration
+    declarations := declarations.push declaration
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok info => pure info
+    | .error message => badShape message
+  -- Rolls do not depend on any unroll, so install the whole vector first.
+  for type in types do
+    let shape := familyMember! members type.name
+    let member := familyCertificateMember! certificate type.name
+    let rollType ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+      withLocalDeclD `value (mkAppN (.const member.publicSelf levels) parameters) fun value =>
+        mkForallFVars (parameters.push value)
+          (mkAppN (.const member.privateSelf levels) parameters)
+    let rollValue ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+      withLocalDeclD `value (mkAppN (.const member.publicSelf levels) parameters) fun value => do
+        let body ← if shape.changed then
+            let constructor := constructors.find? (·.induct == type.name) |>.get!
+            let privateConstructorType ← generatedType
+              (privateConstructor! member constructor.name)
+            let telescope ← instForall privateConstructorType parameters
+            forallBoundedTelescope telescope (some constructor.numFields) fun fields _ => do
+              let values ← wTowerProjsOf shape.level fields value
+              pure <| mkAppN (.const (privateConstructor! member constructor.name) levels)
+                (parameters ++ values)
+          else pure value
+        mkLambdaFVars (parameters.push value) body
+    let declaration := Declaration.defnDecl
+      { name := member.roll, levelParams := lparams, type := rollType, value := rollValue
+        hints := ← hintsFor rollValue, safety := .safe }
+    addChecked declaration
+    declarations := declarations.push declaration
+  -- Unrolls use the simultaneous private recursors but only expose one layer.
+  for type in types do
+    let shape := familyMember! members type.name
+    let member := familyCertificateMember! certificate type.name
+    let unrollType ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+      withLocalDeclD `value (mkAppN (.const member.privateSelf levels) parameters) fun value =>
+        mkForallFVars (parameters.push value)
+          (mkAppN (.const member.publicSelf levels) parameters)
+    let unrollValue ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+      withLocalDeclD `value (mkAppN (.const member.privateSelf levels) parameters) fun value => do
+        let body ← if shape.changed then
+            let plan ← mutualUnrollPlan all constructors members certificate type.name
+              parameters shape.level levels
+            pure <| mkAppN (.const member.privateRecursor (shape.level :: levels))
+              (parameters ++ plan.motives ++ plan.minors ++ #[value])
+          else pure value
+        mkLambdaFVars (parameters.push value) body
+    let declaration := Declaration.defnDecl
+      { name := member.unroll, levelParams := lparams, type := unrollType, value := unrollValue
+        hints := ← hintsFor unrollValue, safety := .safe }
+    addChecked declaration
+    declarations := declarations.push declaration
+  -- Both laws are explicit for every owner, including identity siblings.
+  for type in types do
+    let shape := familyMember! members type.name
+    let member := familyCertificateMember! certificate type.name
+    let publicCarrierAt := fun ps => mkAppN (.const member.publicSelf levels) ps
+    let privateCarrierAt := fun ps => mkAppN (.const member.privateSelf levels) ps
+    let unrollRollType ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+      withLocalDeclD `value (publicCarrierAt parameters) fun value => do
+        let rolled := mkAppN (.const member.roll levels) (parameters.push value)
+        let lhs := mkAppN (.const member.unroll levels) (parameters.push rolled)
+        mkForallFVars (parameters.push value)
+          (eqi.mk' shape.level (publicCarrierAt parameters) lhs value)
+    let unrollRollValue ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+      withLocalDeclD `value (publicCarrierAt parameters) fun value => do
+        let proof ← if shape.changed then
+            let constructor := constructors.find? (·.induct == type.name) |>.get!
+            let privateConstructorType ← generatedType
+              (privateConstructor! member constructor.name)
+            let telescope ← instForall privateConstructorType parameters
+            forallBoundedTelescope telescope (some constructor.numFields) fun fields _ => do
+              let values ← wTowerProjsOf shape.level fields value
+              let plan ← mutualUnrollPlan all constructors members certificate type.name
+                parameters shape.level levels
+              pure <| mkAppN (.const (privateIota! member constructor.name)
+                (shape.level :: levels))
+                (parameters ++ plan.motives ++ plan.minors ++ values)
+          else pure (eqi.refl' shape.level (publicCarrierAt parameters) value)
+        mkLambdaFVars (parameters.push value) proof
+    let unrollRoll := Declaration.thmDecl
+      { name := member.unrollRoll, levelParams := lparams, type := unrollRollType
+        value := unrollRollValue }
+    addChecked unrollRoll
+    declarations := declarations.push unrollRoll
+    let rollUnrollType ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+      withLocalDeclD `value (privateCarrierAt parameters) fun value => do
+        let unrolled := mkAppN (.const member.unroll levels) (parameters.push value)
+        let lhs := mkAppN (.const member.roll levels) (parameters.push unrolled)
+        mkForallFVars (parameters.push value)
+          (eqi.mk' shape.level (privateCarrierAt parameters) lhs value)
+    let rollUnrollValue ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+      withLocalDeclD `value (privateCarrierAt parameters) fun value => do
+        let proof ← if shape.changed then
+            let plan ← mutualRollUnrollPlan all constructors members certificate eqi type.name
+              parameters levels
+            pure <| mkAppN (.const member.privateRecursor (.zero :: levels))
+              (parameters ++ plan.motives ++ plan.minors ++ #[value])
+          else pure (eqi.refl' shape.level (privateCarrierAt parameters) value)
+        mkLambdaFVars (parameters.push value) proof
+    let rollUnroll := Declaration.thmDecl
+      { name := member.rollUnroll, levelParams := lparams, type := rollUnrollType
+        value := rollUnrollValue }
+    addChecked rollUnroll
+    declarations := declarations.push rollUnroll
+  let result := { publicSkeleton with
+    decls := declarations
+    implementation? := none
+    familyImplementation? := some certificate
+    projectionOverrides := #[]
+    spliced := spliced }
+  return (result, members)
+
 end InductiveModels

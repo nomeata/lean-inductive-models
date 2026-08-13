@@ -13,6 +13,32 @@ open Lean Meta
 
 namespace InductiveModels
 
+/-- Nullary-recursion companion of [`oneLayerRecursorCompatibility`].  Ordinary
+constructor fields are already fixed in the surrounding generated telescope;
+this lemma accounts only for the private/public major conversion. -/
+theorem zeroFieldOneLayerRecursorCompatibility
+    {M P : Type u} {C : P → Sort v}
+    (roll : P → M) (unroll : M → P)
+    (unrollRoll : ∀ p, unroll (roll p) = p)
+    (privateCtor : M) (publicCtor : P)
+    (rollCtor : roll publicCtor = privateCtor)
+    (minor : C publicCtor) (core : ∀ q, C (unroll q))
+    (constructorAgreement : publicCtor = unroll privateCtor)
+    (coreIota : core privateCtor =
+      Eq.mp (congrArg C constructorAgreement) minor) :
+    let publicRec : ∀ p, C p := fun p =>
+      Eq.mp (congrArg C (unrollRoll p)) (core (roll p))
+    publicRec publicCtor = minor := by
+  intro publicRec
+  unfold publicRec
+  subst privateCtor
+  have paths : unrollRoll publicCtor = constructorAgreement.symm := by rfl
+  rw [paths, coreIota]
+  exact Eq.rec (motive := fun target equality =>
+      Eq.mp (congrArg C equality.symm)
+          (Eq.mp (congrArg C equality) minor) = minor)
+    rfl constructorAgreement
+
 /-- Equality bookkeeping for the public recursor over an equivalent private
 carrier.  `q` and its private recursive result stay fixed while equality
 elimination changes only the public recursive field.  The generator inlines
@@ -280,6 +306,18 @@ private partial def inlineCompatibilityConstants (expression : Expr) : MetaM Exp
   | other => return other
 
 open Elab Term in
+elab "zeroFieldOneLayerCompatibilityProof%" : term => do
+  let info ← getConstInfo ``zeroFieldOneLayerRecursorCompatibility
+  let .thmInfo theoremInfo := info
+    | throwError "zeroFieldOneLayerRecursorCompatibility is not a theorem"
+  let value ← inlineCompatibilityConstants theoremInfo.value
+  let extra := value.getUsedConstants.filter fun name =>
+    name != ``Eq && name != ``Eq.refl && name != ``Eq.rec
+  unless extra.isEmpty do
+    throwError "embedded zero-field one-layer compatibility proof retains {extra}"
+  return quoteClosedExprValue value
+
+open Elab Term in
 elab "oneLayerCompatibilityProof%" : term => do
   let info ← getConstInfo ``oneLayerRecursorCompatibility
   let .thmInfo theoremInfo := info
@@ -315,6 +353,7 @@ elab "oneLayerIHCompatibilityProof%" : term => do
     throwError "embedded one-layer IH compatibility proof retains {extra}"
   return quoteClosedExprValue value
 
+private def zeroFieldOneLayerCompatibilityProof : Expr := zeroFieldOneLayerCompatibilityProof%
 private def oneLayerCompatibilityProof : Expr := oneLayerCompatibilityProof%
 private def twoFieldOneLayerCompatibilityProof : Expr := twoFieldOneLayerCompatibilityProof%
 private def oneLayerIHCompatibilityProof : Expr := oneLayerIHCompatibilityProof%
@@ -341,6 +380,29 @@ private partial def firstDifferencePath? (actual expected : Expr)
     if an != en || ai != ei then some s!"{path}.projection" else
       firstDifferencePath? av ev s!"{path}.subject"
   | _, _ => some path
+
+def applyZeroFieldOneLayerCompatibility (levels : List Level) (arguments : Array Expr)
+    (expected : Expr) : MetaM (Except String Expr) := do
+  unless arguments.size == 12 do
+    return .error s!"zero-field compatibility needs 12 arguments, got {arguments.size}"
+  let levelParams := (collectLevelParams {} zeroFieldOneLayerCompatibilityProof).params
+  unless levels.length == levelParams.size do
+    return .error s!"zero-field compatibility needs {levelParams.size} universes, got {levels.length}"
+  let template := zeroFieldOneLayerCompatibilityProof.instantiateLevelParams
+    levelParams.toList levels
+  let proof ← instantiateMVars (mkAppN template arguments)
+  let actual ← inferType proof
+  unless ← withTransparency .all <| isDefEq actual expected do
+    return .error s!"zero-field compatibility result differs at \
+      {(firstDifferencePath? actual expected).getD "definitionally unequal subterm"}: \
+      {actual}, expected {expected}"
+  let proof ← instantiateMVars proof
+  if proof.hasExprMVar || proof.hasLevelMVar then
+    return .error "zero-field compatibility proof retains metavariables"
+  if proof.getUsedConstants.contains ``zeroFieldOneLayerRecursorCompatibility then
+    return .error "zero-field compatibility proof refers to the tool-side oracle declaration"
+  check proof
+  return .ok proof
 
 /-- Instantiate the embedded oracle after all semantic arguments are known.
 The first six entries are `M, P, Q, R, C, H`; spelling them explicitly avoids
