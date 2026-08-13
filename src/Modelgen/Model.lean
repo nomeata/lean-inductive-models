@@ -384,7 +384,11 @@ partial def restore (heads : Std.HashMap Name (Nat × Expr)) (e : Expr) : Expr :
   | .lam n t b bi => .lam n (restore heads t) (restore heads b) bi
   | .forallE n t b bi => .forallE n (restore heads t) (restore heads b) bi
   | .letE n t v b nd => .letE n (restore heads t) (restore heads v) (restore heads b) nd
-  | .proj tn i s => .proj tn i (restore heads s)
+  | .proj tn i s =>
+    let restoredType := match heads[tn]? with
+      | some (0, .const name _) => name
+      | _ => tn
+    .proj restoredType i (restore heads s)
   | _ => e
 
 /-- Close `body` over the already-opened `values`, taking each binder's name,

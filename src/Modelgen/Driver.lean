@@ -48,6 +48,42 @@ open Lean Meta
 
 namespace Modelgen
 
+/-- The exact public type and universe binders of a generated declaration,
+read from the construction result rather than from kernel-normalized metadata.
+Proof construction may still use the installed declaration; only serialized
+public statements cross this interface. -/
+private structure GeneratedDeclInfo where
+  levelParams : List Name
+  type : Expr
+
+private def generatedDeclInfo? (is : Iso) (name : Name) : Option GeneratedDeclInfo :=
+  is.decls.findSome? fun declaration => match declaration with
+    | .axiomDecl value =>
+      if value.name == name then some { levelParams := value.levelParams, type := value.type }
+      else none
+    | .defnDecl value =>
+      if value.name == name then some { levelParams := value.levelParams, type := value.type }
+      else none
+    | .thmDecl value =>
+      if value.name == name then some { levelParams := value.levelParams, type := value.type }
+      else none
+    | .opaqueDecl value =>
+      if value.name == name then some { levelParams := value.levelParams, type := value.type }
+      else none
+    | _ => none
+
+private def generatedDeclInfo (is : Iso) (name : Name) : GenM GeneratedDeclInfo := do
+  let some info := generatedDeclInfo? is name
+    | badShape s!"generated declaration table has no public type for {name}"
+  return info
+
+/-- Apply the same deliberately bounded beta-only normalization as the exact
+statement checker to the domains of a constructor telescope. -/
+private partial def betaForallDomains (normalizer : ExactNormalizationEnv) : Expr → Expr
+  | .forallE name domain body info =>
+    .forallE name (normalizer.beta domain) (betaForallDomains normalizer body) info
+  | body => body
+
 /-- What one run did. -/
 structure Report where
   generated : Array (Name × Nat) := #[]
@@ -341,8 +377,8 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
     let modelRecursor := is.recs[k]!
     let theoremName := Name.str modelType "unitlike"
     if env.constants.contains theoremName then declineWith (.nameTaken theoremName)
-    let typeInfo ← constInfo modelType
-    let recInfo ← constInfo modelRecursor
+    let typeInfo ← generatedDeclInfo is modelType
+    let recInfo ← generatedDeclInfo is modelRecursor
     let recLevels ←
       if recInfo.levelParams.length == is.levelParams.length + 1 then
         pure (.zero :: us)
@@ -351,7 +387,7 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
       else
         badShape s!"{modelRecursor} carries unexpected universe parameters"
     let recType := recInfo.type.instantiateLevelParams recInfo.levelParams recLevels
-    let ctorInfo ← constInfo modelConstructor
+    let ctorInfo ← generatedDeclInfo is modelConstructor
     let ctorType := ctorInfo.type.instantiateLevelParams ctorInfo.levelParams us
 
     let declaration ← forallBoundedTelescope typeInfo.type (some type.numParams) fun ps _ => do
@@ -578,7 +614,8 @@ the shared motive sort; thus no arbitrary inhabitant of an unrelated field
 codomain is assumed. -/
 def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     (recursors : Array ERec) (_projections : Array EProjection)
-    (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+    (reserved : Std.HashSet Name) (is : Iso)
+    (sourceNormalizer? : Option ExactNormalizationEnv := none) : GenM Iso := do
   let mut fields : Array (Name × Nat) := #[]
   for type in types do
     if let [constructorName] := type.ctors then
@@ -655,9 +692,10 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     let override? := is.projectionOverrides.find? fun entry =>
       entry.1 == type.name && entry.2.1 == fieldIndex
 
-    let modelConstructorType := (← constInfo modelConstructor).type
-    let modelTypeInfo ← constInfo modelType
-    let modelRecursorInfo ← constInfo modelRecursor
+    let modelConstructorInfo ← generatedDeclInfo is modelConstructor
+    let modelConstructorType := modelConstructorInfo.type
+    let modelTypeInfo ← generatedDeclInfo is modelType
+    let modelRecursorInfo ← generatedDeclInfo is modelRecursor
     let ownerArity := type.numParams + type.numIndices
     let carrier := fun (arguments : Array Expr) => mkAppN (.const modelType us) arguments
 
@@ -675,7 +713,9 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           let .forallE _ fieldType rest _ := current
             | badShape s!"{constructorName} has too few fields"
           if earlier == fieldIndex then
-            return ← mkForallFVars (ownerArguments.push self) fieldType
+            let selfType ← mkForallFVars #[self] fieldType
+            return (closeForallsExact? modelTypeInfo.type ownerArguments selfType).getD
+              (← mkForallFVars ownerArguments selfType)
           let some (_, _, earlierProjection, _) := projectionModels.find? fun entry =>
               entry.1 == type.name && entry.2.1 == earlier
             | badShape s!"{type.name}'s field {fieldIndex} precedes intrinsic field {earlier}"
@@ -772,7 +812,13 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
             major targetMotive fieldIndex constructor.numFields fieldLevel recLevels us
             projectionModels type.name
           pure (mkAppN (.const iotaTheorem recLevels) (pre ++ fields))
-      let type ← mkForallFVars arguments (eqi.mk' fieldLevel alpha lhs rhs)
+      let body := eqi.mk' fieldLevel alpha lhs rhs
+      let type ← match sourceNormalizer? with
+        | some normalizer =>
+          let telescope := betaForallDomains normalizer modelConstructorType
+          let fallback ← mkForallFVars arguments body
+          pure ((closeForallsExact? telescope arguments body).getD fallback)
+        | none => mkForallFVars arguments body
       let value ← mkLambdaFVars arguments proof
       return Declaration.thmDecl
         { name := modelRule, levelParams := is.levelParams, type, value }
@@ -849,9 +895,9 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
     let theoremName := Name.str modelType "eta"
     let publicName := Naming.etaName type.name
     if (← getEnv).constants.contains theoremName then declineWith (.nameTaken publicName)
-    let typeInfo ← constInfo modelType
-    let constructorInfo ← constInfo modelConstructor
-    let recursorInfo ← constInfo modelRecursor
+    let typeInfo ← generatedDeclInfo is modelType
+    let constructorInfo ← generatedDeclInfo is modelConstructor
+    let recursorInfo ← generatedDeclInfo is modelRecursor
     let mut modelProjections : Array Name := #[]
     for fieldIndex in [0:constructor.numFields] do
       let some (_, _, modelProjection, _) := is.projections.find? fun entry =>
@@ -899,8 +945,10 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
 /-- Add all declaration-local structure metadata in dependency order. -/
 def addStructureModels (types : Array EIndType) (constructors : Array ECtor)
     (recursors : Array ERec) (projections : Array EProjection)
-    (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+    (reserved : Std.HashSet Name) (is : Iso)
+    (sourceNormalizer? : Option ExactNormalizationEnv := none) : GenM Iso := do
   let is ← addProjectionModels types constructors recursors projections reserved is
+    sourceNormalizer?
   let is ← addStructureEtaTheorems types constructors recursors reserved is
   addUnitlikeTheorems types constructors recursors reserved is
 
@@ -951,6 +999,18 @@ def addInstalledStructureModels (names : Array Name) (projections : Array EProje
     | badShape s!"{names} did not read back as an inductive block"
   addStructureModels types.toArray constructors.toArray recursors.toArray
     projections reserved is
+
+/-- Exact source-owned adapter.  Unlike the installed adapter above, this
+keeps the raw export spelling of the owner, constructor, and recursor records;
+the optional normalizer is used only at the one kernel beta-normalization
+boundary of projection-iota theorem binders. -/
+def addSourceStructureModels (block : EDecl) (projections : Array EProjection)
+    (normalizer : ExactNormalizationEnv) (reserved : Std.HashSet Name)
+    (is : Iso) : GenM Iso := do
+  let .induct types constructors recursors := block
+    | badShape "source structure adapter did not receive an inductive block"
+  addStructureModels types.toArray constructors.toArray recursors.toArray
+    projections reserved is (some normalizer)
 
 /-- Read the exact recursor records of a block generated inside this pass. -/
 def recursorsOfNames (names : Array Name) : MetaM (Array ERec) := do
@@ -1853,7 +1913,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (basicModels : Bool)
     (canWait : Bool)
-    (st : FilterState) (sourceRecursor? : Option ERec := none) :
+    (st : FilterState) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none) :
     MetaM (FilterState × Option PrimReadiness) := do
   let (out, rep, pending) := st
   let saved ← getEnv
@@ -1868,13 +1928,20 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
   -- user name, because `_private` is no longer the leading component.
   let aliasRoot : Name := Naming.retryRoot tname
   let mut root := tname
+  let sourceRecursor? := sourceBlock?.bind fun (block, _) => match block with
+    | .induct _ _ recursors => recursors.find? (·.name == Name.str tname "rec")
+    | _ => none
+  let attachStructureModels := fun (is : Iso) => match sourceBlock? with
+    | some (block, normalizer) =>
+      addSourceStructureModels block projections normalizer reserved is
+    | none => addInstalledStructureModels #[tname] projections reserved is
   let exactTaken ← exactPrimNameTaken? tname ctors projections
   let initial ← match exactTaken with
     | some n => pure (.error (.nameTaken n))
     | none => (do
         let is ← primIso tname root lparams np ty ctors reserved
           (sourceRecursor? := sourceRecursor?)
-        addInstalledStructureModels #[tname] projections reserved is).run
+        attachStructureModels is).run
   let mut res := initial
   if let .error (.nameLost _) := res then
     setEnv saved
@@ -1882,7 +1949,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     res ← (do
       let is ← primIso tname root lparams np ty ctors reserved
         (sourceRecursor? := sourceRecursor?)
-      addInstalledStructureModels #[tname] projections reserved is).run
+      attachStructureModels is).run
   match res with
   | .error dec =>
     setEnv saved
@@ -2052,6 +2119,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- Built once. Each island overlays only its generated records, avoiding the
   -- former full-source declaration/constructor/rule/normalizer rebuild.
   let sourceSyntax := Check.SyntaxIndex.ofSource x
+  let sourceNormalizer := x.exactNormalizationEnv
   let mut persistentSyntax := sourceSyntax
   let sourceSummaries := Order.summaries scheduled
   let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
@@ -2252,7 +2320,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     --
     -- The **records** still go out ahead of the declaration's whenever they
     -- can, because `out` has not been pushed yet.
-    if let .induct ts cs inputRecursors := d then
+    if let .induct ts cs _ := d then
       if let t :: _ := ts then
         -- **No "is this a block I wrote?" test here**, and that is deliberate.
         -- On this tool's own output the block `T._model.0 … T._model.{n−1}` is
@@ -2294,7 +2362,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           -- `scheduledSupportRecord` before ordinary owners.
           let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
             #[] reserved generation.basic true (out, rep, pending)
-            (inputRecursors.find? (·.name == Name.str t.name "rec"))
+            (some (d, sourceNormalizer))
           if wait?.isSome then
             throwError "simple model prerequisite remained late after support scheduling"
           (out, rep, pending) ← pure st
