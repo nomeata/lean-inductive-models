@@ -228,15 +228,46 @@ def run (root : String) : IO UInt32 := do
   let siblingRule := Naming.projectionIotaName `MutualLayerB 0
   let generatedNames := generated.decls.flatMap (·.names.toArray)
 
+  let exactDeclaration := fun sourceParams sourceType modelName =>
+    (declarationType? generated modelName).any fun (modelParams, actualType) =>
+      sourceParams.length == modelParams.length &&
+        actualType == family.correspondence.expectedType sourceParams modelParams sourceType
+  let exactTypeFormers := family.correspondence.typeFormers.all fun pair =>
+    (types.find? (·.name == pair.owner)).any fun source =>
+      exactDeclaration source.levelParams source.type pair.model
+  let exactConstructors := family.correspondence.constructors.all fun pair =>
+    (constructors.find? (·.name == pair.owner)).any fun source =>
+      exactDeclaration source.levelParams source.type pair.model
+  let exactRecursors := family.correspondence.recursors.all fun pair =>
+    (recursors.find? (·.name == pair.owner)).any fun source =>
+      exactDeclaration source.levelParams source.type pair.model
+  let exactRecursorRules := family.correspondence.iotas.all fun iota =>
+    (Check.iotaProposition? generated family.ownerDecl iota.recursor iota.ruleIndex).any
+      fun (sourceParams, sourceType) =>
+        (declarationType? generated iota.name).any fun (modelParams, actualType) =>
+          sourceParams.length == modelParams.length &&
+            actualType == family.correspondence.expectedIotaType
+              sourceParams modelParams sourceType
+
   -- Proposed partial-family certificate. The family root is the first source
-  -- owner, while each member retains an owner-keyed private carrier and maps.
+  -- owner, while every member, constructor, recursor, and rule has an
+  -- owner/key-derived private spelling. No association below is positional.
   let familyImpl := `MutualLayerA._model._impl
   let memberImpl := fun owner => Name.str familyImpl (lastStr owner)
   let memberCertificate := fun owner =>
     let root := memberImpl owner
-    #[Name.str root "self", Name.str root "roll", Name.str root "unroll",
-      Name.str root "unroll_roll", Name.str root "roll_unroll"]
-  let certificate := memberCertificate `MutualLayerA ++ memberCertificate `MutualLayerB
+    let sourceRecursor := recursors.find? (·.all.contains owner)
+    let ownerConstructors := constructors.filter (·.induct == owner)
+    #[Name.str root "self", Name.str root "rec", Name.str root "roll",
+      Name.str root "unroll", Name.str root "unroll_roll", Name.str root "roll_unroll"] ++
+      ownerConstructors.toArray.flatMap fun constructor =>
+        #[Name.str (Name.str root "ctor") (lastStr constructor.name),
+          Name.str (Name.str root "rec_iota") (lastStr constructor.name)] ++
+      sourceRecursor.toArray.flatMap fun recursor =>
+        recursor.rules.toArray.map fun rule =>
+          Name.str (Name.str root "rule") (lastStr rule.ctor)
+  let certificate := #[Name.str familyImpl "tag", Name.str familyImpl "aux"] ++
+    memberCertificate `MutualLayerA ++ memberCertificate `MutualLayerB
 
   let mut state : TestState := {}
   state := state.check "diagnostic reaches mutual generation and checking" <|
@@ -255,6 +286,8 @@ def run (root : String) : IO UInt32 := do
     ownerType.ctors == [`MutualLayerA.mk] &&
       #[keyProjection, childProjection, payloadProjection,
         keyRule, childRule, payloadRule].all generatedNames.contains
+  state := state.check "complete mutual public family is the exact source-name rewrite" <|
+    exactTypeFormers && exactConstructors && exactRecursors && exactRecursorRules
   state := state.check "ordinary and recursive projection types are source-exact" <|
     actual keyProjection == expected keyProjection &&
       actual childProjection == expected childProjection &&

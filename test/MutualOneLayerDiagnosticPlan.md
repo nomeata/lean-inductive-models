@@ -41,10 +41,12 @@ unchanged, projection-ineligible sibling.
   minors, rules, maps, or laws by array position: Lean may emit mutual recursors
   in a different order from the member array.
 - Extend `Iso.implementation?` from one interface to an owner-keyed partial
-  family certificate. The serialized checker recognizes the tranche only when
-  every member's private carrier, both maps, and both laws are uniquely present
-  and exact. A partial prefix is malformed, not a request to accept literal
-  rules under the legacy classifier.
+  family certificate. It includes the mutual tag/aux support and, for every
+  owner, its private carrier/recursor, constructors keyed by `(owner,
+  constructor)`, iotas keyed by `(recursor owner, rule constructor)`, both
+  maps, and both laws. The serialized checker recognizes the tranche only when
+  all entries are uniquely present and exact. A partial prefix is malformed,
+  not a request to accept literal rules under the legacy classifier.
 
 ## Projection boundary
 
