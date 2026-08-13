@@ -630,7 +630,7 @@ def expectedPrim : List Row :=
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4), ("Wty", 14),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4), ("Wty", 23),
        ("P", 6), ("Q", 8), ("Wt", 20),
        ("Dep", 12), ("Bad", 12), ("Br", 12), ("Utd", 14)],
       [ ("Eq", "prim model: a basis primitive")])
