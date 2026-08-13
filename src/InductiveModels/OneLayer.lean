@@ -1593,8 +1593,11 @@ def indexedFibreOneLayerIso (tname root : Name) (lparams : List Name)
   addChecked rollUnroll
   let certificate := #[privateSelf, privateCtor, privateRec, privateIota,
     roll, unroll, unrollRoll, rollUnroll]
+  let aliases := publicIso.aliases.register
+    (certificate.flatMap (·.getNames.toArray))
   return { publicIso with
     decls := publicIso.decls ++ certificate
+    aliases
     implementation? := some
       { selfNames := #[names.implementation.self]
         ctors := #[(sourceConstructor.1, names.implementation.ctors[0]!)]
