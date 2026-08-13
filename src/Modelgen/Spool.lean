@@ -69,8 +69,8 @@ private def copyBufferSize : Nat := 4194304
 /-- Copy exactly one validated span. A short read is an error rather than a
 silently truncated output. The caller supplies the completed source size so
 validation never depends on the handle's mutable current position. -/
-def copySpan (source destination : IO.FS.Handle) (fileSize : UInt64)
-    (span : ByteSpan) : IO Unit := do
+private def copySpanWith (source : IO.FS.Handle) (write : ByteArray → IO Unit)
+    (fileSize : UInt64) (span : ByteSpan) : IO Unit := do
   match span.validate fileSize with
   | .error error => throw <| IO.userError error
   | .ok _ => pure ()
@@ -81,8 +81,19 @@ def copySpan (source destination : IO.FS.Handle) (fileSize : UInt64)
     let chunk ← source.read requested.toUSize
     if chunk.size != requested then
       throw <| IO.userError s!"short spool read: wanted {requested} bytes, got {chunk.size}"
-    destination.write chunk
+    write chunk
     remaining := remaining - requested.toUInt64
+
+def copySpan (source destination : IO.FS.Handle) (fileSize : UInt64)
+    (span : ByteSpan) : IO Unit :=
+  copySpanWith source destination.write fileSize span
+
+/-- Copy a validated spool span to the stream abstraction used by transactional
+output. This performs the same bounded reads and short-read checks as the
+handle-to-handle copier. -/
+def copySpanToStream (source : IO.FS.Handle) (destination : IO.FS.Stream)
+    (fileSize : UInt64) (span : ByteSpan) : IO Unit :=
+  copySpanWith source destination.write fileSize span
 
 /-- One append-only spool payload. The handle is deliberately private: only a
 successful full write publishes the new position and returned span. -/
@@ -485,5 +496,104 @@ def Composition.emit (composition : Composition) (source destination : IO.FS.Han
     copySpan source destination fileSize arena
   for index in composition.declarationOrder do
     copySpan source destination fileSize composition.declarations[index]!
+
+/-! ## Mixed source/generated composition
+
+The parser and generated-island stages deliberately use separate append-only
+files. Keeping them separate avoids another full-size concatenation spool; the
+final writer only needs to distinguish which declaration file owns each span.
+-/
+
+inductive MixedDeclarationSpan where
+  | source (span : ByteSpan)
+  | generated (span : ByteSpan)
+  deriving Inhabited, Repr, BEq
+
+/-- Every immutable file and completed byte count needed to emit one staged
+export. Source metadata and arenas retain parser order, generated arenas retain
+cursor publication order, and `declarations` is already in compact final order.
+-/
+structure MixedComposition where
+  sourceMetadataPath : System.FilePath
+  sourceArenaPath : System.FilePath
+  sourceDeclarationPath : System.FilePath
+  sourceSizes : RawSpoolSizes
+  generatedArenaPath : System.FilePath
+  generatedDeclarationPath : System.FilePath
+  generatedArenaSize : UInt64
+  generatedDeclarationSize : UInt64
+  declarations : Array MixedDeclarationSpan
+  deriving Repr, BEq
+
+private def spansPartitionFile (spans : Array ByteSpan) (fileSize : UInt64) : Bool := Id.run do
+  let sorted := spans.qsort fun left right => left.offset < right.offset
+  let mut endpoint : UInt64 := 0
+  for span in sorted do
+    unless span.offset == endpoint do return false
+    let some next := span.end? | return false
+    unless next ≤ fileSize do return false
+    endpoint := next
+  return endpoint == fileSize
+
+/-- Validate declaration ownership and exact physical coverage before opening
+the output transaction. This makes a missing, repeated, overlapping, or
+out-of-range span fail before stdout receives its first byte. -/
+def MixedComposition.validate (composition : MixedComposition) : Except String Unit := do
+  let mut source : Array ByteSpan := #[]
+  let mut generated : Array ByteSpan := #[]
+  for declaration in composition.declarations do
+    match declaration with
+    | .source span =>
+      span.validate composition.sourceSizes.declarations
+      source := source.push span
+    | .generated span =>
+      span.validate composition.generatedDeclarationSize
+      generated := generated.push span
+  unless spansPartitionFile source composition.sourceSizes.declarations do
+    throw "source declaration spans do not partition their spool"
+  unless spansPartitionFile generated composition.generatedDeclarationSize do
+    throw "generated declaration spans do not partition their spool"
+
+private def exactFileSize (path : System.FilePath) (expected : UInt64) : IO Unit := do
+  let actual := (← path.metadata).byteSize
+  unless actual == expected do
+    throw <| IO.userError s!"staged spool size mismatch for {path}: expected {expected}, got {actual}"
+
+/-- Check every path and span, open every input handle, then emit metadata,
+source arenas, generated arenas, and compactly ordered declarations. No byte is
+written until all validation and opens succeed. Flushing and atomic installation
+remain the responsibility of [`Modelgen.Output.write`]. -/
+def MixedComposition.emit (composition : MixedComposition)
+    (destination : IO.FS.Stream) : IO Unit := do
+  match composition.validate with
+  | .error error => throw <| IO.userError error
+  | .ok _ => pure ()
+  exactFileSize composition.sourceMetadataPath composition.sourceSizes.metadata
+  exactFileSize composition.sourceArenaPath composition.sourceSizes.arena
+  exactFileSize composition.sourceDeclarationPath composition.sourceSizes.declarations
+  exactFileSize composition.generatedArenaPath composition.generatedArenaSize
+  exactFileSize composition.generatedDeclarationPath composition.generatedDeclarationSize
+  IO.FS.withFile composition.sourceMetadataPath .read fun sourceMetadata =>
+    IO.FS.withFile composition.sourceArenaPath .read fun sourceArena =>
+      IO.FS.withFile composition.sourceDeclarationPath .read fun sourceDeclarations =>
+        IO.FS.withFile composition.generatedArenaPath .read fun generatedArena =>
+          IO.FS.withFile composition.generatedDeclarationPath .read fun generatedDeclarations => do
+            unless composition.sourceSizes.metadata == 0 do
+              copySpanToStream sourceMetadata destination composition.sourceSizes.metadata
+                { offset := 0, length := composition.sourceSizes.metadata }
+            unless composition.sourceSizes.arena == 0 do
+              copySpanToStream sourceArena destination composition.sourceSizes.arena
+                { offset := 0, length := composition.sourceSizes.arena }
+            unless composition.generatedArenaSize == 0 do
+              copySpanToStream generatedArena destination composition.generatedArenaSize
+                { offset := 0, length := composition.generatedArenaSize }
+            for declaration in composition.declarations do
+              match declaration with
+              | .source span =>
+                copySpanToStream sourceDeclarations destination
+                  composition.sourceSizes.declarations span
+              | .generated span =>
+                copySpanToStream generatedDeclarations destination
+                  composition.generatedDeclarationSize span
 
 end Modelgen.Spool

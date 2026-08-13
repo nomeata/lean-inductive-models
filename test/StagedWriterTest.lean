@@ -106,13 +106,14 @@ def main (args : List String) : IO UInt32 := do
   let rawBlankPath := s!"{scratch}/raw-spool-blank.ndjson"
   let rawCrlfPath := s!"{scratch}/raw-spool-crlf.ndjson"
   let compositionPath := s!"{scratch}/raw-spool-composition.ndjson"
+  let mixedCompositionPath := s!"{scratch}/raw-spool-mixed-composition.ndjson"
   let rawRootSentinel := s!"{scratch}/raw-spool-root-sentinel"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
     nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath,
     projectionOrderPath, projectionOverwritePath, parserCompatibilityPath,
     rawCanonicalPath, rawNameGapPath, rawLevelGapPath, rawExprGapPath,
     rawNameOrderPath, rawNoLfPath, rawWhitespacePath, rawBlankPath, rawCrlfPath,
-    rawRootSentinel, compositionPath]
+    rawRootSentinel, compositionPath, mixedCompositionPath]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -286,6 +287,49 @@ def main (args : List String) : IO UInt32 := do
     isExceptError ({ composition with declarationOrder := #[0, 0] }.validate compositionSize)
   state := state.check "spool composition rejects an EOF mismatch" <|
     isExceptError (composition.validate (compositionSize + 1))
+
+  -- Production staging keeps parser and generated payloads in separate files.
+  -- The mixed emitter validates every file/span before streaming the source
+  -- arenas, generated arenas, and interleaved compact declaration order.
+  let mixedResult ← Spool.withWorkspace scratch fun workspace => do
+    let sourceMetadata ← workspace.createFile "mixed-source-metadata.ndjson"
+    let sourceArena ← workspace.createFile "mixed-source-arena.ndjson"
+    let sourceDeclarations ← workspace.createFile "mixed-source-declarations.ndjson"
+    let generatedArena ← workspace.createFile "mixed-generated-arena.ndjson"
+    let generatedDeclarations ← workspace.createFile "mixed-generated-declarations.ndjson"
+    discard <| sourceMetadata.append "meta\n".toUTF8
+    discard <| sourceArena.append "source-arena\n".toUTF8
+    let sourceFirst ← sourceDeclarations.append "source-first\n".toUTF8
+    let sourceSecond ← sourceDeclarations.append "source-second\n".toUTF8
+    discard <| generatedArena.append "generated-arena\n".toUTF8
+    let generated ← generatedDeclarations.append "generated\n".toUTF8
+    let sourceSizes : RawSpoolSizes := {
+      metadata := ← sourceMetadata.finish
+      arena := ← sourceArena.finish
+      declarations := ← sourceDeclarations.finish }
+    let generatedArenaSize ← generatedArena.finish
+    let generatedDeclarationSize ← generatedDeclarations.finish
+    let mixed : Spool.MixedComposition := {
+      sourceMetadataPath := sourceMetadata.path
+      sourceArenaPath := sourceArena.path
+      sourceDeclarationPath := sourceDeclarations.path
+      sourceSizes
+      generatedArenaPath := generatedArena.path
+      generatedDeclarationPath := generatedDeclarations.path
+      generatedArenaSize
+      generatedDeclarationSize
+      declarations := #[.source sourceSecond, .generated generated, .source sourceFirst] }
+    IO.FS.withFile mixedCompositionPath .write fun destination =>
+      mixed.emit (IO.FS.Stream.ofHandle destination)
+    let duplicate := { mixed with
+      declarations := #[.source sourceFirst, .generated generated, .source sourceFirst] }
+    return (mixed.validate, duplicate.validate)
+  state := state.check "mixed staged composition emits four files in compact order" <|
+    !isExceptError mixedResult.1 &&
+      (← IO.FS.readFile mixedCompositionPath) ==
+        "meta\nsource-arena\ngenerated-arena\nsource-second\ngenerated\nsource-first\n"
+  state := state.check "mixed staged composition rejects a missing source span" <|
+    isExceptError mixedResult.2
 
   let islandDirectoryRef ← IO.mkRef (none : Option System.FilePath)
   let islandResult ← Spool.withWorkspace scratch fun workspace => do
