@@ -18,9 +18,10 @@ Two properties the rest of the tool depends on:
   sparse, out of order, or overwritten, but an absent ID is never an implicit
   anonymous name, zero level, or bound variable. [`Writer`] emits a fresh dense
   arena when transforming an export.
-* **Key order is alphabetical and there is no whitespace.** Matching it is
-  what makes a no-op run byte-identical to its input, which is
-  `Modelgen.Tests`'s cheapest oracle.
+* **The writer's key order is alphabetical and it emits no whitespace.** This
+  is the canonical `lean4export` spelling, so canonical dense fixtures retain
+  their bytes on a no-op run. Sparse, overwritten, metadata-bearing, or
+  differently formatted valid input is normalized when it is written again.
 -/
 open Lean
 
@@ -998,8 +999,10 @@ def parseHandle (h : IO.FS.Handle) (analyse : Bool := true) : IO (Except String 
 
 /-! ## Writing
 
-Fresh interning, in dependency order, with the same key order and spacing the
-exporter uses — so a file the tool does not change comes back byte-identical.
+Fresh dense interning, in dependency order, with the same key order and spacing
+the exporter uses. A canonical exporter file which the tool does not change is
+therefore byte-identical; other valid arena layouts and JSON formatting are
+normalized.
 
 **The writer streams.** [`Writer.out`] holds the lines of **one record** and is
 drained after each; it is never the whole file. That is not a micro-optimisation
