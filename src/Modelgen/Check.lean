@@ -1525,8 +1525,14 @@ the certificates. -/
 def compactOrderedReport (records : Array CompactCheckRecord) : Except String Report := do
   let orderedGlobals := records.map (·.globalExtra)
   let orderedNames := orderedGlobals.flatMap (·.names)
-  let declared := orderedNames.foldl (fun names name => names.insert name)
-    ({} : Std.HashSet Name)
+  let mut declared : Std.HashSet Name := {}
+  let mut declaringRecord : Std.HashMap Name (Array Name) := {}
+  for record in records do
+    for name in record.globalExtra.names do
+      if declared.contains name then
+        throw s!"duplicate compact declaration name {name}"
+      declared := declared.insert name
+      declaringRecord := declaringRecord.insert name record.globalExtra.names
   let ruleSlots := orderedNames.foldl (init :=
       ({} : Std.HashMap Name (Array (Name × Nat)))) fun slots name =>
     match iotaSlot? name with
@@ -1547,10 +1553,8 @@ def compactOrderedReport (records : Array CompactCheckRecord) : Except String Re
       certifiedOwners := certifiedOwners.insert family.owner
       unless family.publicNames.any declared.contains do continue
       familiesChecked := familiesChecked + 1
-      let familyNames := records.foldl (init := #[]) fun names candidate =>
-        if candidate.globalExtra.names.any family.publicNames.contains then
-          appendUnique names candidate.globalExtra.names.toList
-        else names
+      let familyNames := family.publicNames.foldl (init := #[]) fun names publicName =>
+        appendUnique names (declaringRecord.getD publicName #[]).toList
       if let some (owner, target) :=
           ownerBackreferenceFromCertificate? family.ownerReferences familyNames then
         violations := violations.push (.ownerBackreference owner target)
@@ -1567,14 +1571,15 @@ def compactOrderedReport (records : Array CompactCheckRecord) : Except String Re
 /-- In-memory equivalence oracle for an already ordered export. -/
 def compactOrderedCheckReport (x : Export) : Except String Report :=
   let index := SyntaxIndex.ofSource x
-  let familyRecords := compactFamilyCertificateRecordsWithIndex x index (discover x)
+  let families := discover x
+  let familyRecords := compactFamilyCertificateRecordsWithIndex x index families
+  let modelSlotRecords := families.foldl (init := Array.replicate x.decls.size #[])
+    fun records family => records.set! family.ownerDecl family.correspondence.publicNames
   compactOrderedReport <| (globalExtraRecordsWithIndex index x.decls).mapIdx fun i globalExtra =>
     { owner := match x.decls[i]! with
         | .induct (type :: _) _ _ => some type.name
         | _ => none
-      modelSlots := match (discoverWith x fun _ => true).find? (·.ownerDecl == i) with
-        | some family => family.correspondence.publicNames
-        | none => #[]
+      modelSlots := modelSlotRecords[i]!
       globalExtra, families := familyRecords[i]! }
 
 /-- Exact public-interface comparison without an environment or an ordering

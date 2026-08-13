@@ -276,7 +276,13 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
               (Lean.Meta.MetaM.run'
                 (Modelgen.runFilterStaged generationInput false config (.ofStage stage)))
               context { env }
-            pure (Except.ok (FilterOutput.staged raw stage plan, report))
+            match plan.unavailable? with
+            | none => pure (Except.ok (FilterOutput.staged raw stage plan, report))
+            | some _ =>
+              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
+                (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config))
+                context { env }
+              pure (Except.ok (FilterOutput.full decls, fallbackReport))
           else
             let ((decls, report), _) ← Lean.Core.CoreM.toIO
               (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config))
