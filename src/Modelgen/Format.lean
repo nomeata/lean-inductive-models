@@ -276,6 +276,16 @@ structure Export where
   projNodes : Std.HashSet Expr := {}
   deriving Inhabited
 
+/-- Declaration names are semantic export identities. The library parsers use
+this validator by default; the CLI may defer it until after syntactic parsing
+so a collision is reported as a rejected export rather than a parser crash. -/
+def Export.validateUniqueDeclarationNames (x : Export) : Except String Unit := do
+  let mut names : Std.HashSet Name := {}
+  for declaration in x.decls do
+    for name in declaration.names do
+      if names.contains name then throw s!"duplicate declaration {name}"
+      names := names.insert name
+
 /-! ## Recovering primitive structure projections
 
 The export format has no record for Lean's projection-function or structure
@@ -891,12 +901,9 @@ def parse (text : String) (analyse : Bool := true) : Except String Export := do
     let (c', d?) ← readLine c j
     c := c'
     if let some d := d? then decls := decls.push d
-  let mut names : Std.HashSet Name := {}
-  for declaration in decls do
-    for name in declaration.names do
-      if names.contains name then throw s!"duplicate declaration {name}"
-      names := names.insert name
-  return { metaLine, decls, projNodes := c.projNodes }
+  let resultExport : Export := { metaLine, decls, projNodes := c.projNodes }
+  resultExport.validateUniqueDeclarationNames
+  return resultExport
 
 /-! ## Optional raw staging during streaming parse
 
@@ -1181,24 +1188,23 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
   | some e => return .error e
   | none =>
     let decls ← declsRef.get
-    let mut names : Std.HashSet Name := {}
-    for declaration in decls do
-      for name in declaration.names do
-        if !allowDuplicateNames && names.contains name then
-          return .error s!"duplicate declaration {name}"
-        names := names.insert name
     -- Take the result out while dropping every arena table held by the ref.
     let projNodes ← cRef.modifyGet fun c => (c.projNodes, {})
     let rawState ← rawRef.get
     let certificate := if sink?.isSome then rawState.certificate else {}
-    return .ok ({ metaLine, decls, projNodes }, certificate)
+    let resultExport := { metaLine, decls, projNodes }
+    unless allowDuplicateNames do
+      if let .error message := resultExport.validateUniqueDeclarationNames then
+        return .error message
+    return .ok (resultExport, certificate)
 
 /-- Parse while sending exact input records to `sink`. The compact returned
 certificate is necessary but not sufficient for a later raw-hoist fast path;
 a false certificate unconditionally requires the ordinary writer. -/
 def parseStreamWithSink (h : IO.FS.Stream) (sink : RawSink)
-    (analyse : Bool := true) : IO (Except String (Export × RawCertificate)) :=
-  parseStreamCore h analyse (some sink) false
+    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    IO (Except String (Export × RawCertificate)) :=
+  parseStreamCore h analyse (some sink) allowDuplicateNames
 
 def parseStream (h : IO.FS.Stream) (analyse : Bool := true)
     (allowDuplicateNames : Bool := false) : IO (Except String Export) := do
@@ -1211,8 +1217,9 @@ def parseHandle (h : IO.FS.Handle) (analyse : Bool := true)
 
 /-- Handle-specialized raw-staging parser. -/
 def parseHandleWithSink (h : IO.FS.Handle) (sink : RawSink)
-    (analyse : Bool := true) : IO (Except String (Export × RawCertificate)) :=
-  parseStreamWithSink (IO.FS.Stream.ofHandle h) sink analyse
+    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    IO (Except String (Export × RawCertificate)) :=
+  parseStreamWithSink (IO.FS.Stream.ofHandle h) sink analyse allowDuplicateNames
 
 /-- Lowercase hexadecimal encoding used for random spool leaf names. Exposed
 so the secure workspace tests can pin the entropy-preserving representation. -/

@@ -387,18 +387,18 @@ def main (args : List String) : IO UInt32 := do
   let duplicateText :=
     { nestedExport with decls := nestedExport.decls.push nestedExport.decls[0]! }.render
   let duplicate ← runModelgenStdin binary [
-    "--arena-check", "-"] duplicateText
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] duplicateText
   state := state.check "duplicate declaration is an Arena rejection with exit 1" <|
     duplicate.exitCode == 1 &&
-      (duplicate.stderr.splitOn "input kernel check rejected: duplicate declaration").length > 1
-  let duplicateOutsideArena ← runModelgenStdin binary [
+      duplicate.stderr.contains "invalid export: duplicate declaration"
+  let duplicateWithoutKernel ← runModelgenStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input", "--no-output", "-"] duplicateText
-  state := state.check "duplicate declaration outside Arena mode remains a tool error" <|
-    duplicateOutsideArena.exitCode == 3 &&
-      (duplicateOutsideArena.stderr.splitOn "parse error:").length > 1
+  state := state.check "duplicate declaration without kernel checking is rejected" <|
+    duplicateWithoutKernel.exitCode == 1 &&
+      duplicateWithoutKernel.stderr.contains "invalid export: duplicate declaration"
 
   -- A flattened export can contain distinct private/public names which Lean's
-  -- full Environment indexes under one normalized key. Arena mode keeps the
+  -- full Environment indexes under one normalized key. Kernel checking keeps the
   -- colliding record out of its supplemental mirror without weakening the
   -- authoritative kernel replay or panicking.
   let publicCollision : Lean.Name := `ArenaCollision.X
@@ -407,7 +407,8 @@ def main (args : List String) : IO UInt32 := do
   let normalizedCollision : Modelgen.Export := { metaLine := .null, decls := #[
     .ax publicCollision [] (.sort (.succ .zero)) false,
     .ax privateCollision [] (.sort (.succ .zero)) false] }
-  let normalizedArena ← runModelgenStdin binary ["--arena-check", "-"]
+  let normalizedArena ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     normalizedCollision.render
   state := state.check "Arena accepts a valid normalized private-name collision without panic" <|
     Lean.privateToUserName privateCollision == publicCollision &&
@@ -419,7 +420,8 @@ def main (args : List String) : IO UInt32 := do
     normalizedOrdinary.exitCode == 0
 
   let imaxProjection ← runModelgen binary [
-    "--arena-check", s!"{root}/test/fixtures/arena/proj-imax-prop.ndjson"]
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output",
+    s!"{root}/test/fixtures/arena/proj-imax-prop.ndjson"]
   state := state.check "Arena rejects a data projection from normalized Prop" <|
     imaxProjection.exitCode == 1 &&
       imaxProjection.stderr.contains "expression validation failed: invalid projection"
@@ -476,7 +478,7 @@ def main (args : List String) : IO UInt32 := do
     declined.exitCode == 2 && (declined.stderr.splitOn "declined").length > 1
 
   let malformed ← runModelgenStdin binary
-    ["--arena-check", "-"] "not ndjson\n"
+    ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] "not ndjson\n"
   state := state.check "malformed Arena stdin is a tool error with exit 3" <|
     malformed.exitCode == 3 && (malformed.stderr.splitOn "parse error:").length > 1
   let arenaHoles : Array (String × String) := #[
@@ -488,7 +490,7 @@ def main (args : List String) : IO UInt32 := do
       "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}\n")]
   for (kind, arenaHole) in arenaHoles do
     let result ← runModelgenStdin binary
-      ["--arena-check", "-"] arenaHole
+      ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] arenaHole
     state := state.check s!"undefined sparse {kind} ID is a tool error with exit 3" <|
       result.exitCode == 3 && (result.stderr.splitOn "parse error:").length > 1
 
@@ -499,7 +501,7 @@ def main (args : List String) : IO UInt32 := do
     ("invalid natural literal", "{\"ie\":0,\"natVal\":\"not-a-natural\"}\n")]
   for (kind, input) in malformedArenaRecords do
     let result ← runModelgenStdin binary
-      ["--arena-check", "-"] input
+      ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] input
     state := state.check s!"{kind} is a parse/tool error with exit 3" <|
       result.exitCode == 3 && (result.stderr.splitOn "parse error:").length > 1
 
@@ -520,7 +522,8 @@ def main (args : List String) : IO UInt32 := do
       | .ok output => output.decls == #[metadataDecl]
       | .error _ => false
   let missing ← runModelgen binary [
-    "--arena-check", s!"{scratch}/does-not-exist.ndjson"]
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output",
+    s!"{scratch}/does-not-exist.ndjson"]
   state := state.check "missing $IN path is a tool error with exit 3" (missing.exitCode == 3)
   let badOption ← runModelgen binary ["--unknown-arena-option", nested]
   state := state.check "CLI misuse is a tool error with exit 3" (badOption.exitCode == 3)

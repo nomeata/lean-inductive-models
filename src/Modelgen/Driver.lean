@@ -1641,7 +1641,7 @@ Using `Lean.Environment.replay` here would split the constant map back into
 individual records.  That loses the export's atomic grouping for nested
 inductives and can fail to expose kernel-generated auxiliary recursors. -/
 private def replayKernelRecords (base : Environment) (x : Export) (order : Array Nat)
-    (constants : Std.HashMap Name ConstantInfo) (arenaCheck : Bool) :
+    (constants : Std.HashMap Name ConstantInfo) :
     MetaM (Except String Environment) := do
   let mut checked := base.toKernelEnv
   -- `Environment.ofKernelEnv` intentionally exposes no elaborator constant
@@ -1657,36 +1657,35 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
       | .ok declaration => pure declaration
       | .error message => return .error message
     let some declaration := declaration? | continue
-    if arenaCheck then
-      arityVisited ← match checkKernelReplayLevelArities constants record arityVisited with
-        | .ok visited => pure visited
-        | .error message => return .error message
-      -- `AsyncConsts.add` panics and drops the second entry when distinct raw
-      -- private names normalize to the same user name. Keep such records out
-      -- of the supplemental mirror, and propagate that unavailability through
-      -- later records. The official kernel environment still receives and
-      -- checks every record.
-      let referencesOmitted := (kernelInputReferences record).any mirrorOmitted.contains
-      let mut normalizedCollision := false
-      for name in record.names do
-        let normalized := privateToUserName name
-        if let some first := normalizedNames[normalized]? then
-          if first != name then normalizedCollision := true
-        normalizedNames := normalizedNames.insert normalized name
-      if normalizedCollision || referencesOmitted then
-        for name in record.names do mirrorOmitted := mirrorOmitted.insert name
-      else unless record matches .induct .. do
-        unless x.projNodes.isEmpty do
-          setEnv analysis
-          if let .error message ← checkKernelReplayExpressions record
-              (some x.projNodes) mirrorOmitted then
-            return .error message
+    arityVisited ← match checkKernelReplayLevelArities constants record arityVisited with
+      | .ok visited => pure visited
+      | .error message => return .error message
+    -- `AsyncConsts.add` panics and drops the second entry when distinct raw
+    -- private names normalize to the same user name. Keep such records out
+    -- of the supplemental mirror, and propagate that unavailability through
+    -- later records. The official kernel environment still receives and
+    -- checks every record.
+    let referencesOmitted := (kernelInputReferences record).any mirrorOmitted.contains
+    let mut normalizedCollision := false
+    for name in record.names do
+      let normalized := privateToUserName name
+      if let some first := normalizedNames[normalized]? then
+        if first != name then normalizedCollision := true
+      normalizedNames := normalizedNames.insert normalized name
+    if normalizedCollision || referencesOmitted then
+      for name in record.names do mirrorOmitted := mirrorOmitted.insert name
+    else unless record matches .induct .. do
+      unless x.projNodes.isEmpty do
+        setEnv analysis
+        if let .error message ← checkKernelReplayExpressions record
+            (some x.projNodes) mirrorOmitted then
+          return .error message
     match checked.addDeclCore 0 declaration none with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
     | .ok next =>
       checked := next
-      if arenaCheck && !record.names.any mirrorOmitted.contains then
+      if !record.names.any mirrorOmitted.contains then
         analysis ← match analysis.addDeclCore 0 declaration none false with
           | .error exception =>
             return .error s!"{record.names}: cannot construct expression-checking environment: \
@@ -1696,7 +1695,7 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
           setEnv analysis
           if let .error message ← checkKernelReplayExpressions record none mirrorOmitted then
             return .error message
-  return .ok (if arenaCheck then analysis else .ofKernelEnv checked)
+  return .ok (.ofKernelEnv checked)
 
 /-- Submit a complete export to Lean's kernel and verify that its serialized
 inductive, constructor, and recursor metadata agrees with what Lean regenerates.
@@ -1705,7 +1704,7 @@ This is the explicit whole-stream verdict gate used by the command line.  It
 is separate from the mandatory checked construction of declarations generated
 by this tool: disabling a CLI type-check gate never weakens model generation's
 owner-free kernel replay. -/
-def typeCheckExport (x : Export) (arenaCheck : Bool := false) : MetaM (Except String Unit) := do
+def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   let base ← getEnv
   let constants ← match x.constantInfos with
     | .error message => return .error message
@@ -1713,7 +1712,7 @@ def typeCheckExport (x : Export) (arenaCheck : Bool := false) : MetaM (Except St
   let order ← match kernelReplayOrder x with
     | .error message => return .error message
     | .ok order => pure order
-  let checked ← match ← replayKernelRecords base x order constants arenaCheck with
+  let checked ← match ← replayKernelRecords base x order constants with
     | .error message => return .error message
     | .ok checked => pure checked
   setEnv checked

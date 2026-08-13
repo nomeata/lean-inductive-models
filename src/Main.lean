@@ -93,12 +93,12 @@ def reportCheckSuccess (config : Modelgen.Cli.Config) (stage : String)
 /-- Run the whole-stream kernel gate in a genuinely empty environment.  The
 outer `Except` reports a tool failure; the inner one is Lean's rejection of
 the submitted export. -/
-def typeCheckExportIO (context : Core.Context) (x : Export) (arenaCheck : Bool := false) :
+def typeCheckExportIO (context : Core.Context) (x : Export) :
     IO (Except String (Except String Unit)) := do
   try
     let env ← mkEmptyEnvironment
     let (result, _) ← Lean.Core.CoreM.toIO
-      (Lean.Meta.MetaM.run' (Modelgen.typeCheckExport x arenaCheck)) context { env }
+      (Lean.Meta.MetaM.run' (Modelgen.typeCheckExport x)) context { env }
     return .ok result
   catch error =>
     return .error (toString error)
@@ -183,21 +183,30 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       if input == "-" then
         let stdin ← IO.getStdin
         let result ← match tee? with
-          | none => (Modelgen.parseStream stdin (analyse := config.monoLevels || config.arenaCheck)
-              (allowDuplicateNames := config.arenaCheck)).map (Except.map fun x => (x, none))
-          | some tee => (Modelgen.parseStreamWithSink stdin tee.sink
-              (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
-                (x, some (tee, certificate)))
+          | none => do
+            let result ← Modelgen.parseStream stdin
+              (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+              (allowDuplicateNames := true)
+            pure (result.map fun x => (x, none))
+          | some tee => do
+            let result ← Modelgen.parseStreamWithSink stdin tee.sink
+              (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+              (allowDuplicateNames := true)
+            pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
         pure (some result)
       else
         IO.FS.withFile input .read fun handle => do
           let result ← match tee? with
-            | none => (Modelgen.parseHandle handle
-                (analyse := config.monoLevels || config.arenaCheck)
-                (allowDuplicateNames := config.arenaCheck)).map (Except.map fun x => (x, none))
-            | some tee => (Modelgen.parseHandleWithSink handle tee.sink
-                (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
-                  (x, some (tee, certificate)))
+            | none => do
+              let result ← Modelgen.parseHandle handle
+                (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+                (allowDuplicateNames := true)
+              pure (result.map fun x => (x, none))
+            | some tee => do
+              let result ← Modelgen.parseHandleWithSink handle tee.sink
+                (analyse := config.monoLevels || config.typeCheckInput || config.typeCheckOutput)
+                (allowDuplicateNames := true)
+              pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
           pure (some result)
     catch error =>
       IO.eprintln s!"{input}: {error}"
@@ -220,6 +229,10 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       else
         pure (parsedExport, none)
 
+  if let .error message := parsed.validateUniqueDeclarationNames then
+    IO.eprintln s!"{input}: invalid export: {message}"
+    return exitRejected
+
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -227,7 +240,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       maxHeartbeats := 0, maxRecDepth := 8192 }
 
   if config.typeCheckInput then
-    match ← typeCheckExportIO context parsed config.arenaCheck with
+    match ← typeCheckExportIO context parsed with
     | .error message =>
       IO.eprintln s!"{input}: input kernel check failed internally: {message}"
       return exitToolError
