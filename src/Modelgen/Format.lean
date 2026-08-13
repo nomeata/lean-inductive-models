@@ -898,6 +898,123 @@ def parse (text : String) (analyse : Bool := true) : Except String Export := do
       names := names.insert name
   return { metaLine, decls, projNodes := c.projNodes }
 
+/-! ## Optional raw staging during streaming parse
+
+The parser may hand each exact UTF-8 record to a transient sink while it is
+already in scope.  This is deliberately an optional side channel: ordinary
+parsing retains its old result and does no spool allocation.  A later output
+pass may use a certified spool without reopening a mutable input path.
+-/
+
+/-- Which logical spool consumes one exact input record.  `ignored` covers
+blank lines; accepting them remains parser-compatible, but they disqualify the
+strict raw-arena fast path. -/
+inductive RawRecordKind where
+  | metadata | arena | declaration | ignored
+  deriving Inhabited, Repr, BEq
+
+/-- A transient exact line, including its original LF when present.  Sinks
+must consume `bytes` during the call rather than retaining the parser chunk. -/
+structure RawRecord where
+  kind : RawRecordKind
+  bytes : ByteArray
+
+/-- Optional parse-time consumer for exact raw records. -/
+structure RawSink where
+  emit : RawRecord → IO Unit
+
+/-- A compact byte span in the declaration-only spool.  Offsets are 64-bit so
+the summary has fixed size; lengths remain `Nat`, matching `ByteArray.size`. -/
+structure RawSpan where
+  offset : UInt64
+  bytes : Nat
+  deriving Inhabited, Repr, BEq
+
+/-- Exclusive upper bounds of a strictly progressive input arena. -/
+structure RawArenaCursor where
+  nextName : Nat := 1
+  nextLevel : Nat := 1
+  nextExpr : Nat := 0
+  deriving Inhabited, Repr, BEq
+
+/-- Certification and compact offsets produced beside a raw spool.
+
+`canonical` is intentionally stronger than parser acceptance: every nonempty
+record has canonical compressed JSON spelling and a terminating LF, and name,
+level, and expression IDs progress exactly `1,2,…`, `1,2,…`, and `0,1,…`.
+Sparse, repeated, or out-of-order arenas therefore fall back to full
+re-interning instead of changing the snapshot seen by an earlier declaration.
+-/
+structure RawCertificate where
+  canonical : Bool := true
+  cursor : RawArenaCursor := {}
+  metadataBytes : UInt64 := 0
+  arenaBytes : UInt64 := 0
+  declarationBytes : UInt64 := 0
+  declarations : Array RawSpan := #[]
+  deriving Inhabited, Repr, BEq
+
+private structure RawCertState where
+  certificate : RawCertificate := {}
+  declarationBytes : Nat := 0
+
+private def exactRawBytes (line : String) (terminated : Bool) : ByteArray :=
+  if terminated then line.toUTF8.push 10 else line.toUTF8
+
+private inductive RawArenaAxis where
+  | name | level | expression
+
+private def rawArenaId? (j : Json) : Option (RawArenaAxis × Nat) :=
+  if let some id := (jField j "in").toOption.bind fun value => value.getNat?.toOption then
+    some (.name, id)
+  else if let some id := (jField j "il").toOption.bind fun value => value.getNat?.toOption then
+    some (.level, id)
+  else if let some id := (jField j "ie").toOption.bind fun value => value.getNat?.toOption then
+    some (.expression, id)
+  else none
+
+private def RawCertState.addBytes (state : RawCertState) (kind : RawRecordKind)
+    (bytes : Nat) : RawCertState :=
+  let add (current : UInt64) := current + bytes.toUInt64
+  match kind with
+  | .metadata => { state with certificate.metadataBytes := add state.certificate.metadataBytes }
+  | .arena => { state with certificate.arenaBytes := add state.certificate.arenaBytes }
+  | .declaration =>
+      { certificate := { state.certificate with
+          declarationBytes := add state.certificate.declarationBytes
+          declarations := state.certificate.declarations.push
+            { offset := state.declarationBytes.toUInt64, bytes } }
+        declarationBytes := state.declarationBytes + bytes }
+  | .ignored => state
+
+private def RawCertState.observeArena (state : RawCertState) (j : Json) : RawCertState :=
+  match rawArenaId? j with
+  | some (.name, id) =>
+      { state with certificate := { state.certificate with
+          canonical := state.certificate.canonical && id == state.certificate.cursor.nextName
+          cursor.nextName := state.certificate.cursor.nextName + 1 } }
+  | some (.level, id) =>
+      { state with certificate := { state.certificate with
+          canonical := state.certificate.canonical && id == state.certificate.cursor.nextLevel
+          cursor.nextLevel := state.certificate.cursor.nextLevel + 1 } }
+  | some (.expression, id) =>
+      { state with certificate := { state.certificate with
+          canonical := state.certificate.canonical && id == state.certificate.cursor.nextExpr
+          cursor.nextExpr := state.certificate.cursor.nextExpr + 1 } }
+  | _ => { state with certificate.canonical := false }
+
+private def emitRaw (sink : RawSink) (state : IO.Ref RawCertState)
+    (kind : RawRecordKind) (line : String) (terminated : Bool)
+    (json? : Option Json := none) : IO Unit := do
+  let bytes := exactRawBytes line terminated
+  sink.emit { kind, bytes }
+  state.modify fun current =>
+    let current := current.addBytes kind bytes.size
+    let spelling := terminated && json?.any (line == ·.compress)
+    let current := { current with certificate.canonical :=
+      current.certificate.canonical && spelling }
+    if kind == .arena then json?.elim current current.observeArena else current
+
 /-- **The same parse, off a handle, a chunk at a time.**
 
 [`parse`] takes the file as one `String`, and on a large export that costs more
@@ -919,7 +1036,8 @@ the 10-million-line prefix it takes the parse's peak from 2,381,888 KB to
 **1.3 % fewer instructions**. `Handle.getLine` is not the route: it did not
 finish a 1-million-line prefix in ten minutes.
 -/
-def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String Export) := do
+private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
+    (sink? : Option RawSink) : IO (Except String (Export × RawCertificate)) := do
   -- **One ref per growing array, and `modifyGet`.** `RCtx` holds three arrays
   -- that grow by `push`, and a `push` is in-place only while the array is
   -- uniquely referenced. Two shapes lose that and both were measured on a 20 MB
@@ -932,6 +1050,7 @@ def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String 
   -- the only reference to it.
   let cRef ← IO.mkRef ({ analyse } : RCtx)
   let declsRef ← IO.mkRef (#[] : Array EDecl)
+  let rawRef ← IO.mkRef ({} : RawCertState)
   let mut metaLine : Json := .null
   let mut first := true
   let mut err : Option String := none
@@ -960,8 +1079,18 @@ def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String 
     match String.fromUTF8? (block.extract 0 cut) with
     | none => err := some "the input is not valid UTF-8"
     | some text =>
-      for line in text.splitOn "\n" do
-        if line.isEmpty then continue
+      let lines := (text.splitOn "\n").toArray
+      for hline : lineIndex in [:lines.size] do
+        let line := lines[lineIndex]
+        let terminated := lineIndex + 1 < lines.size
+        -- `splitOn` leaves one empty sentinel after a final LF.  Other empty
+        -- lines remain accepted by the historical parser but disqualify raw
+        -- canonical staging and are handed to the sink exactly.
+        if line.isEmpty then
+          if terminated then
+            if let some sink := sink? then
+              emitRaw sink rawRef .ignored line true
+          continue
         match Json.parse line with
         | .error e => err := some e; break
         | .ok j =>
@@ -969,6 +1098,8 @@ def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String 
             first := false
             if (jField j "meta").toOption.isSome then
               metaLine := j
+              if let some sink := sink? then
+                emitRaw sink rawRef .metadata line terminated (some j)
               continue
           match ← cRef.modifyGet fun c =>
               match readLine c j with
@@ -979,7 +1110,11 @@ def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String 
               | .error e => (Except.error e, ({} : RCtx))
               | .ok (c', d?) => (Except.ok d?, c') with
           | .error e => err := some e; break
-          | .ok d? => if let some d := d? then declsRef.modify (·.push d)
+          | .ok d? =>
+            if let some sink := sink? then
+              emitRaw sink rawRef (if d?.isSome then .declaration else .arena)
+                line terminated (some j)
+            if let some d := d? then declsRef.modify (·.push d)
   match err with
   | some e => return .error e
   | none =>
@@ -991,11 +1126,85 @@ def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String 
         names := names.insert name
     -- Take the result out while dropping every arena table held by the ref.
     let projNodes ← cRef.modifyGet fun c => (c.projNodes, {})
-    return .ok { metaLine, decls, projNodes }
+    let rawState ← rawRef.get
+    let certificate := if sink?.isSome then rawState.certificate else {}
+    return .ok ({ metaLine, decls, projNodes }, certificate)
+
+/-- Parse while sending exact input records to `sink`.  The compact returned
+certificate says whether the spooled arena is safe to hoist ahead of its
+declaration records; a false certificate requires the ordinary writer. -/
+def parseStreamWithSink (h : IO.FS.Stream) (sink : RawSink)
+    (analyse : Bool := true) : IO (Except String (Export × RawCertificate)) :=
+  parseStreamCore h analyse (some sink)
+
+def parseStream (h : IO.FS.Stream) (analyse : Bool := true) : IO (Except String Export) := do
+  return (← parseStreamCore h analyse none).map (·.1)
 
 /-- Handle-specialized wrapper around [`parseStream`]. -/
 def parseHandle (h : IO.FS.Handle) (analyse : Bool := true) : IO (Except String Export) :=
   parseStream (IO.FS.Stream.ofHandle h) analyse
+
+/-- Handle-specialized raw-staging parser. -/
+def parseHandleWithSink (h : IO.FS.Handle) (sink : RawSink)
+    (analyse : Bool := true) : IO (Except String (Export × RawCertificate)) :=
+  parseStreamWithSink (IO.FS.Stream.ofHandle h) sink analyse
+
+/-! ### Project-local spool lifecycle
+
+Production callers choose explicit paths below a project-local scratch
+directory.  The helper refuses to overwrite any existing path and removes all
+three files on success, parse failure, or exception.  It is intentionally not
+wired into `Main` yet; this tranche establishes the parser contract only.
+-/
+
+structure RawSpoolPaths where
+  metadata : System.FilePath
+  arena : System.FilePath
+  declarations : System.FilePath
+  deriving Inhabited, Repr, BEq
+
+structure RawSpool where
+  paths : RawSpoolPaths
+  private metadataHandle : IO.FS.Handle
+  private arenaHandle : IO.FS.Handle
+  private declarationHandle : IO.FS.Handle
+
+def RawSpool.sink (spool : RawSpool) : RawSink where
+  emit record := match record.kind with
+    | .metadata => spool.metadataHandle.write record.bytes
+    | .arena => spool.arenaHandle.write record.bytes
+    | .declaration => spool.declarationHandle.write record.bytes
+    | .ignored => pure ()
+
+def RawSpool.flush (spool : RawSpool) : IO Unit := do
+  spool.metadataHandle.flush
+  spool.arenaHandle.flush
+  spool.declarationHandle.flush
+
+private def removeSpoolPath (path : System.FilePath) : IO Unit := do
+  if ← path.pathExists then IO.FS.removeFile path
+
+/-- Open three new caller-chosen spool files and remove them unconditionally
+after `action`.  Reusing a path or naming an existing file fails before the
+first file is opened. -/
+def withRawSpool (paths : RawSpoolPaths) (action : RawSpool → IO α) : IO α := do
+  let distinct := paths.metadata != paths.arena && paths.metadata != paths.declarations &&
+    paths.arena != paths.declarations
+  unless distinct do
+    throw <| IO.userError "raw spool paths must be distinct"
+  for path in [paths.metadata, paths.arena, paths.declarations] do
+    if ← path.pathExists then
+      throw <| IO.userError s!"refusing to overwrite raw spool {path}"
+  try
+    let metadataHandle ← IO.FS.Handle.mk paths.metadata .write
+    let arenaHandle ← IO.FS.Handle.mk paths.arena .write
+    let declarationHandle ← IO.FS.Handle.mk paths.declarations .write
+    let spool : RawSpool := { paths, metadataHandle, arenaHandle, declarationHandle }
+    action spool
+  finally
+    removeSpoolPath paths.metadata
+    removeSpoolPath paths.arena
+    removeSpoolPath paths.declarations
 
 /-! ## Writing
 
