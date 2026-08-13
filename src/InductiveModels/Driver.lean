@@ -2526,6 +2526,146 @@ def SourceCensus.schedule (census : SourceCensus) (source : Export)
   let order ← census.scheduleOrder source generation
   return { source with decls := order.map fun ordinal => source.decls[ordinal]! }
 
+/-- Exact source declarations installed ahead of their logical source turn.
+The map is keyed by raw source ordinal so namespace similarity can never turn
+an unrelated declaration into support. -/
+private structure FutureSourceSupport where
+  env : Environment
+  records : Std.HashMap Nat EDecl
+
+private def exactSupportBundleRecords? (source : Export) (names : Array Name) :
+    Except String (Option (Array (Nat × EDecl))) := do
+  let mut ordinals : Std.HashSet Nat := {}
+  let mut anyPresent := false
+  for name in names do
+    let mut occurrences : Array Nat := #[]
+    for ordinal in [:source.decls.size] do
+      if source.decls[ordinal]!.names.contains name then
+        occurrences := occurrences.push ordinal
+    if !occurrences.isEmpty then anyPresent := true
+    unless occurrences.size ≤ 1 do
+      throw s!"future support name {name} is introduced more than once"
+    if let some ordinal := occurrences[0]? then ordinals := ordinals.insert ordinal
+  unless anyPresent do return none
+  for name in names do
+    unless source.decls.any (·.names.contains name) do
+      throw s!"future support bundle containing {name} is incomplete"
+  let mut records : Array (Nat × EDecl) := #[]
+  for ordinal in [:source.decls.size] do
+    if ordinals.contains ordinal then
+      let declaration := source.decls[ordinal]!
+      unless declaration.names.all names.contains do
+        throw s!"future support record {declaration.names} also introduces an unaudited name"
+      records := records.push (ordinal, declaration)
+  return some records
+
+private def installFutureRecords (env : Environment) (template : Export)
+    (records : Array (Nat × EDecl)) : MetaM (Except String Environment) := do
+  let bundle := { template with decls := records.map (·.2) }
+  let ordered ← match Order.reorder bundle with
+    | .ok ordered => pure ordered
+    | .error error => return .error s!"cannot order future support bundle: {repr error}"
+  checkGeneratedIn env ordered.decls
+
+private def validateFutureBasis (env : Environment) (root : Name) (record : EDecl) :
+    MetaM (Except String Unit) := do
+  setEnv env
+  match ← (validateBasisOwner root record).run with
+  | .ok () => return .ok ()
+  | .error decline => return .error decline.label
+
+/-- Build the exact phase-one shadow ledger. Any partial, malformed, or
+unsupported scheduled-support family makes the internal comparison mode use
+the historical scheduler instead. This is deliberately narrower than
+`scheduledSupportRecord`: no prefix or arbitrary future declaration is ever
+preinstalled. -/
+private def FutureSourceSupport.create (base : Environment) (source : Export)
+    (generation : Cli.Config) : MetaM (Except String FutureSourceSupport) := do
+  let eqNames : Array Name := #[`Eq, `Eq.refl, `Eq.rec]
+  let natNames : Array Name := #[`Nat, `Nat.zero, `Nat.succ, `Nat.rec]
+  let punitNames : Array Name := #[`PUnit, `PUnit.unit, `PUnit.rec]
+  let psigmaNames : Array Name := #[`PSigma', `PSigma'.mk, `PSigma'.rec,
+    `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk, `PSigma'.snd_mk,
+    `PSigma'.rec', `PSigma'.rec'_mk]
+  let quotNames : Array Name := #[`Quot, `Quot.mk, `Quot.lift, `Quot.ind]
+  let audited := (eqNames ++ natNames ++ punitNames ++ psigmaNames ++ quotNames).push `Quot.sound
+  for declaration in source.decls do
+    if scheduledSupportRecord generation declaration &&
+        !declaration.names.all audited.contains then
+      return .error s!"scheduled support {declaration.names} is outside the audited shadow set"
+  let mut env := base
+  let mut shadowed : Std.HashMap Nat EDecl := {}
+  for (root, names) in #[( `Eq, eqNames), (`Nat, natNames),
+      (`PUnit, punitNames), (`PSigma', psigmaNames)] do
+    let records? ← match exactSupportBundleRecords? source names with
+      | .ok records => pure records
+      | .error error => return .error error
+    if let some records := records? then
+      let some (_, owner) := records.find? fun entry => entry.2.names.contains root
+        | return .error s!"future support bundle {root} has no owner record"
+      match ← validateFutureBasis env root owner with
+      | .error error => return .error s!"future support {root} is not canonical: {error}"
+      | .ok () => pure ()
+      match ← installFutureRecords env source records with
+      | .error error => return .error error
+      | .ok next => env := next
+      if root == `Eq then
+        match EqInfo.check env with
+        | .error error => return .error s!"future Eq is not canonical: {error}"
+        | .ok _ => pure ()
+      else if root == `Nat then
+        match checkNat env with
+        | .error error => return .error s!"future Nat is not canonical: {error}"
+        | .ok () => pure ()
+      else if root == `PUnit then
+        match checkPUnit env with
+        | .error error => return .error s!"future PUnit is not canonical: {error}"
+        | .ok () => pure ()
+      else
+        setEnv env
+        match ← (ensurePSigmaPrime {}).run with
+        | .error decline => return .error s!"future PSigma' is not canonical: {decline.label}"
+        | .ok added => unless added.isEmpty do
+            return .error "future PSigma' bundle was incomplete"
+      for (ordinal, record) in records do shadowed := shadowed.insert ordinal record
+  let quotRecords? ← match exactSupportBundleRecords? source quotNames with
+    | .ok records => pure records
+    | .error error => return .error error
+  if let some records := quotRecords? then
+    let ordinals := records.map (·.1)
+    unless ordinals.size == 4 && ordinals[1]! == ordinals[0]! + 1 &&
+        ordinals[2]! == ordinals[1]! + 1 && ordinals[3]! == ordinals[2]! + 1 do
+      return .error "future quotient is not one atomic four-record source bundle"
+    match ← installFutureRecords env source records with
+    | .error error => return .error error
+    | .ok next => env := next
+    let some expected := installedQuotRecords? env
+      | return .error "future quotient did not install the kernel's four-record bundle"
+    unless records.map (·.2) == expected do
+      return .error "future quotient source records are not the kernel's exact bundle"
+    for (ordinal, record) in records do shadowed := shadowed.insert ordinal record
+  let soundRecords? ← match exactSupportBundleRecords? source #[`Quot.sound] with
+    | .ok records => pure records
+    | .error error => return .error error
+  if let some records := soundRecords? then
+    let #[entry] := records | return .error "future Quot.sound is not one source record"
+    let .ax `Quot.sound levelParams _ false := entry.2
+      | return .error "future Quot.sound is not a safe axiom"
+    let [su] := levelParams | return .error "future Quot.sound has the wrong universe arity"
+    match ← installFutureRecords env source records with
+    | .error error => return .error error
+    | .ok next => env := next
+    let some info := env.constants.find? `Quot.sound
+      | return .error "future Quot.sound disappeared after replay"
+    let eqi ← match EqInfo.check env with
+      | .ok eqi => pure eqi
+      | .error error => return .error s!"future Quot.sound lacks canonical Eq: {error}"
+    setEnv env
+    unless ← isDefEq info.type (← quotSoundType eqi.eqN (.param su)) do
+      return .error "future Quot.sound does not have Lean's statement"
+    shadowed := shadowed.insert entry.1 entry.2
+  return .ok { env, records := shadowed }
+
 private structure FilterContext where
   source : Export
   checkRecursors : Bool
@@ -2539,6 +2679,7 @@ private structure FilterContext where
   sourceFamilyRecords : Array (Array Check.CompactFamilyCertificate)
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
+  futureSupport? : Option FutureSourceSupport := none
   collectTrace : Bool := false
 
 private structure FilterState where
@@ -2554,6 +2695,7 @@ private structure FilterState where
     { statementsChecked := 0, violations := #[] }
   invalidBasis : Std.HashSet Name := {}
   persistentSupportOrigins : Std.HashMap Name Nat := {}
+  futureSupportRemaining : Std.HashMap Nat EDecl := {}
   sourceSteps : Array FilterSourceStep := #[]
 
 private inductive FilterFeedResult where
@@ -2590,6 +2732,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut islandStatements := state.islandStatements
   let mut invalidBasis := state.invalidBasis
   let mut persistentSupportOrigins := state.persistentSupportOrigins
+  let mut futureSupportRemaining := state.futureSupportRemaining
   let mut sourceSteps := state.sourceSteps
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
@@ -2694,15 +2837,26 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   -- Replay the source record between its pre-owner and post-owner generation
   -- phases.  An unreplayable source record terminates the complete machine and
   -- discards every private island, matching the historical loop return.
-  if let some dcl := toDeclaration (← getEnv) d then
-    match (← getEnv).addDeclCore 0 dcl none false with
-    | .ok e =>
-      replayedOwnerEnv? := some e
-      setEnv e
-    | .error ex =>
-      let msg ← (ex.toMessageData {}).toString
-      return .unreplayable
-        { rep with unreplayable := some s!"{d.names}: {msg}" }
+  let some firstSourceName := d.names.head?
+    | throwError "source declaration has no name"
+  let some rawSourceOrdinal := rawOrdinals[firstSourceName]?
+    | throwError "logical source declaration {firstSourceName} lost its raw ordinal"
+  match futureSupportRemaining[rawSourceOrdinal]? with
+  | some expected =>
+    unless d == expected do
+      throwError "future support source record {rawSourceOrdinal} changed before discharge"
+    futureSupportRemaining := futureSupportRemaining.erase rawSourceOrdinal
+    replayedOwnerEnv? := some (← getEnv)
+  | none =>
+    if let some dcl := toDeclaration (← getEnv) d then
+      match (← getEnv).addDeclCore 0 dcl none false with
+      | .ok e =>
+        replayedOwnerEnv? := some e
+        setEnv e
+      | .error ex =>
+        let msg ← (ex.toMessageData {}).toString
+        return .unreplayable
+          { rep with unreplayable := some s!"{d.names}: {msg}" }
   if let some root := basisRoot? then
     match ← (validateBasisOwner root d).run with
     | .ok () =>
@@ -2852,7 +3006,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, commits, stagedRecords,
     scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
-    persistentSupportOrigins, sourceSteps }
+    persistentSupportOrigins, futureSupportRemaining, sourceSteps }
 
 /-- Complete compact ordering and checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
@@ -2871,6 +3025,8 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
   let stagedRecords := state.stagedRecords
   let islandStatements := state.islandStatements
   let persistentSupportOrigins := state.persistentSupportOrigins
+  unless state.futureSupportRemaining.isEmpty do
+    throwError "future support shadow retained undischarged source records"
   let mut rep := state.report
   let stagedOrder ← if compactMode then
       match Order.summaryRecordOrder (stagedRecords.map (·.summary)) with
@@ -2967,17 +3123,23 @@ the historical full declaration array for exact A/B comparison. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (retention : RetentionMode)
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false)
-    (plannedSource? : Option Spool.PlannedSourceReader := none) :
+    (plannedSource? : Option Spool.PlannedSourceReader := none)
+    (sourceOrder? : Option (Array Nat) := none)
+    (futureSupport? : Option FutureSourceSupport := none) :
     MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep) := do
   let sourceCensus := SourceCensus.ofSource x
-  let sourceOrder ← match sourceCensus.scheduleOrder x generation with
-    | .ok order => pure order
-    | .error error => throwError "cannot schedule shared support: {repr error}"
+  let sourceOrder ← match sourceOrder? with
+    | some order => pure order
+    | none => match sourceCensus.scheduleOrder x generation with
+      | .ok order => pure order
+      | .error error => throwError "cannot schedule shared support: {repr error}"
   let scheduled := { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
-  match validateScheduledSupport scheduled generation with
-  | .ok () => pure ()
-  | .error message => throwError "invalid shared-support schedule: {message}"
-  let mainEnv ← getEnv
+  if futureSupport?.isNone then
+    match validateScheduledSupport scheduled generation with
+    | .ok () => pure ()
+    | .error message => throwError "invalid shared-support schedule: {message}"
+  let fallbackEnv ← getEnv
+  let mainEnv := futureSupport?.map (·.env) |>.getD fallbackEnv
   -- Build the immutable source products once.  They are deliberately still
   -- derived from today's complete scheduled Export; only the logical
   -- declaration transition is extracted in this phase.
@@ -2991,8 +3153,13 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, sourceNormalizer, sourceSummaries, sourceGlobalExtras,
-    sourceFamilyRecords, rawOrdinals, reserved, collectTrace }
-  let mut state : FilterState := { mainEnv, persistentSyntax := sourceSyntax }
+    sourceFamilyRecords, rawOrdinals, reserved, futureSupport?, collectTrace }
+  let initialFutureSupport := futureSupport?.map (·.records) |>.getD
+    ({} : Std.HashMap Nat EDecl)
+  let mut state : FilterState :=
+    { mainEnv := mainEnv
+      persistentSyntax := sourceSyntax
+      futureSupportRemaining := initialFutureSupport }
   for rawOrdinal in sourceOrder do
     let oracle := x.decls[rawOrdinal]!
     let declaration ← match plannedSource? with
@@ -3016,6 +3183,40 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
   let (decls, report, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
   return (decls, report)
+
+/-- Internal phase-one A/B path for replacing support-priority execution.
+Only a complete exact [`FutureSourceSupport`] ledger selects it; every
+unsupported or malformed source shape runs the historical scheduler unchanged.
+Logical processing uses ordinary dependency order, while the returned export
+is put through the existing stable support-priority order so this phase changes
+neither bytes nor report ordering. -/
+def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
+    (generation : Cli.Config) : MetaM (Array EDecl × Report × Bool) := do
+  let census := SourceCensus.ofSource x
+  unless sourceNeedsSupportScheduling x generation census.reserved do
+    let (decls, report) ← runFilter x checkRecursors generation
+    return (decls, report, false)
+  let base ← getEnv
+  let shadowResult ← FutureSourceSupport.create base x generation
+  let .ok shadow := shadowResult | do
+    setEnv base
+    let (decls, report) ← runFilter x checkRecursors generation
+    return (decls, report, false)
+  unless !shadow.records.isEmpty do
+    setEnv base
+    let (decls, report) ← runFilter x checkRecursors generation
+    return (decls, report, false)
+  let ordinaryOrder ← match Order.summaryRecordOrder census.summaries with
+    | .ok order => pure order
+    | .error error => throwError "cannot ordinarily order source shadow: {repr error}"
+  setEnv base
+  let (decls, report, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
+    (sourceOrder? := some ordinaryOrder) (futureSupport? := some shadow)
+  let final := { x with decls }
+  let ordered ← match Order.reorderPrioritizing final (scheduledSupportRecord generation) with
+    | .ok ordered => pure ordered
+    | .error error => throwError "cannot restore support-priority output order: {repr error}"
+  return (ordered.decls, report, true)
 
 /-- Test-facing observer for the declaration-wise transition.  The generated
 output and report are produced by the same core invocation as the snapshots;
