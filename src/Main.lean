@@ -179,7 +179,7 @@ private def mixedComposition (raw : RawStage) (sealed : InductiveModels.Spool.Se
 
 private def runWithWorkspace (config : InductiveModels.Cli.Config)
     (workspace? : Option InductiveModels.Spool.Workspace)
-    (compactEnabled : Bool) (compactRequired : Bool := false) : IO UInt32 := do
+    (compactEnabled : Bool) : IO UInt32 := do
   let input := config.input.getD ""
   -- Reserve every spool leaf before consuming the input. Failure to establish
   -- the optional tee selects the historical parser; an error after parsing has
@@ -311,16 +311,13 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
               context { env }
             match plan.unavailable? with
             | none => pure (Except.ok (FilterOutput.discarded plan, report))
-            | some why =>
+            | some _ =>
               InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
               InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-              if compactRequired then
-                pure (Except.error s!"required compact discard is unavailable: {why}")
-              else
-                let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                  (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
-                  context { env }
-                pure (Except.ok (FilterOutput.full decls, fallbackReport))
+              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
+                (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
+                context { env }
+              pure (Except.ok (FilterOutput.full decls, fallbackReport))
           else if let some raw := rawStage? then
             let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
             let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
@@ -332,24 +329,18 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
               context { env }
             match plan.unavailable? with
             | none => pure (Except.ok (FilterOutput.staged raw stage plan, report))
-            | some why =>
+            | some _ =>
               InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
               InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-              if compactRequired then
-                pure (Except.error s!"required compact staging is unavailable: {why}")
-              else
-                let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                  (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
-                  context { env }
-                pure (Except.ok (FilterOutput.full decls, fallbackReport))
-          else
-            if compactRequired then
-              pure (Except.error "required compact staging has no certified raw input spool")
-            else
-              let ((decls, report), _) ← Lean.Core.CoreM.toIO
+              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
                 (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
                 context { env }
-              pure (Except.ok (FilterOutput.full decls, report))
+              pure (Except.ok (FilterOutput.full decls, fallbackReport))
+          else
+            let ((decls, report), _) ← Lean.Core.CoreM.toIO
+              (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
+              context { env }
+            pure (Except.ok (FilterOutput.full decls, report))
         catch error =>
           pure (Except.error (toString error))
       match generated with
@@ -445,7 +436,7 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
         return exitToolError
     return outcome
 
-def run (config : InductiveModels.Cli.Config) (compactRequired : Bool := false) : IO UInt32 := do
+def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   -- Canonical eligible generation uses bounded-memory staged output by default.
   -- The legacy override is retained for deliberate A/B measurements. Statically
   -- ineligible modes never tee their input, and planner trace mode stays on the
@@ -456,9 +447,9 @@ def run (config : InductiveModels.Cli.Config) (compactRequired : Bool := false) 
   if compactEnabled && stagedModeEligible config then
     let scratch := (← IO.currentDir) / "_tmp"
     InductiveModels.Spool.withOptionalWorkspace scratch fun workspace? =>
-      runWithWorkspace config workspace? compactEnabled compactRequired
+      runWithWorkspace config workspace? compactEnabled
   else
-    runWithWorkspace config none compactEnabled compactRequired
+    runWithWorkspace config none compactEnabled
 
 def workerMain (args : List String) : IO UInt32 := do
   InductiveModels.Output.containToolErrors do
@@ -530,8 +521,9 @@ private def parseConfig (args : List String) : IO (Except Unit InductiveModels.C
 
 /-- The producer preserves the public invocation's generation, structural
 checks, diagnostics, and exit 0/1/2/3. Only publication and the final kernel
-gate are redirected to the private candidate. Compact staging is mandatory:
-this phase must fail closed rather than rebuild a cumulative generated AST. -/
+gate are redirected to the private candidate. It prefers compact staging and
+retains the ordinary full-oracle fallback when raw or compact certification is
+unavailable; either producer process terminates before kernel replay starts. -/
 private def freshProducerMain (args : List String) : IO UInt32 := do
   let candidateResult ← freshCandidatePath
   let candidate ← match candidateResult with
@@ -552,7 +544,7 @@ private def freshProducerMain (args : List String) : IO UInt32 := do
   let producerConfig := { config with typeCheckOutput := false }
   let producerConfig := { producerConfig with
     output := true, outputTarget := candidate.toString }
-  run producerConfig true
+  run producerConfig
 
 /-- Parse and kernel-replay only the private candidate. This worker has no
 generation route and starts only after the producer process has terminated, so

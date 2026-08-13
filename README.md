@@ -152,7 +152,9 @@ AST—currently universe monomorphization and published named/stdout output
 kernel replay—use the full-memory path. With generated `--no-output`, the
 default output kernel gate instead stages a private candidate, terminates the
 generation worker, and replays that serialization in a fresh worker. Thus the
-generation and whole-output kernel heaps do not overlap. With both `--no-output` and
+generation and whole-output kernel heaps do not overlap. Inputs unavailable to
+compact staging retain the ordinary full-oracle producer fallback, but that
+producer likewise terminates before replay. With both `--no-output` and
 `--no-type-check-output`, accepted islands are checked and summarized while
 live and then discarded: no workspace is opened and no cumulative generated
 declaration array is retained. Monomorphization and deliberate legacy/planner
