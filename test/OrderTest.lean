@@ -92,6 +92,21 @@ def mustReorder (label : String) (x : Export) : IO Export :=
   | .ok reordered => return reordered
   | .error error => throw <| IO.userError s!"{label}: unexpected ordering error: {repr error}"
 
+def isExactRecordOrder (outcome : Except Order.Error (Array Nat))
+    (expected : Array Nat) : Bool :=
+  match outcome with
+  | .ok order => order == expected
+  | .error _ => false
+
+def kernelAccepts (x : Export) : IO Bool := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<order-kernel-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run' (typeCheckExport x)) context { env }
+  return result matches .ok ()
+
 structure FilterRun where
   input : Export
   output : Export
@@ -462,11 +477,73 @@ def run (root : String) : IO UInt32 := do
   state := state.check "shared support hoists with a valid dependency closure" <|
     hoisted.decls == #[supportDependency, support, ordinary] && dependenciesForward hoisted
 
+  -- Mutual-block `all` fields are descriptive metadata, not dependencies.
+  -- Semantic ownership fields and every expression root remain references.
   let metadataReferences := Order.references metadataRecord
-  state := state.check "all inductive record reference fields are traversed" <|
-    [`TypeDependency, `AllDependency, `CtorListDependency, `CtorTypeDependency,
-      `InductDependency, `RecTypeDependency, `RecAllDependency,
-      `RuleCtorDependency, `RuleRhsDependency].all metadataReferences.contains
+  state := state.check "semantic inductive record references are traversed" <|
+    [`TypeDependency, `CtorListDependency, `CtorTypeDependency,
+      `InductDependency, `RecTypeDependency, `RuleCtorDependency,
+      `RuleRhsDependency].all metadataReferences.contains &&
+      !metadataReferences.contains `AllDependency &&
+      !metadataReferences.contains `RecAllDependency
+
+  let defMetadata := EDecl.defn `MetadataDef [] (.const `DefType [])
+    (.const `DefValue []) .opaque "safe" [`DefAll]
+  let theoremMetadata := EDecl.thm `MetadataTheorem [] (.const `TheoremType [])
+    (.const `TheoremValue []) [`TheoremAll]
+  let opaqueMetadata := EDecl.opaq `MetadataOpaque [] (.const `OpaqueType [])
+    (.const `OpaqueValue []) false [`OpaqueAll]
+  let defReferences := Order.references defMetadata
+  let theoremReferences := Order.references theoremMetadata
+  let opaqueReferences := Order.references opaqueMetadata
+  state := state.check "definition theorem and opaque all metadata is not a dependency" <|
+    [`DefType, `DefValue].all defReferences.contains && !defReferences.contains `DefAll &&
+      [`TheoremType, `TheoremValue].all theoremReferences.contains &&
+        !theoremReferences.contains `TheoremAll &&
+      [`OpaqueType, `OpaqueValue].all opaqueReferences.contains &&
+        !opaqueReferences.contains `OpaqueAll
+
+  -- Corpus-shaped opaque declarations may carry the same cyclic mutual-block
+  -- metadata even though their exported expressions have at most a one-way
+  -- dependency. Both value-retaining and compact ordering must use that real
+  -- dependency, and the resulting stream must remain kernel-replayable.
+  let groupedAll := [`GroupedA, `GroupedB]
+  let groupedA := EDecl.opaq `GroupedA [] (.sort (.succ .zero))
+    (.const `GroupedB []) false groupedAll
+  let groupedB := EDecl.opaq `GroupedB [] (.sort (.succ .zero))
+    (.sort .zero) false groupedAll
+  let grouped := exportOf #[groupedA, groupedB]
+  state := state.check "mutual metadata does not hide a real opaque dependency" <|
+    isExactRecordOrder (Order.recordOrder grouped) #[1, 0] &&
+      isExactRecordOrder
+        (Order.summaryRecordOrderPrioritizing (Order.summaries grouped)) #[1, 0] &&
+      (← kernelAccepts grouped)
+
+  let independentA := EDecl.opaq `IndependentGroupedA [] (.sort (.succ .zero))
+    (.sort .zero) false [`IndependentGroupedA, `IndependentGroupedB]
+  let independentB := EDecl.opaq `IndependentGroupedB [] (.sort (.succ .zero))
+    (.sort .zero) false [`IndependentGroupedA, `IndependentGroupedB]
+  let independentGrouped := exportOf #[independentA, independentB]
+  state := state.check "mutual metadata alone preserves stable raw order" <|
+    isExactRecordOrder (Order.recordOrder independentGrouped) #[0, 1] &&
+      isExactRecordOrder
+        (Order.summaryRecordOrderPrioritizing (Order.summaries independentGrouped)) #[0, 1] &&
+      (← kernelAccepts independentGrouped)
+
+  let expressionCycle := exportOf #[
+    EDecl.opaq `ExpressionCycleA [] (.sort (.succ .zero))
+      (.const `ExpressionCycleB []) false [`ExpressionCycleA, `ExpressionCycleB],
+    EDecl.opaq `ExpressionCycleB [] (.sort (.succ .zero))
+      (.const `ExpressionCycleA []) false [`ExpressionCycleA, `ExpressionCycleB]]
+  state := state.check "genuine opaque expression cycles remain exact errors" <|
+    match Order.recordOrder expressionCycle,
+        Order.summaryRecordOrderPrioritizing (Order.summaries expressionCycle) with
+    | .error (.cycle records declarations),
+        .error (.cycle compactRecords compactDeclarations) =>
+      records == #[0, 1] && compactRecords == records &&
+        declarations == #[#[`ExpressionCycleA], #[`ExpressionCycleB]] &&
+        compactDeclarations == declarations
+    | _, _ => false
 
   -- A model that refers to the owner produces owner→model from the ordinary
   -- dependency graph and model→owner from the ordering contract.
