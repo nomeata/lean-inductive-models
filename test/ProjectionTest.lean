@@ -420,6 +420,35 @@ def main : IO UInt32 := do
       (declarationType? propGenerated propProjectionRules[1]!).any
         (containsConst ``Eq.rec)
 
+  -- Nested and plain-mutual builders still use installed constructor
+  -- telescopes. Their head-beta wrapper is therefore pinned to the existing
+  -- normalized/transported projection contract until those routes receive an
+  -- exact raw-source adapter of their own.
+  let propBoundaryRaw ← readExport
+    "test/fixtures/inductive-models/prop_projection_boundaries.ndjson"
+  let (propBoundaryDeclarations, propBoundaryReport) ← runExport propBoundaryRaw
+  let propBoundaryGenerated := outputExport propBoundaryRaw propBoundaryDeclarations
+  let nestedBoundaryRule := Naming.projectionIotaName `NestedProp 1
+  let mutualBoundaryRule := Naming.projectionIotaName `MutualPropA 1
+  state := state.check "nested and mutual Prop owners remain outside the literal tranche" <|
+    (ownerAndRecursor? propBoundaryRaw `NestedProp).all fun (type, _) =>
+      !propositionProjectionIotaUsesLiteralField type &&
+    (ownerAndRecursor? propBoundaryRaw `MutualPropA).all fun (type, _) =>
+      !propositionProjectionIotaUsesLiteralField type
+  state := state.check "nested and mutual Prop controls expose dependent proof fields" <|
+    intrinsicFieldsFor propBoundaryRaw `NestedProp == #[0, 1, 2] &&
+      intrinsicFieldsFor propBoundaryRaw `MutualPropA == #[0, 1, 2] &&
+      intrinsicFieldsFor propBoundaryRaw `MutualPropB == #[0]
+  state := state.check "nested and mutual Prop controls retain transported rules" <|
+    (declarationType? propBoundaryGenerated nestedBoundaryRule).bind outerEqualityRhs? !=
+        some (.bvar 1) &&
+      (declarationType? propBoundaryGenerated mutualBoundaryRule).bind outerEqualityRhs? !=
+        some (.bvar 1)
+  state := state.check "nested and mutual Prop controls remain exactly checked" <|
+    propBoundaryReport.stmtErrors.isEmpty &&
+      (Check.check propBoundaryGenerated).all fun violation =>
+        !#[`NestedProp, `MutualPropA, `MutualPropB].contains violation.familyOwner
+
   -- A recursive Type with no base constructor is empty, including when arm C
   -- obtains it as the erasure skeleton of an indexed family.  `NoBase` checks
   -- both layers: the eight-slot skeleton interface (including its two
