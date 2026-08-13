@@ -462,7 +462,7 @@ def propertyGlobalExtraRecords (seed : Nat) : Array GlobalExtraRecord :=
     { names, templates }
 
 def run (root : String) : IO UInt32 := do
-  let path := s!"{root}/test/fixtures/lean-inductive-models/nested_iota_arm.ndjson"
+  let path := s!"{root}/test/fixtures/inductive-models/nested_iota_arm.ndjson"
   let text ← IO.FS.readFile path
   match InductiveModels.parse text (analyse := false) with
   | .error error =>
@@ -766,7 +766,7 @@ def run (root : String) : IO UInt32 := do
     -- `IdxP.at_a` and `IdxP.at_b` have the same binder shape and differ only
     -- in their result indices.  Exact declaration-local names must prevent a
     -- type-shape heuristic from pairing them interchangeably.
-    let shapesPath := s!"{root}/test/fixtures/lean-inductive-models/prim_shapes.ndjson"
+    let shapesPath := s!"{root}/test/fixtures/inductive-models/prim_shapes.ndjson"
     let shapesText ← IO.FS.readFile shapesPath
     match InductiveModels.parse shapesText (analyse := false) with
     | .error error =>
@@ -855,7 +855,7 @@ def run (root : String) : IO UInt32 := do
         checkStatementFamiliesLocalWithIndex privateValid (.ofExport privateValid)
           (statementFamiliesFor privateValid privateOwners)
 
-    let mutualPath := s!"{root}/test/fixtures/lean-inductive-models/mutual_shapes.ndjson"
+    let mutualPath := s!"{root}/test/fixtures/inductive-models/mutual_shapes.ndjson"
     let mutualText ← IO.FS.readFile mutualPath
     match InductiveModels.parse mutualText (analyse := false) with
     | .error error =>
@@ -927,7 +927,7 @@ def run (root : String) : IO UInt32 := do
         (checkStatementsFor wrongMutualConstructor generatedMutualOwners).violations.any
           (isTypeMismatch bCtor.owner bCtor.model)
 
-    let unitlikePath := s!"{root}/test/fixtures/lean-inductive-models/unitlike.ndjson"
+    let unitlikePath := s!"{root}/test/fixtures/inductive-models/unitlike.ndjson"
     let unitlikeText ← IO.FS.readFile unitlikePath
     match InductiveModels.parse unitlikeText (analyse := false) with
     | .error error =>

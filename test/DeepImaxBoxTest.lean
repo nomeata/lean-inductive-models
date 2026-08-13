@@ -80,7 +80,7 @@ def axiomsOf (environment : Environment) (name : Name) : IO (Array Name) := do
 
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let raw ← readExport "test/fixtures/lean-inductive-models/imax_box.ndjson"
+  let raw ← readExport "test/fixtures/inductive-models/imax_box.ndjson"
   let (generated, report, _) ← runExport raw
   let names := generated.decls.flatMap (·.names.toArray)
   let boxModel := Naming.modelName `BoxF
@@ -125,7 +125,7 @@ def main : IO UInt32 := do
     ownerPasses generated `BoxF && ownerPasses generated `IBox &&
       ownerPasses generated skeleton
 
-  let wRaw ← readExport "test/fixtures/lean-inductive-models/w_imax.ndjson"
+  let wRaw ← readExport "test/fixtures/inductive-models/w_imax.ndjson"
   let (wGenerated, wReport, wEnvironment) ← runExport wRaw
   let wNames := wGenerated.decls.flatMap (·.names.toArray)
   let dataModel := Naming.modelName `WData
@@ -163,7 +163,7 @@ def main : IO UInt32 := do
   -- `max 1 u` is positive but has no syntactic predecessor. Arm W therefore
   -- builds its core in `Type` and exposes it at the literal public sort through
   -- the constrained lift `PSigma' low (fun _ => PSigma' True (fun _ => PUnit))`.
-  let maxRaw ← readExport "test/fixtures/lean-inductive-models/w_max.ndjson"
+  let maxRaw ← readExport "test/fixtures/inductive-models/w_max.ndjson"
   let (maxGenerated, maxReport, _) ← runExport maxRaw
   let maxModel := Naming.modelName `WMax
   state := state.check "predecessor-free W generates at its pinned size" <|
@@ -189,7 +189,7 @@ def main : IO UInt32 := do
   -- `As AliasW` is definitionally `AliasW`; its exported spelling remains in
   -- the model constructor and is checked once in memory and once after the
   -- same NDJSON serialization the public CLI uses.
-  let aliasRaw ← readExport "test/fixtures/lean-inductive-models/w_alias.ndjson"
+  let aliasRaw ← readExport "test/fixtures/inductive-models/w_alias.ndjson"
   let (aliasGenerated, aliasReport, _) ← runExport aliasRaw
   let aliasNames := aliasGenerated.decls.flatMap (·.names.toArray)
   let aliasModel := Naming.modelName `AliasW

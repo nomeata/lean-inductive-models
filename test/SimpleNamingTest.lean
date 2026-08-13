@@ -66,7 +66,7 @@ def main : IO UInt32 := do
   let mut state : TestState := {}
   let simpleOnly := { noGeneration with simple := true }
 
-  let shapes ← runFixture "test/fixtures/lean-inductive-models/prim_shapes.ndjson" simpleOnly
+  let shapes ← runFixture "test/fixtures/inductive-models/prim_shapes.ndjson" simpleOnly
   state := state.check "Type route has declaration-local interface"
     (shapes.hasInterface `Tri `Tri.rec #[`Tri.a, `Tri.b, `Tri.c] 3)
   state := state.check "Type route has no legacy indexed slots" (shapes.noLegacySlots `Tri)
@@ -75,7 +75,7 @@ def main : IO UInt32 := do
   state := state.check "indexed Church route has no legacy slots"
     (shapes.noLegacySlots `IdxP)
 
-  let graph ← runFixture "test/fixtures/lean-inductive-models/prim_graph.ndjson" simpleOnly
+  let graph ← runFixture "test/fixtures/inductive-models/prim_graph.ndjson" simpleOnly
   state := state.check "graph route has declaration-local interface"
     (graph.hasInterface `Ac `Ac.rec #[`Ac.intro] 1)
   state := state.check "graph helpers are implementation descendants"
@@ -83,14 +83,14 @@ def main : IO UInt32 := do
       !graph.hasName `Ac._model.graph)
   state := state.check "graph route has no legacy slots" (graph.noLegacySlots `Ac)
 
-  let carve ← runFixture "test/fixtures/lean-inductive-models/prim_carve.ndjson" simpleOnly
+  let carve ← runFixture "test/fixtures/inductive-models/prim_carve.ndjson" simpleOnly
   state := state.check "carve route has declaration-local interface"
     (carve.hasInterface `Bif `Bif.rec #[`Bif.b0, `Bif.b2] 2)
   state := state.check "skeleton helpers are implementation descendants"
     (carve.hasName `Bif._model._impl.skel && !carve.hasName `Bif._model.skel)
   state := state.check "carve route has no legacy slots" (carve.noLegacySlots `Bif)
 
-  let w ← runFixture "test/fixtures/lean-inductive-models/prim_w.ndjson" simpleOnly
+  let w ← runFixture "test/fixtures/inductive-models/prim_w.ndjson" simpleOnly
   state := state.check "W route has declaration-local interface"
     (w.hasInterface `Wt `Wt.rec #[`Wt.leaf, `Wt.one, `Wt.two, `Wt.mix, `Wt.gap, `Wt.alt] 6)
   state := state.check "W helpers are implementation descendants"
@@ -98,14 +98,14 @@ def main : IO UInt32 := do
       !w.hasName `Wt._model.wD)
   state := state.check "W route has no legacy slots" (w.noLegacySlots `Wt)
 
-  let basicNonempty ← runFixture "test/fixtures/lean-inductive-models/prim_graph_pre.ndjson"
+  let basicNonempty ← runFixture "test/fixtures/inductive-models/prim_graph_pre.ndjson"
     { noGeneration with basic := true }
   state := state.check "basic Nonempty has declaration-local interface"
     (basicNonempty.hasInterface `Nonempty `Nonempty.rec #[`Nonempty.intro] 1)
   state := state.check "basic Nonempty has no legacy slots"
     (basicNonempty.noLegacySlots `Nonempty)
 
-  let basicAcc ← runFixture "test/fixtures/lean-inductive-models/w_core.ndjson" { noGeneration with basic := true }
+  let basicAcc ← runFixture "test/fixtures/inductive-models/w_core.ndjson" { noGeneration with basic := true }
   state := state.check "basic Acc has declaration-local interface"
     (basicAcc.hasInterface `Acc `Acc.rec #[`Acc.intro] 1)
   state := state.check "basic Acc has no legacy slots" (basicAcc.noLegacySlots `Acc)
@@ -117,7 +117,7 @@ def main : IO UInt32 := do
   state := state.check "private-constructor route has no legacy slots"
     (privateCtor.noLegacySlots `Off)
 
-  let composed ← runFixture "test/fixtures/lean-inductive-models/prim_late_basis.ndjson"
+  let composed ← runFixture "test/fixtures/inductive-models/prim_late_basis.ndjson"
     { noGeneration with mutualModels := true, simple := true }
   state := state.check "an original _model component composes"
     (composed.hasName `MA._model._impl.tag._model &&

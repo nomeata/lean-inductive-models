@@ -76,7 +76,7 @@ def breakRuleLayout (owner : Name) (declaration : EDecl) : EDecl :=
   | _ => declaration
 
 def runRoute (root : String) (route : Route) : IO Bool := do
-  let path := s!"{root}/test/fixtures/lean-inductive-models/{route.fixture}"
+  let path := s!"{root}/test/fixtures/inductive-models/{route.fixture}"
   let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}
@@ -99,7 +99,7 @@ def runRoute (root : String) (route : Route) : IO Bool := do
   return (← Core.CoreM.toIO (MetaM.run' action) context { env }).1
 
 def runLayoutFailure (root : String) (route : Route) : IO Bool := do
-  let path := s!"{root}/test/fixtures/lean-inductive-models/{route.fixture}"
+  let path := s!"{root}/test/fixtures/inductive-models/{route.fixture}"
   let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}

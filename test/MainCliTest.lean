@@ -122,7 +122,7 @@ def main (args : List String) : IO UInt32 := do
 
   let scratch := s!"{root}/_tmp"
   IO.FS.createDirAll scratch
-  let nested := s!"{root}/test/fixtures/lean-inductive-models/nested_iota.ndjson"
+  let nested := s!"{root}/test/fixtures/inductive-models/nested_iota.ndjson"
   let nestedText ← IO.FS.readFile nested
   let .ok nestedExport := InductiveModels.parse nestedText (analyse := false) | do
     IO.eprintln "mainclitest: nested fixture did not parse"
@@ -406,7 +406,7 @@ def main (args : List String) : IO UInt32 := do
     duplicateWithoutKernel.exitCode == 1 &&
       duplicateWithoutKernel.stderr.contains "invalid export: duplicate declaration"
 
-  let quotientPath := s!"{root}/test/fixtures/lean-inductive-models/prim_graph_pre.ndjson"
+  let quotientPath := s!"{root}/test/fixtures/inductive-models/prim_graph_pre.ndjson"
   let quotientText ← IO.FS.readFile quotientPath
   let unknownQuotient := quotientText.replace "\"kind\":\"type\"" "\"kind\":\"mystery\""
   let badQuotient ← runInductiveModelsStdin binary [
@@ -662,7 +662,7 @@ def main (args : List String) : IO UInt32 := do
   -- rather than raw bytes.
   for (label, fixture) in #[
       ("nested multi-model island", nested),
-      ("late scheduled support", s!"{root}/test/fixtures/lean-inductive-models/prim_late_basis.ndjson")] do
+      ("late scheduled support", s!"{root}/test/fixtures/inductive-models/prim_late_basis.ndjson")] do
     let args := #["--no-check-output", "--no-type-check-output", "--no-mono-levels", fixture]
     let legacy ← runInductiveModelsLegacy binary args.toList
     let staged ← runInductiveModels binary args.toList
@@ -853,7 +853,7 @@ def main (args : List String) : IO UInt32 := do
   -- can model its result without asking Mono to infer instantiations for the
   -- generated bootstrap basis.  This fixture has distinct universe use sites
   -- and exercises the full default `--inductives --check` pipeline.
-  let poly := s!"{root}/test/fixtures/lean-inductive-models/poly_nested_used.ndjson"
+  let poly := s!"{root}/test/fixtures/inductive-models/poly_nested_used.ndjson"
   let monoModels ← runInductiveModels binary ["--mono-levels", "--quiet", poly]
   state := state.check "monomorphized generated models pass the final check"
     (monoModels.exitCode == 0 && !monoModels.stdout.isEmpty)

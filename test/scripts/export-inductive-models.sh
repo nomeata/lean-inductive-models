@@ -4,7 +4,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-FIXTURES="$ROOT/test/fixtures/lean-inductive-models"
+FIXTURES="$ROOT/test/fixtures/inductive-models"
 
 declare -a NAMES=()
 if (($#)); then

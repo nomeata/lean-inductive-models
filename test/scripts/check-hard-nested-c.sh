@@ -4,7 +4,7 @@ set -euo pipefail
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../.." && pwd)"
 bin="${LEAN_INDUCTIVE_MODELS_BIN:-$root/.lake/build/bin/lean-inductive-models}"
-fixture="$root/test/fixtures/lean-inductive-models/nested_mutual_indexed_container.ndjson"
+fixture="$root/test/fixtures/inductive-models/nested_mutual_indexed_container.ndjson"
 
 [[ -x "$bin" ]] || { echo "lean-inductive-models is not built: $bin" >&2; exit 2; }
 

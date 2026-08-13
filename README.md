@@ -671,12 +671,12 @@ fresh processes. It and the `envprobe` and `levelfuzz` targets under `tools/`
 are diagnostics, not correctness suites.
 
 Human-readable Lean fixture sources and committed NDJSON exports live under
-[`test/fixtures/lean-inductive-models/`](test/fixtures/lean-inductive-models/) and
+[`test/fixtures/inductive-models/`](test/fixtures/inductive-models/) and
 [`test/fixtures/mono/`](test/fixtures/mono/). Regenerating a model-generator
 fixture requires the pinned exporter:
 
 ```console
-TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-lean-inductive-models.sh prim_shapes
+TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-inductive-models.sh prim_shapes
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/export-mono.sh mono_proj
 ```
 

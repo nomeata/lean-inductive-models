@@ -71,7 +71,7 @@ does — trusted, checking off — and then runs [`InductiveModels.ensureWCore`]
 the checked side. Reports how many of the fragment's records were added, how
 many the input already had, and what the kernel said. This is the splice's
 oracle at scale: `w_core.ndjson` alone goes in from nothing (that is
-`envprobe test/fixtures/lean-inductive-models/w_core.ndjson C`), and this asks the different question of
+`envprobe test/fixtures/inductive-models/w_core.ndjson C`), and this asks the different question of
 whether it goes in *on top of* a real export's own `Eq`, `Iff`, `Quot` and
 `propext`. -/
 def probeW (x : Export) (env0 : Environment) : IO Unit := do

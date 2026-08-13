@@ -64,7 +64,7 @@ partial def containsConst (target : Name) : Expr → Bool
 
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let raw ← readExport "test/fixtures/lean-inductive-models/transparent_owner_aliases.ndjson"
+  let raw ← readExport "test/fixtures/inductive-models/transparent_owner_aliases.ndjson"
   let (generated, report) ← runExport raw
   let mut state : TestState := {}
 

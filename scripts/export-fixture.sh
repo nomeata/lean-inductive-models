@@ -16,7 +16,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FIXTURES="${FIXTURE_DIR:-$ROOT/test/fixtures/lean-inductive-models}"
+FIXTURES="${FIXTURE_DIR:-$ROOT/test/fixtures/inductive-models}"
 OUT="${OUT_DIR:-$FIXTURES}"
 FILTER="${LEAN_INDUCTIVE_MODELS_FILTER:-1}"
 TOOLCHAIN="leanprover/lean4:v4.29.1"

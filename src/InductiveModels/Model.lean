@@ -187,7 +187,7 @@ Four constants are reached by the *proofs* this module writes and by none of the
 public signatures: `Eq` (with `Eq.refl` and the `Eq.rec` the kernel mints for it),
 and — only for a field at a mimic **under a binder** — `Quot`, `Quot.sound` and
 `funext`. An export is not obliged to declare any of them:
-`test/fixtures/lean-inductive-models/decline_no_eq.lean` omits `Eq`, while the paired
+`test/fixtures/inductive-models/decline_no_eq.lean` omits `Eq`, while the paired
 `infinitary` and `funext_binder` fixtures exercise absent and present `funext`.
 
 **A prelude constant the input lacks is spliced, and a spliced constant is
@@ -198,7 +198,7 @@ reported.** This is the one place `lean-inductive-models` writes a declaration t
   inside [`InductiveModels.iso`], so a file with nothing to splice is untouched.
 * **Exactly what Lean's prelude declares**, taken from `Init/Prelude.lean`
   (`Eq`, `init_quot`) and `Init/Core.lean` (`Quot.sound`, `funext`), and
-  `test/fixtures/lean-inductive-models/funext_binder.lean` is that development written as a
+  `test/fixtures/inductive-models/funext_binder.lean` is that development written as a
   fixture. Each goes through [`InductiveModels.addChecked`] like everything else here,
   so the kernel has agreed to it before it is emitted.
 * **Present beats spliced.** If the input declares one, the input's own is
@@ -220,7 +220,7 @@ statement, only inside proofs, so it is the one that can be namespaced and is:
 `T._model.funext`, following the model naming convention, which is also where
 the collision risk
 was (a file may declare a `funext` of its own later, and
-`test/fixtures/lean-inductive-models/nested_keying.lean` exists because a file can declare a
+`test/fixtures/inductive-models/nested_keying.lean` exists because a file can declare a
 name the model wants).
 -/
 
@@ -337,7 +337,7 @@ def funextDecl (eqi : EqInfo) (nm : Name) : MetaM Declaration := do
 own members are `all`.
 
 Measured on Lean's own export of
-`test/fixtures/lean-inductive-models/nest_mutual_both.ndjson`,
+`test/fixtures/inductive-models/nest_mutual_both.ndjson`,
 where the mutual block `A`/`B` nesting at `List B` and `Box A` comes back with
 `A.rec`, `B.rec`, `A.rec_1` and `A.rec_2`: a **real** member's recursor is in
 that member's own namespace and a **mimic**'s is in the first member's,
@@ -660,7 +660,7 @@ so a field whose type mentions an earlier packed field is ill-typed at every
 intermediate stage. A dependency on a field that does **not** move is never
 touched by the fold, and Lean supports it — `node : (n : N) → Vec N n → List
 DTree → DTree` and `node : List ETree → (n : N) → Vec N n → ETree` are both
-`test/fixtures/lean-inductive-models/dependent_fields.lean`, and both are models now.
+`test/fixtures/inductive-models/dependent_fields.lean`, and both are models now.
 
 A dependency *on* a packed field is out of reach for a different reason: Lean
 does not support it either. `node : (l : List GTree) → Len l N.z → GTree` fails
@@ -2249,7 +2249,7 @@ def ensureEq (reserved : Std.HashSet Name) : GenM (EqInfo × Array Declaration) 
     | .error why => declineWith (.notLeans `Eq why)
   -- **A name the file itself introduces later is not ours to write.** The
   -- guard is the same one the model's own names go through, and
-  -- `test/fixtures/lean-inductive-models/nested_keying.lean` is why it looks at the whole
+  -- `test/fixtures/inductive-models/nested_keying.lean` is why it looks at the whole
   -- file rather than the prefix replayed so far.
   for n in [`Eq, `Eq.refl] do
     if reserved.contains n then declineWith (.nameTaken n)
@@ -2349,7 +2349,7 @@ is in the binary's data), and the alternative — locating the `.ndjson` relativ
 to `IO.appPath` — would make the binary depend on its own build layout.
 
 **And `include_str` is not in Lake's trace for this module.** Re-exporting
-`test/fixtures/lean-inductive-models/w_core.ndjson` and rebuilding leaves the binary carrying
+`test/fixtures/inductive-models/w_core.ndjson` and rebuilding leaves the binary carrying
 the *previous*
 fragment, with no diagnostic: `lake build` reports success, and neither a
 `touch` nor a changed mtime forces the issue, because Lake hashes content and
@@ -2358,7 +2358,7 @@ that added 11 declarations still spliced the old 149. The test suite's
 `runWSpliceProbe` therefore compares this string against the file on disk, and
 that comparison is the only thing standing between a fragment change and a
 silently stale tool. -/
-def wCoreText : String := include_str "../../test/fixtures/lean-inductive-models/w_core.ndjson"
+def wCoreText : String := include_str "../../test/fixtures/inductive-models/w_core.ndjson"
 
 /-- The prefix every fragment name gets, bar the shared ones below. The
 fragment's names are Lean core's, so splicing its `List` into an input that
@@ -2688,7 +2688,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- generated constant is declared at `lparams` and referenced at `us`; a
   -- recursor is declared at its motive universe *followed by* `lparams`, which
   -- is the order Lean itself writes.
-  -- `test/fixtures/lean-inductive-models/poly_nested.lean` is the fixture, and it
+  -- `test/fixtures/inductive-models/poly_nested.lean` is the fixture, and it
   -- is arranged so that a generator writing a container's *declared* parameter
   -- where the occurrence's instantiation belongs cannot pass.
   let us := lparams.map Level.param
@@ -2777,7 +2777,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   for n in selfNames do taken n
   -- **The `Eq` first, because everything downstream is written at it** — and
   -- spliced in when the input has none, which is the whole of what
-  -- `test/fixtures/lean-inductive-models/decline_no_eq.lean` used to refuse. It goes at the
+  -- `test/fixtures/inductive-models/decline_no_eq.lean` used to refuse. It goes at the
   -- head of `out`, ahead
   -- of the block, so that it precedes its first use in the round trips no
   -- matter how the rest of the emission is ordered.
@@ -2844,7 +2844,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- decline every otherwise-supported declaration. Lean accepts all three places
   -- the binder can sit: the root (`HTree`), the container's own recursive
   -- field (`RTree` over `Rose`) and a container's field into another mimic
-  -- (`OTree` over `Outer`), and `test/fixtures/lean-inductive-models/infinitary.lean` has all
+  -- (`OTree` over `Outer`), and `test/fixtures/inductive-models/infinitary.lean` has all
   -- three.
   let anyUnderBinder ← withParams fun ps => do
     let mut any := false

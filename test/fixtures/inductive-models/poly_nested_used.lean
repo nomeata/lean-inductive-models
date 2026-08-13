@@ -1,6 +1,6 @@
 /- **A nested polymorphic declaration, actually used at three instantiations.**
 
-   `test/fixtures/lean-inductive-models/poly_nested.ndjson` declares `PTree.{u}` and `QTree.{u,v}`
+   `test/fixtures/inductive-models/poly_nested.ndjson` declares `PTree.{u}` and `QTree.{u,v}`
    and *uses* neither, so every group in it monomorphizes to exactly one copy
    (`copies per group: [(1, 42)]`). On that file "the model came out at the
    instantiation its declaration did" and "everything defaulted and the defaults

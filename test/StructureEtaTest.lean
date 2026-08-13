@@ -88,7 +88,7 @@ def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
 
-  let focusedRaw ← readExport "test/fixtures/lean-inductive-models/structure_eta.ndjson"
+  let focusedRaw ← readExport "test/fixtures/inductive-models/structure_eta.ndjson"
   let (focusedOutput, focusedReport) ← runExport focusedRaw
   let focusedNames := focusedOutput.decls.flatMap (·.names.toArray)
   let focusedOwners :=
@@ -122,7 +122,7 @@ def main : IO UInt32 := do
     state := state.check s!"focused miss {negative} has no eta" <|
       !focusedNames.contains (Naming.etaName negative)
 
-  let projectionRaw ← readExport "test/fixtures/lean-inductive-models/structure_projections.ndjson"
+  let projectionRaw ← readExport "test/fixtures/inductive-models/structure_projections.ndjson"
   let (projectionOutput, projectionReport) ← runExport projectionRaw
   let depEta := Naming.etaName `Dep
   let depType := declarationType? projectionOutput depEta
@@ -154,7 +154,7 @@ def main : IO UInt32 := do
   state := state.check "checker rejects a source projection in eta" <|
     (Check.check sourceProjectionMutation).any (hasTypeViolation `Dep depEta)
 
-  let unitRaw ← readExport "test/fixtures/lean-inductive-models/unitlike.ndjson"
+  let unitRaw ← readExport "test/fixtures/inductive-models/unitlike.ndjson"
   let (unitOutput, unitReport) ← runExport unitRaw
   let unitEta := Naming.etaName `UnitType
   let fieldEta := Naming.etaName `WithField

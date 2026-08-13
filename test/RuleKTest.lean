@@ -66,7 +66,7 @@ def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
 
-  let simple ← runFixture "test/fixtures/lean-inductive-models/prim_shapes.ndjson"
+  let simple ← runFixture "test/fixtures/inductive-models/prim_shapes.ndjson"
     { noGeneration with simple := true, basic := true }
   let positive := modeledK simple
   let baseViolations := Check.check simple.output
@@ -102,13 +102,13 @@ def main : IO UInt32 := do
     state := state.check "metadata on a non-K recursor is rejected"
       (violations.contains (.extraMetadata recursor.name theoremName .ruleK))
 
-  let mutualFixture ← runFixture "test/fixtures/lean-inductive-models/mutual_prop.ndjson"
+  let mutualFixture ← runFixture "test/fixtures/inductive-models/mutual_prop.ndjson"
     { noGeneration with mutualModels := true }
   state := state.check "mutual route never invents K metadata"
     ((modeledNonK mutualFixture).all fun recursor =>
       !hasName mutualFixture.output (Naming.ruleKName recursor.name))
 
-  let nested ← runFixture "test/fixtures/lean-inductive-models/nested_iota.ndjson"
+  let nested ← runFixture "test/fixtures/inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true }
   state := state.check "nested route follows every literal K flag"
     ((modeledK nested).all fun recursor =>
