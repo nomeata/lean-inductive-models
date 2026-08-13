@@ -7,7 +7,7 @@ readme="$root/README.md"
 lakefile="$root/lakefile.lean"
 
 mapfile -t direct_builds < <(
-  sed -nE 's/^[[:space:]]*(lake -Kjobs=1 build .*)$/\1/p' "$workflow"
+  sed -nE 's/^[[:space:]]*(lake .*build .*)$/\1/p' "$workflow"
 )
 if [[ "${#direct_builds[@]}" -ne 1 ||
       "${direct_builds[0]}" != 'lake -Kjobs=1 build "$target"' ]]; then
@@ -40,6 +40,15 @@ readme_function_source="$(
 )"
 if [[ -z "$readme_function_source" ]]; then
   echo "README build_serially function is missing" >&2
+  exit 1
+fi
+mapfile -t readme_direct_builds < <(
+  sed -nE 's/^[[:space:]]*(TMPDIR="[^\"]+" )?(lake .*build .*)$/\2/p' "$readme"
+)
+if [[ "${#readme_direct_builds[@]}" -ne 1 ||
+      "${readme_direct_builds[0]}" != 'lake -Kjobs=1 build "$target"' ]]; then
+  printf '%s\n' "README contains a Lake build outside the one-target loop:" >&2
+  printf '  %s\n' "${readme_direct_builds[@]}" >&2
   exit 1
 fi
 
