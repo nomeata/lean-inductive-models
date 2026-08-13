@@ -418,6 +418,12 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "ordinary kernel gate preserves normalized private-name behavior" <|
     normalizedOrdinary.exitCode == 0
 
+  let imaxProjection ← runModelgen binary [
+    "--arena-check", s!"{root}/test/fixtures/arena/proj-imax-prop.ndjson"]
+  state := state.check "Arena rejects a data projection from normalized Prop" <|
+    imaxProjection.exitCode == 1 &&
+      imaxProjection.stderr.contains "expression validation failed: invalid projection"
+
   let quotientPath := s!"{root}/test/fixtures/modelgen/prim_graph_pre.ndjson"
   let quotientText ← IO.FS.readFile quotientPath
   let unknownQuotient := quotientText.replace "\"kind\":\"type\"" "\"kind\":\"mystery\""
