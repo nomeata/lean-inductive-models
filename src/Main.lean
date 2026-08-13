@@ -126,6 +126,39 @@ def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Nam
 def generationEnabled (config : Modelgen.Cli.Config) : Bool :=
   config.nested || config.mutualModels || config.simple || config.basic
 
+/-- Initial internal fast-path boundary. Output structural checking still
+needs the complete final `Export`, and output kernel checking must replay the
+exact final byte stream; both therefore retain the legacy in-memory path.
+Monomorphization rewrites source declarations, while a no-output or
+no-generation invocation has no staged payload to compose. -/
+def stagedModeEligible (config : Modelgen.Cli.Config) : Bool :=
+  config.output && generationEnabled config && !config.monoLevels &&
+    !config.checkOutput && !config.typeCheckOutput
+
+private structure RawStage where
+  workspace : Modelgen.Spool.Workspace
+  tee : Modelgen.Spool.ParseTee
+  certificate : Modelgen.RawCertificate
+  sizes : Modelgen.RawSpoolSizes
+
+private inductive FilterOutput where
+  | full (declarations : Array Modelgen.EDecl)
+  | staged (composition : Modelgen.Spool.MixedComposition)
+
+private def mixedComposition (raw : RawStage) (sealed : Modelgen.Spool.SealedIsland)
+    (spans : Array Modelgen.StagedDeclarationSpan) : Modelgen.Spool.MixedComposition :=
+  { sourceMetadataPath := raw.tee.metadata.path
+    sourceArenaPath := raw.tee.arena.path
+    sourceDeclarationPath := raw.tee.declarations.path
+    sourceSizes := raw.sizes
+    generatedArenaPath := sealed.arenaPath
+    generatedDeclarationPath := sealed.declarationPath
+    generatedArenaSize := sealed.arenaSize
+    generatedDeclarationSize := sealed.declarationSize
+    declarations := spans.map fun span => match span with
+      | .source span => .source { offset := span.offset, length := span.bytes }
+      | .generated span => .generated span }
+
 private def runWithWorkspace (config : Modelgen.Cli.Config)
     (workspace? : Option Modelgen.Spool.Workspace) : IO UInt32 := do
   let input := config.input.getD ""
@@ -159,19 +192,22 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       IO.eprintln s!"{input}: {error}"
       pure none
   let some parsedResult := parsed? | return exitToolError
-  let parsed ← match parsedResult with
+  let (parsed, rawStage?) ← match parsedResult with
     | .error error =>
         IO.eprintln s!"{input}: parse error: {error}"
         return exitToolError
     | .ok (parsedExport, stage?) =>
-      -- Certification is deliberately only observed here. Until generated
-      -- island serialization is transactional, all modes retain `Export` and
-      -- use the existing writer even when the source fast path is eligible.
       if let some (tee, certificate) := stage? then
         let sizes ← tee.finish
-        let _eligible := Modelgen.Spool.rawFastPathEligible certificate sizes
-          parsedExport.decls.size config.monoLevels
-      pure parsedExport
+        if Modelgen.Spool.rawFastPathEligible certificate sizes
+            parsedExport.decls.size config.monoLevels then
+          let some workspace := workspace?
+            | throw <| IO.userError "certified raw parse lost its spool workspace"
+          pure (parsedExport, some { workspace, tee, certificate, sizes })
+        else
+          pure (parsedExport, none)
+      else
+        pure (parsedExport, none)
 
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
@@ -230,11 +266,25 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     else
       pure parsed
 
-  let (decls, generationReport) ← if generationEnabled config then do
+  let (filterOutput, generationReport) ← if generationEnabled config then do
       let generated ← try
-          let ((decls, report), _) ← Lean.Core.CoreM.toIO
-            (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config)) context { env }
-          pure (Except.ok (decls, report))
+          if let some raw := rawStage? then
+            let stage ← Modelgen.Spool.IslandStage.create raw.workspace
+              (Modelgen.Writer.Cursor.ofRaw raw.certificate.cursor)
+            let ((report, plan), _) ← Lean.Core.CoreM.toIO
+              (Lean.Meta.MetaM.run'
+                (Modelgen.runFilterStaged generationInput false config (.ofStage stage)))
+              context { env }
+            let sealed ← stage.finish
+            let spans ← match plan.declarationSpans raw.certificate raw.sizes sealed with
+              | .ok spans => pure spans
+              | .error message => throw <| IO.userError s!"invalid staged output plan: {message}"
+            pure (Except.ok (.staged (mixedComposition raw sealed spans), report))
+          else
+            let ((decls, report), _) ← Lean.Core.CoreM.toIO
+              (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config))
+              context { env }
+            pure (Except.ok (.full decls, report))
         catch error =>
           pure (Except.error (toString error))
       match generated with
@@ -243,7 +293,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
           return exitToolError
       | .ok result => pure result
     else
-      pure (generationInput.decls, {})
+      pure (.full generationInput.decls, {})
 
   reportGeneration config generationReport
   if let some why := generationReport.unreplayable then
@@ -255,53 +305,65 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     for error in generationReport.stmtErrors do IO.eprintln s!"  ! {error}"
     return exitToolError
 
-  let transformed : Export := { generationInput with decls }
-  let finalExport ← if generationEnabled config || config.monoLevels then
-      match Modelgen.Order.reorder transformed with
-      | .error error =>
-          IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
-          return exitToolError
-      | .ok output => pure output
-    else
-      pure transformed
-
-  if config.checkOutput then
-    let report := Modelgen.Check.checkReport finalExport
-    unless report.violations.isEmpty do
-      reportViolations input "output" report.violations
-      return exitRejected
-    reportCheckSuccess config "output" report
-
-  if config.typeCheckOutput then
-    match ← typeCheckExportIO context finalExport with
-    | .error message =>
-      IO.eprintln s!"{input}: output kernel check failed internally: {message}"
-      return exitToolError
-    | .ok (.error message) =>
-      IO.eprintln s!"{input}: output kernel check rejected: {message}"
-      return exitRejected
-    | .ok (.ok ()) => reportTypeCheckSuccess config "output"
-
   -- Force the final semantic verdict before opening an output sibling. The
   -- useful partial candidate is still written for a supported exit-2 decline,
   -- but no analysis remains which could fail after a named output is committed.
   let outcome :=
     if (unsupportedDeclines parsed generationReport).isEmpty then exitAccepted
     else exitDeclined
-  if config.output then
+  match filterOutput with
+  | .staged composition =>
+    -- Eligibility excludes whole-output checks until they have compact or
+    -- serialized-stream equivalents. The plan and every physical spool span
+    -- have already validated before this transaction opens its destination.
     try
-      writeExport config.outputTarget finalExport
+      Modelgen.Output.write config.outputTarget composition.emit
     catch error =>
       IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
       return exitToolError
-  return outcome
+    return outcome
+  | .full decls =>
+    let transformed : Export := { generationInput with decls }
+    let finalExport ← if generationEnabled config || config.monoLevels then
+        match Modelgen.Order.reorder transformed with
+        | .error error =>
+            IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
+            return exitToolError
+        | .ok output => pure output
+      else
+        pure transformed
+
+    if config.checkOutput then
+      let report := Modelgen.Check.checkReport finalExport
+      unless report.violations.isEmpty do
+        reportViolations input "output" report.violations
+        return exitRejected
+      reportCheckSuccess config "output" report
+
+    if config.typeCheckOutput then
+      match ← typeCheckExportIO context finalExport with
+      | .error message =>
+        IO.eprintln s!"{input}: output kernel check failed internally: {message}"
+        return exitToolError
+      | .ok (.error message) =>
+        IO.eprintln s!"{input}: output kernel check rejected: {message}"
+        return exitRejected
+      | .ok (.ok ()) => reportTypeCheckSuccess config "output"
+
+    if config.output then
+      try
+        writeExport config.outputTarget finalExport
+      catch error =>
+        IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
+        return exitToolError
+    return outcome
 
 def run (config : Modelgen.Cli.Config) : IO UInt32 := do
-  -- Until staged generated islands can replace the cumulative output AST,
-  -- teeing a large source is only a disk/time regression. Keep the integration
-  -- seam testable without enabling it in production; the eventual fast-path
-  -- switch will replace this internal gate with an eligibility decision.
-  if (← IO.getEnv "MODELGEN_RAW_SPOOL") == some "1" then
+  -- The staged path remains an internal opt-in while end-to-end equivalence is
+  -- expanded across the fixture matrix. Statically ineligible modes never tee
+  -- their input, so the experiment cannot impose a disk/time regression on
+  -- output checking, monomorphization, no-output, or parser-only invocations.
+  if (← IO.getEnv "MODELGEN_RAW_SPOOL") == some "1" && stagedModeEligible config then
     let scratch := (← IO.currentDir) / "_tmp"
     Modelgen.Spool.withOptionalWorkspace scratch (runWithWorkspace config)
   else
