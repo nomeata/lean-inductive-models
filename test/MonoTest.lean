@@ -1,4 +1,5 @@
 import Modelgen.Mono
+import Modelgen.Order
 
 /-!
 # Universe-level monomorphization oracles
@@ -192,6 +193,12 @@ def main (args : List String) : IO UInt32 := do
           fails := fails.push s!"{r.file}[{tag}]: {rep.errors.size} problems: {rep.errors[0]!}"
         unless rep.rejected == 0 do
           fails := fails.push s!"{r.file}[{tag}]: the kernel rejected {rep.rejected} of the output"
+        -- Monomorphization is a separate producer from model islands and its
+        -- output may still require a final reorder.  The compact graph must
+        -- select exactly the same record indices (or exact diagnostic) as the
+        -- established value-retaining pass before that pass can be removed.
+        unless Order.summaryRecordOrder (Order.summaries y) == Order.recordOrder y do
+          fails := fails.push s!"{r.file}[{tag}]: compact ordering differs from full ordering"
         -- The round trip.
         match Modelgen.parse y.render with
         | .error e => fails := fails.push s!"{r.file}[{tag}]: output does not re-parse: {e}"
