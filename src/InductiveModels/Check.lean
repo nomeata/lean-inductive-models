@@ -795,6 +795,7 @@ private def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
         ownerType.isRec && !ownerType.isUnsafe && ownerType.numParams == first.numParams do
     return .malformed root
   let mut anyChanged := false
+  let mut edges : Array (Name × Name) := #[]
   for ownerType in ownerTypes do
     let (_, carrierResult) := openForalls
       ((`_check.mutualOneLayerShape).append ownerType.name) ownerType.type
@@ -813,6 +814,7 @@ private def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
       let fields := binders.extract constructor.numParams binders.size
       let fieldTypes := fields.map (·.type)
       let fieldValues := fields.map (·.value)
+      let mut recursiveFields := 0
       for fieldIndex in [:fields.size] do
         let normalized := normalizer.whnf fieldTypes[fieldIndex]!
         let target? := all.find? fun candidate =>
@@ -821,13 +823,27 @@ private def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
         if target?.isNone && all.any (fieldTypes[fieldIndex]!.getUsedConstants.contains ·) then
           return .malformed (privateConstructor ownerType.name constructor.name)
         if target?.isSome then
+          recursiveFields := recursiveFields + 1
+          edges := edges.push (ownerType.name, target?.get!)
           let fieldId := fieldValues[fieldIndex]!.fvarId!
           for later in [fieldIndex + 1:fields.size] do
             if fieldTypes[later]!.containsFVar fieldId then
               return .malformed (privateConstructor ownerType.name constructor.name)
           changed := true
+      unless recursiveFields ≤ 1 do
+        return .malformed (privateConstructor ownerType.name constructor.name)
     anyChanged := anyChanged || (ownerType.ctors.length == 1 && changed)
   unless anyChanged do return .malformed root
+  for source in all do
+    let mut reached : Std.HashSet Name := { source }
+    let mut progress := true
+    while progress do
+      progress := false
+      for edge in edges do
+        if reached.contains edge.1 && !reached.contains edge.2 then
+          reached := reached.insert edge.2
+          progress := true
+    unless all.all reached.contains do return .malformed root
   let unique := fun name => match declarations.getD name #[] with
     | #[declaration] => some declaration
     | _ => none

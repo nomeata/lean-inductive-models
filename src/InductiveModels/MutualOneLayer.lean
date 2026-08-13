@@ -78,6 +78,7 @@ private def classifyMutualOneLayer (types : Array EIndType)
   let np := types[0]!.numParams
   unless types.all (·.numParams == np) do return none
   let mut members := #[]
+  let mut edges : Array (Name × Name) := #[]
   let mut anyChanged := false
   for type in types do
     let level ← exactCarrierLevel type.type np
@@ -88,12 +89,29 @@ private def classifyMutualOneLayer (types : Array EIndType)
           constructor.name == constructorName && constructor.induct == type.name
         | badShape s!"{constructorName} has no exact constructor record"
       let some shape ← mutualFieldShape all np constructor.type | return none
+      unless (shape.filter (·.target?.isSome)).size ≤ 1 do return none
+      for field in shape do
+        if let some target := field.target? then edges := edges.push (type.name, target)
       constructorFields := constructorFields.push (constructor.name, shape)
     let changed := type.ctors.length == 1 &&
       constructorFields.any fun (_, fields) => fields.any (·.target?.isSome)
     anyChanged := anyChanged || changed
     members := members.push { owner := type.name, changed, level, constructorFields }
-  if anyChanged then return some members else return none
+  unless anyChanged do return none
+  -- `isRec` is block-wide metadata; require the source declarations to be an
+  -- actual strongly connected component rather than merely members of one
+  -- recursive `mutual` command.
+  for source in all do
+    let mut reached : Std.HashSet Name := { source }
+    let mut progress := true
+    while progress do
+      progress := false
+      for edge in edges do
+        if reached.contains edge.1 && !reached.contains edge.2 then
+          reached := reached.insert edge.2
+          progress := true
+    unless all.all reached.contains do return none
+  return some members
 
 /-- Owner-keyed selection result used by downstream certificate validation. -/
 def mutualOneLayerChangedMembers? (source : EDecl) : GenM (Option (Array (Name × Bool))) := do
