@@ -121,6 +121,9 @@ def syntheticCertificate (cursor : Writer.Cursor) (count : Nat) : RawCertificate
     declarations := (Array.range count).map fun ordinal =>
       { offset := ordinal.toUInt64, bytes := 1 } }
 
+def syntheticRawSizes (count : Nat) : RawSpoolSizes :=
+  { metadata := 0, arena := 0, declarations := count.toUInt64 }
+
 def runFilterState (input : Export) (generation : Modelgen.Cli.Config) : IO FilterRun := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -147,17 +150,18 @@ def runFilterStagedState (scratch : String) (input : Export)
     unless sealed.cursor == (← stage.cursor) do
       throw <| IO.userError "sealed staged cursor changed after finish"
     let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
-    let planValid := match plan.declarationSpans certificate sealed with
+    let sourceSizes := syntheticRawSizes input.decls.size
+    let planValid := match plan.declarationSpans certificate sourceSizes sealed with
       | .ok spans => spans.size == plan.records.size
       | .error _ => false
     let duplicateOrder := if plan.order.size < 2 then plan.order.push 0
       else plan.order.set! 1 plan.order[0]!
     let duplicateRejected := if plan.records.isEmpty then true else
-      ({ plan with order := duplicateOrder }.declarationSpans certificate sealed).isError
+      ({ plan with order := duplicateOrder }.declarationSpans certificate sourceSizes sealed).isError
     let badCursor : Writer.Cursor :=
       { sealed.cursor with nextExpr := sealed.cursor.nextExpr + 1 }
     let cursorRejected :=
-      (plan.declarationSpans certificate { sealed with cursor := badCursor }).isError
+      (plan.declarationSpans certificate sourceSizes { sealed with cursor := badCursor }).isError
     return {
       input, output := { input with decls }, report, env := finalState.env,
       islands := plan.islands, records := plan.records, order := plan.order, planValid,
@@ -176,7 +180,8 @@ def runFilterDroppedState (scratch : String) (input : Export)
         (runFilterStaged input false generation (.ofStage stage))) context { env }
     let sealed ← stage.finish
     let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
-    let planValid := match plan.declarationSpans certificate sealed with
+    let planValid := match plan.declarationSpans certificate
+        (syntheticRawSizes input.decls.size) sealed with
       | .ok spans => spans.size == plan.records.size
       | .error _ => false
     return { report, plan, planValid }
