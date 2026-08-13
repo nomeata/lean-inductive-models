@@ -150,6 +150,10 @@ lean_exe basisvalidationtest where
   root := `BasisValidationTest
   supportInterpreter := true
 
+lean_lib OneLayerProjectionPrototype where
+  srcDir := "test"
+  roots := #[`OneLayerProjectionPrototype]
+
 -- Diagnostics: these targets are useful during development, but are not
 -- correctness suites and are not part of the default build.
 lean_exe envprobe where
