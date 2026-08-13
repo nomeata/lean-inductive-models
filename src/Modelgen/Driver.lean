@@ -1655,6 +1655,10 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
           if first != name then
             return .error s!"normalized declaration-name collision: {first} and {name}"
         normalizedNames := normalizedNames.insert normalized name
+      unless record matches .induct .. do
+        setEnv analysis
+        if let .error message ← checkKernelReplayExpressions record then
+          return .error message
     match checked.addDeclCore 0 declaration none with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
@@ -1666,9 +1670,10 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
             return .error s!"{record.names}: cannot construct expression-checking environment: \
               {← (exception.toMessageData {}).toString}"
           | .ok next => pure next
-        setEnv analysis
-        if let .error message ← checkKernelReplayExpressions record then
-          return .error message
+        if record matches .induct .. then
+          setEnv analysis
+          if let .error message ← checkKernelReplayExpressions record then
+            return .error message
   return .ok (if arenaCheck then analysis else .ofKernelEnv checked)
 
 /-- Submit a complete export to Lean's kernel and verify that its serialized
