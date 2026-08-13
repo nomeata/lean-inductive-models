@@ -223,7 +223,7 @@ private def addEdge (outgoing : Array (Std.HashSet Nat)) (indegree : Array Nat)
     (outgoing, indegree)
   else
     (outgoing.modify before (·.insert after),
-      indegree.modify after (· + 1))
+      indegree.set! after (indegree[after]! + 1))
 
 /-- Stable topological ordering over compact declaration summaries.
 
