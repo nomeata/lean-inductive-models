@@ -103,6 +103,12 @@ partial def outerEqualityRhs? : Expr → Option Expr
   | .forallE _ _ body _ => outerEqualityRhs? body
   | body => body.getAppArgs[2]?
 
+partial def lambdaBodyIsEqRefl : Expr → Bool
+  | .lam _ _ body _ => lambdaBodyIsEqRefl body
+  | body => match body.getAppFn with
+    | .const ``Eq.refl _ => true
+    | _ => false
+
 /-- A test-only defeq-redundant level spelling.  The raw constructor is
 intentional: normalization would destroy the syntax this regression pins. -/
 def redundantSourceLevels (expression : Expr) : Expr :=
@@ -395,7 +401,7 @@ def main : IO UInt32 := do
       let rule := propProjectionRules[fieldIndex]!
       (declarationType? propGenerated rule).bind outerEqualityRhs? ==
           some (.bvar (2 - fieldIndex)) &&
-        (theoremValue? propGenerated rule).any (containsConst ``Eq.refl)
+        (theoremValue? propGenerated rule).any lambdaBodyIsEqRefl
   state := state.check "dependent Prop projection retains the source default wrapper" <|
     (declarationType? propGenerated propProjectionRules[1]!).any
       (containsConst `optParam)
@@ -407,7 +413,7 @@ def main : IO UInt32 := do
     propReport.stmtErrors.isEmpty &&
       (Check.check propGenerated).all (fun violation => violation.familyOwner != `PropRecIdx)
   state := state.check "maybe-zero formers do not enter the Prop literal contract" <|
-    (ownerAndRecursor? primRaw `PI).all fun (type, _) =>
+    (ownerAndRecursor? primRaw `PI).any fun (type, _) =>
       !propositionProjectionIotaUsesLiteralField type
 
   -- Literal means source-literal, not transport-free. The fixture writes a
@@ -439,11 +445,12 @@ def main : IO UInt32 := do
     intrinsicFieldsFor propBoundaryRaw `NestedProp == #[0, 1, 2] &&
       intrinsicFieldsFor propBoundaryRaw `MutualPropA == #[0, 1, 2] &&
       intrinsicFieldsFor propBoundaryRaw `MutualPropB == #[0]
-  state := state.check "nested and mutual Prop controls retain transported rules" <|
+  state := state.check "nested and mutual Prop controls retain their legacy rule contracts" <|
     (declarationType? propBoundaryGenerated nestedBoundaryRule).bind outerEqualityRhs? !=
         some (.bvar 1) &&
-      (declarationType? propBoundaryGenerated mutualBoundaryRule).bind outerEqualityRhs? !=
-        some (.bvar 1)
+      (declarationType? propBoundaryGenerated mutualBoundaryRule).bind outerEqualityRhs? ==
+        some (.bvar 1) &&
+      (declarationType? propBoundaryGenerated mutualBoundaryRule).any (containsConst `optParam)
   state := state.check "nested and mutual Prop controls remain exactly checked" <|
     propBoundaryReport.stmtErrors.isEmpty &&
       (Check.check propBoundaryGenerated).all fun violation =>
