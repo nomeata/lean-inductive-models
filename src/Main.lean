@@ -123,16 +123,13 @@ def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Nam
     report.declined.filter fun entry =>
       Modelgen.declineIsUnsupported alreadyCovered generated entry.1
 
-def generationEnabled (config : Modelgen.Cli.Config) : Bool :=
-  config.nested || config.mutualModels || config.simple || config.basic
-
 /-- Initial internal fast-path boundary. Structural output checking consumes
 the compact report certified while each family was live. Output kernel checking
 must still replay the exact final byte stream and therefore retains the legacy
 in-memory path. Monomorphization rewrites source declarations, while a no-output
 or no-generation invocation has no staged payload to compose. -/
 def stagedModeEligible (config : Modelgen.Cli.Config) : Bool :=
-  config.output && generationEnabled config && !config.monoLevels &&
+  config.output && Modelgen.generationEnabled config && !config.monoLevels &&
     !config.typeCheckOutput
 
 private structure RawStage where
@@ -290,7 +287,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     else
       pure parsed
 
-  let (filterOutput, generationReport) ← if generationEnabled config then do
+  let (filterOutput, generationReport) ← if Modelgen.generationEnabled config then do
       let generated : Except String (FilterOutput × Modelgen.Report) ← try
           if let some raw := rawStage? then
             let levelCallsBefore ← Modelgen.LevelAlgebra.levelCalls.get
@@ -369,7 +366,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     return outcome
   | .full decls =>
     let transformed : Export := { generationInput with decls }
-    let finalExport ← if generationEnabled config || config.monoLevels then
+    let finalExport ← if Modelgen.generationEnabled config || config.monoLevels then
         match Modelgen.Order.reorder transformed with
         | .error error =>
             IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
