@@ -294,13 +294,29 @@ def main (args : List String) : IO UInt32 := do
     let tee ← Spool.ParseTee.create workspace
     let parsed ← IO.FS.withFile rawCanonicalPath .read fun handle =>
       parseHandleWithSink handle tee.sink (analyse := false)
-    discard <| tee.finish
+    let sizes ← tee.finish
+    let decodedParity ← match parsed with
+      | .error _ => pure false
+      | .ok (output, certificate) => do
+        match ← Spool.PlannedSourceReader.create tee certificate sizes output.decls.size with
+        | .error _ => pure false
+        | .ok reader => do
+          let second ← reader.read 1
+          let first ← reader.read 0
+          let secondAgain ← reader.read 1
+          let outside ← reader.read 2
+          pure <| reader.size == 2 &&
+            (match second with | .ok actual => actual == output.decls[1]! | _ => false) &&
+            (match first with | .ok actual => actual == output.decls[0]! | _ => false) &&
+            (match secondAgain with | .ok actual => actual == output.decls[1]! | _ => false) &&
+            (outside matches .error _)
     let metadata ← IO.FS.readFile tee.metadata.path
     let arena ← IO.FS.readFile tee.arena.path
     let declarations ← IO.FS.readFile tee.declarations.path
-    return (parsed, metadata, arena, declarations,
+    return (parsed, decodedParity, metadata, arena, declarations,
       #[tee.metadata.path, tee.arena.path, tee.declarations.path])
-  let (stagedParse, stagedMetadata, stagedArena, stagedDeclarations, stagedPaths) := staged
+  let (stagedParse, stagedDecodedParity, stagedMetadata, stagedArena, stagedDeclarations,
+      stagedPaths) := staged
   let expectedArena := lines (firstSplit.arena ++ secondSplit.arena)
   let expectedDeclarations := rawFirstDecl ++ rawSecondDecl
   state := state.check "canonical parse-time spool preserves exact split bytes" <|
@@ -319,6 +335,8 @@ def main (args : List String) : IO UInt32 := do
           { offset := rawFirstDecl.utf8ByteSize.toUInt64,
             bytes := rawSecondDecl.utf8ByteSize.toUInt64 }]
     | .error _ => false
+  state := state.check "planned source reader decodes arbitrary and backward ordinals" <|
+    stagedDecodedParity
   let spoolSizes : RawSpoolSizes :=
     { metadata := stagedMetadata.utf8ByteSize.toUInt64
       arena := stagedArena.utf8ByteSize.toUInt64
