@@ -337,7 +337,7 @@ def run (root : String) : IO UInt32 := do
     let treeOwners := ({} : Std.HashSet Name).insert owner
     state ← state.check "indexed nested generated view equals aggregate selection" <|
       indexedFamilyUnionFor valid treeOwners == checkStatementsFor valid treeOwners
-    let sourceIndex := SyntaxIndex.ofExport raw
+    let sourceIndex := SyntaxIndex.ofSource raw
     let .ok overlaidIndex := sourceIndex.prependRecords models | do
       IO.eprintln "checktest: valid island overlay was rejected"
       return 1
@@ -572,7 +572,7 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "indexed private-alias family equals aggregate selection" <|
       indexedFamilyUnionFor privateValid privateOwners ==
         checkStatementsFor privateValid privateOwners
-    let privateSourceIndex := SyntaxIndex.ofExport privateRaw
+    let privateSourceIndex := SyntaxIndex.ofSource privateRaw
     let .ok privateOverlay := privateSourceIndex.prependRecords privateModels | do
       IO.eprintln "checktest: private-alias island overlay was rejected"
       return 1

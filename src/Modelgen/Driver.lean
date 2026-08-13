@@ -1844,7 +1844,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   let mut mainEnv ← getEnv
   -- Built once. Each island overlays only its generated records, avoiding the
   -- former full-source declaration/constructor/rule/normalizer rebuild.
-  let sourceSyntax := Check.SyntaxIndex.ofExport x
+  let sourceSyntax := Check.SyntaxIndex.ofSource x
   let mut out : Array EDecl := #[]
   let mut rep : Report := {}
   let mut islandStatements : Check.StatementReport :=

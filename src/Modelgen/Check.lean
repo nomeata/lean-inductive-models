@@ -1026,9 +1026,18 @@ structure SyntaxIndex where
   private sourceFamilies : Std.HashMap Name (Array Family) := {}
   private names : Std.HashSet Name := {}
 
-private def familyTable (x : Export) : Std.HashMap Name (Array Family) :=
-  (discoverWith x fun _ => true).foldl (init := {}) fun table family =>
-    table.insert family.owner ((table.getD family.owner #[]).push family)
+private def familyTable (x : Export) : Std.HashMap Name (Array Family) := Id.run do
+  let mut table : Std.HashMap Name (Array Family) := {}
+  for ownerDecl in [0:x.decls.size] do
+    let .induct types _ _ := x.decls[ownerDecl]! | continue
+    let some root := types.head?.map (·.name) | continue
+    let some correspondence := correspondenceAt? x ownerDecl | continue
+    let family : Family :=
+      { owner := root, modelRoot := Naming.modelName root,
+        carrier := Naming.modelName root, ownerDecl, correspondence,
+        decls := #[], names := #[] }
+    table := table.insert root ((table.getD root #[]).push family)
+  return table
 
 private def SyntaxIndex.coreOfExport (x : Export) : SyntaxIndex :=
   { declarations := declarationTypes x, constructors := constructorRecords x,
@@ -1116,6 +1125,12 @@ of rescanning every declaration for every generated island. -/
 def SyntaxIndex.ofExport (x : Export) : SyntaxIndex :=
   let index := SyntaxIndex.coreOfExport x
   { index with globalExtras := computeGlobalExtras x index }
+
+/-- Build the persistent generation-time source tables without the global
+unexpected-slot sweep. Island checks consume only family-local diagnostics;
+the final aggregate constructs an `ofExport` index and runs that sweep once. -/
+def SyntaxIndex.ofSource (x : Export) : SyntaxIndex :=
+  SyntaxIndex.coreOfExport x
 
 /-- Overlay an island in front of a persistent source index without rescanning
 the source export. Any name collision fails closed before first/last-map
