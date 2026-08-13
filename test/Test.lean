@@ -624,6 +624,10 @@ def expectedPrim : List Row :=
   -- instantiation a target took — `#print axioms` does, and that is the report
   -- the section carries: these three at `[propext, Classical.choice,
   -- Quot.sound]` against every other target's `[propext, Quot.sound]`.
+  -- `Twin`, `Mixed`, `TwinInf`, and `Prefix` are the binary one-layer
+  -- public-carrier tranche. `Triple` deliberately remains on the legacy W
+  -- route: its row is present, while the assertion in `runOne` requires the
+  -- one-layer private certificate to be absent.
   , ("prim_w",
       [("Tree", 224), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
@@ -631,8 +635,9 @@ def expectedPrim : List Row :=
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4), ("Wty", 23),
-       ("P", 6), ("Q", 8), ("Wt", 20),
-       ("Dep", 12), ("Bad", 12), ("Br", 12), ("Utd", 14)],
+       ("Triple", 16), ("P", 6), ("Q", 8), ("Wt", 20),
+       ("Dep", 12), ("Bad", 12), ("TwinInf", 23), ("Br", 12), ("Twin", 22),
+       ("Prefix", 26), ("Utd", 14), ("Mixed", 25)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The head-normalization sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
@@ -789,6 +794,17 @@ def runOne (root : String) (a : TAcc) (r : Row)
     a := check a
       (rep.generated.any (·.1 == `False) && !rep.declined.any fun entry => entry.1 == `False)
       "w_core: derived False did not model after fixed Nat support"
+  if name == "prim_w" then
+    let emittedNames := decls.flatMap (·.names.toArray)
+    let privateRoot := `Triple._model._impl
+    let certificate := #[Name.str privateRoot "self", Name.str privateRoot "ctor_0",
+      Name.str privateRoot "rec", Name.str privateRoot "rec_iota_0",
+      Name.str privateRoot "roll", Name.str privateRoot "unroll",
+      Name.str privateRoot "unroll_roll", Name.str privateRoot "roll_unroll"]
+    a := check a
+      (rep.generated.any (·.1 == `Triple) && emittedNames.contains `Triple._model &&
+        certificate.all fun name => !emittedNames.contains name)
+      "prim_w: Triple did not generate on the legacy route without a one-layer certificate"
   -- **Exempt then declined.** The basis primitives are their own row in the
   -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a
