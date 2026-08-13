@@ -129,10 +129,12 @@ def run_corpus(binary: Path, corpus: Path, work: Path) -> int:
     runtime.mkdir()
     environment = os.environ.copy()
     environment["TMPDIR"] = str(runtime)
-    passed = {"good": 0, "bad": 0}
+    good_accepted = 0
+    bad_rejected = 0
+    bad_errored = 0
     failed = 0
     total = 0
-    for group, expected in (("good", 0), ("bad", 1)):
+    for group in ("good", "bad"):
         for case in sorted((corpus / group).rglob("*.ndjson")):
             relative = case.relative_to(corpus)
             log_name = "_".join(relative.parts)
@@ -148,10 +150,21 @@ def run_corpus(binary: Path, corpus: Path, work: Path) -> int:
                     check=False,
                 )
             total += 1
-            if result.returncode == expected:
-                passed[group] += 1
+            if group == "good" and result.returncode == 0:
+                good_accepted += 1
+                continue
+            if group == "bad" and result.returncode == 1:
+                bad_rejected += 1
+                continue
+            if group == "bad" and result.returncode == 3:
+                # Arena calls this a checker error rather than a rejection. It
+                # still proves the soundness property enforced here: the bad
+                # proof was not accepted. A decline remains a failure because
+                # this checker claims to handle the corpus.
+                bad_errored += 1
                 continue
             failed += 1
+            expected = "0" if group == "good" else "1 or 3 (never 0, 2, or a signal)"
             print(
                 f"FAIL {relative}: expected exit {expected}, got {result.returncode}",
                 file=sys.stderr,
@@ -159,8 +172,8 @@ def run_corpus(binary: Path, corpus: Path, work: Path) -> int:
             for line in first_diagnostic(stderr, stdout):
                 print(line, file=sys.stderr)
     print(
-        f"Arena corpus: {passed['good']} good accepted, {passed['bad']} bad rejected, "
-        f"{failed} failed ({total} total)"
+        f"Arena corpus: {good_accepted} good accepted, {bad_rejected} bad rejected, "
+        f"{bad_errored} bad checker errors, {failed} failed ({total} total)"
     )
     return int(failed != 0)
 

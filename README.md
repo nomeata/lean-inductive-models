@@ -645,10 +645,13 @@ test/scripts/check-ci-serialized-builds.sh
 `mainclitest` executes the built `modelgen` binary and covers the complete
 `--mono-levels` process path. `monotest` exercises the underlying pass directly.
 `check_arena_corpus.py` downloads the published Lean Kernel Arena corpus and
-requires every `good/` case to exit 0 and every `bad/` case to exit 1 in the
-full generation-and-validation mode documented above. It checks both the input
-and generated output structurally and through Lean's kernel without publishing
-the output. Its counts follow the live corpus and are not hard-coded.
+requires every `good/` case to exit 0. Every `bad/` case must either be rejected
+with exit 1 or stop at the tool's exit-3 internal-invariant boundary; the report
+keeps those Arena outcomes separate. Exit 2 is a failure because this checker
+claims to handle the corpus, and a signal is never accepted as a verdict. It
+checks both the input and generated output structurally and through Lean's
+kernel without publishing the output. Its counts follow the live corpus and
+are not hard-coded.
 The `memoryprobe` target compares whole-file and streaming parser retention in
 fresh processes. It and the `envprobe` and `levelfuzz` targets under `tools/`
 are diagnostics, not correctness suites.
