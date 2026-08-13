@@ -65,6 +65,20 @@ def indexedFamilyStatements? (x : Export) (owner : Name) : Option StatementRepor
 def indexedStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
   checkStatementFamiliesWithIndex x (.ofExport x) (statementFamiliesFor x owners)
 
+/-- Exercise the staged-output representation: owner decisions are captured
+record-by-record, then only ordered names and value-free templates survive for
+the one global-extra sweep. -/
+def compactIndexedStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
+  let index := SyntaxIndex.ofSource x
+  let families := statementFamiliesFor x owners
+  let localReport := checkStatementFamiliesLocalWithIndex x index families
+  let diagnosticOwners := families.foldl (init := ({} : Std.HashSet Name))
+    fun result family => family.correspondence.diagnosticOwners.foldl
+      (fun result owner => result.insert owner) result
+  let global := compactGlobalExtrasWithIndex index x.decls |>.filter fun violation =>
+    diagnosticOwners.contains violation.familyOwner
+  { localReport with violations := localReport.violations ++ global }
+
 def indexedFamilyUnionFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
   let index := SyntaxIndex.ofExport x
   (statementFamiliesFor x owners).foldl
@@ -337,6 +351,15 @@ def run (root : String) : IO UInt32 := do
     let treeOwners := ({} : Std.HashSet Name).insert owner
     state ← state.check "indexed nested generated view equals aggregate selection" <|
       indexedFamilyUnionFor valid treeOwners == checkStatementsFor valid treeOwners
+    state ← state.check "compact nested generated view equals aggregate selection" <|
+      compactIndexedStatementsFor valid treeOwners == checkStatementsFor valid treeOwners
+    let invalidProjection := Naming.projectionName owner 99
+    let duplicateInvalidProjection := insertBeforeOwner
+      (insertBeforeOwner valid owner (.ax invalidProjection [] (.sort .zero) false))
+      owner (.ax invalidProjection [] (.sort .zero) false)
+    state ← state.check "compact projection extras retain duplicate order and multiplicity" <|
+      compactIndexedStatementsFor duplicateInvalidProjection treeOwners ==
+        checkStatementsFor duplicateInvalidProjection treeOwners
     let sourceIndex := SyntaxIndex.ofSource raw
     let .ok overlaidIndex := sourceIndex.prependRecords models | do
       IO.eprintln "checktest: valid island overlay was rejected"
@@ -572,6 +595,9 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "indexed private-alias family equals aggregate selection" <|
       indexedFamilyUnionFor privateValid privateOwners ==
         checkStatementsFor privateValid privateOwners
+    state ← state.check "compact private-alias family equals aggregate selection" <|
+      compactIndexedStatementsFor privateValid privateOwners ==
+        checkStatementsFor privateValid privateOwners
     let privateSourceIndex := SyntaxIndex.ofSource privateRaw
     let .ok privateOverlay := privateSourceIndex.prependRecords privateModels | do
       IO.eprintln "checktest: private-alias island overlay was rejected"
@@ -625,6 +651,8 @@ def run (root : String) : IO UInt32 := do
         mutualStatements.statementsChecked == mutualTable.statementCount
       state ← state.check "indexed mutual/member diagnostics equal aggregate selection" <|
         indexedFamilyUnionFor mutualValid generatedMutualOwners == mutualStatements
+      state ← state.check "compact mutual/member diagnostics equal aggregate selection" <|
+        compactIndexedStatementsFor mutualValid generatedMutualOwners == mutualStatements
       let mutualPublicNames := mutualTable.publicNames
       let missingMutualInterface : Export := { mutualValid with
         decls := mutualValid.decls.filter fun declaration =>
@@ -637,6 +665,9 @@ def run (root : String) : IO UInt32 := do
             (isMissing `A (Naming.modelName `A))
       state ← state.check "indexed missing whole family equals aggregate selection" <|
         indexedFamilyUnionFor missingMutualInterface generatedMutualOwners ==
+          missingMutualStatements
+      state ← state.check "compact missing whole family equals aggregate selection" <|
+        compactIndexedStatementsFor missingMutualInterface generatedMutualOwners ==
           missingMutualStatements
       let some bCtor := mutualTable.constructors.find? (·.owner == `B.bC) | do
         IO.eprintln "checktest: B.bC correspondence missing"
@@ -687,6 +718,9 @@ def run (root : String) : IO UInt32 := do
       state ← state.check "multi-family indexed union equals aggregate with one global extra" <|
         indexedFamilyUnionFor multiValid multiOwners ==
           checkStatementsFor multiValid multiOwners
+      state ← state.check "compact global-extra templates equal aggregate with one global extra" <|
+        compactIndexedStatementsFor multiValid multiOwners ==
+          checkStatementsFor multiValid multiOwners
       let some mutualDecl := ownerIndex? unitlikeExport `MU | do return 1
       let some mutualUnitlike := correspondenceAt? unitlikeExport mutualDecl | do return 1
       state ← state.check "unit-like is per mutual member" <|
@@ -724,6 +758,9 @@ def run (root : String) : IO UInt32 := do
             (check bareExtra).any (isExtraUnitlike owner extraName)
           state ← state.check "indexed extra-slot sweep equals aggregate selection" <|
             indexedFamilyUnionFor bareExtra extraOwners ==
+              checkStatementsFor bareExtra extraOwners
+          state ← state.check "compact bare extra-slot sweep equals aggregate selection" <|
+            compactIndexedStatementsFor bareExtra extraOwners ==
               checkStatementsFor bareExtra extraOwners
 
     if state.failed == 0 then

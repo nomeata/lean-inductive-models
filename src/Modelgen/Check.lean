@@ -1227,6 +1227,86 @@ private def intrinsicProjectionFieldsWithIndex (index : SyntaxIndex)
       fields := fields.push fieldIndex
   return fields
 
+/-! ## Value-free global-extra summaries
+
+The whole-export unexpected-slot sweep historically revisits every owner
+record after generation.  Staged output cannot retain generated `EDecl`s just
+for that pass, so record the eligibility decisions while each owner is live.
+These summaries contain names, field indices, and booleans only; in
+particular, they cannot retain an island's expression graph.
+
+The outer array returned by `globalExtraTemplatesForRecordsWithIndex` remains
+aligned with its input records, including non-inductive records.  A compact
+final ordering can therefore reorder templates with the same locators it uses
+for declaration records. -/
+
+/-- One owner-local decision needed by the unexpected public-slot sweep. -/
+inductive GlobalExtraTemplate where
+  | type (owner : Name) (validProjectionFields : Array Nat)
+      (allowsUnitlike allowsEta : Bool)
+  | recursor (owner : Name) (allowsRuleK : Bool)
+  deriving Inhabited, Repr, BEq
+
+/-- Capture unexpected-slot eligibility for each record without retaining an
+`Expr`.  Projection eligibility and proposition-former tests use the supplied
+overlay index, so generated owners may depend on transparent source aliases.
+As with the staging pipeline generally, duplicate owner declarations must be
+rejected by compact ordering before capture; the index's owner table is not a
+substitute for that collision check. -/
+def globalExtraTemplatesForRecordsWithIndex (index : SyntaxIndex)
+    (records : Array EDecl) : Array (Array GlobalExtraTemplate) :=
+  records.map fun declaration => match declaration with
+    | .induct types constructors recursors =>
+      types.toArray.map (fun type =>
+        .type type.name (intrinsicProjectionFieldsWithIndex index type constructors)
+          (type.isKernelUnitlike constructors)
+          (type.isKernelStructureLike constructors &&
+            !index.normalizer.isPropositionFormer type.type)) ++
+      recursors.toArray.map fun recursor => .recursor recursor.name recursor.k
+    | _ => #[]
+
+/-- Reproduce the historical global-extra diagnostic order from value-free
+owner templates and declaration names in final record order.  `orderedNames`
+is deliberately an array rather than a set: repeated slot names retain their
+projection-diagnostic order and multiplicity, while a local set answers
+metadata presence queries. -/
+def globalExtrasFromTemplates (templates : Array (Array GlobalExtraTemplate))
+    (orderedNames : Array Name) : Array Violation := Id.run do
+  let declared := orderedNames.foldl (fun names name => names.insert name)
+    ({} : Std.HashSet Name)
+  let mut violations : Array Violation := #[]
+  for record in templates do
+    for template in record do
+      match template with
+      | .type owner validFields allowsUnitlike allowsEta =>
+        for name in orderedNames do
+          if let some fieldIndex := projectionSlot? owner name then
+            unless validFields.contains fieldIndex do
+              violations := violations.push (.extraProjection owner name)
+        unless allowsUnitlike do
+          let name := Naming.unitlikeName owner
+          if declared.contains name then
+            violations := violations.push (.extraMetadata owner name .unitlike)
+        unless allowsEta do
+          let name := Naming.etaName owner
+          if declared.contains name then
+            violations := violations.push (.extraMetadata owner name .eta)
+      | .recursor owner allowsRuleK =>
+        unless allowsRuleK do
+          let name := Naming.ruleKName owner
+          if declared.contains name then
+            violations := violations.push (.extraMetadata owner name .ruleK)
+  return violations
+
+/-- Convenience form for an in-memory export.  Staged callers instead retain
+the per-record templates, reorder them with compact declaration locators, and
+pass the corresponding final name order to `globalExtrasFromTemplates`. -/
+def compactGlobalExtrasWithIndex (index : SyntaxIndex) (records : Array EDecl) :
+    Array Violation :=
+  globalExtrasFromTemplates
+    (globalExtraTemplatesForRecordsWithIndex index records)
+    (records.flatMap fun declaration => declaration.names.toArray)
+
 /-- Discover selected families whose owner records belong to one generated
 island, using its overlay for transparent aliases and projection eligibility.
 Declaration indices are island-local; statement checking never interprets
