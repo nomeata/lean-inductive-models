@@ -598,7 +598,8 @@ not the complete correctness matrix. The complete matrix is:
 correctness_targets=(
   test monotest clitest generationflagstest checktest ordertest
   incrementalordertest namingtest drivernamingtest privatealiastest
-  simplenamingtest rulektest defaultctoriotatest mainclitest projectiontest structureetatest
+  simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
+  mainclitest projectiontest structureetatest
   deepimaxboxtest psigmaprimetest exactsortlifttest
   tightpsigmaprimeroutetest vanishingerasuretest
   transparentowneraliasestest exportsyntaxnormalizationtest
@@ -618,6 +619,7 @@ TMPDIR="$PWD/_tmp/build-tmp" lake exe privatealiastest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe simplenamingtest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe rulektest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe defaultctoriotatest "$PWD"
+TMPDIR="$PWD/_tmp/build-tmp" lake exe sourcestructuresyntaxtest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe mainclitest "$PWD"
 TMPDIR="$PWD/_tmp/build-tmp" lake exe projectiontest
 TMPDIR="$PWD/_tmp/build-tmp" lake exe structureetatest
