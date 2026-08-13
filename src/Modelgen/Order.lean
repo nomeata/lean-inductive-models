@@ -323,7 +323,9 @@ def summaryNameOrder (summaries : Array DeclSummary) :
 second full-export [`reorder`] is provably record-neutral because both passes
 run the same stable graph algorithm. -/
 def summariesAreOrdered (summaries : Array DeclSummary) : Bool :=
-  summaryRecordOrder summaries == .ok (Array.range summaries.size)
+  match summaryRecordOrder summaries with
+  | .ok order => order == Array.range summaries.size
+  | .error _ => false
 
 /-- The stable topological order of the export's atomic records, optionally
 preferring a class of records and its complete dependency closure whenever

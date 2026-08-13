@@ -827,9 +827,13 @@ def runOne (root : String) (a : TAcc) (r : Row)
   let compact := Order.summaries { x with decls }
   a := check a (Order.summariesAreOrdered compact)
     s!"{name}: scheduled source plus locally ordered model islands is not a final fixed point"
-  a := check a
-    (Order.summaryRecordOrder compact == Order.recordOrder { x with decls })
-    s!"{name}: compact ordering differs from the full-export oracle"
+  let compactOrder := Order.summaryRecordOrder compact
+  let fullOrder := Order.recordOrder { x with decls }
+  let sameOrder := match compactOrder, fullOrder with
+    | .ok compact, .ok full => compact == full
+    | .error compact, .error full => compact == full
+    | _, _ => false
+  a := check a sameOrder s!"{name}: compact ordering differs from the full-export oracle"
   -- axis 4: the round trip
   let out := ({ x with decls }).render
   match Modelgen.parse out with

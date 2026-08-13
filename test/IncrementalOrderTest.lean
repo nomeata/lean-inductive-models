@@ -47,8 +47,14 @@ def compactOutcome (x : Export) (prefer : EDecl → Bool := fun _ => false) :
     Except Order.Error (Array (Array Name)) :=
   Order.summaryNameOrder (Order.summaries x prefer)
 
+def sameOutcome [BEq α] (left right : Except Order.Error α) : Bool :=
+  match left, right with
+  | .ok left, .ok right => left == right
+  | .error left, .error right => left == right
+  | _, _ => false
+
 def outcomesAgree (x : Export) (prefer : EDecl → Bool := fun _ => false) : Bool :=
-  fullOutcome x prefer == compactOutcome x prefer
+  sameOutcome (fullOutcome x prefer) (compactOutcome x prefer)
 
 def noGeneration : Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
@@ -67,7 +73,13 @@ def fullScheduledOutcome (x : Export) (generation : Cli.Config) :
   return scheduled.decls.map fun declaration => declaration.names.toArray
 
 def schedulingAgrees (x : Export) (generation : Cli.Config) : Bool :=
-  fullScheduledOutcome x generation == compactScheduledOutcome x generation
+  sameOutcome (fullScheduledOutcome x generation) (compactScheduledOutcome x generation)
+
+def isExactOrder (outcome : Except Order.Error (Array (Array Name)))
+    (expected : Array (Array Name)) : Bool :=
+  match outcome with
+  | .ok order => order == expected
+  | .error _ => false
 
 def readExport (path : System.FilePath) : IO Export := do
   let text ← IO.FS.readFile path
@@ -115,7 +127,7 @@ def run (root : String) : IO UInt32 := do
   let prefer := fun declaration => declaration.names.contains `Support
   state := state.check "preferred dependency closure is exactly equivalent"
     (outcomesAgree preferred prefer &&
-      compactOutcome preferred prefer == .ok
+      isExactOrder (compactOutcome preferred prefer)
         #[#[`SupportDependency], #[`Support], #[`Earlier], #[`Middle]])
 
   -- Pre-existing public model records exercise the synthetic model→owner
@@ -126,19 +138,19 @@ def run (root : String) : IO UInt32 := do
   let modelEarly := exportOf #[model, owner]
   let modelLate := exportOf #[owner, model]
   state := state.check "pre-existing early public model stays before owner"
-    (outcomesAgree modelEarly && compactOutcome modelEarly ==
-      .ok #[#[Naming.modelName `Owner], #[`Owner]])
+    (outcomesAgree modelEarly && isExactOrder (compactOutcome modelEarly)
+      #[#[Naming.modelName `Owner], #[`Owner]])
   state := state.check "pre-existing late public model moves before owner"
-    (outcomesAgree modelLate && compactOutcome modelLate ==
-      .ok #[#[Naming.modelName `Owner], #[`Owner]])
+    (outcomesAgree modelLate && isExactOrder (compactOutcome modelLate)
+      #[#[Naming.modelName `Owner], #[`Owner]])
 
   let ownerDependent := exportOf #[owner,
     modelDef (Naming.modelName `Owner) (.const `Owner [])]
   state := state.check "owner-dependent model has the exact cycle diagnostic"
-    (fullOutcome ownerDependent == compactOutcome ownerDependent)
+    (sameOutcome (fullOutcome ownerDependent) (compactOutcome ownerDependent))
   let duplicate := exportOf #[axDecl `Duplicate, axDecl `Duplicate]
   state := state.check "duplicate ownership has the exact diagnostic"
-    (fullOutcome duplicate == compactOutcome duplicate)
+    (sameOutcome (fullOutcome duplicate) (compactOutcome duplicate))
 
   -- This is the composition shape produced by source scheduling followed by
   -- one locally ordered generated island. It contains only names and edges:
@@ -162,7 +174,7 @@ def run (root : String) : IO UInt32 := do
   let misplaced := composed.swap 4 5
   state := state.check "a public slot after its owner is not a fixed point"
     (!Order.summariesAreOrdered misplaced &&
-      Order.summaryNameOrder misplaced == .ok (composed.map (·.introduced)))
+      isExactOrder (Order.summaryNameOrder misplaced) (composed.map (·.introduced)))
 
   IO.println s!"compact order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

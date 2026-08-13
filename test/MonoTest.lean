@@ -197,7 +197,13 @@ def main (args : List String) : IO UInt32 := do
         -- output may still require a final reorder.  The compact graph must
         -- select exactly the same record indices (or exact diagnostic) as the
         -- established value-retaining pass before that pass can be removed.
-        unless Order.summaryRecordOrder (Order.summaries y) == Order.recordOrder y do
+        let compactOrder := Order.summaryRecordOrder (Order.summaries y)
+        let fullOrder := Order.recordOrder y
+        let sameOrder := match compactOrder, fullOrder with
+          | .ok compact, .ok full => compact == full
+          | .error compact, .error full => compact == full
+          | _, _ => false
+        unless sameOrder do
           fails := fails.push s!"{r.file}[{tag}]: compact ordering differs from full ordering"
         -- The round trip.
         match Modelgen.parse y.render with
