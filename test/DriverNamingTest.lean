@@ -85,6 +85,27 @@ def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
 
+  -- These are the three aggregate failure shapes caused by unconditional
+  -- support prioritization: two already-filtered composed exports, and the
+  -- plain no-selected-owner export checked once per aggregate fixture.  The
+  -- scheduler and the complete filter must both be byte-order fixed points.
+  let passThrough : Array (String × Modelgen.Cli.Config) := #[
+    ("nested_iota.ndjson", {}),
+    ("nested_shapes.ndjson", {}),
+    ("nat_char_equations.ndjson", legacyGenerationConfig false)]
+  for (fixture, generation) in passThrough do
+    let path := s!"test/fixtures/modelgen/filtered/{fixture}"
+    let text ← IO.FS.readFile path
+    let .ok input := Modelgen.parse text (analyse := false)
+      | throw <| IO.userError s!"cannot parse {path}"
+    state := state.check s!"{fixture} source scheduling is a fixed point" <|
+      match scheduleSource input generation with
+      | .ok scheduled => scheduled.decls == input.decls
+      | .error _ => false
+    let result ← runExport s!"pass-through {fixture}" input false generation
+    state := state.check s!"{fixture} filtering is a byte-order fixed point"
+      (result.report.generated.isEmpty && result.output == input.decls)
+
   let safetyText ← IO.FS.readFile "test/fixtures/modelgen/nested_iota_arm.ndjson"
   let .ok safetyInput := Modelgen.parse safetyText (analyse := false)
     | throw <| IO.userError "cannot parse test/fixtures/modelgen/nested_iota_arm.ndjson"

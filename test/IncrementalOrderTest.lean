@@ -61,8 +61,11 @@ def noGeneration : Cli.Config :=
 
 def compactScheduledOutcome (x : Export) (generation : Cli.Config) :
     Except Order.Error (Array (Array Name)) :=
+  let reserved := x.decls.foldl (fun names declaration =>
+    declaration.names.foldl (·.insert ·) names) {}
+  let selected := x.decls.any (scheduledModelOwner generation reserved)
   compactOutcome x fun declaration =>
-    generationEnabled generation && scheduledSupportRecord generation declaration
+    selected && scheduledSupportRecord generation declaration
 
 def fullScheduledOutcome (x : Export) (generation : Cli.Config) :
     Except Order.Error (Array (Array Name)) := do

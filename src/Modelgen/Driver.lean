@@ -1247,58 +1247,79 @@ def closeModelIsland (template : Export) (main : Environment)
     | .error message => return .error message
     | .ok supported => return .ok (generated, compact, supported, statementReport)
 
-/-- Source declarations which must be replayed before any owner that can need
-them. This is deliberately wider than [`Modelgen.persistentSupportName`]:
-When only the nested/mutual layers are selected, moving the full simple basis
-would change independent source order for no reason. `False` is derived, not
-support: preferring it could put its own model before a later input-owned
-`Nat`, although that model needs `Nat`. -/
+/-- The exact quotient/choice interface that a prim model may splice after its
+ordinary basis is ready.  These are source-scheduling names as well as the
+readiness class used at the construction site below. -/
+def lateSpliceNames : List Name :=
+  [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
+   `Nonempty, `Nonempty.intro, `Nonempty.rec, `Classical.choice]
+
+/-- The exact logical interface shared with the fixed W fragment. -/
+def wLogicalLateNames : List Name := [`Iff, `Iff.intro, `Iff.rec, `propext]
+
+/-- The exact ordinary basis interface which can be input-owned.  Namespace
+membership is intentionally insufficient: Mathlib contains hundreds of
+unrelated later declarations such as `PUnit.le`, and preferring one of those
+also prefers its complete dependency closure. -/
+def scheduledPrimBasisNames : List Name :=
+  [`Eq, `Eq.refl, `Eq.rec,
+   `Nat, `Nat.zero, `Nat.succ, `Nat.rec,
+   `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
+   `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
+   `PUnit, `PUnit.unit, `PUnit.rec]
+
+/-- Source declarations which must be replayed before an unmodelled owner that
+can need them.  Public core interfaces are selected by exact name.  The one
+prefix exception is this tool's private `_wcore` namespace: its sentinel is
+only sound when the complete fixed fragment has been replayed. -/
 def scheduledSupportRecord (generation : Cli.Config) (declaration : EDecl) : Bool :=
   if generation.simple || generation.basic then
-    declaration.names.any persistentSupportRoot || declaration.names.all persistentSupportName
+    declaration.names.any fun name =>
+      scheduledPrimBasisNames.contains name || lateSpliceNames.contains name ||
+        wLogicalLateNames.contains name || wCoreRoot.isPrefixOf name
   else if generation.nested || generation.mutualModels then
     declaration.names.any fun name =>
-      name == `Eq || name == `PSigma' || (`PSigma').isPrefixOf name ||
-        name == `PUnit || (`PUnit).isPrefixOf name
+      [`Eq, `Eq.refl, `Eq.rec,
+       `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
+       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
+       `PUnit, `PUnit.unit, `PUnit.rec].contains name
   else
     false
 
 /-- Whether this input record reaches any enabled model-generation branch.
 
-This predicate is an audit surface, not the switch for support scheduling.
-Fixed source support is prioritized whenever generation is enabled: deciding
-that no owner needs it is a global negative claim, and one false negative
-turns every earlier owner into a misleading `name taken` decline. -/
+This is the cheap scheduling pre-scan.  Fixed source support is relevant only
+when an enabled branch has an owner whose public carrier is absent; basis and
+fixed-support records are never such owners. -/
 def scheduledModelOwner (generation : Cli.Config) (reserved : Std.HashSet Name) : EDecl → Bool
-  | .induct types _ _ =>
+  | declaration@(.induct types _ _) =>
     match types with
     | [] => false
     | first :: _ =>
-      !reserved.contains (Naming.modelName first.name) &&
+      !scheduledSupportRecord generation declaration &&
+        !reserved.contains (Naming.modelName first.name) &&
         ((generation.nested && types.any (·.numNested > 0)) ||
           (generation.mutualModels && types.length > 1 && !types.any (·.numNested > 0)) ||
           (types.length == 1 && first.numNested == 0 &&
             generation.modelsSimpleInput first.name))
   | _ => false
 
-/-- A deliberately independent over-approximation of the inductive records a
-generation branch can attempt.
-
-Unlike [`scheduledModelOwner`], this does not inspect whether a public model
-name is already reserved.  That distinction is essential for the scheduling
-certificate: reusing the optimized pre-scan as both classifier and proof would
-let the same false negative justify itself.  Basis/support owners are removed
-separately by [`scheduledSupportRecord`]; noncanonical basis declarations are
-therefore still validated by their existing strict path. -/
-def generationMayAttemptOwner (generation : Cli.Config) : EDecl → Bool
-  | .induct types _ _ =>
+/-- Independently classify the exact source owners for which generation lacks
+the public carrier.  This repeats the enabled-branch cases instead of calling
+[`scheduledModelOwner`], so the post-schedule certificate cannot certify a
+pre-scan bug by reusing that pre-scan. -/
+def generationMayAttemptOwner (generation : Cli.Config)
+    (reserved : Std.HashSet Name) : EDecl → Bool
+  | declaration@(.induct types _ _) =>
     match types with
     | [] => false
     | first :: _ =>
-      (generation.nested && types.any (·.numNested > 0)) ||
-        (generation.mutualModels && types.length > 1 && !types.any (·.numNested > 0)) ||
-        (types.length == 1 && first.numNested == 0 &&
-          generation.modelsSimpleInput first.name)
+      !scheduledSupportRecord generation declaration &&
+        !reserved.contains (Naming.modelName first.name) &&
+        ((generation.nested && types.any (·.numNested > 0)) ||
+          (generation.mutualModels && types.length > 1 && !types.any (·.numNested > 0)) ||
+          (types.length == 1 && first.numNested == 0 &&
+            generation.modelsSimpleInput first.name))
   | _ => false
 
 /-- Whether any model-generation branch is enabled.  Kept local to the driver
@@ -1306,17 +1327,13 @@ so the library scheduler has the same boundary as the command-line driver. -/
 def generationEnabled (generation : Cli.Config) : Bool :=
   generation.nested || generation.mutualModels || generation.simple || generation.basic
 
-/-- Dependency-order source records, hoisting the fixed support class whenever
-generation is enabled.
-
-The previous selected-owner pre-scan made a correctness invariant depend on a
-negative global classification: if it missed every owner, a source-owned `Eq`
-or `Quot` stayed after consumers, while the reserved-name guards correctly
-refused to splice over it.  Prioritizing fixed support unconditionally is
-conservative and idempotent.  With generation disabled, ordinary stable
-dependency order remains byte-for-byte the old path. -/
+/-- Dependency-order source records.  Preserve ordinary stable order unless
+there is an exact unmodelled owner; only then hoist the exact fixed interface
+and its dependency closure. -/
 def scheduleSource (x : Export) (generation : Cli.Config) : Except Order.Error Export :=
-  if generationEnabled generation then
+  let reserved := x.decls.foldl (fun names declaration =>
+    declaration.names.foldl (·.insert ·) names) {}
+  if x.decls.any (scheduledModelOwner generation reserved) then
     Order.reorderPrioritizing x (scheduledSupportRecord generation)
   else
     Order.reorder x
@@ -1332,11 +1349,11 @@ closure; this check makes a regression in either selection or prioritization a
 fail-fast internal error instead of eighteen unrelated model declines.
 
 The owner classifier is intentionally [`generationMayAttemptOwner`], not
-[`scheduledModelOwner`]: an optimized model-presence pre-scan cannot certify
-its own completeness.  This slightly over-approximates attempted generation,
-which is harmless because fixed support has already been prioritized globally. -/
+[`scheduledModelOwner`]: the scheduling pre-scan cannot certify itself. -/
 def validateScheduledSupport (scheduled : Export) (generation : Cli.Config) : Except String Unit := do
   unless generationEnabled generation do return
+  let reserved := scheduled.decls.foldl (fun names declaration =>
+    declaration.names.foldl (·.insert ·) names) {}
   -- `every support index < ownerIndex` is equivalent to checking only the
   -- greatest support index.  Compute that witness once: the certificate stays
   -- exactly linear even on an export with many selected owners.
@@ -1349,7 +1366,7 @@ def validateScheduledSupport (scheduled : Export) (generation : Cli.Config) : Ex
   for ownerIndex in [:scheduled.decls.size] do
     let owner := scheduled.decls[ownerIndex]!
     if scheduledSupportRecord generation owner then continue
-    unless generationMayAttemptOwner generation owner do continue
+    unless generationMayAttemptOwner generation reserved owner do continue
     unless supportIndex < ownerIndex do
       throw s!"latest fixed support {supportNames} remains at record {supportIndex} \
         after selected owner {owner.names} at record {ownerIndex}"
@@ -1830,7 +1847,7 @@ def primMissingBasis (reserved : Std.HashSet Name) : MetaM (Array Name) := do
 def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
   return (← primMissingBasis reserved).isEmpty
 
-/-- **The names beyond the basis that a prim model may splice** — the ones
+/- **The names beyond the basis that a prim model may splice** — the ones
 [`Modelgen.primReady`] does not cover. Input-owned records for these names are
 moved, with their dependency closure, ahead of selected owners by
 [`Modelgen.scheduleSource`].
@@ -1848,18 +1865,12 @@ They form one post-scheduling readiness class:
   `Nonempty` only through `Classical.propDecidable` — used to lose `Acc`'s model
   to `prim model name taken (Nonempty)`. That is an uninstalled reserved-support
   name, not a generated name that was lost. -/
-def lateSpliceNames : List Name :=
-  [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
-   `Nonempty, `Nonempty.intro, `Nonempty.rec, `Classical.choice]
-
-/-- The exact logical interface the W fragment shares with the input.
+/- The exact logical interface the W fragment shares with the input.
 
 `ensureWCore` refuses to splice any one of these when the input reserves it.
 They form a separate atomic readiness class so a failed W construction reports
 the complete Iff/propext prerequisite rather than conflating it with the
 quotient/choice support used by non-W routes. `w_late_iff` pins that distinction. -/
-def wLogicalLateNames : List Name := [`Iff, `Iff.intro, `Iff.rec, `propext]
-
 /-- [`Modelgen.primReady`]'s question, asked of quotient/choice support after a
 construction has actually encountered one of those names. It is not folded
 into `primReady`: most simple models never use `funext` or choice. -/

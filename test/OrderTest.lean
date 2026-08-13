@@ -432,16 +432,14 @@ def run (root : String) : IO UInt32 := do
   state := state.check "original order breaks ready-node ties"
     (stable'.decls == #[independent, constantProvider, constantUser])
 
-  -- Fixed source support is conservative: whenever generation is enabled it
-  -- moves atomically, even if a pre-scan would call every owner unselected.
-  -- Disabling generation entirely retains ordinary stable ordering.
+  -- Enabled generation does not perturb an export without an unmodelled owner.
+  -- Once an exact selected owner is present, fixed support moves atomically.
   let nestedMutualOnly := { noGeneration with nested := true, mutualModels := true }
   let unrelatedSupport := exportOf
     #[inductiveRecord [`UnselectedSimple], axDecl `Eq, axDecl `PUnit]
-  state := state.check "enabled generation conservatively hoists fixed support" <|
+  state := state.check "enabled generation preserves unrelated source order" <|
     match scheduleSource unrelatedSupport nestedMutualOnly with
-    | .ok scheduled =>
-      scheduled.decls == #[axDecl `Eq, axDecl `PUnit, inductiveRecord [`UnselectedSimple]]
+    | .ok scheduled => scheduled.decls == unrelatedSupport.decls
     | .error _ => false
   state := state.check "disabled generation retains ordinary stable order" <|
     match scheduleSource unrelatedSupport noGeneration with
@@ -462,11 +460,9 @@ def run (root : String) : IO UInt32 := do
     | .error _ => false
   let alreadyModeled := exportOf
     #[axDecl (Naming.modelName `SelectedA), selectedOwner, axDecl `Eq, axDecl `PUnit]
-  state := state.check "fixed support also precedes an already-modeled owner" <|
+  state := state.check "already-modeled source order is preserved" <|
     match scheduleSource alreadyModeled nestedMutualOnly with
-    | .ok scheduled =>
-      scheduled.decls == #[axDecl `Eq, axDecl `PUnit,
-        axDecl (Naming.modelName `SelectedA), selectedOwner]
+    | .ok scheduled => scheduled.decls == alreadyModeled.decls
     | .error _ => false
 
   -- The exact eighteen declarations which the full Mathlib run used to reach
@@ -483,7 +479,13 @@ def run (root : String) : IO UInt32 := do
       axDecl `Quot, axDecl `Quot.sound]
   let irrelevantTail := (Array.range 256).map fun index =>
     axDecl ((`IrrelevantTail).mkNum index)
-  let supportStress := exportOf (earlyOwners ++ lateSupport ++ irrelevantTail)
+  -- This real Mathlib namespace shape used to be mistaken for fixed PUnit
+  -- support. Its dependency on LE then polluted the preferred closure and
+  -- kept LE ahead of Eq. Exact support selection leaves it in the ordinary
+  -- tail while still hoisting the canonical PUnit block above the owners.
+  let punitNamespaceTail := axDecl `PUnit.le (.const `LE [])
+  let supportStress := exportOf
+    (earlyOwners ++ lateSupport ++ irrelevantTail ++ #[punitNamespaceTail])
   let supportStress' := scheduleSource supportStress
     { noGeneration with simple := true, basic := true }
   state := state.check "all Mathlib early owners follow late fixed support" <|
@@ -492,6 +494,12 @@ def run (root : String) : IO UInt32 := do
       [`Eq, `Nat, `PSigma', `PUnit, `Quot, `Quot.sound].all fun support =>
         earlyNames.all fun owner => before scheduled support owner
     | .error _ => false
+  state := state.check "ordinary PUnit namespace tail is not fixed support" <|
+    !scheduledSupportRecord { noGeneration with simple := true, basic := true }
+      punitNamespaceTail &&
+      match supportStress' with
+      | .ok scheduled => before scheduled `LE `PUnit.le
+      | .error _ => false
   state := state.check "post-schedule support certificate accepts the stress order" <|
     match supportStress' with
     | .ok scheduled =>
