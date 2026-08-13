@@ -192,11 +192,16 @@ def main (args : List String) : IO UInt32 := do
     args := #["--no-check", "--no-type-check-output", "-o",
       stagedReplayTarget.toString, "-"]
     env := #[("MODELGEN_RAW_SPOOL", some "1")] } (some invalidText)
-  state := state.check "late staged replay rejection leaves named output untouched" <|
+  let stagedReplayUntouched :=
     stagedReplayRejected.exitCode == 1 &&
       (← IO.FS.readFile stagedReplayTarget) == gatedSentinel &&
       (stagedReplayRejected.stderr.splitOn
         "kernel rejected an input declaration during generation:").length > 1
+  unless stagedReplayUntouched do
+    IO.eprintln s!"late staged replay diagnostic: exit={stagedReplayRejected.exitCode}, \
+      stderr={repr stagedReplayRejected.stderr}, target={repr (← IO.FS.readFile stagedReplayTarget)}"
+  state := state.check "late staged replay rejection leaves named output untouched"
+    stagedReplayUntouched
   IO.FS.removeFile stagedReplayTarget
   IO.FS.removeFile invalidPath
 
@@ -538,8 +543,9 @@ def main (args : List String) : IO UInt32 := do
     stagedRun.exitCode == 0 && stagedRun.stdout == stdoutRun.stdout
   let fallbackCwd := s!"{scratch}/main-cli-no-spool-root"
   IO.FS.createDirAll fallbackCwd
+  let nestedAbsolute ← System.FilePath.realPath nested
   let fallbackRun ← runModelgenAt binary
-    ["--no-inductives", "--no-check", "--quiet", nested] fallbackCwd
+    ["--no-inductives", "--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
   state := state.check "missing staging root falls back without changing output" <|
     fallbackRun.exitCode == 0 && fallbackRun.stdout == stdoutRun.stdout
   IO.FS.removeDir fallbackCwd
