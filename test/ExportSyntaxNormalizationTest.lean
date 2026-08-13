@@ -97,6 +97,7 @@ def run (root : String) : IO UInt32 := do
 
   let flatInput ← readExport s!"{root}/test/fixtures/modelgen/nest_fam_arg.ndjson"
   let (flatOutput, flatReport) ← generatedExport flatInput
+  let flatFamilyOwner := (`Flat._model._impl).mkNum 0
   let flatOwner := (`Flat._model._impl).mkNum 1
   let flatIotas := #[Naming.projectionIotaName flatOwner 0,
     Naming.projectionIotaName flatOwner 1]
@@ -106,7 +107,7 @@ def run (root : String) : IO UInt32 := do
     ((Check.check flatOutput).all fun violation =>
       !(flatOwner.isPrefixOf violation.familyOwner))
   state := state.check "generated Flat owner checks through the source syntax overlay"
-    (flatReport.generated.any (·.1 == flatOwner) && flatReport.stmtErrors.isEmpty)
+    (flatReport.generated.any (·.1 == flatFamilyOwner) && flatReport.stmtErrors.isEmpty)
 
   IO.println s!"export syntax normalization: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
