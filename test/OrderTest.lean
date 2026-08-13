@@ -262,6 +262,14 @@ def replayGeneratedIn (base : Environment) (records : Array EDecl) :
     (Lean.Meta.MetaM.run' (checkGeneratedIn base records)) context { env := base }
   return result
 
+def exactInductiveRecord (env : Environment) (names : Array Name) : IO EDecl := do
+  let context : Core.Context :=
+    { fileName := "<generated-replay-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (record, _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run' (indEDecl names)) context { env }
+  return record
+
 def generatedReplayRejects (base : Environment) (records : Array EDecl) : IO Bool := do
   match ← replayGeneratedIn base records with
   | .error _ => return true
@@ -359,6 +367,16 @@ def run (root : String) : IO UInt32 := do
     | throw <| IO.userError "the kernel did not expose all four quotient records"
   let #[quot, mk, lift, ind] := quotientRecords
     | throw <| IO.userError "the kernel quotient did not have four export records"
+  let eqRecord ← exactInductiveRecord quotientBase #[`Eq]
+  state := state.check "generated Eq may precede and support a generated quotient bundle" <|
+    match ← replayGeneratedIn empty (#[eqRecord] ++ quotientRecords) with
+    | .ok checked =>
+        checked.constants.contains `Eq && installedQuotRecords? checked == some quotientRecords
+    | .error _ => false
+  let quotientBeforeEqRejected ←
+    generatedReplayRejects empty (quotientRecords ++ #[eqRecord])
+  state := state.check "generated quotient cannot precede its generated Eq prerequisite"
+    quotientBeforeEqRejected
   state := state.check "canonical quotient bundle replays exactly once" <|
     match ← replayGeneratedIn quotientBase quotientRecords with
     | .ok checked => installedQuotRecords? checked == some quotientRecords
