@@ -214,6 +214,32 @@ private def withMutualMinorBinders (minorType : Expr) (constructor : Name)
     let hypotheses := binders.filter fun binder => !fields.contains binder
     k binders fields hypotheses result
 
+/-- Recover a source constructor key from a minor's result major.  The table
+contains `(source, modeled)` names, so both public and private simultaneous
+minor telescopes use the same name-only association. -/
+private def mutualMinorKey (candidates : Array (Name × Name)) (minorType : Expr) :
+    GenM Name := do
+  forallBoundedTelescope minorType (some (numForalls minorType)) fun _ result => do
+    let some major := result.getAppArgs.back?
+      | badShape "a mutual minor has no constructor major"
+    let some modeled := major.getAppFn.constName?
+      | badShape "a mutual minor major is not a constructor application"
+    let found := candidates.filter (·.2 == modeled)
+    unless found.size == 1 do
+      badShape s!"a mutual minor constructor {modeled} has no unique source key"
+    return found[0]!.1
+
+private def keyedMutualMinors (candidates : Array (Name × Name))
+    (minors : Array Expr) : GenM (Array (Name × Expr)) := do
+  let mut keyed := #[]
+  for minor in minors do
+    let key ← mutualMinorKey candidates (← inferType minor)
+    if keyed.any (·.1 == key) then badShape s!"duplicate mutual minor key {key}"
+    keyed := keyed.push (key, minor)
+  unless keyed.size == candidates.size do
+    badShape "the mutual minor table is incomplete"
+  return keyed
+
 private def mutualUnrollPlan (all : Array Name) (constructors : Array ECtor)
     (members : Array MutualMemberShape) (certificate : IsoFamilyImplementation)
     (target : Name) (parameters : Array Expr) (level : Level) (levels : List Level) :
@@ -629,6 +655,12 @@ private def mutualRecursorPlan (types : Array EIndType) (constructors : Array EC
     else levels
   unless publicMotives.size == all.size && publicMinors.size == constructors.size do
     badShape s!"{sourceRecursor.name}'s public prefix has inconsistent cardinalities"
+  let publicConstructorKeys := constructors.map fun constructor =>
+    (constructor.name, publicConstructor constructor.name)
+  let publicMinorTable ← keyedMutualMinors publicConstructorKeys publicMinors
+  let privateConstructorKeys := constructors.map fun constructor =>
+    let member := familyCertificateMember! certificate constructor.induct
+    (constructor.name, privateConstructor! member constructor.name)
   let mut privateMotives := #[]
   for index in [0:all.size] do
     let owner := all[index]!
@@ -648,10 +680,14 @@ private def mutualRecursorPlan (types : Array EIndType) (constructors : Array EC
       | badShape s!"{targetMember.privateRecursor} has too few motives"
     current := body.instantiate1 motive
   let mut privateMinors := #[]
-  for constructorIndex in [0:constructors.size] do
-    let constructor := constructors[constructorIndex]!
+  for _ in [0:constructors.size] do
     let .forallE _ privateMinorType body _ := current
       | badShape s!"{targetMember.privateRecursor} has too few minors"
+    let constructorKey ← mutualMinorKey privateConstructorKeys privateMinorType
+    let some constructor := constructors.find? (·.name == constructorKey)
+      | badShape s!"private mutual minor names absent constructor {constructorKey}"
+    let some (_, publicMinor) := publicMinorTable.find? (·.1 == constructor.name)
+      | badShape s!"{constructor.name}'s public mutual minor is absent"
     let ownerShape := familyMember! members constructor.induct
     let ownerMember := familyCertificateMember! certificate constructor.induct
     let privateConstructor := privateConstructor! ownerMember constructor.name
@@ -672,7 +708,7 @@ private def mutualRecursorPlan (types : Array EIndType) (constructors : Array EC
         else
           mappedBinders := mappedBinders.push hypotheses[hypothesisIndex]!
           hypothesisIndex := hypothesisIndex + 1
-      let publicResult := mkAppN publicMinors[constructorIndex]! mappedBinders
+      let publicResult := mkAppN publicMinor mappedBinders
       let agreement ← mutualConstructorAgreement all constructors members certificate eqi
         constructor.induct constructor parameters fields levels
       let ownerCarrier := mkAppN (.const ownerMember.publicSelf levels) parameters
@@ -914,6 +950,9 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
         let motives := pre.extract sourceRecursor.numParams
           (sourceRecursor.numParams + sourceRecursor.numMotives)
         let minors := pre.extract (sourceRecursor.numParams + sourceRecursor.numMotives) numPre
+        let publicMinorTable ← keyedMutualMinors
+          (constructors.map fun constructor =>
+            (constructor.name, publicConstructor constructor.name)) minors
         let plan ← mutualRecursorPlan types constructors members certificate eqi sourceRecursor
           parameters motives minors levels
         let constructorType := exact constructor.type
@@ -950,7 +989,8 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
           let privateConstructor := privateConstructor! ownerMember constructor.name
           let privateMajor := mkAppN (.const privateConstructor levels)
             (parameters ++ privateFields)
-          let publicMinor := minors[constructors.findIdx? (·.name == constructor.name) |>.get!]!
+          let some (_, publicMinor) := publicMinorTable.find? (·.1 == constructor.name)
+            | badShape s!"{constructor.name}'s public mutual minor is absent"
           let proof ← if recursiveFields.isEmpty then do
               let publicResult := mkAppN publicMinor fields
               let rollCtor := eqi.refl' ownerShape.level ownerPrivateCarrier
