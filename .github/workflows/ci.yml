@@ -42,6 +42,7 @@ jobs:
 
           PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
             python3 -m py_compile test/scripts/check_arena_corpus.py
+          PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_arena_corpus_runner.py
           lake -Kjobs=1 build modelgen
           test/scripts/check_arena_corpus.py
 
