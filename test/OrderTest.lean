@@ -383,9 +383,72 @@ def finalEnvironmentIsIsolated (run : FilterRun) : Bool :=
   census.retainedPublic.isEmpty && census.retainedUnexpected.isEmpty &&
     census.missingFixed.isEmpty
 
+def summaryEqual (left right : Order.DeclSummary) : Bool :=
+  left.ordinal == right.ordinal && left.introduced == right.introduced &&
+    left.referenced == right.referenced && left.origin == right.origin &&
+    left.owner == right.owner && left.support == right.support &&
+    left.modelSlots == right.modelSlots && left.modelBefore == right.modelBefore
+
+def summariesEqual (left right : Array Order.DeclSummary) : Bool :=
+  left.size == right.size && (Array.range left.size).all fun i =>
+    summaryEqual left[i]! right[i]!
+
+def orderOutcomesEqual (left right : Except Order.Error (Array Nat)) : Bool :=
+  match left, right with
+  | .ok left, .ok right => left == right
+  | .error left, .error right => toString (repr left) == toString (repr right)
+  | _, _ => false
+
 def run (root : String) : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
+
+  -- The phase-two census is deliberately checked against the independent
+  -- whole-export implementations retained during migration.  The fixture
+  -- combines declaration metadata, an inductive owner, duplicate record-name
+  -- occurrences and a transparent definition so every frozen table has a
+  -- nonempty observation.
+  let censusInput := exportOf #[
+    modelDef `CensusTransparent,
+    metadataRecord,
+    axDecl `CensusDuplicate,
+    axDecl `CensusDuplicate]
+  let census := SourceCensus.ofSource censusInput
+  let referenceIndex := Check.SyntaxIndex.ofSource censusInput
+  state := state.check "incremental syntax discovery equals whole-export discovery" <|
+    Check.discoverWithIndex censusInput census.sourceSyntax ==
+      Check.discoverWithIndex censusInput referenceIndex
+  state := state.check "incremental global syntax rows equal whole-export rows" <|
+    Check.globalExtraRecordsWithIndex census.sourceSyntax censusInput.decls ==
+      Check.globalExtraRecordsWithIndex referenceIndex censusInput.decls
+  state := state.check "incremental source summaries equal whole-export summaries" <|
+    summariesEqual census.summaries (Order.summaries censusInput)
+  state := state.check "incremental certificate rows equal whole-export rows" <|
+    census.familyCertificateRecords censusInput censusInput ==
+      Check.compactFamilyCertificateRecordsWithIndex censusInput referenceIndex
+        (Check.discoverWithIndex censusInput referenceIndex)
+  state := state.check "incremental raw-name callback keeps historical last occurrence" <|
+    census.reserved.contains `CensusDuplicate &&
+      census.rawOrdinals[`CensusDuplicate]? == some 3
+  state := state.check "incremental duplicate diagnostics equal full record ordering" <|
+    orderOutcomesEqual (Order.summaryRecordOrder census.summaries)
+      (Order.recordOrder censusInput)
+  let censusCycle := exportOf #[
+    axDecl `CensusCycleA (.const `CensusCycleB []),
+    axDecl `CensusCycleB (.const `CensusCycleA [])]
+  let cycleCensus := SourceCensus.ofSource censusCycle
+  state := state.check "incremental cycle diagnostics equal full record ordering" <|
+    orderOutcomesEqual (Order.summaryRecordOrder cycleCensus.summaries)
+      (Order.recordOrder censusCycle)
+  let censusScheduled := exportOf #[
+    axDecl `CensusConsumer (.const `CensusProvider []), axDecl `CensusProvider]
+  let .ok censusScheduledView := Order.reorder censusScheduled
+    | throw <| IO.userError "census scheduled-view fixture did not reorder"
+  let scheduledCensus := SourceCensus.ofSource censusScheduled
+  state := state.check "scheduled callback summaries retain view ordinals" <|
+    summariesEqual
+      (Order.summariesIncremental censusScheduledView scheduledCensus.sourceSyntax)
+      (Order.summaries censusScheduledView)
 
   -- lean4export spells the kernel's one quotient declaration as exactly four
   -- consecutive records.  Replay must validate the bundle before the first
