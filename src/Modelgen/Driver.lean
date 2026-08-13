@@ -8,16 +8,16 @@ import Modelgen.Order
 /-!
 # The filter
 
-`.ndjson` in, `.ndjson` out. The input is **trusted**: every declaration is
-replayed into a `Lean.Environment` with checking off. Only the declarations
-this tool *generates* are checked, and they are checked by the kernel, one at a
-time.
+`.ndjson` in, `.ndjson` out. Generation replays source declarations into its
+analysis environment without checking their values; the independent
+`--type-check-input` and `--type-check-output` gates request whole-stream kernel
+verdicts. Every declaration this tool generates is always checked in an
+owner-free environment before it can be emitted.
 
-Beside each nested inductive and each plain mutual block the output carries that
-declaration's model — before it for the first and, when the input's own `Eq`
-gets in the way, just after the block for the second. The
-input's own records are otherwise unchanged, and a file with neither kind of
-declaration is copied **byte for byte** rather than re-serialised.
+Beside each supported inductive the output carries that declaration's complete
+public model family. Final ordering places every model record before its owner
+and preserves the dependency constraints of the complete transformed export.
+Input declarations themselves retain their exact exported records.
 
 There are **three** constructions and they are separate files.
 `src/Modelgen/Model.lean` specialises a nested declaration into a mutual block
@@ -27,11 +27,12 @@ plain mutual block into an implementation tag and one auxiliary inductive;
 models a single inductive from the primitive basis. None is a degenerate case
 of another, and this driver is the only thing that composes them.
 
-## Why the whole file is re-interned when anything is spliced
+## Why output is re-interned
 
-The target parser rejects a back-reference that is not the current count, so a
-model cannot be inserted into an existing file with fresh high indices. When
-there is a model to write, [`Modelgen.Export.render`] re-interns from scratch.
+Declaration records refer into one file-wide name, level, and expression arena.
+After generation and ordering, [`Modelgen.Export.writeTo`] therefore serializes
+the parsed snapshot as one self-contained arena. The writer streams record
+lines rather than retaining the rendered file as one string.
 
 ## The free oracle
 

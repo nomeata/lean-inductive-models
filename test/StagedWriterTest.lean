@@ -16,6 +16,17 @@ def lines (records : Array String) : String :=
 def removeIfPresent (path : String) : IO Unit := do
   if ← System.FilePath.pathExists path then IO.FS.removeFile path
 
+def parseHandleAt (path : String) : IO (Except String Export) :=
+  IO.FS.withFile path .read fun handle => Modelgen.parseHandle handle
+
+def bothReject (whole streamed : Except String Export) : Bool :=
+  whole.isError && streamed.isError
+
+def bothHaveDecls (whole streamed : Except String Export) (expected : Array EDecl) : Bool :=
+  match whole, streamed with
+  | .ok first, .ok second => first.decls == expected && second.decls == expected
+  | _, _ => false
+
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let scratch := s!"{root}/_tmp"
@@ -24,7 +35,13 @@ def main (args : List String) : IO UInt32 := do
   let firstPath := s!"{scratch}/staged-writer-first.ndjson"
   let secondPath := s!"{scratch}/staged-writer-second.ndjson"
   let malformedPath := s!"{scratch}/staged-writer-malformed.ndjson"
-  let paths := [arenaPath, firstPath, secondPath, malformedPath]
+  let nameHolePath := s!"{scratch}/staged-writer-name-hole.ndjson"
+  let levelHolePath := s!"{scratch}/staged-writer-level-hole.ndjson"
+  let exprHolePath := s!"{scratch}/staged-writer-expr-hole.ndjson"
+  let sparsePath := s!"{scratch}/staged-writer-sparse.ndjson"
+  let overwritePath := s!"{scratch}/staged-writer-overwrite.ndjson"
+  let paths := [arenaPath, firstPath, secondPath, malformedPath,
+    nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -81,6 +98,57 @@ def main (args : List String) : IO UInt32 := do
     match Modelgen.parse malformedText (analyse := false) with
     | .error _ => true
     | .ok output => output.decls != #[first, second]
+
+  -- Sparse and out-of-order IDs are part of the arena format, but an ID which
+  -- has never been written is not an implicit default value.  Exercise every
+  -- table through both parser front ends.
+  let nameHole := lines #[
+    "{\"in\":2,\"str\":{\"pre\":0,\"str\":\"DefinedName\"}}",
+    "{\"il\":1,\"param\":1}"]
+  IO.FS.writeFile nameHolePath nameHole
+  state := state.check "name references into sparse holes fail closed" <|
+    bothReject (Modelgen.parse nameHole) (← parseHandleAt nameHolePath)
+
+  let levelHole := lines #[
+    "{\"il\":2,\"succ\":0}",
+    "{\"ie\":0,\"sort\":1}"]
+  IO.FS.writeFile levelHolePath levelHole
+  state := state.check "level references into sparse holes fail closed" <|
+    bothReject (Modelgen.parse levelHole) (← parseHandleAt levelHolePath)
+
+  let exprHole := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"HoleExprOwner\"}}",
+    "{\"ie\":2,\"sort\":0}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}"]
+  IO.FS.writeFile exprHolePath exprHole
+  state := state.check "expression references into sparse holes fail closed" <|
+    bothReject (Modelgen.parse exprHole) (← parseHandleAt exprHolePath)
+
+  -- A very large explicit ID must remain valid without allocating every gap.
+  let sparse := lines #[
+    "{\"in\":1000000000,\"str\":{\"pre\":0,\"str\":\"SparseOwner\"}}",
+    "{\"il\":1000000000,\"param\":1000000000}",
+    "{\"ie\":1000000000,\"sort\":1000000000}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1000000000,\"type\":1000000000}}"]
+  IO.FS.writeFile sparsePath sparse
+  let sparseDecl : EDecl := .ax `SparseOwner [] (.sort (.param `SparseOwner)) false
+  state := state.check "large sparse IDs remain exact and bounded" <|
+    bothHaveDecls (Modelgen.parse sparse) (← parseHandleAt sparsePath) #[sparseDecl]
+
+  -- The arena parser used by the Kernel Arena gives the latest explicit value
+  -- to a repeated ID.  Preserve that behavior independently for all tables.
+  let overwrite := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"Before\"}}",
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"After\"}}",
+    "{\"il\":1,\"succ\":0}",
+    "{\"il\":1,\"param\":1}",
+    "{\"ie\":0,\"sort\":0}",
+    "{\"ie\":0,\"sort\":1}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":0}}"]
+  IO.FS.writeFile overwritePath overwrite
+  let overwrittenDecl : EDecl := .ax `After [] (.sort (.param `After)) false
+  state := state.check "explicit repeated arena IDs overwrite in both readers" <|
+    bothHaveDecls (Modelgen.parse overwrite) (← parseHandleAt overwritePath) #[overwrittenDecl]
 
   for path in paths do removeIfPresent path
   IO.println s!"staged writer: {state.passed} passed, {state.failed.size} failed"

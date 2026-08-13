@@ -358,6 +358,18 @@ def main (args : List String) : IO UInt32 := do
     ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] "not ndjson\n"
   state := state.check "malformed stdin is a tool error with exit 3" <|
     malformed.exitCode == 3 && (malformed.stderr.splitOn "parse error:").length > 1
+  let arenaHoles : Array (String × String) := #[
+    ("name", "{\"in\":2,\"str\":{\"pre\":0,\"str\":\"Defined\"}}\n" ++
+      "{\"il\":1,\"param\":1}\n"),
+    ("level", "{\"il\":2,\"succ\":0}\n{\"ie\":0,\"sort\":1}\n"),
+    ("expression", "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"Owner\"}}\n" ++
+      "{\"ie\":2,\"sort\":0}\n" ++
+      "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}\n")]
+  for (kind, arenaHole) in arenaHoles do
+    let result ← runModelgenStdin binary
+      ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] arenaHole
+    state := state.check s!"undefined sparse {kind} ID is a tool error with exit 3" <|
+      result.exitCode == 3 && (result.stderr.splitOn "parse error:").length > 1
   let missing ← runModelgen binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output",
     s!"{scratch}/does-not-exist.ndjson"]
