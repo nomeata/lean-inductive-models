@@ -2312,6 +2312,19 @@ This is the boundary a later census/span reader can drive without changing an
 owner's pre-replay generation, source replay, post-replay generation, or atomic
 island close. -/
 
+/-- Observable, value-free boundary facts for one completed source transition.
+This regression seam deliberately exposes neither `FilterState` nor a live
+environment, so a test cannot mutate subsequent generation. -/
+structure FilterSourceStep where
+  scheduledOrdinal : Nat
+  rawOrdinal : Nat
+  sourceNames : Array Name
+  sourceIsInductive : Bool
+  sourceInstalled : Bool
+  generated : Array (Name × Nat)
+  generatedRecords : Nat
+  deriving Inhabited, Repr, BEq
+
 private structure FilterContext where
   source : Export
   checkRecursors : Bool
@@ -2326,6 +2339,7 @@ private structure FilterContext where
   sourceFamilyRecords : Array (Array Check.CompactFamilyCertificate)
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
+  collectTrace : Bool := false
 
 private structure FilterState where
   mainEnv : Environment
@@ -2339,6 +2353,7 @@ private structure FilterState where
     { statementsChecked := 0, violations := #[] }
   invalidBasis : Std.HashSet Name := {}
   persistentSupportOrigins : Std.HashMap Name Nat := {}
+  sourceSteps : Array FilterSourceStep := #[]
 
 private inductive FilterFeedResult where
   | next (state : FilterState)
@@ -2371,6 +2386,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut islandStatements := state.islandStatements
   let mut invalidBasis := state.invalidBasis
   let mut persistentSupportOrigins := state.persistentSupportOrigins
+  let mut sourceSteps := state.sourceSteps
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
   let mut out : Array EDecl := #[]
@@ -2616,10 +2632,22 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     if let .induct _ _ rs := d then
       let (n, b) ← checkRecs rs
       rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
+  if context.collectTrace then
+    let some firstName := d.names.head? | throwError "source declaration has no name"
+    let some rawOrdinal := rawOrdinals[firstName]?
+      | throwError "logical source declaration {firstName} lost its raw ordinal"
+    sourceSteps := sourceSteps.push {
+      scheduledOrdinal
+      rawOrdinal
+      sourceNames := d.names.toArray
+      sourceIsInductive := d matches .induct ..
+      sourceInstalled := d.names.all mainEnv.constants.contains
+      generated := rep.generated.extract reportedBefore rep.generated.size
+      generatedRecords := out.size }
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, staged, stagedRecords,
     scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
-    persistentSupportOrigins }
+    persistentSupportOrigins, sourceSteps }
 
 /-- Complete compact ordering and checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
@@ -2717,8 +2745,8 @@ and compacted at its close boundary. The full declaration array is retained
 only by callers which explicitly request the legacy final-order/report oracle. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink? : Option IslandSink) (retainOracle : Bool)
-    (exactTransform : EDecl → EDecl := id) :
-    MetaM (Array EDecl × Report × StagedPlan) := do
+    (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false) :
+    MetaM (Array EDecl × Report × StagedPlan × Array FilterSourceStep) := do
   let scheduled ← match scheduleSource x generation with
     | .ok scheduled => pure scheduled
     | .error error => throwError "cannot schedule shared support: {repr error}"
@@ -2745,20 +2773,30 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let context : FilterContext := {
     source := x, checkRecursors, generation, sink?, retainOracle, exactTransform,
     sourceSyntax, sourceNormalizer, sourceSummaries, sourceGlobalExtras,
-    sourceFamilyRecords, rawOrdinals, reserved }
+    sourceFamilyRecords, rawOrdinals, reserved, collectTrace }
   let mut state : FilterState := { mainEnv, persistentSyntax := sourceSyntax }
   for declaration in scheduled.decls do
     match ← state.feedSource context declaration with
     | .next next => state := next
     | .unreplayable report =>
-      return (x.decls, report, { islands := #[], declarations := #[] })
-  state.finalize context
+      return (x.decls, report, { islands := #[], declarations := #[] }, state.sourceSteps)
+  let (decls, report, plan) ← state.finalize context
+  return (decls, report, plan, state.sourceSteps)
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _) ← runFilterCore x checkRecursors generation none true
+  let (decls, report, _, _) ← runFilterCore x checkRecursors generation none true
   return (decls, report)
+
+/-- Test-facing observer for the declaration-wise transition.  The generated
+output and report are produced by the same core invocation as the snapshots;
+ordinary production callers collect no snapshots. -/
+def runFilterWithSourceTrace (x : Export) (checkRecursors : Bool)
+    (generation : Cli.Config) : MetaM (Array EDecl × Report × Array FilterSourceStep) := do
+  let (decls, report, _, steps) ←
+    runFilterCore x checkRecursors generation none true (collectTrace := true)
+  return (decls, report, steps)
 
 /-- Focused exact-syntax regression seam. The transform is applied only to
 freshly serialized generated inductive records, before their immediate
@@ -2766,7 +2804,7 @@ composed consumer sees them; ordinary production callers use [`runFilter`]. -/
 def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) (transform : EDecl → EDecl) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _) ←
+  let (decls, report, _, _) ←
     runFilterCore x checkRecursors generation none true transform
   return (decls, report)
 
@@ -2774,15 +2812,16 @@ def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
 the full output remains live for comparison with final Order/Check. The
 returned plan has already discarded the compact checking summaries. -/
 def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
-    (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) :=
-  runFilterCore x checkRecursors generation (some sink) true
+    (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) := do
+  let (decls, report, plan, _) ← runFilterCore x checkRecursors generation (some sink) true
+  return (decls, report, plan)
 
 /-- AST-dropping staged generation. Accepted generated records are committed at
 island close and never appended to a cumulative declaration array. The result
 contains only ordered declaration locators and spool spans. -/
 def runFilterStaged (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Report × StagedPlan) := do
-  let (_, report, plan) ← runFilterCore x checkRecursors generation (some sink) false
+  let (_, report, plan, _) ← runFilterCore x checkRecursors generation (some sink) false
   return (report, plan)
 
 end InductiveModels

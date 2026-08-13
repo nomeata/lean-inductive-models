@@ -113,6 +113,9 @@ structure FilterRun where
   report : Report
   env : Environment
 
+structure TracedFilterRun extends FilterRun where
+  steps : Array FilterSourceStep
+
 structure StagedFilterRun extends FilterRun where
   plan : StagedPlan
   planValid : Bool
@@ -152,6 +155,19 @@ def runFilterState (input : Export) (generation : InductiveModels.Cli.Config)
   unless report.stmtErrors.isEmpty do
     throw <| IO.userError s!"generated statements differ: {report.stmtErrors}"
   return { input, output := { input with decls }, report, env := finalState.env }
+
+def runFilterTraceState (input : Export) (generation : InductiveModels.Cli.Config)
+    (checkRecursors : Bool := false) : IO TracedFilterRun := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<order-trace-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let ((decls, report, steps), finalState) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run'
+      (runFilterWithSourceTrace input checkRecursors generation)) context { env }
+  unless report.stmtErrors.isEmpty do
+    throw <| IO.userError s!"traced generated statements differ: {report.stmtErrors}"
+  return { input, output := { input with decls }, report, env := finalState.env, steps }
 
 def runFilterStagedState (scratch : String) (input : Export)
     (generation : InductiveModels.Cli.Config) (checkRecursors : Bool := false) : IO StagedFilterRun :=
@@ -682,11 +698,20 @@ def run (root : String) : IO UInt32 := do
   let feedProvider := axDecl `FeedProvider
   let feedInput := exportOf #[feedConsumer, feedProvider]
   let feedRun ← runFilterState feedInput noGeneration
+  let feedTrace ← runFilterTraceState feedInput noGeneration
   state := state.check "filter consumes one dependency-ordered source record at a time" <|
     feedRun.output.decls == #[feedProvider, feedConsumer] &&
       feedRun.report == ({} : Report) &&
       feedRun.env.constants.contains `FeedProvider &&
       feedRun.env.constants.contains `FeedConsumer
+  state := state.check "one-record trace preserves output and records logical/raw ordinals" <|
+    feedTrace.output.decls == feedRun.output.decls && feedTrace.report == feedRun.report &&
+      feedTrace.steps.map (·.scheduledOrdinal) == #[0, 1] &&
+      feedTrace.steps.map (·.rawOrdinal) == #[1, 0] &&
+      feedTrace.steps.map (·.sourceNames) == #[#[`FeedProvider], #[`FeedConsumer]] &&
+      feedTrace.steps.all fun step =>
+        !step.sourceIsInductive && step.sourceInstalled &&
+          step.generated.isEmpty && step.generatedRecords == 0
 
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,
@@ -938,6 +963,21 @@ def run (root : String) : IO UInt32 := do
       latePUnitRun.env.constants.contains `PFP &&
       !latePUnitRun.env.constants.contains (Naming.modelName `PFP) &&
       finalEnvironmentIsIsolated latePUnitRun
+  let latePUnitTrace ← runFilterTraceState latePUnitRun.input
+    { noGeneration with simple := true }
+  let pfpSteps := latePUnitTrace.steps.filter fun step =>
+    step.generated.any (·.1 == `PFP)
+  state := state.check "one inductive transition owns pre/post generation and island close" <|
+    latePUnitTrace.output.decls == latePUnitRun.output.decls &&
+      latePUnitTrace.report == latePUnitRun.report &&
+      latePUnitTrace.steps.size == latePUnitRun.input.decls.size &&
+      latePUnitTrace.steps.map (·.scheduledOrdinal) ==
+        Array.range latePUnitRun.input.decls.size &&
+      latePUnitTrace.steps.map (·.rawOrdinal) == #[0, 2, 1] &&
+      pfpSteps.size == 1 && pfpSteps[0]!.sourceNames.contains `PFP &&
+      pfpSteps[0]!.sourceIsInductive && pfpSteps[0]!.sourceInstalled &&
+      pfpSteps[0]!.generatedRecords > 0 &&
+      latePUnitTrace.steps.filter (·.generatedRecords > 0) == pfpSteps
 
   IO.println s!"record order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
