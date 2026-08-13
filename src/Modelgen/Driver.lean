@@ -71,8 +71,9 @@ structure Report where
   owner records, and the ones that did not match. -/
   stmtChecked : Nat := 0
   stmtErrors : Array String := #[]
-  /-- Peak number of complete model witnesses retained inside one not-yet-closed
-  generated island.  This is a retention invariant, not an output statistic. -/
+  /-- Peak number of compact splice summaries retained inside one not-yet-closed
+  generated island. `PendingModel` deliberately cannot retain an `Iso`. This
+  is a retention invariant, not an output statistic. -/
   maxLivePendingModels : Nat := 0
   /-- Peak number of generated declaration records retained by one island
   before ordering, checking, and eventual staged serialization. -/
@@ -83,10 +84,12 @@ structure Report where
   unreplayable : Option String := none
   deriving Inhabited
 
-/-- One generated model awaiting owner-free reinstallation at the end of its
-disposable construction fork. -/
+/-- The compact support-persistence witness retained until an island closes.
+The complete `Iso` is needed only while composing and serializing a model;
+retaining it here would keep every generated declaration and construction
+expression alive until owner-free replay. -/
 structure PendingModel where
-  iso : Iso
+  spliced : Array Name
 
 /-- The unique minor-premise position belonging to `constructorName` in a
 mutual recursor telescope.  Each exported recursor record carries only its
@@ -913,7 +916,7 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
     (models : Array PendingModel) :
     MetaM (Except String Environment) := do
   let spliced := models.foldl (init := ({} : Std.HashSet Name)) fun names model =>
-    model.iso.spliced.foldl (fun names name => names.insert name) names
+    model.spliced.foldl (fun names name => names.insert name) names
   let mut main := base
   for record in records do
     if record.names.any spliced.contains &&
@@ -958,6 +961,10 @@ def closeModelIsland (template : Export) (main : Environment)
       let view := { template with decls := generated ++ template.decls }
       let families := Check.statementFamiliesFor view generatedOwners
       Check.checkStatementFamiliesWithIndex view (.ofExport view) families
+  -- Drop the construction fork before reconstructing any declaration.  The
+  -- exact serialized records and compact splice witnesses above are the only
+  -- state allowed to cross into owner-free checked replay.
+  setEnv main
   match ← checkGeneratedIn main generated with
   | .error message => return .error message
   | .ok _ =>
@@ -1681,7 +1688,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
-    let mut st2 := (out, rep, pending.push { iso := is })
+    let mut st2 := (out, rep, pending.push { spliced := is.spliced })
     if basicModels then
       for n in is.spliced do
         if primBasis.contains n then continue
@@ -1802,7 +1809,7 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
-    let st := (out, rep, pending.push { iso := is })
+    let st := (out, rep, pending.push { spliced := is.spliced })
     if simpleModels then
       primCompose is.members is.levelParams np reserved basicModels st
     else
@@ -1885,7 +1892,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
               rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
               unless is.spliced.isEmpty do
                 rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
-              pending := pending.push { iso := is }
+              pending := pending.push { spliced := is.spliced }
               -- ── the model of the model ────────────────────────────────────
               --
               -- **What has just been emitted is a `mutual … end` block**, and
@@ -1935,7 +1942,7 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
                   out := out ++ records
                   rep := { rep with
                     generated := rep.generated.push (is.members[0]!, is2.decls.size) }
-                  pending := pending.push { iso := is2 }
+                  pending := pending.push { spliced := is2.spliced }
                   -- ── the third step of the chain (`--simple`) ──────────────
                   -- The mutual model's own single inductives, modelled from
                   -- the primitives — nested → mutual → primitives, one pass.
