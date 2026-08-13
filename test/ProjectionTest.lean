@@ -119,6 +119,30 @@ def intrinsicFieldsFor (x : Export) (owner : Name) : Array Nat :=
         x.intrinsicProjectionFieldsFor type constructors
     | _ => none) |>.getD #[]
 
+def indexedIntrinsicFieldsAgree (x : Export) : Bool :=
+  let index := Check.SyntaxIndex.ofSource x
+  x.decls.all fun declaration => match declaration with
+    | .induct types constructors _ =>
+      types.all fun type =>
+        index.intrinsicProjectionFields type constructors ==
+          x.intrinsicProjectionFieldsFor type constructors
+    | _ => true
+
+private structure ProjectionPropertyDecl where
+  key : Nat
+  ordinal : Nat
+  declaration : EDecl
+
+private def projectionPropertyMix (seed index : Nat) : Nat :=
+  (seed * 1664525 + index * 1013904223 + index * index * 31) % 2147483647
+
+def permuteProjectionExport (x : Export) (seed : Nat) : Export :=
+  let keyed := x.decls.mapIdx fun ordinal declaration =>
+    { key := projectionPropertyMix seed ordinal, ordinal, declaration : ProjectionPropertyDecl }
+  let ordered := keyed.qsort fun left right =>
+    left.key < right.key || (left.key == right.key && left.ordinal < right.ordinal)
+  { x with decls := ordered.map (·.declaration) }
+
 def replaceDeclarationType (x : Export) (name : Name) (type : Expr) : Export :=
   { x with decls := x.decls.map fun declaration => match declaration with
     | .ax got params _ isUnsafe =>
@@ -213,6 +237,11 @@ def main : IO UInt32 := do
     #[Naming.projectionName `SortFields fieldIndex,
       Naming.projectionIotaName `SortFields fieldIndex]
   let mut state : TestState := {}
+  state := state.check "indexed intrinsic fields equal the whole-export helper" <|
+    indexedIntrinsicFieldsAgree wrapperRaw && indexedIntrinsicFieldsAgree raw
+  state := state.check "indexed intrinsic fields survive focused permutations" <|
+    (Array.range 64).all fun seed =>
+      indexedIntrinsicFieldsAgree (permuteProjectionExport wrapperRaw seed)
 
   -- A maybe-zero singleton cannot use the ordinary Church carrier: it forgets
   -- which payload constructed it, while an intrinsic projection retains that
