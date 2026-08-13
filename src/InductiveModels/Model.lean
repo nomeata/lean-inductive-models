@@ -3120,7 +3120,15 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- ── 7. the ι rules themselves ──────────────────────────────────────────
   let mut iotas : Array (Nat × Name × Name) := #[]
   for k in [0:shapes.size] do
-    let sourceRecursor? := exportRecursors.find? (·.name == exportRecs[k]!)
+    -- Exact raw syntax is authoritative for the block's real public
+    -- recursors. Nested mimic recursors have a different generated field/IH
+    -- telescope; beta-applying the source rule to that telescope can shift a
+    -- deeper container field (for example `DTree.rec_2`'s `List.cons`) into
+    -- the element slot. Their installed statement is the public contract and
+    -- was already constructed at the exact emitted names.
+    let sourceRecursor? := if g.isReal k then
+        exportRecursors.find? (·.name == exportRecs[k]!)
+      else none
     for (key, nm, d) in ← g.iotaDecls shapes[k]! ctorTys sourceRecursor? exactSource do
       taken nm
       addChecked d

@@ -717,6 +717,12 @@ def run (root : String) : IO UInt32 := do
           pair.owner == `Tree.rec && pair.model == Naming.modelName `Tree.rec) &&
         family.correspondence.iotas.any (fun rule =>
           rule.recursor == `Tree.rec && rule.name == Naming.iotaName `Tree.rec 1)
+  let nestedDeepRun ← generatedFixtureState
+    s!"{root}/test/fixtures/inductive-models/nested_deep.ndjson"
+    { noGeneration with nested := true }
+  state := state.check "depth-two nested iotas remain on the legacy motive path" <|
+    nestedDeepRun.report.generated.any (·.1 == `DTree) &&
+      nestedDeepRun.output.decls.any (·.names.contains `DTree.rec_2._model.iota_1)
   state := state.check "nested-only models are absent from the final replay environment" <|
     finalEnvironmentIsIsolated nestedRun
   let futureModelProbe : EDecl :=
