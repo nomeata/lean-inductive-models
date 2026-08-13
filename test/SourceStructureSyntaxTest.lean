@@ -2,10 +2,10 @@ import Modelgen.Driver
 import Modelgen.Order
 
 /-!
-# Exact source-structure syntax diagnostic
+# Exact source-structure syntax regression
 
 This fixture keeps an inherited projection in a dependent constructor field
-and an `optParam` default in the same source-owned structure.  The diagnostic
+and an `optParam` default in the same source-owned structure.  The regression
 records the generated declaration, the statement checker's literal
 expectation, and kernel readback for every public owner/constructor/recursor
 slot and for every intrinsic projection and projection rule.
@@ -279,9 +279,9 @@ def run (root : String) : IO UInt32 := do
   let mismatches := evidence.faces.filter fun face => face.actual != face.expected
   let kernelMatchesActual := evidence.faces.all fun face => face.actual == face.kernel
   let passed := coreCovered && projectionCovered && projectionIotaCovered &&
-    !mismatches.isEmpty && kernelMatchesActual &&
-    !evidence.report.stmtErrors.isEmpty && evidence.ownerFreeAccepted
-  IO.println s!"source structure diagnostic: {evidence.faces.size} faces; {
+    mismatches.isEmpty && kernelMatchesActual &&
+    evidence.report.stmtErrors.isEmpty && evidence.ownerFreeAccepted
+  IO.println s!"source structure exact syntax: {evidence.faces.size} faces; {
     evidence.report.stmtErrors.size} statement mismatches"
   unless passed do
     IO.eprintln s!"FAIL: core={coreCovered}, projection={projectionCovered}, \
