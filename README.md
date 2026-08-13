@@ -262,9 +262,20 @@ T._model.proj_j.iota :
 For a single nonrecursive, unindexed, unnested owner, and for an unindexed
 member of a plain mutual block, every field uses this literal equation,
 including dependent fields: those carrier routes make the modeled projections
-compute definitionally on the modeled constructor. Other simple-recursive,
-indexed, and source nested-specialization routes may recover an earlier field only
-propositionally. In those cases a dependent
+compute definitionally on the modeled constructor. Production also uses a
+one-layer public carrier over its private fixpoint for the current phase-one
+recursive class: a direct source-simple, one-member, one-constructor,
+unindexed, unnested, never-zero `Type` owner with exactly one recursive
+occurrence (direct or infinitary) and no later field depending on that
+recursive slot. Its complete public carrier, constructor, recursor/iota, and
+intrinsic projection family retain the exact source-shaped interface; its
+projection-iota right-hand sides are the literal fields and introduce no
+transport.
+
+Other recursive owners—including indexed, nested, composed, mutual,
+propositional/maybe-zero, multi-constructor, multi-recursive, and later-field-
+dependent shapes—remain on the established routes. Those routes may recover
+an earlier field only propositionally. In those cases a dependent
 field's right-hand side is the canonical transport of `fields[j]`, using the
 already generated projection-iota equalities for the minimal transitive set of
 earlier fields on which its type depends, in increasing field order. The
@@ -363,14 +374,16 @@ Missing, duplicate, renamed, differently typed, or non-theorem eta slots are
 rejected; an eta-looking declaration is also rejected for an ineligible
 member.
 
-An alternative one-layer carrier/equivalence design has been successfully
-compile-checked in
+The one-layer carrier/equivalence design was first compile-checked in
 [`OneLayerProjectionPrototype.lean`](test/OneLayerProjectionPrototype.lean),
 with implementation notes in
-[`OneLayerProjectionPrototype.md`](test/OneLayerProjectionPrototype.md). It is
-a prototype, not runtime coverage: production retains the projection and eta
-implementation described above, and a full carrier/recursor migration remains
-future work.
+[`OneLayerProjectionPrototype.md`](test/OneLayerProjectionPrototype.md).
+Production now implements the phase-one direct/infinitary class described
+above, with the embedded recursor compatibility independently compile-checked
+by [`OneLayerRecursorProof.lean`](test/OneLayerRecursorProof.lean). The
+prototype remains compile-only documentation rather than a claim of all-route
+coverage. Extending the one-layer public family to the remaining recursive
+routes is future work; their existing projection transports are intentional.
 
 ## Unit-like inductives
 
@@ -618,6 +631,7 @@ correctness_targets=(
 )
 compile_only_targets=(
   OneLayerProjectionPrototype
+  OneLayerRecursorProof
 )
 build_serially "${compile_only_targets[@]}"
 build_serially "${correctness_targets[@]}"

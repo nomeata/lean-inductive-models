@@ -161,6 +161,11 @@ lean_lib OneLayerProjectionPrototype where
   srcDir := "test"
   roots := #[`OneLayerProjectionPrototype]
 
+/-- Compile-time application oracle for the embedded one-layer recursor proof. -/
+lean_lib OneLayerRecursorProof where
+  srcDir := "test"
+  roots := #[`OneLayerRecursorProof]
+
 -- Diagnostics: these targets are useful during development, but are not
 -- correctness suites and are not part of the default build.
 lean_exe envprobe where
