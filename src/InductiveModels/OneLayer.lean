@@ -1,4 +1,5 @@
 import InductiveModels.Simple
+import Lean.Meta.Tactic.Simp
 
 /-!
 # One-layer public carriers
@@ -57,6 +58,20 @@ structure OneLayerPublicRecursor where
   recursorName : Name
   iotas : Array (Nat × Name × Name)
   deriving Inhabited
+
+private def proveOneLayerIota (names : OneLayerNames) (proposition : Expr) : GenM Expr := do
+  let mut theorems : SimpTheorems := {}
+  for name in #[names.publicNames.recursor, names.publicNames.ctors[0]!, names.roll,
+      names.unroll] do
+    theorems := ← theorems.addDeclToUnfold name
+  for name in #[names.implementation.iotas[0]!, names.unrollRoll, names.rollUnroll] do
+    theorems := ← theorems.addConst name
+  let context ← Simp.mkContext (simpTheorems := #[theorems])
+  let goal ← mkFreshExprMVar proposition
+  let (result, _) ← simpGoal goal.mvarId! context
+  unless result.isNone do
+    badShape s!"{names.publicNames.iotas[0]!}'s private computation and round-trip laws do not prove its exact public rule"
+  instantiateMVars goal
 
 private structure OneLayerUnrollPlan where
   motive : Expr
@@ -540,8 +555,35 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
   addChecked recursor
 
   let publicRecursorName := names.publicNames.recursor
-  let declarations := #[recursor]
-  let iotas : Array (Nat × Name × Name) := #[]
+  let sourceRule ← match sourceRecursor.rules[0]? with
+    | some rule => pure rule
+    | none => badShape s!"{sourceRecursor.name} has no rule for {sourceConstructor.1}"
+  unless sourceRule.ctor == sourceConstructor.1 do
+    badShape s!"{sourceRecursor.name}'s rule is for {sourceRule.ctor}, not {sourceConstructor.1}"
+  let iota ← forallBoundedTelescope publicRecursorType (some (np + 2)) fun pre _ => do
+    let parameters := pre.extract 0 np
+    let motive := pre[np]!
+    let constructorTelescope ← instForall publicConstructorType parameters
+    let fieldCount := numForalls constructorTelescope
+    forallBoundedTelescope constructorTelescope (some fieldCount) fun fields _ => do
+      let major := mkAppN (.const names.publicNames.ctors[0]! us) (parameters ++ fields)
+      let lhs := mkAppN (.const names.publicNames.recursor recLevels) (pre.push major)
+      let rhs := (restore publicTable sourceRule.rhs).beta (pre ++ fields)
+      let proposition := eqi.mk' motiveLevel (mkApp motive major) lhs rhs
+      let some exactFields := exactRecursorFieldTelescope? sourceRecursor 0 pre
+        | badShape s!"{sourceRecursor.name}'s exported rule has no exact field telescope"
+      let some fieldsType := closeForallsExact? (restore publicTable exactFields) fields proposition
+        | badShape s!"{sourceConstructor.1}'s exact field telescope is too short"
+      let some theoremType := closeForallsExact? publicRecursorType pre fieldsType
+        | badShape s!"{sourceRecursor.name}'s exact prefix is too short"
+      let proof ← proveOneLayerIota names proposition
+      pure <| Declaration.thmDecl
+        { name := names.publicNames.iotas[0]!, levelParams := sourceRecursor.levelParams
+          type := theoremType, value := ← mkLambdaFVars (pre ++ fields) proof }
+  addChecked iota
+  let declarations := #[recursor, iota]
+  let iotas : Array (Nat × Name × Name) :=
+    #[(0, sourceConstructor.1, names.publicNames.iotas[0]!)]
   return { declarations, recursorName := publicRecursorName, iotas }
 
 end InductiveModels
