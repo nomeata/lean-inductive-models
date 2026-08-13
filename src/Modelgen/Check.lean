@@ -1448,11 +1448,10 @@ def checkReport (x : Export) : Report :=
 
 /-! ## Compact whole-output certificates
 
-Once compact ordering succeeds, model records precede their owners and an
-owner backreference would have formed a dependency cycle. The remaining
-whole-output check can therefore retain each family's already-checked local
-interface diagnostics plus names needed for final discovery and extra-rule
-census, rather than its declarations and expression graph.
+Once compact ordering succeeds, model records precede their owners. An owner
+reference to a model name reinforces that order rather than forming a cycle,
+so the exact ordered owner-reference trace is retained as well. The remaining
+whole-output check can therefore release declarations and expression graphs.
 -/
 
 /-- Name-only whole-output certificate captured while one family's source and
@@ -1461,9 +1460,17 @@ checks and the final whole-stream extra-rule census. -/
 structure CompactFamilyCertificate where
   owner : Name
   publicNames : Array Name
+  ownerReferences : Array (Name × Name)
+  captureIsland? : Option Nat := none
   localViolations : Array Violation
   recursors : Array (Name × Name × Nat)
   deriving Inhabited, Repr, BEq
+
+/-- Mark a family whose syntax was checked with the declarations available in
+one generated island. `none` denotes the complete parsed source snapshot. -/
+def CompactFamilyCertificate.inIsland
+    (certificate : CompactFamilyCertificate) (island : Nat) : CompactFamilyCertificate :=
+  { certificate with captureIsland? := some island }
 
 private def notExtraRule : Violation → Bool
   | .extraRule .. => false
@@ -1475,6 +1482,7 @@ def compactFamilyCertificateWithIndex (x : Export) (index : SyntaxIndex)
     (family : Family) : CompactFamilyCertificate :=
   { owner := family.owner
     publicNames := family.correspondence.publicNames
+    ownerReferences := ownerReferenceCertificate x.decls[family.ownerDecl]!
     localViolations :=
       (checkFamilyWithIndex x index family false).filter notExtraRule
     recursors := family.correspondence.recursors.map fun pair =>
@@ -1500,13 +1508,23 @@ def compactFamilyCertificates (x : Export) : Array CompactFamilyCertificate :=
   let index := SyntaxIndex.ofSource x
   (discover x).map (compactFamilyCertificateWithIndex x index)
 
+/-- One final record's global-extra template and family certificates. Keeping
+the fields bound makes it possible to reject a certificate attached to a row
+other than its exact owner record. -/
+structure CompactCheckRecord where
+  owner : Option Name := none
+  modelSlots : Array Name := #[]
+  globalExtra : GlobalExtraRecord
+  families : Array CompactFamilyCertificate := #[]
+  deriving Inhabited, Repr, BEq
+
 /-- Finish the structural report from final ordered names and family-local
 certificates. The caller must already have proved compact dependency/model
 ordering; that proof excludes the two order-only violation classes omitted by
 the certificates. -/
-def compactOrderedReport (records : Array GlobalExtraRecord)
-    (families : Array CompactFamilyCertificate) : Report := Id.run do
-  let orderedNames := records.flatMap (·.names)
+def compactOrderedReport (records : Array CompactCheckRecord) : Except String Report := do
+  let orderedGlobals := records.map (·.globalExtra)
+  let orderedNames := orderedGlobals.flatMap (·.names)
   let declared := orderedNames.foldl (fun names name => names.insert name)
     ({} : Std.HashSet Name)
   let ruleSlots := orderedNames.foldl (init :=
@@ -1517,22 +1535,47 @@ def compactOrderedReport (records : Array GlobalExtraRecord)
       slots.insert parent ((slots.getD parent #[]).push (name, ruleIndex))
   let mut familiesChecked := 0
   let mut violations : Array Violation := #[]
-  for family in families do
-    unless family.publicNames.any declared.contains do continue
-    familiesChecked := familiesChecked + 1
-    violations := violations ++ family.localViolations
-    for (owner, model, validRules) in family.recursors do
-      for (name, ruleIndex) in ruleSlots.getD model #[] do
-        if ruleIndex >= validRules || name != Naming.iotaName owner ruleIndex then
-          violations := violations.push (.extraRule owner name)
-  violations := violations ++ globalExtrasFromRecords records
+  let mut certifiedOwners : Std.HashSet Name := {}
+  for record in records do
+    if record.families.size > 1 then
+      throw s!"compact owner record {record.owner} carries {record.families.size} family certificates"
+    for family in record.families do
+      unless record.owner == some family.owner do
+        throw s!"compact family certificate for {family.owner} is not bound to its owner record"
+      if certifiedOwners.contains family.owner then
+        throw s!"duplicate compact family certificate for {family.owner}"
+      certifiedOwners := certifiedOwners.insert family.owner
+      unless family.publicNames.any declared.contains do continue
+      familiesChecked := familiesChecked + 1
+      let familyNames := records.foldl (init := #[]) fun names candidate =>
+        if candidate.globalExtra.names.any family.publicNames.contains then
+          appendUnique names candidate.globalExtra.names.toList
+        else names
+      if let some (owner, target) :=
+          ownerBackreferenceFromCertificate? family.ownerReferences familyNames then
+        violations := violations.push (.ownerBackreference owner target)
+      violations := violations ++ family.localViolations
+      for (owner, model, validRules) in family.recursors do
+        for (name, ruleIndex) in ruleSlots.getD model #[] do
+          if ruleIndex >= validRules || name != Naming.iotaName owner ruleIndex then
+            violations := violations.push (.extraRule owner name)
+    if record.modelSlots.any declared.contains && record.families.isEmpty then
+      throw s!"compact owner record {record.owner} has declared model slots but no family certificate"
+  violations := violations ++ globalExtrasFromRecords orderedGlobals
   return { familiesChecked, violations }
 
 /-- In-memory equivalence oracle for an already ordered export. -/
-def compactOrderedCheckReport (x : Export) : Report :=
+def compactOrderedCheckReport (x : Export) : Except String Report :=
   let index := SyntaxIndex.ofSource x
-  compactOrderedReport (globalExtraRecordsWithIndex index x.decls)
-    ((discover x).map (compactFamilyCertificateWithIndex x index))
+  let familyRecords := compactFamilyCertificateRecordsWithIndex x index (discover x)
+  compactOrderedReport <| (globalExtraRecordsWithIndex index x.decls).mapIdx fun i globalExtra =>
+    { owner := match x.decls[i]! with
+        | .induct (type :: _) _ _ => some type.name
+        | _ => none
+      modelSlots := match (discoverWith x fun _ => true).find? (·.ownerDecl == i) with
+        | some family => family.correspondence.publicNames
+        | none => #[]
+      globalExtra, families := familyRecords[i]! }
 
 /-- Exact public-interface comparison without an environment or an ordering
 assumption.  This is the generation oracle: all expected declarations and

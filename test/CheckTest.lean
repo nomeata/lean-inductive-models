@@ -469,7 +469,26 @@ def run (root : String) : IO UInt32 := do
       state ← state.check "only exact public records establish the family" false
     state ← state.check "valid ordering and independence" (check valid).isEmpty
     state ← state.check "compact ordered report equals the valid full checker" <|
-      compactOrderedCheckReport valid == checkReport valid
+      compactOrderedCheckReport valid == .ok (checkReport valid)
+    let compactIndex := SyntaxIndex.ofSource valid
+    let compactFamilyRows := compactFamilyCertificateRecordsWithIndex
+      valid compactIndex (discover valid)
+    let compactRows := (globalExtraRecordsWithIndex compactIndex valid.decls).mapIdx
+      fun i globalExtra =>
+        { owner := match valid.decls[i]! with
+            | .induct (type :: _) _ _ => some type.name
+            | _ => none
+          globalExtra, families := compactFamilyRows[i]! : CompactCheckRecord }
+    let some ownerRow := compactRows.findIdx? (fun row => row.owner == some owner) | do
+      IO.eprintln "checktest: compact owner row missing"
+      return 1
+    let ownerCertificate := compactRows[ownerRow]!.families[0]!
+    state ← state.check "duplicate compact family certificates fail closed" <|
+      (compactOrderedReport (compactRows.set! ownerRow
+        { compactRows[ownerRow]! with families := #[ownerCertificate, ownerCertificate] })).isError
+    state ← state.check "misbound compact family certificates fail closed" <|
+      (compactOrderedReport (compactRows.set! ownerRow
+        { compactRows[ownerRow]! with owner := some `Wrong.Owner })).isError
     state ← state.check "indexed one-family statements equal the aggregate checker" <|
       indexedFamilyStatements? valid owner == some (checkStatements valid)
     let treeOwners := ({} : Std.HashSet Name).insert owner
@@ -486,7 +505,7 @@ def run (root : String) : IO UInt32 := do
         checkStatementsFor duplicateInvalidProjection treeOwners
     state ← state.check "compact ordered report retains duplicate projection extras" <|
       compactOrderedCheckReport duplicateInvalidProjection ==
-        checkReport duplicateInvalidProjection
+        .ok (checkReport duplicateInvalidProjection)
     let sourceIndex := SyntaxIndex.ofSource raw
     let .ok overlaidIndex := sourceIndex.prependRecords models | do
       IO.eprintln "checktest: valid island overlay was rejected"
@@ -510,7 +529,7 @@ def run (root : String) : IO UInt32 := do
       (check unsafeModel).any
         (isSafetyMismatch owner carrier "unsafe")
     state ← state.check "compact ordered report retains local interface failures" <|
-      compactOrderedCheckReport unsafeModel == checkReport unsafeModel
+      compactOrderedCheckReport unsafeModel == .ok (checkReport unsafeModel)
     state ← state.check "partial model implementation is rejected" <|
       (check (withDefinitionSafety valid carrier "partial")).any
         (isSafetyMismatch owner carrier "partial")
@@ -549,6 +568,8 @@ def run (root : String) : IO UInt32 := do
       ownerBackreferenceFromCertificate?
           (ownerReferenceCertificate constantBackref.decls[validOwnerDecl]!) families[0]!.names ==
         some (owner, carrier)
+    state ← state.check "compact report retains constant backreferences" <|
+      compactOrderedCheckReport constantBackref == .ok (checkReport constantBackref)
 
     -- `Expr.getUsedConstants` does not include this name: it lives in the
     -- projection node's `typeName` field, so this pins the checker's explicit
@@ -564,12 +585,14 @@ def run (root : String) : IO UInt32 := do
       ownerBackreferenceFromCertificate?
           (ownerReferenceCertificate projectionBackref.decls[validOwnerDecl]!)
           families[0]!.names == some (owner, firstCtor.model)
+    state ← state.check "compact report retains projection type-name backreferences" <|
+      compactOrderedCheckReport projectionBackref == .ok (checkReport projectionBackref)
 
     let missingCtor := withoutDeclaration valid firstCtor.model
     state ← state.check "missing constructor slot is rejected" <|
       (check missingCtor).any (isMissing firstCtor.owner firstCtor.model)
     state ← state.check "compact ordered report retains missing slots" <|
-      compactOrderedCheckReport missingCtor == checkReport missingCtor
+      compactOrderedCheckReport missingCtor == .ok (checkReport missingCtor)
 
     -- Constructor slots still claim the family when the carrier is missing,
     -- so exactness cannot disappear with the declaration it must diagnose.
@@ -593,7 +616,7 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "extra recursor occurrence is rejected" <|
       (check duplicateRec).any (isDuplicate firstRec.owner firstRec.model)
     state ← state.check "compact ordered report retains duplicate slots" <|
-      compactOrderedCheckReport duplicateRec == checkReport duplicateRec
+      compactOrderedCheckReport duplicateRec == .ok (checkReport duplicateRec)
     let some (_, firstRecType) := exportDeclarationType? valid firstRec.model | do
       IO.eprintln "checktest: modeled recursor type missing"
       return 1
@@ -636,7 +659,7 @@ def run (root : String) : IO UInt32 := do
     state ← state.check "out-of-range iota theorem is rejected" <|
       (check extraRule).any (isExtraRule firstRec.owner extraRuleName)
     state ← state.check "compact ordered report recomputes extra rules" <|
-      compactOrderedCheckReport extraRule == checkReport extraRule
+      compactOrderedCheckReport extraRule == .ok (checkReport extraRule)
     let some (_, firstRuleType) := exportDeclarationType? valid firstRule.name | do
       IO.eprintln "checktest: first iota type missing"
       return 1
