@@ -953,15 +953,15 @@ def closeModelIsland (template : Export) (main : Environment)
   -- owners use family templates indexed once; generated owners use the island
   -- records plus an overlay carrying source transparent aliases and exact
   -- projection metadata. The final aggregate remains the equivalence oracle.
-  let statementReport :=
+  let statementReport ←
     if generatedOwners.isEmpty then
-      { statementsChecked := 0, violations := #[] }
-    else
+      pure { statementsChecked := 0, violations := #[] }
+    else do
       let index ← match sourceSyntax.prependRecords generated with
         | .ok index => pure index
         | .error message => return .error s!"cannot index generated island: {message}"
-      let sourceRoot? := match owner with
-        | .induct types _ _ => types.head?.map (·.name)
+      let sourceRoot? : Option Name := match owner with
+        | .induct (type :: _) _ _ => some type.name
         | _ => none
       let generatedOnlyOwners := sourceRoot?.elim generatedOwners generatedOwners.erase
       let generatedView := { template with decls := generated }
@@ -973,8 +973,10 @@ def closeModelIsland (template : Export) (main : Environment)
         if generatedOwners.contains root then sourceSyntax.sourceStatementFamilies root else #[]
       let sourceReport :=
         Check.checkStatementFamiliesLocalWithIndex template index sourceFamilies
-      { statementsChecked := generatedReport.statementsChecked + sourceReport.statementsChecked
-        violations := generatedReport.violations ++ sourceReport.violations }
+      let checkedCount := generatedReport.statementsChecked + sourceReport.statementsChecked
+      let combinedViolations := generatedReport.violations ++ sourceReport.violations
+      pure ({ statementsChecked := checkedCount, violations := combinedViolations } :
+        Check.StatementReport)
   -- Drop the construction fork before reconstructing any declaration.  The
   -- exact serialized records and compact splice witnesses above are the only
   -- state allowed to cross into owner-free checked replay.
