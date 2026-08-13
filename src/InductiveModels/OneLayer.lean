@@ -371,13 +371,17 @@ private def proveOneLayerIota (names : OneLayerNames) (roundTrips : Array Expr)
     for index in [0:roundTrips.size] do
       reductions := ← reductions.add (.other (Name.appendIndexAfter `oneLayerRoundTrip index))
         #[] roundTrips[index]!
-    let defaults ← Meta.getSimpTheorems
-    let context ← Simp.mkContext (simpTheorems := #[reductions, defaults])
+    -- This proof runs after the generator has replaced its environment with
+    -- the export.  In particular, the host's global simp set may mention
+    -- declarations (such as the standard `funext`) which that export does not
+    -- contain.  The public equation is discharged solely by the selected
+    -- equivalence's definitions, private iota, and one section law per field.
+    let context ← Simp.mkContext (simpTheorems := #[reductions])
     let goal ← mkFreshExprMVar proposition
     let (result, _) ← simpGoal goal.mvarId! context
     unless result.isNone do
       let pending := result.map (·.2) |>.getD goal.mvarId!
-      badShape s!"{names.publicNames.iotas[0]!}'s equivalence laws do not prove its exact public rule: {(← pending.getType)}"
+      badShape s!"{names.publicNames.iotas[0]!}'s equivalence laws do not prove its exact public rule: {repr (← pending.getType)}"
     instantiateMVars goal
 
 /-- The induction-hypothesis telescope associated with one direct or
@@ -1079,8 +1083,33 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
         | badShape s!"{sourceRecursor.name}'s exact prefix is too short"
       let recursiveFields := (Array.range fields.size).filter fun index =>
         fieldShape[index]!.rec?.isSome
-      unless recursiveFields.size == 1 do
-        badShape s!"{tname}'s phase-1 one-layer family has {recursiveFields.size} recursive fields"
+      if recursiveFields.isEmpty then
+        badShape s!"{tname}'s phase-1 one-layer family has no recursive fields"
+      if recursiveFields.size > 1 then do
+        let mut roundTrips : Array Expr := #[]
+        for index in [0:fields.size] do
+          let field := fields[index]!
+          let proof ← if fieldShape[index]!.rec?.isSome then
+              oneLayerOccurrenceRoundTrip names.publicNames.self names.implementation.self np
+                names.roll names.unroll names.unrollRoll publicFields.fx? us
+                (← inferType field) field
+            else
+              let type ← inferType field
+              pure (eqi.refl' (← ilevel type) type field)
+          roundTrips := roundTrips.push proof
+        let proof ← try proveOneLayerIota names roundTrips proposition catch _ =>
+          badShape s!"{tname}'s multi-field one-layer proof did not close"
+        let forbidden := proof.getUsedConstants.filter fun name =>
+          (`InductiveModels).isPrefixOf name || name == ``HEq || name == ``HEq.refl
+        unless forbidden.isEmpty do
+          badShape s!"{names.publicNames.iotas[0]!}'s multi-field proof retains unavailable constants {forbidden}"
+        let actual ← inferType proof
+        unless ← withTransparency .all <| isDefEq actual proposition do
+          badShape s!"{names.publicNames.iotas[0]!}'s multi-field proof has type {actual}, expected {proposition}"
+        check proof
+        return Declaration.thmDecl
+          { name := names.publicNames.iotas[0]!, levelParams := sourceRecursor.levelParams
+            type := theoremType, value := ← mkLambdaFVars (pre ++ fields) proof }
       let recursiveIndex := recursiveFields[0]!
       let publicField := fields[recursiveIndex]!
       let publicFieldType ← inferType publicField

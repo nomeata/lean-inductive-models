@@ -3426,7 +3426,7 @@ def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
   let neverZero ← forallBoundedTelescope memberTy (some np) fun _ result => match result with
     | .sort level => pure level.normalize.isNeverZero
     | _ => pure false
-  let oneRecursiveField ← match exportCtors[0]? with
+  let independentRecursiveFields ← match exportCtors[0]? with
     | some (_, constructorType) =>
       forallBoundedTelescope constructorType (some np) fun parameters _ => do
         match ← (do
@@ -3434,19 +3434,19 @@ def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
           let shape : Array PField ← classifyCtor tname (numForalls telescope) telescope
           let recursive := (Array.range shape.size).filter fun index =>
             (PField.rec? shape[index]!).isSome
-          unless recursive.size == 1 do return false
-          let recursiveIndex := recursive[0]!
+          if recursive.isEmpty then return false
           forallBoundedTelescope telescope (some shape.size) fun fields _ => do
-            let .fvar recursiveId := fields[recursiveIndex]!
-              | badShape "a phase-1 recursive field is not constructor-local"
-            for later in [recursiveIndex + 1:fields.size] do
-              if (← inferType fields[later]!).containsFVar recursiveId then
-                return false
+            for recursiveIndex in recursive do
+              let .fvar recursiveId := fields[recursiveIndex]!
+                | badShape "a phase-1 recursive field is not constructor-local"
+              for later in [recursiveIndex + 1:fields.size] do
+                if (← inferType fields[later]!).containsFVar recursiveId then
+                  return false
             return true).run with
         | .error _ => pure false
         | .ok eligible => pure eligible
     | none => pure false
-  return neverZero && oneRecursiveField && sourceRecursor?.isSome && exportCtors.size == 1 && type.all == [tname] &&
+  return neverZero && independentRecursiveFields && sourceRecursor?.isSome && exportCtors.size == 1 && type.all == [tname] &&
     type.ctors.length == 1 && type.numIndices == 0 && type.numNested == 0 && type.isRec &&
     !type.isUnsafe
 
