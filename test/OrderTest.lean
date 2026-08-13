@@ -103,6 +103,7 @@ structure StagedFilterRun extends FilterRun where
   records : Array StagedRecord
   order : Array Nat
   planValid : Bool
+  malformedPlansRejected : Bool
 
 structure DroppedFilterRun where
   report : Report
@@ -149,9 +150,18 @@ def runFilterStagedState (scratch : String) (input : Export)
     let planValid := match plan.declarationSpans certificate sealed with
       | .ok spans => spans.size == plan.records.size
       | .error _ => false
+    let duplicateOrder := if plan.order.size < 2 then plan.order.push 0
+      else plan.order.set! 1 plan.order[0]!
+    let duplicateRejected := if plan.records.isEmpty then true else
+      ({ plan with order := duplicateOrder }.declarationSpans certificate sealed).isError
+    let badCursor : Writer.Cursor :=
+      { sealed.cursor with nextExpr := sealed.cursor.nextExpr + 1 }
+    let cursorRejected :=
+      (plan.declarationSpans certificate { sealed with cursor := badCursor }).isError
     return {
       input, output := { input with decls }, report, env := finalState.env,
-      islands := plan.islands, records := plan.records, order := plan.order, planValid }
+      islands := plan.islands, records := plan.records, order := plan.order, planValid,
+      malformedPlansRejected := duplicateRejected && cursorRejected }
 
 def runFilterDroppedState (scratch : String) (input : Export)
     (generation : Modelgen.Cli.Config) : IO DroppedFilterRun :=
@@ -572,7 +582,7 @@ def run (root : String) : IO UInt32 := do
       aliasStaged.report == aliasRun.report &&
       aliasStaged.records.size == aliasStaged.output.decls.size &&
       aliasStaged.order.size == aliasStaged.records.size &&
-      aliasStaged.planValid &&
+      aliasStaged.planValid && aliasStaged.malformedPlansRejected &&
       aliasStaged.islands.size == aliasRun.report.generated.size &&
       aliasStaged.islands.all fun island =>
         island.compact.summaries.size == island.commit.declarations.size &&
