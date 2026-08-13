@@ -86,6 +86,11 @@ lean_exe defaultctoriotatest where
   root := `DefaultCtorIotaTest
   supportInterpreter := true
 
+lean_exe sourcestructuresyntaxtest where
+  srcDir := "test"
+  root := `SourceStructureSyntaxTest
+  supportInterpreter := true
+
 lean_exe mainclitest where
   srcDir := "test"
   root := `MainCliTest
