@@ -653,6 +653,7 @@ TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check_arena_corpus.py
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-a.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-hard-nested-c.sh
 TMPDIR="$PWD/_tmp/build-tmp" test/scripts/check-mathlib-result.sh
+test/scripts/check-lean4export-patch.sh
 test/scripts/check-ci-serialized-builds.sh
 ```
 
@@ -688,8 +689,17 @@ a per-process memory limit. The
 full-Mathlib workflow
 [`.github/workflows/mathlib.yml`](.github/workflows/mathlib.yml) generates and
 checks a pinned Mathlib export on a standard `ubuntu-24.04` hosted runner.
-Serialized builds and cache extraction have a 12 GiB address-space limit; the
-single full-environment exporter has a 14 GiB limit; and the model generator
+Serialized builds and cache extraction have a 12 GiB address-space limit. The
+pinned exporter is patched locally with a reviewed pure-Lean compact expression
+interner: first-seen IDs, `Expr.hash`, `Expr.eqv`, and serialized bytes are
+unchanged, while fixed-size chunks and packed UInt32 links remove the standard
+hash map's per-entry nodes and table-doubling peak. The pinned Mathlib input has
+95,334,373 expression IDs; the table fails closed at 100,000,000 rather than
+changing the export format. The patch revision and SHA-256 are checked before
+application. Setting `LEAN4EXPORT_DIFFERENTIAL=1` for the patch-check command
+compares a stock and patched small
+export byte for byte. The single full-environment exporter retains a 14 GiB
+limit; and the model generator
 and kernel reread retain the authoritative 10 GiB worker limit. The exporter
 writes a
 compressed stream which is fed to the staged generator through a FIFO; build

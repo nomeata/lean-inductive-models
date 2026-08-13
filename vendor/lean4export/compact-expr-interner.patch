@@ -1,0 +1,260 @@
+diff --git a/Export.lean b/Export.lean
+index 2054d47..3ae3e84 100644
+--- a/Export.lean
++++ b/Export.lean
+@@ -1,5 +1,6 @@
+ import Lean
+ import Std.Data.HashMap.Basic
++import Export.CompactExprInterner
+ 
+ open Lean
+ open Std (HashMap)
+@@ -35,7 +36,7 @@ structure Context where
+ structure State where
+   visitedNames : HashMap Name Nat := HashMap.emptyWithCapacity 200000 |>.insert .anonymous 0
+   visitedLevels : HashMap Level Nat := HashMap.emptyWithCapacity 1000 |>.insert .zero 0
+-  visitedExprs : HashMap Expr Nat := HashMap.emptyWithCapacity 10000000
++  visitedExprs : CompactExprInterner.Table := default
+   visitedConstants : NameHashSet := {}
+   noMDataExprs : HashMap Expr Expr := HashMap.emptyWithCapacity 100000
+   exportMData : Bool := false
+@@ -67,9 +68,20 @@ def initState (env : Environment) (cliOptions : List String := []) : M Unit := d
+           fun
+           | none => some <| NameSet.empty.insert recVal.name
+           | some recNames => some <| recNames.insert recVal.name
++  let internerConfig :=
++    if cliOptions.contains "--compact-expr-test-tiny" then
++      CompactExprInterner.Config.testTiny
++    else if cliOptions.contains "--compact-expr-test-table" then
++      CompactExprInterner.Config.test
++    else
++      CompactExprInterner.Config.production
++  let visitedExprs ← match CompactExprInterner.Table.create internerConfig with
++    | .ok table => pure table
++    | .error error => throw <| IO.userError error
+   modify fun st => { st with
+     exportMData  := cliOptions.any  (· == "--export-mdata")
+     exportUnsafe := cliOptions.any (· == "--export-unsafe")
++    visitedExprs
+     recursorMap
+   }
+ 
+@@ -90,6 +102,28 @@ def getIdx [Hashable α] [BEq α] (x : α) (namespaced: String) (getM : State 
+   modify fun st => setM st ((getM st).insert x idx)
+   return idx
+ 
++/-- Expression-specialized `getIdx` backed by the compact exact interner. -/
++@[inline]
++def getExprIdx (x : Expr) (rec : M Json) : M Nat := do
++  if let some idx := (← get).visitedExprs.find? x then
++    return idx
++  let s ← rec
++  -- Dependencies emitted by `rec` may have inserted `x` themselves only if
++  -- the input expression is cyclic, which kernel expressions cannot be.
++  let idx := (← get).visitedExprs.size
++  let capacity := (← get).visitedExprs.capacity
++  if idx >= capacity then
++    throw <| IO.userError s!"compact expression interner exhausted its {capacity} entry capacity"
++  if idx + 1 >= 0xFFFFFFFF then
++    throw <| IO.userError "compact expression interner exhausted its UInt32 link space"
++  let inserted ← modifyGet fun st =>
++    let (inserted, table) := st.visitedExprs.insertNew x
++    (inserted, { st with visitedExprs := table })
++  if inserted != idx then
++    throw <| IO.userError "compact expression interner assigned a non-sequential ID"
++  IO.println (s.setObjVal! "ie" inserted).compress
++  return inserted
++
+ def dumpName (n : Name) : M Nat := getIdx n "in" (·.visitedNames) ({ · with visitedNames := · }) do
+   match n with
+   | .anonymous => unreachable!
+@@ -153,7 +187,7 @@ def removeMData (e : Expr) : M Expr := do
+ mutual
+ 
+ partial def dumpExprAux (e : Expr) : M Nat := do
+-  getIdx e "ie" (·.visitedExprs) ({ · with visitedExprs := · }) do
++  getExprIdx e do
+     match e with
+     | .fvar .. | .mvar .. => panic! "cannot export free variables or metavariables"
+     | .mdata a e' =>
+diff --git a/Export/CompactExprInterner.lean b/Export/CompactExprInterner.lean
+new file mode 100644
+index 0000000..aa97e31
+--- /dev/null
++++ b/Export/CompactExprInterner.lean
+@@ -0,0 +1,175 @@
++import Lean
++
++open Lean
++
++/-!
++`lean4export` assigns an expression index on first occurrence and must retain
++enough information to recognize every later occurrence.  `Std.HashMap` is a
++large representation for the roughly one hundred million expressions in the
++full Mathlib export: each entry is a heap-allocated association-list node and
++the bucket array is repeatedly doubled.
++
++This table preserves the exact `HashMap Expr Nat` contract with dense storage.
++`keys[id]` retains the expression, `heads[bucket]` stores a one-based entry id,
++and `next[id]` stores the preceding one-based id in that bucket.  Keys and next
++links are split into fixed-size chunks so no growth step needs a second
++gigabyte-scale backing allocation.  Both link stores are packed little-endian
++`UInt32`s.  IDs remain first-seen positions, hashing remains `Expr.hash`, and
++equality remains `Expr.eqv`.
++-/
++
++namespace CompactExprInterner
++
++structure Config where
++  capacity : Nat
++  bucketBits : Nat
++  deriving Repr
++
++def Config.production : Config where
++  -- The pinned full-Mathlib input contains 95,334,373 expression IDs.
++  capacity := 100_000_000
++  -- 2^25 buckets gives a mean chain length below three on that input.
++  bucketBits := 25
++
++/-- A bounded table used only by the byte-for-byte differential test. -/
++def Config.test : Config where
++  capacity := 100_000
++  bucketBits := 13
++
++/-- A deliberately exhausted table used only by the fail-closed test. -/
++def Config.testTiny : Config where
++  capacity := 1
++  bucketBits := 0
++
++structure Table where
++  keys : Array (Array Expr)
++  heads : Array ByteArray
++  next : Array ByteArray
++  size : Nat := 0
++  bucketMask : Nat
++  capacity : Nat
++
++instance : Inhabited Table where
++  default := {
++    keys := #[]
++    heads := #[]
++    next := #[]
++    bucketMask := 0
++    capacity := 0
++  }
++
++private partial def zeroBytes (size : Nat) : ByteArray :=
++  if size == 0 then
++    ByteArray.empty
++  else
++    let rec loop (bytes : ByteArray) :=
++      if bytes.size == size then
++        bytes
++      else if bytes.size > size then
++        bytes.extract 0 size
++      else
++        loop (bytes.copySlice 0 bytes bytes.size bytes.size true)
++    loop (ByteArray.empty.push 0)
++
++private def chunkBits : Nat := 20
++private def chunkSize : Nat := 1 <<< chunkBits
++private def chunkMask : Nat := chunkSize - 1
++
++def Table.create (config : Config) : Except String Table := do
++  if config.capacity == 0 then
++    throw "compact expression interner capacity must be positive"
++  if config.capacity >= 0xFFFFFFFF then
++    throw "compact expression interner capacity must be below 2^32 - 1"
++  if config.bucketBits > 30 then
++    throw "compact expression interner bucket count is too large"
++  let bucketCount := 1 <<< config.bucketBits
++  let chunkCount := (config.capacity + chunkSize - 1) / chunkSize
++  let headChunkCount := (bucketCount + chunkSize - 1) / chunkSize
++  return {
++    keys := Array.mkEmpty chunkCount
++    heads := Array.replicate headChunkCount ByteArray.empty
++    next := Array.mkEmpty chunkCount
++    bucketMask := bucketCount - 1
++    capacity := config.capacity
++  }
++
++@[inline]
++private def readLink (bytes : @& ByteArray) (slot : Nat) : Nat :=
++  let offset := 4 * slot
++  let b0 := (bytes.get! offset).toNat
++  let b1 := (bytes.get! (offset + 1)).toNat <<< 8
++  let b2 := (bytes.get! (offset + 2)).toNat <<< 16
++  let b3 := (bytes.get! (offset + 3)).toNat <<< 24
++  b0 ||| b1 ||| b2 ||| b3
++
++@[inline]
++private def writeLink (bytes : ByteArray) (slot value : Nat) : ByteArray :=
++  let offset := 4 * slot
++  let bytes := bytes.set! offset value.toUInt8
++  let bytes := bytes.set! (offset + 1) (value >>> 8).toUInt8
++  let bytes := bytes.set! (offset + 2) (value >>> 16).toUInt8
++  bytes.set! (offset + 3) (value >>> 24).toUInt8
++
++@[inline]
++private def pushLink (bytes : ByteArray) (value : Nat) : ByteArray :=
++  let bytes := bytes.push value.toUInt8
++  let bytes := bytes.push (value >>> 8).toUInt8
++  let bytes := bytes.push (value >>> 16).toUInt8
++  bytes.push (value >>> 24).toUInt8
++
++@[inline]
++private def Table.bucket (table : @& Table) (expr : @& Expr) : Nat :=
++  expr.hash.toNat &&& table.bucketMask
++
++@[inline]
++private def Table.headAt (table : @& Table) (bucket : Nat) : Nat :=
++  let chunk := table.heads[bucket >>> chunkBits]!
++  if chunk.isEmpty then 0 else readLink chunk (bucket &&& chunkMask)
++
++@[inline]
++private def Table.setHead (table : Table) (bucket value : Nat) : Table :=
++  let chunkIndex := bucket >>> chunkBits
++  let offset := bucket &&& chunkMask
++  let heads := table.heads.modify chunkIndex fun chunk =>
++    let chunk := if chunk.isEmpty then zeroBytes (4 * chunkSize) else chunk
++    writeLink chunk offset value
++  { table with heads }
++
++@[inline]
++private def Table.keyAt (table : @& Table) (id : Nat) : Expr :=
++  table.keys[id >>> chunkBits]![id &&& chunkMask]!
++
++@[inline]
++private def Table.nextAt (table : @& Table) (id : Nat) : Nat :=
++  readLink table.next[id >>> chunkBits]! (id &&& chunkMask)
++
++partial def Table.findFrom (table : @& Table) (expr : @& Expr) : Nat → Option Nat
++  | 0 => none
++  | id + 1 =>
++      if table.keyAt id == expr then
++        some id
++      else
++        table.findFrom expr (table.nextAt id)
++
++def Table.find? (table : @& Table) (expr : @& Expr) : Option Nat :=
++  table.findFrom expr (table.headAt (table.bucket expr))
++
++/-- Insert a key which `find?` and the caller's capacity checks have shown to be new. -/
++def Table.insertNew (table : Table) (expr : Expr) : Nat × Table :=
++  let id := table.size
++  let bucket := table.bucket expr
++  let previous := table.headAt bucket
++  let offset := id &&& chunkMask
++  let chunkCapacity := min chunkSize (table.capacity - id + offset)
++  let keys := if offset == 0 then
++      table.keys.push ((Array.mkEmpty chunkCapacity).push expr)
++    else
++      table.keys.modify (id >>> chunkBits) (·.push expr)
++  let next := if offset == 0 then
++      table.next.push (pushLink (ByteArray.emptyWithCapacity (4 * chunkCapacity)) previous)
++    else
++      table.next.modify (id >>> chunkBits) (pushLink · previous)
++  let table := { table with keys, next, size := id + 1 }
++  (id, table.setHead bucket (id + 1))
++
++end CompactExprInterner

@@ -95,6 +95,7 @@ jobs:
             OneLayerProjectionPrototype
           )
           test/scripts/check-ci-serialized-builds.sh
+          test/scripts/check-lean4export-patch.sh
 
           case "$SUITE" in
             fixtures)

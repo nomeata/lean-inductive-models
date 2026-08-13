@@ -22,6 +22,8 @@ OUTPUT="$WORK/mathlib.model.ndjson"
 
 MATHLIB_REV="5e932f97dd25535344f80f9dd8da3aab83df0fe6"
 EXPORTER_REV="caccfbebbc99077962b3321125b2375bb3fa22db"
+EXPORTER_PATCH="$ROOT/vendor/lean4export/compact-expr-interner.patch"
+EXPORTER_PATCH_SHA="6f3ea993887612d4e7417c7fc23efe0f8777e05cda992ec90aa22d6afe60e1bc"
 WORKER_LIMIT_KIB=$((10 * 1024 * 1024))
 BUILD_LIMIT_KIB=$((12 * 1024 * 1024))
 EXPORT_LIMIT_KIB=$((14 * 1024 * 1024))
@@ -51,7 +53,7 @@ fail() {
   exit 1
 }
 
-for tool in awk df du git grep gzip lake mkfifo stat; do
+for tool in awk df du git grep gzip lake mkfifo sha256sum stat; do
   command -v "$tool" >/dev/null || fail "required command not found: $tool"
 done
 [[ -x /usr/bin/time ]] || fail "required command not found: /usr/bin/time"
@@ -186,6 +188,10 @@ disk_census generator-built
 checkout_pinned \
   https://github.com/leanprover/lean4export.git \
   "$EXPORTER_REV" "$EXPORTER_DIR"
+[[ "$(sha256sum "$EXPORTER_PATCH" | awk '{print $1}')" == "$EXPORTER_PATCH_SHA" ]] ||
+  fail "lean4export compact-interner patch SHA-256 mismatch"
+git -C "$EXPORTER_DIR" apply --check "$EXPORTER_PATCH"
+git -C "$EXPORTER_DIR" apply "$EXPORTER_PATCH"
 cp "$ROOT/lean-toolchain" "$EXPORTER_DIR/lean-toolchain"
 (cd "$EXPORTER_DIR" && run_build_measured build-exporter lake -Kjobs=1 build)
 cp "$EXPORTER_DIR/.lake/build/bin/lean4export" "$BIN_DIR/lean4export"
