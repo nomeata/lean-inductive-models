@@ -5,12 +5,10 @@ import InductiveModels.Order
 /-!
 # Indexed one-layer fibre diagnostic
 
-This is a deliberately red production-target test.  `IndexedDep` is already a
-minimal one-constructor indexed `Type` with an ordinary dependent field.  Its
-current public carrier, constructor, recursor, recursor iota and projection
-types have the desired source-name-rewritten spelling, but the second
-projection rule still receives the legacy canonical transport and the family
-has no private/public one-layer certificate.
+`IndexedDep` is the first production indexed fibre: a minimal one-constructor
+indexed `Type` with an ordinary dependent field.  Its public statements retain
+the exact source-name rewrite, while a complete private/public certificate
+authorizes the literal dependent projection rule.
 
 The final guarded declaration pins the source boundary separately: Lean does
 not admit a result index which mentions a recursive constructor field, even
@@ -118,6 +116,23 @@ def replaceDeclarationType (x : Export) (name : Name) (type : Expr) : Export :=
     | .opaq got params _ value isUnsafe all =>
       if got == name then .opaq got params type value isUnsafe all else declaration
     | _ => declaration }
+
+def withoutDeclaration (x : Export) (name : Name) : Export :=
+  { x with decls := x.decls.filterMap fun declaration => match declaration with
+    | .ax got .. | .defn got .. | .thm got .. | .opaq got .. | .quot got .. =>
+      if got == name then none else some declaration
+    | .induct types constructors recursors =>
+      let types := types.filter (·.name != name)
+      let constructors := constructors.filter (·.name != name)
+      let recursors := recursors.filter (·.name != name)
+      if types.isEmpty && constructors.isEmpty && recursors.isEmpty then none
+      else some (.induct types constructors recursors) }
+
+def declarationValue? (x : Export) (name : Name) : Option Expr :=
+  x.decls.findSome? fun declaration => match declaration with
+    | .defn got _ _ value .. | .thm got _ _ value .. | .opaq got _ _ value .. =>
+      if got == name then some value else none
+    | _ => none
 
 partial def containsConst (target : Name) : Expr -> Bool
   | .const name _ => name == target
@@ -314,6 +329,24 @@ def run (root : String) : IO UInt32 := do
     actual payloadRule == expectedProjection payloadRule
   state := state.check "indexed family carries the complete one-layer fibre certificate" <|
     certificate.all generatedNames.contains
+  state := state.check "indexed public carrier is the arm-C sigma fibre" <|
+    (declarationValue? generated typePair.model).any fun value =>
+      containsConst `PSigma' value &&
+        (declarationValue? generated (Name.str privateRoot "good")).any (containsConst ``Eq)
+
+  let missingLaw := Check.check <|
+    withoutDeclaration generated (Name.str privateRoot "roll_unroll")
+  state := state.check "partial indexed fibre certificate fails closed" <|
+    missingLaw.any
+      (hasTypeViolation `IndexedDep (Name.str privateRoot "roll_unroll"))
+  let malformedMap := Check.check <|
+    replaceDeclarationType generated (Name.str privateRoot "roll")
+      (.sort (.succ .zero))
+  state := state.check "malformed indexed fibre map fails closed" <|
+    malformedMap.any (hasTypeViolation `IndexedDep (Name.str privateRoot "roll"))
+  let noCertificate := certificate.foldl withoutDeclaration generated
+  state := state.check "literal indexed rule requires the complete certificate" <|
+    (Check.check noCertificate).any (hasTypeViolation `IndexedDep payloadRule)
 
   let currentPayloadRule := actual payloadRule
   let transportedCandidate := if currentPayloadRule.any (containsConst ``Eq.rec) then
@@ -334,6 +367,16 @@ def run (root : String) : IO UInt32 := do
     fixedShape.any fun (type, constructor, _) =>
       type.numIndices == 1 && type.isRec && type.ctors.length == 1 &&
         recursiveResultIndependent constructor
+  let (boundaryGenerated, _) ← runExport boundary
+  let recursivePrivateRoot := `FixedRecursiveResult._model._impl
+  let recursiveCertificate := #[Name.str recursivePrivateRoot "self",
+    Name.str recursivePrivateRoot "ctor_0", Name.str recursivePrivateRoot "rec",
+    Name.str recursivePrivateRoot "rec_iota_0", Name.str recursivePrivateRoot "roll",
+    Name.str recursivePrivateRoot "unroll", Name.str recursivePrivateRoot "unroll_roll",
+    Name.str recursivePrivateRoot "roll_unroll"]
+  let boundaryNames := boundaryGenerated.decls.flatMap (·.names.toArray)
+  state := state.check "recursive indexed control remains on the legacy route" <|
+    recursiveCertificate.all fun name => !boundaryNames.contains name
 
   IO.println s!"indexed fibre diagnostic: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
