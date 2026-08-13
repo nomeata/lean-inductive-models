@@ -477,33 +477,46 @@ partial def oneLayerOccurrenceRoundTrip (owner intermediate : Name) (np : Nat)
       | badShape s!"a one-layer recursive field does not end in {owner}"
     pure (mkAppN (.const theoremName levels) (arguments.extract 0 np |>.push value))
 
-private def oneLayerTowerValue (level : Level) (telescope : Expr)
-    (sourceFields values : Array Expr) : GenM Expr := do
-  let rec build (remaining : Nat) (current : Expr) (stored : Array Expr) :
-      GenM Expr := do
-    match remaining with
-    | 0 => return ← wTowerMkOf level sourceFields stored
-    | remaining + 1 =>
-      let index := stored.size
-      let .forallE name domain body info := current
-        | badShape "a one-layer storage telescope has too few fields"
-      let some value := values[index]?
-        | badShape "a one-layer storage value is missing"
-      let valueDomain := domain.replaceFVars sourceFields stored
-      unless ← isDefEq (← inferType value) valueDomain do
-        badShape s!"a one-layer storage value {index} has type {← inferType value}, expected {valueDomain}"
-      withLocalDecl name info valueDomain fun _ =>
-        build remaining (body.instantiate1 value)
-          (stored.push value)
-  build values.size telescope #[]
+private def oneLayerTowerValue (stage : String) (level : Level) (carrier : Expr)
+    (values : Array Expr) : GenM Expr := do
+  let rec build (index : Nat) (current : Expr) : GenM Expr := do
+    if index < values.size then
+      let current ← withTransparency .all <| whnf current
+      let .const name _ := current.getAppFn
+        | badShape "a one-layer carrier layer is not a PSigma'"
+      unless name == `PSigma' do badShape "a one-layer carrier layer is not a PSigma'"
+      let arguments := current.getAppArgs
+      unless arguments.size == 2 do badShape "a one-layer PSigma' has malformed arguments"
+      let alpha := arguments[0]!
+      let beta := arguments[1]!
+      unless ← isDefEq (← inferType values[index]!) alpha do
+        badShape s!"{stage}: a one-layer storage value {index} has type {← inferType values[index]!}, expected {alpha}; values={values}"
+      let tail ← build (index + 1) (mkApp beta values[index]!)
+      return psigmaMk (← ilevel alpha) level alpha beta values[index]! tail
+    unless ← withTransparency .all <| isDefEq current (unitAt level) do
+      badShape "a one-layer carrier does not terminate in PUnit"
+    return unitAtCanon level
+  build 0 carrier
 
 private def oneLayerCongrChain (eqi : EqInfo) (v : Level) (α : Expr)
-    (mkStep : Array Expr → GenM Expr) (ga gb pfs : Array Expr) : GenM Expr := do
+    (mkStep : Array Expr → GenM Expr) (ga gb pfs : Array Expr)
+    (changed : Array Bool) : GenM Expr := do
   let n := ga.size
+  unless gb.size == n && pfs.size == n && changed.size == n do
+    badShape "a one-layer congruence certificate has inconsistent cardinalities"
   let mixed := fun (j : Nat) => (Array.range n).map fun m => if m < j then gb[m]! else ga[m]!
   let base ← mkStep ga
   let mut acc := eqi.refl' v α base
   for j in [0:n] do
+    if !changed[j]! then
+      unless ga[j]! == gb[j]! do
+        badShape s!"an unchanged one-layer field {j} was rewritten"
+      continue
+    let .fvar fieldId := ga[j]!
+      | badShape s!"a changed one-layer field {j} is not a constructor-local variable"
+    for later in [j + 1:n] do
+      if (← inferType ga[later]!).containsFVar fieldId then
+        badShape s!"a changed one-layer field {j} occurs in later field {later}"
     let A ← ityp ga[j]!
     let ℓA ← ilevel A
     let atA ← mkStep ((mixed j).set! j ga[j]!)
@@ -519,7 +532,7 @@ private def oneLayerCongrChain (eqi : EqInfo) (v : Level) (α : Expr)
 
 /-- Public constructor fields obtained from private fields, and the equation
 identifying the rebuilt public constructor with `unroll` of the private one. -/
-private def oneLayerConstructorAgreement (np : Nat)
+private def oneLayerConstructorAgreement (stage : String) (np : Nat)
     (names : OneLayerNames) (eqi : EqInfo) (fx? : Option Name)
     (levels recLevels : List Level) (level : Level) (parameters privateFields : Array Expr)
     (fieldShape : Array PField) (privateConstructorType privateRecursorType : Expr) :
@@ -527,6 +540,7 @@ private def oneLayerConstructorAgreement (np : Nat)
   let mut publicFields : Array Expr := #[]
   let mut storedFields : Array Expr := #[]
   let mut proofs : Array Expr := #[]
+  let mut changed : Array Bool := #[]
   for index in [0:privateFields.size] do
     let field := privateFields[index]!
     if fieldShape[index]!.rec?.isSome then
@@ -539,18 +553,22 @@ private def oneLayerConstructorAgreement (np : Nat)
       publicFields := publicFields.push publicField
       storedFields := storedFields.push stored
       proofs := proofs.push proof
+      changed := changed.push true
     else
       publicFields := publicFields.push field
       storedFields := storedFields.push field
       let type ← inferType field
       proofs := proofs.push (eqi.refl' (← ilevel type) type field)
+      changed := changed.push false
   let publicCarrier := mkAppN (.const names.publicNames.self levels) parameters
-  let privateTelescope ← instantiateForall privateConstructorType parameters
-  let mkStep := oneLayerTowerValue level privateTelescope privateFields
+  let mkStep := oneLayerTowerValue stage level publicCarrier
   let stored ← mkStep privateFields
   let rebuilt ← mkStep storedFields
   let storageEquality ← oneLayerCongrChain eqi level publicCarrier
-    mkStep storedFields privateFields proofs
+    mkStep storedFields privateFields proofs changed
+  if storageEquality.hasExprMVar || storageEquality.hasLevelMVar then do
+    let goals ← getMVars storageEquality
+    badShape s!"one-layer storage equality retained metavariables: {repr goals}"
   let plan ← oneLayerUnrollPlan names level levels parameters
     privateConstructorType privateRecursorType
   let unrollEquality := mkAppN (.const names.implementation.iotas[0]! recLevels)
@@ -561,6 +579,9 @@ private def oneLayerConstructorAgreement (np : Nat)
   let reverse ← symmOf eqi level publicCarrier unrolledMajor stored unrollEquality
   let agreement ← transOf eqi level publicCarrier rebuilt stored unrolledMajor
     storageEquality reverse
+  if agreement.hasExprMVar || agreement.hasLevelMVar then do
+    let goals ← getMVars agreement
+    badShape s!"one-layer constructor agreement retained metavariables: {repr goals}"
   return (publicFields, agreement)
 
 private partial def oneLayerHypothesisAgreement (owner : Name) (np : Nat)
@@ -606,6 +627,10 @@ private structure OneLayerRecursorPlan where
   privateMotive : Expr
   privateMinor : Expr
   core : Expr
+  /-- The implementation iota proposition after fixing the public motive and
+  private minor, but before applying constructor fields.  This is the single
+  syntax authority used by the public compatibility proof. -/
+  coreIotaProposition : Expr
   publicRec : Expr
   recLevels : List Level
 
@@ -632,7 +657,7 @@ private def transportOneLayerMotiveAlong (eqi : EqInfo) (v ℓ : Level)
 compatibility proof.  Factoring it keeps the theorem arguments literally
 identical to the declaration body rather than reconstructing an equivalent
 minor after the declaration has been installed. -/
-private def oneLayerRecursorPlan (tname : Name) (lparams : List Name) (np : Nat)
+private def oneLayerRecursorPlan (_tname : Name) (lparams : List Name) (np : Nat)
     (parameters : Array Expr) (publicMotive publicMinor : Expr)
     (motiveLevel level : Level) (privateConstructorType privateRecursorType : Expr)
     (privateRecursorInfo : DefinitionVal) (fieldShape : Array PField)
@@ -660,14 +685,14 @@ private def oneLayerRecursorPlan (tname : Name) (lparams : List Name) (np : Nat)
       if privateRecursorInfo.levelParams.length == lparams.length + 1 then
         level :: us
       else us
-    let (mappedFields, agreement) ← oneLayerConstructorAgreement np names eqi
+    let (mappedFields, agreement) ← oneLayerConstructorAgreement "private minor" np names eqi
       publicFields.fx? us layerRecLevels level parameters privateFields fieldShape
       privateConstructorType privateRecursorType
     let targetMajor := mkAppN (.const names.unroll us)
       (parameters.push (mkAppN (.const names.implementation.ctors[0]! us)
         (parameters ++ privateFields)))
     let publicResult := mkAppN publicMinor (mappedFields ++ hypotheses)
-    let proof ← transportAlong eqi motiveLevel level publicCarrier
+    let proof ← transportOneLayerMotiveAlong eqi motiveLevel level publicCarrier
       (mkAppN (.const names.publicNames.ctors[0]! us) (parameters ++ mappedFields))
       targetMajor agreement publicResult fun value => pure (mkApp publicMotive value)
     mkLambdaFVars binders proof
@@ -678,6 +703,9 @@ private def oneLayerRecursorPlan (tname : Name) (lparams : List Name) (np : Nat)
   let core ← withLocalDeclD `value privateCarrier fun value =>
     mkLambdaFVars #[value] (mkAppN (.const names.implementation.recursor recLevels)
       (parameters ++ #[privateMotive, privateMinor, value]))
+  let coreIotaProof := mkAppN (.const names.implementation.iotas[0]! recLevels)
+    (parameters ++ #[privateMotive, privateMinor])
+  let coreIotaProposition ← inferType coreIotaProof
   let publicRec ← withLocalDeclD `value publicCarrier fun value => do
     let privateMajor := mkAppN (.const names.roll us) (parameters.push value)
     let privateResult := mkApp core privateMajor
@@ -686,7 +714,7 @@ private def oneLayerRecursorPlan (tname : Name) (lparams : List Name) (np : Nat)
       (mkAppN (.const names.unroll us) (parameters.push privateMajor)) value
       roundTrip privateResult fun result => pure (mkApp publicMotive result)
     mkLambdaFVars #[value] body
-  return { privateMotive, privateMinor, core, publicRec, recLevels }
+  return { privateMotive, privateMinor, core, coreIotaProposition, publicRec, recLevels }
 
 /-- Build `P`, `roll : P → M`, and `unroll : M → P` over an already checked
 private simple implementation.  No caller selects this helper until the two
@@ -911,7 +939,6 @@ def buildOneLayerPublicFields (tname : Name) (lparams : List Name) (np : Nat)
 
   let constructorValue ← forallBoundedTelescope memberTy (some np) fun parameters _ => do
     let publicTelescope ← instForall publicConstructorType parameters
-    let privateTelescope ← instForall privateConstructorType parameters
     let fieldCount := numForalls publicTelescope
     forallBoundedTelescope publicTelescope (some fieldCount) fun publicFields _ => do
       let mut stored : Array Expr := #[]
@@ -922,8 +949,8 @@ def buildOneLayerPublicFields (tname : Name) (lparams : List Name) (np : Nat)
               type publicFields[index]!
           else pure publicFields[index]!
         stored := stored.push value
-      let value ← oneLayerTowerValue level privateTelescope publicFields stored
       let expectedResult := mkAppN (.const names.publicNames.self us) parameters
+      let value ← oneLayerTowerValue "public constructor" level expectedResult stored
       let actualResult ← inferType value
       unless ← withTransparency .all <| isDefEq actualResult expectedResult do
         badShape s!"{names.publicNames.ctors[0]!}'s concrete layer type {actualResult} does not inhabit {expectedResult}, which unfolds to {← withTransparency .all <| whnf expectedResult}"
@@ -933,6 +960,9 @@ def buildOneLayerPublicFields (tname : Name) (lparams : List Name) (np : Nat)
     { name := names.publicNames.ctors[0]!, levelParams := lparams
       type := constructorValueType, value := constructorValue
       hints := constructorHints, safety := .safe }
+  if constructorValue.hasExprMVar || constructorValue.hasLevelMVar then do
+    let goals ← getMVars constructorValue
+    badShape s!"one-layer public constructor retained metavariables: {repr goals}"
   addChecked constructor
   declarations := declarations.push constructor
 
@@ -1096,8 +1126,6 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
         let lhs := mkAppN (.const names.roll us)
           (parameters.push (mkApp publicCtor field))
         let rhs := mkApp privateCtor (mkApp rollField field)
-        let target := eqi.mk' level
-          (mkAppN (.const names.implementation.self us) parameters) lhs rhs
         unless ← isDefEq lhs rhs do
           badShape s!"{names.publicNames.ctors[0]!}'s roll compatibility is not definitional"
         let proof := eqi.refl' level
@@ -1115,31 +1143,18 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
           if privateRecursorInfo.levelParams.length == lparams.length + 1 then
             level :: us
           else us
-        let (_, agreement) ← oneLayerConstructorAgreement np names eqi publicFields.fx?
+        let (_, agreement) ← oneLayerConstructorAgreement "public iota" np names eqi publicFields.fx?
           us layerRecLevels level parameters privateFields fieldShape
           privateConstructorType privateRecursorType
         mkLambdaFVars #[field] agreement
       let coreIota ← withLocalDeclD `field privateFieldType fun field => do
         let privateFields := storedFields.set! recursiveIndex field
-        let privateMajor := mkApp privateCtor field
-        let lhs := mkApp plan.core privateMajor
-        let publicMapped := mkApp unrollField field
-        let publicResult := mkApp2 minor publicMapped (mkApp privateIH field)
-        let agreement := mkApp constructorAgreement field
-        let source := mkApp publicCtor publicMapped
-        let targetMajor := mkAppN (.const names.unroll us)
-          (parameters.push privateMajor)
-        let publicResultType ← inferType publicResult
-        let rhs ← transportAlong eqi (← ilevel publicResultType) level
-          (mkAppN (.const names.publicNames.self us) parameters)
-          source targetMajor agreement publicResult fun value => pure (mkApp motive value)
-        let resultType ← inferType rhs
-        let target := eqi.mk' (← ilevel resultType) resultType lhs rhs
+        let target ← instantiateForall plan.coreIotaProposition privateFields
         let proof := mkAppN (.const names.implementation.iotas[0]! plan.recLevels)
           (parameters ++ #[plan.privateMotive, plan.privateMinor] ++ privateFields)
         let actual ← inferType proof
-        unless ← isDefEq actual target do
-          badShape s!"{names.implementation.iotas[0]!}'s exact rule does not establish the one-layer core rule: {actual} != {target}"
+        unless actual == target do
+          badShape s!"{names.implementation.iotas[0]!}'s exact instantiated rule changed syntax"
         mkLambdaFVars #[field] proof
 
       let carrierUniverse := level.normalize.dec.getD .zero
