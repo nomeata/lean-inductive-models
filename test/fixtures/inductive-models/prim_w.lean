@@ -118,13 +118,18 @@ inductive Twin : Type where
   | mk : Twin → Twin → Twin
 
 inductive Mixed (P : Type) : Type where
-  | mk : Mixed P → (P → Mixed P) → Mixed P
+  | mk : Mixed P → P → (P → Mixed P) → Mixed P
 
 inductive TwinInf (P Q : Type) : Type where
-  | mk : (P → TwinInf P Q) → (Q → TwinInf P Q) → TwinInf P Q
+  | mk : (P → Q → TwinInf P Q) → (Q → P → TwinInf P Q) → TwinInf P Q
 
 inductive Prefix (α : Type u) (β : α → Type u) : Type u where
   | mk : (a : α) → β a → Prefix α β → Prefix α β → Prefix α β
+
+/- Deliberate phase boundary: the binary compatibility oracle must not be
+   partially applied to three recursive fields. -/
+inductive Triple : Type where
+  | mk : Triple → Triple → Triple → Triple
 
 inductive Utd : Type where
   | nil : Utd

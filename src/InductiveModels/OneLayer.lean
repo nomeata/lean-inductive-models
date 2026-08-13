@@ -1,5 +1,4 @@
 import InductiveModels.Simple
-import Lean.Meta.Tactic.Simp
 
 /-!
 # One-layer public carriers
@@ -492,29 +491,6 @@ structure OneLayerPublicRecursor where
   recursorName : Name
   iotas : Array (Nat × Name × Name)
   deriving Inhabited
-
-private def proveOneLayerIota (names : OneLayerNames) (roundTrips : Array Expr)
-    (proposition : Expr) : GenM Expr := do
-    let mut reductions : SimpTheorems := {}
-    for name in #[names.publicNames.recursor, names.publicNames.ctors[0]!, names.roll,
-        names.unroll] do
-      reductions := reductions.addDeclToUnfoldCore name
-    reductions := ← reductions.addConst names.implementation.iotas[0]!
-    for index in [0:roundTrips.size] do
-      reductions := ← reductions.add (.other (Name.appendIndexAfter `oneLayerRoundTrip index))
-        #[] roundTrips[index]!
-    -- This proof runs after the generator has replaced its environment with
-    -- the export.  In particular, the host's global simp set may mention
-    -- declarations (such as the standard `funext`) which that export does not
-    -- contain.  The public equation is discharged solely by the selected
-    -- equivalence's definitions, private iota, and one section law per field.
-    let context ← Simp.mkContext (simpTheorems := #[reductions])
-    let goal ← mkFreshExprMVar proposition
-    let (result, _) ← simpGoal goal.mvarId! context
-    unless result.isNone do
-      let pending := result.map (·.2) |>.getD goal.mvarId!
-      badShape s!"{names.publicNames.iotas[0]!}'s equivalence laws do not prove its exact public rule"
-    instantiateMVars goal
 
 /-- The induction-hypothesis telescope associated with one direct or
 infinitary recursive field.  The field's binders are retained literally and
