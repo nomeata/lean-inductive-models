@@ -135,6 +135,50 @@ def withMemberIndices (memberTy : Expr) (ni : Nat) (ps : Array Expr)
     (k : Array Expr → GenM α) : GenM α := do
   forallBoundedTelescope (← instForall memberTy ps) (some ni) fun idxs _ => k idxs
 
+/-- Name plan for the private half of a simultaneous mutual adapter.
+
+The family root is stable under member/recursor array reordering.  Member,
+constructor, and rule slots are derived from their source owners, never from
+their positions in an export record. -/
+structure MutualFamilyNames where
+  familyRoot : Name
+  tag : Name
+  aux : Name
+  deriving Inhabited
+
+def MutualFamilyNames.forBuild (root : Name) : MutualFamilyNames :=
+  let familyRoot := Name.str (Naming.modelName root) "_impl"
+  { familyRoot, tag := Name.str familyRoot "tag", aux := Name.str familyRoot "aux" }
+
+def MutualFamilyNames.memberRoot (names : MutualFamilyNames) (owner : Name) : Name :=
+  Name.str names.familyRoot (lastStr owner)
+
+def MutualFamilyNames.privateSelf (names : MutualFamilyNames) (owner : Name) : Name :=
+  Name.str (names.memberRoot owner) "self"
+
+def MutualFamilyNames.privateConstructor (names : MutualFamilyNames)
+    (owner constructor : Name) : Name :=
+  Name.str (Name.str (names.memberRoot owner) "ctor") (lastStr constructor)
+
+def MutualFamilyNames.privateRecursor (names : MutualFamilyNames) (owner : Name) : Name :=
+  Name.str (names.memberRoot owner) "rec"
+
+def MutualFamilyNames.privateIota (names : MutualFamilyNames)
+    (recursorOwner constructor : Name) : Name :=
+  Name.str (Name.str (names.memberRoot recursorOwner) "rec_iota") (lastStr constructor)
+
+def MutualFamilyNames.roll (names : MutualFamilyNames) (owner : Name) : Name :=
+  Name.str (names.memberRoot owner) "roll"
+
+def MutualFamilyNames.unroll (names : MutualFamilyNames) (owner : Name) : Name :=
+  Name.str (names.memberRoot owner) "unroll"
+
+def MutualFamilyNames.unrollRoll (names : MutualFamilyNames) (owner : Name) : Name :=
+  Name.str (names.memberRoot owner) "unroll_roll"
+
+def MutualFamilyNames.rollUnroll (names : MutualFamilyNames) (owner : Name) : Name :=
+  Name.str (names.memberRoot owner) "roll_unroll"
+
 /-- The model of one plain mutual block, or the shape that stopped it.
 
 `all` is the export's own `all`, in the export's order; `memberTys` and
@@ -148,7 +192,7 @@ generated declaration. Nothing is emitted unchecked. -/
 def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     (memberTys : Array Expr) (exportCtors : Array (Array (Name × Expr)))
     (reserved : Std.HashSet Name) (buildRoot? : Option Name := none)
-    (sourceBlock? : Option EDecl := none) : GenM Iso := do
+    (sourceBlock? : Option EDecl := none) (privateFamily : Bool := false) : GenM Iso := do
   let us := lparams.map Level.param
   let r := all.size
   unless r ≥ 2 && memberTys.size == r && exportCtors.size == r do
@@ -160,9 +204,9 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   -- `InductiveModels.Naming` are public contract slots.
   let buildCarrier := Naming.modelName buildRoot
   let exactCarrier := Naming.modelName root
-  let impl := Name.str buildCarrier "_impl"
-  let tagN := Name.str impl "tag"
-  let auxN := Name.str impl "aux"
+  let familyNames := MutualFamilyNames.forBuild buildRoot
+  let tagN := familyNames.tag
+  let auxN := familyNames.aux
   let tagCtorN := fun (k : Nat) => Name.num tagN k
   -- `T._model._impl.aux.k.<last component of the original>`. The member index is in
   -- the name because two members of one block may have constructors whose last
@@ -170,9 +214,11 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   -- constructors of every member live on one inductive here.
   let auxCtorN := fun (k : Nat) (cn : Name) => Name.str (Name.num auxN k) (lastStr cn)
   let selfNames := all.map fun n =>
-    Naming.modelName (Naming.relocateSource root buildRoot n)
-  let ctorN := fun n =>
-    Naming.modelName (Naming.relocateSource root buildRoot n)
+    if privateFamily then familyNames.privateSelf n
+    else Naming.modelName (Naming.relocateSource root buildRoot n)
+  let ctorN := fun (owner n : Name) =>
+    if privateFamily then familyNames.privateConstructor owner n
+    else Naming.modelName (Naming.relocateSource root buildRoot n)
   let exportRecs := (Array.range r).map (exportRecName all)
   let sourceRecursors? ← match sourceBlock? with
     | none => pure none
@@ -182,9 +228,12 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       pure (some recursors.toArray)
     | some _ => badShape "exact generated mutual source is not an inductive block"
   let recN := fun (k : Nat) =>
-    Naming.modelName (Naming.relocateSource root buildRoot exportRecs[k]!)
+    if privateFamily then familyNames.privateRecursor all[k]!
+    else Naming.modelName (Naming.relocateSource root buildRoot exportRecs[k]!)
   let iotaN := fun (k j : Nat) =>
-    Naming.iotaName (Naming.relocateSource root buildRoot exportRecs[k]!) j
+    if privateFamily then
+      familyNames.privateIota all[k]! exportCtors[k]![j]!.1
+    else Naming.iotaName (Naming.relocateSource root buildRoot exportRecs[k]!) j
   let ruleKN := fun (k : Nat) =>
     Naming.ruleKName (Naming.relocateSource root buildRoot exportRecs[k]!)
 
@@ -230,6 +279,13 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   -- The environment also contains declarations generated earlier in a
   -- composed run, which are not part of the input's `reserved` set.
   for name in publicTable.requiredNames do taken name
+  if privateFamily then
+    for k in [0:r] do
+      taken selfNames[k]!
+      taken (recN k)
+      for j in [0:exportCtors[k]!.size] do
+        taken (ctorN all[k]! exportCtors[k]![j]!.1)
+        taken (iotaN k j)
 
   -- Each member's index count and resultant sort. **Every member's sort, not
   -- just the first's**: the kernel requires them to agree and the encoding
@@ -365,11 +421,11 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       let val ← forallBoundedTelescope ty (some (numForalls cty)) fun bs _ =>
         mkLambdaFVars bs (mkAppN (.const (auxCtorN k cn) us) bs)
       let d := Declaration.defnDecl
-        { name := ctorN cn, levelParams := lparams, type := ty, value := val
+        { name := ctorN all[k]! cn, levelParams := lparams, type := ty, value := val
           hints := ← hintsFor val, safety := .safe }
       addChecked d
       out := out.push d
-      ctors := ctors.push (cn, ctorN cn)
+      ctors := ctors.push (cn, ctorN all[k]! cn)
 
   -- The shared restore table every statement below is written with, built from
   -- the `Iso` this is on the way to returning. The recursor names are all that
@@ -545,15 +601,16 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   if buildRoot != root then
     aliases := Naming.AliasMap.forRetry (Naming.modelName buildRoot) (Naming.modelName root)
       (out.flatMap (·.getNames.toArray))
-    for k in [0:r] do
-      aliases := aliases.insert selfNames[k]! (Naming.modelName all[k]!)
-      aliases := aliases.insert (recN k) (Naming.modelName exportRecs[k]!)
-      if recRuleInfo[k]!.2 then
-        aliases := aliases.insert (ruleKN k) (Naming.ruleKName exportRecs[k]!)
-      for j in [0:exportCtors[k]!.size] do
-        let cn := exportCtors[k]![j]!.1
-        aliases := aliases.insert (ctorN cn) (Naming.modelName cn)
-        aliases := aliases.insert (iotaN k j) (Naming.iotaName exportRecs[k]! j)
+    unless privateFamily do
+      for k in [0:r] do
+        aliases := aliases.insert selfNames[k]! (Naming.modelName all[k]!)
+        aliases := aliases.insert (recN k) (Naming.modelName exportRecs[k]!)
+        if recRuleInfo[k]!.2 then
+          aliases := aliases.insert (ruleKN k) (Naming.ruleKName exportRecs[k]!)
+        for j in [0:exportCtors[k]!.size] do
+          let cn := exportCtors[k]![j]!.1
+          aliases := aliases.insert (ctorN all[k]! cn) (Naming.modelName cn)
+          aliases := aliases.insert (iotaN k j) (Naming.iotaName exportRecs[k]! j)
   return { decls := out, levelParams := lparams, members := #[tagN, auxN], selfNames
            numAll := r, ctors, recs, iotas, ruleKs, spliced, aliases }
 
