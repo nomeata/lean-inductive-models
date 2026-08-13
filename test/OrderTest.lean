@@ -102,14 +102,23 @@ structure StagedFilterRun extends FilterRun where
   islands : Array StagedIsland
   records : Array StagedRecord
   order : Array Nat
+  planValid : Bool
 
 structure DroppedFilterRun where
   report : Report
   plan : StagedPlan
+  planValid : Bool
 
 def cursorAfter (records : Array EDecl) : Writer.Cursor :=
   let writer := records.foldl (fun writer record => (writer.splitDecl record).1) (Writer.fromCursor {})
   writer.cursor
+
+def syntheticCertificate (cursor : Writer.Cursor) (count : Nat) : RawCertificate :=
+  { cursor := { nextName := cursor.nextName, nextLevel := cursor.nextLevel,
+      nextExpr := cursor.nextExpr }
+    declarationBytes := count.toUInt64
+    declarations := (Array.range count).map fun ordinal =>
+      { offset := ordinal.toUInt64, bytes := 1 } }
 
 def runFilterState (input : Export) (generation : Modelgen.Cli.Config) : IO FilterRun := do
   let env ← importModules #[] {}
@@ -136,9 +145,13 @@ def runFilterStagedState (scratch : String) (input : Export)
     let sealed ← stage.finish
     unless sealed.cursor == (← stage.cursor) do
       throw <| IO.userError "sealed staged cursor changed after finish"
+    let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
+    let planValid := match plan.declarationSpans certificate sealed with
+      | .ok spans => spans.size == plan.records.size
+      | .error _ => false
     return {
       input, output := { input with decls }, report, env := finalState.env,
-      islands := plan.islands, records := plan.records, order := plan.order }
+      islands := plan.islands, records := plan.records, order := plan.order, planValid }
 
 def runFilterDroppedState (scratch : String) (input : Export)
     (generation : Modelgen.Cli.Config) : IO DroppedFilterRun :=
@@ -151,8 +164,12 @@ def runFilterDroppedState (scratch : String) (input : Export)
     let ((report, plan), _) ← Lean.Core.CoreM.toIO
       (Lean.Meta.MetaM.run'
         (runFilterStaged input false generation (.ofStage stage))) context { env }
-    discard <| stage.finish
-    return { report, plan }
+    let sealed ← stage.finish
+    let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
+    let planValid := match plan.declarationSpans certificate sealed with
+      | .ok spans => spans.size == plan.records.size
+      | .error _ => false
+    return { report, plan, planValid }
 
 def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
     IO FilterRun := do
@@ -555,12 +572,14 @@ def run (root : String) : IO UInt32 := do
       aliasStaged.report == aliasRun.report &&
       aliasStaged.records.size == aliasStaged.output.decls.size &&
       aliasStaged.order.size == aliasStaged.records.size &&
+      aliasStaged.planValid &&
       aliasStaged.islands.size == aliasRun.report.generated.size &&
       aliasStaged.islands.all fun island =>
         island.compact.summaries.size == island.commit.declarations.size &&
           island.compact.globalExtras.size == island.commit.declarations.size
   state := state.check "AST-dropping staged path preserves report and compact schedule" <|
     aliasDropped.report == aliasRun.report &&
+      aliasDropped.planValid &&
       aliasDropped.plan.records.map (·.summary.introduced) ==
         aliasStaged.records.map (·.summary.introduced) &&
       aliasDropped.plan.order == aliasStaged.order &&

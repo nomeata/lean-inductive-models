@@ -154,6 +154,79 @@ structure StagedPlan where
   records : Array StagedRecord := #[]
   order : Array Nat := #[]
 
+/-- Physical declaration payload selected by one compact output row. -/
+inductive StagedDeclarationSpan where
+  | source (span : RawSpan)
+  | generated (span : Spool.ByteSpan)
+  deriving Inhabited, Repr, BEq
+
+private def spansPartition (spans : Array Spool.ByteSpan) (size : UInt64) : Bool := Id.run do
+  let mut endpoint : UInt64 := 0
+  for span in spans do
+    unless span.offset == endpoint do return false
+    let some next := span.end? | return false
+    unless next ≤ size do return false
+    endpoint := next
+  return endpoint == size
+
+/-- Validate every compact/output axis before the first final byte is written.
+This binds source raw ordinals, generated island spans, cursor publication, and
+the final compact permutation without reparsing a staged export. -/
+def StagedPlan.declarationSpans (plan : StagedPlan) (certificate : RawCertificate)
+    (sealed : Spool.SealedIsland) : Except String (Array StagedDeclarationSpan) := do
+  unless plan.order.size == plan.records.size do
+    throw "staged order length does not match staged records"
+  let mut seenOrder : Std.HashSet Nat := {}
+  for index in plan.order do
+    unless index < plan.records.size do throw "staged order contains an out-of-range record"
+    if seenOrder.contains index then throw "staged order contains a duplicate record"
+    seenOrder := seenOrder.insert index
+
+  let mut expectedCursor := Writer.Cursor.ofRaw certificate.cursor
+  let mut generatedArenaSpans : Array Spool.ByteSpan := #[]
+  let mut generatedDeclarationSpans : Array Spool.ByteSpan := #[]
+  for island in plan.islands do
+    unless island.compact.summaries.size == island.compact.globalExtras.size &&
+        island.compact.summaries.size == island.commit.declarations.size do
+      throw "staged island compact/span cardinality mismatch"
+    unless island.commit.before == expectedCursor do
+      throw "staged island cursor chain has a gap or overlap"
+    expectedCursor := island.commit.after
+    generatedArenaSpans := generatedArenaSpans ++ island.commit.arenas
+    generatedDeclarationSpans := generatedDeclarationSpans ++ island.commit.declarations
+  unless expectedCursor == sealed.cursor do
+    throw "sealed cursor does not match staged island cursor chain"
+  unless spansPartition generatedArenaSpans sealed.arenaSize do
+    throw "generated arena spans do not partition the sealed spool"
+  unless spansPartition generatedDeclarationSpans sealed.declarationSize do
+    throw "generated declaration spans do not partition the sealed spool"
+
+  let mut seenSource : Std.HashSet Nat := {}
+  let mut seenGenerated : Std.HashSet (Nat × Nat) := {}
+  let mut result : Array StagedDeclarationSpan := #[]
+  for index in plan.order do
+    match plan.records[index]!.locator with
+    | .source ordinal =>
+      let some span := certificate.declarations[ordinal]?
+        | throw "staged source locator is outside the parser certificate"
+      if seenSource.contains ordinal then throw "staged source locator is duplicated"
+      seenSource := seenSource.insert ordinal
+      result := result.push (.source span)
+    | .generated island declaration =>
+      let some artifact := plan.islands[island]?
+        | throw "staged generated locator has an invalid island"
+      let some span := artifact.commit.declarations[declaration]?
+        | throw "staged generated locator has an invalid declaration"
+      let key := (island, declaration)
+      if seenGenerated.contains key then throw "staged generated locator is duplicated"
+      seenGenerated := seenGenerated.insert key
+      result := result.push (.generated span)
+  unless seenSource.size == certificate.declarations.size do
+    throw "staged plan does not contain every source declaration"
+  unless seenGenerated.size == generatedDeclarationSpans.size do
+    throw "staged plan does not contain every generated declaration"
+  return result
+
 /-- The unique minor-premise position belonging to `constructorName` in a
 mutual recursor telescope.  Each exported recursor record carries only its
 own member's rules, while the installed mutual recursor consumes every
