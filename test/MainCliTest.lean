@@ -457,6 +457,12 @@ def main (args : List String) : IO UInt32 := do
     ["--no-check", "--no-type-check-output", "--no-output", "-"] declinedText
   state := state.check "unsupported generation declines with exit 2" <|
     declined.exitCode == 2 && (declined.stderr.splitOn "declined").length > 1
+  let kernelCheckedDecline ← runInductiveModelsStdin binary
+    ["--no-check", "--type-check-output", "--no-output", "-"] declinedText
+  state := state.check "fresh output kernel acceptance preserves generation exit 2" <|
+    kernelCheckedDecline.exitCode == 2 && kernelCheckedDecline.stdout.isEmpty &&
+      (kernelCheckedDecline.stderr.splitOn "declined").length > 1 &&
+      hasDiagnostic kernelCheckedDecline.stderr "output kernel check: accepted"
 
   let malformed ← runInductiveModelsStdin binary
     ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] "not ndjson\n"
@@ -704,9 +710,9 @@ def main (args : List String) : IO UInt32 := do
   let kernelDiscardMode ← runInductiveModelsWithEnv binary
     ["--no-output", "--no-check", "--type-check-output", nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "no-output kernel checking retains the legacy fresh-worker seam" <|
+  state := state.check "no-output kernel checking stages for a fresh worker" <|
     kernelDiscardMode.exitCode == 0 && kernelDiscardMode.stdout.isEmpty &&
-      hasDiagnostic kernelDiscardMode.stderr "output backend: legacy"
+      hasDiagnostic kernelDiscardMode.stderr "output backend: staged"
 
   -- Generated arena IDs may differ from the legacy global writer, so compare
   -- parsed exports, exact declaration order, diagnostics, and exit status
