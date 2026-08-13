@@ -1,6 +1,6 @@
-import Modelgen.Simple
+import InductiveModels.Simple
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 partial def containsProjection (owner : Name) (field : Nat) : Expr → Bool
   | .proj got index value =>

@@ -1,6 +1,6 @@
-import Modelgen.Model
-import Modelgen.LevelAlgebra
-import Modelgen.Naming
+import InductiveModels.Model
+import InductiveModels.LevelAlgebra
+import InductiveModels.Naming
 
 /-!
 # The model of a **plain mutual block**, generated
@@ -17,9 +17,9 @@ The target shape can also be written by hand at a three-member block; doing so
 answers the load-bearing question — *are the ι rules definitional?* — before
 any generator is involved.
 
-## Why this is not [`Modelgen.iso`] at zero mimics
+## Why this is not [`InductiveModels.iso`] at zero mimics
 
-`Modelgen.iso` models a **nested** declaration by specialising it into a mutual
+`InductiveModels.iso` models a **nested** declaration by specialising it into a mutual
 block of `r + m` members and then proving the export's recursors over *that*.
 Set `m = 0` and the specialised block is the declaration itself, renamed: the
 model is the identity, and a consumer that could not take a mutual block still
@@ -96,7 +96,7 @@ is a real check. A plain mutual block has no second inductive: `aux.rec`
 is not `R_k.rec` at any renaming. So the recursors and the ι rules here are the
 **export's own, restored** — read off the recursor Lean minted for the input's
 block, with the members, their constructors and their recursors rewritten to the
-model's names ([`Modelgen.modelTable`]) and nothing else.
+model's names ([`InductiveModels.modelTable`]) and nothing else.
 
 That makes the audit's *recursor type* comparison true by construction here.
 What is
@@ -106,7 +106,7 @@ What is
   declared type*, so the tag/aux encoding really does implement that recursor;
   and each ι theorem is checked at the export's own rule with `Eq.refl` as its
   proof, so the rule really is definitional in the model.
-* **the structural oracle.** [`Modelgen.Check`] independently reconstructs the
+* **the structural oracle.** [`InductiveModels.Check`] independently reconstructs the
   complete public family from the serialized owner and model records and
   compares every declaration type syntactically. A key filed under the wrong
   constructor, a level list off by a motive universe, or a rule count that does
@@ -116,7 +116,7 @@ What is
 
 open Lean Meta
 
-namespace Modelgen
+namespace InductiveModels
 
 /-- How many leading `∀` binders an expression has, **syntactically**. No
 `whnf`: every telescope peeled here is one the export wrote as a literal
@@ -128,7 +128,7 @@ def numForalls : Expr → Nat
 
 /-- Open one member's **index** telescope at the block's parameter `fvar`s.
 
-A separate definition rather than a `let` in [`Modelgen.mutualIso`] because it
+A separate definition rather than a `let` in [`InductiveModels.mutualIso`] because it
 is used at three different result types and a `do`-bound lambda does not
 generalise over them. -/
 def withMemberIndices (memberTy : Expr) (ni : Nat) (ps : Array Expr)
@@ -143,7 +143,7 @@ order. **The export's block must already be installed**: the recursors this
 restates are the ones Lean minted for it, and there is nothing else to read them
 off (see the header).
 
-The whole of the checker interaction is [`Modelgen.addChecked`], once per
+The whole of the checker interaction is [`InductiveModels.addChecked`], once per
 generated declaration. Nothing is emitted unchecked. -/
 def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     (memberTys : Array Expr) (exportCtors : Array (Array (Name × Expr)))
@@ -157,7 +157,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   let buildRoot := buildRoot?.getD root
   -- Tag, auxiliary carrier and their constructors are implementation details.
   -- Only names obtained directly from an exported declaration through
-  -- `Modelgen.Naming` are public contract slots.
+  -- `InductiveModels.Naming` are public contract slots.
   let buildCarrier := Naming.modelName buildRoot
   let exactCarrier := Naming.modelName root
   let impl := Name.str buildCarrier "_impl"
@@ -557,4 +557,4 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   return { decls := out, levelParams := lparams, members := #[tagN, auxN], selfNames
            numAll := r, ctors, recs, iotas, ruleKs, spliced, aliases }
 
-end Modelgen
+end InductiveModels

@@ -1,6 +1,6 @@
-import Modelgen.Driver
+import InductiveModels.Driver
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 structure TestState where
   passed : Nat := 0
@@ -12,10 +12,10 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else
     { state with failed := state.failed.push label }
 
-def noGeneration : Modelgen.Cli.Config :=
+def noGeneration : InductiveModels.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
 
-def runExport (parsed : Export) (generation : Modelgen.Cli.Config) : IO (Array EDecl × Modelgen.Report) := do
+def runExport (parsed : Export) (generation : InductiveModels.Cli.Config) : IO (Array EDecl × InductiveModels.Report) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<generation-flags-test>", fileMap := default,
@@ -28,21 +28,21 @@ def runExport (parsed : Export) (generation : Modelgen.Cli.Config) : IO (Array E
 
 def readFixture (path : String) : IO Export := do
   let text ← IO.FS.readFile path
-  let .ok parsed := Modelgen.parse text (analyse := false)
+  let .ok parsed := InductiveModels.parse text (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   return parsed
 
-def runFixtureOutput (path : String) (generation : Modelgen.Cli.Config) :
-    IO (Array EDecl × Modelgen.Report) := do
+def runFixtureOutput (path : String) (generation : InductiveModels.Cli.Config) :
+    IO (Array EDecl × InductiveModels.Report) := do
   runExport (← readFixture path) generation
 
-def runFixture (path : String) (generation : Modelgen.Cli.Config) : IO Modelgen.Report := do
+def runFixture (path : String) (generation : InductiveModels.Cli.Config) : IO InductiveModels.Report := do
   return (← runFixtureOutput path generation).2
 
-def generatedNames (report : Modelgen.Report) : Array Name :=
+def generatedNames (report : InductiveModels.Report) : Array Name :=
   report.generated.map (·.1)
 
-def hasGeneratedSuffix (report : Modelgen.Report) (suffix : String) : Bool :=
+def hasGeneratedSuffix (report : InductiveModels.Report) (suffix : String) : Bool :=
   (generatedNames report).any fun name => (toString name).endsWith suffix
 
 def outputNames (decls : Array EDecl) : Array Name :=

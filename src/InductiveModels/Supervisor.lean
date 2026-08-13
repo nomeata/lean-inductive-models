@@ -9,7 +9,7 @@ about exports, models, or checking: it preserves ordinary worker results and
 only contains statuses outside the public `0` through `3` contract.
 -/
 
-namespace Modelgen.Supervisor
+namespace InductiveModels.Supervisor
 
 /-- Private recursion guard inherited only by the supervised worker. -/
 def workerMarker : String := "LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER"
@@ -46,4 +46,4 @@ byte and code for code; only native/impossible process statuses are contained. -
 def supervise (worker : List String → IO UInt32) (args : List String) : IO UInt32 := do
   if (← IO.getEnv workerMarker) == some "1" then worker args else runWorker args
 
-end Modelgen.Supervisor
+end InductiveModels.Supervisor

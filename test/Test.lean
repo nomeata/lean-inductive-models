@@ -1,6 +1,6 @@
-import Modelgen.Driver
-import Modelgen.Mono
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Mono
+import InductiveModels.Order
 
 /-!
 # The tool's own oracles, as a test
@@ -21,7 +21,7 @@ Four axes, and each one has an occupant that would pass the other three:
    persistent source-prefix environment with the owner absent. An `ok` here is
    Lean's answer that the emitted model is well typed and owner-independent,
    not the generator's.
-3. **The statements.** [`Modelgen.Check.checkStatementsFor`] rebuilds the
+3. **The statements.** [`InductiveModels.Check.checkStatementsFor`] rebuilds the
    complete public interface from the exact exported owner records and compares
    it syntactically with the serialized model records. It does not consult the
    replay environment or a kernel-minted owner recursor. Well-typedness is not
@@ -33,7 +33,7 @@ Four axes, and each one has an occupant that would pass the other three:
 
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 /-- `(fixture, [(declaration, model size)], [(declaration, decline)])`. -/
 abbrev Row := String × List (String × Nat) × List (String × String)
@@ -254,7 +254,7 @@ def expectedOwn : List Row :=
       [("Tree", 15), ("Tree._model._impl.0", 14), ("P", 37), ("P._model._impl.0", 32),
        ("R", 21), ("R._model._impl.0", 20)], [])
     -- **`C`/`D` is a plain mutual block** — the pair of containers `X` cycles
-    -- through — so the *second* construction (`src/Modelgen/Mutual.lean`) models
+    -- through — so the *second* construction (`src/InductiveModels/Mutual.lean`) models
     -- it, and it heads this row because the export declares it first. Two
     -- members and four constructors: the tag, the carrier, two type formers,
     -- four constructors, two recursors and four ι theorems is 14.
@@ -269,7 +269,7 @@ def expectedOwn : List Row :=
     -- composition's third step on top.
     -- ── the second construction: a plain mutual block ──────────────────────
     --
-    -- **`src/Modelgen/Mutual.lean`, and its coverage is its own.** A plain mutual
+    -- **`src/InductiveModels/Mutual.lean`, and its coverage is its own.** A plain mutual
     -- block is not the nested construction at zero mimics — that is the
     -- identity — so none of the rows above says anything about it. Before
     -- metadata, the count is `2 + 2r + 2c` for `r` members and `c` constructors:
@@ -514,7 +514,7 @@ def expectedPrim : List Row :=
   -- because those two are declared *after* it here — `Acc` arrives through
   -- `WellFounded.fix` and `Nonempty` only through `Classical.propDecidable`.
   -- This is the late-primitive class rather than a name that
-  -- is lost, and [`Modelgen.lateSpliceNames`] is what holds the model back
+  -- is lost, and [`InductiveModels.lateSpliceNames`] is what holds the model back
   -- until the input has caught up. Without that it is a decline, and this row
   -- is where the difference shows.
   --
@@ -610,7 +610,7 @@ def expectedPrim : List Row :=
   -- exact public feature roles. So the number is a property of *ordering* and
   -- not of `Tree`, and if it
   -- moves, the fragment changed size — which is a thing to notice, since
-  -- `Modelgen.wCoreText` is not in Lake's trace.
+  -- `InductiveModels.wCoreText` is not in Lake's trace.
   --
   -- **The eighteen rows between it and `Q` are the fragment being modelled in
   -- turn** — `Iso.requires`' rule, the same one arm C's skeleton is under. A
@@ -641,8 +641,8 @@ def expectedPrim : List Row :=
   -- too. `JT` and `PT` are `Lean.Json` and `Lean.PrefixTreeNode` at that
   -- shape, and their `_model._impl.aux` families were the two declarations the
   -- Mathlib run reported as **infinitary** until the guards in
-  -- `src/Modelgen/Simple.lean` started reading a field's head through
-  -- [`Modelgen.headNorm`], the same function used by layer 1's
+  -- `src/InductiveModels/Simple.lean` started reading a field's head through
+  -- [`InductiveModels.headNorm`], the same function used by layer 1's
   -- three readers. Nine `_model._impl.aux` rows here are that repair; `Zeta`'s is
   -- the one that needs ζ and not β alone.
   --
@@ -765,7 +765,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
   let (name, want, wantDeclined) := r
   let path := s!"{root}/{dir}/{name}.ndjson"
   let text ← IO.FS.readFile path
-  let .ok x := Modelgen.parse text | do
+  let .ok x := InductiveModels.parse text | do
     return check a false s!"{name}: does not parse"
   let env ← importModules #[] {}
   let ctx : Core.Context :=
@@ -794,7 +794,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
   -- names `Eq` still pins it; the extra claim below is that nothing but a
   -- basis primitive ever lands in the exempt row.
   let gotD := (rep.exempt ++ rep.declined).toList.map fun (n, w) => (n.toString, w)
-  a := check a (rep.exempt.all fun (n, _) => Modelgen.inductiveBasis.contains n)
+  a := check a (rep.exempt.all fun (n, _) => InductiveModels.inductiveBasis.contains n)
     s!"{name}: the exempt row holds a non-basis name: {rep.exempt.map (·.1)}"
   -- By **prefix**: which shape stopped the generator is the claim, and a
   -- kernel diagnostic quoted inside the message is not.
@@ -854,7 +854,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
       "prim_graph_pre: scheduled quotient support does not precede derived funext and its owner"
   -- axis 4: the round trip
   let out := ({ x with decls }).render
-  match Modelgen.parse out with
+  match InductiveModels.parse out with
   | .error e => a := check a false s!"{name}: the output does not parse: {e}"
   | .ok y =>
     a := check a (y.decls == decls) s!"{name}: the output does not read back as it was written"
@@ -863,7 +863,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
   if cross then
     let fpath := s!"{root}/test/fixtures/lean-inductive-models/filtered/{name}.ndjson"
     let ftext ← IO.FS.readFile fpath
-    match Modelgen.parse ftext with
+    match InductiveModels.parse ftext with
     | .error e => a := check a false s!"{name}: filtered fixture does not parse: {e}"
     | .ok f =>
       match Order.reorder { x with decls } with
@@ -902,7 +902,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
   let plainPath := s!"{root}/test/fixtures/lean-inductive-models/filtered/nat_char_equations.ndjson"
   if ← System.FilePath.pathExists plainPath then
     let t ← IO.FS.readFile plainPath
-    let .ok p := Modelgen.parse t | return check a false "nat_char_equations does not parse"
+    let .ok p := InductiveModels.parse t | return check a false "nat_char_equations does not parse"
     let ((d2, r2), _) ←
       Lean.Core.CoreM.toIO
         (Lean.Meta.MetaM.run' (runFilter p false (legacyGenerationConfig false))) ctx { env }
@@ -931,7 +931,7 @@ so that day is a test failure with a name on it.
 def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
   let path := s!"{root}/test/fixtures/lean-inductive-models/prim_carve.ndjson"
   let text ← IO.FS.readFile path
-  let .ok x := Modelgen.parse text | return check a false "prim_carve does not parse"
+  let .ok x := InductiveModels.parse text | return check a false "prim_carve does not parse"
   let env0 ← importModules #[] {}
   let mut env := env0
   for d in x.decls do
@@ -940,8 +940,8 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
   let reserved : Std.HashSet Name :=
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
   -- **The compiled-in fragment against the one on disk.**
-  -- `Modelgen.wCoreText` is an `include_str`, and `include_str` is *not* in
-  -- Lake's trace for `Modelgen.Model`: re-exporting the w_core fixture and
+  -- `InductiveModels.wCoreText` is an `include_str`, and `include_str` is *not* in
+  -- Lake's trace for `InductiveModels.Model`: re-exporting the w_core fixture and
   -- running `lake build` reports success and leaves the binary carrying the
   -- previous fragment. Measured — a re-export that added 11 declarations still
   -- spliced the old 149, and neither `touch` nor an mtime forces it, because
@@ -949,16 +949,16 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
   -- this function runs against `wCoreText`, so without this one they all pass
   -- on a stale tool and say nothing about the fragment that was committed.
   let onDisk ← IO.FS.readFile s!"{root}/test/fixtures/lean-inductive-models/w_core.ndjson"
-  let a := check a (onDisk == Modelgen.wCoreText)
-    s!"the compiled-in W core fragment is {Modelgen.wCoreText.length} bytes and \
+  let a := check a (onDisk == InductiveModels.wCoreText)
+    s!"the compiled-in W core fragment is {InductiveModels.wCoreText.length} bytes and \
        the w_core fixture is {onDisk.length} — the fragment was re-exported and \
        the binary was not rebuilt, which `lake build` will not tell you"
-  let nFrag := match Modelgen.parse Modelgen.wCoreText (analyse := false) with
+  let nFrag := match InductiveModels.parse InductiveModels.wCoreText (analyse := false) with
     | .ok x => x.decls.size
     | .error _ => 0
   let act : MetaM (Array (Bool × String)) := do
     let mut cs : Array (Bool × String) := #[]
-    match ← Modelgen.ensureWCore reserved with
+    match ← InductiveModels.ensureWCore reserved with
     | .error e =>
       return #[(false, s!"the W core splice declined on prim_carve: {e.label}")]
     | .ok ds =>
@@ -971,16 +971,16 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
       -- because all four take the instance as a parameter —
       -- `instDecidableEqNat` at `K := Nat` and `WT.decEqAll` at `K := A`
       -- because those names are parameters rather than dependencies.
-      for k in [Modelgen.wCoreDecEqNat, Modelgen.wCoreDecEqAll] do
+      for k in [InductiveModels.wCoreDecEqNat, InductiveModels.wCoreDecEqAll] do
         cs := cs.push (((← getEnv).find? k).isSome,
           s!"{k} is missing after the splice — one of the two instantiations has \
              no decidable equality and every W target on it would have to prove one")
-      for k in [Modelgen.wCoreSelf, Modelgen.wCoreSup, Modelgen.wCoreRec, Modelgen.wCoreIota] do
+      for k in [InductiveModels.wCoreSelf, InductiveModels.wCoreSup, InductiveModels.wCoreRec, InductiveModels.wCoreIota] do
         cs := cs.push (((← getEnv).find? k).isSome,
           s!"{k} is not visible to Environment.find? after the splice")
       -- **Once per run.** The sentinel is what makes the splice a splice and
       -- not 160 kernel checks per W target.
-      match ← Modelgen.ensureWCore reserved with
+      match ← InductiveModels.ensureWCore reserved with
       | .error _ => cs := cs.push (false, "the second W core splice declined")
       | .ok ds2 => cs := cs.push (ds2.isEmpty,
           s!"the W core spliced a second time and added {ds2.size} records")
@@ -990,11 +990,11 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
       -- is worse than that: consumers key the standard axiom by its name and
       -- would attach the wrong statement. Both are pinned, because the
       -- rename is one list and either mistake is one entry in it.
-      for n in [Modelgen.wCoreRoot ++ `propext, Modelgen.wCoreRoot ++ `Quot.sound,
-                Modelgen.wCoreRoot ++ `Eq, Modelgen.wCoreRoot ++ `Iff,
-                Modelgen.wCoreRoot ++ `Nat, Modelgen.wCoreRoot ++ `Quot,
-                Modelgen.wCoreRoot ++ `Classical.choice,
-                Modelgen.wCoreRoot ++ `Nonempty] do
+      for n in [InductiveModels.wCoreRoot ++ `propext, InductiveModels.wCoreRoot ++ `Quot.sound,
+                InductiveModels.wCoreRoot ++ `Eq, InductiveModels.wCoreRoot ++ `Iff,
+                InductiveModels.wCoreRoot ++ `Nat, InductiveModels.wCoreRoot ++ `Quot,
+                InductiveModels.wCoreRoot ++ `Classical.choice,
+                InductiveModels.wCoreRoot ++ `Nonempty] do
         cs := cs.push (((← getEnv).find? n).isNone,
           s!"{n} exists — a shared name was renamed even though the construction \
              requires the eight roots to retain their standard names")
@@ -1022,7 +1022,7 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
 def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
   let path := s!"{root}/test/fixtures/lean-inductive-models/nested_iota.ndjson"
   let text ← IO.FS.readFile path
-  let .ok x := Modelgen.parse text | return check a false "nested_iota does not parse"
+  let .ok x := InductiveModels.parse text | return check a false "nested_iota does not parse"
   let env0 ← importModules #[] {}
   let mut env := env0
   for d in x.decls do
@@ -1049,7 +1049,7 @@ def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
 /-- Every constant an export record introduces *or* refers to. A leaked alias
 root is a name that appears here and in no declaration of the output, so this
 is what the probe below searches. -/
-def edeclNames : Modelgen.EDecl → Array Name
+def edeclNames : InductiveModels.EDecl → Array Name
   | .ax n _ t _ => #[n] ++ t.getUsedConstants
   | .defn n _ t v _ _ all => #[n] ++ all.toArray ++ t.getUsedConstants ++ v.getUsedConstants
   | .thm n _ t v all => #[n] ++ all.toArray ++ t.getUsedConstants ++ v.getUsedConstants
@@ -1096,7 +1096,7 @@ Three checks, and the third is the one that would catch a half-done renaming:
 def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
   let path := s!"{root}/test/fixtures/lean-inductive-models/prim_shapes.ndjson"
   let text ← IO.FS.readFile path
-  let .ok x := Modelgen.parse text | return check a false "prim_shapes does not parse"
+  let .ok x := InductiveModels.parse text | return check a false "prim_shapes does not parse"
   let tgt : Name := `Sv
   let priv : Name := (`_private.M).mkNum 0 |>.str "Sv"
   let mut a := a
@@ -1168,7 +1168,7 @@ get wrong. Every claim here is a fact about *Lean* that this tool's
    `privateToUserName`, `panic!`s on a duplicate, and returns the collection
    **unchanged**. Adding the public name first loses the private one and vice
    versa, so no ordering discipline avoids it — which is why the guard in
-   `Modelgen.addChecked` tests membership *after* the add.
+   `InductiveModels.addChecked` tests membership *after* the add.
 
 3. **A name that normalizes differently is added and found.** This is the
    escape, and it is inside this tool rather than inside Lean: generate the
@@ -1223,7 +1223,7 @@ def runCollisionProbe (a : TAcc) : IO TAcc := do
      the normalized-name collision is gone and the `name taken` declines can be retired"
   a := check a (secondIsLost publ priv)
     "the private name added after the public one is now visible to `Environment.find?` — \
-     the collision has become order-dependent, so `Modelgen.addChecked`'s check-after-add \
+     the collision has become order-dependent, so `InductiveModels.addChecked`'s check-after-add \
      could be replaced by an ordering rule"
   -- (3) the escape: a root that normalizes differently is added and found.
   let al : Name := (`_private.M).mkNum 0 |>.str "X" |>.str "_mg1" |>.str "foo"
@@ -1328,7 +1328,7 @@ for precisely that reason. `copies per group` is the check that says so, and it
 is the first one below. -/
 def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
   let text ← IO.FS.readFile s!"{root}/test/fixtures/lean-inductive-models/poly_nested_used.ndjson"
-  let .ok x := Modelgen.parse text | return check a false "poly_nested_used does not parse"
+  let .ok x := InductiveModels.parse text | return check a false "poly_nested_used does not parse"
   let env ← importModules #[] {}
   let ctx : Core.Context :=
     { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }

@@ -1,4 +1,4 @@
-import Modelgen.Model
+import InductiveModels.Model
 
 /-!
 # Canonical transport for dependent intrinsic projections
@@ -17,7 +17,7 @@ definition or asks for definitional equality here.
 
 open Lean
 
-namespace Modelgen
+namespace InductiveModels
 
 /-- Whether a one-constructor owner's projection rules can use each constructor
 field literally, including dependent fields.
@@ -241,4 +241,4 @@ def normalizeProjectionField (eqi : EqInfo) (tag : Name)
   normalizedWith eqi tag fields target (fields.map (·.value)) (fields.map (·.iota?))
 
 end ProjectionField
-end Modelgen
+end InductiveModels

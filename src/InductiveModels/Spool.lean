@@ -1,7 +1,7 @@
-import Modelgen.Format
+import InductiveModels.Format
 import Std.Sync.Mutex
 
-namespace Modelgen.Spool
+namespace InductiveModels.Spool
 
 /-- Main-side eligibility guard. Stream certification is necessary, but a mode
 which rewrites the whole export (currently universe monomorphization) always
@@ -569,7 +569,7 @@ private def exactFileSize (path : System.FilePath) (expected : UInt64) : IO Unit
 /-- Check every path and span, open every input handle, then emit metadata,
 source arenas, generated arenas, and compactly ordered declarations. No byte is
 written until all validation and opens succeed. Flushing and atomic installation
-remain the responsibility of [`Modelgen.Output.write`]. -/
+remain the responsibility of [`InductiveModels.Output.write`]. -/
 def MixedComposition.emit (composition : MixedComposition)
     (destination : IO.FS.Stream) : IO Unit := do
   match composition.validate with
@@ -603,4 +603,4 @@ def MixedComposition.emit (composition : MixedComposition)
                 copySpanToStream generatedDeclarations destination
                   composition.generatedDeclarationSize span
 
-end Modelgen.Spool
+end InductiveModels.Spool

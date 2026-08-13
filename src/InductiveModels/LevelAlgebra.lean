@@ -1,7 +1,7 @@
 import Lean
 
 /-
-# `Modelgen.LevelAlgebra` — a complete decision procedure for Lean's
+# `InductiveModels.LevelAlgebra` — a complete decision procedure for Lean's
 universe-level algebra, in Lean.
 
 ## Why the planner wants this and the elaborator will not do
@@ -12,7 +12,7 @@ absorb an `imax` it dominates, so
 
     max 1 (imax (imax u v) v) (max 1 u v)   and   max 1 u v
 
-are equal at every assignment and Lean says no. `Modelgen.primIso`'s
+are equal at every assignment and Lean says no. `InductiveModels.primIso`'s
 **planner** asks exactly this question when it decides whether a pad or a box
 closes a field's level gap, so the incompleteness shows up there as a
 *decline* — a model not attempted, rather than a model built wrong.
@@ -51,7 +51,7 @@ six million generated pairs. The caps below bound pathological inputs so the
 procedure returns `unknown` instead of hanging.
 -/
 
-namespace Modelgen.LevelAlgebra
+namespace InductiveModels.LevelAlgebra
 
 open Lean
 
@@ -311,4 +311,4 @@ def laEval (rho : Array Nat) : LA → Nat
                  if vb == 0 then 0 else Nat.max (laEval rho a) vb
   | .var i    => rho[i]!
 
-end Modelgen.LevelAlgebra
+end InductiveModels.LevelAlgebra

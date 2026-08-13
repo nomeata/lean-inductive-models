@@ -14,7 +14,7 @@ individual option may therefore override part of an earlier bundle, and a
 later bundle may override earlier individual options.
 -/
 
-namespace Modelgen.Cli
+namespace InductiveModels.Cli
 
 /-- The command line after parsing, before any input is read. -/
 structure Config where
@@ -125,4 +125,4 @@ where
       else
         go rest { config with input := some arg }
 
-end Modelgen.Cli
+end InductiveModels.Cli

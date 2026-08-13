@@ -1,11 +1,11 @@
-import Modelgen.Driver
-import Modelgen.Check
-import Modelgen.Mono
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Check
+import InductiveModels.Mono
+import InductiveModels.Order
 
 set_option maxRecDepth 2048
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 structure TestState where
   passed : Nat := 0
@@ -554,7 +554,7 @@ def main : IO UInt32 := do
     extraViolations.any (hasExtraProjectionViolation `Indexed extraIndexed)
   state := state.check "projection route choice emits no public marker" <|
     declarations.all fun declaration =>
-      !(declarationNames declaration).contains `Modelgen.projectionIotaUsesLiteralField
+      !(declarationNames declaration).contains `InductiveModels.projectionIotaUsesLiteralField
 
   let missingModel := Check.check (withoutDeclaration generated payloadModel)
   state := state.check "checker rejects a missing projection definition" <|

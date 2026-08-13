@@ -1,5 +1,5 @@
-import Modelgen.Driver
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Order
 
 /-!
 # Default-parameter recursor-iota syntax regression
@@ -11,7 +11,7 @@ faces at that boundary: the serialized generated theorem, the statement
 checker's reconstruction, and the type stored after kernel replay.
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 structure TestState where
   passed : Nat := 0
@@ -75,7 +75,7 @@ structure Evidence where
   ownerFreeAccepted : Bool
 
 def collectEvidence (path : String) : IO Evidence := do
-  let .ok input := Modelgen.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   let base ← importModules #[] {}
   let context : Core.Context :=

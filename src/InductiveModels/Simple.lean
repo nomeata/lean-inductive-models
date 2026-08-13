@@ -1,5 +1,5 @@
-import Modelgen.Mutual
-import Modelgen.Naming
+import InductiveModels.Mutual
+import InductiveModels.Naming
 
 /-!
 # The model of a **simple inductive from four primitives**, generated
@@ -15,13 +15,13 @@ primitive inductives —
 exactly as the existing prelude splice does for `Eq`. A consumer that
 recognises the four interface names then needs to implement only the four
 primitives (plus `Quot`), not general inductives — and, if the input reaches
-[`Modelgen.graphArm`], `Nonempty` and the `Classical.choice` axiom beside
+[`InductiveModels.graphArm`], `Nonempty` and the `Classical.choice` axiom beside
 them. `Nonempty` is not an additional primitive: it is `Classical.choice`'s own
 domain, needs no exemption, and self-models by the Church route.
 
 **`False` is not in the basis**: it is *derived* (Church `∀ p : Prop, p`,
 with the `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
-transport along — [`Modelgen.cfalseElim`]), so `False` models like any other
+transport along — [`InductiveModels.cfalseElim`]), so `False` models like any other
 declaration. Its role is derived from **`PSigma'` and `PUnit`** as
 `PSigma'.{0,u} (fun _ : p => PUnit.{u})`, a lift of a proposition to a bare
 variable sort. Lean's elaborator refuses both exact-sort primitives at their
@@ -39,7 +39,7 @@ universe floor instead of baking `1` into every pair.
 **`Acc` is not in the basis either, and used to be.** It was there for the
 subsingleton-recursive **large** eliminator — the one grant the kernel makes
 to a *declaration* that an emitted `def` does not inherit — and that grant is
-now derived rather than assumed: [`Modelgen.graphArm`] defines the recursion
+now derived rather than assumed: [`InductiveModels.graphArm`] defines the recursion
 by its *graph* and extracts the value, packaged with its graph proof, with
 `Classical.choice`, which gives `Acc.rec`'s exact type with ι a theorem
 instead of `rfl`. The derivation is uniform across the supported recursive
@@ -66,8 +66,8 @@ constructor returns its direct recursive field, and the recursor and ι theorems
 eliminate that empty value.  This is arm E below.
 
 * **A pad** closes a level gap. At a `dsingOk` level it is `D`
-  ([`Modelgen.dsingAt`]); at any other level — a bare parameter in the gap,
-  `PULift`'s shape — it is the derived lift of `⊤` ([`Modelgen.unitAt`]), which
+  ([`InductiveModels.dsingAt`]); at any other level — a bare parameter in the gap,
+  `PULift`'s shape — it is the derived lift of `⊤` ([`InductiveModels.unitAt`]), which
   exists at *every* level. **Both are definitionally canonical**, in the one
   sense the construction needs: every element is *defeq to the canonical
   one*, because the canonical one is a literal constructor application and
@@ -79,7 +79,7 @@ eliminate that empty value.  This is arm E below.
   Direct kernel checks pin both claims and the gap between them. The `False`-Π
   singleton this replaced was not canonical in *either*
   sense and cost a `funext`.
-* **A recursive box** ([`Modelgen.boxTyOf`]) absorbs an `imax`: a Π-typed
+* **A recursive box** ([`InductiveModels.boxTyOf`]) absorbs an `imax`: a Π-typed
   field's level is an `imax` chain (`Trans.mk`'s shape), and no pad subsumes
   an `imax` under a `max`.  Every exposed Π domain and codomain is recursively
   boxed, with each atomic leaf stored as `Σ'(_ : S), D 1`; all transformed
@@ -96,7 +96,7 @@ T._model.self p⃗ ι⃗ := ∀ C : (∀ ι⃗, Prop), k⃗ → C ι⃗
 ```
 
 with `k_j` constructor `j`'s telescope, `T p⃗` replaced by `C` at its
-recursive fields as well as at its result ([`Modelgen.churchSwapAt`]); and at
+recursive fields as well as at its result ([`InductiveModels.churchSwapAt`]); and at
 a maybe-zero sort that same proposition under the derived tight-pair/PUnit lift, which puts it at
 exactly `Sort w` for any `w`. The constructors are the folds, `up` of the
 folds under a lift. There is **no transport between the two**: structure eta
@@ -111,7 +111,7 @@ Three recursors:
   irrelevance.
 * **small elimination, otherwise** — the fold at the Church *pair*
   `Pair ι⃗ := ∀ D : Prop, (Self ι⃗ → (∀ h : Self ι⃗, motive ι⃗ h) → D) → D`
-  ([`Modelgen.pairArm`]). The plain fold does not serve here: a minor premise
+  ([`InductiveModels.pairArm`]). The plain fold does not serve here: a minor premise
   wants `motive ι⃗_j (c_j f⃗)` and the fold offers `C ι⃗_j`, which proof
   irrelevance stops identifying once the index moves; and a *recursive* minor
   premise needs a carrier element to apply itself to, which only the pair's
@@ -146,14 +146,14 @@ nothing; and arm W applies the W core's propositional ι theorem.
 
 * **branching and infinitary recursion at a never-zero sort**
   (`Lean.ParserDescr`) routes to arm W. The tuple tower
-  ([`Modelgen.recSlotOf`]) remains deliberately linear; its refusal is the
+  ([`InductiveModels.recSlotOf`]) remains deliberately linear; its refusal is the
   dispatcher signal that selects the W/path construction rather than a public
   generation decline.
 * **indexed at a never-zero sort whose index erasure contains a nested
   occurrence** — an occurrence inside a container belongs to layer 1, not to
   the simple representation. A recursive occurrence under binders is carried,
   including when βζ-reduction first reveals those binders. **The head is read
-  through [`Modelgen.headNorm`]**, so a field written `(fun x => T p⃗ e⃗) k` — which is
+  through [`InductiveModels.headNorm`]**, so a field written `(fun x => T p⃗ e⃗) k` — which is
   what Lean's nested specialisation leaves at a container's family parameter —
   is the bare occurrence it reduces to and not a binder; the same head
   normalization is required at layer 1. A field whose type mentions `T`
@@ -162,7 +162,7 @@ nothing; and arm W applies the W core's propositional ι theorem.
   constructor type literally.
   An indexed family whose erasure is bare is no longer a refusal, **however
   many recursive fields its constructors have**: it is **arm C**
-  ([`Modelgen.primIso`]'s `armC`), a skeleton-plus-`good` construction standing
+  ([`InductiveModels.primIso`]'s `armC`), a skeleton-plus-`good` construction standing
   on a spliced inductive rather than on a W-type — no axioms, no
   per-constructor currying glue, every ι rule `Eq.refl`.
   A *branching* erasure used to decline here, because the spliced skeleton
@@ -170,7 +170,7 @@ nothing; and arm W applies the W core's propositional ι theorem.
   does, so the carve now carries every recursive slot and hands the skeleton
   to W.
 * **a recursive subsingleton at mixed pivot and non-pivot indices** models by
-  [`Modelgen.graphArm`]. Its inversion carries one equality at the dependent
+  [`InductiveModels.graphArm`]. Its inversion carries one equality at the dependent
   tuple of non-pivots and transports the constructor step into the caller's
   fibre. Data-valued constants such as `mk : P 0 → P 0`, proof-valued
   expressions, and the `below` Lean mints beside recursive propositions all
@@ -193,7 +193,7 @@ nothing; and arm W applies the W core's propositional ι theorem.
 
 open Lean Meta
 
-namespace Modelgen
+namespace InductiveModels
 
 /-- The complete trusted basis, by principal name.
 
@@ -203,20 +203,20 @@ nevertheless part of the advertised basis: generated proofs may use it to
 derive `funext` from `Quot.sound`. -/
 def basis : List Name := [`Eq, `PSigma', `Nat, `PUnit, `Quot]
 
-/-- The ordinary inductive subset of [`Modelgen.basis`]. Declarations in this
+/-- The ordinary inductive subset of [`InductiveModels.basis`]. Declarations in this
 set are not modelled — the exemption that makes the construction
 well-founded. `Quot` is handled by the kernel's quotient declaration path
 instead, so it does not participate in this owner-exemption test.
 
 **`Acc` was the fifth and is not here any more.** Its one grant — the
 subsingleton-recursive large eliminator — is derived by
-[`Modelgen.graphArm`], so `Acc` is an ordinary declaration and models like
+[`InductiveModels.graphArm`], so `Acc` is an ordinary declaration and models like
 one. `Nonempty` never joins this list either, though the graph arm names it:
 `Classical.choice`'s domain is not an exemption, and it self-models.
 
 `False` is **not** among them: it is derived (Church `∀ p : Prop, p`, with
 its `Sort w` eliminator from `0 = 1` plus a `Nat.rec`-built family to
-transport along — [`Modelgen.cfalseElim`]), so `False` models like any other
+transport along — [`InductiveModels.cfalseElim`]), so `False` models like any other
 declaration. The tight pair and `PUnit` together take its place. -/
 def inductiveBasis : List Name := [`Eq, `PSigma', `Nat, `PUnit]
 
@@ -406,7 +406,7 @@ def psigmaPrimeRec (u v w : Level) (α β motive minor self : Expr) : Expr :=
 
 /-- One primitive, checked or spliced. `check` runs on a present declaration
 and says what is wrong with it; a missing one is spliced at Lean's shape and
-re-checked. The pattern is [`Modelgen.ensureEq`]'s, and the name guard is
+re-checked. The pattern is [`InductiveModels.ensureEq`]'s, and the name guard is
 the same one. -/
 def ensurePrim (n : Name) (guard : List Name) (d : Declaration)
     (check : Environment → Except String Unit) (reserved : Std.HashSet Name) :
@@ -469,7 +469,7 @@ def checkNat (env : Environment) : Except String Unit := do
 
 /-- Validate the only trusted part of the tight pair bundle: the kernel
 inductive and constructor.  The named projections and `rec'` are checked as
-ordinary derived declarations by [`Modelgen.ensurePSigmaPrime`]. -/
+ordinary derived declarations by [`InductiveModels.ensurePSigmaPrime`]. -/
 def checkPSigmaPrimeCore (env : Environment) : Except String Unit := do
   let some (.inductInfo iv) := env.constants.find? `PSigma'
     | throw "it is not an inductive type"
@@ -495,9 +495,9 @@ def checkPSigmaPrimeCore (env : Environment) : Except String Unit := do
 /-- **Lean's `Nonempty`**, as `Init/Prelude.lean` declares it:
 `inductive Nonempty (α : Sort u) : Prop | intro (val : α) : Nonempty α`.
 
-**It is not a basis primitive** and it is not on [`Modelgen.basis`]'s list.
+**It is not a basis primitive** and it is not on [`InductiveModels.basis`]'s list.
 It is here for one reason: `Classical.choice`'s *own domain* is `Nonempty`, so
-the graph arm ([`Modelgen.graphArm`]) cannot state totality without naming it.
+the graph arm ([`InductiveModels.graphArm`]) cannot state totality without naming it.
 Unlike the five it does not need an exemption to keep the construction
 well-founded — it is a non-recursive, small-eliminating `Prop`, so where the
 input declares one the Church route models it like anything else, and the
@@ -524,7 +524,7 @@ def checkNonempty (env : Environment) : Except String Unit := do
 
 /-- `Classical.choice`'s statement: `{α : Sort u} → Nonempty α → α`. One
 builder for both uses — the input's own is compared against it with `isDefEq`
-and a spliced one is declared at it, exactly as [`Modelgen.funextType`] serves
+and a spliced one is declared at it, exactly as [`InductiveModels.funextType`] serves
 `funext`. -/
 def choiceType (lu : Level) : Expr :=
   .forallE `α (.sort lu)
@@ -745,7 +745,7 @@ def natRec (s : Level) (motive z sc t : Expr) : Expr :=
 `False` is no longer a primitive, so the two propositions the constructions
 seed with are written out: `⊥ := ∀ p : Prop, p` and `⊤ := ∀ C : Prop, C → C`.
 Both are pure Π — they consume no primitive at all. What they lack is `⊥`'s
-`Sort w` eliminator, which [`Modelgen.cfalseElim`] supplies from `Nat` and
+`Sort w` eliminator, which [`InductiveModels.cfalseElim`] supplies from `Nat` and
 `Eq`. -/
 
 /-- The always-true proposition `∀ C : Prop, C → C`, and its inhabitant. -/
@@ -755,7 +755,7 @@ def trueI : Expr :=
   .lam `C (.sort .zero) (.lam `c (.bvar 0) (.bvar 0) .default) .default
 
 /-- **Church `False`**: `∀ p : Prop, p`. Small elimination is instantiation;
-large elimination is [`Modelgen.cfalseElim`]. -/
+large elimination is [`InductiveModels.cfalseElim`]. -/
 def falseP : Expr :=
   .forallE `p (.sort .zero) (.bvar 0) .default
 
@@ -803,7 +803,7 @@ conversion is simply not transitive at this shape. Direct kernel checks pin all
 of it.
 
 Two consequences the construction leans on, **both at a redex**. Every element
-of the lifted `⊤` is defeq to [`Modelgen.unitAtCanon`], which is a literal pair,
+of the lifted `⊤` is defeq to [`InductiveModels.unitAtCanon`], which is a literal pair,
 so a pad built from it needs no transport — the strict improvement on the
 `False`-Π pad, whose uniqueness was `funext`. And `motive (up (down t))` and
 `motive t` are convertible, so the maybe-zero route's recursor is the `Prop`
@@ -851,7 +851,7 @@ def cfalseElim (eqi : EqInfo) (v : Level) (C h : Expr) : GenM Expr := do
   transportAlong eqi v (.succ .zero) natT (natNumeral 0) (natNumeral 1)
     (.app h eqn) (puliftUp v trueP trueI) (fun z => pure (fam z))
 
-/-- Anything at all out of an inhabitant of [`Modelgen.emptyAt`]: project the
+/-- Anything at all out of an inhabitant of [`InductiveModels.emptyAt`]: project the
 Church `⊥` out of the lift, then eliminate it. -/
 def emptyAtElim (eqi : EqInfo) (v w : Level) (C e : Expr) : GenM Expr :=
   cfalseElim eqi v C (puliftDown w falseP e)
@@ -864,10 +864,10 @@ only through an `imax` collapse, which needs
 a `Sort ℓ`-valued *body*. The tight-pair/PUnit composite lands there for
 **any** `ℓ` whatsoever and — unlike the `False`-Π family the old basis used —
 is empty exactly when its proposition is. Thus its lifted `⊤` is the
-singleton below and its lifted `⊥` is [`Modelgen.emptyAt`].
+singleton below and its lifted `⊥` is [`InductiveModels.emptyAt`].
 
-Like [`Modelgen.dsingAt`]'s pads the singleton **is** definitionally
-canonical — *every element is defeq to [`Modelgen.unitAtCanon`]*, by structure
+Like [`InductiveModels.dsingAt`]'s pads the singleton **is** definitionally
+canonical — *every element is defeq to [`InductiveModels.unitAtCanon`]*, by structure
 eta on `PSigma'` and `PUnit` against the literal pair plus proof irrelevance on `⊤` — so
 wherever one is destructed the applied minor already has the target type and
 no transport rides along. This is where the `False`-Π singleton cost a
@@ -877,7 +877,7 @@ no transport rides along. This is where the `False`-Π singleton cost a
 **Read "canonical" narrowly.** What holds is `t ≡ canon`, where one side is a
 constructor application and eta expands the other. What does *not* hold is
 `x ≡ y` for two opaque inhabitants: no side is a redex, so the kernel refuses
-it — see [`Modelgen.puliftEta`].
+it — see [`InductiveModels.puliftEta`].
 Every use below is of the first kind. -/
 
 /-- The singleton at exactly `Sort ℓ`: the lift of `⊤`. -/
@@ -886,15 +886,15 @@ def unitAt (ℓ : Level) : Expr := puliftT ℓ trueP
 /-- Its canonical element. -/
 def unitAtCanon (ℓ : Level) : Expr := puliftUp ℓ trueP trueI
 
-/-- `Eq canon t` for `t : unitAt ℓ`. [`Modelgen.puliftEta`] proves
+/-- `Eq canon t` for `t : unitAt ℓ`. [`InductiveModels.puliftEta`] proves
 `Eq (up (down t)) t`, and `up (down t)` is *definitionally* the canonical
 element: both components are proofs of `⊤`, and proof irrelevance closes it.
 No `funext`.
 
-[`Modelgen.padsAt`] marks both current pad families `canonical := true`, because
+[`InductiveModels.padsAt`] marks both current pad families `canonical := true`, because
 `t ≡ canon` is a conversion the kernel performs (the canonical element is a
 literal `up`, so eta expands `t` against it). Consequently
-[`Modelgen.chainDestruct`] takes its no-transport branch for the lift pad as
+[`InductiveModels.chainDestruct`] takes its no-transport branch for the lift pad as
 well as for the `D` pad. This function makes the generic `canonical := false`
 branch total, and its behavior is measured rather than assumed: forcing the
 lift pad through here by setting
@@ -904,7 +904,7 @@ is red at `Tri`, `Opt`, `Dec` and `Big`. -/
 def unitAtUniq (eqi : EqInfo) (ℓ : Level) (t : Expr) : Expr :=
   puliftEta eqi ℓ trueP t
 
-/-- Is a pad at this level buildable? [`Modelgen.dsingAt`]'s domain, asked
+/-- Is a pad at this level buildable? [`InductiveModels.dsingAt`]'s domain, asked
 before anything is spliced so that a decline costs no splice. -/
 partial def dsingOk (ℓ : Level) : Bool :=
   match ℓ.normalize with
@@ -938,11 +938,11 @@ partial def dsingAt (ℓ : Level) : GenM (Expr × Expr) := do
 
 `canonical` says whether every element is **defeq** to `canon`, in which case
 no uniqueness proof rides along. **Both families set it**: the
-[`Modelgen.dsingAt`] pad by `PSigma'`/`PUnit` structure eta, and
-the [`Modelgen.unitAt`] lift — used at a level `dsingOk` cannot build, a bare
+[`InductiveModels.dsingAt`] pad by `PSigma'`/`PUnit` structure eta, and
+the [`InductiveModels.unitAt`] lift — used at a level `dsingOk` cannot build, a bare
 parameter in the gap, `PULift`'s shape — by tight-pair and unit structure eta
 against the literal pair that `canon` is. Thus current planners do not select
-the `false` case; [`Modelgen.unitAtUniq`] is the generic transport branch, and
+the `false` case; [`InductiveModels.unitAtUniq`] is the generic transport branch, and
 the measurement that validates it is in that docstring. -/
 structure Pad where
   ty : Expr
@@ -979,7 +979,7 @@ partial def levelHasIMax : Level → Bool
   | .succ a => levelHasIMax a
   | _ => false
 
-/-- The universe of [`Modelgen.boxTyOf`] without constructing its `PSigma'`
+/-- The universe of [`InductiveModels.boxTyOf`] without constructing its `PSigma'`
 terms. The W arm asks its tower-level question before primitives are spliced,
 so this level-only mirror keeps that early, rollback-free guard while using the
 same recursive Π shape as the actual box. -/
@@ -1053,7 +1053,7 @@ A constructor's field telescope becomes a right-nested `PSigma'` at exactly
 telescope expression, so nothing is stored across scopes. `pad?` closes the
 chain when the field levels do not already reach `w` — and always for a
 nullary constructor. `boxed` says, per field, whether the field is stored
-boxed ([`Modelgen.boxTyOf`]); a later field's type always depends on the
+boxed ([`InductiveModels.boxTyOf`]); a later field's type always depends on the
 *unboxed* value, so the recursions instantiate with `unbox` of the bound
 variable and the real value stays what the minor is applied to. -/
 
@@ -1102,8 +1102,8 @@ element of `target (wrap scrut)` — `wrap` embeds a suffix value into the
 full tuple (the identity at the top) and `target` is `fun tup => M ⟨j̄,
 tup⟩`. The minor is applied to the collected fields, each unboxed where the
 plan boxed it. A canonical pad costs nothing — `scrut` is defeq to its
-canonical element. A [`Modelgen.unitAt`] pad is discharged by transporting
-the applied minor along [`Modelgen.unitAtUniq`], and on a constructor
+canonical element. A [`InductiveModels.unitAt`] pad is discharged by transporting
+the applied minor along [`InductiveModels.unitAtUniq`], and on a constructor
 application that proof is a closed self-equality which K-like reduction on
 `Eq.rec` erases — ι stays `Eq.refl` on both. -/
 partial def chainDestruct (v : Level) (eqi : EqInfo)
@@ -1148,7 +1148,7 @@ structure PCtor where
   tele : Expr
   nf : Nat
   pad? : Option Pad
-  /-- Which fields are stored boxed ([`Modelgen.boxTyOf`]). -/
+  /-- Which fields are stored boxed ([`InductiveModels.boxTyOf`]). -/
   boxed : Array Bool
   /-- The chain type. -/
   chain : Expr
@@ -1168,7 +1168,7 @@ partial def fibreTower (w : Level) (cs : Array PCtor) (j : Nat) (scrut : Expr) :
 
 /-- The recursor's cases tower over the tag: at level `j` the zero case is
 constructor `j`'s destructor and the successor case descends; past the last
-constructor the fibre is empty and [`Modelgen.emptyAtElim`] closes it. `scrut`
+constructor the fibre is empty and [`InductiveModels.emptyAtElim`] closes it. `scrut`
 is the level's own binder; the original tag is `succ^j scrut`. -/
 partial def stepTower (v w : Level) (eqi : EqInfo) (fib : Expr)
     (tgt : Expr → Expr) (minorOf : Nat → Array Expr → Expr)
@@ -1299,7 +1299,7 @@ The three functions below are driven by the *packed type* rather than by the
 telescope. That is deliberate: reading a component's type back off a built
 expression is only valid while nothing has beta-reduced it, and that
 assumption has already cost this file two attempts (see
-[`Modelgen.pairArm`]). A `PSigma'` application is stable under everything the
+[`InductiveModels.pairArm`]). A `PSigma'` application is stable under everything the
 elaborator does to it, so destructuring it is safe. -/
 
 /-- `Σ'(x₁ : A₁) … A_n` over a **subsequence** `sel` of an opened index
@@ -1403,8 +1403,8 @@ with a dependent value field — `Impl α β | inner : … → (k : α) → β k
 specialised at `β := fun _ => T` carries the field as `(fun x => T) k`, and a
 `let` in the family's body survives the same way. This same defect at layer 1
 cost `Lean.Json` and `Lean.PrefixTreeNode` their
-nested models until [`Modelgen.Gen.occIdx?`] and its two siblings started
-reading through [`Modelgen.headNorm`]. Layer 3 is the same two declarations
+nested models until [`InductiveModels.Gen.occIdx?`] and its two siblings started
+reading through [`InductiveModels.headNorm`]. Layer 3 is the same two declarations
 one step further on: their `_model.aux` families are what the composition
 hands *this* file, and the redex is still in them.
 
@@ -1412,15 +1412,15 @@ So the repair is the same function and deliberately not a second one — β and
 ζ, iterated, no constant unfolded. It is applied where this file asks a
 question whose answer is invariant under β and ζ:
 
-* **is the occurrence bare** — [`Modelgen.recSlotOf`] and `erasureBareWhy`;
+* **is the occurrence bare** — [`InductiveModels.recSlotOf`] and `erasureBareWhy`;
 * **what are its index arguments, and how many binders is it under** —
-  [`Modelgen.withRecSlot`], which is where arm C's `ctorIdxAt` used to inspect
+  [`InductiveModels.withRecSlot`], which is where arm C's `ctorIdxAt` used to inspect
   only the unreduced head;
-* **what binders does a recursive field have** — [`Modelgen.tagFactored`],
+* **what binders does a recursive field have** — [`InductiveModels.tagFactored`],
   which has none to peel until the redex is gone.
 
 and at the indexed erasure's internal boundary:
-[`Modelgen.erasureFieldDomain`] head-normalises a field which syntactically
+[`InductiveModels.erasureFieldDomain`] head-normalises a field which syntactically
 mentions the erased owner. If the occurrence disappears, the field was never
 recursive; if binders appear, the skeleton keeps those binders and replaces
 the occurrence beneath them. No public declaration type is normalised, and a
@@ -1489,7 +1489,7 @@ def tagFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) :
     return true
 
 /-- **Does `B` factor through the whole label?** — the same question as
-[`Modelgen.tagFactored`], asked of the *untagged* instantiation of the same
+[`InductiveModels.tagFactored`], asked of the *untagged* instantiation of the same
 core, and the guard arm W actually runs on.
 
 The untagged form is the tagged construction at `K := A` and `tg := id`, so
@@ -1516,7 +1516,7 @@ def labelFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr))
       | _ => return false
     -- Which of this constructor's own fields are recursive, by position. The
     -- test is `mentionsAny` on the *written* domain, exactly as
-    -- [`Modelgen.eraseCtorTy`] and `wShapeOf` ask it, so all three agree about
+    -- [`InductiveModels.eraseCtorTy`] and `wShapeOf` ask it, so all three agree about
     -- which fields the two towers split the telescope into.
     let mut recAt : Array Bool := #[]
     let mut u := t
@@ -1608,9 +1608,9 @@ def recSlotOf (tname : Name) (np ni : Nat) (cn : Name) (nf : Nat) (tele : Expr)
     GenM (Option Nat) := do
   -- **The W arm's bill, printed at the decline that names W**, and it is two
   -- questions because the arm runs the one core at two
-  -- instantiations. `labelled` is [`Modelgen.labelFactored`] and is the one
+  -- instantiations. `labelled` is [`InductiveModels.labelFactored`] and is the one
   -- that decides *whether* W reaches the declaration; `tagged` is
-  -- [`Modelgen.tagFactored`] and decides only *what it costs* — yes and the
+  -- [`InductiveModels.tagFactored`] and decides only *what it costs* — yes and the
   -- model is `[propext, Quot.sound]`, which is covered; no and it spends
   -- `Classical.choice` on top. Two populations, so the census counts two
   -- numbers, and a decline that reads `through the tag: no` alone is a model
@@ -1641,7 +1641,7 @@ W/path construction (plan B){bill}"
 binders it sits under kept verbatim: `T p⃗ e⃗` becomes `Vn` and `∀ z⃗, T p⃗ e⃗`
 becomes `∀ z⃗, Vn`.
 
-The domain is read through [`Modelgen.headNorm`], so the same operation handles
+The domain is read through [`InductiveModels.headNorm`], so the same operation handles
 a binder exposed only by βζ reduction. `Vn` is closed over the parameter scope
 and never mentions `z⃗`, which is what
 makes keeping the binders and replacing only the core well typed. The binder
@@ -1661,7 +1661,7 @@ either way, so the storage plan computed on the export's telescope is the
 plan for this one too.
 
 The tuple tower only ever calls this at a **bare** occurrence, where
-[`Modelgen.swapOcc`] is the identity on binders and this is the whole-domain
+[`InductiveModels.swapOcc`] is the identity on binders and this is the whole-domain
 replacement it always was; arm C calls it at an infinitary one too. -/
 partial def spineSwap (tname : Name) (Vn : Expr) (nf : Nat) (tele : Expr) :
     GenM Expr := do
@@ -1672,7 +1672,7 @@ partial def spineSwap (tname : Name) (Vn : Expr) (nf : Nat) (tele : Expr) :
   withLocalDecl x bi d' fun xv => do
     mkForallFVars #[xv] (← spineSwap tname Vn (nf - 1) (b.instantiate1 xv))
 
-/-- The same classification as [`Modelgen.churchSwapAt`] makes, without the
+/-- The same classification as [`InductiveModels.churchSwapAt`] makes, without the
 rewrite — used where the *values* are built, since those are bound at the
 model's restored telescope and not at the export's. -/
 partial def classifyCtor (tname : Name) (nf : Nat) (tele : Expr)
@@ -1808,14 +1808,14 @@ routes for which that is true. A consumer must rewrite with `iota_0_0` where
 the kernel would have reduced.
 
 **Two lines of the recipe are shape-sensitive**, and both are mechanical:
-[`Modelgen.congrChain`]'s n-ary congruence, one factor per recursive field,
-and [`Modelgen.funextUp`]'s chain, one `funext` per binder of a recursive
+[`InductiveModels.congrChain`]'s n-ary congruence, one factor per recursive field,
+and [`InductiveModels.funextUp`]'s chain, one `funext` per binder of a recursive
 field. The recipe is checked across the three shapes that settle them.
 
 **The axiom cost is per shape, not per arm.** `rec_0` is `Classical.choice`
 uniformly; ι adds `funext` — hence the quotient and `Quot.sound` — only when
 some recursive field has a binder, because that is the only thing
-[`Modelgen.funextUp`] is called for. A recursive field that is a bare
+[`InductiveModels.funextUp`] is called for. A recursive field that is a bare
 occurrence contributes none, and the degenerate shape's ι costs no
 `Quot.sound` at all. -/
 
@@ -1827,7 +1827,7 @@ def andCOf (A B : Expr) : Expr :=
       (.bvar 1) .default) .default
 
 /-- `Eq α x z` from `Eq α x y` and `Eq α y z`, as one `Eq.rec` at a `Prop`
-motive — the companion of [`Modelgen.symmOf`], and built the same way so that
+motive — the companion of [`InductiveModels.symmOf`], and built the same way so that
 nothing is added to the input that this module does not need to name. -/
 def transOf (eqi : EqInfo) (ℓ : Level) (α x y z h1 h2 : Expr) : GenM Expr :=
   transportAlong eqi .zero ℓ α y z h2 h1 fun w => pure (eqi.mk' ℓ α x w)
@@ -1902,7 +1902,7 @@ step f⃗ ga₁ ga₂ … = step f⃗ gb₁ ga₂ … = step f⃗ gb₁ gb₂ �
 
 The single `congrArg (step x h)` is the `n = 1` case of this and is
 insufficient at two recursive fields. Each `congrArg` is one `Eq.rec`, inlined here for the same
-reason [`Modelgen.funextDecl`] inlines its own. -/
+reason [`InductiveModels.funextDecl`] inlines its own. -/
 def congrChain (eqi : EqInfo) (v : Level) (α : Expr) (mkStep : Array Expr → Expr)
     (ga gb pfs : Array Expr) : GenM Expr := do
   let n := ga.size
@@ -1918,7 +1918,7 @@ def congrChain (eqi : EqInfo) (v : Level) (α : Expr) (mkStep : Array Expr → E
     acc ← transOf eqi v α base (mkStep (mixed j)) (mkStep (mixed (j + 1))) acc factor
   return acc
 
-/-- Everything [`Modelgen.graphArm`] needs about the declaration it is
+/-- Everything [`InductiveModels.graphArm`] needs about the declaration it is
 modelling, settled before a single declaration is emitted so that a decline
 costs no splice. -/
 structure GraphCtx where
@@ -2427,9 +2427,9 @@ structure CPlan where
   deriving Inhabited
 
 /-- The pads of every constructor at the given parameter scope, `none` where
-the plan needs none. A `dsingOk` level gets the [`Modelgen.dsingAt`] pad; any
+the plan needs none. A `dsingOk` level gets the [`InductiveModels.dsingAt`] pad; any
 other level — a bare parameter in the gap, `PULift`'s shape — gets the
-[`Modelgen.unitAt`] lift, which exists at every level.
+[`InductiveModels.unitAt`] lift, which exists at every level.
 
 **Both are marked `canonical`**, and that is the measured fact rather than a
 symmetry: each family's canonical element is a literal constructor
@@ -2459,7 +2459,7 @@ def pctorsAt (exportCtors : Array (Name × Expr)) (plans : Array CPlan)
 /-- Which route the carrier's sort admits: `Sort 0` is the Church encoding, a
 never-zero sort the `Nat`-tagged sum, and a **maybe-zero** sort — `Prop` at
 some instantiations, `Type` at others, `PUnit`'s and `PEmpty`'s shape — the
-same Church encoding under a [`Modelgen.puliftT`]. -/
+same Church encoding under a [`InductiveModels.puliftT`]. -/
 inductive PrimRoute | type | prop | bare
 
 /-- A field-preserving model for the one-field corner of the bare route.
@@ -2468,7 +2468,7 @@ inductive PrimRoute | type | prop | bare
 inductive DirectFieldRoute | identity | propLift
 
 /-- The complete field-preserving direct routes. The one-field cases share
-[`Modelgen.directFieldModel`]; `tight` is the multi-field `PSigma'` tower. -/
+[`InductiveModels.directFieldModel`]; `tight` is the multi-field `PSigma'` tower. -/
 inductive DirectRoute
   | field (route : DirectFieldRoute)
   | tight
@@ -2479,7 +2479,7 @@ The skeleton arm C splices is the declaration with its indices dropped: the
 carrier loses its index telescope and every recursive field and every
 constructor's conclusion loses its index arguments. Nothing else moves except
 that a field whose only owner mention βζ-disappears is stored at its reduct;
-[`Modelgen.erasureFieldDomain`] is that one internal exception. Public types
+[`InductiveModels.erasureFieldDomain`] is that one internal exception. Public types
 remain literal. This is the whole reason this arm has no currying glue where
 the W route has one lemma per constructor.
 
@@ -2541,8 +2541,8 @@ component, the recursor's induction hypothesis — is a `mkLambdaFVars zs` or a
 `mkForallFVars zs` around what the continuation returns, and at `zs = #[]` each
 of them is the term the bare case built before this existed.
 
-**Read through [`Modelgen.headNorm`]**, exactly as `erasureBareWhy`,
-[`Modelgen.eraseCtorTy`], [`Modelgen.spineSwap`] and [`Modelgen.swapOcc`] read
+**Read through [`InductiveModels.headNorm`]**, exactly as `erasureBareWhy`,
+[`InductiveModels.eraseCtorTy`], [`InductiveModels.spineSwap`] and [`InductiveModels.swapOcc`] read
 it: the guard and every internal consumer must agree about how many binders a
 field has and what its index vector is. A domain that arrives as a redex has
 neither until it is reduced; only the internal skeleton sees that reduction,
@@ -2579,18 +2579,18 @@ with constructors `c⃗`:
 that is what makes the universes come out: the core fixes `A` and `B'` at the
 same `Type u`, a tower over the field types alone lands at `Type (max v⃗)` —
 below `u` in general — and there is no `ULift` here to close the gap. Ending
-every tower at [`Modelgen.unitAt`] `w`, which is at exactly `Sort w`, makes the
+every tower at [`InductiveModels.unitAt`] `w`, which is at exactly `Sort w`, makes the
 max exactly `w` for free at every arity including zero.
 
 `Σ'` is `PSigma'` rather than the fragment's `Sigma` for a second reason beside
 the levels: a non-recursive field may sit at `Prop`, and `Sigma`'s domain may
-not. `PSigma'` is on [`Modelgen.inductiveBasis`] and its eta is the kernel's
+not. `PSigma'` is on [`InductiveModels.inductiveBasis`] and its eta is the kernel's
 structure eta.
 
 **The junk is uninhabited in both directions and that is load-bearing for
 elaboration, not only for correctness.** `D p⃗ t` for `t ≥ nc` and `Tel p⃗ t j`
 for `j` past that constructor's recursive-field count are
-[`Modelgen.emptyAt`] `w`; the constructors' and the recursor's junk arms are
+[`InductiveModels.emptyAt`] `w`; the constructors' and the recursor's junk arms are
 discharged from that emptiness, so a junk arm sent to the *unit* does not
 quietly produce a `W` bigger than the target — it fails to typecheck. -/
 
@@ -2657,7 +2657,7 @@ def wTowerLevel (w : Level) (xs : Array Expr) (boxed : Array Bool) : GenM (Optio
   return none
 
 /-- **One level of a tower at a substitution** — the `α` and `β` that
-[`Modelgen.wTowerTy`] wrote at field `i`, with the earlier fields replaced by
+[`InductiveModels.wTowerTy`] wrote at field `i`, with the earlier fields replaced by
 whatever the caller has in their place (projections when a tower is being taken
 apart, values when one is being built).
 
@@ -2693,7 +2693,7 @@ partial def wTowerProjs (w : Level) (xs : Array Expr) (boxed : Array Bool)
   wTowerProjs w xs boxed (i + 1) (psigmaSnd ℓ w stored β d) (acc.push value)
 
 /-- **A tower built from field values** — the same `α` and `β` as
-[`Modelgen.wTowerProjs`] rebuilds, so `⟨proj⃗ d⟩` and `d` are the same tower and
+[`InductiveModels.wTowerProjs`] rebuilds, so `⟨proj⃗ d⟩` and `d` are the same tower and
 structure eta closes the round trip with no transport. -/
 partial def wTowerMk (w : Level) (xs : Array Expr) (boxed : Array Bool)
     (i : Nat) (vals : Array Expr) : GenM Expr := do
@@ -2947,7 +2947,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
 
 /-- Decide whether the exact-sort multi-field route applies, and check its
 right-nested tight-pair carrier level before any support is installed. Kept
-outside [`Modelgen.primIso`] so the route dispatcher does not elaborate this
+outside [`InductiveModels.primIso`] so the route dispatcher does not elaborate this
 telescope walk as another large inline branch. -/
 def planDirectTightRoute (bare nonrecursiveOneConstructor : Bool) (np ni : Nat)
     (memberTy : Expr) (exportCtors : Array (Name × Expr)) (w : Level) : GenM Bool := do
@@ -2982,7 +2982,7 @@ def emitDirectTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np
   return (support ++ declarations, spliced, overrides)
 
 /-- Emit the field-preserving implementation of a tight one-field model.
-Kept outside [`Modelgen.primIso`] so the already-large route dispatcher does
+Kept outside [`InductiveModels.primIso`] so the already-large route dispatcher does
 not pay to elaborate both the identity and proposition-lift implementations. -/
 def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
     (lparams : List Name) (np : Nat) (memberTy constructorType modelConstructorType : Expr)
@@ -3057,7 +3057,7 @@ def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
   return (declarations, (tname, 0, selector, proof))
 
 /-- Emit any field-preserving direct route, including its exact support
-splice. Keeping this case split outside [`Modelgen.primIso`] leaves the main
+splice. Keeping this case split outside [`InductiveModels.primIso`] leaves the main
 dispatcher with one compact direct-model branch. -/
 def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
     (lparams : List Name) (np : Nat)
@@ -3202,7 +3202,7 @@ def armFZipRec (eqi : EqInfo) (ℓpk : Level) (lift? : Option Level)
   pure (mkAppN fn extracted)
 
 /-- Extract arm F's zipper premises from the Church major and hand them to the
-full-index equality recursor.  Kept out of [`Modelgen.primIso`] so the route
+full-index equality recursor.  Kept out of [`InductiveModels.primIso`] so the route
 dispatcher remains below the default elaboration heartbeat budget. -/
 def armFZipModelRec (eqi : EqInfo) (lift? : Option Level)
     (memberTy ctorTy : Expr) (ni : Nat) (isData : Array Bool) (idxPos : Array Nat)
@@ -3381,7 +3381,7 @@ set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
 recursor this restates is the one Lean minted for it, and the ι rules are
-its own, restored — exactly [`Modelgen.mutualIso`]'s arrangement. -/
+its own, restored — exactly [`InductiveModels.mutualIso`]'s arrangement. -/
 def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
     (sourceRecursor? : Option ERec := none) : GenM Iso := do
@@ -3389,7 +3389,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- **Where the model is built and where it is emitted can differ.** `root` is
   -- the former and `tname` the latter; they are the same name for every
   -- declaration but the handful whose model name is lost to a normalized-name
-  -- collision, where [`Modelgen.genPrim`] retries under an alias root and
+  -- collision, where [`InductiveModels.genPrim`] retries under an alias root and
   -- renames the export records back. So every *guard*
   -- below is about `tname`'s names — those are what reach the output and what
   -- must not collide with the input — while descendants of `tname` are built
@@ -3474,7 +3474,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
 
   -- **Is the index erasure unnested, and is it linear?** — the two questions arm
   -- C's reach turns on, and the second is the same test the tuple tower
-  -- applies ([`Modelgen.recSlotOf`]). *Unnested* (the historical
+  -- applies ([`InductiveModels.recSlotOf`]). *Unnested* (the historical
   -- `erasureBare` name below): every recursive occurrence reduces to
   -- `∀ z⃗, T p⃗ e⃗`, rather than sitting inside a container. *Linear*:
   -- unnested, and at most one such field per constructor. Erasing the indices
@@ -3490,13 +3490,13 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- arm C.** The erasure can fail to be linear by branching (two recursive
   -- fields), by being infinitary (a recursive occurrence under a binder), or
   -- by the occurrence not being an application of `tname` at all. The first
-  -- keeps every occurrence bare, which is all that [`Modelgen.eraseCtorTy`]
-  -- and [`Modelgen.spineSwap`] assume — they replace one recursive field's
+  -- keeps every occurrence bare, which is all that [`InductiveModels.eraseCtorTy`]
+  -- and [`InductiveModels.spineSwap`] assume — they replace one recursive field's
   -- occurrence, once per such field, so a constructor with three of them
   -- erases as readily as one. The second keeps the *binders* and moves only
   -- the occurrence under them: `∀ z⃗, T p⃗ e⃗` erases to `∀ z⃗, S p⃗`, and the
   -- three consumers each wrap what they built in the same `z⃗`
-  -- ([`Modelgen.withRecSlot`]). Arm C therefore runs at `erasureBare`, which
+  -- ([`InductiveModels.withRecSlot`]). Arm C therefore runs at `erasureBare`, which
   -- is now the third reason alone, and carries **every** recursive slot
   -- through `ctorIdxAt`, `good`'s minor and the constructor's carve proof; the
   -- spliced skeleton that comes out branches and is infinitary, and arm W is
@@ -3742,7 +3742,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- tuple tower reaches every linear shape with no axiom and no fragment, so
   -- taking W wherever it applies would move six thousand models onto a heavier
   -- construction for nothing. `!erasureLinear` is exactly the complement of
-  -- [`Modelgen.recSlotOf`]'s two refusals — two recursive fields in one
+  -- [`InductiveModels.recSlotOf`]'s two refusals — two recursive fields in one
   -- constructor, or a recursive occurrence that is not a bare `T p⃗` — so this
   -- fires precisely where the tower declines and nowhere else.
   --
@@ -3753,9 +3753,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --   `tg : A → K`, and the arm runs it at **two** instantiations of one
   --   construction. At `K := Nat`, `tg := PSigma'.fst`
   --   the branch type is a function of the *tag* and cannot see the label's
-  --   data, which is [`Modelgen.tagFactored`]; at `K := A`, `tg := id` it sees
+  --   data, which is [`InductiveModels.tagFactored`]; at `K := A`, `tg := id` it sees
   --   all of it and only an earlier *recursive* field is out of reach, which is
-  --   [`Modelgen.labelFactored`]. The guard is the weaker one and
+  --   [`InductiveModels.labelFactored`]. The guard is the weaker one and
   --   `tagFactored` picks the column: the tagged instantiation takes
   --   `instDecidableEqNat` and stays at `[propext, Quot.sound]`, the untagged
   --   one takes `WT.decEqAll` and pays `Classical.choice`.
@@ -3783,7 +3783,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   let wFN := Name.str impl "wF"
 
   -- ── the kit arm C needs: Church conjunction's two projections and its
-  -- introduction, built here because [`Modelgen.andCOf`] gives the type only.
+  -- introduction, built here because [`InductiveModels.andCOf`] gives the type only.
   let andCMk := fun (A B a b : Expr) => withLocalDeclD `D (.sort .zero) fun D => do
     withLocalDeclD `k (.forallE `a A (.forallE `b B D .default) .default) fun kk =>
       mkLambdaFVars #[D, kk] (mkAppN kk #[a, b])
@@ -4136,7 +4136,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- but proofs — and equates at the rest. So the carrier quantifies the
     -- constructor's `Prop` fields *at the pivots already supplied*, and
     -- Church-conjoins them with **one** `Eq` at the **non-pivot subsequence**
-    -- packed into a `PSigma'` ([`Modelgen.packTyAt`]) — the Henry-Ford
+    -- packed into a `PSigma'` ([`InductiveModels.packTyAt`]) — the Henry-Ford
     -- equation, stated once because a later index's type may mention an
     -- earlier one:
     --
@@ -4194,7 +4194,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       pure (args.extract np args.size)
 
     -- The constructor's field telescope with the **data fields substituted**
-    -- from an index vector — [`Modelgen.ctorFieldsAux`], the same walk arm G's
+    -- from an index vector — [`InductiveModels.ctorFieldsAux`], the same walk arm G's
     -- `GraphInv` is stated by. `fs` is every field (substituted or bound),
     -- `bnd` only the bound ones, and `res` the conclusion at them.
     let fieldsAt := fun (ps is : Array Expr)
@@ -4203,7 +4203,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       ctorFieldsAux true gIsData gIdxPos is (numForalls tele) 0 tele #[] #[] k
 
     -- **`Pk`, the packed non-pivot type, at a given index vector.** Its
-    -- component types may mention the *pivots*, which [`Modelgen.packTyAt`]
+    -- component types may mention the *pivots*, which [`InductiveModels.packTyAt`]
     -- deliberately leaves free, so it is built once at an opened telescope and
     -- then instantiated. `none` when every index is a pivot.
     let pkAt := fun (ps : Array Expr) (vs : Array Expr) => do
@@ -4410,7 +4410,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
 
     let skelSelf := fun (ps : Array Expr) => mkAppN (.const skelN us) ps
-    -- The index telescope packed into one `PSigma'` ([`Modelgen.packTyOf`]),
+    -- The index telescope packed into one `PSigma'` ([`InductiveModels.packTyOf`]),
     -- at a parameter scope. Closed over the telescope, so it depends on `ps`
     -- alone.
     let pkAt := fun (ps : Array Expr) => do
@@ -4422,7 +4422,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
 
     -- ── the skeleton, spliced ──
     -- Each constructor keeps its field telescope; only the recursive fields'
-    -- types and the codomain lose their indices. [`Modelgen.spineSwap`] does
+    -- types and the codomain lose their indices. [`InductiveModels.spineSwap`] does
     -- the first and is the tuple tower's own swap, which is the same swap
     -- because `erasureBare` has already said the recursive occurrence reduces
     -- to `∀ z⃗, T p⃗ e⃗` rather than remaining nested.
@@ -4458,7 +4458,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     -- field's indices are not expressions at this scope at all: they mention
     -- the field's own binders, and those exist only once someone has opened
     -- them. So each consumer opens the slot itself with
-    -- [`Modelgen.withRecSlot`] and gets `z⃗` and `e⃗(z⃗)` together, inside a
+    -- [`InductiveModels.withRecSlot`] and gets `z⃗` and `e⃗(z⃗)` together, inside a
     -- scope where it can abstract them again. At zero binders every consumer
     -- builds exactly the term it built when this returned `e⃗` directly.
     --
@@ -4488,9 +4488,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         let mut slots : Array (Nat × Expr) := #[]
         for i in [0:nf] do
           -- `mentionsAny` on the type **as written**, which is the test
-          -- [`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`] replace an
+          -- [`InductiveModels.eraseCtorTy`] and [`InductiveModels.spineSwap`] replace an
           -- occurrence on; the reading through `headNorm` happens in
-          -- [`Modelgen.withRecSlot`], where the consumer opens the slot.
+          -- [`InductiveModels.withRecSlot`], where the consumer opens the slot.
           let ft0 ← ityp fs[i]!
           if erasureRecursive tname ft0 then
             slots := slots.push (i, ft0.replaceFVars fs gs)
@@ -4556,7 +4556,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
           -- infinitary field the kernel binds it **under the field's own
           -- binders**: for `g : ∀ z⃗, S p⃗` the hypothesis is
           -- `∀ z⃗, motive (g z⃗)`, and at the constant motive `fun _ => Pk →
-          -- Prop` that is `∀ z⃗, Pk → Prop` — which is [`Modelgen.swapOcc`] at
+          -- Prop` that is `∀ z⃗, Pk → Prop` — which is [`InductiveModels.swapOcc`] at
           -- `predTy`, the same rewrite that built the erased telescope.
           let ihTys ← slots.mapM fun (_, dom) => do pure (`ih, ← swapOcc predTy dom)
           withLocalsD ihTys 0 #[] fun ihs => do
@@ -4856,7 +4856,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- **The inductives the core brought with it, which this model may not
     -- leave unmodelled** — `Iso.requires`' rule, and the same one arm C's
     -- skeleton is under. Empty when the fragment was already spliced, and that
-    -- is not a hole: [`Modelgen.genPrim`] rolls the environment back on every
+    -- is not a hole: [`InductiveModels.genPrim`] rolls the environment back on every
     -- withdrawal and on every decline, so a fragment that is *present* was put
     -- there by an earlier model whose own `requires` were met.
     let wRequires : Array Name := core.flatMap fun d =>
@@ -5059,7 +5059,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- deliberately raises this to `max 1 ℓ⃗`, and `w` itself covers a raised
     -- carrier — at *any* `w` now, since the derived lift exists at every level.
     -- What no pad absorbs is an `imax` in a field's level: those fields are
-    -- recursively boxed ([`Modelgen.boxTyOf`]) and the plan is retried on the
+    -- recursively boxed ([`InductiveModels.boxTyOf`]) and the plan is retried on the
     -- boxed levels, whose exposed Π codomains are never-zero `max`es.
     let plans : Array CPlan ← withParams fun ps =>
       exportCtors.mapM fun (cn, cty) => do
@@ -5117,7 +5117,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
             pad or recursive box closes the gap"
 
     -- A pad at a level `dsingOk` cannot build is discharged by transport
-    -- along the lift's eta ([`Modelgen.unitAtUniq`]) — a recursor call and
+    -- along the lift's eta ([`InductiveModels.unitAtUniq`]) — a recursor call and
     -- proof irrelevance. The `False`-Π pad this replaces needed `funext`
     -- here, and with it `Quot.sound` and a wait on the input's quotient; the
     -- construction now splices neither.
@@ -5322,7 +5322,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- that same encoding under the derived lift, which puts it at exactly `Sort w`
     -- for any `w`. The constructors are the folds, `up` of the folds under a
     -- lift. The recursor is the fold at the right `C`, plus — under a lift —
-    -- one transport along [`Modelgen.puliftEta`], because the lifted `p` is not
+    -- one transport along [`InductiveModels.puliftEta`], because the lifted `p` is not
     -- itself a proposition and proof irrelevance no longer closes the
     -- "which element" question by itself.
     --
@@ -5360,7 +5360,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
     -- route pairs a value with its graph proof (`PSigma'`) and extracts it with
     -- `Classical.choice`, whose own domain is `Nonempty`; and `Graph.unique`
     -- transports along a `funext` — but only when a recursive field has a
-    -- binder, because [`Modelgen.funextUp`] is the only caller and it is the
+    -- binder, because [`InductiveModels.funextUp`] is the only caller and it is the
     -- identity at none. That is the whole of why the axiom cost is per shape.
     let mut gFx? : Option Name := none
     if armG then
@@ -5688,4 +5688,4 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
            requires := if armC then #[skelN] else requires
            aliases }
 
-end Modelgen
+end InductiveModels

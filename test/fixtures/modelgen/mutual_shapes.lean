@@ -1,6 +1,6 @@
 /- **A plain mutual block, on every axis that is not about indices.**
 
-   `src/Modelgen/Mutual.lean` implements a second construction rather than a specialisation of
+   `src/InductiveModels/Mutual.lean` implements a second construction rather than a specialisation of
    the nested one, so it needs its own coverage rather than a corner of
    somebody else's. This file is the axes that a *type*-valued block has;
    `mutual_index.lean` is the indices and `mutual_prop.lean` is `Prop`.

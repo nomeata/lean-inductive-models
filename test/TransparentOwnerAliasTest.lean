@@ -1,6 +1,6 @@
-import Modelgen.Driver
-import Modelgen.Check
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Check
+import InductiveModels.Order
 
 /-!
 # Transparent recursive-owner aliases
@@ -11,7 +11,7 @@ recursor, and iota theorem types retain the exact transparent former exported
 by Lean and are checked literally both before and after NDJSON serialization.
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 structure TestState where
   passed : Nat := 0

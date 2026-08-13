@@ -1,5 +1,5 @@
 import Lean
-import Modelgen.Naming
+import InductiveModels.Naming
 /-!
 # The Lean 4 export format, read and written
 
@@ -25,7 +25,7 @@ Two properties the rest of the tool depends on:
 -/
 open Lean
 
-namespace Modelgen
+namespace InductiveModels
 
 /-- One constructor, as the export declares it. -/
 structure ECtor where
@@ -141,9 +141,9 @@ end EDecl
 The one function that turns a parsed record into something the kernel takes,
 and the two hint/safety translations it needs. **It lives here rather than
 beside its callers because it has three of them at three different heights of
-the import graph**: the input replay in `Modelgen.Driver`, the replay in
-`Modelgen.Mono` — which deliberately does not import `Driver` — and the
-fragment splice in `Modelgen.Simple`, which sits *below* `Driver`. `Format` is
+the import graph**: the input replay in `InductiveModels.Driver`, the replay in
+`InductiveModels.Mono` — which deliberately does not import `Driver` — and the
+fragment splice in `InductiveModels.Simple`, which sits *below* `Driver`. `Format` is
 the shared floor, and the function is pure in its argument, so nothing but the
 name resolution moves. -/
 
@@ -1561,4 +1561,4 @@ where
   that the buffer is not the thing that runs the machine out of memory. -/
   writeChunk : Nat := 4 * 1024 * 1024
 
-end Modelgen
+end InductiveModels

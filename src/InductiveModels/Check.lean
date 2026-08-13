@@ -1,6 +1,6 @@
-import Modelgen.Format
-import Modelgen.Naming
-import Modelgen.Projection
+import InductiveModels.Format
+import InductiveModels.Naming
+import InductiveModels.Projection
 
 /-!
 # Structural checks for exported inductive models
@@ -9,7 +9,7 @@ This module is the format-only foundation of the model checker.  It discovers
 public model families solely from the declarations in an original inductive
 record.  If that record declares type former `T`, constructor `C`, recursor `R`
 and rule `j`, their public names are respectively `T._model`, `C._model`,
-`R._model` and `R._model.iota_j`, constructed by [`Modelgen.Naming`].  A
+`R._model` and `R._model.iota_j`, constructed by [`InductiveModels.Naming`].  A
 recursor whose literal `k` flag is true additionally owns `R._model.ruleK`.  No
 name is split at `_model`, so private names and originals which themselves
 contain an `_model` component retain their exact identity.
@@ -35,12 +35,12 @@ The second walk covers both names held directly in export records and names in
 expressions.  In expressions it treats both `Expr.const` and the `typeName`
 field of `Expr.proj` as references. Literal comparisons never ask for
 definitional equality; the few kernel-visible sort observations use only the
-bounded export-syntax normalizer from `Modelgen.Format`.
+bounded export-syntax normalizer from `InductiveModels.Format`.
 -/
 
 open Lean
 
-namespace Modelgen.Check
+namespace InductiveModels.Check
 
 /-- One entry in the simultaneous public constant substitution. -/
 structure ConstantPair where
@@ -1678,4 +1678,4 @@ violations. -/
 def check (x : Export) : Array Violation :=
   (checkReport x).violations
 
-end Modelgen.Check
+end InductiveModels.Check

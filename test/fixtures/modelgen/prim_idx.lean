@@ -1,5 +1,5 @@
 /- **The index axis of the one-constructor `Prop`**
-   (`src/Modelgen/Simple.lean`), presented as an explicit grid.
+   (`src/InductiveModels/Simple.lean`), presented as an explicit grid.
 
    # What the axis is
 

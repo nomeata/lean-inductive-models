@@ -1,20 +1,20 @@
 /- **An ordinary declaration physically follows unrelated model owners in the
    raw export.**
 
-   [`Modelgen.runFilter`] dependency-orders the source and prioritizes the
+   [`InductiveModels.runFilter`] dependency-orders the source and prioritizes the
    complete fixed support closure before opening any selected owner island.
    `Eq`, `Nat`, `PSigma'`, and `PUnit` are support; ordinary `PSigma` is not,
    and therefore remains an ordinary modelled owner at its dependency position.
 
    **What this file adds is that the scheduled prefix reaches composition.**
-   [`Modelgen.primCompose`] is the third step over the `_model._impl.tag` and
+   [`InductiveModels.primCompose`] is the third step over the `_model._impl.tag` and
    `_model._impl.aux` a mutual model just emitted. It runs inside the same
    disposable island as `genMutual` or the nested arm, with the scheduled exact
    fixed support already installed in the persistent prefix.
 
    The layout is the whole fixture:
 
-   * `MA`/`MB`/`MC` is a plain **mutual** block, so `src/Modelgen/Mutual.lean`
+   * `MA`/`MB`/`MC` is a plain **mutual** block, so `src/InductiveModels/Mutual.lean`
      emits `MA._model._impl.tag` and `MA._model._impl.aux` for it, and those two are what
      the third step then models. Three members and unequal constructor counts,
      for the reason `mutual_shapes.lean` gives: two members cannot distinguish

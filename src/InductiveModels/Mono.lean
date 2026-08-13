@@ -1,5 +1,5 @@
-import Modelgen.Format
-import Modelgen.Naming
+import InductiveModels.Format
+import InductiveModels.Naming
 
 /-!
 # Universe-level monomorphization
@@ -45,7 +45,7 @@ passed is *counted and named* rather than assumed away.
 
 open Lean Meta
 
-namespace Modelgen
+namespace InductiveModels
 namespace Mono
 
 /-- One ground instantiation: a natural number per universe parameter, in the
@@ -1197,8 +1197,8 @@ def declCount : EDecl → Nat
 /-! ## The driver -/
 
 /-! The replay's `EDecl → Declaration` is
-[`Modelgen.toDeclaration`], in `Modelgen.Format`. This module used to carry a
-trimmed copy of it because the original lived in `Modelgen.Driver`, which it
+[`InductiveModels.toDeclaration`], in `InductiveModels.Format`. This module used to carry a
+trimmed copy of it because the original lived in `InductiveModels.Driver`, which it
 deliberately does not import; the function has since moved down to the shared
 floor and the copy is gone. -/
 

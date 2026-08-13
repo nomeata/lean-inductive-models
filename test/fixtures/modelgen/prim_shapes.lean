@@ -1,5 +1,5 @@
 /- **The simple-model construction's positive shapes**
-   (`src/Modelgen/Simple.lean`), one per route variant:
+   (`src/InductiveModels/Simple.lean`), one per route variant:
 
    * `Tri` — a **three**-element enumeration, because two atoms cannot
      distinguish an ordering: three nullary constructors pin tag order and

@@ -1,9 +1,9 @@
-import Modelgen.Driver
-import Modelgen.Check
-import Modelgen.Naming
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Check
+import InductiveModels.Naming
+import InductiveModels.Order
 
-open Lean Meta Modelgen Modelgen.Naming
+open Lean Meta InductiveModels InductiveModels.Naming
 
 structure FixtureResult where
   output : Array EDecl
@@ -19,11 +19,11 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else
     { state with failed := state.failed.push label }
 
-def noGeneration : Modelgen.Cli.Config :=
+def noGeneration : InductiveModels.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
 
 def runExport (label : String) (input : Export) (checkRecursors : Bool)
-    (generation : Modelgen.Cli.Config) : IO FixtureResult := do
+    (generation : InductiveModels.Cli.Config) : IO FixtureResult := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<driver-naming-test>", fileMap := default,
@@ -34,9 +34,9 @@ def runExport (label : String) (input : Export) (checkRecursors : Bool)
     throw <| IO.userError s!"{label}: generated statements differ: {report.stmtErrors}"
   return { output, report }
 
-def runFixture (path : String) (generation : Modelgen.Cli.Config) : IO FixtureResult := do
+def runFixture (path : String) (generation : InductiveModels.Cli.Config) : IO FixtureResult := do
   let text ← IO.FS.readFile path
-  let .ok input := Modelgen.parse text (analyse := false)
+  let .ok input := InductiveModels.parse text (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   runExport path input false generation
 
@@ -89,14 +89,14 @@ def main : IO UInt32 := do
   -- support prioritization: two already-filtered composed exports, and the
   -- plain no-selected-owner export checked once per aggregate fixture.  The
   -- scheduler and the complete filter must both be byte-order fixed points.
-  let passThrough : Array (String × Modelgen.Cli.Config) := #[
+  let passThrough : Array (String × InductiveModels.Cli.Config) := #[
     ("nested_iota.ndjson", legacyGenerationConfig false),
     ("nested_shapes.ndjson", legacyGenerationConfig false),
     ("nat_char_equations.ndjson", legacyGenerationConfig false)]
   for (fixture, generation) in passThrough do
     let path := s!"test/fixtures/lean-inductive-models/filtered/{fixture}"
     let text ← IO.FS.readFile path
-    let .ok input := Modelgen.parse text (analyse := false)
+    let .ok input := InductiveModels.parse text (analyse := false)
       | throw <| IO.userError s!"cannot parse {path}"
     state := state.check s!"{fixture} source scheduling is a fixed point" <|
       match scheduleSource input generation with
@@ -111,7 +111,7 @@ def main : IO UInt32 := do
   -- idempotence check: the missing ordinary models must still be added.
   let partialText ← IO.FS.readFile
     "test/fixtures/lean-inductive-models/filtered/nested_iota.ndjson"
-  let .ok partialInput := Modelgen.parse partialText (analyse := false)
+  let .ok partialInput := InductiveModels.parse partialText (analyse := false)
     | throw <| IO.userError "cannot parse the partially filtered nested_iota fixture"
   let allBranches ← runExport "partially filtered nested_iota with every branch"
     partialInput false {}
@@ -121,7 +121,7 @@ def main : IO UInt32 := do
     ([`N, `List, `Box].all allBranches.generated)
 
   let safetyText ← IO.FS.readFile "test/fixtures/lean-inductive-models/nested_iota_arm.ndjson"
-  let .ok safetyInput := Modelgen.parse safetyText (analyse := false)
+  let .ok safetyInput := InductiveModels.parse safetyText (analyse := false)
     | throw <| IO.userError "cannot parse test/fixtures/lean-inductive-models/nested_iota_arm.ndjson"
   let some (wrongSafety, recursorName) := flipFirstRecursorSafety safetyInput
     | throw <| IO.userError "no recursor to mutate in test/fixtures/lean-inductive-models/nested_iota_arm.ndjson"
@@ -149,7 +149,7 @@ def main : IO UInt32 := do
   -- Its first basis wait drains at Eq; the late wait must remain atomic until
   -- Iff, both of its kernel-owned declarations, and propext are all installed.
   let lateText ← IO.FS.readFile "test/fixtures/lean-inductive-models/w_late_iff.ndjson"
-  let .ok lateInput := Modelgen.parse lateText (analyse := false)
+  let .ok lateInput := InductiveModels.parse lateText (analyse := false)
     | throw <| IO.userError "cannot parse test/fixtures/lean-inductive-models/w_late_iff.ndjson"
   let lateW ← runExport "late W logical basis" lateInput false
     { noGeneration with simple := true, basic := true }
@@ -158,7 +158,7 @@ def main : IO UInt32 := do
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order late W output: {repr error}"
   let lateOutputCheck := Check.checkReport lateOrdered
-  let .ok lateSerialized := Modelgen.parse lateOrdered.render (analyse := false)
+  let .ok lateSerialized := InductiveModels.parse lateOrdered.render (analyse := false)
     | throw <| IO.userError "cannot parse serialized late W output"
   let lateInputCheck := Check.checkReport lateSerialized
   state := state.check "W target retries after the complete later logical basis"
@@ -198,7 +198,7 @@ def main : IO UInt32 := do
   -- composed owners. The reserved-name guards must remain strict; source
   -- scheduling, not a prelude splice, is what makes every construction work.
   let lateEqText ← IO.FS.readFile "test/fixtures/lean-inductive-models/prim_late_basis.ndjson"
-  let .ok lateEqSource := Modelgen.parse lateEqText (analyse := false)
+  let .ok lateEqSource := InductiveModels.parse lateEqText (analyse := false)
     | throw <| IO.userError "cannot parse the late-Eq source fixture"
   let lateEqInput := postponeRecords lateEqSource fun declaration =>
     declaration.names.contains `Eq
@@ -216,10 +216,10 @@ def main : IO UInt32 := do
   -- short-circuit the route, recursive support closure must use the scheduled
   -- quotient while ensureFunext's reserved-name checks remain untouched.
   let graphText ← IO.FS.readFile "test/fixtures/lean-inductive-models/prim_graph.ndjson"
-  let .ok graphSource := Modelgen.parse graphText (analyse := false)
+  let .ok graphSource := InductiveModels.parse graphText (analyse := false)
     | throw <| IO.userError "cannot parse the graph source fixture"
   let quotientText ← IO.FS.readFile "test/fixtures/lean-inductive-models/prim_graph_pre.ndjson"
-  let .ok quotientSource := Modelgen.parse quotientText (analyse := false)
+  let .ok quotientSource := InductiveModels.parse quotientText (analyse := false)
     | throw <| IO.userError "cannot parse the quotient support fixture"
   let quotientSupport := quotientSource.decls.filter fun declaration =>
     declaration.names.any fun name => name == `Quot || (`Quot).isPrefixOf name

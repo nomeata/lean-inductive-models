@@ -1,4 +1,4 @@
-import Modelgen.Check
+import InductiveModels.Check
 
 set_option maxRecDepth 4096
 
@@ -21,7 +21,7 @@ names, and a multi-member mutual record whose public slots do not depend on the
 first member or export position.
 -/
 
-open Lean Modelgen Modelgen.Check
+open Lean InductiveModels InductiveModels.Check
 
 structure TestState where
   passed : Nat := 0
@@ -464,7 +464,7 @@ def propertyGlobalExtraRecords (seed : Nat) : Array GlobalExtraRecord :=
 def run (root : String) : IO UInt32 := do
   let path := s!"{root}/test/fixtures/lean-inductive-models/nested_iota_arm.ndjson"
   let text ← IO.FS.readFile path
-  match Modelgen.parse text (analyse := false) with
+  match InductiveModels.parse text (analyse := false) with
   | .error error =>
       IO.eprintln s!"checktest: could not parse {path}: {error}"
       return 1
@@ -768,7 +768,7 @@ def run (root : String) : IO UInt32 := do
     -- type-shape heuristic from pairing them interchangeably.
     let shapesPath := s!"{root}/test/fixtures/lean-inductive-models/prim_shapes.ndjson"
     let shapesText ← IO.FS.readFile shapesPath
-    match Modelgen.parse shapesText (analyse := false) with
+    match InductiveModels.parse shapesText (analyse := false) with
     | .error error =>
         IO.eprintln s!"checktest: could not parse {shapesPath}: {error}"
         state ← state.check "swapped equal-looking constructors" false
@@ -857,7 +857,7 @@ def run (root : String) : IO UInt32 := do
 
     let mutualPath := s!"{root}/test/fixtures/lean-inductive-models/mutual_shapes.ndjson"
     let mutualText ← IO.FS.readFile mutualPath
-    match Modelgen.parse mutualText (analyse := false) with
+    match InductiveModels.parse mutualText (analyse := false) with
     | .error error =>
         IO.eprintln s!"checktest: could not parse {mutualPath}: {error}"
         state ← state.check "valid exact mutual family" false
@@ -929,7 +929,7 @@ def run (root : String) : IO UInt32 := do
 
     let unitlikePath := s!"{root}/test/fixtures/lean-inductive-models/unitlike.ndjson"
     let unitlikeText ← IO.FS.readFile unitlikePath
-    match Modelgen.parse unitlikeText (analyse := false) with
+    match InductiveModels.parse unitlikeText (analyse := false) with
     | .error error =>
         IO.eprintln s!"checktest: could not parse {unitlikePath}: {error}"
         state ← state.check "unit-like metadata fixture" false

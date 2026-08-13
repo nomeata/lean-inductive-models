@@ -1,4 +1,4 @@
-import Modelgen.Driver
+import InductiveModels.Driver
 
 /-!
 `envprobe IN.ndjson [P|A|B|C]` — **what a replayed export is visible as, and
@@ -13,7 +13,7 @@ time and memory to obtain.
 * **`P`** — parse and stop. Says how much of the pass's peak is the parsed
   export rather than the environment built from it.
 * **`A`** — parse, then replay through `Environment.addDeclCore`, which is
-  what `Modelgen.runFilter` does. Counts and prints the names that are in the
+  what `InductiveModels.runFilter` does. Counts and prints the names that are in the
   **kernel** constant map and invisible to `Environment.find?`: the
   `AsyncConsts.add` panic's victims, and the auxiliary `T.rec_k` of every
   nested inductive, which `Declaration.getNames` documents itself as omitting.
@@ -35,7 +35,7 @@ No argument: `A` then `B`. Both replays in one process needs twice the memory of
 one, so on anything Mathlib-sized pass a mode.
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 def probeA (x : Export) (names : Array Name) (env0 : Environment) : IO Unit := do
   let mut env := env0
@@ -67,7 +67,7 @@ def probeC (x : Export) (env0 : Environment) : IO Unit := do
   for m in bad[0:10] do IO.println s!"  rejected {m}"
 
 /-- **The W core, spliced onto a replayed input.** Replays `IN` the way the tool
-does — trusted, checking off — and then runs [`Modelgen.ensureWCore`], which is
+does — trusted, checking off — and then runs [`InductiveModels.ensureWCore`], which is
 the checked side. Reports how many of the fragment's records were added, how
 many the input already had, and what the kernel said. This is the splice's
 oracle at scale: `w_core.ndjson` alone goes in from nothing (that is
@@ -84,12 +84,12 @@ def probeW (x : Export) (env0 : Environment) : IO Unit := do
   let reserved : Std.HashSet Name :=
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
   let act : MetaM Unit := do
-    match ← Modelgen.ensureWCore reserved with
+    match ← InductiveModels.ensureWCore reserved with
     | .ok ds =>
       -- The total is read off the compiled-in fragment rather than written
       -- down, so that re-exporting `w_core.ndjson` does not leave a literal
       -- here saying what it used to hold.
-      let nFrag := match Modelgen.parse Modelgen.wCoreText (analyse := false) with
+      let nFrag := match InductiveModels.parse InductiveModels.wCoreText (analyse := false) with
         | .ok x => x.decls.size
         | .error _ => 0
       IO.println s!"W splice: {ds.size} records added, {nFrag - ds.size} the input \
@@ -97,8 +97,8 @@ def probeW (x : Export) (env0 : Environment) : IO Unit := do
       let mut n := 0
       for d in ds do n := n + d.getNames.length
       IO.println s!"W splice: {n} constants, all through addChecked"
-      for k in [Modelgen.wCoreSelf, Modelgen.wCoreSup, Modelgen.wCoreRec, Modelgen.wCoreIota,
-                Modelgen.wCoreDecEqNat, Modelgen.wCoreDecEqAll] do
+      for k in [InductiveModels.wCoreSelf, InductiveModels.wCoreSup, InductiveModels.wCoreRec, InductiveModels.wCoreIota,
+                InductiveModels.wCoreDecEqNat, InductiveModels.wCoreDecEqAll] do
         IO.println s!"  {k}: {if ((← getEnv).find? k).isSome then "present" else "MISSING"}"
     | .error e => IO.println s!"W splice DECLINED: {e.label}"
   discard <| Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' act)
@@ -123,7 +123,7 @@ def probeB (x : Export) (names : Array Name) (env0 : Environment) : IO Unit := d
 def main (args : List String) : IO UInt32 := do
   let path :: rest := args | do IO.eprintln "usage: envprobe IN.ndjson [P|A|B]"; return 1
   let text ← IO.FS.readFile path
-  let .ok x := Modelgen.parse text (analyse := false) | do IO.eprintln s!"{path}: parse error"; return 2
+  let .ok x := InductiveModels.parse text (analyse := false) | do IO.eprintln s!"{path}: parse error"; return 2
   initSearchPath (← findSysroot)
   let env0 ← importModules #[] {}
   let mut names : Array Name := #[]

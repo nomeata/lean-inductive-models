@@ -1,15 +1,15 @@
-import Modelgen.Driver
-import Modelgen.Check
-import Modelgen.Mono
-import Modelgen.Order
-import Modelgen.Output
-import Modelgen.Spool
-import Modelgen.Supervisor
+import InductiveModels.Driver
+import InductiveModels.Check
+import InductiveModels.Mono
+import InductiveModels.Order
+import InductiveModels.Output
+import InductiveModels.Spool
+import InductiveModels.Supervisor
 
 /-!
 `lean-inductive-models [OPTIONS] IN.ndjson`
 
-The command-line data model and option ordering live in `Modelgen.Cli`.  This
+The command-line data model and option ordering live in `InductiveModels.Cli`.  This
 module owns only the IO boundary and the pipeline between the already separate
 passes:
 
@@ -28,7 +28,7 @@ stderr, and `--quiet` suppresses successful pass reports without hiding fatal
 errors.
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 def exitAccepted : UInt32 := 0
 def exitRejected : UInt32 := 1
@@ -38,11 +38,11 @@ def exitToolError : UInt32 := 3
 /-- Write the parsed export rather than reopening the input path. This keeps
 the output tied to the bytes that passed parsing and checking even if the
 input is replaced or mutated while a long generation pass is running. Named
-paths are installed transactionally by [`Modelgen.Output.write`]. -/
+paths are installed transactionally by [`InductiveModels.Output.write`]. -/
 def writeExport (target : String) (x : Export) : IO Unit :=
-  Modelgen.Output.write target x.writeTo
+  InductiveModels.Output.write target x.writeTo
 
-def reportGeneration (config : Modelgen.Cli.Config) (rep : Modelgen.Report) : IO Unit := do
+def reportGeneration (config : InductiveModels.Cli.Config) (rep : InductiveModels.Report) : IO Unit := do
   if config.quiet then return
   let input := config.input.getD "<input>"
   if let some why := rep.unreplayable then
@@ -55,12 +55,12 @@ def reportGeneration (config : Modelgen.Cli.Config) (rep : Modelgen.Report) : IO
   for (name, why) in rep.declined do IO.eprintln s!"{name}: declined — {why}"
   unless rep.stmtChecked == 0 do
     IO.eprintln s!"statements: {rep.stmtChecked} compared, {rep.stmtErrors.size} differ"
-  let calls ← Modelgen.LevelAlgebra.levelCalls.get
-  let escapes ← Modelgen.LevelAlgebra.levelEscapes.get
+  let calls ← InductiveModels.LevelAlgebra.levelCalls.get
+  let escapes ← InductiveModels.LevelAlgebra.levelEscapes.get
   IO.eprintln s!"levels: {calls} planner comparisons, {escapes} escapes\
-    {if Modelgen.LevelAlgebra.stockLevels then " (widening OFF — control run)" else ""}"
+    {if InductiveModels.LevelAlgebra.stockLevels then " (widening OFF — control run)" else ""}"
 
-def reportMono (config : Modelgen.Cli.Config) (rep : Modelgen.Mono.Report) : IO Unit := do
+def reportMono (config : InductiveModels.Cli.Config) (rep : InductiveModels.Mono.Report) : IO Unit := do
   if config.quiet then return
   IO.eprintln s!"monomorphization: {rep.declsIn} declarations in, {rep.declsOut} out \
     ({rep.recordsIn} → {rep.recordsOut} records), {rep.groups} groups, \
@@ -69,10 +69,10 @@ def reportMono (config : Modelgen.Cli.Config) (rep : Modelgen.Mono.Report) : IO 
   IO.eprintln s!"  model groups: {rep.modelGroups} keyed, {rep.modelLoose} loose, \
     {rep.modelDeclined} declined; {rep.recRegen} recursors regenerated"
 
-def violationMessage (violation : Modelgen.Check.Violation) : String :=
+def violationMessage (violation : InductiveModels.Check.Violation) : String :=
   violation.message
 
-def orderErrorMessage : Modelgen.Order.Error → String
+def orderErrorMessage : InductiveModels.Order.Error → String
   | .duplicateName name first second =>
       s!"declaration name {name} occurs in both records {first} and {second}"
   | .cycle records declarations =>
@@ -80,14 +80,14 @@ def orderErrorMessage : Modelgen.Order.Error → String
         {records.toList}: {declarations.toList.map (·.toList)}"
 
 def reportViolations (input stage : String)
-    (violations : Array Modelgen.Check.Violation) : IO Unit := do
+    (violations : Array InductiveModels.Check.Violation) : IO Unit := do
   for violation in violations do
     IO.eprintln s!"{input}: {stage} check failed: {violationMessage violation}"
 
 /-- Report a successful structural pass with its exact amount of model-facing
 work.  Failed passes retain their existing per-violation diagnostics. -/
-def reportCheckSuccess (config : Modelgen.Cli.Config) (stage : String)
-    (report : Modelgen.Check.Report) : IO Unit := do
+def reportCheckSuccess (config : InductiveModels.Cli.Config) (stage : String)
+    (report : InductiveModels.Check.Report) : IO Unit := do
   unless config.quiet do
     IO.eprintln s!"{stage} check: {report.familiesChecked} model families checked"
 
@@ -99,50 +99,50 @@ def typeCheckExportIO (context : Core.Context) (x : Export) :
   try
     let env ← mkEmptyEnvironment
     let (result, _) ← Lean.Core.CoreM.toIO
-      (Lean.Meta.MetaM.run' (Modelgen.typeCheckExport x)) context { env }
+      (Lean.Meta.MetaM.run' (InductiveModels.typeCheckExport x)) context { env }
     return .ok result
   catch error =>
     return .error (toString error)
 
-def reportTypeCheckSuccess (config : Modelgen.Cli.Config) (stage : String) : IO Unit := do
+def reportTypeCheckSuccess (config : InductiveModels.Cli.Config) (stage : String) : IO Unit := do
   unless config.quiet do IO.eprintln s!"{stage} kernel check: accepted"
 
 /-- A reported generation refusal is fulfilled when the exact owner already
 had a complete, structurally valid public model in the input, or when another
 selected route generated it during this run. A noncanonical reserved basis
 owner remains unsupported regardless of either condition. -/
-def unsupportedDeclines (input : Export) (report : Modelgen.Report) : Array (Name × String) :=
+def unsupportedDeclines (input : Export) (report : InductiveModels.Report) : Array (Name × String) :=
   if report.declined.isEmpty then
     #[]
   else
-    let discovered := Modelgen.Check.discover input
-    let violations := Modelgen.Check.check input
+    let discovered := InductiveModels.Check.discover input
+    let violations := InductiveModels.Check.check input
     let alreadyCovered := discovered.foldl (init := ({} : Std.HashSet Name)) fun owners family =>
       if violations.any (·.familyOwner == family.owner) then owners else owners.insert family.owner
     let generated := report.generated.foldl (init := ({} : Std.HashSet Name))
       fun owners entry => owners.insert entry.1
     report.declined.filter fun entry =>
-      Modelgen.declineIsUnsupported alreadyCovered generated entry.1
+      InductiveModels.declineIsUnsupported alreadyCovered generated entry.1
 
 /-- Initial internal fast-path boundary. Structural output checking consumes
 the compact report certified while each family was live. Output kernel checking
 must still replay the exact final byte stream and therefore retains the legacy
 in-memory path. Monomorphization rewrites source declarations, while a no-output
 or no-generation invocation has no staged payload to compose. -/
-def stagedModeEligible (config : Modelgen.Cli.Config) : Bool :=
-  config.output && Modelgen.generationEnabled config && !config.monoLevels &&
+def stagedModeEligible (config : InductiveModels.Cli.Config) : Bool :=
+  config.output && InductiveModels.generationEnabled config && !config.monoLevels &&
     !config.typeCheckOutput
 
 private structure RawStage where
-  workspace : Modelgen.Spool.Workspace
-  tee : Modelgen.Spool.ParseTee
-  certificate : Modelgen.RawCertificate
-  sizes : Modelgen.RawSpoolSizes
+  workspace : InductiveModels.Spool.Workspace
+  tee : InductiveModels.Spool.ParseTee
+  certificate : InductiveModels.RawCertificate
+  sizes : InductiveModels.RawSpoolSizes
 
 private inductive FilterOutput where
-  | full (declarations : Array Modelgen.EDecl)
-  | staged (raw : RawStage) (stage : Modelgen.Spool.IslandStage)
-      (plan : Modelgen.StagedPlan)
+  | full (declarations : Array InductiveModels.EDecl)
+  | staged (raw : RawStage) (stage : InductiveModels.Spool.IslandStage)
+      (plan : InductiveModels.StagedPlan)
 
 /-- Optional A/B and test diagnostic. This observes the actual filter result;
 it never enables staging or changes eligibility. -/
@@ -152,8 +152,8 @@ private def reportOutputBackend (output : FilterOutput) : IO Unit := do
       | .full .. => "legacy"
       | .staged .. => "staged"}"
 
-private def mixedComposition (raw : RawStage) (sealed : Modelgen.Spool.SealedIsland)
-    (spans : Array Modelgen.StagedDeclarationSpan) : Modelgen.Spool.MixedComposition :=
+private def mixedComposition (raw : RawStage) (sealed : InductiveModels.Spool.SealedIsland)
+    (spans : Array InductiveModels.StagedDeclarationSpan) : InductiveModels.Spool.MixedComposition :=
   { sourceMetadataPath := raw.tee.metadata.path
     sourceArenaPath := raw.tee.arena.path
     sourceDeclarationPath := raw.tee.declarations.path
@@ -166,8 +166,8 @@ private def mixedComposition (raw : RawStage) (sealed : Modelgen.Spool.SealedIsl
       | .source span => .source { offset := span.offset, length := span.bytes }
       | .generated span => .generated span }
 
-private def runWithWorkspace (config : Modelgen.Cli.Config)
-    (workspace? : Option Modelgen.Spool.Workspace) : IO UInt32 := do
+private def runWithWorkspace (config : InductiveModels.Cli.Config)
+    (workspace? : Option InductiveModels.Spool.Workspace) : IO UInt32 := do
   let input := config.input.getD ""
   -- Reserve every spool leaf before consuming the input. Failure to establish
   -- the optional tee selects the historical parser; an error after parsing has
@@ -175,19 +175,19 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
   let tee? ← match workspace? with
     | none => pure none
     | some workspace => try
-        pure (some (← Modelgen.Spool.ParseTee.create workspace))
+        pure (some (← InductiveModels.Spool.ParseTee.create workspace))
       catch _ => pure none
   let parsed? ← try
       if input == "-" then
         let stdin ← IO.getStdin
         let result ← match tee? with
           | none => do
-            let result ← Modelgen.parseStream stdin
+            let result ← InductiveModels.parseStream stdin
               (analyse := config.monoLevels)
               (allowDuplicateNames := true)
             pure (result.map fun x => (x, none))
           | some tee => do
-            let result ← Modelgen.parseStreamWithSink stdin tee.sink
+            let result ← InductiveModels.parseStreamWithSink stdin tee.sink
               (analyse := config.monoLevels)
               (allowDuplicateNames := true)
             pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
@@ -196,12 +196,12 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
         IO.FS.withFile input .read fun handle => do
           let result ← match tee? with
             | none => do
-              let result ← Modelgen.parseHandle handle
+              let result ← InductiveModels.parseHandle handle
                 (analyse := config.monoLevels)
                 (allowDuplicateNames := true)
               pure (result.map fun x => (x, none))
             | some tee => do
-              let result ← Modelgen.parseHandleWithSink handle tee.sink
+              let result ← InductiveModels.parseHandleWithSink handle tee.sink
                 (analyse := config.monoLevels)
                 (allowDuplicateNames := true)
               pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
@@ -217,7 +217,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     | .ok (parsedExport, stage?) =>
       if let some (tee, certificate) := stage? then
         let sizes ← tee.finish
-        if Modelgen.Spool.rawFastPathEligible certificate sizes
+        if InductiveModels.Spool.rawFastPathEligible certificate sizes
             parsedExport.decls.size config.monoLevels then
           let some workspace := workspace?
             | throw <| IO.userError "certified raw parse lost its spool workspace"
@@ -248,7 +248,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     | .ok (.ok ()) => reportTypeCheckSuccess config "input"
 
   if config.checkInput then
-    let report := Modelgen.Check.checkReport parsed
+    let report := InductiveModels.Check.checkReport parsed
     unless report.violations.isEmpty do
       reportViolations input "input" report.violations
       return exitRejected
@@ -262,7 +262,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       let result ← try
           let ((output, report), _) ← Lean.Core.CoreM.toIO
             (Lean.Meta.MetaM.run'
-              (Modelgen.Mono.monomorphize parsed { check := true })) context { env }
+              (InductiveModels.Mono.monomorphize parsed { check := true })) context { env }
           pure (Except.ok (output, report))
         catch error =>
           pure (Except.error (toString error))
@@ -279,7 +279,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
             for error in report.errors do IO.eprintln s!"  ! {error}"
             return exitToolError
           reportMono config report
-          match Modelgen.Order.reorder output with
+          match InductiveModels.Order.reorder output with
           | .error error =>
               IO.eprintln s!"{input}: cannot order monomorphized input: \
                 {orderErrorMessage error}"
@@ -288,29 +288,29 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
     else
       pure parsed
 
-  let (filterOutput, generationReport) ← if Modelgen.generationEnabled config then do
-      let generated : Except String (FilterOutput × Modelgen.Report) ← try
+  let (filterOutput, generationReport) ← if InductiveModels.generationEnabled config then do
+      let generated : Except String (FilterOutput × InductiveModels.Report) ← try
           if let some raw := rawStage? then
-            let levelCallsBefore ← Modelgen.LevelAlgebra.levelCalls.get
-            let levelEscapesBefore ← Modelgen.LevelAlgebra.levelEscapes.get
-            let stage ← Modelgen.Spool.IslandStage.create raw.workspace
-              (Modelgen.Writer.Cursor.ofRaw raw.certificate.cursor)
+            let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
+            let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
+            let stage ← InductiveModels.Spool.IslandStage.create raw.workspace
+              (InductiveModels.Writer.Cursor.ofRaw raw.certificate.cursor)
             let ((report, plan), _) ← Lean.Core.CoreM.toIO
               (Lean.Meta.MetaM.run'
-                (Modelgen.runFilterStaged generationInput false config (.ofStage stage)))
+                (InductiveModels.runFilterStaged generationInput false config (.ofStage stage)))
               context { env }
             match plan.unavailable? with
             | none => pure (Except.ok (FilterOutput.staged raw stage plan, report))
             | some _ =>
-              Modelgen.LevelAlgebra.levelCalls.set levelCallsBefore
-              Modelgen.LevelAlgebra.levelEscapes.set levelEscapesBefore
+              InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
+              InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
               let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config))
+                (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
                 context { env }
               pure (Except.ok (FilterOutput.full decls, fallbackReport))
           else
             let ((decls, report), _) ← Lean.Core.CoreM.toIO
-              (Lean.Meta.MetaM.run' (Modelgen.runFilter generationInput false config))
+              (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
               context { env }
             pure (Except.ok (FilterOutput.full decls, report))
         catch error =>
@@ -321,7 +321,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
           return exitToolError
       | .ok result => pure result
     else
-      pure (FilterOutput.full generationInput.decls, ({} : Modelgen.Report))
+      pure (FilterOutput.full generationInput.decls, ({} : InductiveModels.Report))
 
   reportOutputBackend filterOutput
   reportGeneration config generationReport
@@ -360,15 +360,15 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       match composition.validate with
       | .ok _ => pure ()
       | .error message => throw <| IO.userError s!"invalid staged composition: {message}"
-      Modelgen.Output.write config.outputTarget composition.emit
+      InductiveModels.Output.write config.outputTarget composition.emit
     catch error =>
       IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
       return exitToolError
     return outcome
   | .full decls =>
     let transformed : Export := { generationInput with decls }
-    let finalExport ← if Modelgen.generationEnabled config || config.monoLevels then
-        match Modelgen.Order.reorder transformed with
+    let finalExport ← if InductiveModels.generationEnabled config || config.monoLevels then
+        match InductiveModels.Order.reorder transformed with
         | .error error =>
             IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
             return exitToolError
@@ -377,7 +377,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
         pure transformed
 
     if config.checkOutput then
-      let report := Modelgen.Check.checkReport finalExport
+      let report := InductiveModels.Check.checkReport finalExport
       unless report.violations.isEmpty do
         reportViolations input "output" report.violations
         return exitRejected
@@ -401,7 +401,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
         return exitToolError
     return outcome
 
-def run (config : Modelgen.Cli.Config) : IO UInt32 := do
+def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   -- Canonical eligible generation uses bounded-memory staged output by default.
   -- The legacy override is retained for deliberate A/B measurements. Statically
   -- ineligible modes never tee their input, and planner trace mode stays on the
@@ -410,18 +410,18 @@ def run (config : Modelgen.Cli.Config) : IO UInt32 := do
       (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1" &&
       stagedModeEligible config then
     let scratch := (← IO.currentDir) / "_tmp"
-    Modelgen.Spool.withOptionalWorkspace scratch (runWithWorkspace config)
+    InductiveModels.Spool.withOptionalWorkspace scratch (runWithWorkspace config)
   else
     runWithWorkspace config none
 
 def workerMain (args : List String) : IO UInt32 := do
-  Modelgen.Output.containToolErrors do
-    match Modelgen.Cli.parseArgs args with
+  InductiveModels.Output.containToolErrors do
+    match InductiveModels.Cli.parseArgs args with
     | .error error =>
         IO.eprintln error
-        IO.eprintln Modelgen.Cli.usage
+        IO.eprintln InductiveModels.Cli.usage
         return exitToolError
     | .ok config => run config
 
 def main (args : List String) : IO UInt32 :=
-  Modelgen.Supervisor.supervise workerMain args
+  InductiveModels.Supervisor.supervise workerMain args

@@ -80,7 +80,7 @@ owner.
 - **Nested:** a recursive occurrence under a container needs generated maps
   `mapRoll : G P⃗ → G M⃗` and `mapUnroll : G M⃗ → G P⃗`, plus the pointwise
   section/retraction laws.  Reuse the occurrence traversal and the
-  `pack`/`unpack` congruence infrastructure in `Modelgen.Model`; a recursive
+  `pack`/`unpack` congruence infrastructure in `InductiveModels.Model`; a recursive
   projection's literal iota proof is the container section law instead of
   bare `funext`.
 - **Mutual:** define the vector of `P_k = F_k M⃗` after the current private

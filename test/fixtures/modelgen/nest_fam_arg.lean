@@ -10,7 +10,7 @@
    — which member, which occurrence, which index vector — and `Plan.spec` never
    entered a lambda that sat in an application's head. Every declaration below
    is one of those two mistakes, and each one is red under a different mutation
-   of the repair; the header of `Modelgen.Gen.occIdx?` is the diagnosis.
+   of the repair; the header of `InductiveModels.Gen.occIdx?` is the diagnosis.
 
    `OK` is the discriminating control that was here before the fix and is still
    the first line of it: the **same container** with the recursion in the

@@ -1,5 +1,5 @@
-import Modelgen.Driver
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Order
 
 /-!
 # Focused tests for record-level model ordering
@@ -7,9 +7,9 @@ import Modelgen.Order
 Run from the repository root with `lake exe ordertest [ROOT]`.
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
-namespace Modelgen.Order.Tests
+namespace InductiveModels.Order.Tests
 
 structure TestState where
   passed : Nat := 0
@@ -139,7 +139,7 @@ def syntheticCertificate (cursor : Writer.Cursor) (count : Nat) : RawCertificate
 def syntheticRawSizes (count : Nat) : RawSpoolSizes :=
   { metadata := 0, arena := 0, declarations := count.toUInt64 }
 
-def runFilterState (input : Export) (generation : Modelgen.Cli.Config)
+def runFilterState (input : Export) (generation : InductiveModels.Cli.Config)
     (checkRecursors : Bool := false) : IO FilterRun := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -152,7 +152,7 @@ def runFilterState (input : Export) (generation : Modelgen.Cli.Config)
   return { input, output := { input with decls }, report, env := finalState.env }
 
 def runFilterStagedState (scratch : String) (input : Export)
-    (generation : Modelgen.Cli.Config) (checkRecursors : Bool := false) : IO StagedFilterRun :=
+    (generation : InductiveModels.Cli.Config) (checkRecursors : Bool := false) : IO StagedFilterRun :=
   Spool.withWorkspace scratch fun workspace => do
     let stage ← Spool.IslandStage.create workspace (cursorAfter input.decls)
     let env ← importModules #[] {}
@@ -194,7 +194,7 @@ def runFilterStagedState (scratch : String) (input : Export)
       malformedPlansRejected := duplicateRejected && cursorRejected && sourceCountRejected }
 
 def runFilterDroppedState (scratch : String) (input : Export)
-    (generation : Modelgen.Cli.Config) (checkRecursors : Bool := false) : IO DroppedFilterRun :=
+    (generation : InductiveModels.Cli.Config) (checkRecursors : Bool := false) : IO DroppedFilterRun :=
   Spool.withWorkspace scratch fun workspace => do
     let stage ← Spool.IslandStage.create workspace (cursorAfter input.decls)
     let env ← importModules #[] {}
@@ -212,14 +212,14 @@ def runFilterDroppedState (scratch : String) (input : Export)
       | .error _ => false
     return { report, plan, planValid }
 
-def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
+def generatedFixtureState (path : String) (generation : InductiveModels.Cli.Config) :
     IO FilterRun := do
   let text ← IO.FS.readFile path
-  let .ok parsed := Modelgen.parse text (analyse := false)
+  let .ok parsed := InductiveModels.parse text (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   runFilterState parsed generation
 
-def generatedFixture (path : String) (generation : Modelgen.Cli.Config) : IO Export := do
+def generatedFixture (path : String) (generation : InductiveModels.Cli.Config) : IO Export := do
   return (← generatedFixtureState path generation).output
 
 def mapConstructor (input : Export) (target : Name) (f : ECtor → ECtor) : Export :=
@@ -250,7 +250,7 @@ def ownerDependentRecordIsRejected : IO Bool := do
   let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }
   return result
 
-def noGeneration : Modelgen.Cli.Config :=
+def noGeneration : InductiveModels.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
 
 def replayGeneratedIn (base : Environment) (records : Array EDecl) :
@@ -776,7 +776,7 @@ def run (root : String) : IO UInt32 := do
   -- Run the legacy full-output oracle, the shadow sink, and the AST-dropping
   -- sink across each generation route. Recursor checking is enabled on the
   -- composed case so its report fields are part of the exact comparison too.
-  let stagedMatrix : Array (String × String × Modelgen.Cli.Config × Bool) := #[
+  let stagedMatrix : Array (String × String × InductiveModels.Cli.Config × Bool) := #[
     ("nested", "nested_iota.ndjson", { noGeneration with nested := true }, false),
     ("mutual", "mutual_shapes.ndjson", { noGeneration with mutualModels := true }, false),
     ("simple", "prim_shapes.ndjson", { noGeneration with simple := true }, false),
@@ -785,7 +785,7 @@ def run (root : String) : IO UInt32 := do
   for (label, fixture, generation, checkRecursors) in stagedMatrix do
     let fixturePath := s!"{root}/test/fixtures/lean-inductive-models/{fixture}"
     let text ← IO.FS.readFile fixturePath
-    let .ok input := Modelgen.parse text (analyse := false) | do
+    let .ok input := InductiveModels.parse text (analyse := false) | do
       state := state.check s!"staged {label} fixture parses" false
       continue
     let legacy ← runFilterState input generation checkRecursors
@@ -902,7 +902,7 @@ def run (root : String) : IO UInt32 := do
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
 
-end Modelgen.Order.Tests
+end InductiveModels.Order.Tests
 
 def main (args : List String) : IO UInt32 :=
-  Modelgen.Order.Tests.run (args.head?.getD ".")
+  InductiveModels.Order.Tests.run (args.head?.getD ".")

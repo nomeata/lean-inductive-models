@@ -1,5 +1,5 @@
-import Modelgen.Driver
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Order
 
 /-!
 # Compact-order equivalence
@@ -10,9 +10,9 @@ summary-only graph with the established full-export ordering implementation on
 every committed raw and filtered fixture, including exact error diagnostics.
 -/
 
-open Lean Modelgen
+open Lean InductiveModels
 
-namespace Modelgen.IncrementalOrder.Tests
+namespace InductiveModels.IncrementalOrder.Tests
 
 structure TestState where
   passed : Nat := 0
@@ -83,7 +83,7 @@ def isExactOrder (outcome : Except Order.Error (Array (Array Name)))
 
 def readExport (path : System.FilePath) : IO Export := do
   let text ← IO.FS.readFile path
-  match Modelgen.parse text (analyse := false) with
+  match InductiveModels.parse text (analyse := false) with
   | .ok x => return x
   | .error error => throw <| IO.userError s!"cannot parse {path}: {error}"
 
@@ -431,7 +431,7 @@ def run (root : String) : IO UInt32 := do
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
 
-end Modelgen.IncrementalOrder.Tests
+end InductiveModels.IncrementalOrder.Tests
 
 def main (args : List String) : IO UInt32 :=
-  Modelgen.IncrementalOrder.Tests.run (args.head?.getD ".")
+  InductiveModels.IncrementalOrder.Tests.run (args.head?.getD ".")

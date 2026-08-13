@@ -1,4 +1,4 @@
-import Modelgen.Check
+import InductiveModels.Check
 import Std.Data.TreeSet.Basic
 import Lean.Util.PtrSet
 
@@ -15,7 +15,7 @@ The graph contains two kinds of edges:
 * every name used by record `consumer` and introduced by record `provider`
   contributes `provider → consumer`; and
 * every record in a public model family discovered by
-  [`Modelgen.Check.discover`] contributes `model → owner`.
+  [`InductiveModels.Check.discover`] contributes `model → owner`.
 
 The first kind is deliberately exhaustive.  Besides constants in expressions,
 it includes `Expr.proj.typeName` and the direct name fields in inductive,
@@ -30,7 +30,7 @@ silently emitting a dependency-invalid export.
 
 open Lean
 
-namespace Modelgen.Order
+namespace InductiveModels.Order
 
 /-- Why a record ordering could not be constructed. -/
 inductive Error where
@@ -474,4 +474,4 @@ def reorderPrioritizing (x : Export) (prefer : EDecl → Bool) : Except Error Ex
   let order ← recordOrderPrioritizing x prefer
   return { x with decls := order.map fun i => x.decls[i]! }
 
-end Modelgen.Order
+end InductiveModels.Order

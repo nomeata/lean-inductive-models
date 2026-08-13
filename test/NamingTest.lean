@@ -1,6 +1,6 @@
-import Modelgen.Naming
+import InductiveModels.Naming
 
-open Lean Modelgen.Naming
+open Lean InductiveModels.Naming
 
 structure TestState where
   passed : Nat := 0

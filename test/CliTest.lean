@@ -1,6 +1,6 @@
-import Modelgen.Cli
+import InductiveModels.Cli
 
-open Modelgen.Cli
+open InductiveModels.Cli
 
 structure TestState where
   passed : Nat := 0

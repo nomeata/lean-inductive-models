@@ -10,7 +10,7 @@ necessarily different: once a consumer has received bytes they cannot be
 recalled, so it is written only after the caller has completed every gate.
 -/
 
-namespace Modelgen.Output
+namespace InductiveModels.Output
 
 private def maxTempAttempts : Nat := 64
 
@@ -137,4 +137,4 @@ def writeNamedFailing (target : System.FilePath) (failure : Failure) : IO Unit :
 
 end Test
 
-end Modelgen.Output
+end InductiveModels.Output

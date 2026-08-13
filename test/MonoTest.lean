@@ -1,5 +1,5 @@
-import Modelgen.Mono
-import Modelgen.Order
+import InductiveModels.Mono
+import InductiveModels.Order
 
 /-!
 # Universe-level monomorphization oracles
@@ -26,7 +26,7 @@ Four axes, and each one has an occupant the other three would pass.
    universe parameter at all comes back byte for byte.
 -/
 
-open Lean Meta Modelgen Modelgen.Mono
+open Lean Meta InductiveModels InductiveModels.Mono
 
 /-- `(fixture, declarations in, mode A out, mode B out, recursors the kernel
 minted differently, refusal)`. -/
@@ -67,7 +67,7 @@ def expected : List Row :=
 def readExport (p : String) : IO (Option (String × Export)) := do
   if !(← System.FilePath.pathExists p) then return none
   let t ← IO.FS.readFile p
-  match Modelgen.parse t with
+  match InductiveModels.parse t with
   | .error e => throw (IO.userError s!"{p}: {e}")
   | .ok x => return some (t, x)
 
@@ -206,7 +206,7 @@ def main (args : List String) : IO UInt32 := do
         unless sameOrder do
           fails := fails.push s!"{r.file}[{tag}]: compact ordering differs from full ordering"
         -- The round trip.
-        match Modelgen.parse y.render with
+        match InductiveModels.parse y.render with
         | .error e => fails := fails.push s!"{r.file}[{tag}]: output does not re-parse: {e}"
         | .ok z =>
           unless z.decls == y.decls do

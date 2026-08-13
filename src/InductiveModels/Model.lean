@@ -1,20 +1,20 @@
 import Lean
-import Modelgen.Naming
-import Modelgen.Plan
+import InductiveModels.Naming
+import InductiveModels.Plan
 
 /-!
 # The model of a nested inductive, generated
 
 **The first of three constructions in this package**, and the one that keeps mutuality:
 the model of a nested declaration is a *mutual block* with one extra member per
-nested occurrence. `src/Modelgen/Mutual.lean` is the second and removes
-mutuality; `src/Modelgen/Simple.lean` reduces a single inductive to the fixed
+nested occurrence. `src/InductiveModels/Mutual.lean` is the second and removes
+mutuality; `src/InductiveModels/Simple.lean` reduces a single inductive to the fixed
 basis. These are not one construction at three settings. What they share
 is the interface, `Decline`, `EqInfo`, the
-prelude splice, [`Modelgen.Iso`], [`Modelgen.modelTable`] and
-[`Modelgen.addChecked`], all of which live here.
+prelude splice, [`InductiveModels.Iso`], [`InductiveModels.modelTable`] and
+[`InductiveModels.addChecked`], all of which live here.
 
-Given a nested declaration and its specialisation ([`Modelgen.plan`]), this
+Given a nested declaration and its specialisation ([`InductiveModels.plan`]), this
 emits ordinary Lean declarations —
 the block under fresh names, a carrier, one `pack`/`unpack` pair per mimic with
 **both round trips as theorems**, the declared type's own constructors, one
@@ -31,7 +31,7 @@ shape explicit independently of the generator.
 Earlier implementations wrote every term at an explicit de Bruijn depth, where
 reading a term at the wrong depth repeatedly caused failures. None of that
 arithmetic survives here: an occurrence is stored once, relative
-to the block's parameter telescope, and [`Modelgen.Gen.occAt`] instantiates it
+to the block's parameter telescope, and [`InductiveModels.Gen.occAt`] instantiates it
 at whatever parameter `fvar`s are in scope. There is no shift in this file, and
 every minor's binder telescope is read off the recursor's **own** minor type
 rather than reconstructed.
@@ -51,13 +51,13 @@ rather than reconstructed.
   `Vec T._model.self` is one, and the container's index telescope rides outside
   it: `pack`, `unpack`, both round trips and `congrPack` take it between `p⃗`
   and their argument. Every index vector in this file, the declaration's and
-  the container's alike, is read off a type in hand — [`Modelgen.Gen.idxOf`],
-  [`Modelgen.Gen.occIdx?`], [`Modelgen.Gen.withOccIndices`] — and none is
+  the container's alike, is read off a type in hand — [`InductiveModels.Gen.idxOf`],
+  [`InductiveModels.Gen.occIdx?`], [`InductiveModels.Gen.withOccIndices`] — and none is
   rebuilt. Indexed-container fixtures make this observable by giving the
   container a nonempty index telescope.
 * **`congrCtor` cannot be a single named lemma** — each step of the fold
   abstracts a different position of the same constructor — so
-  [`Modelgen.Gen.foldCongr`] builds it inline. `congrPack` per mimic *can* be a
+  [`InductiveModels.Gen.foldCongr`] builds it inline. `congrPack` per mimic *can* be a
   declaration, because the root's fold moves `pack` and one lemma covers every
   position.
 
@@ -67,8 +67,8 @@ It is tempting to assume nesting strictly decreases and therefore supplies a
 topological order, but it does not. When a
 container is **itself** a nested inductive, two mimics can each need the
 other's `pack`, and then no order over single mimics exists at all.
-[`Modelgen.mimicGroups`] therefore emits strongly connected components in the
-condensation's order, and [`Modelgen.familyFor`] answers a group of more than
+[`InductiveModels.mimicGroups`] therefore emits strongly connected components in the
+condensation's order, and [`InductiveModels.familyFor`] answers a group of more than
 one by finding the recursion Lean already generated for it: the container's
 own recursor family, over one motive and minor vector, of which each `pack` is
 one component. Only `pack` and the retraction change — `unpack` never calls
@@ -78,16 +78,16 @@ does every member at once.
 
 open Lean Meta
 
-namespace Modelgen
+namespace InductiveModels
 
 /-- A positively recognized reason not to emit a requested public interface.
 
-Construction-invariant failures do not belong here; [`Modelgen.badShape`]
+Construction-invariant failures do not belong here; [`InductiveModels.badShape`]
 raises an internal tool error for those. -/
 inductive Decline where
   /-- **A prelude constant the input declares at something other than Lean's
   statement.** Absence is not this: a prelude constant the input simply does
-  not have is *spliced* ([`Modelgen.ensureEq`], [`Modelgen.ensureFunext`]).
+  not have is *spliced* ([`InductiveModels.ensureEq`], [`InductiveModels.ensureFunext`]).
   This is the case a splice cannot reach, because the name is already bound —
   by the input, in the output, and in every one of the input's own terms — and
   Lean's `Environment` has no way to rebind a constant, so replacing it would
@@ -96,7 +96,7 @@ inductive Decline where
   | notLeans (n : Name) (why : String)
   | nameTaken (n : Name)
   /-- **The kernel accepted the declaration and the environment then lost it.**
-  Distinct from [`Modelgen.Decline.nameTaken`], which is the input already
+  Distinct from [`InductiveModels.Decline.nameTaken`], which is the input already
   holding the name, because the two want opposite responses. This one is
   Lean's `AsyncConsts.add` refusing a *normalized* duplicate — an export
   flattens many modules, so it holds both `_private.M.0.X` and a public `X`,
@@ -114,7 +114,7 @@ inductive Decline where
   construction well-founded, so it is not a gap and a census that counts it as
   one is misleading. It is its own constructor so that the *report* can keep it
   in its own
-  row ([`Modelgen.Report.exempt`]) and the decline count can mean what it
+  row ([`InductiveModels.Report.exempt`]) and the decline count can mean what it
   says. -/
   | basisExempt
   deriving Inhabited
@@ -125,8 +125,8 @@ There are two models in this package and they share every guard below the
 driver — the name reservation, the prelude splice, `constInfo`, `instForall` —
 so a decline raised in shared code has to be able to say which construction was
 being built. `nested` is the model of a nested declaration
-([`Modelgen.iso`]) and `mutual` is the model of a plain mutual block
-([`Modelgen.mutualIso`]); the prefix is a parameter rather than a second copy of
+([`InductiveModels.iso`]) and `mutual` is the model of a plain mutual block
+([`InductiveModels.mutualIso`]); the prefix is a parameter rather than a second copy of
 the enumeration, because a second copy is a second thing to keep in step. -/
 def Decline.labelAs (what : String) : Decline → String
   | .notLeans n why => s!"{what} model: the input's {n} is not Lean's ({why})"
@@ -141,7 +141,7 @@ def Decline.label : Decline → String := Decline.labelAs "nested"
 
 /-- `Eq`, `Eq.refl` and `Eq.rec` at the arities the round trips need. The
 input's own where it has them, and Lean's spliced in where it does not — see
-[`Modelgen.ensureEq`]. -/
+[`InductiveModels.ensureEq`]. -/
 structure EqInfo where
   eqN : Name
   reflN : Name
@@ -195,18 +195,18 @@ reported.** This is the one place `lean-inductive-models` writes a declaration t
 *about* the nested type, so three things hold it down:
 
 * **Only when a model is actually being spliced.** Every one of these is built
-  inside [`Modelgen.iso`], so a file with nothing to splice is untouched.
+  inside [`InductiveModels.iso`], so a file with nothing to splice is untouched.
 * **Exactly what Lean's prelude declares**, taken from `Init/Prelude.lean`
   (`Eq`, `init_quot`) and `Init/Core.lean` (`Quot.sound`, `funext`), and
   `test/fixtures/lean-inductive-models/funext_binder.lean` is that development written as a
-  fixture. Each goes through [`Modelgen.addChecked`] like everything else here,
+  fixture. Each goes through [`InductiveModels.addChecked`] like everything else here,
   so the kernel has agreed to it before it is emitted.
 * **Present beats spliced.** If the input declares one, the input's own is
   used and nothing is written. A splice adds; it never substitutes.
 
 **`funext` is derived, not asserted.** It is a theorem in Lean and it is a
 theorem here: `congrArg` — inlined from `Eq.rec`, as
-[`Modelgen.Gen.congrFunFor`] already is — applied to the extensional
+[`InductiveModels.Gen.congrFunFor`] already is — applied to the extensional
 application of a `Quot`, at `Quot.sound`. An axiom would have been worse than
 useless, because a standard-axiom policy would refuse a fabricated `funext`.
 
@@ -232,7 +232,7 @@ inductive Eq : α → α → Prop where
 ```
 
 Two parameters and one index — `α` and the left-hand side are parameters, which
-is what [`Modelgen.EqInfo.check`] asserts of the input's own. Written as raw
+is what [`InductiveModels.EqInfo.check`] asserts of the input's own. Written as raw
 `Expr` rather than through a telescope because it is a closed term with two
 binders and no context. -/
 def eqDecl : Declaration :=
@@ -294,7 +294,7 @@ conclusion `Eq f (E (Quot.mk eqv g))` is the declared `Eq f g`. Both steps are
 definitional and the kernel does them; `addChecked` is what says so.
 
 `congrArg` is **not** emitted as a declaration of its own. It is one `Eq.rec`,
-built here the way [`Modelgen.Gen.congrFunFor`] and [`Modelgen.Gen.congrOne`]
+built here the way [`InductiveModels.Gen.congrFunFor`] and [`InductiveModels.Gen.congrOne`]
 are built, so nothing is added to the input that this module does not need to
 name. -/
 def funextDecl (eqi : EqInfo) (nm : Name) : MetaM Declaration := do
@@ -514,14 +514,14 @@ structure Gen where
   and something has to transport along `(fun x⃗ => pack (unpack (f x⃗))) = f`.
   `none` for every other declaration. It is the **input's own** `funext` where
   the input has one and `T._model.funext` — derived from `Quot.sound`, spliced
-  into the output — where it does not; [`Modelgen.ensureFunext`] is the choice
+  into the output — where it does not; [`InductiveModels.ensureFunext`] is the choice
   between them and this field is only its answer. -/
   fx : Option Name
   /-- **Do the block's recursors carry a motive universe?** Lean mints one only
   when the block supports large elimination; `inductive S : Prop | mk : PL S →
   S` eliminates into `Prop` alone and `S.rec` carries the block's own level
   parameters and nothing in front of them. Every level list this module writes
-  for a recursor goes through [`Modelgen.Gen.recLs`] for that reason. -/
+  for a recursor goes through [`InductiveModels.Gen.recLs`] for that reason. -/
   largeElim : Bool
 
 /-- The generator's monad: `MetaM`, with an explicit non-emission result as its
@@ -571,12 +571,12 @@ partial def zetaHead : Expr → Expr
   | .letE _ _ v b _ => zetaHead (b.instantiate1 v)
   | e => e
 
-/-- **A type's head, ζ- *and* β-reduced.** [`Modelgen.zetaHead`] plus the redex
+/-- **A type's head, ζ- *and* β-reduced.** [`InductiveModels.zetaHead`] plus the redex
 a container's **family** parameter leaves behind, iterated until neither moves.
 Only `let` and β move and no constant is unfolded, so this answers "which
 member / which occurrence / which index vector" and changes nothing about what
 the type *is*. Every reader below goes through it; see the section on reading a
-type's head, at [`Modelgen.Gen.occIdx?`]. -/
+type's head, at [`InductiveModels.Gen.occIdx?`]. -/
 partial def headNorm (e : Expr) : Expr :=
   match e with
   | .letE _ _ v b _ => headNorm (b.instantiate1 v)
@@ -589,12 +589,12 @@ def ftyp (e : Expr) : GenM Expr := return zetaHead (← inferType e)
 
 /-- **The input's own `funext`, if it has one and it is Lean's.** Checked
 against the statement Lean's own carries by building that type at the found
-declaration's own two level parameters ([`Modelgen.funextType`]) and asking
+declaration's own two level parameters ([`InductiveModels.funextType`]) and asking
 `isDefEq`, which is indifferent to binder names and binder info where a
 syntactic comparison would not be.
 
 `none` is *not* a decline. It means the model's proofs will use a `funext` of
-their own, derived and spliced — [`Modelgen.ensureFunext`]. This is asked
+their own, derived and spliced — [`InductiveModels.ensureFunext`]. This is asked
 **lazily**, because `funext` is in no public statement and only one proof shape
 needs it. -/
 def usableFunext? (eqi : EqInfo) : GenM (Option Name) := do
@@ -669,7 +669,7 @@ auxiliary block replaces `List GTree` with a fresh member and `Len l` is then
 about a constant absent at that point in the block.
 
 **The mention has to survive β**, which is why the type goes through
-[`Modelgen.headNorm`] first.
+[`InductiveModels.headNorm`] first.
 A container whose parameter is a *family* leaves its field as the redex
 `(fun x => …) k`, and `k` is the field before it; when the family is constant —
 `RB (RB N (fun _ => Key)) (fun _ => N)`, where the nesting is in the **key** —
@@ -737,11 +737,11 @@ at no member, and the index vector reads `k` where the type says `N.z`.
 
 `Lean.Json` and `Lean.PrefixTreeNode` are exactly that shape. The repair is at
 the three readers rather than at
-their callers — [`Modelgen.Gen.occIdx?`], [`Modelgen.Gen.idxOf`],
-[`Modelgen.Gen.memberOf`] and the family's [`Modelgen.Gen.Family.memberAt?`]
+their callers — [`InductiveModels.Gen.occIdx?`], [`InductiveModels.Gen.idxOf`],
+[`InductiveModels.Gen.memberOf`] and the family's [`InductiveModels.Gen.Family.memberAt?`]
 — because *every* question this module asks of a field's type goes through one
 of them, and a repair at one caller would leave the rest reading a lambda.
-[`Modelgen.headNorm`] and not `whnf`: β and `let` are the whole of the
+[`InductiveModels.headNorm`] and not `whnf`: β and `let` are the whole of the
 difference, and unfolding definitions here would make a carrier look like a
 block member. -/
 
@@ -768,7 +768,7 @@ def withOccIndices (g : Gen) (i : Nat) (ps : Array Expr)
   forallBoundedTelescope (← ityp (g.occAt i ps)) (some (g.midx i)) fun idxs _ => f idxs
 
 /-- `Bₖ p⃗`. **Not a type when member `k` is indexed** — an index vector still
-has to be applied, and [`Modelgen.Gen.idxOf`] is where every one of them comes
+has to be applied, and [`InductiveModels.Gen.idxOf`] is where every one of them comes
 from. -/
 def memAt (g : Gen) (k : Nat) (ps : Array Expr) : Expr := mkAppN (.const g.members[k]! g.us) ps
 
@@ -802,7 +802,7 @@ def memberOf (g : Gen) (t : Expr) : Option Nat :=
   | _ => none
 
 /-- **Which member a field's induction hypothesis is at**, which is not the
-same question as [`Modelgen.Gen.memberOf`]. Lean gives a field of type
+same question as [`InductiveModels.Gen.memberOf`]. Lean gives a field of type
 `∀ x⃗, Bₘ …` an induction hypothesis `∀ x⃗, motiveₘ (f x⃗)` — infinitary
 constructors are supported and `FTree.branch : (N → FTree) → FTree` is one — so
 a minor's hypothesis vector has an entry for it and a treatment that counted
@@ -846,7 +846,7 @@ b` in the scope of `x⃗`, `Eq (fun x⃗ => a) (fun x⃗ => b)`. Each step η-re
 its two sides, so closing over `f x⃗` gives `f` back rather than its
 η-expansion and the fold downstream compares equal to the field. -/
 def funextFor (g : Gen) (xs : Array Expr) (a b p : Expr) : GenM Expr := do
-  -- `g.fx` is set by [`Modelgen.ensureFunext`] for exactly the declarations
+  -- `g.fx` is set by [`InductiveModels.ensureFunext`] for exactly the declarations
   -- that have a packed position under a binder, which is exactly the
   -- declarations that reach here; `none` is an internal inconsistency and not
   -- an input's shortcoming.
@@ -898,7 +898,7 @@ def underBinders (nb : Nat) (ty f : Expr)
 
 /-- **A moved position and its proof, under the binder telescope.** `k` returns
 the moved value and a *pointwise* proof of `Eq (that value) (f x⃗)`; this
-abstracts both over `x⃗` and closes the equation with [`Modelgen.Gen.funextFor`],
+abstracts both over `x⃗` and closes the equation with [`InductiveModels.Gen.funextFor`],
 which is the only place in this module an equality Lean did not write is used —
 and it is read from the export, never fabricated. -/
 def underEq (g : Gen) (nb : Nat) (ty f : Expr)
@@ -958,7 +958,7 @@ def container (g : Gen) (i : Nat) (ps : Array Expr) :
   return (c, cls, occ.getAppArgs)
 
 /-- The real container constructor a mimic's constructor stands for, by its
-last name component — the correspondence [`Modelgen.plan`] built it from. -/
+last name component — the correspondence [`InductiveModels.plan`] built it from. -/
 def realCtor (g : Gen) (i : Nat) (ps : Array Expr) (cn : Name) : GenM Name := do
   let (c, _, _) ← g.container i ps
   let last := lastStr cn
@@ -997,7 +997,7 @@ def foldCongr (g : Gen) (goalTy : Expr) (fieldTys lhs rhs : Array Expr)
     acc := g.eqi.recAt .zero uα α lhs[j]! mot acc rhs[j]! p
   return acc
 
-/-- The value-transport counterpart of [`Modelgen.Gen.foldCongr`]: from
+/-- The value-transport counterpart of [`InductiveModels.Gen.foldCongr`]: from
 `v : M (f lhs⃗)` and `pⱼ : Eq lhsⱼ rhsⱼ`, produce `M (f rhs⃗)`, one position at a
 time. The motive lands at the eliminator's universe, which is the one place in
 this file an `Eq.rec` is not `Prop`-valued. -/
@@ -1043,7 +1043,7 @@ def congrFunFor (g : Gen) (α y target h : Expr) (xs : Array Expr) : GenM Expr :
 /-- **`Eq (m l₀) (m l)` from `h : Eq l₀ l`, inline.** `congrPack_i` is this at a
 position that needs no binder, as a declaration; a position *under* a binder
 abstracts a whole function and no one lemma covers it, so it is built here the
-way [`Modelgen.Gen.foldCongr`] builds its steps. `β` is the type of `m l₀`. -/
+way [`InductiveModels.Gen.foldCongr`] builds its steps. `β` is the type of `m l₀`. -/
 def congrOne (g : Gen) (α β : Expr) (m : Expr → GenM Expr) (l0 l h : Expr) :
     GenM Expr := do
   let uα ← ilevel α
@@ -1135,7 +1135,7 @@ def Family.ctorPrefix (f : Family) (j : Nat) : List Level × Array Expr :=
   | _ => ([], f.doms[j]!.getAppArgs)
 
 /-- Which family member a type is at, and at which indices. Through β, for
-[`Modelgen.Gen.occIdx?`]'s reason. -/
+[`InductiveModels.Gen.occIdx?`]'s reason. -/
 def Family.memberAt? (f : Family) (t : Expr) : Option (Nat × Array Expr) :=
   let t := headNorm t
   (Array.range f.doms.size).findSome? fun j =>
@@ -1147,7 +1147,7 @@ def Family.memberAt? (f : Family) (t : Expr) : Option (Nat × Array Expr) :=
     else none
 
 /-- Which family member `t` is at, and how deep under a binder — the
-[`Modelgen.Gen.mimicUnder?`] of a cyclic group's own recursion. `Tr.node :
+[`InductiveModels.Gen.mimicUnder?`] of a cyclic group's own recursion. `Tr.node :
 (N → List (Tr α)) → Tr α` is one, and a cycle through it is a binder inside a
 simultaneous recursion. -/
 def Family.memberUnder? (f : Family) (t : Expr) : GenM (Option (Nat × Nat)) := do
@@ -1922,7 +1922,7 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
           ihs := ihs.push (g.eqi.recAt r.v (← ilevel α) α y mot w xv hv)
         else
           -- **Pointwise, because the other side is.** See
-          -- [`Modelgen.Gen.congrFunFor`].
+          -- [`InductiveModels.Gen.congrFunFor`].
           ihs := ihs.push (← forallBoundedTelescope α (some nb) fun xs res => do
             let ures ← ilevel res
             let yx := y.beta xs
@@ -2131,7 +2131,7 @@ structure Iso where
   The check is **after** the splice-and-model descent rather than a prediction
   before it, because a prediction is the shape of "skip is not pass": a
   cheap test that says the skeleton will model, and an emission that leaves it
-  unmodelled when it does not. [`Modelgen.genPrim`] is where the withdrawal
+  unmodelled when it does not. [`InductiveModels.genPrim`] is where the withdrawal
   happens. Empty for every other arm, so nothing else changes shape. -/
   requires : Array Name := #[]
   /-- Exact build-name to export-name aliases used only after a normalized-name
@@ -2320,7 +2320,7 @@ thirty-line tactic proofs over `List`, `Option`, `Sigma`, `Subtype`, `Acc` and
 what `Simple.lean` already does. So the construction's whole constant closure
 is carried as an **export fragment** and spliced.
 
-**It is spliced through [`Modelgen.addChecked`], which is the checked side of
+**It is spliced through [`InductiveModels.addChecked`], which is the checked side of
 the boundary.** `addChecked` is `addDeclCore 0 d none true` and the trusted
 input replay is the same call with `false`, so the two are one boolean apart.
 Compiling the closure in and copying its `ConstantInfo`s — the obvious
@@ -2402,7 +2402,7 @@ The fragment holds two `Expr.lit (.natVal _)`, and a literal's type is the
 kernel's own `Nat` by fiat — nothing renames it. A prefixed `_wcore.Nat` leaves
 `_wcore.Bool.ctorIdx` returning it while the literal in its body is at `Nat`,
 and that is `(kernel) unknown constant 'Nat'`. Sharing costs nothing anyone
-was counting on: `Nat` is already one of [`Modelgen.inductiveBasis`]'s four, so it
+was counting on: `Nat` is already one of [`InductiveModels.inductiveBasis`]'s four, so it
 was never going to be modelled, and sharing it takes an unmodelled inductive
 *out* of the output rather than putting one in. `Nat.beq` and the rest of the
 namespace stay prefixed — they are ordinary definitions and only the type
@@ -2437,7 +2437,7 @@ def wCoreShared : Std.HashSet Name := Std.HashSet.ofList
 def wCoreName (n : Name) : Name := if wCoreShared.contains n then n else wCoreRoot ++ n
 
 /-- The same, inside an expression — constant heads **and** the `typeName` of
-every `Expr.proj`, which is what [`Modelgen.mapConstsE`] exists for. The
+every `Expr.proj`, which is what [`InductiveModels.mapConstsE`] exists for. The
 fragment is a *closure*, every constant it mentions is one of its own 195
 names, so rewriting every one is right and there is nothing else it could
 refer to. -/
@@ -2480,11 +2480,11 @@ def wCoreDecEqNat : Name := wCoreRoot ++ `instDecidableEqNat
 name, and the untagged instantiation's entire price.
 Prefixed for the same reason `instDecidableEqNat` is; what may *not* be
 prefixed is the `Classical.choice` underneath it, which is why that name is on
-[`Modelgen.wCoreShared`]. -/
+[`InductiveModels.wCoreShared`]. -/
 def wCoreDecEqAll : Name := wCoreRoot ++ `WT.decEqAll
 /-- **`funext` under the prefix** — the arm's one per-constructor cost, and the
 reason it is taken from the fragment rather than derived beside the model:
-[`Modelgen.funextDecl`] would splice a second `funext` at the same `Eq`, and
+[`InductiveModels.funextDecl`] would splice a second `funext` at the same `Eq`, and
 the fragment already carries Lean's own (`WT.mk_sub` and `WT.canon` use it) at
 the *shared* `Eq`, so the eta lemma and the contract's ι theorems are one
 equality throughout. Prefixed like any other ordinary definition: nothing
@@ -2512,7 +2512,7 @@ wrong answer, which is the property that matters. -/
 def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
   if (← getEnv).constants.contains wCoreSelf then return #[]
   let ex ←
-    match Modelgen.parse wCoreText (analyse := false) with
+    match InductiveModels.parse wCoreText (analyse := false) with
     | .ok ex => pure ex
     | .error msg => badShape s!"the W core fragment does not parse ({msg})"
   let mut out : Array Declaration := #[]
@@ -2526,7 +2526,7 @@ def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
         badShape s!"the W core's {ns} would redeclare {present}"
       continue
     -- **A name the input introduces later is not ours to write**, exactly as
-    -- in [`Modelgen.ensureEq`], and for the shared twelve as much as for the
+    -- in [`InductiveModels.ensureEq`], and for the shared twelve as much as for the
     -- prefixed rest: `reserved` is the whole file's names, so this is the
     -- case where the input declares `propext` below the target being modelled.
     for n in ns do
@@ -2631,7 +2631,7 @@ matters:
   time.
 
 A group of size one is emitted the way it always was. A larger one is one
-simultaneous recursion, and [`Modelgen.familyFor`] finds the recursors Lean
+simultaneous recursion, and [`InductiveModels.familyFor`] finds the recursors Lean
 already generated for it. -/
 def mimicGroups (pl : Plan) : Except String (Array (Array Nat)) := Id.run do
   let m := pl.mimics.size
@@ -2679,7 +2679,7 @@ def mimicGroups (pl : Plan) : Except String (Array (Array Nat)) := Id.run do
 
 /-- **Build the model, or say which shape stopped it.**
 
-The whole of the checker interaction is [`Modelgen.addChecked`], once per
+The whole of the checker interaction is [`InductiveModels.addChecked`], once per
 generated declaration. Nothing is emitted unchecked. -/
 def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     (exportCtors : Array (Array (Name × Expr))) (exportRecursors : Array ERec) (pl : Plan)
@@ -2833,7 +2833,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- congruence fold in this file moves the *packed* positions of one of the
   -- block's constructors, so the condition is the same for all of them and is
   -- settled here rather than at each telescope: no field's type may mention an
-  -- earlier field the block holds at a mimic. See [`Modelgen.noDepOnPacked`].
+  -- earlier field the block holds at a mimic. See [`InductiveModels.noDepOnPacked`].
   --
   -- **And whether any packed position sits under a binder**, which is the one
   -- shape whose proofs need `funext`: the block types such a field `∀ x⃗, Bₘ ι⃗`
@@ -2853,7 +2853,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
         any := any || (← forallTelescope (← instCtor cn us ps) fun fs _ => do
           let tys ← fs.mapM ftyp
           -- **The positions the folds move**, which is
-          -- [`Modelgen.Gen.mimicUnder?`] and not a bare head test: a field at a
+          -- [`InductiveModels.Gen.mimicUnder?`] and not a bare head test: a field at a
           -- mimic under a binder is one, and so is the redex `(fun x => Bₘ) k`
           -- a family parameter leaves behind. Both questions below are about
           -- that same set, so both read it the same way.
@@ -2882,7 +2882,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- another occurrence calls that occurrence's `pack`, so the emission has to
   -- follow the dependency order — and when the dependency is *mutual*, no such
   -- order exists and the group is one simultaneous recursion instead
-  -- ([`Modelgen.mimicGroups`], [`Modelgen.familyFor`]). Only `pack` and the
+  -- ([`InductiveModels.mimicGroups`], [`InductiveModels.familyFor`]). Only `pack` and the
   -- retraction change: `unpack` never calls another `unpack`, and the section
   -- already goes through the block's own recursor, which does every member at
   -- once.
@@ -3069,4 +3069,4 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
            numAll := r, ctors
            recs := (Array.range pl.types.size).map g.recName, iotas, ruleKs, spliced, aliases }
 
-end Modelgen
+end InductiveModels

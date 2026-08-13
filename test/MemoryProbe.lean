@@ -1,4 +1,4 @@
-import Modelgen.Format
+import InductiveModels.Format
 
 /-!
 A deliberately tiny, opt-in process for comparing parser retention.  Run each
@@ -37,9 +37,9 @@ def main (args : List String) : IO UInt32 := do
     | "whole" => do
         let text ← IO.FS.readFile path
         memory "whole-read"
-        pure (Modelgen.parse text (analyse := false))
+        pure (InductiveModels.parse text (analyse := false))
     | "stream" =>
-        IO.FS.withFile path .read fun handle => Modelgen.parseHandle handle (analyse := false)
+        IO.FS.withFile path .read fun handle => InductiveModels.parseHandle handle (analyse := false)
     | _ => do
         IO.eprintln s!"memoryprobe: unknown mode {mode}"
         return 1

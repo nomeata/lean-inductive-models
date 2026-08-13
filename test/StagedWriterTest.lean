@@ -1,6 +1,6 @@
-import Modelgen.Spool
+import InductiveModels.Spool
 
-open Lean Modelgen
+open Lean InductiveModels
 
 set_option maxRecDepth 4096
 
@@ -19,11 +19,11 @@ def removeIfPresent (path : String) : IO Unit := do
   if ← System.FilePath.pathExists path then IO.FS.removeFile path
 
 def parseHandleAt (path : String) : IO (Except String Export) :=
-  IO.FS.withFile path .read fun handle => Modelgen.parseHandle handle
+  IO.FS.withFile path .read fun handle => InductiveModels.parseHandle handle
 
 def rawCertificateAt (path : String) : IO (Except String (Export × RawCertificate)) :=
   IO.FS.withFile path .read fun handle =>
-    Modelgen.parseHandleWithSink handle { emit := fun _ => pure () } (analyse := false)
+    InductiveModels.parseHandleWithSink handle { emit := fun _ => pure () } (analyse := false)
 
 def rawFastPathRejected (path text : String) : IO Bool := do
   IO.FS.writeFile path text
@@ -133,7 +133,7 @@ def main (args : List String) : IO UInt32 := do
   -- Arena order is fixed; declaration records can be consumed in a different
   -- topological order without changing what their IDs decode to.
   let reordered := arenaText ++ secondText ++ firstText
-  let parsed := Modelgen.parse reordered (analyse := false)
+  let parsed := InductiveModels.parse reordered (analyse := false)
 
   let mut state : TestState := {}
   let suffixProbe := rawSpoolSuffixOfBytes <| ByteArray.mk #[
@@ -276,7 +276,7 @@ def main (args : List String) : IO UInt32 := do
   let expectedComposition := rawMeta ++ expectedArena ++ rawSecondDecl ++ rawFirstDecl
   state := state.check "spool composition emits exact arenas and reordered declarations" <|
     !isExceptError compositionValidation && compositionText == expectedComposition &&
-      match Modelgen.parse compositionText (analyse := false) with
+      match InductiveModels.parse compositionText (analyse := false) with
       | .ok output => output.decls == #[second, first]
       | .error _ => false
   let workspaceRemoved ← match ← workspaceDirectoryRef.get with
@@ -366,7 +366,7 @@ def main (args : List String) : IO UInt32 := do
       islandCommit.declarations.size == 2 &&
       sealedIsland.arenaSize == islandArena.utf8ByteSize.toUInt64 &&
       sealedIsland.declarationSize == islandDeclarations.utf8ByteSize.toUInt64 &&
-      match Modelgen.parse (islandArena ++ islandDeclarations) (analyse := false) with
+      match InductiveModels.parse (islandArena ++ islandDeclarations) (analyse := false) with
       | .ok output => output.decls == #[first, second]
       | .error _ => false
   state := state.check "stale island transaction writes and publishes nothing" <|
@@ -440,7 +440,7 @@ def main (args : List String) : IO UInt32 := do
     | .error _ => true
     | .ok _ => false
   state := state.check "an unchecked overlapping spool does not roundtrip" <|
-    match Modelgen.parse malformedText (analyse := false) with
+    match InductiveModels.parse malformedText (analyse := false) with
     | .error _ => true
     | .ok output => output.decls != #[first, second]
 
@@ -452,14 +452,14 @@ def main (args : List String) : IO UInt32 := do
     "{\"il\":1,\"param\":1}"]
   IO.FS.writeFile nameHolePath nameHole
   state := state.check "name references into sparse holes fail closed" <|
-    bothReject (Modelgen.parse nameHole) (← parseHandleAt nameHolePath)
+    bothReject (InductiveModels.parse nameHole) (← parseHandleAt nameHolePath)
 
   let levelHole := lines #[
     "{\"il\":2,\"succ\":0}",
     "{\"ie\":0,\"sort\":1}"]
   IO.FS.writeFile levelHolePath levelHole
   state := state.check "level references into sparse holes fail closed" <|
-    bothReject (Modelgen.parse levelHole) (← parseHandleAt levelHolePath)
+    bothReject (InductiveModels.parse levelHole) (← parseHandleAt levelHolePath)
 
   let exprHole := lines #[
     "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"HoleExprOwner\"}}",
@@ -467,7 +467,7 @@ def main (args : List String) : IO UInt32 := do
     "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}"]
   IO.FS.writeFile exprHolePath exprHole
   state := state.check "expression references into sparse holes fail closed" <|
-    bothReject (Modelgen.parse exprHole) (← parseHandleAt exprHolePath)
+    bothReject (InductiveModels.parse exprHole) (← parseHandleAt exprHolePath)
 
   -- A very large explicit ID must remain valid without allocating every gap.
   let sparse := lines #[
@@ -478,7 +478,7 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.writeFile sparsePath sparse
   let sparseDecl : EDecl := .ax `SparseOwner [] (.sort (.param `SparseOwner)) false
   state := state.check "large sparse IDs remain exact and bounded" <|
-    bothHaveDecls (Modelgen.parse sparse) (← parseHandleAt sparsePath) #[sparseDecl]
+    bothHaveDecls (InductiveModels.parse sparse) (← parseHandleAt sparsePath) #[sparseDecl]
 
   -- The arena parser used by the Kernel Arena gives the latest explicit value
   -- to a repeated ID.  Preserve that behavior independently for all tables.
@@ -493,7 +493,7 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.writeFile overwritePath overwrite
   let overwrittenDecl : EDecl := .ax `After [] (.sort (.param `After)) false
   state := state.check "explicit repeated arena IDs overwrite in both readers" <|
-    bothHaveDecls (Modelgen.parse overwrite) (← parseHandleAt overwritePath) #[overwrittenDecl]
+    bothHaveDecls (InductiveModels.parse overwrite) (← parseHandleAt overwritePath) #[overwrittenDecl]
 
   -- Parser compatibility is wider than the raw-hoist contract.  Each axis is
   -- certified independently and any gap, reorder, or overwrite selects the
@@ -635,7 +635,7 @@ def main (args : List String) : IO UInt32 := do
   let projection := Expr.proj `ProjectionOwner 0 struct
   let projectionParent := Expr.app projection struct
   state := state.check "projection analysis accepts out-of-order numeric IDs" <|
-    bothProjectionFacts (Modelgen.parse projectionOrder) (← parseHandleAt projectionOrderPath)
+    bothProjectionFacts (InductiveModels.parse projectionOrder) (← parseHandleAt projectionOrderPath)
       #[projection, projectionParent] #[]
 
   -- A parent captures the child expression present when its record is parsed.
@@ -651,7 +651,7 @@ def main (args : List String) : IO UInt32 := do
   let replacement := Expr.sort .zero
   let replacementParent := Expr.app replacement replacement
   state := state.check "projection analysis observes expression overwrite time" <|
-    bothProjectionFacts (Modelgen.parse projectionOverwrite)
+    bothProjectionFacts (InductiveModels.parse projectionOverwrite)
       (← parseHandleAt projectionOverwritePath) #[projection, projectionParent]
       #[replacement, replacementParent]
 
@@ -686,7 +686,7 @@ def main (args : List String) : IO UInt32 := do
     let input := record ++ "\n"
     IO.FS.writeFile parserCompatibilityPath input
     state := state.check s!"top-level record variant {index} rejects extra keys" <|
-      bothReject (Modelgen.parse input) (← parseHandleAt parserCompatibilityPath)
+      bothReject (InductiveModels.parse input) (← parseHandleAt parserCompatibilityPath)
 
   let malformedPayloads : Array (String × String) := #[
     ("combined expression tags", "{\"bvar\":0,\"ie\":0,\"sort\":0}\n"),
@@ -697,7 +697,7 @@ def main (args : List String) : IO UInt32 := do
   for (label, input) in malformedPayloads do
     IO.FS.writeFile parserCompatibilityPath input
     state := state.check s!"{label} fails cleanly in both readers" <|
-      bothReject (Modelgen.parse input) (← parseHandleAt parserCompatibilityPath)
+      bothReject (InductiveModels.parse input) (← parseHandleAt parserCompatibilityPath)
 
   let metadata := lines #[
     "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"MetadataOwner\"}}",
@@ -707,7 +707,7 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.writeFile parserCompatibilityPath metadata
   let metadataDecl : EDecl := .ax `MetadataOwner [] (.mdata {} (.sort .zero)) false
   state := state.check "metadata expressions parse in both readers" <|
-    bothHaveDecls (Modelgen.parse metadata) (← parseHandleAt parserCompatibilityPath)
+    bothHaveDecls (InductiveModels.parse metadata) (← parseHandleAt parserCompatibilityPath)
       #[metadataDecl]
   state := state.check "raw certification rejects metadata expressions"
     (← rawFastPathRejected parserCompatibilityPath metadata)
@@ -719,7 +719,7 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.writeFile parserCompatibilityPath legacyOpaque
   let legacyOpaqueDecl : EDecl := .opaq `LegacyOpaque [] (.sort .zero) (.sort .zero) false []
   state := state.check "opaque records may omit isUnsafe for arena compatibility" <|
-    bothHaveDecls (Modelgen.parse legacyOpaque) (← parseHandleAt parserCompatibilityPath)
+    bothHaveDecls (InductiveModels.parse legacyOpaque) (← parseHandleAt parserCompatibilityPath)
       #[legacyOpaqueDecl]
 
   for path in paths do removeIfPresent path

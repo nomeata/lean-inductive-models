@@ -33,8 +33,8 @@
    **The last three are the untagged instantiation**:
    the same core at `K := A` and `tg := id`, where the branch type sees the
    whole label and a child's binders may therefore mention the constructor's
-   own non-recursive fields. `Modelgen.tagFactored` is false for each of them
-   and `Modelgen.labelFactored` is true, which is the two-column split — these
+   own non-recursive fields. `InductiveModels.tagFactored` is false for each of them
+   and `InductiveModels.labelFactored` is true, which is the two-column split — these
    three model at `[propext, Classical.choice, Quot.sound]` where every target
    above stays at `[propext, Quot.sound]`.
 

@@ -4,7 +4,7 @@
    binder survives the *declaration's* indices, a mutual block, or a cycle of
    mimics, and the cycle in particular does **not** come for free: `pack` and
    the retraction for a cyclic group go through
-   [`Modelgen.packFamMinor`]/[`Modelgen.retractFamilyValue`], which are a second
+   [`InductiveModels.packFamMinor`]/[`InductiveModels.retractFamilyValue`], which are a second
    copy of the one-at-a-time path and were measured refusing `CycB` before they
    were taught the same telescope.
 

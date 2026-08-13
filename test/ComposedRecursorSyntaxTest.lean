@@ -1,4 +1,4 @@
-import Modelgen.Driver
+import InductiveModels.Driver
 
 /-!
 # Composed exact-recursor syntax regression
@@ -11,7 +11,7 @@ Every generated public statement must follow that syntax while proof terms
 continue to use installed kernel metadata.
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 def noGeneration : Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
@@ -77,7 +77,7 @@ def breakRuleLayout (owner : Name) (declaration : EDecl) : EDecl :=
 
 def runRoute (root : String) (route : Route) : IO Bool := do
   let path := s!"{root}/test/fixtures/lean-inductive-models/{route.fixture}"
-  let .ok input := Modelgen.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -100,7 +100,7 @@ def runRoute (root : String) (route : Route) : IO Bool := do
 
 def runLayoutFailure (root : String) (route : Route) : IO Bool := do
   let path := s!"{root}/test/fixtures/lean-inductive-models/{route.fixture}"
-  let .ok input := Modelgen.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}
   let context : Core.Context :=

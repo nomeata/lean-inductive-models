@@ -1,10 +1,10 @@
-import Modelgen.Simple
-import Modelgen.Cli
-import Modelgen.Naming
-import Modelgen.Projection
-import Modelgen.Check
-import Modelgen.Order
-import Modelgen.Spool
+import InductiveModels.Simple
+import InductiveModels.Cli
+import InductiveModels.Naming
+import InductiveModels.Projection
+import InductiveModels.Check
+import InductiveModels.Order
+import InductiveModels.Spool
 
 /-!
 # The filter
@@ -21,17 +21,17 @@ and preserves the dependency constraints of the complete transformed export.
 Input declarations themselves retain their exact exported records.
 
 There are **three** constructions and they are separate files.
-`src/Modelgen/Model.lean` specialises a nested declaration into a mutual block
-and proves the export's recursors over it; `src/Modelgen/Mutual.lean` packs a
+`src/InductiveModels/Model.lean` specialises a nested declaration into a mutual block
+and proves the export's recursors over it; `src/InductiveModels/Mutual.lean` packs a
 plain mutual block into an implementation tag and one auxiliary inductive;
-`src/Modelgen/Simple.lean`
+`src/InductiveModels/Simple.lean`
 models a single inductive from the primitive basis. None is a degenerate case
 of another, and this driver is the only thing that composes them.
 
 ## Why output is re-interned
 
 Declaration records refer into one file-wide name, level, and expression arena.
-After generation and ordering, [`Modelgen.Export.writeTo`] therefore serializes
+After generation and ordering, [`InductiveModels.Export.writeTo`] therefore serializes
 the parsed snapshot as one self-contained arena. The writer streams record
 lines rather than retaining the rendered file as one string.
 
@@ -46,7 +46,7 @@ installed recursors with the export while replaying the file. The public
 
 open Lean Meta
 
-namespace Modelgen
+namespace InductiveModels
 
 /-- The exact public type and universe binders of a generated declaration,
 read from the construction result rather than from kernel-normalized metadata.
@@ -89,7 +89,7 @@ structure Report where
   generated : Array (Name × Nat) := #[]
   declined : Array (Name × String) := #[]
   /-- **The inductive-basis exemption, which is not a decline**
-  ([`Modelgen.inductiveBasis`]).
+  ([`InductiveModels.inductiveBasis`]).
   `Eq`, `Nat`, `PSigma'`, and `PUnit` are the primitives
   the third construction is written in, so a run leaves them unmodelled *by
   definition*; counting them among the declines makes every coverage report
@@ -98,8 +98,8 @@ structure Report where
   exempt : Array (Name × String) := #[]
   /-- **Prelude constants the input did not declare and a model spliced in**,
   per declaration. `Eq`, the quotient and `Quot.sound` come out under Lean's
-  own names and `funext` under the model's; `Modelgen.ensureEq` and
-  `Modelgen.ensureFunext` say why the two are named differently. Printed,
+  own names and `funext` under the model's; `InductiveModels.ensureEq` and
+  `InductiveModels.ensureFunext` say why the two are named differently. Printed,
   always: an insertion is a decision on record. -/
   spliced : Array (Name × Array Name) := #[]
   /-- Recursors whose replayed shape differs from the export's own. -/
@@ -1064,7 +1064,7 @@ def installedQuotRecords? (env : Environment) : Option (Array EDecl) := do
 
 /-- A generated declaration as export records — **plural**, because
 `Declaration.quotDecl` is one kernel declaration and four records. Everything
-else is one record and goes through [`Modelgen.toEDecl`]. -/
+else is one record and goes through [`InductiveModels.toEDecl`]. -/
 def toEDecls (d : Declaration) : MetaM (Array EDecl) := do
   match d with
   | .quotDecl =>
@@ -1810,7 +1810,7 @@ def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   return .ok ()
 
 /-- **One installed inductive block, read back out of the environment** as the
-member types and constructor lists [`Modelgen.mutualIso`] wants.
+member types and constructor lists [`InductiveModels.mutualIso`] wants.
 
 The block a nested declaration's model *is* — `T._model.0 … T._model.{n−1}` —
 is not in the input, so there is no `EDecl` to take these off; it exists only in
@@ -1865,7 +1865,7 @@ private def isMutualBasisRecord (needsExactSortLift : Bool) (declaration : EDecl
       (needsExactSortLift && (name == `PSigma' || (`PSigma').isPrefixOf name ||
         name == `PUnit || (`PUnit).isPrefixOf name))
 
-/-- **Can a prim model be written here?** — [`Modelgen.eqReady`]'s question,
+/-- **Can a prim model be written here?** — [`InductiveModels.eqReady`]'s question,
 asked of every basis constant a prim model may splice: each must be already
 installed or not declared by the input at all, else the model waits for the
 input's own declaration to be replayed. -/
@@ -1883,14 +1883,14 @@ def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
   return (← primMissingBasis reserved).isEmpty
 
 /- **The names beyond the basis that a prim model may splice** — the ones
-[`Modelgen.primReady`] does not cover. Input-owned records for these names are
+[`InductiveModels.primReady`] does not cover. Input-owned records for these names are
 moved, with their dependency closure, ahead of selected owners by
-[`Modelgen.scheduleSource`].
+[`InductiveModels.scheduleSource`].
 
 They form one post-scheduling readiness class:
 
 * the quotient-side names deriving `funext` may splice
-  ([`Modelgen.ensureFunext`]). A prim model reaches them on the singleton route
+  ([`InductiveModels.ensureFunext`]). A prim model reaches them on the singleton route
   and wherever a pad at a level `dsingOk` cannot build is discharged by
   transport — `PUnit`'s and the derived exact-sort lift's shapes.
 * `Nonempty` and `Classical.choice`, which **arm G** splices and which the W
@@ -1906,7 +1906,7 @@ They form one post-scheduling readiness class:
 They form a separate atomic readiness class so a failed W construction reports
 the complete Iff/propext prerequisite rather than conflating it with the
 quotient/choice support used by non-W routes. `w_late_iff` pins that distinction. -/
-/-- [`Modelgen.primReady`]'s question, asked of quotient/choice support after a
+/-- [`InductiveModels.primReady`]'s question, asked of quotient/choice support after a
 construction has actually encountered one of those names. It is not folded
 into `primReady`: most simple models never use `funext` or choice. -/
 def primLateReady (reserved : Std.HashSet Name) : MetaM Bool := do
@@ -1990,14 +1990,14 @@ def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr))
   return none
 
 /-- One simple inductive's model from the primitives, generated and
-accounted for — [`Modelgen.primIso`], selected by `--simple`. Shared by the
+accounted for — [`InductiveModels.primIso`], selected by `--simple`. Shared by the
 input's own simple inductives and the composition (the single inductives the
 other two constructions emit).
 
 `canWait` enables prerequisite classification: a collision at fixed support
-([`Modelgen.Decline.lateReadiness?`]) returns its exact class in the second
+([`InductiveModels.Decline.lateReadiness?`]) returns its exact class in the second
 component instead of recording a model-shape decline. Source owners have
-already passed through [`Modelgen.scheduleSource`]; recursive splice closure
+already passed through [`InductiveModels.scheduleSource`]; recursive splice closure
 passes `false` because it must complete inside the same model island.
 
 **And, with `basicModels`, models for whatever that model had to splice.**
@@ -2010,7 +2010,7 @@ show it, because a spliced declaration was never a candidate to begin with.
 Earlier coverage figures therefore measured only declarations from the input.
 
 Only *non-basis* splices are modelled: the four on
-[`Modelgen.inductiveBasis`] are the exemption that makes the construction
+[`InductiveModels.inductiveBasis`] are the exemption that makes the construction
 well-founded and must stay unmodelled. That is also what bounds the recursion
 — a model's own splices are basis members or already present.
 
@@ -2364,7 +2364,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
               -- idempotence is unaffected, because on an already-filtered
               -- input every name below is taken and the name guard declines.
               --
-              -- `Eq` is certainly present: `Modelgen.iso` above went through
+              -- `Eq` is certainly present: `InductiveModels.iso` above went through
               -- `ensureEq`, which either found the input's or spliced Lean's.
               -- The composed step therefore satisfies its Eq prerequisite in
               -- this same island.
@@ -2450,9 +2450,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     -- model restates the recursors of the *specialised* block, which this tool
     -- builds itself, and a plain mutual block has no such second inductive —
     -- the implementation auxiliary's recursor is not `R_k.rec` at any
-    -- renaming. So `Modelgen.mutualIso` reads the recursors Lean minted for the
+    -- renaming. So `InductiveModels.mutualIso` reads the recursors Lean minted for the
     -- input's own block, which exist only once it is installed
-    -- (`src/Modelgen/Mutual.lean`'s header).
+    -- (`src/InductiveModels/Mutual.lean`'s header).
     --
     -- The **records** still go out ahead of the declaration's whenever they
     -- can, because `out` has not been pushed yet.
@@ -2713,4 +2713,4 @@ def runFilterStaged (x : Export) (checkRecursors : Bool) (generation : Cli.Confi
   let (_, report, plan) ← runFilterCore x checkRecursors generation (some sink) false
   return (report, plan)
 
-end Modelgen
+end InductiveModels

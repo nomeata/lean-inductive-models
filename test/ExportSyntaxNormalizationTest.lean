@@ -1,5 +1,5 @@
-import Modelgen.Driver
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Order
 
 /-!
 # Exact export-syntax normalization controls
@@ -13,7 +13,7 @@ transparent former alias and `Flat`'s generated projection iotas contain
 β-normalized local binder types.
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 structure TestState where
   passed : Nat := 0

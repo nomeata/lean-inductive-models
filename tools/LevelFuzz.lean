@@ -1,4 +1,4 @@
-import Modelgen.LevelAlgebra
+import InductiveModels.LevelAlgebra
 
 /-!
 # `LevelFuzz` — semantic fuzzing for the level algebra
@@ -16,7 +16,7 @@ Usage: `lake exe levelfuzz <pairs> <depth> <vars> <wide>`, or with no
 arguments the full six-million-pair sweep.
 -/
 
-open Modelgen.LevelAlgebra
+open InductiveModels.LevelAlgebra
 
 namespace LevelFuzz
 
@@ -92,7 +92,7 @@ def oracle (nvars wide : Nat) (a b : LA) : Bool × Bool × Bool := Id.run do
 /-- `Lean.Level.isNeverZero`, transliterated onto the private AST.
 
 This is not part of the port. It is here because the planner's **route
-selector** ([`Modelgen.classifyRoute`]) asks "is this carrier level never zero?" with
+selector** ([`InductiveModels.classifyRoute`]) asks "is this carrier level never zero?" with
 this structural test, and routes to `.bare` when it says no — whose declines
 are the route classifier's `type` and `maybeZero` cases. That is a level question decided
 structurally, so it is a candidate for exactly the incompleteness this whole

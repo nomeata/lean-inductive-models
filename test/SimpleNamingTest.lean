@@ -1,7 +1,7 @@
-import Modelgen.Driver
-import Modelgen.Naming
+import InductiveModels.Driver
+import InductiveModels.Naming
 
-open Lean Meta Modelgen Modelgen.Naming
+open Lean Meta InductiveModels InductiveModels.Naming
 
 structure FixtureResult where
   input : Export
@@ -18,12 +18,12 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else
     { state with failed := state.failed.push label }
 
-def noGeneration : Modelgen.Cli.Config :=
+def noGeneration : InductiveModels.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
 
-def runFixture (path : String) (generation : Modelgen.Cli.Config) : IO FixtureResult := do
+def runFixture (path : String) (generation : InductiveModels.Cli.Config) : IO FixtureResult := do
   let text ← IO.FS.readFile path
-  let .ok input := Modelgen.parse text (analyse := false)
+  let .ok input := InductiveModels.parse text (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}
   let context : Core.Context :=

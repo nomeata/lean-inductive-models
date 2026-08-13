@@ -1,9 +1,9 @@
-import Modelgen.Driver
-import Modelgen.Check
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Check
+import InductiveModels.Order
 import Lean.Util.CollectAxioms
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 structure TestState where
   passed : Nat := 0

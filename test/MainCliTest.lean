@@ -1,7 +1,7 @@
-import Modelgen.Check
-import Modelgen.Naming
-import Modelgen.Output
-import Modelgen.Supervisor
+import InductiveModels.Check
+import InductiveModels.Naming
+import InductiveModels.Output
+import InductiveModels.Supervisor
 
 set_option maxRecDepth 4096
 
@@ -23,50 +23,50 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else
     { state with failed := state.failed.push label }
 
-def defaultModelgenEnv : Array (String × Option String) :=
+def defaultInductiveModelsEnv : Array (String × Option String) :=
   #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", none), ("LEAN_INDUCTIVE_MODELS_RAW_SPOOL", none),
     ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", none),
     ("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", none),
-    (Modelgen.Supervisor.workerMarker, none)]
+    (InductiveModels.Supervisor.workerMarker, none)]
 
-def runModelgenWithEnv (binary : String) (args : List String)
+def runInductiveModelsWithEnv (binary : String) (args : List String)
     (env : Array (String × Option String)) (input? : Option String := none) :
     IO IO.Process.Output :=
   IO.Process.output {
     cmd := binary
     args := args.toArray
-    env := defaultModelgenEnv ++ env } input?
+    env := defaultInductiveModelsEnv ++ env } input?
 
-def runModelgen (binary : String) (args : List String) (input? : Option String := none) :
+def runInductiveModels (binary : String) (args : List String) (input? : Option String := none) :
     IO IO.Process.Output :=
-  runModelgenWithEnv binary args #[] input?
+  runInductiveModelsWithEnv binary args #[] input?
 
-def runModelgenLegacy (binary : String) (args : List String)
+def runInductiveModelsLegacy (binary : String) (args : List String)
     (input? : Option String := none) : IO IO.Process.Output :=
-  runModelgenWithEnv binary args #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1")] input?
+  runInductiveModelsWithEnv binary args #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1")] input?
 
-def runModelgenAt (binary : String) (args : List String) (cwd : String)
+def runInductiveModelsAt (binary : String) (args : List String) (cwd : String)
     (env : Array (String × Option String) := #[]) :
     IO IO.Process.Output :=
   IO.Process.output {
     cmd := binary
     args := args.toArray
     cwd := some cwd
-    env := defaultModelgenEnv ++ env }
+    env := defaultInductiveModelsEnv ++ env }
 
-def runModelgenStdin (binary : String) (args : List String) (input : String) :
+def runInductiveModelsStdin (binary : String) (args : List String) (input : String) :
     IO IO.Process.Output :=
-  runModelgen binary args (some input)
+  runInductiveModels binary args (some input)
 
 def hasDiagnostic (stderr diagnostic : String) : Bool :=
   (stderr.splitOn "\n").contains diagnostic
 
 def familyCount? (text : String) : Option Nat := do
-  let parsed ← (Modelgen.parse text (analyse := false)).toOption
-  return (Modelgen.Check.discover parsed).size
+  let parsed ← (InductiveModels.parse text (analyse := false)).toOption
+  return (InductiveModels.Check.discover parsed).size
 
 def sameSemanticExport (left right : String) : Bool :=
-  match Modelgen.parse left (analyse := false), Modelgen.parse right (analyse := false) with
+  match InductiveModels.parse left (analyse := false), InductiveModels.parse right (analyse := false) with
   | .ok left, .ok right => left.metaLine == right.metaLine && left.decls == right.decls
   | _, _ => false
 
@@ -80,16 +80,16 @@ def hasOutputSibling (directory : System.FilePath) : IO Bool := do
   return (← directory.readDir).any fun entry =>
     entry.fileName.startsWith ".lean-inductive-models-output-" && entry.fileName.endsWith ".tmp"
 
-def mapInductiveType (inputExport : Modelgen.Export) (target : Lean.Name)
-    (f : Modelgen.EIndType → Modelgen.EIndType) : Modelgen.Export :=
+def mapInductiveType (inputExport : InductiveModels.Export) (target : Lean.Name)
+    (f : InductiveModels.EIndType → InductiveModels.EIndType) : InductiveModels.Export :=
   { inputExport with decls := inputExport.decls.map fun declaration => match declaration with
     | .induct types constructors recursors =>
       .induct (types.map fun type => if type.name == target then f type else type)
         constructors recursors
     | other => other }
 
-def mapConstructor (inputExport : Modelgen.Export) (target : Lean.Name)
-    (f : Modelgen.ECtor → Modelgen.ECtor) : Modelgen.Export :=
+def mapConstructor (inputExport : InductiveModels.Export) (target : Lean.Name)
+    (f : InductiveModels.ECtor → InductiveModels.ECtor) : InductiveModels.Export :=
   { inputExport with decls := inputExport.decls.map fun declaration => match declaration with
     | .induct types constructors recursors =>
       .induct types
@@ -98,15 +98,15 @@ def mapConstructor (inputExport : Modelgen.Export) (target : Lean.Name)
         recursors
     | other => other }
 
-def mapRecursor (inputExport : Modelgen.Export) (target : Lean.Name)
-    (f : Modelgen.ERec → Modelgen.ERec) : Modelgen.Export :=
+def mapRecursor (inputExport : InductiveModels.Export) (target : Lean.Name)
+    (f : InductiveModels.ERec → InductiveModels.ERec) : InductiveModels.Export :=
   { inputExport with decls := inputExport.decls.map fun declaration => match declaration with
     | .induct types constructors recursors =>
       .induct types constructors
         (recursors.map fun recursor => if recursor.name == target then f recursor else recursor)
     | other => other }
 
-def reverseConstructorsFor (inputExport : Modelgen.Export) (target : Lean.Name) : Modelgen.Export :=
+def reverseConstructorsFor (inputExport : InductiveModels.Export) (target : Lean.Name) : InductiveModels.Export :=
   { inputExport with decls := inputExport.decls.map fun declaration => match declaration with
     | .induct types constructors recursors =>
       if types.any (·.name == target) then .induct types constructors.reverse recursors
@@ -124,7 +124,7 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.createDirAll scratch
   let nested := s!"{root}/test/fixtures/lean-inductive-models/nested_iota.ndjson"
   let nestedText ← IO.FS.readFile nested
-  let .ok nestedExport := Modelgen.parse nestedText (analyse := false) | do
+  let .ok nestedExport := InductiveModels.parse nestedText (analyse := false) | do
     IO.eprintln "mainclitest: nested fixture did not parse"
     return 1
   -- This fixture contains `Expr.proj`, so success also pins that the integrated
@@ -139,7 +139,7 @@ def main (args : List String) : IO UInt32 := do
   let unusedBasis := { nestedExport with decls := nestedExport.decls.filter (·.names.contains `Eq) }
   let malformedBasis := mapRecursor unusedBasis `Eq.rec fun recursor =>
     { recursor with numMinors := recursor.numMinors + 1 }
-  let malformedBasisRun ← runModelgenStdin binary ["--no-check", "--no-output", "-"]
+  let malformedBasisRun ← runInductiveModelsStdin binary ["--no-check", "--no-output", "-"]
     malformedBasis.render
   state := state.check "noncanonical unused basis exits unsupported 2" <|
     malformedBasisRun.exitCode == 2 && malformedBasisRun.stdout.isEmpty &&
@@ -149,7 +149,7 @@ def main (args : List String) : IO UInt32 := do
   -- both structural checks, and both whole-stream kernel verdict gates. A
   -- checker can receive its NDJSON path as `$IN`, or read the same bytes from
   -- stdin; `--no-output` suppresses only publication.
-  let arenaPath ← runModelgen binary [
+  let arenaPath ← runInductiveModels binary [
     "--inductives", "--check-input", "--check-output", "--type-check-input",
     "--type-check-output", "--no-output", nested]
   state := state.check "arena path generates models and validates input and output" <|
@@ -159,7 +159,7 @@ def main (args : List String) : IO UInt32 := do
       !arenaPath.stderr.contains "output check: 0 model families checked" &&
       hasDiagnostic arenaPath.stderr "input kernel check: accepted" &&
       hasDiagnostic arenaPath.stderr "output kernel check: accepted"
-  let arenaStdin ← runModelgenStdin binary [
+  let arenaStdin ← runInductiveModelsStdin binary [
     "--inductives", "--check-input", "--check-output", "--type-check-input",
     "--type-check-output", "--no-output", "-"] nestedText
   state := state.check "arena stdin runs the same complete pipeline" <|
@@ -171,29 +171,29 @@ def main (args : List String) : IO UInt32 := do
   -- Pure kernel-check mode does not impose this tool's model-before-owner
   -- ordering policy. This export is kernel-valid even though its model-shaped
   -- axiom depends on the source owner and would make that policy cyclic.
-  let modelCycleName := Modelgen.Naming.modelName `Tree
-  let modelCycle : Modelgen.EDecl :=
+  let modelCycleName := InductiveModels.Naming.modelName `Tree
+  let modelCycle : InductiveModels.EDecl :=
     .ax modelCycleName [] (.const `Tree []) false
   let modelCycleText := { nestedExport with decls := nestedExport.decls.push modelCycle }.render
-  let arenaModelCycle ← runModelgenStdin binary [
+  let arenaModelCycle ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
     "--no-output", "-"] modelCycleText
   state := state.check "pure kernel mode does not impose model ordering" <|
     arenaModelCycle.exitCode == 0 && arenaModelCycle.stdout.isEmpty
 
   let badName := `ArenaBad
-  let badDeclaration : Modelgen.EDecl :=
+  let badDeclaration : InductiveModels.EDecl :=
     .defn badName [] (.sort .zero) (.sort .zero) .opaque "safe" [badName]
   let invalidExport := { nestedExport with decls := nestedExport.decls.push badDeclaration }
   let invalidText := invalidExport.render
   let invalidPath := s!"{scratch}/main-cli-invalid.ndjson"
   IO.FS.writeFile invalidPath invalidText
-  let invalidInput ← runModelgen binary [
+  let invalidInput ← runInductiveModels binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", invalidPath]
   state := state.check "kernel-invalid path input is rejected with exit 1" <|
     invalidInput.exitCode == 1 &&
       (invalidInput.stderr.splitOn "input kernel check rejected:").length > 1
-  let invalidOutput ← runModelgenStdin binary [
+  let invalidOutput ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input",
     "--type-check-output", "--no-output", "-"] invalidText
   state := state.check "kernel-invalid stdin output is rejected with exit 1" <|
@@ -202,7 +202,7 @@ def main (args : List String) : IO UInt32 := do
   let gatedOutputPath : System.FilePath := s!"{scratch}/main-cli-gated-output.ndjson"
   let gatedSentinel := "output gate sentinel\n"
   IO.FS.writeFile gatedOutputPath gatedSentinel
-  let gatedOutput ← runModelgenStdin binary [
+  let gatedOutput ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input",
     "--type-check-output", "-o", gatedOutputPath.toString, "-"] invalidText
   state := state.check "output kernel rejection occurs before named output is touched" <|
@@ -216,7 +216,7 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.writeFile stagedReplayTarget gatedSentinel
   let lateReplayCorruption := mapConstructor nestedExport `PT.node fun constructor =>
     { constructor with type := .sort .zero }
-  let stagedReplayRejected ← runModelgen binary
+  let stagedReplayRejected ← runInductiveModels binary
     ["--no-check", "--no-type-check-output", "-o",
       stagedReplayTarget.toString, "-"] (some lateReplayCorruption.render)
   let stagedReplayUntouched :=
@@ -236,22 +236,22 @@ def main (args : List String) : IO UInt32 := do
   -- the model-before-owner output policy or changing the stream's bytes.
   let dependency := `ArenaDependency
   let dependent := `ArenaDependent
-  let dependencyDecl : Modelgen.EDecl :=
+  let dependencyDecl : InductiveModels.EDecl :=
     .ax dependency [] (.sort (.succ .zero)) false
-  let dependentDecl : Modelgen.EDecl :=
+  let dependentDecl : InductiveModels.EDecl :=
     .ax dependent [] (.const dependency []) false
-  let reversedDependencies : Modelgen.Export :=
+  let reversedDependencies : InductiveModels.Export :=
     { nestedExport with decls := #[dependentDecl, dependencyDecl] }
   let reversedText := reversedDependencies.render
-  let reversedReplay ← runModelgenStdin binary [
+  let reversedReplay ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
     "--quiet", "-"] reversedText
   state := state.check "kernel replay dependency-orders without transforming output" <|
     reversedReplay.exitCode == 0 && reversedReplay.stdout == reversedText
 
-  let missingDependency : Modelgen.Export :=
+  let missingDependency : InductiveModels.Export :=
     { nestedExport with decls := #[dependentDecl] }
-  let missingReplay ← runModelgenStdin binary [
+  let missingReplay ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     missingDependency.render
   state := state.check "missing kernel dependency is rejected with exit 1" <|
@@ -260,10 +260,10 @@ def main (args : List String) : IO UInt32 := do
 
   let cycleLeft := `ArenaCycleLeft
   let cycleRight := `ArenaCycleRight
-  let dependencyCycle : Modelgen.Export := { nestedExport with decls := #[
+  let dependencyCycle : InductiveModels.Export := { nestedExport with decls := #[
     .ax cycleLeft [] (.const cycleRight []) false,
     .ax cycleRight [] (.const cycleLeft []) false] }
-  let cycleReplay ← runModelgenStdin binary [
+  let cycleReplay ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     dependencyCycle.render
   state := state.check "cyclic kernel dependencies are rejected with exit 1" <|
@@ -273,7 +273,7 @@ def main (args : List String) : IO UInt32 := do
   -- `Declaration.inductDecl` consumes only type-former and constructor inputs;
   -- all exported bookkeeping and recursor metadata must independently equal
   -- the `ConstantInfo`s minted by Lean's kernel.
-  let metadataCorruptions : Array (String × Modelgen.Export) := #[
+  let metadataCorruptions : Array (String × InductiveModels.Export) := #[
     ("inductive name", mapInductiveType nestedExport `N fun type =>
       { type with name := `ArenaWrongInductive }),
     ("inductive level parameters", mapInductiveType nestedExport `N fun type =>
@@ -342,7 +342,7 @@ def main (args : List String) : IO UInt32 := do
     ("recursor unsafe flag", mapRecursor nestedExport `N.rec fun recursor =>
       { recursor with isUnsafe := !recursor.isUnsafe })]
   for (field, corruption) in metadataCorruptions do
-    let result ← runModelgenStdin binary [
+    let result ← runInductiveModelsStdin binary [
       "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
       corruption.render
     state := state.check s!"corrupt {field} is rejected with exit 1" <|
@@ -350,7 +350,7 @@ def main (args : List String) : IO UInt32 := do
         (result.stderr.splitOn "input kernel check rejected:").length > 1
 
   let reorderedConstructorRecords := reverseConstructorsFor nestedExport `N
-  let reorderedConstructors ← runModelgenStdin binary [
+  let reorderedConstructors ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     reorderedConstructorRecords.render
   state := state.check "constructor record array order is not semantic metadata" <|
@@ -365,7 +365,7 @@ def main (args : List String) : IO UInt32 := do
   let theoremName := `ArenaTheorem
   let definitionName := `ArenaDefinition
   let opaqueName := `ArenaOpaque
-  let generalMetadata : Modelgen.Export := { nestedExport with decls := #[
+  let generalMetadata : InductiveModels.Export := { nestedExport with decls := #[
     .thm theoremName [] (.const proposition []) (.const proof [])
       [theoremName, proof],
     .opaq opaqueName [universeName] (.sort (.succ (.param universeName)))
@@ -380,14 +380,14 @@ def main (args : List String) : IO UInt32 := do
     .defn `ArenaPartial [] (.sort .zero) (.const `ArenaMissing []) .opaque "partial"
       [`ArenaPartial],
     .ax `ArenaUnsafe [] (.const `ArenaMissing []) true] }
-  let generalReplay ← runModelgenStdin binary [
+  let generalReplay ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
     "--quiet", "-"] generalMetadata.render
   state := state.check "general metadata and arena safety skips replay exactly" <|
     generalReplay.exitCode == 0 && generalReplay.stdout == generalMetadata.render
 
   let unknownSafety := nestedText.replace "\"safety\":\"safe\"" "\"safety\":\"mystery\""
-  let badSafety ← runModelgenStdin binary [
+  let badSafety ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] unknownSafety
   state := state.check "unknown definition safety is a parse/tool error with exit 3" <|
     unknownSafety != nestedText && badSafety.exitCode == 3 &&
@@ -395,12 +395,12 @@ def main (args : List String) : IO UInt32 := do
 
   let duplicateText :=
     { nestedExport with decls := nestedExport.decls.push nestedExport.decls[0]! }.render
-  let duplicate ← runModelgenStdin binary [
+  let duplicate ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] duplicateText
   state := state.check "duplicate declaration is an Arena rejection with exit 1" <|
     duplicate.exitCode == 1 &&
       duplicate.stderr.contains "invalid export: duplicate declaration"
-  let duplicateWithoutKernel ← runModelgenStdin binary [
+  let duplicateWithoutKernel ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input", "--no-output", "-"] duplicateText
   state := state.check "duplicate declaration without kernel checking is rejected" <|
     duplicateWithoutKernel.exitCode == 1 &&
@@ -409,13 +409,13 @@ def main (args : List String) : IO UInt32 := do
   let quotientPath := s!"{root}/test/fixtures/lean-inductive-models/prim_graph_pre.ndjson"
   let quotientText ← IO.FS.readFile quotientPath
   let unknownQuotient := quotientText.replace "\"kind\":\"type\"" "\"kind\":\"mystery\""
-  let badQuotient ← runModelgenStdin binary [
+  let badQuotient ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     unknownQuotient
   state := state.check "unknown quotient kind is a parse/tool error with exit 3" <|
     unknownQuotient != quotientText && badQuotient.exitCode == 3 &&
       (badQuotient.stderr.splitOn "parse error:").length > 1
-  let .ok quotientExport := Modelgen.parse quotientText (analyse := false) | do
+  let .ok quotientExport := InductiveModels.parse quotientText (analyse := false) | do
     IO.eprintln "mainclitest: quotient fixture did not parse"
     return 1
   let quotientRecords := quotientExport.decls.filter fun declaration =>
@@ -428,19 +428,19 @@ def main (args : List String) : IO UInt32 := do
   -- needs the exported Eq declaration which its minted lift/ind types use.
   let quotientPrincipal :=
     { quotientExport with decls := #[equalityRecord, quotientRecords[0]!] }
-  let principalReplay ← runModelgenStdin binary [
+  let principalReplay ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     quotientPrincipal.render
   state := state.check "arena-compatible quotient principal replays with Eq but no companions" <|
     quotientRecords.size == 4 && principalReplay.exitCode == 0
   let quotientWithoutEquality := { quotientExport with decls := quotientRecords.extract 0 1 }
-  let principalWithoutEquality ← runModelgenStdin binary [
+  let principalWithoutEquality ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     quotientWithoutEquality.render
   state := state.check "quotient principal without Eq is kernel-invalid" <|
     quotientRecords.size == 4 && principalWithoutEquality.exitCode == 1
   let quotientCompanions := { quotientExport with decls := quotientRecords.extract 1 4 }
-  let companionsReplay ← runModelgenStdin binary [
+  let companionsReplay ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     quotientCompanions.render
   state := state.check "arena-compatible quotient companions alone are ignored" <|
@@ -449,15 +449,15 @@ def main (args : List String) : IO UInt32 := do
   -- A valid declaration occupying a required public model slot is a genuine
   -- unsupported-generation result, not a kernel rejection.  Conversely, the
   -- fixed basis exemptions in the ordinary default run remain accepted.
-  let collisionName := Modelgen.Naming.modelName `Tree
-  let collision : Modelgen.EDecl := .ax collisionName [] (.sort (.succ .zero)) false
+  let collisionName := InductiveModels.Naming.modelName `Tree
+  let collision : InductiveModels.EDecl := .ax collisionName [] (.sort (.succ .zero)) false
   let declinedText := { nestedExport with decls := nestedExport.decls.push collision }.render
-  let declined ← runModelgenStdin binary
+  let declined ← runInductiveModelsStdin binary
     ["--no-check", "--no-output", "-"] declinedText
   state := state.check "unsupported generation declines with exit 2" <|
     declined.exitCode == 2 && (declined.stderr.splitOn "declined").length > 1
 
-  let malformed ← runModelgenStdin binary
+  let malformed ← runInductiveModelsStdin binary
     ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] "not ndjson\n"
   state := state.check "malformed Arena stdin is a tool error with exit 3" <|
     malformed.exitCode == 3 && (malformed.stderr.splitOn "parse error:").length > 1
@@ -469,7 +469,7 @@ def main (args : List String) : IO UInt32 := do
       "{\"ie\":2,\"sort\":0}\n" ++
       "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}\n")]
   for (kind, arenaHole) in arenaHoles do
-    let result ← runModelgenStdin binary
+    let result ← runInductiveModelsStdin binary
       ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] arenaHole
     state := state.check s!"undefined sparse {kind} ID is a tool error with exit 3" <|
       result.exitCode == 3 && (result.stderr.splitOn "parse error:").length > 1
@@ -480,7 +480,7 @@ def main (args : List String) : IO UInt32 := do
     ("wrong max arity", "{\"il\":1,\"max\":[0]}\n"),
     ("invalid natural literal", "{\"ie\":0,\"natVal\":\"not-a-natural\"}\n")]
   for (kind, input) in malformedArenaRecords do
-    let result ← runModelgenStdin binary
+    let result ← runInductiveModelsStdin binary
       ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] input
     state := state.check s!"{kind} is a parse/tool error with exit 3" <|
       result.exitCode == 3 && (result.stderr.splitOn "parse error:").length > 1
@@ -492,23 +492,23 @@ def main (args : List String) : IO UInt32 := do
     "{\"ie\":0,\"sort\":0}\n" ++
     "{\"ie\":1,\"mdata\":{\"data\":{\"synthetic\":true},\"expr\":0}}\n" ++
     "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}\n"
-  let metadataRun ← runModelgenStdin binary [
+  let metadataRun ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
     "--quiet", "-"] metadataInput
-  let metadataDecl : Modelgen.EDecl := .ax `ArenaMetadata [] (.sort .zero) false
+  let metadataDecl : InductiveModels.EDecl := .ax `ArenaMetadata [] (.sort .zero) false
   state := state.check "metadata expression input passes both arena kernel gates" <|
     metadataRun.exitCode == 0 &&
-      match Modelgen.parse metadataRun.stdout (analyse := false) with
+      match InductiveModels.parse metadataRun.stdout (analyse := false) with
       | .ok output => output.decls == #[metadataDecl]
       | .error _ => false
-  let missing ← runModelgen binary [
+  let missing ← runInductiveModels binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output",
     s!"{scratch}/does-not-exist.ndjson"]
   state := state.check "missing $IN path is a tool error with exit 3" (missing.exitCode == 3)
-  let badOption ← runModelgen binary ["--unknown-arena-option", nested]
+  let badOption ← runInductiveModels binary ["--unknown-arena-option", nested]
   state := state.check "CLI misuse is a tool error with exit 3" (badOption.exitCode == 3)
   let monoRefusal := s!"{root}/test/fixtures/mono/marker_taken.ndjson"
-  let internal ← runModelgen binary [
+  let internal ← runInductiveModels binary [
     "--no-inductives", "--no-check", "--mono-levels", "--no-output", monoRefusal]
   state := state.check "internal transform refusal is a tool error with exit 3" <|
     internal.exitCode == 3 &&
@@ -519,21 +519,21 @@ def main (args : List String) : IO UInt32 := do
   -- verbatim-copy shortcut after it has been consumed, so compare exports
   -- structurally rather than requiring its harmless re-interning to preserve
   -- whitespace.
-  let stdinRun ← runModelgen binary
+  let stdinRun ← runInductiveModels binary
     ["--no-inductives", "--no-check", "--quiet", "-"] (some nestedText)
   state := state.check "stdin input succeeds" (stdinRun.exitCode == 0)
   state := state.check "stdin and file parse to the same export" <|
-    match Modelgen.parse stdinRun.stdout (analyse := false),
-        Modelgen.parse nestedText (analyse := false) with
+    match InductiveModels.parse stdinRun.stdout (analyse := false),
+        InductiveModels.parse nestedText (analyse := false) with
     | .ok stdinExport, .ok fileExport => stdinExport.decls == fileExport.decls
     | _, _ => false
 
   -- All defaults are exercised here, including stdout output and both checks.
   -- This succeeds once all generated model families precede their owners; it
   -- is the integration seam between the CLI and the ordering repair.
-  let defaults ← runModelgen binary [nested]
-  let directWorker ← runModelgenWithEnv binary [nested]
-    #[(Modelgen.Supervisor.workerMarker, some "1")]
+  let defaults ← runInductiveModels binary [nested]
+  let directWorker ← runInductiveModelsWithEnv binary [nested]
+    #[(InductiveModels.Supervisor.workerMarker, some "1")]
   state := state.check "supervisor preserves an ordinary CLI run byte-for-byte" <|
     defaults.exitCode == directWorker.exitCode && defaults.stdout == directWorker.stdout &&
       defaults.stderr == directWorker.stderr
@@ -555,7 +555,7 @@ def main (args : List String) : IO UInt32 := do
   -- unmodelled source fixture.
   let modeledPath := s!"{scratch}/main-cli-modeled.ndjson"
   IO.FS.writeFile modeledPath defaults.stdout
-  let checkedAgain ← runModelgen binary ["--no-output", modeledPath]
+  let checkedAgain ← runInductiveModels binary ["--no-output", modeledPath]
   state := state.check "default input check accepts generated models"
     (checkedAgain.exitCode == 0 && checkedAgain.stdout.isEmpty)
   state := state.check "input check reports its exact nonempty family count" <|
@@ -563,17 +563,17 @@ def main (args : List String) : IO UInt32 := do
       s!"input check: {defaultOutputFamilies} model families checked"
   IO.FS.removeFile modeledPath
 
-  let checkOnly ← runModelgen binary
+  let checkOnly ← runInductiveModels binary
     ["--no-inductives", "--check", "--no-output", nested]
   state := state.check "check-only invocation succeeds" (checkOnly.exitCode == 0)
   state := state.check "no-output suppresses stdout" checkOnly.stdout.isEmpty
 
   -- With generation disabled, stdout and a named output file must contain the
   -- same byte-for-byte export.  `-o` also re-enables output after --no-output.
-  let stdoutRun ← runModelgen binary
+  let stdoutRun ← runInductiveModels binary
     ["--no-inductives", "--no-check", "--quiet", nested]
   state := state.check "stdout output succeeds" (stdoutRun.exitCode == 0)
-  let generationDisabled ← runModelgenWithEnv binary
+  let generationDisabled ← runInductiveModelsWithEnv binary
     ["--no-inductives", "--no-check", "--quiet", nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "generation-disabled output selects the legacy backend" <|
@@ -586,7 +586,7 @@ def main (args : List String) : IO UInt32 := do
   let currentDirectory ← IO.currentDir
   let nestedAbsolute := if nestedPath.isAbsolute then nestedPath else currentDirectory / nestedPath
   let binaryAbsolute := if binaryPath.isAbsolute then binaryPath else currentDirectory / binaryPath
-  let fallbackRun ← runModelgenAt binaryAbsolute.toString
+  let fallbackRun ← runInductiveModelsAt binaryAbsolute.toString
     ["--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "missing staging root falls back without changing output" <|
@@ -600,13 +600,13 @@ def main (args : List String) : IO UInt32 := do
   -- Eligible canonical generation selects staged output without an enabling
   -- environment variable. The trace observes the actual backend after raw
   -- certification and compact-availability checks; it is not a selector.
-  let observedDefault ← runModelgenWithEnv binary [nested]
+  let observedDefault ← runInductiveModelsWithEnv binary [nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "ordinary default generation selects staged output" <|
     observedDefault.exitCode == defaults.exitCode &&
       hasDiagnostic observedDefault.stderr "output backend: staged" &&
       sameSemanticExport observedDefault.stdout defaults.stdout
-  let observedLegacy ← runModelgenWithEnv binary [nested] #[
+  let observedLegacy ← runInductiveModelsWithEnv binary [nested] #[
     ("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1"),
     ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "explicit A/B override selects legacy output" <|
@@ -615,7 +615,7 @@ def main (args : List String) : IO UInt32 := do
       sameSemanticExport observedLegacy.stdout defaults.stdout
   let stagedNamedPath := s!"{scratch}/main-cli-staged-default.ndjson"
   removeIfPresent stagedNamedPath
-  let stagedNamed ← runModelgenWithEnv binary
+  let stagedNamed ← runInductiveModelsWithEnv binary
     ["-o", stagedNamedPath, nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   let stagedNamedText ← if ← System.FilePath.pathExists stagedNamedPath then
@@ -633,24 +633,24 @@ def main (args : List String) : IO UInt32 := do
   -- composition. Certification falls back before generation without changing
   -- the accepted semantic output.
   let noncanonicalInput := "\n" ++ nestedExport.render
-  let noncanonicalDefault ← runModelgenWithEnv binary
+  let noncanonicalDefault ← runInductiveModelsWithEnv binary
     ["--no-check", "--no-type-check-output", "-"]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")] (some noncanonicalInput)
-  let noncanonicalLegacy ← runModelgenLegacy binary
+  let noncanonicalLegacy ← runInductiveModelsLegacy binary
     ["--no-check", "--no-type-check-output", "-"] (some noncanonicalInput)
   state := state.check "noncanonical raw input selects legacy output" <|
     noncanonicalDefault.exitCode == noncanonicalLegacy.exitCode &&
       hasDiagnostic noncanonicalDefault.stderr "output backend: legacy" &&
       sameSemanticExport noncanonicalDefault.stdout noncanonicalLegacy.stdout
 
-  let traceMode ← runModelgenWithEnv binary
+  let traceMode ← runInductiveModelsWithEnv binary
     ["--no-check-output", "--no-type-check-output", nested]
     #[("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", some "1"),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "planner trace mode selects legacy output" <|
     traceMode.exitCode == 0 && hasDiagnostic traceMode.stderr "output backend: legacy"
 
-  let kernelOutputMode ← runModelgenWithEnv binary
+  let kernelOutputMode ← runInductiveModelsWithEnv binary
     ["--no-check", "--type-check-output", nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "output kernel checking selects legacy output" <|
@@ -664,14 +664,14 @@ def main (args : List String) : IO UInt32 := do
       ("nested multi-model island", nested),
       ("late scheduled support", s!"{root}/test/fixtures/lean-inductive-models/prim_late_basis.ndjson")] do
     let args := #["--no-check-output", "--no-type-check-output", "--no-mono-levels", fixture]
-    let legacy ← runModelgenLegacy binary args.toList
-    let staged ← runModelgen binary args.toList
+    let legacy ← runInductiveModelsLegacy binary args.toList
+    let staged ← runInductiveModels binary args.toList
     state := state.check s!"default staged {label} preserves report and exit" <|
       staged.exitCode == legacy.exitCode && staged.stderr == legacy.stderr
     state := state.check s!"default staged {label} preserves semantic output and order" <|
       sameSemanticExport staged.stdout legacy.stdout
-  let checkedLegacy ← runModelgenLegacy binary [nested]
-  let checkedStaged ← runModelgen binary [nested]
+  let checkedLegacy ← runInductiveModelsLegacy binary [nested]
+  let checkedStaged ← runInductiveModels binary [nested]
   state := state.check "default staged compact output check preserves report and exit" <|
     checkedStaged.exitCode == checkedLegacy.exitCode &&
       checkedStaged.stderr == checkedLegacy.stderr
@@ -682,13 +682,13 @@ def main (args : List String) : IO UInt32 := do
   -- unavailable; the private staged attempt must rerun the ordinary filter,
   -- preserving the exact report, exit, and output rather than surfacing an
   -- internal error or publishing its partial spool.
-  let futureModel := Modelgen.Naming.modelName `Tree
+  let futureModel := InductiveModels.Naming.modelName `Tree
   let stabilityMiss := { nestedExport with decls :=
-    #[Modelgen.EDecl.ax `CompactFallbackProbe [] (.const futureModel []) false] ++
+    #[InductiveModels.EDecl.ax `CompactFallbackProbe [] (.const futureModel []) false] ++
       nestedExport.decls }
   let fallbackArgs := #["--no-type-check-input", "--no-type-check-output", "-"]
-  let fallbackLegacy ← runModelgenLegacy binary fallbackArgs.toList (some stabilityMiss.render)
-  let fallbackStaged ← runModelgen binary fallbackArgs.toList (some stabilityMiss.render)
+  let fallbackLegacy ← runInductiveModelsLegacy binary fallbackArgs.toList (some stabilityMiss.render)
+  let fallbackStaged ← runInductiveModels binary fallbackArgs.toList (some stabilityMiss.render)
   state := state.check "compact availability miss falls back with exact report and exit" <|
     fallbackStaged.exitCode == fallbackLegacy.exitCode &&
       fallbackStaged.stderr == fallbackLegacy.stderr
@@ -699,7 +699,7 @@ def main (args : List String) : IO UInt32 := do
     !leakedGeneratedSpools.any (fun entry => entry.fileName.startsWith "lean-inductive-models-spool-")
   let outputPath := s!"{scratch}/main-cli-output.ndjson"
   if ← System.FilePath.pathExists outputPath then IO.FS.removeFile outputPath
-  let fileRun ← runModelgen binary
+  let fileRun ← runInductiveModels binary
     ["--no-inductives", "--no-check", "--quiet", "--no-output", "-o", outputPath, nested]
   state := state.check "file output succeeds" (fileRun.exitCode == 0)
   state := state.check "file output does not leak to stdout" fileRun.stdout.isEmpty
@@ -714,10 +714,10 @@ def main (args : List String) : IO UInt32 := do
   -- happens after the sibling has received bytes, but before the destination
   -- can be replaced; the old file and directory must remain clean.
   let failureTarget : System.FilePath := s!"{scratch}/main-cli-output-failure.ndjson"
-  for failure in #[Modelgen.Output.Test.Failure.write, .flush, .rename] do
+  for failure in #[InductiveModels.Output.Test.Failure.write, .flush, .rename] do
     IO.FS.writeFile failureTarget "old-output\n"
     let rejected ← try
-        Modelgen.Output.Test.writeNamedFailing failureTarget failure
+        InductiveModels.Output.Test.writeNamedFailing failureTarget failure
         pure false
       catch _ => pure true
     state := state.check s!"injected {repr failure} preserves named output" <|
@@ -726,12 +726,12 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.removeFile failureTarget
 
   let noBasenameRejected ← try
-      Modelgen.Output.write "." fun stream => stream.putStr "unreachable"
+      InductiveModels.Output.write "." fun stream => stream.putStr "unreachable"
       pure false
     catch _ => pure true
   state := state.check "named output requires a final file name" noBasenameRejected
 
-  let contained ← Modelgen.Output.containToolErrors do
+  let contained ← InductiveModels.Output.containToolErrors do
     throw <| IO.userError "injected uncaught tool failure"
   state := state.check "uncaught IO is contained as exit 3" (contained == 3)
 
@@ -745,12 +745,12 @@ def main (args : List String) : IO UInt32 := do
   unless System.Platform.isWindows do
     discard <| IO.Process.run {
       cmd := "ln", args := #["-s", linkReferent.toString, symbolicTarget.toString] }
-    let symbolicRun ← runModelgen binary [
+    let symbolicRun ← runInductiveModels binary [
       "--no-inductives", "--no-check", "--quiet", "-o", symbolicTarget.toString, nested]
     state := state.check "named output replaces a symlink, not its referent" <|
       symbolicRun.exitCode == 0 && (← IO.FS.readFile linkReferent) == linkSentinel &&
         (← symbolicTarget.symlinkMetadata).type == .file &&
-        (Modelgen.parse (← IO.FS.readFile symbolicTarget) (analyse := false)).isOk
+        (InductiveModels.parse (← IO.FS.readFile symbolicTarget) (analyse := false)).isOk
   removeIfPresent symbolicTarget
   IO.FS.removeFile linkReferent
 
@@ -759,13 +759,13 @@ def main (args : List String) : IO UInt32 := do
   removeIfPresent hardTarget
   IO.FS.writeFile hardSource nestedText
   IO.FS.hardLink hardSource hardTarget
-  let hardRun ← runModelgen binary [
+  let hardRun ← runInductiveModels binary [
     "--no-inductives", "--no-check", "--quiet", "-o", hardTarget.toString,
     hardSource.toString]
   state := state.check "named output replaces only the selected hardlink entry" <|
     hardRun.exitCode == 0 && (← IO.FS.readFile hardSource) == nestedText &&
       (← hardSource.metadata).numLinks == 1 && (← hardTarget.metadata).numLinks == 1 &&
-      (Modelgen.parse (← IO.FS.readFile hardTarget) (analyse := false)).isOk
+      (InductiveModels.parse (← IO.FS.readFile hardTarget) (analyse := false)).isOk
   IO.FS.removeFile hardTarget
   IO.FS.removeFile hardSource
 
@@ -777,44 +777,44 @@ def main (args : List String) : IO UInt32 := do
   let boundaryText :=
     "{\"meta\":{},\"padding\":\"" ++ String.ofList (List.replicate (5 * 1024 * 1024) 'x') ++
       "\"}\r\n"
-  let .ok boundaryExport := Modelgen.parse boundaryText (analyse := false) | do
+  let .ok boundaryExport := InductiveModels.parse boundaryText (analyse := false) | do
     IO.eprintln "mainclitest: chunk-boundary input did not parse"
     return 1
   IO.FS.writeFile boundaryPath boundaryText
-  let boundaryRun ← runModelgen binary
+  let boundaryRun ← runInductiveModels binary
     ["--no-inductives", "--no-check", "--quiet", boundaryPath]
   state := state.check "line spanning the chunk boundary parses" (boundaryRun.exitCode == 0)
   state := state.check "chunk-boundary output is the parsed snapshot" <|
-    match Modelgen.parse boundaryRun.stdout (analyse := false),
-        Modelgen.parse boundaryText (analyse := false) with
+    match InductiveModels.parse boundaryRun.stdout (analyse := false),
+        InductiveModels.parse boundaryText (analyse := false) with
     | .ok output, .ok input => output.decls == input.decls && output.metaLine == input.metaLine
     | _, _ => false
-  let inPlaceRun ← runModelgen binary
+  let inPlaceRun ← runInductiveModels binary
     ["--no-inductives", "--no-check", "--quiet", "-o", boundaryPath, boundaryPath]
   let boundaryAfter ← IO.FS.readFile boundaryPath
   state := state.check "literal in-place output is a complete parsed snapshot" <|
     inPlaceRun.exitCode == 0 && inPlaceRun.stdout.isEmpty &&
-      match Modelgen.parse boundaryAfter (analyse := false) with
+      match InductiveModels.parse boundaryAfter (analyse := false) with
       | .ok output => output.metaLine == boundaryExport.metaLine
       | .error _ => false
   let aliasPath := s!"{scratch}/./main-cli-chunk-boundary.ndjson"
-  let aliasRun ← runModelgen binary
+  let aliasRun ← runInductiveModels binary
     ["--no-inductives", "--no-check", "--quiet", "-o", aliasPath, boundaryPath]
   let boundaryAfterAlias ← IO.FS.readFile boundaryPath
   state := state.check "canonical-path in-place output remains complete" <|
     aliasRun.exitCode == 0 && aliasRun.stdout.isEmpty &&
-      (Modelgen.parse boundaryAfterAlias (analyse := false)).isOk
+      (InductiveModels.parse boundaryAfterAlias (analyse := false)).isOk
   IO.FS.removeFile boundaryPath
 
   let malformedPath := s!"{scratch}/main-cli-malformed.ndjson"
   IO.FS.writeFile malformedPath "{not-json}\n"
-  let malformedRun ← runModelgen binary
+  let malformedRun ← runInductiveModels binary
     ["--no-inductives", "--no-check", "--no-output", malformedPath]
   state := state.check "malformed NDJSON is a tool error" <|
     malformedRun.exitCode == 3 && malformedRun.stdout.isEmpty &&
       malformedRun.stderr.contains "parse error"
   IO.FS.writeBinFile malformedPath (ByteArray.mk #[0xff, 0x0a])
-  let utf8Run ← runModelgen binary
+  let utf8Run ← runInductiveModels binary
     ["--no-inductives", "--no-check", "--no-output", malformedPath]
   state := state.check "malformed UTF-8 is a tool error" <|
     utf8Run.exitCode == 3 && utf8Run.stdout.isEmpty &&
@@ -824,13 +824,13 @@ def main (args : List String) : IO UInt32 := do
   -- Options apply left-to-right at the actual process boundary.  The last
   -- --no-output wins in the first invocation; the later --output wins in the
   -- second.  The later --nested likewise restores just that generation stage.
-  let outputOff ← runModelgen binary
+  let outputOff ← runInductiveModels binary
     ["--output", "--no-output", "--no-inductives", "--no-check", nested]
   state := state.check "later no-output wins" (outputOff.exitCode == 0 && outputOff.stdout.isEmpty)
-  let outputOn ← runModelgen binary
+  let outputOn ← runInductiveModels binary
     ["--no-output", "--output", "--no-inductives", "--no-check", "--quiet", nested]
   state := state.check "later output wins" (outputOn.exitCode == 0 && !outputOn.stdout.isEmpty)
-  let nestedOnly ← runModelgen binary
+  let nestedOnly ← runInductiveModels binary
     ["--no-inductives", "--nested", "--check", "--quiet", nested]
   state := state.check "later nested restores the nested stage" <|
     nestedOnly.exitCode == 0 && nestedOnly.stdout != stdoutRun.stdout
@@ -840,7 +840,7 @@ def main (args : List String) : IO UInt32 := do
 
   -- The integrated switch is mode A: it keeps recursor elimination levels,
   -- runs before inductive generation, and performs Mono's kernel replay.
-  let monoRun ← runModelgenWithEnv binary
+  let monoRun ← runInductiveModelsWithEnv binary
     ["--no-inductives", "--mono-levels", "--quiet", mono]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "mono-levels mode A succeeds" (monoRun.exitCode == 0)
@@ -854,7 +854,7 @@ def main (args : List String) : IO UInt32 := do
   -- generated bootstrap basis.  This fixture has distinct universe use sites
   -- and exercises the full default `--inductives --check` pipeline.
   let poly := s!"{root}/test/fixtures/lean-inductive-models/poly_nested_used.ndjson"
-  let monoModels ← runModelgen binary ["--mono-levels", "--quiet", poly]
+  let monoModels ← runInductiveModels binary ["--mono-levels", "--quiet", poly]
   state := state.check "monomorphized generated models pass the final check"
     (monoModels.exitCode == 0 && !monoModels.stdout.isEmpty)
 
@@ -863,7 +863,7 @@ def main (args : List String) : IO UInt32 := do
   -- input check green if serialization changes the declaration order.
   let monoModeledPath := s!"{scratch}/main-cli-mono-modeled.ndjson"
   IO.FS.writeFile monoModeledPath monoModels.stdout
-  let monoCheckedAgain ← runModelgen binary [
+  let monoCheckedAgain ← runInductiveModels binary [
     "--no-inductives", "--check-input", "--no-check-output", "--no-output",
     monoModeledPath]
   state := state.check "serialized monomorphized models remain ordered and check"

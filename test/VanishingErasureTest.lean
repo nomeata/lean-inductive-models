@@ -1,6 +1,6 @@
-import Modelgen.Driver
-import Modelgen.Check
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Check
+import InductiveModels.Order
 
 /-!
 # Focused test for βζ-dead owner mentions in internal erasures
@@ -12,7 +12,7 @@ internal erased skeleton or tuple spine may use its reduct and treat the field
 as non-recursive.
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 structure TestState where
   passed : Nat := 0

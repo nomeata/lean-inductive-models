@@ -15,7 +15,7 @@ the public names recorded here.
 
 open Lean
 
-namespace Modelgen.Naming
+namespace InductiveModels.Naming
 
 /-- A collision retry's exact build-name to export-name substitution.
 
@@ -255,4 +255,4 @@ def Table.collisionCensus (table : Table) (occupied : Array Name) : CollisionCen
       seen := seen.push name
   return { taken, duplicateRequirements }
 
-end Modelgen.Naming
+end InductiveModels.Naming

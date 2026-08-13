@@ -1,5 +1,5 @@
 import Lean
-import Modelgen.Format
+import InductiveModels.Format
 
 /-!
 # Specialising a nested inductive into a mutual block
@@ -41,7 +41,7 @@ closure in `test/fixtures/lean-inductive-models/hard_nested_mutual_index.ndjson`
 
 open Lean
 
-namespace Modelgen
+namespace InductiveModels
 
 /-- The last component of a name, as a string. -/
 def lastStr : Name → String
@@ -284,4 +284,4 @@ def plan (env : Environment) (lparams : List Name) (numParams : Nat)
   if st'.mimics.isEmpty then return none
   return some { types := out, numAll := types.size, mimics := st'.mimics, paramTys }
 
-end Modelgen
+end InductiveModels

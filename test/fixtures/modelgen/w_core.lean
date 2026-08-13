@@ -24,9 +24,9 @@ cannot reach either**, because all four take the instance as a *parameter*.
   takes the export from 163 records to 208 — **45 more**, of which exactly one
   is an inductive (`Nonempty`) and one an axiom (`Classical.choice`). Those two
   are why `Test.lean`'s `w_core` row asserts that `Nonempty` models, and why
-  `Modelgen.wCoreShared` gained both names beside `propext` and `Iff`.
+  `InductiveModels.wCoreShared` gained both names beside `propext` and `Iff`.
 
-Both are exported, and which a target takes is `Modelgen.tagFactored`'s answer:
+Both are exported, and which a target takes is `InductiveModels.tagFactored`'s answer:
 the tagged column stays at `[propext, Quot.sound]` and only a declaration that
 *needs* the untagged instantiation pays `Classical.choice`. -/
 

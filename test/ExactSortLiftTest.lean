@@ -1,6 +1,6 @@
-import Modelgen.Simple
+import InductiveModels.Simple
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 partial def containsConst (target : Name) : Expr → Bool
   | .const name _ => name == target

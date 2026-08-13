@@ -1,5 +1,5 @@
-/- **Arm G's positive shapes** (`src/Modelgen/Simple.lean`'s
-   [`Modelgen.graphArm`]): the recursive subsingleton, modelled by the **graph**
+/- **Arm G's positive shapes** (`src/InductiveModels/Simple.lean`'s
+   [`InductiveModels.graphArm`]): the recursive subsingleton, modelled by the **graph**
    of its own recursion. This is the arm that took `Acc` out of the basis, and
    these are the exported shapes for the choice-based and `PSigma'`-based routes.
 

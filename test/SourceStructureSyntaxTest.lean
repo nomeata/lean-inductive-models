@@ -1,5 +1,5 @@
-import Modelgen.Driver
-import Modelgen.Order
+import InductiveModels.Driver
+import InductiveModels.Order
 
 /-!
 # Exact source-structure syntax regression
@@ -11,7 +11,7 @@ expectation, and kernel readback for every public owner/constructor/recursor
 slot and for every intrinsic projection and projection rule.
 -/
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 structure OpenBinder where
   name : Name
@@ -178,7 +178,7 @@ def projectionExpectations (x : Export) (family : Check.Family)
   return result
 
 def collectEvidence (path : String) : IO Evidence := do
-  let .ok parsed := Modelgen.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok parsed := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
     | throw <| IO.userError s!"cannot parse {path}"
   let input := injectFieldSyntax parsed
   let base ← importModules #[] {}

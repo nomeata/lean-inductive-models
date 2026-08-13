@@ -1,8 +1,8 @@
-import Modelgen.Driver
-import Modelgen.Check
-import Modelgen.Mono
+import InductiveModels.Driver
+import InductiveModels.Check
+import InductiveModels.Mono
 
-open Lean Meta Modelgen
+open Lean Meta InductiveModels
 
 structure TestState where
   passed : Nat := 0

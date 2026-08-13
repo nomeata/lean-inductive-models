@@ -1,4 +1,4 @@
-import Modelgen.Supervisor
+import InductiveModels.Supervisor
 
 structure TestState where
   passed : Nat := 0
@@ -36,7 +36,7 @@ def runSynthetic (executable : String) (args : Array String)
   IO.Process.output {
     cmd := executable
     args
-    env := #[(Modelgen.Supervisor.workerMarker, none)] } input?
+    env := #[(InductiveModels.Supervisor.workerMarker, none)] } input?
 
 def runTests (executable : String) : IO UInt32 := do
   let mut state : TestState := {}
@@ -70,4 +70,4 @@ def runTests (executable : String) : IO UInt32 := do
 def main (args : List String) : IO UInt32 := do
   match args with
   | ["--run-tests", executable] => runTests executable
-  | _ => Modelgen.Supervisor.supervise syntheticWorker args
+  | _ => InductiveModels.Supervisor.supervise syntheticWorker args

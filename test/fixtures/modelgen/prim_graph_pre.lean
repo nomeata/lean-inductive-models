@@ -12,7 +12,7 @@
      it at all. It is **not** a basis primitive: it is a non-recursive,
      small-eliminating `Prop`, so the Church route models it like anything
      else, and it has a model in this file's output beside its declaration.
-   * `Classical.choice` — the one axiom the arm asserts. `Modelgen.ensureChoice`
+   * `Classical.choice` — the one axiom the arm asserts. `InductiveModels.ensureChoice`
      compares an input's own against Lean's statement with `isDefEq`.
    * `funext` — Lean's own development, from the quotient and `Quot.sound`,
      written out exactly as `funext_binder.lean` writes it. `Ac`'s recursive
@@ -25,9 +25,9 @@
    earlier. So the report's one splice line for `Ac` reads
    `PSigma'` and `Ac._model._impl.funext`. That a *declared* `funext`
    ahead of the model is used instead is `funext_binder.lean`'s claim, on the
-   same [`Modelgen.ensureFunext`]; what this file measures is the distinction
+   same [`InductiveModels.ensureFunext`]; what this file measures is the distinction
    between ordinary and tight pairs, plus the `isDefEq` check
-   `Modelgen.ensureChoice` puts the input's own axiom through. -/
+   `InductiveModels.ensureChoice` puts the input's own axiom through. -/
 prelude
 
 universe u v

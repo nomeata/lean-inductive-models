@@ -38,7 +38,7 @@
 
    Three occupants for the **multi-slot** carve — a constructor with more than
    one recursive field. Arm C runs at `erasureBare` rather than at
-   `erasureLinear`: [`Modelgen.eraseCtorTy`] and [`Modelgen.spineSwap`] replace
+   `erasureLinear`: [`InductiveModels.eraseCtorTy`] and [`InductiveModels.spineSwap`] replace
    a recursive field's whole domain and do it once per such field, so the
    erasure of a branching family is as bare as a linear one — and the spliced
    skeleton that comes out branches, which is **arm W's** to model. That is why
@@ -96,7 +96,7 @@
    under them (`∀ z⃗, T p⃗ e⃗` becomes `∀ z⃗, S p⃗`), and each of the three
    consumers — `good`'s clause, the constructor's component, the recursor's
    induction hypothesis — wraps what it built in the same `z⃗`
-   ([`Modelgen.withRecSlot`]). The spliced skeleton is then **arm W's**, which
+   ([`InductiveModels.withRecSlot`]). The spliced skeleton is then **arm W's**, which
    is why these could not land before arm W did, and `Inf2` was this file's
    third negative until they did.
 
@@ -108,7 +108,7 @@
      this arm was extended for: two **parameters**, the second a family, the
      branch type `B a` reading the constructor's own earlier field, and a
      nullary base constructor. It is the one occupant with a parameter, and
-     that is exactly what it pins. [`Modelgen.eraseCtorTy`] is raw de Bruijn
+     that is exactly what it pins. [`InductiveModels.eraseCtorTy`] is raw de Bruijn
      surgery and every binder of the field it crosses pushes the parameters one
      index further out; a treatment that erased the occurrence at the *field's*
      depth rather than at the depth under its own binders writes
@@ -129,7 +129,7 @@
    Four further mutations, for the record, and all four loud at every
    infinitary occupant: erasing the occurrence *with* its binders (the
    whole-domain replacement the bare case does) is rejected at `_model.good`,
-   as is the same omission in [`Modelgen.spineSwap`]; appending the branch's
+   as is the same omission in [`InductiveModels.spineSwap`]; appending the branch's
    binders after the induction hypothesis's own arguments rather than before is
    rejected at the recursor model; and taking the constructor's field without
    applying it to the branch is rejected at the constructor model.
