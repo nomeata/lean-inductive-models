@@ -124,19 +124,20 @@ def syntheticCertificate (cursor : Writer.Cursor) (count : Nat) : RawCertificate
 def syntheticRawSizes (count : Nat) : RawSpoolSizes :=
   { metadata := 0, arena := 0, declarations := count.toUInt64 }
 
-def runFilterState (input : Export) (generation : Modelgen.Cli.Config) : IO FilterRun := do
+def runFilterState (input : Export) (generation : Modelgen.Cli.Config)
+    (checkRecursors : Bool := false) : IO FilterRun := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<order-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let ((decls, report), finalState) ← Lean.Core.CoreM.toIO
-    (Lean.Meta.MetaM.run' (runFilter input false generation)) context { env }
+    (Lean.Meta.MetaM.run' (runFilter input checkRecursors generation)) context { env }
   unless report.stmtErrors.isEmpty do
     throw <| IO.userError s!"generated statements differ: {report.stmtErrors}"
   return { input, output := { input with decls }, report, env := finalState.env }
 
 def runFilterStagedState (scratch : String) (input : Export)
-    (generation : Modelgen.Cli.Config) : IO StagedFilterRun :=
+    (generation : Modelgen.Cli.Config) (checkRecursors : Bool := false) : IO StagedFilterRun :=
   Spool.withWorkspace scratch fun workspace => do
     let stage ← Spool.IslandStage.create workspace (cursorAfter input.decls)
     let env ← importModules #[] {}
@@ -145,7 +146,7 @@ def runFilterStagedState (scratch : String) (input : Export)
         maxHeartbeats := 0, maxRecDepth := 8192 }
     let ((decls, report, plan), finalState) ← Lean.Core.CoreM.toIO
       (Lean.Meta.MetaM.run'
-        (runFilterWithIslandSink input false generation (.ofStage stage))) context { env }
+        (runFilterWithIslandSink input checkRecursors generation (.ofStage stage))) context { env }
     let sealed ← stage.finish
     unless sealed.cursor == (← stage.cursor) do
       throw <| IO.userError "sealed staged cursor changed after finish"
@@ -178,7 +179,7 @@ def runFilterStagedState (scratch : String) (input : Export)
       malformedPlansRejected := duplicateRejected && cursorRejected && sourceCountRejected }
 
 def runFilterDroppedState (scratch : String) (input : Export)
-    (generation : Modelgen.Cli.Config) : IO DroppedFilterRun :=
+    (generation : Modelgen.Cli.Config) (checkRecursors : Bool := false) : IO DroppedFilterRun :=
   Spool.withWorkspace scratch fun workspace => do
     let stage ← Spool.IslandStage.create workspace (cursorAfter input.decls)
     let env ← importModules #[] {}
@@ -187,7 +188,7 @@ def runFilterDroppedState (scratch : String) (input : Export)
         maxHeartbeats := 0, maxRecDepth := 8192 }
     let ((report, plan), _) ← Lean.Core.CoreM.toIO
       (Lean.Meta.MetaM.run'
-        (runFilterStaged input false generation (.ofStage stage))) context { env }
+        (runFilterStaged input checkRecursors generation (.ofStage stage))) context { env }
     let sealed ← stage.finish
     let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
     let planValid := match plan.declarationSpans certificate
@@ -205,6 +206,13 @@ def generatedFixtureState (path : String) (generation : Modelgen.Cli.Config) :
 
 def generatedFixture (path : String) (generation : Modelgen.Cli.Config) : IO Export := do
   return (← generatedFixtureState path generation).output
+
+def mapConstructor (input : Export) (target : Name) (f : ECtor → ECtor) : Export :=
+  { input with decls := input.decls.map fun declaration => match declaration with
+    | .induct types constructors recursors =>
+      .induct types (constructors.map fun constructor =>
+        if constructor.name == target then f constructor else constructor) recursors
+    | other => other }
 
 def ownerDependentRecordIsRejected : IO Bool := do
   let env ← importModules #[] {}
@@ -582,6 +590,48 @@ def run (root : String) : IO UInt32 := do
             pair.owner == `IdxP.rec && pair.model == Naming.modelName `IdxP.rec) &&
           family.correspondence.iotas.any (fun rule =>
             rule.recursor == `IdxP.rec && rule.name == Naming.iotaName `IdxP.rec 1))
+
+  -- Run the legacy full-output oracle, the shadow sink, and the AST-dropping
+  -- sink across each generation route. Recursor checking is enabled on the
+  -- composed case so its report fields are part of the exact comparison too.
+  let stagedMatrix : Array (String × String × Modelgen.Cli.Config × Bool) := #[
+    ("nested", "nested_iota.ndjson", { noGeneration with nested := true }, false),
+    ("mutual", "mutual_shapes.ndjson", { noGeneration with mutualModels := true }, false),
+    ("simple", "prim_shapes.ndjson", { noGeneration with simple := true }, false),
+    ("composed", "nested_iota.ndjson", {}, true),
+    ("late support", "prim_late_basis.ndjson", {}, false)]
+  for (label, fixture, generation, checkRecursors) in stagedMatrix do
+    let fixturePath := s!"{root}/test/fixtures/modelgen/{fixture}"
+    let text ← IO.FS.readFile fixturePath
+    let .ok input := Modelgen.parse text (analyse := false) | do
+      state := state.check s!"staged {label} fixture parses" false
+      continue
+    let legacy ← runFilterState input generation checkRecursors
+    let shadow ← runFilterStagedState s!"{root}/_tmp" input generation checkRecursors
+    let dropped ← runFilterDroppedState s!"{root}/_tmp" input generation checkRecursors
+    state := state.check s!"staged {label} shadow equals legacy" <|
+      shadow.output.decls == legacy.output.decls && shadow.report == legacy.report &&
+        shadow.planValid
+    state := state.check s!"staged {label} drop equals shadow" <|
+      dropped.report == shadow.report && dropped.planValid &&
+        dropped.plan.declarations == shadow.plan.declarations &&
+        dropped.plan.islands == shadow.plan.islands
+
+  -- A malformed later inductive rejects after earlier owners may already have
+  -- committed physical islands. The report/output verdict must still agree;
+  -- the deliberately empty returned plan is noncomposable with that tail.
+  let lateMalformed := mapConstructor nestedRun.input `PT.node fun constructor =>
+    { constructor with type := .sort .zero }
+  let malformedLegacy ← runFilterState lateMalformed {}
+  let malformedShadow ← runFilterStagedState s!"{root}/_tmp" lateMalformed {}
+  let malformedDropped ← runFilterDroppedState s!"{root}/_tmp" lateMalformed {}
+  state := state.check "late unreplayable staged verdict equals legacy" <|
+    malformedLegacy.report.unreplayable.isSome &&
+      malformedShadow.output.decls == malformedLegacy.output.decls &&
+      malformedShadow.report == malformedLegacy.report &&
+      malformedDropped.report == malformedLegacy.report &&
+      malformedShadow.plan.declarations.isEmpty && malformedDropped.plan.declarations.isEmpty &&
+      !malformedShadow.planValid && !malformedDropped.planValid
 
   -- The small alias fixture exercises both a model-local arm-C skeleton and
   -- fixed shared graph support. Every generated declaration that survives in
