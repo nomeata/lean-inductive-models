@@ -1919,7 +1919,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- Built once. Each island overlays only its generated records, avoiding the
   -- former full-source declaration/constructor/rule/normalizer rebuild.
   let sourceSyntax := Check.SyntaxIndex.ofSource x
-  let mut out : Array EDecl := #[]
+  let mut legacyOut : Array EDecl := #[]
   let mut rep : Report := {}
   let mut staged : Array StagedIsland := #[]
   let mut islandStatements : Check.StatementReport :=
@@ -1927,7 +1927,6 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- The declarations built inside the current model island. Besides staging
   -- exact generated names for support persistence, this keeps recursive
   -- splice closure and nested → mutual → simple composition atomic.
-  let mut pending : Array PendingModel := #[]
   -- A noncanonical declaration under a basis name makes generation
   -- unsupported for this stream. Support scheduling puts basis owners before
   -- their consumers; suppressing later islands prevents a weak, route-local
@@ -1938,6 +1937,10 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let reserved : Std.HashSet Name :=
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
   for d in scheduled.decls do
+    -- Construction state is island-local. Nothing generated for an earlier
+    -- owner remains in this buffer after that island has closed.
+    let mut out : Array EDecl := #[]
+    let mut pending : Array PendingModel := #[]
     let basisRoot? := match d with
       | .induct types _ _ => types.findSome? fun type =>
           if primBasis.contains type.name then some type.name else none
@@ -1947,8 +1950,6 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     -- restores this exact source prefix plus accepted reusable support.
     setEnv mainEnv
     let mainBefore := mainEnv
-    let outputBefore := out.size
-    let pendingBefore := pending.size
     let reportedBefore := rep.generated.size
     -- The model, if this is a nested declaration. Generated **before** the
     -- declaration is added: nothing in the model mentions `T`.
@@ -2146,8 +2147,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
             throwError "simple model prerequisite remained late after support scheduling"
           (out, rep, pending) ← pure st
     if d matches .induct .. then
-      let generated := out.extract outputBefore out.size
-      let islandModels := pending.extract pendingBefore pending.size
+      let generated := out
+      let islandModels := pending
       rep := { rep with
         maxLivePendingModels := max rep.maxLivePendingModels islandModels.size
         maxLiveIslandRecords := max rep.maxLiveIslandRecords generated.size }
@@ -2172,8 +2173,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         staged := staged.push {
           compact := { compact with summaries := Order.tagIsland staged.size compact.summaries }
           commit }
-      out := out.extract 0 outputBefore ++ orderedGenerated
-      pending := pending.extract 0 pendingBefore
+      legacyOut := legacyOut ++ orderedGenerated
       setEnv mainWithSupport
       if let some ownerDeclaration := toDeclaration mainWithSupport d then
         match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
@@ -2186,21 +2186,20 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
             { rep with unreplayable := some s!"{d.names}: {message}" }, staged)
     else
       mainEnv ← getEnv
-    out := out.push d
+    legacyOut := legacyOut.push d
     -- Statement correspondence is deliberately postponed until every emitted
     -- record is available.  It is an exact export-level comparison and does
     -- not consult this replay environment or the recursors the kernel minted
     -- for the owner.
-    pending := #[]
     if checkRecursors then
       if let .induct _ _ rs := d then
         let (n, b) ← checkRecs rs
         rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
   let generatedOwners := rep.generated.foldl
     (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
-  let finalExport := { x with decls := out }
+  let finalExport := { x with decls := legacyOut }
   let finalFamilies := Check.statementFamiliesFor finalExport generatedOwners
-  let generatedRecords := out.filter fun declaration =>
+  let generatedRecords := legacyOut.filter fun declaration =>
     declaration.names.any fun name => !reserved.contains name
   let finalIndex ← match sourceSyntax.prependRecords generatedRecords with
     | .error message => throwError "cannot index final generated records: {message}"
@@ -2214,7 +2213,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   rep := { rep with stmtChecked := statementReport.statementsChecked }
   rep := { rep with
     stmtErrors := statementReport.violations.map fun violation => violation.message }
-  return (out, rep, staged)
+  return (legacyOut, rep, staged)
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
