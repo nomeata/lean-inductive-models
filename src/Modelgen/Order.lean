@@ -133,7 +133,13 @@ def references (declaration : EDecl) : Std.HashSet Name := Id.run do
     roots := roots.push type |>.push value
   | .opaq _ _ type value _ _ =>
     roots := roots.push type |>.push value
-  | .quot _ _ type _ => roots := roots.push type
+  | .quot _ _ type _ =>
+    -- `Declaration.quotDecl` is one kernel declaration represented by four
+    -- export records, and its hidden kernel prerequisite is exact Eq.  Keep
+    -- that atomic dependency explicit even though no quotient record's public
+    -- type mentions it.
+    names := names.insert `Eq
+    roots := roots.push type
   | .induct types ctors recursors =>
     for type in types do
       names := insertNames names type.ctors

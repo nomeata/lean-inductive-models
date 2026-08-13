@@ -1062,40 +1062,6 @@ def installedQuotRecords? (env : Environment) : Option (Array EDecl) := do
   let ind ← record `Quot.ind
   return #[quot, mk, lift, ind]
 
-/-- Validate quotient records before replaying any generated declaration.
-
-There is no meaningful per-record replay for a quotient: the first record
-causes the kernel to install all four constants.  Consequently the only sound
-serialized representation is one new, consecutive, canonically ordered
-four-record bundle with every exported field equal to the kernel-minted
-metadata.  In particular this rejects a lone first record, a reordered or
-duplicated bundle, and malformed metadata on the first record rather than
-letting the subsequent installed-name checks obscure it. -/
-def checkGeneratedQuotRecords (base : Environment) (records : Array EDecl) :
-    MetaM (Except String Unit) := do
-  let positions := (Array.range records.size).filter fun i =>
-    match records[i]! with | .quot .. => true | _ => false
-  if positions.isEmpty then return .ok ()
-  for name in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
-    if base.constants.contains name then
-      return .error s!"generated quotient bundle would shadow existing {name}"
-  unless positions.size == 4 do
-    return .error s!"quotient declaration has {positions.size} export records, expected 4"
-  let first := positions[0]!
-  unless positions == #[first, first + 1, first + 2, first + 3] do
-    return .error "quotient export records are not one consecutive bundle"
-  let quotientEnv ← match base.addDeclCore 0 .quotDecl none true with
-    | .error exception =>
-      return .error s!"cannot reconstruct quotient declaration: \
-        {← (exception.toMessageData {}).toString}"
-    | .ok next => pure next
-  let some expected := installedQuotRecords? quotientEnv
-    | return .error "kernel quotient declaration did not install its four constants"
-  let actual := records.extract first (first + 4)
-  unless actual == expected do
-    return .error "quotient export bundle does not match the kernel declaration"
-  return .ok ()
-
 /-- A generated declaration as export records — **plural**, because
 `Declaration.quotDecl` is one kernel declaration and four records. Everything
 else is one record and goes through [`Modelgen.toEDecl`]. -/
@@ -1118,16 +1084,34 @@ hope later imposed by record ordering.  The returned environment is a fork;
 the caller may discard it after streaming the records. -/
 def checkGeneratedIn (base : Environment) (records : Array EDecl) :
     MetaM (Except String Environment) := do
-  match ← checkGeneratedQuotRecords base records with
-  | .error message => return .error message
-  | .ok () => pure ()
   let mut checked := base
-  for record in records do
+  let mut cursor := 0
+  while cursor < records.size do
+    let record := records[cursor]!
+    if record matches .quot .. then
+      -- Quotient is one kernel declaration but four consecutive export
+      -- records. Validate and install it at the current checked prefix: that
+      -- prefix may itself contain generated Eq, which the kernel declaration
+      -- requires and an up-front scan against `base` cannot see.
+      for name in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
+        if checked.constants.contains name then
+          return .error s!"generated quotient bundle would shadow existing {name}"
+      unless cursor + 4 <= records.size do
+        return .error "quotient declaration does not have four consecutive export records"
+      let quotientEnv ← match checked.addDeclCore 0 .quotDecl none true with
+        | .error exception =>
+          return .error s!"cannot reconstruct quotient declaration: \
+            {← (exception.toMessageData {}).toString}"
+        | .ok next => pure next
+      let some expected := installedQuotRecords? quotientEnv
+        | return .error "kernel quotient declaration did not install its four constants"
+      let actual := records.extract cursor (cursor + 4)
+      unless actual == expected do
+        return .error "quotient export bundle does not match the kernel declaration"
+      checked := quotientEnv
+      cursor := cursor + 4
+      continue
     let some declaration := toDeclaration checked record | do
-      -- One `Declaration.quotDecl` installs all four exported quotient names.
-      -- The remaining three records are therefore already represented, not
-      -- failed reconstructions, once their exact constant is present.
-      if installedQuotRecord checked record then continue
       return .error s!"{record.names}: cannot reconstruct a kernel declaration"
     match checked.addDeclCore 0 declaration none true with
     | .error exception =>
@@ -1138,6 +1122,7 @@ def checkGeneratedIn (base : Environment) (records : Array EDecl) :
       for name in declaration.getNames do
         unless checked.constants.contains name do
           return .error s!"{name}: checked declaration was lost from the kernel environment"
+    cursor := cursor + 1
   return .ok checked
 
 /-- Persist the reusable subset of support explicitly recorded by an accepted

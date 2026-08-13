@@ -377,6 +377,10 @@ def run (root : String) : IO UInt32 := do
     generatedReplayRejects empty (quotientRecords ++ #[eqRecord])
   state := state.check "generated quotient cannot precede its generated Eq prerequisite"
     quotientBeforeEqRejected
+  state := state.check "record ordering exposes the quotient's hidden Eq prerequisite" <|
+    match Order.reorder (exportOf (quotientRecords ++ #[eqRecord])) with
+    | .ok reordered => before reordered `Eq `Quot
+    | .error _ => false
   state := state.check "canonical quotient bundle replays exactly once" <|
     match ← replayGeneratedIn quotientBase quotientRecords with
     | .ok checked => installedQuotRecords? checked == some quotientRecords
