@@ -389,7 +389,8 @@ def main (args : List String) : IO UInt32 := do
   let duplicate ← runModelgenStdin binary [
     "--arena-check", "-"] duplicateText
   state := state.check "duplicate declaration is an Arena rejection with exit 1" <|
-    duplicate.exitCode == 1 && (duplicate.stderr.splitOn "parse error:").length > 1
+    duplicate.exitCode == 1 &&
+      (duplicate.stderr.splitOn "input kernel check rejected: duplicate declaration").length > 1
   let duplicateOutsideArena ← runModelgenStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input", "--no-output", "-"] duplicateText
   state := state.check "duplicate declaration outside Arena mode remains a tool error" <|
