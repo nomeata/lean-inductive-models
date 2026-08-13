@@ -284,7 +284,7 @@ def expectedOwn : List Row :=
     -- and unequal constructor counts within a block, because equal ones let a
     -- generator that flattened the members wrongly still land every minor at
     -- the right arity.
-  , ("mutual_shapes", [("A", 30), ("PA", 22), ("UA", 24)], [])
+  , ("mutual_shapes", [("A", 30), ("PA", 55), ("UA", 54)], [])
     -- The indices. `T0`/`T1`/`T2` is the shape; `MA`/`MB`/`MC` have index
     -- telescopes of **different lengths**, which is what the tag exists for;
     -- `DA`/`DB` differ in the index *type* at the same sort; `SA`/`SB`/`SC` is
@@ -305,11 +305,11 @@ def expectedOwn : List Row :=
     -- `Sort`-valued field, a **dependent** index telescope, an index at a
     -- parameter (so the tag's sort is `max 1 (u+1)` and not a numeral), and a
     -- parameter that is a function type.
-  , ("mutual_odd_shapes", [("LA", 32), ("IA", 28), ("WA", 14), ("QA", 14), ("FA", 18)], [])
+  , ("mutual_odd_shapes", [("LA", 62), ("IA", 58), ("WA", 35), ("QA", 35), ("FA", 39)], [])
     -- `KB._model.self` is intentionally a legacy-looking squatter. Under the
     -- declaration-local contract it is irrelevant, so both mutual blocks
     -- model; this preserves the regression test that a legacy name is ignored.
-  , ("mutual_keying", [("KA", 22), ("GA", 14)], [])
+  , ("mutual_keying", [("KA", 43), ("GA", 35)], [])
     -- ── the two composed constructions ────────────────────────────────────
     --
     -- **The axis only the composition reaches.** Lean's nested specialisation
