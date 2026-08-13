@@ -38,15 +38,15 @@ def readExport (path : String) : IO Export := do
     | throw <| IO.userError s!"cannot parse {path}"
   return result
 
-def generatedExport (input : Export) : IO Export := do
+def generatedExport (input : Export) : IO (Export × Report) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<export-syntax-normalization-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
-  let ((declarations, _), _) ← Core.CoreM.toIO
+  let ((declarations, report), _) ← Core.CoreM.toIO
     (MetaM.run' (runFilter input false {})) context { env }
   match Order.reorder { input with decls := declarations } with
-  | .ok output => return output
+  | .ok output => return (output, report)
   | .error failure =>
     throw <| IO.userError s!"cannot order generated export: {repr failure}"
 
@@ -96,7 +96,7 @@ def run (root : String) : IO UInt32 := do
     (declarationType? prim `SvIx == svIxType)
 
   let flatInput ← readExport s!"{root}/test/fixtures/modelgen/nest_fam_arg.ndjson"
-  let flatOutput ← generatedExport flatInput
+  let (flatOutput, flatReport) ← generatedExport flatInput
   let flatOwner := (`Flat._model._impl).mkNum 1
   let flatIotas := #[Naming.projectionIotaName flatOwner 0,
     Naming.projectionIotaName flatOwner 1]
@@ -105,6 +105,8 @@ def run (root : String) : IO UInt32 := do
   state := state.check "Flat projection iotas check literally"
     ((Check.check flatOutput).all fun violation =>
       !(flatOwner.isPrefixOf violation.familyOwner))
+  state := state.check "generated Flat owner checks through the source syntax overlay"
+    (flatReport.generated.any (·.1 == flatOwner) && flatReport.stmtErrors.isEmpty)
 
   IO.println s!"export syntax normalization: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
