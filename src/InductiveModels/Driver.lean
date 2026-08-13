@@ -2351,6 +2351,47 @@ private def RetentionMode.sink? : RetentionMode → Option IslandSink
   | .shadowSpool sink | .compactSpool sink => some sink
   | .fullOracle | .compactDiscard => none
 
+/-- Immutable source products accumulated declaration by declaration.  The
+syntax index owns the shared expression-facing tables; summaries, reserved
+names and raw ordinals are value-free frozen views. -/
+structure SourceCensus where
+  sourceSyntax : Check.SyntaxIndex
+  summaries : Array Order.DeclSummary
+  reserved : Std.HashSet Name
+  rawOrdinals : Std.HashMap Name Nat
+
+/-- Build one source census through declaration callbacks.  The last raw
+ordinal for a duplicate name deliberately matches the historical Driver loop;
+ordering still reports the duplicate before consuming that map. -/
+def SourceCensus.ofSource (source : Export) : SourceCensus :=
+  let syntaxBuilder := source.decls.foldl
+    (fun builder declaration => builder.push declaration)
+    ({} : Check.SyntaxIndex.Builder)
+  let sourceSyntax := syntaxBuilder.freeze
+  let summaries := Order.summariesIncremental source sourceSyntax
+  let reserved := source.decls.foldl (fun names declaration =>
+    declaration.names.foldl (·.insert ·) names) ({} : Std.HashSet Name)
+  let (_, rawOrdinals) := source.decls.foldl (init :=
+      (0, ({} : Std.HashMap Name Nat))) fun state declaration =>
+    (state.1 + 1, declaration.names.foldl
+      (fun ordinals name => ordinals.insert name state.1) state.2)
+  { sourceSyntax, summaries, reserved, rawOrdinals }
+
+/-- Rebind source-family certificates to a reordered declaration view without
+interpreting the source index's raw record occurrences as view ordinals. -/
+def SourceCensus.familyCertificateRecords (census : SourceCensus)
+    (source view : Export) : Array (Array Check.CompactFamilyCertificate) := Id.run do
+  let mut byOwner : Std.HashMap Name (Array Check.CompactFamilyCertificate) := {}
+  for family in Check.discoverWithIndex source census.sourceSyntax do
+    let certificate := Check.compactFamilyCertificateWithIndex source census.sourceSyntax family
+    byOwner := byOwner.insert family.owner
+      ((byOwner.getD family.owner #[]).push certificate)
+  let mut rows := Array.replicate view.decls.size #[]
+  for i in [0:view.decls.size] do
+    if let .induct (type :: _) _ _ := view.decls[i]! then
+      rows := rows.set! i (byOwner.getD type.name #[])
+  return rows
+
 private structure FilterContext where
   source : Export
   checkRecursors : Bool
@@ -2803,19 +2844,14 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- Build the immutable source products once.  They are deliberately still
   -- derived from today's complete scheduled Export; only the logical
   -- declaration transition is extracted in this phase.
-  let sourceSyntax := Check.SyntaxIndex.ofSource x
+  let sourceCensus := SourceCensus.ofSource x
+  let sourceSyntax := sourceCensus.sourceSyntax
   let sourceNormalizer := sourceSyntax.exactNormalizer
-  let sourceSummaries := Order.summaries scheduled
+  let sourceSummaries := Order.summariesIncremental scheduled sourceSyntax
   let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
-  let sourceFamilyRecords := Check.compactFamilyCertificateRecordsWithIndex
-    scheduled sourceSyntax (Check.discover scheduled)
-  let mut rawOrdinals : Std.HashMap Name Nat := {}
-  for ordinal in [0:x.decls.size] do
-    rawOrdinals := x.decls[ordinal]!.names.foldl
-      (fun ordinals name => ordinals.insert name ordinal) rawOrdinals
-  let reserved : Std.HashSet Name :=
-    x.decls.foldl (fun names declaration =>
-      declaration.names.foldl (·.insert ·) names) {}
+  let sourceFamilyRecords := sourceCensus.familyCertificateRecords x scheduled
+  let rawOrdinals := sourceCensus.rawOrdinals
+  let reserved := sourceCensus.reserved
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, sourceNormalizer, sourceSummaries, sourceGlobalExtras,

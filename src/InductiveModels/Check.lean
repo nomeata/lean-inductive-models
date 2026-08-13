@@ -1213,6 +1213,62 @@ structure SyntaxIndex where
   private sourceFamilies : Std.HashMap Name (Array Family) := {}
   private names : Std.HashSet Name := {}
 
+/-- Mutable construction state for an immutable [`SyntaxIndex`].  The builder
+is fed in declaration order.  It retains only exact declaration-facing syntax
+tables plus inductive owner records until `freeze`; ordinary declaration
+values are not accumulated. -/
+structure SyntaxIndex.Builder where
+  private declarations : DeclarationTypes := {}
+  private constructors : Constructors := {}
+  private structures : StructureOwners := {}
+  private ruleSlots : IotaSlots := {}
+  private definitions : Std.HashMap Name ExactNormalizationDef := {}
+  private records : Std.HashMap Name (Array Nat) := {}
+  private names : Std.HashSet Name := {}
+  private owners : Array (Nat × EDecl) := #[]
+  private nextOrdinal : Nat := 0
+
+/-- Add one exact export record to a syntax-index builder.  Duplicate handling
+matches the historical whole-export prepasses: declaration types and record
+occurrences append, constructor/structure tables keep the last occurrence,
+and transparent normalization keeps the first definition. -/
+def SyntaxIndex.Builder.push (builder : SyntaxIndex.Builder)
+    (declaration : EDecl) : SyntaxIndex.Builder := Id.run do
+  let ordinal := builder.nextOrdinal
+  let mut declarations := builder.declarations
+  for info in declTypes declaration do
+    declarations := declarations.insert info.name
+      ((declarations.getD info.name #[]).push info)
+  let mut constructors := builder.constructors
+  let mut structures := builder.structures
+  let mut owners := builder.owners
+  if let .induct types ctors _ := declaration then
+    for ctor in ctors do constructors := constructors.insert ctor.name ctor
+    for type in types do structures := structures.insert type.name (type, ctors)
+    owners := owners.push (ordinal, declaration)
+  let mut ruleSlots := builder.ruleSlots
+  let mut records := builder.records
+  let mut names := builder.names
+  for name in declaration.names do
+    if let some (parent, index) := iotaSlot? name then
+      ruleSlots := ruleSlots.insert parent
+        ((ruleSlots.getD parent #[]).push (name, index))
+    records := records.insert name ((records.getD name #[]).push ordinal)
+    names := names.insert name
+  let mut definitions := builder.definitions
+  if let .defn name levelParams _ value .. := declaration then
+    unless definitions.contains name do
+      definitions := definitions.insert name { levelParams, value }
+  let builder := { builder with declarations := declarations }
+  let builder := { builder with constructors := constructors }
+  let builder := { builder with structures := structures }
+  let builder := { builder with ruleSlots := ruleSlots }
+  let builder := { builder with definitions := definitions }
+  let builder := { builder with records := records }
+  let builder := { builder with names := names }
+  let builder := { builder with owners := owners }
+  return { builder with nextOrdinal := ordinal + 1 }
+
 /-- The exact syntax normalizer already retained by this index.  The returned
 value structurally shares its definition table; consumers must reuse it rather
 than rebuilding a second whole-export map. -/
@@ -1463,6 +1519,38 @@ private def sourceFamilyTable (families : Array Family) : Std.HashMap Name (Arra
   families.foldl (init := {}) fun table family =>
     let template := { family with decls := #[], names := #[] }
     table.insert family.owner ((table.getD family.owner #[]).push template)
+
+/-- Freeze declaration callbacks into one immutable source syntax index.
+Owner templates are computed directly from the retained inductive records;
+they do not require a second whole-export discovery/index construction. -/
+def SyntaxIndex.Builder.freeze (builder : SyntaxIndex.Builder) : SyntaxIndex := Id.run do
+  let index : SyntaxIndex :=
+    { declarations := builder.declarations
+      constructors := builder.constructors
+      structures := builder.structures
+      ruleSlots := builder.ruleSlots
+      normalizer := { definitions := builder.definitions }
+      records := builder.records
+      names := builder.names }
+  let mut families : Array Family := #[]
+  for (ownerDecl, declaration) in builder.owners do
+    let .induct types _ _ := declaration | continue
+    let some root := types.head?.map (·.name) | continue
+    let some correspondence := correspondenceFor? index.normalizer
+        (intrinsicProjectionFieldsWithIndex index) declaration
+      | continue
+    let modelRoot := Naming.modelName root
+    families := families.push
+      { owner := root, modelRoot, carrier := modelRoot, ownerDecl, correspondence
+        decls := #[], names := #[] }
+  return { index with sourceFamilies := sourceFamilyTable families }
+
+/-- Incremental source-index construction.  This is intentionally separate
+from `ofSource` during the migration so property tests retain the old
+whole-export implementation as an independent reference. -/
+def SyntaxIndex.ofSourceIncremental (x : Export) : SyntaxIndex :=
+  (x.decls.foldl (fun builder declaration => builder.push declaration)
+    ({} : SyntaxIndex.Builder)).freeze
 
 /-- Build persistent generation-time source tables without the whole-output
 unexpected-slot sweep. Every owner template is attached after indexed

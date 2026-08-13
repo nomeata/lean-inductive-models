@@ -195,6 +195,50 @@ private def summariesForFamilies (x : Export) (families : Array Check.Family)
       { summary with modelSlots := family.correspondence.publicNames }
   return resolveModelEdges result
 
+/-- Declaration-wise construction state for ordering summaries.  Syntax
+families are attached only when the builder freezes, so the same callback
+logic can summarize raw or scheduled declaration views without conflating
+their ordinals. -/
+structure SummaryBuilder where
+  private rows : Array DeclSummary := #[]
+
+/-- Add one declaration at the next ordinal in this summary view. -/
+def SummaryBuilder.push (builder : SummaryBuilder) (declaration : EDecl)
+    (prefer : EDecl → Bool := fun _ => false)
+    (origin : SummaryOrigin := .source) : SummaryBuilder :=
+  let ordinal := builder.rows.size
+  let owner := match declaration with
+    | .induct types _ _ => types.head?.map (·.name)
+    | _ => none
+  { rows := builder.rows.push
+      { ordinal, introduced := declaration.names.toArray
+        referenced := references declaration, origin, owner
+        support := prefer declaration } }
+
+/-- Attach exact source-family slots and resolve model edges after all
+declaration callbacks have arrived.  Family templates are looked up by owner
+name rather than record ordinal, which keeps scheduled-view ordinals separate
+from the raw source index.  Duplicate owner names are malformed independently
+and still receive the same duplicate-name diagnostic before ordering. -/
+def SummaryBuilder.freeze (builder : SummaryBuilder)
+    (index : Check.SyntaxIndex) : Array DeclSummary := Id.run do
+  let mut rows := builder.rows
+  for i in [0:rows.size] do
+    let some owner := rows[i]!.owner | continue
+    let families := index.sourceStatementFamilies owner
+    if let some family := families[0]? then
+      rows := rows.modify i fun row =>
+        { row with modelSlots := family.correspondence.publicNames }
+  return resolveModelEdges rows
+
+/-- Incrementally summarize a declaration view against one frozen source
+syntax index. -/
+def summariesIncremental (x : Export) (index : Check.SyntaxIndex)
+    (prefer : EDecl → Bool := fun _ => false)
+    (origin : SummaryOrigin := .source) : Array DeclSummary :=
+  (x.decls.foldl (fun builder declaration =>
+      builder.push declaration prefer origin) ({} : SummaryBuilder)).freeze index
+
 /-- Summarize an export while its declaration values are available.
 
 The public-model edges are computed by the same exact discovery used by the
