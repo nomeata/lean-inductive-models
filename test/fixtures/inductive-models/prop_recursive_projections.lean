@@ -23,6 +23,7 @@ inductive Ix : Type where
 
 inductive PropRecIdx (a : Prop) (b : a → Prop) (defaultB : (ha : a) → b ha) :
     Ix → Prop where
-  | mk (ha : a) (hb : b ha := defaultB ha)
+  | mk (ha : a)
+      (hb : Eq.rec (motive := fun _ _ => Prop) (b ha) (Eq.refl (b ha)) := defaultB ha)
       (tail : PropRecIdx a b defaultB Ix.here) :
       PropRecIdx a b defaultB Ix.here

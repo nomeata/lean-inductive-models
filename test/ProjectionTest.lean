@@ -99,6 +99,10 @@ partial def containsRedundantZeroMax : Expr → Bool
   | .mdata _ body => containsRedundantZeroMax body
   | .bvar _ | .fvar _ | .mvar _ | .lit _ => false
 
+partial def outerEqualityRhs? : Expr → Option Expr
+  | .forallE _ _ body _ => outerEqualityRhs? body
+  | body => body.getAppArgs[2]?
+
 /-- A test-only defeq-redundant level spelling.  The raw constructor is
 intentional: normalization would destroy the syntax this regression pins. -/
 def redundantSourceLevels (expression : Expr) : Expr :=
@@ -387,8 +391,10 @@ def main : IO UInt32 := do
       (propProjectionNames ++ propProjectionRules).all fun name =>
         (declaration? propGenerated name).isSome
   state := state.check "recursive indexed Prop projection iotas have literal fields" <|
-    propProjectionRules.all fun rule =>
-      (declarationType? propGenerated rule).any (!containsConst ``Eq.rec ·) &&
+    (Array.range 3).all fun fieldIndex =>
+      let rule := propProjectionRules[fieldIndex]!
+      (declarationType? propGenerated rule).bind outerEqualityRhs? ==
+          some (.bvar (2 - fieldIndex)) &&
         (theoremValue? propGenerated rule).any (containsConst ``Eq.refl)
   state := state.check "dependent Prop projection retains the source default wrapper" <|
     (declarationType? propGenerated propProjectionRules[1]!).any
@@ -400,6 +406,19 @@ def main : IO UInt32 := do
   state := state.check "checker accepts recursive indexed Prop literal projection rules" <|
     propReport.stmtErrors.isEmpty &&
       (Check.check propGenerated).all (fun violation => violation.familyOwner != `PropRecIdx)
+  state := state.check "maybe-zero formers do not enter the Prop literal contract" <|
+    (ownerAndRecursor? primRaw `PI).all fun (type, _) =>
+      !propositionProjectionIotaUsesLiteralField type
+
+  -- Literal means source-literal, not transport-free. The fixture writes a
+  -- definitionally trivial Eq.rec in the dependent proof field's domain. It
+  -- must remain in that projection's exact public type and iota telescope;
+  -- only the generator's former dependency transport is absent.
+  state := state.check "source-authored Eq.rec survives dependent Prop faces" <|
+    (declarationType? propGenerated propProjectionNames[1]!).any
+        (containsConst ``Eq.rec) &&
+      (declarationType? propGenerated propProjectionRules[1]!).any
+        (containsConst ``Eq.rec)
 
   -- A recursive Type with no base constructor is empty, including when arm C
   -- obtains it as the erasure skeleton of an indexed family.  `NoBase` checks
