@@ -771,7 +771,9 @@ private def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
   let unroll := fun owner => Name.str (memberRoot owner) "unroll"
   let unrollRoll := fun owner => Name.str (memberRoot owner) "unroll_roll"
   let rollUnroll := fun owner => Name.str (memberRoot owner) "roll_unroll"
-  let mut certificateNames := support
+  -- `tag` and `aux` are shared with every legacy mutual encoding.  Only a
+  -- member-local adapter slot commits the stream to this new certificate.
+  let mut certificateNames : Array Name := #[]
   for ownerType in ownerTypes do
     certificateNames := certificateNames ++ #[privateSelf ownerType.name,
       privateRecursor ownerType.name, roll ownerType.name, unroll ownerType.name,
