@@ -14,6 +14,42 @@ open Lean Meta
 
 namespace InductiveModels
 
+/-- Equality bookkeeping for the public recursor over an equivalent private
+carrier.  `q` and its private recursive result stay fixed while equality
+elimination changes only the public recursive field.  The generator inlines
+this proof term; generated output never refers to this implementation name. -/
+theorem oneLayerRecursorCompatibility
+    {M P Q R : Type} {C : P → Sort _} {H : R → Sort _}
+    (roll : P → M) (unroll : M → P)
+    (unrollRoll : ∀ p, unroll (roll p) = p)
+    (rollField : R → Q) (unrollField : Q → R)
+    (unrollRollField : ∀ p, unrollField (rollField p) = p)
+    (privateCtor : Q → M) (publicCtor : R → P)
+    (rollCtor : ∀ p, roll (publicCtor p) = privateCtor (rollField p))
+    (privateIH : ∀ q, H (unrollField q)) (publicIH : ∀ p, H p)
+    (ihAgreement : ∀ q, publicIH (unrollField q) = privateIH q)
+    (minor : ∀ p, H p → C (publicCtor p))
+    (core : ∀ q, C (unroll q))
+    (constructorAgreement : ∀ q,
+      publicCtor (unrollField q) = unroll (privateCtor q))
+    (coreIota : ∀ q, core (privateCtor q) =
+      Eq.mp (congrArg C (constructorAgreement q))
+        (minor (unrollField q) (privateIH q))) :
+    let publicRec : ∀ p, C p := fun p =>
+      Eq.mp (congrArg C (unrollRoll p)) (core (roll p))
+    ∀ p, publicRec (publicCtor p) = minor p (publicIH p) := by
+  intro publicRec p
+  unfold publicRec
+  have compat (q : Q) (r : M) (p : R)
+      (hp : unrollField q = p) (hc : r = privateCtor q)
+      (hout : unroll r = publicCtor p) :
+      Eq.mp (congrArg C hout) (core r) = minor p (publicIH p) := by
+    subst r
+    subst p
+    simp [coreIota, ihAgreement]
+  exact compat (rollField p) (roll (publicCtor p)) p
+    (unrollRollField p) (rollCtor p) (unrollRoll (publicCtor p))
+
 /-- Names internal to one private/public one-layer equivalence. -/
 structure OneLayerNames where
   publicNames : PrimInterfaceNames
