@@ -398,9 +398,9 @@ def main (args : List String) : IO UInt32 := do
       (duplicateOutsideArena.stderr.splitOn "parse error:").length > 1
 
   -- A flattened export can contain distinct private/public names which Lean's
-  -- full Environment indexes under one normalized key. Arena mode must fail
-  -- closed before that supplemental mirror panics; ordinary pure-kernel mode
-  -- retains its historical behavior and accepts the distinct raw names.
+  -- full Environment indexes under one normalized key. Arena mode keeps the
+  -- colliding record out of its supplemental mirror without weakening the
+  -- authoritative kernel replay or panicking.
   let publicCollision : Lean.Name := `ArenaCollision.X
   let privateCollision : Lean.Name :=
     (`_private.ArenaCollision).mkNum 0 |>.str "ArenaCollision" |>.str "X"
@@ -409,9 +409,9 @@ def main (args : List String) : IO UInt32 := do
     .ax privateCollision [] (.sort (.succ .zero)) false] }
   let normalizedArena ← runModelgenStdin binary ["--arena-check", "-"]
     normalizedCollision.render
-  state := state.check "Arena normalized private-name collision rejects without panic" <|
+  state := state.check "Arena accepts a valid normalized private-name collision without panic" <|
     Lean.privateToUserName privateCollision == publicCollision &&
-    normalizedArena.exitCode == 1 && !normalizedArena.stderr.contains "PANIC"
+    normalizedArena.exitCode == 0 && !normalizedArena.stderr.contains "PANIC"
   let normalizedOrdinary ← runModelgenStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
     normalizedCollision.render

@@ -1578,9 +1578,14 @@ private def kernelReplayExpressions : EDecl → Array Expr
   | .induct types constructors _ =>
       types.toArray.map (·.type) ++ constructors.toArray.map (·.type)
 
-private def checkKernelReplayExpressions (record : EDecl) : MetaM (Except String Unit) := do
+private def checkKernelReplayExpressions (record : EDecl)
+    (only : Option (Std.HashSet Expr) := none)
+    (unavailable : Std.HashSet Name := {}) : MetaM (Except String Unit) := do
   try
     for expression in kernelReplayExpressions record do
+      if let some selected := only then
+        unless selected.contains expression do continue
+      if expression.getUsedConstants.any unavailable.contains then continue
       Meta.check expression
     return .ok ()
   catch
@@ -1645,6 +1650,7 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
   let mut analysis := base
   let mut normalizedNames : Std.HashMap Name Name := {}
   let mut arityVisited : Std.HashSet Expr := {}
+  let mut mirrorOmitted : Std.HashSet Name := {}
   for index in order do
     let record := x.decls[index]!
     let declaration? ← match kernelReplayDeclaration record with
@@ -1656,23 +1662,31 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
         | .ok visited => pure visited
         | .error message => return .error message
       -- `AsyncConsts.add` panics and drops the second entry when distinct raw
-      -- private names normalize to the same user name. Detect that condition
-      -- before touching the supplemental full-environment mirror. The kernel
-      -- verdict remains authoritative, but without a visible mirror entry the
-      -- extra expression walk cannot be performed soundly, so Arena mode
-      -- rejects instead of panicking or silently skipping it.
+      -- private names normalize to the same user name. Keep such records out
+      -- of the supplemental mirror, and propagate that unavailability through
+      -- later records. The official kernel environment still receives and
+      -- checks every record.
+      let referencesOmitted := (kernelInputReferences record).any mirrorOmitted.contains
+      let mut normalizedCollision := false
       for name in record.names do
         let normalized := privateToUserName name
         if let some first := normalizedNames[normalized]? then
-          if first != name then
-            return .error s!"normalized declaration-name collision: {first} and {name}"
+          if first != name then normalizedCollision := true
         normalizedNames := normalizedNames.insert normalized name
+      if normalizedCollision || referencesOmitted then
+        for name in record.names do mirrorOmitted := mirrorOmitted.insert name
+      else unless record matches .induct .. do
+        unless x.projNodes.isEmpty do
+          setEnv analysis
+          if let .error message ← checkKernelReplayExpressions record
+              (some x.projNodes) mirrorOmitted then
+            return .error message
     match checked.addDeclCore 0 declaration none with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
     | .ok next =>
       checked := next
-      if arenaCheck then
+      if arenaCheck && !record.names.any mirrorOmitted.contains then
         analysis ← match analysis.addDeclCore 0 declaration none false with
           | .error exception =>
             return .error s!"{record.names}: cannot construct expression-checking environment: \
@@ -1680,7 +1694,7 @@ private def replayKernelRecords (base : Environment) (x : Export) (order : Array
           | .ok next => pure next
         if record matches .induct .. then
           setEnv analysis
-          if let .error message ← checkKernelReplayExpressions record then
+          if let .error message ← checkKernelReplayExpressions record none mirrorOmitted then
             return .error message
   return .ok (if arenaCheck then analysis else .ofKernelEnv checked)
 

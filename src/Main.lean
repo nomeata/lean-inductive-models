@@ -183,7 +183,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       if input == "-" then
         let stdin ← IO.getStdin
         let result ← match tee? with
-          | none => (Modelgen.parseStream stdin (analyse := config.monoLevels)
+          | none => (Modelgen.parseStream stdin (analyse := config.monoLevels || config.arenaCheck)
               (allowDuplicateNames := config.arenaCheck)).map (Except.map fun x => (x, none))
           | some tee => (Modelgen.parseStreamWithSink stdin tee.sink
               (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
@@ -193,7 +193,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
         IO.FS.withFile input .read fun handle => do
           let result ← match tee? with
             | none => (Modelgen.parseHandle handle
-                (analyse := config.monoLevels)
+                (analyse := config.monoLevels || config.arenaCheck)
                 (allowDuplicateNames := config.arenaCheck)).map (Except.map fun x => (x, none))
             | some tee => (Modelgen.parseHandleWithSink handle tee.sink
                 (analyse := config.monoLevels)).map (Except.map fun (x, certificate) =>
