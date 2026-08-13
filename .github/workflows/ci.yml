@@ -73,7 +73,7 @@ jobs:
                 projectiontest structureetatest deepimaxboxtest \
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
                 vanishingerasuretest transparentowneraliasestest \
-                exportsyntaxnormalizationtest stagedwritertest
+                exportsyntaxnormalizationtest basisvalidationtest stagedwritertest
               lake exe clitest
               lake exe generationflagstest
               lake exe checktest "$GITHUB_WORKSPACE"
@@ -93,8 +93,9 @@ jobs:
               lake exe vanishingerasuretest
               lake exe transparentowneraliasestest
               lake exe exportsyntaxnormalizationtest
+              lake exe basisvalidationtest
               lake exe stagedwritertest "$GITHUB_WORKSPACE"
-              count=20
+              count=21
               ;;
             mono)
               build_serially modelgen monotest mainclitest

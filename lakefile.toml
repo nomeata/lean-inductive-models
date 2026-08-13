@@ -156,6 +156,12 @@ srcDir = "test"
 root = "ExportSyntaxNormalizationTest"
 supportInterpreter = true
 
+[[lean_exe]]
+name = "basisvalidationtest"
+srcDir = "test"
+root = "BasisValidationTest"
+supportInterpreter = true
+
 # Diagnostics: these targets are useful during development, but are not
 # correctness suites and are not part of the default build.
 [[lean_exe]]
