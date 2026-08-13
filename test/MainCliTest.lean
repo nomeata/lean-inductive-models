@@ -396,6 +396,27 @@ def main (args : List String) : IO UInt32 := do
     duplicateOutsideArena.exitCode == 3 &&
       (duplicateOutsideArena.stderr.splitOn "parse error:").length > 1
 
+  -- A flattened export can contain distinct private/public names which Lean's
+  -- full Environment indexes under one normalized key. Arena mode must fail
+  -- closed before that supplemental mirror panics; ordinary pure-kernel mode
+  -- retains its historical behavior and accepts the distinct raw names.
+  let publicCollision : Lean.Name := `ArenaCollision.X
+  let privateCollision : Lean.Name :=
+    (`_private.ArenaCollision).mkNum 0 |>.str "ArenaCollision" |>.str "X"
+  let normalizedCollision : Modelgen.Export := { metaLine := .null, decls := #[
+    .ax publicCollision [] (.sort (.succ .zero)) false,
+    .ax privateCollision [] (.sort (.succ .zero)) false] }
+  let normalizedArena ← runModelgenStdin binary ["--arena-check", "-"]
+    normalizedCollision.render
+  state := state.check "Arena normalized private-name collision rejects without panic" <|
+    Lean.privateToUserName privateCollision == publicCollision &&
+    normalizedArena.exitCode == 1 && !normalizedArena.stderr.contains "PANIC"
+  let normalizedOrdinary ← runModelgenStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    normalizedCollision.render
+  state := state.check "ordinary kernel gate preserves normalized private-name behavior" <|
+    normalizedOrdinary.exitCode == 0
+
   let quotientPath := s!"{root}/test/fixtures/modelgen/prim_graph_pre.ndjson"
   let quotientText ← IO.FS.readFile quotientPath
   let unknownQuotient := quotientText.replace "\"kind\":\"type\"" "\"kind\":\"mystery\""

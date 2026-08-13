@@ -55,6 +55,11 @@ driver. -/
 def Config.modelsSimpleInput (config : Config) (name : Lean.Name) : Bool :=
   if isBasicInputName name then config.basic else config.simple
 
+def Config.isArenaModeConfiguration (config : Config) : Bool :=
+  config.typeCheckInput && !config.typeCheckOutput &&
+    !config.nested && !config.mutualModels && !config.simple && !config.basic &&
+    !config.checkInput && !config.checkOutput && !config.monoLevels && !config.output
+
 def usage : String := String.intercalate "\n" [
   "usage: modelgen [OPTIONS] IN.ndjson   (`-` reads standard input)",
   "  -o PATH              write the export to PATH (`-` means stdout)",
@@ -79,7 +84,10 @@ def parseArgs (args : List String) : Except String Config :=
 where
   go : List String → Config → Except String Config
     | [], config =>
-      if config.input.isSome then .ok config else .error "no input file"
+      if config.input.isNone then .error "no input file"
+      else if config.arenaCheck && !config.isArenaModeConfiguration then
+        .error "--arena-check cannot be combined with transformation, output, or other check modes"
+      else .ok config
     | "-o" :: [], _ => .error "missing operand after -o"
     | "-o" :: path :: rest, config =>
       go rest { config with output := true, outputTarget := path }

@@ -1581,9 +1581,11 @@ private def checkKernelReplayExpressions (record : EDecl) : MetaM (Except String
     for expression in kernelReplayExpressions record do
       Meta.check expression
     return .ok ()
-  catch exception =>
-    return .error s!"{record.names}: expression validation failed: \
-      {← exception.toMessageData.toString}"
+  catch
+  | exception@(.internal ..) => throw exception
+  | exception@(.error ..) =>
+      return .error s!"{record.names}: expression validation failed: \
+        {← exception.toMessageData.toString}"
 
 private partial def firstBadConstantLevelArity
     (constants : Std.HashMap Name ConstantInfo) (expression : Expr) : Option String :=
@@ -1624,40 +1626,50 @@ Using `Lean.Environment.replay` here would split the constant map back into
 individual records.  That loses the export's atomic grouping for nested
 inductives and can fail to expose kernel-generated auxiliary recursors. -/
 private def replayKernelRecords (base : Environment) (x : Export) (order : Array Nat)
-    (constants : Std.HashMap Name ConstantInfo) :
+    (constants : Std.HashMap Name ConstantInfo) (arenaCheck : Bool) :
     MetaM (Except String Environment) := do
   let mut checked := base.toKernelEnv
   -- `Environment.ofKernelEnv` intentionally exposes no elaborator constant
   -- map. Keep an unchecked mirror solely for `Meta.check`; `checked` remains
   -- the authoritative environment produced by the kernel.
   let mut analysis := base
+  let mut normalizedNames : Std.HashMap Name Name := {}
   for index in order do
     let record := x.decls[index]!
     let declaration? ← match kernelReplayDeclaration record with
       | .ok declaration => pure declaration
       | .error message => return .error message
     let some declaration := declaration? | continue
-    if let .error message := checkKernelReplayLevelArities constants record then
-      return .error message
-    setEnv analysis
-    unless record matches .induct .. do
-      if let .error message ← checkKernelReplayExpressions record then
+    if arenaCheck then
+      if let .error message := checkKernelReplayLevelArities constants record then
         return .error message
+      -- `AsyncConsts.add` panics and drops the second entry when distinct raw
+      -- private names normalize to the same user name. Detect that condition
+      -- before touching the supplemental full-environment mirror. The kernel
+      -- verdict remains authoritative, but without a visible mirror entry the
+      -- extra expression walk cannot be performed soundly, so Arena mode
+      -- rejects instead of panicking or silently skipping it.
+      for name in record.names do
+        let normalized := privateToUserName name
+        if let some first := normalizedNames[normalized]? then
+          if first != name then
+            return .error s!"normalized declaration-name collision: {first} and {name}"
+        normalizedNames := normalizedNames.insert normalized name
     match checked.addDeclCore 0 declaration none with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
     | .ok next =>
       checked := next
-      analysis ← match analysis.addDeclCore 0 declaration none false with
-        | .error exception =>
-          return .error s!"{record.names}: cannot construct expression-checking environment: \
-            {← (exception.toMessageData {}).toString}"
-        | .ok next => pure next
-      if record matches .induct .. then
+      if arenaCheck then
+        analysis ← match analysis.addDeclCore 0 declaration none false with
+          | .error exception =>
+            return .error s!"{record.names}: cannot construct expression-checking environment: \
+              {← (exception.toMessageData {}).toString}"
+          | .ok next => pure next
         setEnv analysis
         if let .error message ← checkKernelReplayExpressions record then
           return .error message
-  return .ok analysis
+  return .ok (if arenaCheck then analysis else .ofKernelEnv checked)
 
 /-- Submit a complete export to Lean's kernel and verify that its serialized
 inductive, constructor, and recursor metadata agrees with what Lean regenerates.
@@ -1666,7 +1678,7 @@ This is the explicit whole-stream verdict gate used by the command line.  It
 is separate from the mandatory checked construction of declarations generated
 by this tool: disabling a CLI type-check gate never weakens model generation's
 owner-free kernel replay. -/
-def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
+def typeCheckExport (x : Export) (arenaCheck : Bool := false) : MetaM (Except String Unit) := do
   let base ← getEnv
   let constants ← match x.constantInfos with
     | .error message => return .error message
@@ -1674,7 +1686,7 @@ def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   let order ← match kernelReplayOrder x with
     | .error message => return .error message
     | .ok order => pure order
-  let checked ← match ← replayKernelRecords base x order constants with
+  let checked ← match ← replayKernelRecords base x order constants arenaCheck with
     | .error message => return .error message
     | .ok checked => pure checked
   setEnv checked

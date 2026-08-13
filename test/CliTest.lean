@@ -73,6 +73,13 @@ def main : IO UInt32 := do
       config.arenaCheck && config.typeCheckInput && !config.typeCheckOutput &&
       !config.nested && !config.mutualModels && !config.simple && !config.basic &&
       !config.checkInput && !config.checkOutput && !config.monoLevels && !config.output
+  state ← state.reject "Arena mode rejects a later transformation override"
+    ["--arena-check", "--simple", "in.ndjson"]
+  state ← state.reject "Arena mode rejects a later output override"
+    ["--arena-check", "--output", "in.ndjson"]
+  state ← state.expect "Arena mode may follow and replace ordinary options"
+    ["--simple", "--output", "--arena-check", "in.ndjson"] fun config =>
+      config.arenaCheck && config.isArenaModeConfiguration
 
   state ← state.expect "short output target"
     ["in.ndjson", "-o", "out.ndjson"] fun config =>

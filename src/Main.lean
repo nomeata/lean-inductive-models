@@ -93,12 +93,12 @@ def reportCheckSuccess (config : Modelgen.Cli.Config) (stage : String)
 /-- Run the whole-stream kernel gate in a genuinely empty environment.  The
 outer `Except` reports a tool failure; the inner one is Lean's rejection of
 the submitted export. -/
-def typeCheckExportIO (context : Core.Context) (x : Export) :
+def typeCheckExportIO (context : Core.Context) (x : Export) (arenaCheck : Bool := false) :
     IO (Except String (Except String Unit)) := do
   try
     let env ← mkEmptyEnvironment
     let (result, _) ← Lean.Core.CoreM.toIO
-      (Lean.Meta.MetaM.run' (Modelgen.typeCheckExport x)) context { env }
+      (Lean.Meta.MetaM.run' (Modelgen.typeCheckExport x arenaCheck)) context { env }
     return .ok result
   catch error =>
     return .error (toString error)
@@ -227,7 +227,7 @@ private def runWithWorkspace (config : Modelgen.Cli.Config)
       maxHeartbeats := 0, maxRecDepth := 8192 }
 
   if config.typeCheckInput then
-    match ← typeCheckExportIO context parsed with
+    match ← typeCheckExportIO context parsed config.arenaCheck with
     | .error message =>
       IO.eprintln s!"{input}: input kernel check failed internally: {message}"
       return exitToolError
