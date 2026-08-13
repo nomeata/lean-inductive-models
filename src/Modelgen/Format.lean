@@ -602,6 +602,16 @@ private def jBool (j : Json) (k : String) : Except String Bool := do
 private def jArr (j : Json) (k : String) : Except String (Array Json) := do
   (← jField j k).getArr?
 
+/-- Whether a top-level record has exactly these keys.  The Kernel Arena
+parser dispatches on the complete top-level key set: extra keys and records
+which combine two tags are malformed rather than partially recognized. -/
+private def hasExactKeys (j : Json) (keys : List String) : Bool :=
+  match j with
+  | .obj fields =>
+      let actual := fields.toList.map (·.1)
+      actual.length == keys.length && keys.all actual.contains
+  | _ => false
+
 /-- A compact arena table with an exact sparse fallback.
 
 The dense prefix is the common exporter case.  An out-of-order entry beyond
@@ -735,78 +745,114 @@ private def containsProjection (known : Std.HashSet Expr) : Expr → Bool
 /-- Read one line into the context, returning a declaration if the line was one. -/
 def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
   -- Name records.
-  if let .ok i := jNat j "in" then
-    let n ←
-      if let .ok o := jField j "str" then
-        pure <| Name.str (← c.nameF o "pre") (← jStr o "str")
-      else if let .ok o := jField j "num" then
-        pure <| Name.num (← c.nameF o "pre") (← jNat o "i")
-      else .error "name record with neither str nor num"
+  if hasExactKeys j ["in", "str"] then
+    let i ← jNat j "in"
+    let o ← jField j "str"
+    let n := Name.str (← c.nameF o "pre") (← jStr o "str")
+    return ({ c with names := c.names.set i n }, none)
+  if hasExactKeys j ["in", "num"] then
+    let i ← jNat j "in"
+    let o ← jField j "num"
+    let n := Name.num (← c.nameF o "pre") (← jNat o "i")
     return ({ c with names := c.names.set i n }, none)
   -- Level records.
-  if let .ok i := jNat j "il" then
-    let l ←
-      if let .ok k := jNat j "succ" then pure <| Level.succ (← c.level! k)
-      else if let .ok k := jNat j "param" then pure <| Level.param (← c.name! k)
-      else if let .ok a := jArr j "max" then
-        pure <| Level.max (← c.level! (← a[0]!.getNat?)) (← c.level! (← a[1]!.getNat?))
-      else if let .ok a := jArr j "imax" then
-        pure <| Level.imax (← c.level! (← a[0]!.getNat?)) (← c.level! (← a[1]!.getNat?))
-      else .error "unknown level record"
+  if hasExactKeys j ["il", "succ"] then
+    let i ← jNat j "il"
+    let l := Level.succ (← c.level! (← jNat j "succ"))
+    return ({ c with levels := c.levels.set i l }, none)
+  if hasExactKeys j ["il", "param"] then
+    let i ← jNat j "il"
+    let l := Level.param (← c.name! (← jNat j "param"))
+    return ({ c with levels := c.levels.set i l }, none)
+  if hasExactKeys j ["il", "max"] then
+    let i ← jNat j "il"
+    let #[left, right] ← jArr j "max" | .error "Level.max invalid"
+    let l := Level.max (← c.level! (← left.getNat?)) (← c.level! (← right.getNat?))
+    return ({ c with levels := c.levels.set i l }, none)
+  if hasExactKeys j ["il", "imax"] then
+    let i ← jNat j "il"
+    let #[left, right] ← jArr j "imax" | .error "Level.imax invalid"
+    let l := Level.imax (← c.level! (← left.getNat?)) (← c.level! (← right.getNat?))
     return ({ c with levels := c.levels.set i l }, none)
   -- Expression records.
-  if let .ok i := jNat j "ie" then
-    let e ←
-      if let .ok k := jNat j "bvar" then pure <| Expr.bvar k
-      else if let .ok k := jNat j "sort" then pure <| Expr.sort (← c.level! k)
-      else if let .ok o := jField j "const" then
-        pure <| Expr.const (← c.nameF o "name")
-          (← (← (← o.getObjVal? "us").getArr?).toList.mapM fun x => do c.level! (← x.getNat?))
-      else if let .ok o := jField j "app" then
-        pure <| Expr.app (← c.exprF o "fn") (← c.exprF o "arg")
-      else if let .ok o := jField j "lam" then
-        pure <| Expr.lam (← c.nameF o "name") (← c.exprF o "type") (← c.exprF o "body")
-          (← binderInfo (← jStr o "binderInfo"))
-      else if let .ok o := jField j "forallE" then
-        pure <| Expr.forallE (← c.nameF o "name") (← c.exprF o "type") (← c.exprF o "body")
-          (← binderInfo (← jStr o "binderInfo"))
-      else if let .ok o := jField j "letE" then
-        pure <| Expr.letE (← c.nameF o "name") (← c.exprF o "type") (← c.exprF o "value")
-          (← c.exprF o "body") (← jBool o "nondep")
-      else if let .ok o := jField j "proj" then
-        pure <| Expr.proj (← c.nameF o "typeName") (← jNat o "idx") (← c.exprF o "struct")
-      else if let .ok s := jStr j "natVal" then
-        pure <| Expr.lit (.natVal s.toNat!)
-      else if let .ok s := jStr j "strVal" then
-        pure <| Expr.lit (.strVal s)
-      else .error "unknown expr record"
+  let expression? ←
+    if hasExactKeys j ["ie", "bvar"] then
+      pure <| some (Expr.bvar (← jNat j "bvar"))
+    else if hasExactKeys j ["ie", "sort"] then
+      pure <| some (Expr.sort (← c.level! (← jNat j "sort")))
+    else if hasExactKeys j ["ie", "const"] then
+      let o ← jField j "const"
+      pure <| some <| Expr.const (← c.nameF o "name")
+        (← (← (← o.getObjVal? "us").getArr?).toList.mapM fun x => do c.level! (← x.getNat?))
+    else if hasExactKeys j ["ie", "app"] then
+      let o ← jField j "app"
+      pure <| some <| Expr.app (← c.exprF o "fn") (← c.exprF o "arg")
+    else if hasExactKeys j ["ie", "lam"] then
+      let o ← jField j "lam"
+      pure <| some <| Expr.lam (← c.nameF o "name") (← c.exprF o "type") (← c.exprF o "body")
+        (← binderInfo (← jStr o "binderInfo"))
+    else if hasExactKeys j ["ie", "forallE"] then
+      let o ← jField j "forallE"
+      pure <| some <| Expr.forallE (← c.nameF o "name") (← c.exprF o "type") (← c.exprF o "body")
+        (← binderInfo (← jStr o "binderInfo"))
+    else if hasExactKeys j ["ie", "letE"] then
+      let o ← jField j "letE"
+      pure <| some <| Expr.letE (← c.nameF o "name") (← c.exprF o "type") (← c.exprF o "value")
+        (← c.exprF o "body") (← jBool o "nondep")
+    else if hasExactKeys j ["ie", "proj"] then
+      let o ← jField j "proj"
+      pure <| some <| Expr.proj (← c.nameF o "typeName") (← jNat o "idx") (← c.exprF o "struct")
+    else if hasExactKeys j ["ie", "natVal"] then
+      let value ← match (← jStr j "natVal").toNat? with
+        | some value => pure value
+        | none => .error "Expr.lit natVal invalid"
+      pure <| some <| Expr.lit (.natVal value)
+    else if hasExactKeys j ["ie", "strVal"] then
+      pure <| some <| Expr.lit (.strVal (← jStr j "strVal"))
+    else if hasExactKeys j ["ie", "mdata"] then
+      let o ← jField j "mdata"
+      match ← jField o "data" with
+      | .obj _ => pure <| some <| Expr.mdata {} (← c.exprF o "expr")
+      | _ => .error "Expr.mdata invalid"
+    else pure none
+  if let some e := expression? then
+    let i ← jNat j "ie"
     let projNodes :=
       if c.analyse && containsProjection c.projNodes e then c.projNodes.insert e
       else c.projNodes
     return ({ c with exprs := c.exprs.set i e, projNodes }, none)
   -- Declaration records.
-  if let .ok o := jField j "axiom" then
+  if hasExactKeys j ["axiom"] then
+    let o ← jField j "axiom"
     return (c, some <| .ax (← c.nameF o "name") (← c.nameL o "levelParams")
       (← c.exprF o "type") (← jBool o "isUnsafe"))
-  if let .ok o := jField j "def" then
+  if hasExactKeys j ["def"] then
+    let o ← jField j "def"
     let safety ← jStr o "safety"
     unless (safetyOf? safety).isSome do
       throw s!"unknown definition safety {safety}"
     return (c, some <| .defn (← c.nameF o "name") (← c.nameL o "levelParams")
       (← c.exprF o "type") (← c.exprF o "value") (← readHints (← jField o "hints"))
       safety (← c.nameL o "all"))
-  if let .ok o := jField j "thm" then
+  if hasExactKeys j ["thm"] then
+    let o ← jField j "thm"
     return (c, some <| .thm (← c.nameF o "name") (← c.nameL o "levelParams")
       (← c.exprF o "type") (← c.exprF o "value") (← c.nameL o "all"))
-  if let .ok o := jField j "opaque" then
+  if hasExactKeys j ["opaque"] then
+    let o ← jField j "opaque"
+    let isUnsafe ← match (jField o "isUnsafe").toOption with
+      | none => pure false
+      | some value => value.getBool?
     return (c, some <| .opaq (← c.nameF o "name") (← c.nameL o "levelParams")
-      (← c.exprF o "type") (← c.exprF o "value") (← jBool o "isUnsafe") (← c.nameL o "all"))
-  if let .ok o := jField j "quot" then
+      (← c.exprF o "type") (← c.exprF o "value") isUnsafe (← c.nameL o "all"))
+  if hasExactKeys j ["quot"] then
+    let o ← jField j "quot"
     let kind ← jStr o "kind"
     unless (quotKindOf? kind).isSome do throw s!"unknown quotient kind {kind}"
     return (c, some <| .quot (← c.nameF o "name") (← c.nameL o "levelParams")
       (← c.exprF o "type") kind)
-  if let .ok o := jField j "inductive" then
+  if hasExactKeys j ["inductive"] then
+    let o ← jField j "inductive"
     return (c, some <| .induct
       (← (← jArr o "types").toList.mapM (readIndType c))
       (← (← jArr o "ctors").toList.mapM (readCtor c))
