@@ -952,7 +952,7 @@ def closeModelIsland (template : Export) (main : Environment)
   -- as an oracle until staged output no longer constructs the complete array.
   let statementReport :=
     if generatedOwners.isEmpty then
-      ({} : Check.StatementReport)
+      { statementsChecked := 0, violations := #[] }
     else
       let view := { template with decls := generated ++ template.decls }
       let families := Check.statementFamiliesFor view generatedOwners
@@ -1822,7 +1822,8 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   let mut mainEnv ← getEnv
   let mut out : Array EDecl := #[]
   let mut rep : Report := {}
-  let mut islandStatements : Check.StatementReport := {}
+  let mut islandStatements : Check.StatementReport :=
+    { statementsChecked := 0, violations := #[] }
   -- The declarations built inside the current model island. Besides staging
   -- exact generated names for support persistence, this keeps recursive
   -- splice closure and nested → mutual → simple composition atomic.
