@@ -3377,6 +3377,31 @@ def analysePrim (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr
     nonrecursiveOneConstructor, route, erasureBare, erasureLinear
   }
 
+/-- Complete build-time naming for one simple implementation family.  Public
+routes use [`PrimInterfaceNames.standard`]; the one-layer adapter supplies a
+private bundle and later publishes the exact source-shaped names. -/
+structure PrimInterfaceNames where
+  model : Name
+  impl : Name
+  self : Name
+  ctors : Array Name
+  recursor : Name
+  iotas : Array Name
+  deriving Inhabited
+
+def PrimInterfaceNames.standard (tname root : Name)
+    (exportCtors : Array (Name × Expr)) : PrimInterfaceNames :=
+  let model := Naming.modelName root
+  let recursor := Name.str tname "rec"
+  { model
+    impl := Name.str model "_impl"
+    self := model
+    ctors := exportCtors.map fun (constructor, _) =>
+      Naming.modelName (Naming.relocateSource tname root constructor)
+    recursor := Naming.modelName (Naming.relocateSource tname root recursor)
+    iotas := (Array.range exportCtors.size).map fun index =>
+      Naming.iotaName (Naming.relocateSource tname root recursor) index }
+
 set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that
 stopped it. **The export's declaration must already be installed**: the
@@ -3384,7 +3409,8 @@ recursor this restates is the one Lean minted for it, and the ι rules are
 its own, restored — exactly [`InductiveModels.mutualIso`]'s arrangement. -/
 private def primIsoCore (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
-    (sourceRecursor? : Option ERec := none) : GenM Iso := do
+    (sourceRecursor? : Option ERec := none)
+    (interface? : Option PrimInterfaceNames := none) : GenM Iso := do
   let us := lparams.map Level.param
   -- **Where the model is built and where it is emitted can differ.** `root` is
   -- the former and `tname` the latter; they are the same name for every
@@ -3395,15 +3421,16 @@ private def primIsoCore (tname : Name) (root : Name) (lparams : List Name) (np :
   -- must not collide with the input — while descendants of `tname` are built
   -- under `root`. An exact raw private constructor need not be a descendant of
   -- its public type name, and then its model name remains raw and exact.
-  let model := Naming.modelName root
-  let impl := Name.str model "_impl"
-  let selfN := model
-  let ctorN := fun (j : Nat) =>
-    Naming.modelName (Naming.relocateSource tname root exportCtors[j]!.1)
+  let interface := interface?.getD (PrimInterfaceNames.standard tname root exportCtors)
+  unless interface.ctors.size == exportCtors.size && interface.iotas.size == exportCtors.size do
+    badShape s!"{tname}'s implementation name bundle has the wrong constructor arity"
+  let model := interface.model
+  let impl := interface.impl
+  let selfN := interface.self
+  let ctorN := fun (j : Nat) => interface.ctors[j]!
   let ern := Name.str tname "rec"
-  let recN := Naming.modelName (Naming.relocateSource tname root ern)
-  let iotaN := fun (j : Nat) =>
-    Naming.iotaName (Naming.relocateSource tname root ern) j
+  let recN := interface.recursor
+  let iotaN := fun (j : Nat) => interface.iotas[j]!
   let indN := Name.str impl "ind"
   -- Arm G's **internal** names, guarded exactly like the interface's — but
   -- only when the arm is taken, so a file that declares
