@@ -1094,6 +1094,28 @@ private def addUInt64Bytes (current : UInt64) (bytes : Nat) : UInt64 × Bool :=
 private def exactRawBytes (line : String) (terminated : Bool) : ByteArray :=
   if terminated then line.toUTF8.push 10 else line.toUTF8
 
+/-- Recognize the whitespace-free JSON spelling emitted by lean4export and
+`Writer` without depending on `Json.compress`'s hash-map iteration order.
+Object key order is semantically irrelevant and may change when unrelated
+imports perturb compiled hash-map layout; whitespace outside strings is the
+only spelling freedom which would make the raw line non-compressed.  The line
+has already parsed as JSON, so quote/escape well-formedness is not rechecked
+here. -/
+private def compressedJsonSpelling (line : String) : Bool :=
+  let rec loop (chars : List Char) (inString escaped : Bool) : Bool :=
+    match chars with
+    | [] => !inString && !escaped
+    | char :: rest =>
+      if inString then
+        if escaped then loop rest true false
+        else if char == '\\' then loop rest true true
+        else if char == '"' then loop rest false false
+        else loop rest true false
+      else if char == '"' then loop rest true false
+      else if char == ' ' || char == '\t' || char == '\r' || char == '\n' then false
+      else loop rest false false
+  loop line.toList false false
+
 private inductive RawArenaAxis where
   | name | level | expression
 
@@ -1156,7 +1178,7 @@ private def emitRaw (sink : RawSink) (state : IO.Ref RawCertState)
   sink.emit { kind, bytes }
   state.modify fun current =>
     let current := current.addBytes kind bytes.size
-    let spelling := terminated && json?.any (line == ·.compress)
+    let spelling := terminated && json?.isSome && compressedJsonSpelling line
     let current := { current with certificate.canonical :=
       current.certificate.canonical && spelling }
     if kind == .arena then json?.elim current current.observeArena else current

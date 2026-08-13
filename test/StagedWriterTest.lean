@@ -52,6 +52,12 @@ def rawFastPathRejected (path text : String) : IO Bool := do
   | .ok (_, certificate) => return !certificate.canonical
   | .error _ => return false
 
+def rawFastPathAccepted (path text : String) : IO Bool := do
+  IO.FS.writeFile path text
+  match ← rawCertificateAt path with
+  | .ok (_, certificate) => return certificate.canonical
+  | .error _ => return false
+
 def plannedSourceRejected (scratch path text : String) : IO Bool := do
   IO.FS.writeFile path text
   let ordinary ← parseHandleAt path
@@ -139,6 +145,7 @@ def main (args : List String) : IO UInt32 := do
   let rawWhitespacePath := s!"{scratch}/raw-spool-whitespace.ndjson"
   let rawBlankPath := s!"{scratch}/raw-spool-blank.ndjson"
   let rawCrlfPath := s!"{scratch}/raw-spool-crlf.ndjson"
+  let rawKeyOrderPath := s!"{scratch}/raw-spool-key-order.ndjson"
   let compositionPath := s!"{scratch}/raw-spool-composition.ndjson"
   let mixedCompositionPath := s!"{scratch}/raw-spool-mixed-composition.ndjson"
   let rawRootSentinel := s!"{scratch}/raw-spool-root-sentinel"
@@ -147,6 +154,7 @@ def main (args : List String) : IO UInt32 := do
     projectionOrderPath, projectionOverwritePath, parserCompatibilityPath,
     rawCanonicalPath, rawNameGapPath, rawLevelGapPath, rawExprGapPath,
     rawNameOrderPath, rawNoLfPath, rawWhitespacePath, rawBlankPath, rawCrlfPath,
+    rawKeyOrderPath,
     rawRootSentinel, compositionPath, mixedCompositionPath]
   for path in paths do removeIfPresent path
 
@@ -704,6 +712,13 @@ def main (args : List String) : IO UInt32 := do
     ← plannedSourceRejected scratch rawNoLfPath rawNoLf
   state := state.check "planned source falls back for CRLF input" <|
     ← plannedSourceRejected scratch rawCrlfPath rawCrlf
+  let rawAlternateKeyOrder := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"KeyOrderA\"}}",
+    "{\"in\":2,\"str\":{\"pre\":0,\"str\":\"KeyOrderB\"}}",
+    "{\"const\":{\"name\":2,\"us\":[]},\"ie\":0}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":0}}"]
+  state := state.check "raw certification is independent of compressed object key order" <|
+    ← rawFastPathAccepted rawKeyOrderPath rawAlternateKeyOrder
 
   let exceptionPathsRef ← IO.mkRef (none : Option (Array System.FilePath))
   let cleanupAfterException ← try
