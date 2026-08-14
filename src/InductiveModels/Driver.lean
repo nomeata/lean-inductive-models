@@ -2597,6 +2597,14 @@ private def FutureSourceSupport.create (base : Environment) (source : Export)
   let mut shadowed : Std.HashMap Nat EDecl := {}
   for (root, names) in #[( `Eq, eqNames), (`Nat, natNames),
       (`PUnit, punitNames), (`PSigma', psigmaNames)] do
+    -- A canonical bundle outside the active route's scheduling class remains
+    -- ordinary future source.  Preinstalling it would grant capabilities the
+    -- historical scheduler deliberately leaves late (Nat for nested-only,
+    -- and quotient support below).
+    unless source.decls.any fun declaration =>
+        scheduledSupportRecord generation declaration &&
+          declaration.names.any names.contains do
+      continue
     let records? ← match exactSupportBundleRecords? source names with
       | .ok records => pure records
       | .error error => return .error error
@@ -2628,9 +2636,15 @@ private def FutureSourceSupport.create (base : Environment) (source : Export)
         | .ok added => unless added.isEmpty do
             return .error "future PSigma' bundle was incomplete"
       for (ordinal, record) in records do shadowed := shadowed.insert ordinal record
-  let quotRecords? ← match exactSupportBundleRecords? source quotNames with
+  let quotScheduled := source.decls.any fun declaration =>
+    scheduledSupportRecord generation declaration &&
+      declaration.names.any quotNames.contains
+  let quotRecords? ← if quotScheduled then
+    match exactSupportBundleRecords? source quotNames with
     | .ok records => pure records
     | .error error => return .error error
+  else
+    pure none
   if let some records := quotRecords? then
     let ordinals := records.map (·.1)
     unless ordinals.size == 4 && ordinals[1]! == ordinals[0]! + 1 &&
@@ -2644,9 +2658,13 @@ private def FutureSourceSupport.create (base : Environment) (source : Export)
     unless records.map (·.2) == expected do
       return .error "future quotient source records are not the kernel's exact bundle"
     for (ordinal, record) in records do shadowed := shadowed.insert ordinal record
-  let soundRecords? ← match exactSupportBundleRecords? source #[`Quot.sound] with
+  let soundRecords? ← if source.decls.any fun declaration =>
+      scheduledSupportRecord generation declaration && declaration.names.contains `Quot.sound then
+    match exactSupportBundleRecords? source #[`Quot.sound] with
     | .ok records => pure records
     | .error error => return .error error
+  else
+    pure none
   if let some records := soundRecords? then
     let #[entry] := records | return .error "future Quot.sound is not one source record"
     let .ax `Quot.sound levelParams _ false := entry.2
