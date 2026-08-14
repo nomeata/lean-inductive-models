@@ -3298,8 +3298,8 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
   return (legacyOut, rep, compactPlan, kernelCheckShadow?)
 
 /-- Shared generation loop. Compact modes summarize every accepted island at
-its close boundary. Spool modes additionally serialize it; oracle modes retain
-the historical full declaration array for exact A/B comparison. -/
+its close boundary; oracle mode retains the historical full declaration array
+for actual output and exact A/B comparison. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (retention : RetentionMode)
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false)

@@ -1149,12 +1149,12 @@ def parse (text : String) (analyse : Bool := true) : Except String Export := do
   resultExport.validateUniqueDeclarationNames
   return resultExport
 
-/-! ## Optional raw staging during streaming parse
+/-! ## Optional raw source capture during streaming parse
 
 The parser may hand each exact UTF-8 record to a transient sink while it is
 already in scope.  This is deliberately an optional side channel: ordinary
-parsing retains its old result and does no spool allocation.  A later output
-pass may use a certified spool without reopening a mutable input path.
+parsing retains its old result and does no spool allocation. Planned input
+replay may use the certified source spool without reopening a mutable path.
 -/
 
 /-- Which logical spool consumes one exact input record.  `ignored` covers
