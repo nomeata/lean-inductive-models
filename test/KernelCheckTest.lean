@@ -151,6 +151,45 @@ structure PlannedDirectObserved where
   result : Report × CompactPlan × Option CompactKernelCheckVerdict
   env : Environment
 
+structure PlannedSharedPrefixObserved where
+  retainedDeclarations : Nat
+  sourceReads : Nat
+  result : (Report × CompactPlan × Option CompactKernelCheckVerdict) ×
+    SharedPrefixDirectObservation
+  env : Environment
+
+def runSharedPrefixPlannedObserved (scratch : String) (x : Export)
+    (generation : Cli.Config) (failAfterOwners? : Option Nat := none) :
+    IO PlannedSharedPrefixObserved :=
+  Spool.withWorkspace scratch fun workspace => do
+    let inputFile ← workspace.createFile "kernel-check-shared-planned-input.ndjson"
+    discard <| inputFile.append x.render.toUTF8
+    discard <| inputFile.finish
+    let tee ← Spool.ParseTee.create workspace
+    let planned ← IO.FS.withFile inputFile.path .read fun handle => do
+      match ← parsePlannedSourceWithTee handle tee
+          (analyse := false) (allowDuplicateNames := true) with
+      | .ok input => pure input
+      | .error message => throw <| IO.userError message
+    let sizes ← tee.finish
+    let reader ← match ← Spool.PlannedSourceReader.create tee planned.certificate sizes
+        planned.envelope.declarationCount (some planned.envelope.arena) with
+      | .ok reader => pure reader
+      | .error message => throw <| IO.userError message
+    let env ← importModules #[] {}
+    let context : Core.Context :=
+      { fileName := "<shared-prefix-planned-kernel-check-test>", fileMap := default,
+        maxHeartbeats := 0, maxRecDepth := 8192 }
+    let ((result, observed), _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+      let result ← runFilterDirectCheckingSharedPrefixPlannedCensus
+        planned reader generation failAfterOwners?
+      return (result, ← getEnv))) context { env }
+    return {
+      retainedDeclarations := planned.envelope.retainedDeclarations
+      sourceReads := ← reader.readCount
+      result
+      env := observed }
+
 def runFilterDirectPlannedObserved (scratch : String) (x : Export)
     (generation : Cli.Config) (checkRecursors : Bool := false) :
     IO PlannedDirectObserved :=
@@ -623,6 +662,10 @@ def run (root : String) : IO UInt32 := do
     let ((sharedResult, sharedObservation), sharedEnv) ←
       runSharedPrefixDirectObserved input generation
     let (directResult, _) ← runFilterDirectObserved input generation
+    let plannedShared ←
+      runSharedPrefixPlannedObserved s!"{root}/_tmp" input generation
+    let plannedCurrent ←
+      runFilterDirectPlannedObserved s!"{root}/_tmp" input generation
     observedSharedSupport := observedSharedSupport ||
       sharedObservation.retainedSupportRecords > 0
     state := state.check s!"filter kernel shadow agrees for {label} generation" <|
@@ -639,6 +682,16 @@ def run (root : String) : IO UInt32 := do
         sharedObservation.source.ownerSnapshots > 0 &&
         input.decls.all fun declaration => declaration.names.all fun name =>
           !sharedEnv.constants.contains name
+    state := state.check s!"planned-census shared prefix agrees for {label} generation" <|
+      plannedShared.retainedDeclarations == 0 && plannedShared.result.2.selected &&
+        sameDirectResult plannedShared.result.1 sharedResult &&
+        sameDirectResult plannedShared.result.1 plannedCurrent.result &&
+        plannedShared.result.2.retainedSupportRecords ==
+          sharedObservation.retainedSupportRecords &&
+        plannedShared.sourceReads ==
+          input.decls.size + plannedShared.result.2.source.ownerSnapshots &&
+        input.decls.all fun declaration => declaration.names.all fun name =>
+          !plannedShared.env.constants.contains name
   state := state.check "shared-prefix retains only witnessed cross-owner support" <|
     observedSharedSupport
 
@@ -680,6 +733,16 @@ def run (root : String) : IO UInt32 := do
       sameDirectResult sharedCounterResult directCounterResult &&
       sharedLevelCalls == directLevelCalls &&
       sharedLevelEscapes == directLevelEscapes && directLevelCalls > 0
+  let plannedCounter ← runSharedPrefixPlannedObserved
+    s!"{root}/_tmp" counterInput counterGeneration (some 1)
+  state := state.check "late planned shared-prefix fallback replays without materialization" <|
+    plannedCounter.retainedDeclarations == 0 && !plannedCounter.result.2.selected &&
+      plannedCounter.result.2.fallback?.any (fun message =>
+        message.contains "injected shared-prefix failure after owner 1") &&
+      sameDirectResult plannedCounter.result.1 directCounterResult &&
+      plannedCounter.sourceReads == counterInput.decls.size * 2 + 1 &&
+      counterInput.decls.all fun declaration => declaration.names.all fun name =>
+        !plannedCounter.env.constants.contains name
 
   let declineBase ← readFixture root "nested_iota.ndjson"
   let occupiedTreeModel : EDecl :=
@@ -689,12 +752,19 @@ def run (root : String) : IO UInt32 := do
   let (declinePrefix, _) ← observeSharedPrefix declineInput {}
   let ((sharedDecline, sharedDeclineObservation), _) ←
     runSharedPrefixDirectObserved declineInput {}
+  let plannedSharedDecline ←
+    runSharedPrefixPlannedObserved s!"{root}/_tmp" declineInput {}
   let (directDecline, _) ← runFilterDirectObserved declineInput {}
   state := state.check "generation declines still feed the exact source stream" <|
     shadowAgrees declineShadow? && !declineReport.declined.isEmpty &&
       declineShadow?.any (fun shadow => declineOutput.size == shadow.finalRecords) &&
       declinePrefix.fallback?.isNone && declinePrefix.ownerSnapshots > 0 &&
       sharedDeclineObservation.selected && sameDirectResult sharedDecline directDecline &&
+      plannedSharedDecline.retainedDeclarations == 0 &&
+      plannedSharedDecline.result.2.selected &&
+      sameDirectResult plannedSharedDecline.result.1 sharedDecline &&
+      plannedSharedDecline.sourceReads == declineInput.decls.size +
+        plannedSharedDecline.result.2.source.ownerSnapshots &&
       sharedDeclineObservation.ownerSnapshotsConsumed ==
         sharedDeclineObservation.source.ownerSnapshots &&
       sharedDeclineObservation.pendingOwnerSnapshotsAtSeal == 0
@@ -737,6 +807,8 @@ def run (root : String) : IO UInt32 := do
   let (collidingPrefix, _) ← observeSharedPrefix collidingShapes collisionGeneration
   let ((sharedColliding, sharedCollidingObservation), sharedCollidingEnv) ←
     runSharedPrefixDirectObserved collidingShapes collisionGeneration
+  let plannedSharedColliding ←
+    runSharedPrefixPlannedObserved s!"{root}/_tmp" collidingShapes collisionGeneration
   let (directColliding, _) ←
     runFilterDirectObserved collidingShapes collisionGeneration
   let (ordinaryCollidingOutput, ordinaryCollidingReport) ←
@@ -754,13 +826,20 @@ def run (root : String) : IO UInt32 := do
       collidingPrefix.fallback?.isNone && collidingPrefix.ownerSnapshots > 0 &&
       sharedCollidingObservation.selected &&
       sameDirectResult sharedColliding directColliding &&
+      plannedSharedColliding.retainedDeclarations == 0 &&
+      plannedSharedColliding.result.2.selected &&
+      sameDirectResult plannedSharedColliding.result.1 sharedColliding &&
+      plannedSharedColliding.sourceReads == collidingShapes.decls.size +
+        plannedSharedColliding.result.2.source.ownerSnapshots &&
       sharedCollidingObservation.ownerSnapshotsConsumed ==
         sharedCollidingObservation.source.ownerSnapshots &&
       sharedCollidingObservation.pendingOwnerSnapshotsAtSeal == 0 &&
       !collidingEnv.constants.contains (Naming.modelName publicOwner) &&
       !collidingEnv.constants.contains (Naming.modelName privateOwner) &&
       !sharedCollidingEnv.constants.contains (Naming.modelName publicOwner) &&
-      !sharedCollidingEnv.constants.contains (Naming.modelName privateOwner)
+      !sharedCollidingEnv.constants.contains (Naming.modelName privateOwner) &&
+      !plannedSharedColliding.env.constants.contains (Naming.modelName publicOwner) &&
+      !plannedSharedColliding.env.constants.contains (Naming.modelName privateOwner)
 
   let lateMalformed := mapConstructor declineBase `PT.node fun constructor =>
     { constructor with type := .sort .zero }
@@ -769,13 +848,18 @@ def run (root : String) : IO UInt32 := do
     runFilterShadow lateMalformed {}
   let ((sharedMalformed, sharedMalformedObservation), _) ←
     runSharedPrefixDirectObserved lateMalformed {}
+  let plannedSharedMalformed ←
+    runSharedPrefixPlannedObserved s!"{root}/_tmp" lateMalformed {}
   let (directMalformed, _) ← runFilterDirectObserved lateMalformed {}
   state := state.check "unreplayable source preserves output/report and has no sealed shadow" <|
     ordinaryMalformedReport.unreplayable.isSome && malformedShadow?.isNone &&
       shadowMalformedOutput == ordinaryMalformedOutput &&
       shadowMalformedReport == ordinaryMalformedReport &&
       !sharedMalformedObservation.selected &&
-      sameDirectResult sharedMalformed directMalformed
+      sameDirectResult sharedMalformed directMalformed &&
+      plannedSharedMalformed.retainedDeclarations == 0 &&
+      !plannedSharedMalformed.result.2.selected &&
+      sameDirectResult plannedSharedMalformed.result.1 directMalformed
 
   -- A source consumer can precede the generated declaration it names.  The
   -- compact planner already marks this future-provider shape unavailable;
@@ -791,6 +875,8 @@ def run (root : String) : IO UInt32 := do
   let (_, futureCompact) ← runDiscarding futureInput futureGeneration
   let ((sharedFuture, sharedFutureObservation), _) ←
     runSharedPrefixDirectObserved futureInput futureGeneration
+  let plannedSharedFuture ←
+    runSharedPrefixPlannedObserved s!"{root}/_tmp" futureInput futureGeneration
   let (directFutureBaseline, _) ← runFilterDirectObserved futureInput futureGeneration
   let some futureShadow := futureShadow?
     | IO.eprintln "kernelchecktest: future-provider run did not seal"; return 1
@@ -801,6 +887,9 @@ def run (root : String) : IO UInt32 := do
       futureCompact.unavailable?.isSome && !sharedFutureObservation.selected &&
       sharedFutureObservation.fallback?.isSome &&
       sameDirectResult sharedFuture directFutureBaseline &&
+      plannedSharedFuture.retainedDeclarations == 0 &&
+      !plannedSharedFuture.result.2.selected &&
+      sameDirectResult plannedSharedFuture.result.1 directFutureBaseline &&
       sharedFutureObservation.pendingOwnerSnapshotsAtSeal == 0
   unless futureFallbackOk do
     IO.eprintln s!"shared future verdict={repr sharedFuture.2.2}, \

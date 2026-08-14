@@ -2718,6 +2718,17 @@ private structure SharedPrefixOwnerSnapshot where
   rawOrdinal : Nat
   env : Environment
 
+private inductive SharedPrefixSourceAccess where
+  | retained (source : Export)
+  | planned (reader : Spool.PlannedSourceReader)
+
+private def SharedPrefixSourceAccess.read (access : SharedPrefixSourceAccess)
+    (rawOrdinal : Nat) : MetaM (Except String EDecl) := match access with
+  | .retained source => pure <| match source.decls[rawOrdinal]? with
+    | some declaration => .ok declaration
+    | none => .error s!"retained shared-prefix source ordinal {rawOrdinal} is out of range"
+  | .planned reader => reader.read rawOrdinal
+
 private structure SharedPrefixSourcePrepared where
   observation : SharedPrefixSourceObservation
   completedEnv : Environment
@@ -2726,15 +2737,16 @@ private structure SharedPrefixSourcePrepared where
   context : FilterContext
   aliases : SourceReplayAliases
   metaOnlyNames : Std.HashSet Name
+  sourceAccess : SharedPrefixSourceAccess
 
 /-- Phase A: replay the collision-free source build image once, checking every
 kernel-relevant record and retaining unchecked unsafe/partial records only for
 Meta visibility.  Exact dependency roots certify that the latter are an
 irrelevant extension.  Owner snapshots share the one persistent source prefix
 and contain no generated declaration payload. -/
-private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
+private def prepareSharedPrefixSourceCore (template : Export) (census : SourceCensus)
+    (sourceAccess : SharedPrefixSourceAccess) (generation : Cli.Config) :
     MetaM (Except String SharedPrefixSourcePrepared) := do
-  let census := SourceCensus.ofSource x
   let plannedAliases ← match census.replayAliases with
     | .ok aliases => pure aliases
     | .error message => return .error s!"cannot plan collision-safe source replay: {message}"
@@ -2745,28 +2757,26 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
     for name in census.replayRoles.quotients do
       if aliases.hasExact name then
         return .error s!"normalized source-name collision moves quotient role {name}"
-  let sourceOrder ← match census.scheduleOrder x generation with
+  let planned := sourceAccess matches .planned _
+  let sourceOrder ← match if planned then census.plannedScheduleOrder generation else
+      match sourceAccess with
+      | .retained source => census.scheduleOrder source generation
+      | .planned _ => unreachable! with
     | .ok order => pure order
     | .error error => return .error s!"cannot schedule shared support: {repr error}"
-  let scheduled := { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
-  match validateScheduledSupport scheduled generation with
+  let supportValidation := if planned then census.validatePlannedSupport sourceOrder generation
+    else match sourceAccess with
+      | .retained source =>
+        let scheduled := { source with
+          decls := sourceOrder.map fun ordinal => source.decls[ordinal]! }
+        validateScheduledSupport scheduled generation
+      | .planned _ => unreachable!
+  match supportValidation with
   | .error message => return .error s!"invalid shared-support schedule: {message}"
   | .ok () => pure ()
   let sourceSummaries ← match census.summariesForOrder sourceOrder with
     | .ok summaries => pure summaries
     | .error message => return .error s!"cannot rebind frozen source summaries: {message}"
-  let sourceGlobals := Check.globalExtraRecordsWithIndex census.sourceSyntax scheduled.decls
-  let sourceFamilies := census.familyCertificateRecords x scheduled
-  let constructionSyntax ← if aliases.isEmpty then pure census.sourceSyntax else do
-    let mut index := census.sourceSyntax
-    for rawOrdinal in [:x.decls.size] do
-      let declaration := x.decls[rawOrdinal]!
-      if sourceRecordUsesAliases aliases census.summaries[rawOrdinal]! declaration then
-        match index.withReplayRecords #[declaration] #[aliases.buildRecord declaration] with
-        | .ok next => index := next
-        | .error message =>
-          return .error s!"cannot index collision-safe source replay: {message}"
-    pure index
   let mut metaOnlyNames : Std.HashSet Name := {}
   let mut metaOnlyRecords := 0
   for rawOrdinal in [:census.scheduling.size] do
@@ -2778,12 +2788,18 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
   let mut env := base
   let mut snapshots : Array SharedPrefixOwnerSnapshot := #[]
   let mut rows : Array CompactRecord := #[]
+  let mut sourceGlobals : Array Check.GlobalExtraRecord := #[]
+  let mut sourceFamilies : Array (Array Check.CompactFamilyCertificate) := #[]
+  let mut constructionSyntax := census.sourceSyntax
   let mut constructionTransitions := 0
   let sourceConstructionTouches := sourceOrder.map fun rawOrdinal =>
     census.scheduling[rawOrdinal]!.constructionTouch generation
   for scheduledOrdinal in [:sourceOrder.size] do
     let rawOrdinal := sourceOrder[scheduledOrdinal]!
-    let declaration := x.decls[rawOrdinal]!
+    let declaration ← match ← sourceAccess.read rawOrdinal with
+      | .ok declaration => pure declaration
+      | .error message =>
+        return .error s!"cannot decode shared-prefix source record {rawOrdinal}: {message}"
     let fact := census.scheduling[rawOrdinal]!
     if fact.constructionTouch generation then
       constructionTransitions := scheduledOrdinal + 1
@@ -2803,6 +2819,11 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
       return .error s!"source replay round trip changed {declaration.names}"
     unless aliases.exactDerivedRecord declaration == declaration do
       return .error s!"source declaration {declaration.names} contains a fresh build alias"
+    if sourceRecordUsesAliases aliases census.summaries[rawOrdinal]! declaration then
+      match constructionSyntax.withReplayRecords #[declaration] #[replay] with
+      | .ok next => constructionSyntax := next
+      | .error message =>
+        return .error s!"cannot index collision-safe source replay: {message}"
     let buildDisposition ← match KernelCheck.replayDisposition replay with
       | .error message => return .error (aliases.exactMessage message)
       | .ok disposition => pure disposition
@@ -2837,6 +2858,11 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
         unless mismatches.isEmpty do
           return .error s!"collision-safe inductive replay metadata differs for \
             {declaration.names}: {mismatches.toList.map aliases.exactMessage}"
+    if declaration matches .quot .. then
+      let some installed := installedQuotRecords? env
+        | return .error "source quotient bundle was not installed by its leading record"
+      unless installed.contains declaration do
+        return .error s!"source quotient record {declaration.names} differs from the kernel bundle"
     let some firstName := declaration.names.head?
       | return .error "shared-prefix source declaration has no name"
     let some certifiedRaw := census.rawOrdinals[firstName]?
@@ -2845,22 +2871,19 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
       return .error s!"shared-prefix source declaration {firstName} changed raw ordinal"
     unless sourceSummaries[scheduledOrdinal]!.introduced == declaration.names.toArray do
       return .error s!"shared-prefix source row changed names for {declaration.names}"
+    let globalExtra := (Check.globalExtraRecordsWithIndex census.sourceSyntax #[declaration])[0]!
+    let families := census.sourceSyntax.sourceFamilyCertificatesForRecord template declaration
+    sourceGlobals := sourceGlobals.push globalExtra
+    sourceFamilies := sourceFamilies.push families
     rows := rows.push {
       summary := sourceSummaries[scheduledOrdinal]!
-      globalExtra := sourceGlobals[scheduledOrdinal]!
-      families := sourceFamilies[scheduledOrdinal]!
+      globalExtra
+      families
       locator := .source rawOrdinal }
-  let quotientRecords := x.decls.filter fun declaration => declaration matches .quot ..
-  unless quotientRecords.isEmpty do
-    let some installed := installedQuotRecords? env
-      | return .error "source quotient bundle was not installed by its leading record"
-    for record in quotientRecords do
-      unless installed.contains record do
-        return .error s!"source quotient record {record.names} differs from the kernel bundle"
   let constructionReserved := census.reserved.fold (init := census.reserved) fun names name =>
     (aliases.buildDerivedNames name).foldl (fun names build => names.insert build) names
   let context : FilterContext := {
-    source := x
+    source := template
     checkRecursors := false
     generation
     retention := .compactDirect
@@ -2890,7 +2913,12 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
     rows
     context
     aliases
-    metaOnlyNames }
+    metaOnlyNames
+    sourceAccess }
+
+private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
+    MetaM (Except String SharedPrefixSourcePrepared) :=
+  prepareSharedPrefixSourceCore x (SourceCensus.ofSource x) (.retained x) generation
 
 /-- Test-facing Phase-A observer.  It always restores the invocation base and
 returns only counts/fallback text; the shared environments remain private. -/
@@ -3744,9 +3772,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     | .error message => throwError "invalid shared-support schedule: {message}"
   let fallbackEnv ← getEnv
   let mainEnv := futureSupport?.map (·.env) |>.getD fallbackEnv
-  -- Build the immutable source products once.  They are deliberately still
-  -- derived from today's complete scheduled Export; only the logical
-  -- declaration transition is extracted in this phase.
+  -- Reuse the immutable census products. Retained sources may still supply
+  -- whole-export row caches; planned sources derive missing rows from each
+  -- transient declaration at its logical transition.
   let sourceSyntax := sourceCensus.sourceSyntax
   let constructionSyntax ← if sourceAliases.isEmpty then pure sourceSyntax else do
     if plannedCensus then
@@ -4056,7 +4084,8 @@ private def feedSharedPrefixOwner (state : FilterState) (context : FilterContext
 private def runSharedPrefixPhaseB (prepared : SharedPrefixSourcePrepared)
     (failAfterOwners? : Option Nat := none) :
     MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict × Nat × Nat × Nat) := do
-  let ⟨_, completedEnv, snapshots, sourceRows, context, aliases, metaOnlyNames⟩ := prepared
+  let ⟨_, completedEnv, snapshots, sourceRows, context, aliases, metaOnlyNames,
+    sourceAccess⟩ := prepared
   let mut chunks := sourceRows.map fun row => #[row]
   let some base := context.kernelCheckBase?
     | throwError "shared-prefix source preparation lost its invocation base"
@@ -4082,7 +4111,10 @@ private def runSharedPrefixPhaseB (prepared : SharedPrefixSourcePrepared)
     let aliases := state.sharedPrefixAliases?.getD aliases
     let (withoutPriorOwner, installed) ←
       prepareSharedPrefixOwnerState state base snapshot aliases
-    let declaration := context.source.decls[snapshot.rawOrdinal]!
+    let declaration ← match ← sourceAccess.read snapshot.rawOrdinal with
+      | .ok declaration => pure declaration
+      | .error message => throwError
+        "cannot reread shared-prefix owner {snapshot.rawOrdinal}: {message}"
     let (next, chunk) ←
       feedSharedPrefixOwner withoutPriorOwner context installed snapshot declaration
     chunks := chunks.set! snapshot.scheduledOrdinal chunk
@@ -4253,6 +4285,68 @@ def runFilterDirectCheckingPlannedCensus (input : PlannedSourceInput)
     runFilterCore input.envelope.template checkRecursors generation .compactDirect
       (plannedSource? := some reader) (sourceCensus? := some input.census)
   return (report, compact, kernelVerdict?)
+
+/-- Planned-census counterpart of [`runFilterDirectCheckingSharedPrefix`].
+Phase A reads each scheduled source declaration once from the completed arena,
+and Phase B rereads only captured owner ordinals. The retained template has no
+declarations; unavailability reruns the existing authoritative planned direct
+path rather than materializing an `Export`. Main does not select this seam. -/
+def runFilterDirectCheckingSharedPrefixPlannedCensus (input : PlannedSourceInput)
+    (reader : Spool.PlannedSourceReader) (generation : Cli.Config)
+    (failAfterOwners? : Option Nat := none) :
+    MetaM ((Report × CompactPlan × Option CompactKernelCheckVerdict) ×
+      SharedPrefixDirectObservation) := do
+  if let .error message ← validatePlannedSource input reader then
+    throwError message
+  let base ← getEnv
+  let levelCallsBefore ← LevelAlgebra.levelCalls.get
+  let levelEscapesBefore ← LevelAlgebra.levelEscapes.get
+  let restoreLevelCounters : MetaM Unit := do
+    LevelAlgebra.levelCalls.set levelCallsBefore
+    LevelAlgebra.levelEscapes.set levelEscapesBefore
+  let preparation : Except String SharedPrefixSourcePrepared ← try
+    prepareSharedPrefixSourceCore input.envelope.template input.census
+      (.planned reader) generation
+  catch error =>
+    pure (.error (← error.toMessageData.toString))
+  finally
+    setEnv base
+  let .ok prepared := preparation | do
+    let .error message := preparation | unreachable!
+    restoreLevelCounters
+    let result ← runFilterDirectCheckingPlannedCensus input reader false generation
+    return (result, {
+      selected := false
+      source := {
+        sourceRecords := input.envelope.declarationCount
+        ownerSnapshots := 0
+        metaOnlyRecords := 0
+        constructionTransitions := 0
+        fallback? := some message }
+      fallback? := some message })
+  let sourceObservation := prepared.observation
+  let phase : Except String
+      (Report × CompactPlan × Option CompactKernelCheckVerdict × Nat × Nat × Nat) ← try
+    pure (Except.ok (← runSharedPrefixPhaseB prepared failAfterOwners?))
+  catch error =>
+    pure (Except.error (← error.toMessageData.toString))
+  match phase with
+  | Except.ok (report, compact, verdict?, retainedSupportRecords,
+      ownerSnapshotsConsumed, pendingOwnerSnapshotsAtSeal) =>
+    return ((report, compact, verdict?), {
+      selected := true
+      source := sourceObservation
+      retainedSupportRecords
+      ownerSnapshotsConsumed
+      pendingOwnerSnapshotsAtSeal })
+  | Except.error message =>
+    setEnv base
+    restoreLevelCounters
+    let result ← runFilterDirectCheckingPlannedCensus input reader false generation
+    return (result, {
+      selected := false
+      source := sourceObservation
+      fallback? := some message })
 
 /-- Phase-four internal route: the parser has released its complete source
 declaration array, and scheduled replay decodes exactly one certified raw

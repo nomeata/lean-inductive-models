@@ -256,12 +256,13 @@ def DirectInputTee.releaseFallback (tee : DirectInputTee) : IO Unit := do
 
 /-- Random-access source decoder over one completed raw tee. The immutable
 arena is the exact graph transferred from the declaration-discarding parser;
-only the declaration handle cursor is mutable. No decoded declaration is
-retained by the reader. -/
+only the declaration handle cursor and value-level read counter are mutable.
+No decoded declaration is retained by the reader. -/
 structure PlannedSourceReader where private mk ::
   private arena : DeclarationArena
   private declarations : IO.FS.Handle
   private position : IO.Ref UInt64
+  private readCalls : IO.Ref Nat
   private declarationSize : UInt64
   private spans : Array RawSpan
   private provenance : SourceProvenance
@@ -294,7 +295,8 @@ def PlannedSourceReader.create (tee : ParseTee) (certificate : RawCertificate)
         | .error error => return .error error
     let declarations ← IO.FS.Handle.mk tee.declarations.path .read
     let position ← IO.mkRef 0
-    return .ok <| PlannedSourceReader.mk arena declarations position
+    let readCalls ← IO.mkRef 0
+    return .ok <| PlannedSourceReader.mk arena declarations position readCalls
       sizes.declarations certificate.declarations tee.provenance
   catch error =>
     return .error s!"cannot open planned source spool: {error}"
@@ -318,13 +320,20 @@ def PlannedSourceReader.createDirect (tee : DirectInputTee)
       return .error "direct input spool changed after completion"
     let declarations ← IO.FS.Handle.mk tee.declarations.path .read
     let position ← IO.mkRef 0
-    return .ok <| PlannedSourceReader.mk arena declarations position
+    let readCalls ← IO.mkRef 0
+    return .ok <| PlannedSourceReader.mk arena declarations position readCalls
       sizes.declarations certificate.declarations tee.provenance
   catch error =>
     return .error s!"cannot open direct input spool: {error}"
 
 /-- Number of source declaration records certified for this reader. -/
 def PlannedSourceReader.size (reader : PlannedSourceReader) : Nat := reader.spans.size
+
+/-- Number of declaration-read requests made through this reader. This
+value-only observer lets retention tests distinguish the one Phase-A pass plus
+owner rereads from accidental materialization or a second all-source pass. -/
+def PlannedSourceReader.readCount (reader : PlannedSourceReader) : IO Nat :=
+  reader.readCalls.get
 
 /-- Bind a reader to the exact tee observed by a parser/census pass. Shape,
 size, and arena-cursor certificates cannot distinguish adversarial or merely
@@ -340,6 +349,7 @@ def PlannedSourceReader.read (reader : PlannedSourceReader)
     (ordinal : Nat) : IO (Except String EDecl) := do
   let some rawSpan := reader.spans[ordinal]?
     | return .error s!"planned source ordinal {ordinal} is out of range"
+  reader.readCalls.modify (· + 1)
   let span : ByteSpan := { offset := rawSpan.offset, length := rawSpan.bytes }
   match span.validate reader.declarationSize with
   | .error error => return .error error
