@@ -29,6 +29,16 @@ def runExportWith (input : Export) (generation : InductiveModels.Cli.Config) :
 def runExport (input : Export) : IO (Array EDecl × Report) :=
   runExportWith input noGeneration
 
+def runShadow (input : Export) (generation : InductiveModels.Cli.Config) :
+    IO (Array EDecl × Report × Bool) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<source-replay-alias-shadow-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+    (runFilterWithFutureSourceSupportShadow input false generation)) context { env }
+  return result
+
 def replayNamesVisible (input : Export) (names : Array Name) : IO (Array Bool) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -188,15 +198,19 @@ def main : IO UInt32 := do
     | throw <| IO.userError "cannot construct replay syntax replacement"
   state := state.check "transparent normalization unfolds to the replay identity"
     (replayIndex.exactNormalizer.whnf (.const wrapper []) == .const generationBuild [])
-  let (generationOutput, generationReport) ← runExportWith generationInput
-    { noGeneration with simple := true }
+  let generation := { noGeneration with simple := true }
+  let (generationOutput, generationReport) ← runExportWith generationInput generation
+  let generationKernelValid ← kernelChecks { generationInput with decls := generationOutput }
   let leakedBuildName := generationOutput.any fun declaration =>
     declaration.names.contains generationBuild ||
       (Order.references declaration).contains generationBuild
   state := state.check "enabled generation through an aliased wrapper succeeds exactly"
     (generationReport.generated.any (·.1 == `AliasWrappedBox) &&
       generationReport.unreplayable.isNone && generationReport.stmtErrors.isEmpty &&
-      !leakedBuildName)
+      !leakedBuildName && generationKernelValid)
+  let (shadowOutput, shadowReport, shadowSelected) ← runShadow generationInput generation
+  state := state.check "future-support shadow falls back before exact replay"
+    (!shadowSelected && shadowOutput == generationOutput && shadowReport == generationReport)
 
   let atomicInput : Export :=
     { metaLine := .null
