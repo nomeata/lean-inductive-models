@@ -6,8 +6,8 @@ import Lean
 Named output is prepared in a fresh sibling and made visible with one rename.
 This keeps an existing target intact when serialization or flushing fails and
 also makes literal and path-alias in-place operation safe. Standard output is
-necessarily different: once a consumer has received bytes they cannot be
-recalled, so it is written only after the caller has completed every gate.
+necessarily different: declaration-wise generation writes it directly, so a
+late semantic failure can leave the consumer with a complete-record prefix.
 -/
 
 namespace InductiveModels.Output

@@ -20,7 +20,7 @@ printf '%s\n' \
   "PUnit: exempt — prim model: a basis primitive" \
   "statements: 48699 compared, 0 differ" \
   "levels: 211 planner comparisons, 0 escapes" \
-  "output backend: legacy" \
+  "output backend: declaration-stream" \
   "output check: 12001 model families checked" > "$generate"
 printf '%s\n' "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"PSigma'\"}}" > "$output"
 printf '%s\n' \
@@ -94,19 +94,20 @@ if "$checker" "$generate" "$output" "$WORK/no-kernel-check.log" >/dev/null 2>&1;
   exit 1
 fi
 
-grep -vF 'output backend: legacy' "$generate" > "$WORK/no-full-backend.log"
-if "$checker" "$WORK/no-full-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
-  echo "mathlib result parser accepted a missing full-AST backend" >&2
+grep -vF 'output backend: declaration-stream' "$generate" > "$WORK/no-stream-backend.log"
+if "$checker" "$WORK/no-stream-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
+  echo "mathlib result parser accepted a missing declaration-stream backend" >&2
   exit 1
 fi
 
-sed 's/output backend: legacy/output backend: compact-discard/' "$generate" > "$WORK/wrong-backend.log"
+sed 's/output backend: declaration-stream/output backend: compact-discard/' \
+  "$generate" > "$WORK/wrong-backend.log"
 if "$checker" "$WORK/wrong-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
   echo "mathlib result parser accepted a non-output generation backend" >&2
   exit 1
 fi
 
-sed '/output backend: legacy/p' "$generate" > "$WORK/duplicate-backend.log"
+sed '/output backend: declaration-stream/p' "$generate" > "$WORK/duplicate-backend.log"
 if "$checker" "$WORK/duplicate-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
   echo "mathlib result parser accepted duplicate backend reports" >&2
   exit 1

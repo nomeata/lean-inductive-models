@@ -146,12 +146,16 @@ owner, while all other source declarations retain input order. Input
 validation rejects a model declaration that occurs after its owner.
 
 Canonical generation retains compact structural certificates while model
-islands are live. All named and stdout output uses the ordinary full-memory AST
-path. On the eligible `--no-output --type-check-output` route with input kernel
-checking disabled, the parser first builds a compact source census; each exact
-source declaration is trusted-installed for construction, and each generated
-island is checked directly in process while its compact certificate is live. The
-parser transfers one declaration replay arena instead of reparsing; at parse
+islands are live. Actual generated output receives the exact island and then
+its source owner at that transition, re-interns one declaration at a time, and
+retains no cumulative output declaration array. Named output remains in a
+private sibling until the final compact semantic/structural verdict commits it;
+standard output is direct and can therefore contain a parseable declaration
+prefix after a late failure. When input kernel checking is disabled, both actual
+output and eligible checked no-output generation first build a compact source
+census; each exact source declaration is trusted-installed for construction,
+and each generated island is optionally checked directly in process while its
+compact certificate is live. The parser transfers one declaration replay arena instead of reparsing; at parse
 completion its dense expression-ID table is replaced by the exact expression
 roots referenced by declarations, while the expression DAGs and name/level
 tables needed for declaration replay remain available. An input-only
@@ -162,7 +166,9 @@ checked directly as values, never through JSON, an output parser, a writer, or
 a spool. With both `--no-output` and `--no-type-check-output`, accepted islands
 are summarized while live and then discarded without any kernel check: no
 workspace is opened and no cumulative generated declaration array is retained.
-Deliberate legacy/planner diagnostic modes remain on the full-memory path.
+Input kernel checking may retain the parsed source, but generated actual output
+still uses the declaration stream. No-generation writing preserves the existing
+whole-export path.
 
 Unsupported shapes pass through unchanged and are reported as declines. A
 consumer using models as an inductive front end must implement the five-member

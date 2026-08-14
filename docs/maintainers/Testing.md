@@ -111,7 +111,8 @@ published `good/` case and requires each `bad/` case to be rejected or to stop
 at the documented internal-invariant boundary; unsupported exit 2 is a corpus
 failure.
 
-`ordertest` compares the full-AST path with sink-free compact discard over the
+`ordertest` compares the compatibility retained-array path, declaration-event
+collection, and sink-free compact discard over the
 same generation fixtures and exercises planned declaration-wise source
 replay. `mainclitest` selects compact discard explicitly with `--no-output`;
 `--type-check-output` checks each exact generated island directly in process,
@@ -126,12 +127,12 @@ never serialized through it.
 suites. The focused CI workflow splits the matrix across fixture, focused, and
 CLI jobs and limits each process to 12 GiB. The Mathlib workflow
 uses its separately documented 10/12 GiB phase envelopes and artifact gates.
-Its generation pass uses the ordinary full-AST named-output backend with the
-generated-island gate disabled; a separate artifact-validation invocation uses
+Its generation pass uses transactional declaration-stream named output with
+the generated-island gate disabled; a separate artifact-validation invocation uses
 `--type-check-input --no-output` to check the serialized export as input after
 generation exits. The existing 10 GiB generation cap is
-unchanged while an authoritative hosted-runner measurement of the full-AST
-route is pending.
+unchanged; the streamed generation and serialized input validation remain
+strictly separate processes.
 
 ## Fixture regeneration
 

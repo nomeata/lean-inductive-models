@@ -472,7 +472,7 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
         | .error _ =>
           -- Parser-compatible arena overwrites cannot be reconstructed from a
           -- completed arena. Reparse the exact consumed input snapshot and use
-          -- the ordinary full-AST pipeline with unchanged diagnostics.
+          -- the ordinary retained-input pipeline with unchanged diagnostics.
           let fallback ← tee.parseFallback (options := { allowDuplicateNames := true })
           let parsed ← match fallback with
             | .ok parsed => pure parsed

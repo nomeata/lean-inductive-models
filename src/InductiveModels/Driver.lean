@@ -32,10 +32,11 @@ of another, and this driver is the only thing that composes them.
 
 ## Why output is re-interned
 
-Declaration records refer into one file-wide name, level, and expression arena.
-[`InductiveModels.Export.writeTo`] therefore serializes the constructively
-ordered result as one self-contained arena. The writer streams record
-lines rather than retaining the rendered file as one string.
+Declaration records refer to numeric name, level, and expression arena IDs.
+Actual generated output re-interns each callback declaration at fresh local
+tables while monotonically advancing the file-wide IDs; neither those tables
+nor an earlier declaration survives the callback. The no-generation path keeps
+[`InductiveModels.Export.writeTo`] for byte-stable whole-export writing.
 
 ## The free oracle
 
@@ -1899,8 +1900,9 @@ Retained-input routes materialise a complete `Export`, while planned-input
 routes decode one certified declaration at a time. The generation loop below
 does not own its mutable state as local variables.
 `FilterState.feedSource` is the one-record logical transition and
-`FilterState.finalize` consumes only its accumulated compact/output state.
-This is the boundary a later census/span reader can drive without changing an
+`FilterState.finalize` consumes only accumulated value-level certificates or
+the compatibility retained output. This is the boundary a census/span reader
+and declaration emitter drive without changing an
 owner's pre-replay generation, source replay, post-replay generation, or atomic
 island close. -/
 
@@ -1917,8 +1919,9 @@ structure FilterSourceStep where
   generatedRecords : Nat
   deriving Inhabited, Repr, BEq
 
-/-- Output retention is explicit: actual output retains declarations, while
-no-output mode retains only value-level certificates. -/
+/-- Output retention is explicit: compatibility callers may retain a complete
+array, while production output streams and no-output mode retain only
+value-level certificates. -/
 private inductive RetentionMode where
   | fullOutput
   | compactDiscard
@@ -2133,11 +2136,12 @@ def sourceReplayInductiveDerivations (roles : SourceReplayRoles)
     aliases ← aliases.replace recursor buildRecursor
   return aliases
 
-/-- Declaration-discarding parser result for the internal planned route.  The
+/-- Declaration-discarding parser result for the internal planned route. The
 raw certificate is not an eligibility promise: callers must still finish the
 tee and construct a `PlannedSourceReader`. Generic raw composition requires a
-canonical stream; the checked no-output CLI needs only a progressive arena and
-falls back to the exact input snapshot when declaration replay is unsafe. -/
+canonical stream; declaration-wise output and checked no-output generation need
+only a progressive arena and fall back to the exact input snapshot when
+declaration replay is unsafe. -/
 structure PlannedSourceInput where private mk ::
   envelope : ParsedEnvelope
   census : SourceCensus
@@ -2166,8 +2170,8 @@ def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
   parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
     options
 
-/-- Parse checked no-output CLI input into a frozen census plus one exact raw
-fallback snapshot and declaration spans. Generated output is not involved. -/
+/-- Parse planned CLI input into a frozen census plus one exact raw fallback
+snapshot and declaration spans. Generated values are never written here. -/
 def parsePlannedSourceWithInputTee (handle : IO.FS.Handle)
     (tee : Spool.PlannedInputTee) (options : ParseOptions := {}) :
     IO (Except String PlannedSourceInput) :=
