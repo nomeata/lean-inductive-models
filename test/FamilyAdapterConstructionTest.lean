@@ -113,6 +113,9 @@ def changedNested : ChangedBoundary :=
     backwardForward := `FamilyAdapterGenerated.generatedChangedNestedUnrollRoll
     forwardBackward := `FamilyAdapterGenerated.generatedChangedNestedRollUnroll }
 
+def prototypeDeclarationName (root owner : Name) (suffix : String) : Name :=
+  Name.str (root.append owner) suffix
+
 def directSamples : Array Name :=
   #[`FamilyAdapterGenerated.GeneratedDirect0,
     `FamilyAdapterGenerated.GeneratedDirect1,
@@ -255,11 +258,16 @@ def runSamples : MetaM Result := do
       result := { result with failures }
     | .ok built =>
       if boundary.publicOwner == changedNested.publicOwner then
+        let root := (`_family_adapter_construction_test_changed).append boundary.publicOwner
         let keyedContainerGap := built.issues.any fun
           | .missingContainerMap occurrence =>
               occurrence.target.owner == boundary.publicOwner
           | _ => false
-        if built.certificate.isNone && keyedContainerGap then
+        let packSource := prototypeDeclarationName root
+          (Name.str boundary.publicOwner "mk") "packSource"
+        let rolledBack := built.declarations.isEmpty &&
+          !(← getEnv).constants.contains packSource
+        if built.certificate.isNone && keyedContainerGap && rolledBack then
           result := { result with blockedContainers := result.blockedContainers + 1 }
         else
           let failures := result.failures.push
@@ -287,7 +295,7 @@ def runSamples : MetaM Result := do
       | .missingInstalledMemberMap member map =>
           member.owner == invalidBoundary.publicOwner && map.isAnonymous
       | _ => false
-    if built.certificate.isNone && keyedMapGap then
+    if built.certificate.isNone && keyedMapGap && built.declarations.isEmpty then
       result := { result with invalidMaps := result.invalidMaps + 1 }
     else
       let failures := result.failures.push
