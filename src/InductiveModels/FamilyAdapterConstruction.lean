@@ -2415,7 +2415,10 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
             publicMinorNames[minorIndex]? == some certificate.publicConstructor &&
             privateMinorNames[minorIndex]? == some certificate.implementationConstructor do
     failConstruction (.malformedRecursorMinor member.key minorCertificates.size)
-  let value ← forallBoundedTelescope publicType (some prefixSize)
+  let agreementName := publicRecursorCallAgreementName root member.key
+  liftGen <| ensurePrototypeFresh agreementName
+  let ((value, agreementValue), agreementType) ←
+      forallBoundedTelescope publicType (some prefixSize)
       fun publicPrefix publicTailType => do
     let parameters := publicPrefix.extract 0 member.parameterArity
     let publicMotives := publicPrefix.extract member.parameterArity
@@ -2453,7 +2456,8 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
           privateMotives member certificate publicMinors[minorIndex]! expected
       privateMinors := privateMinors.push minor
       privateTail := rest.instantiate1 minor
-    forallBoundedTelescope publicTailType (some (numForalls publicTailType))
+    let privatePrefix := parameters ++ privateMotives ++ privateMinors
+    let valueTail ← forallBoundedTelescope publicTailType (some (numForalls publicTailType))
         fun publicTail publicResult => do
       let some publicMajor := publicTail.back?
         | failConstruction (.shortInstalledRecursorPrefix member.key member.publicRecursor)
@@ -2468,7 +2472,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
       let privateCall := mkAppN
         (.const member.implementationRecursor
           (privateRecursorInfo.levelParams.map Level.param))
-        (parameters ++ privateMotives ++ privateMinors ++ indices ++ #[privateMajor])
+        (privatePrefix ++ indices ++ #[privateMajor])
       let privateCallType ← inferType privateCall
       let (roundTripMajor, _) ← mapCarrierValue plan memberCertificates parameters member false
         privateMajorType publicMajorType privateMajor
@@ -2484,51 +2488,9 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
         fun value => pure (mkAppN publicMotive (indices.push value))
       unless ← isDefEq (← inferType transported) publicResult do
         failConstruction (.publicRecursorResultMismatch member.key .transportedResult)
-      mkLambdaFVars (publicPrefix ++ publicTail) transported
-  let declaration := Declaration.defnDecl
-    { name, levelParams := publicRecursorInfo.levelParams, type := publicType, value,
-      hints := .abbrev, safety := .safe }
-  liftGen <| addChecked declaration
-  let agreementName := publicRecursorCallAgreementName root member.key
-  liftGen <| ensurePrototypeFresh agreementName
-  let (agreementValue, agreementType) ←
-      forallBoundedTelescope publicType (some prefixSize)
-      fun publicPrefix _ => do
-    let parameters := publicPrefix.extract 0 member.parameterArity
-    let publicMotives := publicPrefix.extract member.parameterArity
-      (member.parameterArity + member.recursorMotiveArity)
-    let publicMinors := publicPrefix.extract
-      (member.parameterArity + member.recursorMotiveArity) prefixSize
-    let mut privateTail ← instantiateForall privateType parameters
-    let mut privateMotives := #[]
-    for motiveIndex in [:motiveCertificates.size] do
-      let .forallE _ expected rest _ := privateTail
-        | failConstruction (.shortInstalledRecursorPrefix member.key
-            member.implementationRecursor)
-      let motiveMember := plan.members[motiveIndex]?.getD member
-      let motive ← privateMotiveValue plan memberCertificates parameters
-        motiveMember publicMotives[motiveIndex]! expected
-      privateMotives := privateMotives.push motive
-      privateTail := rest.instantiate1 motive
-    let mut privateMinors := #[]
-    for minorIndex in [:minorCertificates.size] do
-      let .forallE _ expected rest _ := privateTail
-        | failConstruction (.shortInstalledRecursorPrefix member.key
-            member.implementationRecursor)
-      let certificate := minorCertificates[minorIndex]!
-      let minor ← if let some constructor := plan.constructors.find? fun constructor =>
-          constructor.publicName == certificate.publicConstructor &&
-            constructor.implementationName == certificate.implementationConstructor then
-        privateMinorValue plan memberCertificates telescopeCertificates
-          constructorCertificates parameters publicMotives privateMotives member minorIndex
-          constructor publicMinors[minorIndex]! expected
-      else
-        privateSpecialisedMinorValue plan memberCertificates parameters publicMotives
-          privateMotives member certificate publicMinors[minorIndex]! expected
-      privateMinors := privateMinors.push minor
-      privateTail := rest.instantiate1 minor
-    let privatePrefix := parameters ++ privateMotives ++ privateMinors
-    forallBoundedTelescope privateTail (some (numForalls privateTail))
+      mkLambdaFVars publicTail transported
+    let (agreementTail, agreementTailType) ←
+      forallBoundedTelescope privateTail (some (numForalls privateTail))
         fun privateTailArguments _ => do
       let some privateMajor := privateTailArguments.back?
         | failConstruction (.shortInstalledRecursorPrefix member.key
@@ -2572,14 +2534,22 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
       let resultType ← liftGen <| inferType privateCall
       let expected := eqi.mk' (← liftGen <| ilevel resultType) resultType
         privateCall publicCall
-      let actual ← liftGen <| inferType proof
-      unless ← liftGen <| withTransparency .all <| isDefEq actual expected do
-        failConstruction (.publicRecursorAgreementMismatch member.key actual expected)
-      let value ← liftGen <| mkLambdaFVars
-        (publicPrefix ++ privateTailArguments) proof
-      let type ← liftGen <| mkForallFVars
-        (publicPrefix ++ privateTailArguments) expected
+      let value ← liftGen <| mkLambdaFVars privateTailArguments proof
+      let type ← liftGen <| mkForallFVars privateTailArguments expected
       return (value, type)
+    let value ← liftGen <| mkLambdaFVars publicPrefix valueTail
+    let agreementValue ← liftGen <| mkLambdaFVars publicPrefix agreementTail
+    let agreementType ← liftGen <| mkForallFVars publicPrefix agreementTailType
+    return ((value, agreementValue), agreementType)
+  let declaration := Declaration.defnDecl
+    { name, levelParams := publicRecursorInfo.levelParams, type := publicType, value,
+      hints := .abbrev, safety := .safe }
+  liftGen <| addChecked declaration
+  let actualAgreementType ← liftGen <| inferType agreementValue
+  unless ← liftGen <| withTransparency .all <|
+      isDefEq actualAgreementType agreementType do
+    failConstruction (.publicRecursorAgreementMismatch member.key
+      actualAgreementType agreementType)
   let agreementDeclaration := Declaration.thmDecl
     { name := agreementName, levelParams := publicRecursorInfo.levelParams,
       type := agreementType, value := agreementValue }
