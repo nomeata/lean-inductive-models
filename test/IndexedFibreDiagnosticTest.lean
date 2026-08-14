@@ -193,9 +193,11 @@ def twoRecursiveLaterDependencyType? (constructor : ECtor)
   let laterIndex := constructor.numParams + 4
   let recursive ← binders[recursiveIndex]?
   let later ← binders[laterIndex]?
-  let witness := mkAppN (.const `RecursiveWitness [.zero])
-    #[recursive.type, recursive.value]
-  let binders := binders.set! laterIndex { later with type := witness }
+  -- Deliberately malformed as a kernel type: the structural checker must
+  -- reject the dependency from source syntax itself, without an enclosing
+  -- constant whose implicit type argument would trigger the earlier
+  -- non-bare-occurrence guard instead.
+  let binders := binders.set! laterIndex { later with type := recursive.value }
   return closeForalls binders result
 
 def declarationValue? (x : Export) (name : Name) : Option Expr :=
