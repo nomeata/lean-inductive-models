@@ -859,8 +859,8 @@ def run (root : String) : IO UInt32 := do
   state := state.check
       s!"composed stream places every recursive model before its generated owner: \
         families={familiesBeforeOwners composedStreamed.output}, \
-        compact={repr composedStreamed.plan.checkReport.violations[0]?}, \
-        full={repr composedCheck[0]?]}" <|
+        compact={repr (composedStreamed.plan.checkReport.violations[0]?)}, \
+        full={repr (composedCheck[0]?)}" <|
     composedStreamed.output.decls == composedRun.output.decls &&
       familiesBeforeOwners composedStreamed.output &&
       composedStreamed.plan.checkReport.violations.isEmpty &&
