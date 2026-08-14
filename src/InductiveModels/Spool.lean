@@ -189,9 +189,10 @@ def ParseTee.finish (tee : ParseTee) : IO RawSpoolSizes := do
     arena := ← tee.arena.finish
     declarations := ← tee.declarations.finish }
 
-/-- Random-access source decoder over one completed raw tee.  The immutable
-arena is shared by every read; only the declaration handle cursor is mutable.
-No decoded declaration is retained by the reader. -/
+/-- Random-access source decoder over one completed raw tee. The immutable
+arena is the exact graph transferred from the declaration-discarding parser;
+only the declaration handle cursor is mutable. No decoded declaration is
+retained by the reader. -/
 structure PlannedSourceReader where private mk ::
   private arena : DeclarationArena
   private declarations : IO.FS.Handle
@@ -205,7 +206,9 @@ must have finished all three tee files. Canonical progressive arena IDs are a
 hard eligibility condition: parser-compatible interleaved overwrites encode
 declaration-time snapshots which one completed arena cannot reconstruct. -/
 def PlannedSourceReader.create (tee : ParseTee) (certificate : RawCertificate)
-    (sizes : RawSpoolSizes) (declarationCount : Nat) : IO (Except String PlannedSourceReader) := do
+    (sizes : RawSpoolSizes) (declarationCount : Nat)
+    (arena? : Option DeclarationArena := none) :
+    IO (Except String PlannedSourceReader) := do
   match certificate.validate sizes declarationCount with
   | .error error => return .error error
   | .ok _ => pure ()
@@ -217,10 +220,13 @@ def PlannedSourceReader.create (tee : ParseTee) (certificate : RawCertificate)
     unless arenaMetadata.byteSize == sizes.arena &&
         declarationMetadata.byteSize == sizes.declarations do
       return .error "planned source spool changed after completion"
-    let arenaResult ← IO.FS.withFile tee.arena.path .read DeclarationArena.ofHandle
-    let arena ← match arenaResult with
-      | .ok arena => pure arena
-      | .error error => return .error error
+    let arena ← match arena? with
+      | some arena => pure arena
+      | none =>
+        let arenaResult ← IO.FS.withFile tee.arena.path .read DeclarationArena.ofHandle
+        match arenaResult with
+        | .ok arena => pure arena
+        | .error error => return .error error
     let declarations ← IO.FS.Handle.mk tee.declarations.path .read
     let position ← IO.mkRef 0
     return .ok <| PlannedSourceReader.mk arena declarations position

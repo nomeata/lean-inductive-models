@@ -217,7 +217,7 @@ def runFilterPlannedCensusState (scratch : String) (input : Export)
       | .error error => throw <| IO.userError s!"planned census parse failed: {error}"
     let sizes ← tee.finish
     let reader ← match ← Spool.PlannedSourceReader.create tee parsed.certificate sizes
-        parsed.envelope.declarationCount with
+        parsed.envelope.declarationCount (some parsed.envelope.arena) with
       | .ok reader => pure reader
       | .error error => throw <| IO.userError s!"planned census reader failed: {error}"
     let env ← importModules #[] {}
@@ -242,7 +242,7 @@ def preparePlannedCensus (workspace : Spool.Workspace) (input : Export) :
     | .error error => throw <| IO.userError s!"planned provenance parse failed: {error}"
   let sizes ← tee.finish
   let reader ← match ← Spool.PlannedSourceReader.create tee parsed.certificate sizes
-      parsed.envelope.declarationCount with
+      parsed.envelope.declarationCount (some parsed.envelope.arena) with
     | .ok reader => pure reader
     | .error error => throw <| IO.userError s!"planned provenance reader failed: {error}"
   return (parsed, reader)

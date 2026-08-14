@@ -43,6 +43,16 @@ def errorSatisfies (result : Except String Unit) (predicate : String → Bool) :
   | .error message => predicate message
   | .ok () => false
 
+def reportEquals (result : Except String Check.Report) (expected : Check.Report) : Bool :=
+  match result with
+  | .ok actual => actual == expected
+  | .error _ => false
+
+def exportEquals (result : Except String Export) (expected : Export) : Bool :=
+  match result with
+  | .ok actual => actual.render == expected.render
+  | .error _ => false
+
 def exportOf (decls : Array EDecl) : Export := { metaLine := .null, decls }
 
 def runMeta (action : MetaM (Except String Unit)) : IO (Except String Unit) := do
@@ -103,6 +113,45 @@ def runFilterDirectObserved (x : Export) (generation : Cli.Config)
     let result ← runFilterDirectChecking x checkRecursors generation
     return (result, ← getEnv))) context { env }
   return result
+
+structure PlannedDirectObserved where
+  retainedDeclarations : Nat
+  inputReport : Except String Check.Report
+  materialized : Except String Export
+  result : Report × CompactPlan × Option CompactKernelCheckVerdict
+  env : Environment
+
+def runFilterDirectPlannedObserved (scratch : String) (x : Export)
+    (generation : Cli.Config) (checkRecursors : Bool := false) :
+    IO PlannedDirectObserved :=
+  Spool.withWorkspace scratch fun workspace => do
+    let inputFile ← workspace.createFile "kernel-check-planned-input.ndjson"
+    discard <| inputFile.append x.render.toUTF8
+    discard <| inputFile.finish
+    let tee ← Spool.ParseTee.create workspace
+    let planned ← IO.FS.withFile inputFile.path .read fun handle => do
+      match ← parsePlannedSourceWithTee handle tee
+          (analyse := false) (allowDuplicateNames := true) with
+      | .ok input => pure input
+      | .error message => throw <| IO.userError message
+    let sizes ← tee.finish
+    let reader ← match ← Spool.PlannedSourceReader.create tee planned.certificate sizes
+        planned.envelope.declarationCount (some planned.envelope.arena) with
+      | .ok reader => pure reader
+      | .error message => throw <| IO.userError message
+    let inputReport ← checkPlannedSource planned reader
+    let materialized ← materializePlannedSource planned reader
+    let env ← importModules #[] {}
+    let context : Core.Context :=
+      { fileName := "<filter-direct-planned-kernel-check-test>", fileMap := default,
+        maxHeartbeats := 0, maxRecDepth := 8192 }
+    let ((result, observed), _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+      let result ← runFilterDirectCheckingPlannedCensus
+        planned reader checkRecursors generation
+      return (result, ← getEnv))) context { env }
+    return {
+      retainedDeclarations := planned.envelope.retainedDeclarations
+      inputReport, materialized, result, env := observed }
 
 def runDiscarding (x : Export) (generation : Cli.Config)
     (checkRecursors : Bool := false) : IO (Report × CompactPlan) := do
@@ -445,6 +494,8 @@ def run (root : String) : IO UInt32 := do
   -- construction declarations remain visible).
   let ((directSuccessReport, directSuccessPlan, directSuccess?), directSuccessEnv) ←
     runFilterDirectObserved futureBase futureGeneration
+  let plannedDirectSuccess ←
+    runFilterDirectPlannedObserved s!"{root}/_tmp" futureBase futureGeneration
   let (discardSuccessReport, discardSuccessPlan) ←
     runDiscarding futureBase futureGeneration
   state := state.check "compact direct success equals compact discard after early seal" <|
@@ -455,6 +506,14 @@ def run (root : String) : IO UInt32 := do
         verdict.scheduledRecords == directSuccessPlan.declarations.size) &&
       !directSuccessEnv.constants.contains `Tree &&
       !directSuccessEnv.constants.contains (Naming.modelName `Tree)
+  state := state.check "planned compact direct releases source AST and preserves input oracle" <|
+    plannedDirectSuccess.retainedDeclarations == 0 &&
+      reportEquals plannedDirectSuccess.inputReport (Check.checkReport futureBase) &&
+      exportEquals plannedDirectSuccess.materialized futureBase &&
+      plannedDirectSuccess.result.1 == directSuccessReport &&
+      sameCompactPlan plannedDirectSuccess.result.2.1 directSuccessPlan &&
+      directAccepted plannedDirectSuccess.result.2.2 &&
+      !plannedDirectSuccess.env.constants.contains `Tree
 
   let ((directMalformedReport, directMalformedPlan, directMalformed?),
       directMalformedEnv) ← runFilterDirectObserved lateMalformed {}
@@ -490,6 +549,8 @@ def run (root : String) : IO UInt32 := do
 
   let ((directAliasReport, directAliasPlan, directAlias?), directAliasEnv) ←
     runFilterDirectObserved collidingShapes collisionGeneration true
+  let plannedDirectAlias ← runFilterDirectPlannedObserved
+    s!"{root}/_tmp" collidingShapes collisionGeneration true
   let (discardAliasReport, discardAliasPlan) ←
     runDiscarding collidingShapes collisionGeneration true
   state := state.check "compact direct generated aliases retain exact bound rows only" <|
@@ -500,6 +561,15 @@ def run (root : String) : IO UInt32 := do
       !directAliasEnv.constants.contains publicOwner &&
       !directAliasEnv.constants.contains privateOwner &&
       !directAliasEnv.constants.contains (Naming.modelName privateOwner)
+  state := state.check "planned compact direct preserves normalized exact/build aliases" <|
+    plannedDirectAlias.retainedDeclarations == 0 &&
+      reportEquals plannedDirectAlias.inputReport (Check.checkReport collidingShapes) &&
+      exportEquals plannedDirectAlias.materialized collidingShapes &&
+      plannedDirectAlias.result.1 == directAliasReport &&
+      sameCompactPlan plannedDirectAlias.result.2.1 directAliasPlan &&
+      directAccepted plannedDirectAlias.result.2.2 &&
+      !plannedDirectAlias.env.constants.contains publicOwner &&
+      !plannedDirectAlias.env.constants.contains privateOwner
 
   let ((directFutureReport, directFuturePlan, directFuture?), directFutureEnv) ←
     runFilterDirectObserved futureInput futureGeneration

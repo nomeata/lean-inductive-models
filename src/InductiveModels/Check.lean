@@ -2016,6 +2016,9 @@ checks and the final whole-stream extra-rule census. -/
 structure CompactFamilyCertificate where
   owner : Name
   publicNames : Array Name
+  /-- Exact `(original, public)` pairs used to reproduce source-order
+  diagnostics after the source declarations themselves have been released. -/
+  publicOwners : Array (Name × Name)
   ownerReferences : Array (Name × Name)
   captureIsland? : Option Nat := none
   localViolations : Array Violation
@@ -2038,6 +2041,8 @@ def compactFamilyCertificateWithIndex (x : Export) (index : SyntaxIndex)
     (family : Family) : CompactFamilyCertificate :=
   { owner := family.owner
     publicNames := family.correspondence.publicNames
+    publicOwners := family.correspondence.publicNames.filterMap fun publicName =>
+      family.correspondence.originalOfPublic? publicName |>.map fun owner => (owner, publicName)
     ownerReferences := ownerReferenceCertificate x.decls[family.ownerDecl]!
     localViolations :=
       (checkFamilyWithIndex x index family false).filter notExtraRule
@@ -2098,12 +2103,14 @@ structure CompactCheckRecord where
 certificates. The caller must already have proved compact dependency/model
 ordering; that proof excludes the two order-only violation classes omitted by
 the certificates. -/
-def compactOrderedReport (records : Array CompactCheckRecord) : Except String Report := do
+private def compactReport (records : Array CompactCheckRecord)
+    (checkSourceOrder : Bool) : Except String Report := do
   let orderedGlobals := records.map (·.globalExtra)
   let orderedNames := orderedGlobals.flatMap (·.names)
   let mut declared : Std.HashSet Name := {}
   let mut declaringRecord : Std.HashMap Name (Array Name) := {}
-  for record in records do
+  for recordIndex in [:records.size] do
+    let record := records[recordIndex]!
     for name in record.globalExtra.names do
       if declared.contains name then
         throw s!"duplicate compact declaration name {name}"
@@ -2118,7 +2125,8 @@ def compactOrderedReport (records : Array CompactCheckRecord) : Except String Re
   let mut familiesChecked := 0
   let mut violations : Array Violation := #[]
   let mut certifiedOwners : Std.HashSet Name := {}
-  for record in records do
+  for recordIndex in [:records.size] do
+    let record := records[recordIndex]!
     if record.families.size > 1 then
       throw s!"compact owner record {record.owner} carries {record.families.size} family certificates"
     for family in record.families do
@@ -2129,6 +2137,13 @@ def compactOrderedReport (records : Array CompactCheckRecord) : Except String Re
       certifiedOwners := certifiedOwners.insert family.owner
       unless family.publicNames.any declared.contains do continue
       familiesChecked := familiesChecked + 1
+      if checkSourceOrder then
+        for modelDecl in [:records.size] do
+          unless modelDecl < recordIndex do
+            for name in records[modelDecl]!.globalExtra.names do
+              if let some (owner, _) := family.publicOwners.find? (fun pair => pair.2 == name) then
+                violations := violations.push
+                  (.modelNotBefore owner name modelDecl recordIndex)
       let familyNames := family.publicNames.foldl (init := #[]) fun names publicName =>
         appendUnique names (declaringRecord.getD publicName #[]).toList
       if let some (owner, target) :=
@@ -2143,6 +2158,16 @@ def compactOrderedReport (records : Array CompactCheckRecord) : Except String Re
       throw s!"compact owner record {record.owner} has declared model slots but no family certificate"
   violations := violations ++ globalExtrasFromRecords orderedGlobals
   return { familiesChecked, violations }
+
+/-- Finish an already dependency/model-ordered compact output report. -/
+def compactOrderedReport (records : Array CompactCheckRecord) : Except String Report :=
+  compactReport records false
+
+/-- Finish the historical structural report for source records in their raw
+order. Unlike [`compactOrderedReport`], this reproduces model-after-owner
+diagnostics rather than assuming a proven compact order. -/
+def compactSourceReport (records : Array CompactCheckRecord) : Except String Report :=
+  compactReport records true
 
 /-- In-memory equivalence oracle for an already ordered export. -/
 def compactOrderedCheckReport (x : Export) : Except String Report :=

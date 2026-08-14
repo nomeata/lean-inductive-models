@@ -82,7 +82,7 @@ def plannedDiscardingSourceRejected (scratch path text : String) : IO Bool := do
     let .ok (envelope, certificate) := captured | return false
     let sizes ← tee.finish
     return (← Spool.PlannedSourceReader.create tee certificate sizes
-      envelope.declarationCount) matches .error _
+      envelope.declarationCount (some envelope.arena)) matches .error _
 
 def bothReject (whole streamed : Except String Export) : Bool :=
   match whole, streamed with

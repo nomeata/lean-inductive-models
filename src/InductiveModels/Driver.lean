@@ -2203,6 +2203,27 @@ private def sourceReplayAliasesFromSummaries
       entries := entries.push { exact, build }
   SourceReplayAliases.ofEntries entries
 
+/-- Value-free exact roles needed to derive construction aliases after a
+declaration-discarding parse. -/
+structure SourceReplayRoles where
+  recursors : Array (Name × Option Name) := #[]
+  quotients : Array Name := #[]
+
+def SourceReplayRoles.push (roles : SourceReplayRoles) (declaration : EDecl) :
+    SourceReplayRoles := match declaration with
+  | .induct types _ recursors =>
+    let derived := recursors.toArray.map fun recursor =>
+      let owner? := types.foldl (init := none) fun best type =>
+        if type.name.isPrefixOf recursor.name &&
+            best.all (fun prior =>
+              prior.name.components.length < type.name.components.length) then
+          some type
+        else best
+      (recursor.name, owner?.map (·.name))
+    { roles with recursors := roles.recursors ++ derived }
+  | .quot name .. => { roles with quotients := roles.quotients.push name }
+  | _ => roles
+
 /-- Immutable source products accumulated declaration by declaration.  The
 syntax index intentionally owns exact declaration types, constructor/owner
 records, and transparent definition values. Summaries, scheduling facts,
@@ -2214,6 +2235,7 @@ structure SourceCensus where
   reserved : Std.HashSet Name
   rawOrdinals : Std.HashMap Name Nat
   replayAliases : Except String SourceReplayAliases
+  replayRoles : SourceReplayRoles
 
 /-- Single callback state for all raw-source products. -/
 structure SourceCensus.Builder where
@@ -2223,6 +2245,7 @@ structure SourceCensus.Builder where
   private reserved : Std.HashSet Name := {}
   private rawOrdinals : Std.HashMap Name Nat := {}
   private duplicate? : Option (Name × Nat × Nat) := none
+  private replayRoles : SourceReplayRoles := {}
   private nextOrdinal : Nat := 0
 
 /-- Accumulate one raw source declaration into every census axis. -/
@@ -2234,7 +2257,7 @@ def SourceCensus.Builder.push (builder : SourceCensus.Builder)
   -- declaration.
   match builder with
   | { syntaxBuilder, summaryBuilder, scheduling, reserved, rawOrdinals, duplicate?,
-      nextOrdinal } =>
+      replayRoles, nextOrdinal } =>
     let (duplicate?, _) := declaration.names.foldl
       (init := (duplicate?, ({} : Std.HashSet Name))) fun (duplicate?, seen) name =>
         let duplicate? := duplicate?.orElse fun _ =>
@@ -2248,6 +2271,7 @@ def SourceCensus.Builder.push (builder : SourceCensus.Builder)
       rawOrdinals := declaration.names.foldl
         (fun ordinals name => ordinals.insert name nextOrdinal) rawOrdinals
       duplicate?
+      replayRoles := replayRoles.push declaration
       nextOrdinal := nextOrdinal + 1 }
 
 /-- Freeze all callback products while structurally sharing the one immutable
@@ -2261,7 +2285,8 @@ def SourceCensus.Builder.freeze (builder : SourceCensus.Builder) : SourceCensus 
     scheduling := builder.scheduling
     reserved := builder.reserved
     rawOrdinals := builder.rawOrdinals
-    replayAliases }
+    replayAliases
+    replayRoles := builder.replayRoles }
 
 /-- Build one source census through declaration callbacks.  The last raw
 ordinal for a duplicate name deliberately matches the historical Driver loop;
@@ -2274,29 +2299,22 @@ def SourceCensus.ofSource (source : Export) : SourceCensus :=
 not accepted as independent inputs to `Declaration.inductDecl`.  When a type
 is moved for replay, register each exported recursor at the name the kernel
 will actually mint. -/
-def sourceReplayInductiveDerivations (source : Export)
+def sourceReplayInductiveDerivations (roles : SourceReplayRoles)
     (initial : SourceReplayAliases) : Except String SourceReplayAliases := do
   let mut aliases := initial
-  for declaration in source.decls do
-    if let .induct types _ recursors := declaration then
-      for recursor in recursors do
-        let owner? := types.foldl (init := none) fun best type =>
-          if type.name.isPrefixOf recursor.name &&
-              best.all (fun prior =>
-                prior.name.components.length < type.name.components.length) then
-            some type
-          else best
-        if let some owner := owner? then
-          if !aliases.hasExact owner.name then
-            if aliases.hasExact recursor.name then
-              throw s!"moved recursor {recursor.name} belongs to unmoved owner {owner.name}"
-            continue
-          let some buildOwner := aliases.build? owner.name
-            | throw "moved inductive owner lost its replay alias"
-          let buildRecursor := recursor.name.replacePrefix owner.name buildOwner
-          aliases ← aliases.replace recursor.name buildRecursor
-        else if aliases.hasExact recursor.name then
-          throw s!"moved recursor {recursor.name} has no uniquely moved inductive owner"
+  for (recursor, owner?) in roles.recursors do
+    let some owner := owner? | do
+      if aliases.hasExact recursor then
+        throw s!"moved recursor {recursor} has no uniquely moved inductive owner"
+      continue
+    if !aliases.hasExact owner then
+      if aliases.hasExact recursor then
+        throw s!"moved recursor {recursor} belongs to unmoved owner {owner}"
+      continue
+    let some buildOwner := aliases.build? owner
+      | throw "moved inductive owner lost its replay alias"
+    let buildRecursor := recursor.replacePrefix owner buildOwner
+    aliases ← aliases.replace recursor buildRecursor
   return aliases
 
 /-- Declaration-discarding parser result for the internal planned route.  The
@@ -3318,20 +3336,15 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let plannedAliases ← match sourceCensus.replayAliases with
     | .ok aliases => pure aliases
     | .error message => throwError "cannot plan collision-safe source replay: {message}"
-  unless plannedAliases.isEmpty do
-    if plannedCensus then
-      throwError "planned source replay does not retain the records needed for normalized-name aliases"
-  let sourceAliases ← match sourceReplayInductiveDerivations x plannedAliases with
+  let sourceAliases ← match sourceReplayInductiveDerivations
+      sourceCensus.replayRoles plannedAliases with
     | .ok aliases => pure aliases
     | .error message => throwError "cannot derive collision-safe inductive replay: {message}"
   unless sourceAliases.isEmpty do
-    for declaration in x.decls do
-      match declaration with
-      | .quot name .. =>
-        if sourceAliases.hasExact name then
-          throwError "normalized source-name collision moves quotient role {name}; \
-            collision-safe quotient replay is not supported"
-      | _ => pure ()
+    for name in sourceCensus.replayRoles.quotients do
+      if sourceAliases.hasExact name then
+        throwError "normalized source-name collision moves quotient role {name}; \
+          collision-safe quotient replay is not supported"
   let sourceOrder ← match sourceOrder? with
     | some order => pure order
     | none => match if plannedCensus then sourceCensus.plannedScheduleOrder generation
@@ -3352,16 +3365,33 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- declaration transition is extracted in this phase.
   let sourceSyntax := sourceCensus.sourceSyntax
   let constructionSyntax ← if sourceAliases.isEmpty then pure sourceSyntax else do
-    let mut exactRecords : Array EDecl := #[]
-    let mut replayRecords : Array EDecl := #[]
-    for ordinal in [:x.decls.size] do
-      let declaration := x.decls[ordinal]!
-      if sourceRecordUsesAliases sourceAliases sourceCensus.summaries[ordinal]! declaration then
-        exactRecords := exactRecords.push declaration
-        replayRecords := replayRecords.push (sourceAliases.buildRecord declaration)
-    match sourceSyntax.withReplayRecords exactRecords replayRecords with
-    | .ok index => pure index
-    | .error message => throwError "cannot index collision-safe source replay: {message}"
+    if plannedCensus then
+      let some reader := plannedSource?
+        | throwError "planned source census has no declaration reader"
+      let mut index := sourceSyntax
+      for ordinal in [:sourceCensus.summaries.size] do
+        let declaration ← match ← reader.read ordinal with
+          | .ok declaration => pure declaration
+          | .error message =>
+            throwError "cannot decode planned source record {ordinal}: {message}"
+        if sourceRecordUsesAliases sourceAliases sourceCensus.summaries[ordinal]! declaration then
+          match index.withReplayRecords #[declaration]
+              #[sourceAliases.buildRecord declaration] with
+          | .ok next => index := next
+          | .error message =>
+            throwError "cannot index collision-safe source replay: {message}"
+      pure index
+    else
+      let mut exactRecords : Array EDecl := #[]
+      let mut replayRecords : Array EDecl := #[]
+      for ordinal in [:x.decls.size] do
+        let declaration := x.decls[ordinal]!
+        if sourceRecordUsesAliases sourceAliases sourceCensus.summaries[ordinal]! declaration then
+          exactRecords := exactRecords.push declaration
+          replayRecords := replayRecords.push (sourceAliases.buildRecord declaration)
+      match sourceSyntax.withReplayRecords exactRecords replayRecords with
+      | .ok index => pure index
+      | .error message => throwError "cannot index collision-safe source replay: {message}"
   let constructionNormalizer := constructionSyntax.exactNormalizer
   let sourceSummaries ← match sourceCensus.summariesForOrder sourceOrder with
     | .ok summaries => pure summaries
@@ -3569,6 +3599,70 @@ def runFilterDiscardingPlanned (x : Export) (reader : Spool.PlannedSourceReader)
     runFilterCore x checkRecursors generation .compactDiscard (plannedSource? := some reader)
   return (report, compact)
 
+private def validatePlannedSource (input : PlannedSourceInput)
+    (reader : Spool.PlannedSourceReader) : IO (Except String Unit) := do
+  unless ← reader.matchesSource input.provenance do
+    return .error "planned source census and reader have different raw provenance"
+  unless input.envelope.retainedDeclarations == 0 do
+    return .error "planned source parser retained complete declaration values"
+  unless input.envelope.declarationCount == input.census.summaries.size &&
+      input.envelope.declarationCount == input.census.scheduling.size &&
+      input.envelope.declarationCount == reader.size do
+    return .error "planned source parser/census/reader cardinalities disagree"
+  return .ok ()
+
+/-- Reproduce the ordinary whole-source structural report from the frozen
+syntax index and one transient declaration value at a time. The retained rows
+contain names and compact certificates only. -/
+def checkPlannedSource (input : PlannedSourceInput)
+    (reader : Spool.PlannedSourceReader) : IO (Except String Check.Report) := do
+  if let .error message ← validatePlannedSource input reader then
+    return .error message
+  let template := input.envelope.template
+  let index := input.census.sourceSyntax
+  let mut records : Array Check.CompactCheckRecord := #[]
+  for ordinal in [:reader.size] do
+    let declaration ← match ← reader.read ordinal with
+      | .ok declaration => pure declaration
+      | .error message => return .error message
+    let families := index.sourceFamilyCertificatesForRecord template declaration
+    let globalExtra := (Check.globalExtraRecordsWithIndex index #[declaration])[0]!
+    records := records.push {
+      owner := match declaration with
+        | .induct (type :: _) _ _ => some type.name
+        | _ => none
+      modelSlots := families.flatMap (·.publicNames)
+      globalExtra
+      families }
+  return Check.compactSourceReport records
+
+/-- Materialize the exact parsed source only for a compatibility fallback.
+The ordinary successful compact-direct route never calls this function. -/
+def materializePlannedSource (input : PlannedSourceInput)
+    (reader : Spool.PlannedSourceReader) : IO (Except String Export) := do
+  if let .error message ← validatePlannedSource input reader then
+    return .error message
+  let mut declarations : Array EDecl := #[]
+  for ordinal in [:reader.size] do
+    match ← reader.read ordinal with
+    | .error message => return .error message
+    | .ok declaration => declarations := declarations.push declaration
+  return .ok { input.envelope.template with decls := declarations }
+
+/-- Declaration-discarding compact-direct checker. Exact source values are
+decoded into the construction and kernel environments only while their feed
+transition is live; no generated logical output is serialized. -/
+def runFilterDirectCheckingPlannedCensus (input : PlannedSourceInput)
+    (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
+    (generation : Cli.Config) :
+    MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict) := do
+  if let .error message ← validatePlannedSource input reader then
+    throwError message
+  let (_, report, compact, _, _, kernelVerdict?, _) ←
+    runFilterCore input.envelope.template checkRecursors generation .compactDirect
+      (plannedSource? := some reader) (sourceCensus? := some input.census)
+  return (report, compact, kernelVerdict?)
+
 /-- Phase-four internal route: the parser has released its complete source
 declaration array, and scheduled replay decodes exactly one certified raw
 record for each `FilterState.feedSource` transition.  Main does not select this
@@ -3577,14 +3671,8 @@ property oracle. -/
 def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
     (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
-  unless ← reader.matchesSource input.provenance do
-    throwError "planned source census and reader have different raw provenance"
-  unless input.envelope.retainedDeclarations == 0 do
-    throwError "planned source parser retained complete declaration values"
-  unless input.envelope.declarationCount == input.census.summaries.size &&
-      input.envelope.declarationCount == input.census.scheduling.size &&
-      input.envelope.declarationCount == reader.size do
-    throwError "planned source parser/census/reader cardinalities disagree"
+  if let .error message ← validatePlannedSource input reader then
+    throwError message
   let (_, report, compact, _, _, _, _) ← runFilterCore input.envelope.template
     checkRecursors generation .compactDiscard (plannedSource? := some reader)
     (sourceCensus? := some input.census)
