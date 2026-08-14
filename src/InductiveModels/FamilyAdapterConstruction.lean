@@ -1009,18 +1009,18 @@ def deriveInstalledMinorHypotheses (plan : FamilyAdapterPlan) : MetaM
       if malformed then
         issues := issues.push (.malformedInstalledMinor rule.key)
         continue
-      let mut hypotheses : Array (Nat × InstalledBinder) := #[]
+      let mut hypotheses : Array (Nat × Nat × InstalledBinder) := #[]
       for binderIndex in [:binders.size] do
         let binder := binders[binderIndex]!
         if fieldBinders.any (·.value == binder.value) then continue
         let body := eventualBody (`_family_adapter_installed_hypothesis) binder.type
-        if motives.contains body.getAppFn then
-          hypotheses := hypotheses.push (binderIndex, binder)
+        if let some motiveIndex := motives.findIdx? (· == body.getAppFn) then
+          hypotheses := hypotheses.push (binderIndex, motiveIndex, binder)
       for occurrence in rule.occurrences do
         let some field := fields[occurrence.fieldIndex]? | do
           issues := issues.push (.malformedInstalledMinor rule.key)
           continue
-        let candidates := hypotheses.filter fun (_, hypothesis) =>
+        let candidates := hypotheses.filter fun (_, _, hypothesis) =>
           let body := eventualBody (`_family_adapter_installed_hypothesis_body)
             hypothesis.type
           (body.getAppArgs.back?.map (·.getAppFn == field)).getD false
@@ -1030,15 +1030,16 @@ def deriveInstalledMinorHypotheses (plan : FamilyAdapterPlan) : MetaM
         if candidates.size > 1 then
           issues := issues.push (.ambiguousInstalledHypothesis rule.key occurrence)
           continue
-        let (binderIndex, _) := candidates[0]!
-        let actual := hypotheses.findIdx? (·.1 == binderIndex) |>.getD hypotheses.size
+        let (binderIndex, motiveIndex, _) := candidates[0]!
+        let actual := hypotheses.findIdx? (fun (index, _, _) => index == binderIndex)
+          |>.getD hypotheses.size
         if actual != occurrence.hypothesisIndex then
           issues := issues.push (.installedHypothesisMismatch rule.key occurrence
             occurrence.hypothesisIndex actual)
           continue
         certificates := certificates.push
           { rule := rule.key, occurrence, minorIndex,
-            hypothesisIndex := actual, binderIndex }
+            hypothesisIndex := actual, binderIndex, motiveIndex }
   return (certificates, issues)
 
 private def uniqueBinderIndices (certificates : Array MinorHypothesisCertificate) : Array Nat :=

@@ -179,6 +179,10 @@ structure MinorHypothesisCertificate where
   minorIndex : Nat
   hypothesisIndex : Nat
   binderIndex : Nat
+  /-- Literal motive binder used at this installed IH position.  This is read
+  from the exact private minor type; it is not inferred from the source member
+  order because specialised mimic motives need not have a source member key. -/
+  motiveIndex : Nat
   deriving Inhabited, BEq, Repr
 
 /-- Kernel-checked congruence of one exact installed recursor minor across its
@@ -247,6 +251,33 @@ structure PublicRecursorCertificate where
   rules : Array RuleKey
   deriving Inhabited, BEq, Repr
 
+/-- One distinct installed IH binder in the deterministic public-iota proof.
+Several source occurrences may share the binder, but its motive slot and map
+boundary are literal installed metadata. -/
+structure PublicIotaHypothesisStep where
+  rule : RuleKey
+  minorIndex : Nat
+  binderIndex : Nat
+  motiveIndex : Nat
+  occurrences : Array OccurrenceKey
+  maps : EquivalenceCertificate
+  deriving Inhabited, BEq, Repr
+
+/-- Exact inputs to one public-iota proof chain.  The constructor-major
+roundtrip, private iota, dependent telescope roundtrip, grouped IH agreements,
+and minor congruence are composed in this mathematical order.  The arrays are
+source/installed-derived finite sequences, never supported-arity cases. -/
+structure PublicIotaProofSchema where
+  key : RuleKey
+  owner : MemberKey
+  constructor : ConstructorKey
+  ownerMaps : EquivalenceCertificate
+  telescope : TelescopeCertificate
+  implementationIota : Name
+  minorCompatibility : Name
+  hypotheses : Array PublicIotaHypothesisStep
+  deriving Inhabited, BEq, Repr
+
 /-- One source-shaped iota theorem for the fresh public constructor/recursor
 pair. The proof may enter the private rule only through the exact installed
 iota and the already checked finite-minor compatibility theorem. -/
@@ -258,6 +289,7 @@ structure PublicIotaCertificate where
   constructorAdapter : Name
   recursorAdapter : Name
   minorCompatibility : Name
+  schema : PublicIotaProofSchema
   deriving Inhabited, BEq, Repr
 
 /-- Atomic disabled-prototype public boundary. It exists only when every exact

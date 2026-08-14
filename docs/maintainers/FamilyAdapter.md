@@ -107,9 +107,13 @@ public constructor type and records the telescope codec, private constructor,
 and owner equivalence used by its definition. A recursor certificate has the
 exact public recursor type and records the literal member-motive and rule-key
 sequences used to wrap the private recursor. An iota certificate has the exact
-source-shaped statement for the fresh constructor/recursor pair and records
-the exact private iota plus finite-minor compatibility declaration used by its
-proof. The family boundary is atomic: missing one keyed declaration leaves
+source-shaped statement for the fresh constructor/recursor pair. Its
+`PublicIotaProofSchema` fixes the proof chain: owner-major cancellation,
+private iota, dependent telescope cancellation, the installed finite sequence
+of grouped IH agreements, then the keyed minor-compatibility theorem. Every IH
+step records its literal private motive and binder indices; shared source
+occurrences remain one proof step. The family boundary is atomic: missing one
+keyed declaration leaves
 `FamilyAdapterCertificate.publicAdapter? = none` and restores the incremental
 environment. These structures do not authorize production selection.
 
