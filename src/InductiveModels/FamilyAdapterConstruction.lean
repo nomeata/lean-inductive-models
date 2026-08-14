@@ -2467,25 +2467,22 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
         | do
           failConstruction (.shortInstalledRecursorPrefix member.key member.implementationRecursor)
       let publicMajorType ← inferType publicMajor
-      let (privateMajor, _) ← mapCarrierValue plan memberCertificates parameters member true
-        publicMajorType privateMajorType publicMajor
+      let boundary ← fixedCarrierBoundary plan memberCertificates parameters member
+        publicMajorType privateMajorType
+      let privateMajor := mkApp boundary.forward publicMajor
       let privateCall := mkAppN
         (.const member.implementationRecursor
           (privateRecursorInfo.levelParams.map Level.param))
         (privatePrefix ++ indices ++ #[privateMajor])
-      let privateCallType ← inferType privateCall
-      let (roundTripMajor, _) ← mapCarrierValue plan memberCertificates parameters member false
-        privateMajorType publicMajorType privateMajor
-      let roundTrip ← carrierRoundTrip plan memberCertificates parameters member true
-        publicMajorType privateMajorType publicMajor
       let some ownerIndex := plan.members.findIdx? (·.key == member.key)
         | failConstruction (.missingMemberMap member.key)
       let publicMotive := publicMotives[ownerIndex]!
-      let resultLevel ← ilevel privateCallType
-      let majorLevel ← ilevel publicMajorType
-      let transported ← liftGen <| transportAlong eqi
-        resultLevel majorLevel publicMajorType roundTripMajor publicMajor roundTrip privateCall
-        fun value => pure (mkAppN publicMotive (indices.push value))
+      let motive ← withLocalDeclD `value boundary.publicType fun value =>
+        liftGen <| mkLambdaFVars #[value]
+          (mkAppN publicMotive (indices.push value))
+      let roundTrip := mkApp boundary.backwardForward publicMajor
+      let congruence ← liftGen <| mkAppM ``congrArg #[motive, roundTrip]
+      let transported ← liftGen <| mkAppM ``Eq.mp #[congruence, privateCall]
       unless ← isDefEq (← inferType transported) publicResult do
         failConstruction (.publicRecursorResultMismatch member.key .transportedResult)
       mkLambdaFVars publicTail transported
