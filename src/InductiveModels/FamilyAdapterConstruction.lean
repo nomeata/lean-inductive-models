@@ -383,6 +383,14 @@ private def memberRecursorBoundary (plan : FamilyAdapterPlan)
   let publicFamily ← liftGen <| namedCarrierFamily plan member member.publicCarrier
   let implementationFamily ←
     liftGen <| namedCarrierFamily plan member member.implementationCarrier
+  let forwardType ← liftGen <| memberMapType plan member member.publicCarrier
+    member.implementationCarrier
+  let backwardType ← liftGen <| memberMapType plan member member.implementationCarrier
+    member.publicCarrier
+  let backwardForwardType ← liftGen <| memberLawType plan member member.publicCarrier
+    certificate.maps.forward certificate.maps.backward
+  let forwardBackwardType ← liftGen <| memberLawType plan member
+    member.implementationCarrier certificate.maps.backward certificate.maps.forward
   return
     { key := member.key
       parameterArity := member.parameterArity
@@ -390,14 +398,10 @@ private def memberRecursorBoundary (plan : FamilyAdapterPlan)
       publicFamily
       implementationFamily
       maps := certificate.maps
-      forwardType := ← liftGen <| memberMapType plan member member.publicCarrier
-        member.implementationCarrier
-      backwardType := ← liftGen <| memberMapType plan member member.implementationCarrier
-        member.publicCarrier
-      backwardForwardType := ← liftGen <| memberLawType plan member member.publicCarrier
-        certificate.maps.forward certificate.maps.backward
-      forwardBackwardType := ← liftGen <| memberLawType plan member
-        member.implementationCarrier certificate.maps.backward certificate.maps.forward }
+      forwardType
+      backwardType
+      backwardForwardType
+      forwardBackwardType }
 
 private def containerRecursorBoundary (container : ContainerRecursorPlan) :
     RecursorCarrierBoundary :=
@@ -1186,10 +1190,11 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
     | .ok information => pure information
     | .error _ => failConstruction (.missingMemberMap fallback.key)
   if ← liftGen <| isDefEq sourceType targetType then
+    let sourceLevel ← liftGen <| ilevel sourceType
     return
       { maps := fallback.maps
         mapped := value
-        roundTrip := eqi.refl' (← liftGen <| ilevel sourceType) sourceType value }
+        roundTrip := eqi.refl' sourceLevel sourceType value }
   let mut candidates : Array ExactCarrierCandidate := #[]
   for member in plan.members do
     if let some certificate := certificateFor? certificates member.key then
