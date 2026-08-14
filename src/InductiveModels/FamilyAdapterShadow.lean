@@ -297,9 +297,11 @@ private def isContainerOccurrence (key : OccurrenceKey) : Bool :=
 
 private def recursorMajorMatches (recursor : RecursorVal) (recursorType : Expr)
     (parameters : Array Expr) (expected : Expr) : MetaM Bool := do
-  if parameters.size > recursor.majorPos then return false
+  let majorPosition :=
+    recursor.numParams + recursor.numMotives + recursor.numMinors + recursor.numIndices
+  if parameters.size != recursor.numParams || parameters.size > majorPosition then return false
   let mut type ← instantiateForall recursorType parameters
-  for _ in [parameters.size:recursor.majorPos] do
+  for _ in [parameters.size:majorPosition] do
     let .forallE name domain body _ := type | return false
     let value ← mkFreshExprMVar domain .natural name
     type := body.instantiate1 value
@@ -558,12 +560,12 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
               -- Domain unification assigns an occurrence to a generated map;
               -- the inferred target must be the exact recorded private mimic.
               let target? ← try containerTarget? container parameters body catch _ => pure none
-              return target?.map fun target => (container, target)
+              return target?.map fun target => (container, body, target)
           if candidates.size > 1 then
             addedReasons := addedReasons.push (.ambiguousContainerMap occurrence)
             continue
-          if let some (container, implementationType) := candidates[0]? then
-            let metadataReasons ← containerMetadataInstalled environment parameters body
+          if let some (container, sourceType, implementationType) := candidates[0]? then
+            let metadataReasons ← containerMetadataInstalled environment parameters sourceType
               implementationType occurrence container
             if metadataReasons.isEmpty then
               addedPlans := addedPlans.push
