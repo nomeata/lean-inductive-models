@@ -43,7 +43,8 @@ reported; a dummy ordinal never counts as covered evidence.
 The plan contains no fabricated proof names. `FamilyAdapterConstruction` is a
 disabled prototype seam that now builds `FamilyAdapterCertificate`: private
 member maps, dependent-telescope packers, `encode`/`decode`, both round trips,
-one packed result-index equality, and exact installed minor/IH associations.
+one packed result-index equality, exact installed minor/IH associations, and
+one finite IH-transport compatibility theorem per exact rule.
 Construction starts only from a complete exact-source shadow. Every reused
 member map and inverse law has its exact installed type checked, and every new
 declaration is accepted by the kernel before its name enters the certificate.
@@ -87,11 +88,14 @@ The proof is structural, with no clause selected by a cardinality.
 4. For each exact recursor rule, installed recursor metadata is opened using
    the source-recorded motive and minor arities. Constructor keys select the
    minor and occurrence keys select the literal IH binder, including shared
-   hypotheses for multiple occurrences in one field. The remaining recursor
-   proof will fold equality transport over those keyed minor hypotheses in
-   telescope order. Each fold step abstracts the current
-   occurrence and applies `Eq.rec`; the induction is on the finite occurrence
-   array, not on a unary/binary case split.
+   hypotheses for multiple occurrences in one field. The prototype emits one
+   kernel-checked minor-compatibility theorem per rule. It deduplicates the
+   keyed literal binder sequence, then folds equality transport over that
+   finite sequence: each distinct IH binder contributes one `Eq.rec`, while
+   two source occurrences sharing an IH contribute one step. The certificate
+   also retains both exact installed iota names and their shadow-validated
+   types. The induction is on the finite keyed array, not on a unary/binary
+   case split.
 5. Enable the adapter only after all member, constructor, telescope,
    occurrence, round-trip, and iota declarations have been kernel checked.
    Publish the complete family atomically; a partial certificate never enables
@@ -133,5 +137,9 @@ checks distinct public/private direct and indexed carriers, one real
 carrier nested field under a function binder closed by an exact keyed
 container equivalence. The
 shadow regression also requires maps exposed by real nested-model generation.
+Rule construction additionally checks generated multi-member and
+multi-constructor matrices, shared nested IH slots, and one rule interleaving
+direct and nested occurrences; a malformed late rule must roll back the whole
+prototype rather than retain the preceding checked declarations.
 Source-level guards pin Lean's rejection of a later field or result index that
 depends on a recursive constructor value.

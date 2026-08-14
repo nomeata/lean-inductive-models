@@ -100,6 +100,8 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
             exactRhs := .sort .zero
             implementationIota := numbered "FamilyAdapterPlanTest.implIota" ruleOrdinal
             publicIota := numbered "FamilyAdapterPlanTest.publicIota" ruleOrdinal
+            implementationIotaType := .sort .zero
+            publicIotaType := .sort .zero
             occurrences := (occurrences.filter (·.key.constructor == key)).map (·.key) }
 
   let members := (Array.range memberCount).map (fun ownerIndex =>

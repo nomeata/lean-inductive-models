@@ -2,7 +2,7 @@ import InductiveModels.Driver
 import InductiveModels.FamilyAdapterConstruction
 import family_adapter_generated
 
-open Lean Meta InductiveModels
+open Lean Meta InductiveModels InductiveModels.FamilyAdapter
 
 namespace FamilyAdapterRejectedBoundaries
 
@@ -210,11 +210,56 @@ def completeSamples : Array (Array Name) :=
     constructorSamples).map (#[·]) ++ mutualSamples
 
 def nestedSamples : Array Name :=
-  #[`FamilyAdapterGenerated.GeneratedNested1,
+  #[`FamilyAdapterGenerated.GeneratedShared,
+    `FamilyAdapterGenerated.GeneratedMixed,
+    `FamilyAdapterGenerated.GeneratedNested1,
     `FamilyAdapterGenerated.GeneratedNested2,
     `FamilyAdapterGenerated.GeneratedNested3,
     `FamilyAdapterGenerated.GeneratedNested5,
     `FamilyAdapterGenerated.GeneratedNested8]
+
+def uniqueBinderIndices (values : Array Nat) : Array Nat := Id.run do
+  let mut result := #[]
+  for value in values do unless result.contains value do result := result.push value
+  return result
+
+partial def containsConstant (target : Name) : Expr → Bool
+  | .const name _ => name == target
+  | .proj _ _ value => containsConstant target value
+  | .app function argument =>
+      containsConstant target function || containsConstant target argument
+  | .lam _ type body _ | .forallE _ type body _ =>
+      containsConstant target type || containsConstant target body
+  | .letE _ type value body _ =>
+      containsConstant target type || containsConstant target value ||
+        containsConstant target body
+  | .mdata _ body => containsConstant target body
+  | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => false
+
+def compatibilityUsesTransport (environment : Environment)
+    (certificate : RuleCompatibilityCertificate) : Bool :=
+  if certificate.transportedHypotheses.isEmpty then true
+  else match environment.constants.find? certificate.compatibility with
+    | some (.thmInfo information) => containsConstant ``Eq.rec information.value
+    | _ => false
+
+def compatibilityName (root : Name) (rule : RuleKey) : Name :=
+  Name.str (root.append (rule.recursor.append rule.constructor.constructor))
+    "minorCompatibility"
+
+def ruleCertificatesComplete (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) (environment : Environment) : Bool :=
+  certificate.rules.size == plan.rules.size && plan.rules.all fun rule =>
+    let expectedBinders := uniqueBinderIndices <|
+      (certificate.minorHypotheses.filter (·.rule == rule.key)).map (·.binderIndex)
+    (certificate.rules.find? (·.key == rule.key)).any fun compatibility =>
+      compatibility.transportedHypotheses == expectedBinders &&
+        compatibility.implementationIota == rule.implementationIota &&
+        compatibility.implementationIotaType == rule.implementationIotaType &&
+        compatibility.publicIota == rule.publicIota &&
+        compatibility.publicIotaType == rule.publicIotaType &&
+        environment.constants.contains compatibility.compatibility &&
+        compatibilityUsesTransport environment compatibility
 
 structure Result where
   complete : Nat := 0
@@ -223,8 +268,12 @@ structure Result where
   installedFamily : Nat := 0
   closedContainers : Nat := 0
   invalidMaps : Nat := 0
+  invalidIotas : Nat := 0
+  lateInvalidIotas : Nat := 0
   invalidContainerMaps : Nat := 0
   wrongTargetMaps : Nat := 0
+  sharedHypothesis : Nat := 0
+  directNestedRule : Nat := 0
   failures : Array String := #[]
 
 def runSamples : MetaM Result := do
@@ -253,7 +302,8 @@ def runSamples : MetaM Result := do
         let declarationsInstalled := built.declarations.all fun declaration =>
           declaration.getNames.all (fun name => environment.constants.contains name)
         if certificate.telescopes.size == plan.constructors.size &&
-            certificate.minorHypotheses.size == expectedHypotheses && declarationsInstalled then
+            certificate.minorHypotheses.size == expectedHypotheses && declarationsInstalled &&
+            ruleCertificatesComplete plan certificate environment then
           result := { result with complete := result.complete + 1 }
         else
           let failures := result.failures.push s!"{owner}: incomplete kernel certificate"
@@ -271,8 +321,24 @@ def runSamples : MetaM Result := do
     | .error decline =>
       result := { result with failures := result.failures.push s!"{owner}: {decline.label}" }
     | .ok built =>
-      if built.certificate.isSome && built.issues.isEmpty then
+      let environment ← getEnv
+      let rulesComplete := report.plan?.any fun plan => built.certificate.any fun certificate =>
+        ruleCertificatesComplete plan certificate environment
+      if built.certificate.isSome && built.issues.isEmpty && rulesComplete then
         result := { result with identityNested := result.identityNested + 1 }
+        if owner == `FamilyAdapterGenerated.GeneratedShared then
+          let shares := report.plan?.any fun plan => built.certificate.any fun certificate =>
+            plan.rules.any fun rule =>
+              let binders := uniqueBinderIndices <|
+                (certificate.minorHypotheses.filter (·.rule == rule.key)).map (·.binderIndex)
+              rule.occurrences.size >= 2 && binders.size < rule.occurrences.size
+          if shares then
+            result := { result with sharedHypothesis := result.sharedHypothesis + 1 }
+        if owner == `FamilyAdapterGenerated.GeneratedMixed then
+          let mixed := report.plan?.any fun plan => plan.rules.any fun rule =>
+            rule.occurrences.any (·.expressionPath.isEmpty) &&
+              rule.occurrences.any (fun occurrence => !occurrence.expressionPath.isEmpty)
+          if mixed then result := { result with directNestedRule := result.directNestedRule + 1 }
       else
         let failures := result.failures.push
           s!"{owner}: definitionally equal nested field did not close: {repr built.issues}"
@@ -303,7 +369,10 @@ def runSamples : MetaM Result := do
             occurrence.key.target.owner == boundary.publicOwner &&
               occurrence.maps.forward ==
                 `FamilyAdapterGenerated.generatedChangedNestedContainerForward
-        if built.issues.isEmpty && keyedPlan && keyedCertificate then
+        let environment ← getEnv
+        let rulesComplete := report.plan?.any fun plan => built.certificate.any fun certificate =>
+          ruleCertificatesComplete plan certificate environment
+        if built.issues.isEmpty && keyedPlan && keyedCertificate && rulesComplete then
           result := { result with changed := result.changed + 1 }
           result := { result with closedContainers := result.closedContainers + 1 }
         else
@@ -311,12 +380,16 @@ def runSamples : MetaM Result := do
             s!"{boundary.publicOwner}: changed nested map did not close generically: {
               repr built.issues}"
           result := { result with failures }
-      else if built.certificate.isSome && built.issues.isEmpty then
-        result := { result with changed := result.changed + 1 }
       else
-        let failures := result.failures.push
-          s!"{boundary.publicOwner}: changed boundary did not close: {repr built.issues}"
-        result := { result with failures }
+        let environment ← getEnv
+        let rulesComplete := report.plan?.any fun plan => built.certificate.any fun certificate =>
+          ruleCertificatesComplete plan certificate environment
+        if built.certificate.isSome && built.issues.isEmpty && rulesComplete then
+          result := { result with changed := result.changed + 1 }
+        else
+          let failures := result.failures.push
+            s!"{boundary.publicOwner}: changed boundary did not close: {repr built.issues}"
+          result := { result with failures }
   let invalidBoundary := { changedDirect with forward := .anonymous }
   let invalidSource ← indEDecl #[invalidBoundary.publicOwner]
   let invalidIso ← changedIso invalidSource invalidBoundary
@@ -337,6 +410,61 @@ def runSamples : MetaM Result := do
     else
       let failures := result.failures.push
         s!"invalid member map was not rejected: {repr built.issues}"
+      result := { result with failures }
+  let validIotaIso ← changedIso invalidSource changedDirect
+  let validIotaReport ← FamilyAdapter.deriveShadowPlan invalidSource validIotaIso
+  let invalidIotaReport := { validIotaReport with plan? := validIotaReport.plan?.map fun plan =>
+    { plan with rules := plan.rules.mapIdx fun index rule =>
+        if index == 0 then { rule with publicIotaType := .sort .zero } else rule } }
+  let invalidIotaBuilt ← (FamilyAdapter.buildFamilyPrototype invalidIotaReport validIotaIso
+    `_family_adapter_construction_test_invalid_iota).run
+  match invalidIotaBuilt with
+  | .error decline =>
+    let failures := result.failures.push s!"invalid iota metadata: {decline.label}"
+    result := { result with failures }
+  | .ok built =>
+    let keyedIotaGap := built.issues.any fun
+      | .installedIotaTypeMismatch rule name =>
+          rule.recursorOwner.owner == changedDirect.publicOwner && !name.isAnonymous
+      | _ => false
+    if built.certificate.isNone && keyedIotaGap && built.declarations.isEmpty then
+      result := { result with invalidIotas := result.invalidIotas + 1 }
+    else
+      let failures := result.failures.push
+        s!"invalid iota metadata was not rejected atomically: {repr built.issues}"
+      result := { result with failures }
+  let lateIotaOwner := `FamilyAdapterGenerated.GeneratedConstructors5x8
+  let lateIotaSource ← indEDecl #[lateIotaOwner]
+  let lateIotaIso := identityIso lateIotaSource
+  let lateIotaReport ← FamilyAdapter.deriveShadowPlan lateIotaSource lateIotaIso
+  let lateRuleIndex := lateIotaReport.plan?.map (·.rules.size - 1) |>.getD 0
+  let lateRuleKey? := lateIotaReport.plan?.bind (·.rules[lateRuleIndex]?) |>.map (·.key)
+  let malformedLateIotaReport := { lateIotaReport with
+    plan? := lateIotaReport.plan?.map fun plan =>
+      { plan with rules := plan.rules.mapIdx fun index rule =>
+          if index == lateRuleIndex then { rule with publicIotaType := .sort .zero } else rule } }
+  let lateIotaRoot := `_family_adapter_construction_test_late_invalid_iota
+  let malformedLateIotaBuilt ← (FamilyAdapter.buildFamilyPrototype malformedLateIotaReport
+    lateIotaIso lateIotaRoot).run
+  match malformedLateIotaBuilt with
+  | .error decline =>
+    let failures := result.failures.push s!"late invalid iota metadata: {decline.label}"
+    result := { result with failures }
+  | .ok built =>
+    let environment ← getEnv
+    let noRuleDeclarationLeaked := lateIotaReport.plan?.map (fun plan =>
+      plan.rules.all fun rule =>
+        !environment.constants.contains (compatibilityName lateIotaRoot rule.key)) |>.getD false
+    let keyedIotaGap := built.issues.any fun
+      | .installedIotaTypeMismatch rule _ =>
+          rule.recursorOwner.owner == lateIotaOwner && lateRuleKey? == some rule
+      | _ => false
+    if built.certificate.isNone && keyedIotaGap && built.declarations.isEmpty &&
+        noRuleDeclarationLeaked then
+      result := { result with lateInvalidIotas := result.lateInvalidIotas + 1 }
+    else
+      let failures := result.failures.push
+        s!"late invalid iota metadata retained a partial rule tranche: {repr built.issues}"
       result := { result with failures }
   let invalidContainerSource ← indEDecl #[changedNested.publicOwner]
   let validContainerIso ← changedIso invalidContainerSource changedNested
@@ -409,8 +537,12 @@ def runSamples : MetaM Result := do
       let failures := result.failures.push s!"installed family prototype: {decline.label}"
       result := { result with failures }
     | .ok built =>
+      let environment ← getEnv
+      let rulesComplete := installedReport.plan?.any fun plan =>
+        built.certificate.any fun certificate =>
+          ruleCertificatesComplete plan certificate environment
       if installedIso.familyImplementation?.isSome && built.certificate.isSome &&
-          built.issues.isEmpty then
+          built.issues.isEmpty && rulesComplete then
         result := { result with installedFamily := result.installedFamily + 1 }
       else
         let failures := result.failures.push
@@ -429,7 +561,8 @@ def runMain : IO UInt32 := do
   if result.failures.isEmpty && result.complete == completeSamples.size &&
       result.identityNested == nestedSamples.size && result.changed == 3 &&
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
-      result.wrongTargetMaps == 1 &&
+      result.invalidIotas == 1 && result.lateInvalidIotas == 1 && result.wrongTargetMaps == 1 &&
+      result.sharedHypothesis == 1 && result.directNestedRule == 1 &&
       result.installedFamily == 1 &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
@@ -442,8 +575,11 @@ def runMain : IO UInt32 := do
   IO.eprintln s!"family adapter construction: complete={result.complete}, \
     identityNested={result.identityNested}, changed={result.changed}, \
     installedFamily={result.installedFamily}, closedContainers={result.closedContainers}, \
-    invalidMaps={result.invalidMaps}, invalidContainerMaps={result.invalidContainerMaps}, \
-    wrongTargetMaps={result.wrongTargetMaps}"
+    invalidMaps={result.invalidMaps}, invalidIotas={result.invalidIotas}, \
+    lateInvalidIotas={result.lateInvalidIotas}, \
+    invalidContainerMaps={result.invalidContainerMaps}, \
+    wrongTargetMaps={result.wrongTargetMaps}, sharedHypothesis={result.sharedHypothesis}, \
+    directNestedRule={result.directNestedRule}"
   return 1
 
 end FamilyAdapterConstructionTest

@@ -129,6 +129,7 @@ class FixtureMatrix:
         sections: list[str] = []
         exported = [
             "GeneratedIndex", "GeneratedKey", "GeneratedPayload", "GeneratedList",
+            "GeneratedPair", "GeneratedShared", "GeneratedMixed",
             "GeneratedChangedDirectPublic", "GeneratedChangedDirectPrivate",
             "generatedChangedDirectRoll", "generatedChangedDirectUnroll",
             "generatedChangedDirectUnrollRoll", "generatedChangedDirectRollUnroll",
@@ -205,6 +206,18 @@ inductive GeneratedPayload : GeneratedKey -> Type where
 inductive GeneratedList (alpha : Type) : Type where
   | nil : GeneratedList alpha
   | cons (head : alpha) (tail : GeneratedList alpha) : GeneratedList alpha
+
+inductive GeneratedPair (left right : Type) : Type where
+  | pair (first : left) (second : right) : GeneratedPair left right
+
+/- Two source occurrences in one nested field share the container recursor's
+single IH binder. `GeneratedMixed` additionally interleaves a direct IH. -/
+inductive GeneratedShared : Type where
+  | mk (children : GeneratedPair GeneratedShared GeneratedShared) : GeneratedShared
+
+inductive GeneratedMixed : Type where
+  | mk (direct : GeneratedMixed)
+      (children : GeneratedPair GeneratedMixed GeneratedMixed) : GeneratedMixed
 
 /- Distinct installed carriers exercise the certificate boundary itself.  The
 axioms are test metadata: the construction prototype must still validate their

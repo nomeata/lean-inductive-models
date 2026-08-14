@@ -181,6 +181,22 @@ structure MinorHypothesisCertificate where
   binderIndex : Nat
   deriving Inhabited, BEq, Repr
 
+/-- Kernel-checked congruence of one exact installed recursor minor across its
+keyed induction-hypothesis binders. `transportedHypotheses` is the deduplicated
+literal binder sequence: several source occurrences may intentionally share
+one IH. The installed iota names anchor the congruence to both sides of the
+already shadow-validated private/public rule contract. -/
+structure RuleCompatibilityCertificate where
+  key : RuleKey
+  minorIndex : Nat
+  transportedHypotheses : Array Nat
+  compatibility : Name
+  implementationIota : Name
+  implementationIotaType : Expr
+  publicIota : Name
+  publicIotaType : Expr
+  deriving Inhabited, BEq, Repr
+
 /-- One constructor in the public/private family boundary. -/
 structure ConstructorPlan where
   key : ConstructorKey
@@ -226,6 +242,8 @@ structure RulePlan where
   exactRhs : Expr
   implementationIota : Name
   publicIota : Name
+  implementationIotaType : Expr
+  publicIotaType : Expr
   occurrences : Array OccurrenceKey := #[]
   deriving Inhabited, BEq, Repr
 
@@ -250,6 +268,7 @@ structure FamilyAdapterCertificate where
   telescopes : Array TelescopeCertificate
   occurrences : Array OccurrenceCertificate
   minorHypotheses : Array MinorHypothesisCertificate
+  rules : Array RuleCompatibilityCertificate
   deriving Inhabited, BEq, Repr
 
 /-- Complete finite plan for a single private/public family boundary. -/

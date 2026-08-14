@@ -582,6 +582,9 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         if publicIota.isAnonymous then reasons := reasons.push (.missingInterfaceRule key .publicModel)
         rulePlans := rulePlans.push
           { key, ruleIndex, exactRhs := rule.rhs, implementationIota, publicIota,
+            implementationIotaType := (installedType? environment implementationIota).getD
+              (.sort .zero),
+            publicIotaType := (installedType? environment publicIota).getD (.sort .zero),
             occurrences := occurrencesFor constructor.key }
 
   let memberKeys := resolvedMembers.map (·.key)

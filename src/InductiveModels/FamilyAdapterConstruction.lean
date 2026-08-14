@@ -30,6 +30,9 @@ inductive ConstructionIssue where
   | ambiguousInstalledHypothesis (rule : RuleKey) (occurrence : OccurrenceKey)
   | installedHypothesisMismatch (rule : RuleKey) (occurrence : OccurrenceKey)
       (expected actual : Nat)
+  | dependentMinorTransport (rule : RuleKey) (binderIndex : Nat)
+  | missingInstalledIota (rule : RuleKey) (iota : Name)
+  | installedIotaTypeMismatch (rule : RuleKey) (iota : Name)
   | missingMemberMap (member : MemberKey)
   | missingOccurrenceMap (occurrence : OccurrenceKey)
   | missingContainerMap (occurrence : OccurrenceKey)
@@ -814,6 +817,185 @@ def deriveInstalledMinorHypotheses (plan : FamilyAdapterPlan) : MetaM
             hypothesisIndex := actual, binderIndex }
   return (certificates, issues)
 
+private def uniqueBinderIndices (certificates : Array MinorHypothesisCertificate) : Array Nat :=
+  Id.run do
+    let mut result := #[]
+    for certificate in certificates do
+      unless result.contains certificate.binderIndex do
+        result := result.push certificate.binderIndex
+    return result
+
+private def installedMinorIndexForRule (plan : FamilyAdapterPlan) (member : MemberPlan)
+    (rule : RulePlan) (recursorType : Expr) : Except ConstructionIssue Nat := do
+  let prefixSize := member.parameterArity + member.recursorMotiveArity +
+    member.recursorMinorArity
+  let (recursorBinders, _) := openExactForalls
+    ((`_family_adapter_compatibility_rec).append member.implementationRecursor) recursorType
+  if recursorBinders.size < prefixSize then
+    throw (.shortInstalledRecursorPrefix member.key member.implementationRecursor)
+  let minors := recursorBinders.extract
+    (member.parameterArity + member.recursorMotiveArity) prefixSize
+  let some constructor := constructorFor? plan rule.key.constructor
+    | throw (.missingInstalledMinor rule.key)
+  let matching := minors.mapIdx fun index minor =>
+    let (_, result) := openExactForalls
+      ((`_family_adapter_compatibility_minor).append rule.key.recursor |>.mkNum index)
+      minor.type
+    (index, result)
+  let matching := matching.filter fun (_, result) =>
+    (result.getAppArgs.back?.bind (·.getAppFn.constName?)) ==
+      some constructor.implementationName
+  if matching.isEmpty then throw (.missingInstalledMinor rule.key)
+  if matching.size > 1 then throw (.ambiguousInstalledMinor rule.key)
+  return matching[0]!.1
+
+private partial def withMinorReplacements (eqi : EqInfo) (rule : RuleKey)
+    (binders : Array Expr) (indices : Array Nat) (position : Nat)
+    (replacements proofs extra : Array Expr)
+    (k : Array Expr → Array Expr → Array Expr → GenM (Except ConstructionIssue α)) :
+    GenM (Except ConstructionIssue α) := do
+  if position == indices.size then return ← k replacements proofs extra
+  let binderIndex := indices[position]!
+  let some original := binders[binderIndex]?
+    | return .error (.malformedInstalledMinor rule)
+  let type ← inferType original
+  let level ← ilevel type
+  withLocalDeclD (Name.mkSimple s!"after_{binderIndex}") type fun replacement =>
+    withLocalDeclD (Name.mkSimple s!"equal_{binderIndex}")
+        (eqi.mk' level type original replacement) fun proof =>
+      withMinorReplacements eqi rule binders indices (position + 1)
+        (replacements.push replacement) (proofs.push proof)
+        (extra.push replacement |>.push proof) k
+
+private def ruleCompatibilityName (root : Name) (rule : RuleKey) : Name :=
+  prototypeName root (rule.recursor.append rule.constructor.constructor) `minorCompatibility
+
+/-- Build one arity-independent congruence theorem for an installed recursor
+minor. Each distinct keyed IH binder contributes one `Eq.rec`; source
+occurrences sharing that binder contribute only one transport step. -/
+private def ruleCompatibilityDeclaration (plan : FamilyAdapterPlan)
+    (minorHypotheses : Array MinorHypothesisCertificate) (root : Name)
+    (rule : RulePlan) : GenM
+    (Except ConstructionIssue (Declaration × RuleCompatibilityCertificate)) := do
+  let some member := plan.members.find? (·.key == rule.key.recursorOwner)
+    | return .error (.missingInstalledMinor rule.key)
+  let environment ← getEnv
+  for (iota, expected) in #[(rule.implementationIota, rule.implementationIotaType),
+      (rule.publicIota, rule.publicIotaType)] do
+    let some actual := environment.constants.find? iota | do
+      return .error (.missingInstalledIota rule.key iota)
+    unless actual.type == expected do
+      return .error (.installedIotaTypeMismatch rule.key iota)
+  let some recursorInfo := environment.constants.find? member.implementationRecursor
+    | return .error (.missingInstalledRecursor member.key member.implementationRecursor)
+  let recursorType := recursorInfo.type
+  let minorIndex ← match installedMinorIndexForRule plan member rule recursorType with
+    | .ok index => pure index
+    | .error issue => return .error issue
+  let keyed := minorHypotheses.filter (·.rule == rule.key)
+  unless keyed.size == rule.occurrences.size &&
+      rule.occurrences.all fun occurrence => keyed.any (·.occurrence == occurrence) do
+    return .error (.malformedInstalledMinor rule.key)
+  unless keyed.all (·.minorIndex == minorIndex) do
+    return .error (.malformedInstalledMinor rule.key)
+  let transportedHypotheses := uniqueBinderIndices keyed
+  let name := ruleCompatibilityName root rule.key
+  ensurePrototypeFresh name
+  let eqi ← match EqInfo.check environment with
+    | .ok information => pure information
+    | .error message => badShape s!"family-adapter rule compatibility needs Eq ({message})"
+  let prefixSize := member.parameterArity + member.recursorMotiveArity +
+    member.recursorMinorArity
+  let built ← forallBoundedTelescope recursorType (some prefixSize) fun recursorPrefix _ => do
+    let some minor := recursorPrefix[
+        member.parameterArity + member.recursorMotiveArity + minorIndex]?
+      | return .error (.missingInstalledMinor rule.key)
+    let minorType ← inferType minor
+    forallBoundedTelescope minorType (some (numForalls minorType)) fun binders _ =>
+      withMinorReplacements eqi rule.key binders transportedHypotheses 0 #[] #[] #[]
+        fun replacements proofs extra => do
+          let argumentsAt := fun position => Id.run do
+            let mut arguments := binders
+            for step in [:position] do
+              arguments := arguments.set! transportedHypotheses[step]! replacements[step]!
+            return arguments
+          let left := mkAppN minor (argumentsAt 0)
+          let alpha ← inferType left
+          let equalityLevel ← ilevel alpha
+          let mut accumulator := eqi.refl' equalityLevel alpha left
+          let mut current := left
+          for position in [:transportedHypotheses.size] do
+            let binderIndex := transportedHypotheses[position]!
+            let original := binders[binderIndex]!
+            let replacement := replacements[position]!
+            let proof := proofs[position]!
+            let valueType ← inferType original
+            let priorOriginals := (transportedHypotheses.extract 0 position).map fun index =>
+              binders[index]!
+            let expectedValueType := valueType.replaceFVars priorOriginals
+              (replacements.extract 0 position)
+            unless ← isDefEq valueType expectedValueType do
+              return .error (.dependentMinorTransport rule.key binderIndex)
+            let valueLevel ← ilevel valueType
+            let next := mkAppN minor (argumentsAt (position + 1))
+            let some nextType ← (try some <$> inferType next catch _ => pure none)
+              | return .error (.dependentMinorTransport rule.key binderIndex)
+            unless ← isDefEq alpha nextType do
+              return .error (.dependentMinorTransport rule.key binderIndex)
+            let factor ← transportAlong eqi .zero valueLevel valueType original replacement proof
+              (eqi.refl' equalityLevel alpha current) fun value => do
+                let stepped := mkAppN minor ((argumentsAt position).set! binderIndex value)
+                let steppedType ← inferType stepped
+                unless ← isDefEq alpha steppedType do
+                  badShape s!"{rule.key.recursor}'s compatibility motive changes result type"
+                return eqi.mk' equalityLevel alpha current stepped
+            accumulator ← transOf eqi equalityLevel alpha left current next accumulator factor
+            current := next
+          let proposition := eqi.mk' equalityLevel alpha left current
+          let locals := recursorPrefix ++ binders ++ extra
+          return .ok (← mkForallFVars locals proposition, ← mkLambdaFVars locals accumulator)
+  match built with
+  | .error issue => return .error issue
+  | .ok (type, value) =>
+    let declaration := Declaration.thmDecl
+      { name, levelParams := recursorInfo.levelParams, type, value }
+    addChecked declaration
+    return .ok (declaration,
+      { key := rule.key, minorIndex, transportedHypotheses, compatibility := name,
+        implementationIota := rule.implementationIota,
+        implementationIotaType := rule.implementationIotaType,
+        publicIota := rule.publicIota, publicIotaType := rule.publicIotaType })
+
+private def buildRuleCompatibilityPrototypesCore (plan : FamilyAdapterPlan)
+    (minorHypotheses : Array MinorHypothesisCertificate) (root : Name) : GenM
+    (Except ConstructionIssue (Array Declaration × Array RuleCompatibilityCertificate)) := do
+  let mut declarations := #[]
+  let mut certificates := #[]
+  for rule in plan.rules do
+    match ← ruleCompatibilityDeclaration plan minorHypotheses root rule with
+    | .error issue => return .error issue
+    | .ok (declaration, certificate) =>
+      declarations := declarations.push declaration
+      certificates := certificates.push certificate
+  return .ok (declarations, certificates)
+
+/-- Disabled-prototype rule tranche. It folds over the exact finite rule array
+and rolls the incremental environment back on either a keyed obligation or a
+kernel/generator decline, so callers cannot retain a partial rule boundary. -/
+def buildRuleCompatibilityPrototypes (plan : FamilyAdapterPlan)
+    (minorHypotheses : Array MinorHypothesisCertificate) (root : Name) : GenM
+    (Except ConstructionIssue (Array Declaration × Array RuleCompatibilityCertificate)) := do
+  let saved ← getEnv
+  match ← ExceptT.lift
+      (buildRuleCompatibilityPrototypesCore plan minorHypotheses root).run with
+  | .error decline =>
+    setEnv saved
+    declineWith decline
+  | .ok (.error issue) =>
+    setEnv saved
+    return .error issue
+  | .ok (.ok built) => return .ok built
+
 /-- Test/prototype-only whole-plan construction.  Every returned declaration
 has been kernel checked in the current incremental environment.  A single
 unresolved semantic obligation leaves `certificate? = none`; callers must not
@@ -836,6 +1018,13 @@ private def buildPlanPrototype (plan : FamilyAdapterPlan) (iso : Iso) (root : Na
     deriveInstalledMinorHypotheses plan
   let (minorHypotheses, minorIssues) := minorResult
   let mut issues := memberIssues ++ minorIssues
+  let mut ruleCertificates := #[]
+  if issues.isEmpty then
+    match ← buildRuleCompatibilityPrototypes plan minorHypotheses root with
+    | .error issue => issues := issues.push issue
+    | .ok (added, certificates) =>
+      declarations := declarations ++ added
+      ruleCertificates := certificates
   let mut telescopes := #[]
   if issues.isEmpty then
     for constructor in plan.constructors do
@@ -868,7 +1057,8 @@ private def buildPlanPrototype (plan : FamilyAdapterPlan) (iso : Iso) (root : Na
     { members := members,
       telescopes := telescopes,
       occurrences := occurrences,
-      minorHypotheses := minorHypotheses }
+      minorHypotheses := minorHypotheses,
+      rules := ruleCertificates }
   return {
     declarations := declarations
     certificate := some certificate
