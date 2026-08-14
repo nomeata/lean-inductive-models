@@ -913,6 +913,32 @@ private def readIndType (c : RCtx) (j : Json) : Except String EIndType := do
     numNested := ← jNat j "numNested", isRec := ← jBool j "isRec"
     isReflexive := ← jBool j "isReflexive", isUnsafe := ← jBool j "isUnsafe" }
 
+/-- Exact expression-arena roots named directly by one declaration record.
+Expression nodes already contain their children, so random declaration replay
+needs only these roots rather than the complete parser lookup table. -/
+private def declarationExprRootIds (j : Json) : Except String (Array Nat) := do
+  let mut roots := #[]
+  if hasExactKeys j ["axiom"] || hasExactKeys j ["quot"] then
+    roots := roots.push (← jNat (← jField j (if hasExactKeys j ["axiom"] then "axiom" else "quot")) "type")
+  else if hasExactKeys j ["def"] || hasExactKeys j ["thm"] ||
+      hasExactKeys j ["opaque"] then
+    let key := if hasExactKeys j ["def"] then "def" else if hasExactKeys j ["thm"] then "thm" else "opaque"
+    let declaration ← jField j key
+    roots := (roots.push (← jNat declaration "type")).push (← jNat declaration "value")
+  else if hasExactKeys j ["inductive"] then
+    let declaration ← jField j "inductive"
+    for type in ← jArr declaration "types" do
+      roots := roots.push (← jNat type "type")
+    for ctor in ← jArr declaration "ctors" do
+      roots := roots.push (← jNat ctor "type")
+    for recursor in ← jArr declaration "recs" do
+      roots := roots.push (← jNat recursor "type")
+      for rule in ← jArr recursor "rules" do
+        roots := roots.push (← jNat rule "rhs")
+  else
+    throw "cannot collect expression roots from a non-declaration record"
+  return roots
+
 private def readHints (j : Json) : Except String EHints :=
   match j with
   | .str "abbrev" => .ok .abbrev
@@ -1071,6 +1097,11 @@ def DeclarationArena.decode (arena : DeclarationArena)
   let some declaration := declaration?
     | throw "declaration span decoded as an arena record"
   return declaration
+
+/-- Number of expression roots retained by a completed random-decode arena.
+This observer exposes storage cardinality, never expression values. -/
+def DeclarationArena.retainedExprRoots (arena : DeclarationArena) : Nat :=
+  arena.context.exprs.dense.size + arena.context.exprs.sparse.size
 
 /-- Build the random-decode arena from an arena-only stream using the same
 bounded chunk/UTF-8 boundary discipline as the full streaming parser.  This
@@ -1449,6 +1480,10 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
   let declarationCountRef ← IO.mkRef 0
   let declarationNamesRef ← IO.mkRef ({} : Std.HashSet Name)
   let duplicateRef ← IO.mkRef (none : Option Name)
+  -- A declaration refers directly to very few expression roots. Preserve
+  -- exactly those roots for later random replay instead of retaining the
+  -- parser's complete dense expression-ID table.
+  let declarationExprRootsRef ← IO.mkRef ({} : Std.HashMap Nat Expr)
   let rawRef ← IO.mkRef ({} : RawCertState)
   let mut metaLine : Json := .null
   let mut first := true
@@ -1507,9 +1542,18 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
               -- refcount two and every push reallocates. The parse is over when
               -- this arm fires, so the context is dead either way.
               | .error e => (Except.error e, ({} : RCtx))
-              | .ok (c', d?) => (Except.ok d?, c') with
+              | .ok (c', d?) =>
+                  let result : Except String (Option EDecl × Array (Nat × Expr)) := do
+                    let ids ← if d?.isSome then declarationExprRootIds j else pure #[]
+                    let roots ← ids.mapM fun id => return (id, ← c'.expr! id)
+                    return (d?, roots)
+                  (result, c') with
           | .error e => err := some e; break
-          | .ok d? =>
+          | .ok (d?, expressionRoots) =>
+            unless retainDeclarations do
+              declarationExprRootsRef.modify fun roots =>
+                expressionRoots.foldl (fun roots (id, expression) =>
+                  roots.insert id expression) roots
             if let some sink := sink? then
               emitRaw sink rawRef (if d?.isSome then .declaration else .arena)
                 line terminated (some j)
@@ -1536,6 +1580,9 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
     -- transfer this exact graph to `PlannedSourceReader`.
     let completed ← cRef.modifyGet fun c => (c, {})
     let projNodes := completed.projNodes
+    let declarationExprRoots ← declarationExprRootsRef.modifyGet fun roots => (roots, {})
+    let replayArena : DeclarationArena := if retainDeclarations then default else
+      { context := { completed with exprs := { sparse := declarationExprRoots } } }
     let rawState ← rawRef.get
     let declarationCount ← declarationCountRef.get
     let certificate := if sink?.isSome then rawState.certificate else {}
@@ -1546,7 +1593,7 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
           return .error message
       else if let some name ← duplicateRef.get then
           return .error s!"duplicate declaration {name}"
-    return .ok (resultExport, certificate, declarationCount, { context := completed })
+    return .ok (resultExport, certificate, declarationCount, replayArena)
 
 /-- Parse while sending exact input records to `sink`. The compact returned
 certificate is necessary but not sufficient for a later raw-hoist fast path;

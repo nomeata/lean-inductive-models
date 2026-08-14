@@ -99,7 +99,7 @@ def plannedDiscardingSourceRejected (scratch path text : String) : IO Bool := do
 The certified case must decode from the parser's transferred arena and may
 then release the exact raw fallback snapshot. -/
 def directInputReplayAccepted (scratch path text : String)
-    (expected : Array EDecl) : IO Bool := do
+    (expected : Array EDecl) (expectedRootCount? : Option Nat := none) : IO Bool := do
   IO.FS.writeFile path text
   let cleanedDirectory ← IO.mkRef (none : Option System.FilePath)
   let accepted ← Spool.withWorkspace scratch fun workspace => do
@@ -109,6 +109,8 @@ def directInputReplayAccepted (scratch path text : String)
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
         (analyse := false) (allowDuplicateNames := true)
     let .ok (envelope, certificate) := captured | return false
+    if let some expectedRootCount := expectedRootCount? then
+      unless envelope.arena.retainedExprRoots == expectedRootCount do return false
     let sizes ← tee.finish
     let .ok reader ← Spool.PlannedSourceReader.createDirect tee certificate sizes
         envelope.declarationCount envelope.arena | return false
@@ -203,12 +205,13 @@ def main (args : List String) : IO UInt32 := do
   let rawCrlfPath := s!"{scratch}/raw-spool-crlf.ndjson"
   let rawKeyOrderPath := s!"{scratch}/raw-spool-key-order.ndjson"
   let rawRootSentinel := s!"{scratch}/raw-spool-root-sentinel"
+  let compactArenaPath := s!"{scratch}/source-spool-compact-arena.ndjson"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
     nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath,
     projectionOrderPath, projectionOverwritePath, parserCompatibilityPath,
     rawCanonicalPath, rawNameGapPath, rawLevelGapPath, rawExprGapPath,
     rawNameOrderPath, rawNoLfPath, rawWhitespacePath, rawBlankPath, rawCrlfPath,
-    rawKeyOrderPath, rawRootSentinel]
+    rawKeyOrderPath, rawRootSentinel, compactArenaPath]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -304,6 +307,16 @@ def main (args : List String) : IO UInt32 := do
   state := state.check
       "direct input replays declarations from the transferred arena and cleans its workspace" <|
     ← directInputReplayAccepted scratch rawCanonicalPath rawCanonical #[first, second]
+  let compactArenaInput := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"CompactArena\"}}",
+    "{\"ie\":0,\"sort\":0}",
+    "{\"ie\":1,\"bvar\":0}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":0}}"]
+  let compactArenaDeclaration : EDecl := .ax `CompactArena [] (.sort .zero) false
+  state := state.check
+      "declaration replay retains only directly referenced expression roots" <|
+    ← directInputReplayAccepted scratch compactArenaPath compactArenaInput
+      #[compactArenaDeclaration] (some 1)
   IO.FS.writeFile rawCanonicalPath rawCanonical
   let captured ← Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
