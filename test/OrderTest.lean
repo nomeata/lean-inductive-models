@@ -517,6 +517,13 @@ def run (root : String) : IO UInt32 := do
         s!"frozen summaries equal callback recomputation for permutation {multiplier}/{offset}" <|
         frozenSummaryPermutationEqual permutationInput order preferPermutationSupport
   let permutationCensus := SourceCensus.ofSource permutationInput
+  state := state.check "permutation oracle exercises nonempty model edges" <|
+    match permutationCensus.summaries.find? (·.owner == some `PermutationOwner),
+        permutationCensus.summaries.find? (·.introduced.contains
+          (Naming.modelName `PermutationOwner)) with
+    | some owner, some model =>
+      !owner.modelSlots.isEmpty && model.modelBefore.contains `PermutationOwner
+    | _, _ => false
   state := state.check "frozen summary permutation rejects missing records" <|
     match permutationCensus.summariesForOrder #[0] with
     | .error _ => true
@@ -529,6 +536,16 @@ def run (root : String) : IO UInt32 := do
     match permutationCensus.summariesForOrder #[0, 1, 2, 3, 4, 5, 6, 8] with
     | .error _ => true
     | .ok _ => false
+  let cyclePermutation := #[1, 0]
+  state := state.check "permuted frozen cycle retains exact callback diagnostic" <|
+    match cycleCensus.summariesForOrder cyclePermutation with
+    | .error _ => false
+    | .ok frozen =>
+      let scheduledCycle := { censusCycle with decls := cyclePermutation.map fun ordinal =>
+        censusCycle.decls[ordinal]! }
+      let callback := Order.summariesIncremental scheduledCycle cycleCensus.sourceSyntax
+      orderOutcomesEqual (Order.summaryRecordOrder frozen)
+        (Order.summaryRecordOrder callback)
 
   -- lean4export spells the kernel's one quotient declaration as exactly four
   -- consecutive records.  Replay must validate the bundle before the first
