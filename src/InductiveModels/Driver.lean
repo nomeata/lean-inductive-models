@@ -2558,6 +2558,10 @@ private def sourceReplayAliasesFromSummaries
   let mut occupiedNormalized : Std.HashSet Name := {}
   for name in reserved do
     occupiedNormalized := occupiedNormalized.insert (privateToUserName name)
+  let moved := occurrences.filter fun occurrence =>
+    canonical[privateToUserName occurrence.exact]? != some occurrence.exact
+  if moved.isEmpty then
+    return ← SourceReplayAliases.ofEntries #[]
   let mut root? : Option Name := none
   for salt in [:reserved.size + 1] do
     if root?.isSome then continue
@@ -2569,11 +2573,12 @@ private def sourceReplayAliasesFromSummaries
   let some root := root?
     | throw "source reserves every bounded collision-safe replay namespace"
   let mut entries : Array SourceReplayAlias := #[]
-  for occurrence in occurrences do
+  for occurrence in moved do
     let normalized := privateToUserName occurrence.exact
     let some keep := canonical[normalized]?
       | throw "normalized source class lost its canonical member"
-    if occurrence.exact == keep then continue
+    if occurrence.exact == keep then
+      throw "source replay move set retained its canonical member"
     let build := (Name.num (Name.num root occurrence.rawOrdinal) occurrence.position) ++
       occurrence.exact
     if occupiedExact.contains build ||
