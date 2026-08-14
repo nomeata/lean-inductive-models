@@ -98,6 +98,8 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
           { key := ruleKey constructorsPerMember recursorOwner constructorOwner constructorIndex
             ruleIndex := constructorOrdinal
             exactRhs := .sort .zero
+            publicRhs := .sort .zero
+            implementationRhs := .sort .zero
             implementationIota := numbered "FamilyAdapterPlanTest.implIota" ruleOrdinal
             publicIota := numbered "FamilyAdapterPlanTest.publicIota" ruleOrdinal
             implementationIotaType := .sort .zero

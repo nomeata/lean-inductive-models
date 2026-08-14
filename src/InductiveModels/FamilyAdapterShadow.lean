@@ -31,6 +31,7 @@ inductive ShadowReason where
   | missingInterfaceRule (rule : RuleKey) (side : InterfaceSide)
   | missingInstalledDeclaration (name : Name) (side : InterfaceSide)
   | installedTypeMismatch (name : Name) (side : InterfaceSide)
+  | installedRuleMismatch (rule : RuleKey) (side : InterfaceSide)
   | malformedConstructorTelescope (constructor : ConstructorKey)
   | malformedMinorTelescope (rule : RuleKey)
   | missingMinorHypothesis (constructor : ConstructorKey) (fieldIndex : Nat)
@@ -272,6 +273,12 @@ private def componentFor (components : Array ComponentPlan) (member : MemberKey)
 
 private def installedType? (env : Environment) (name : Name) : Option Expr :=
   env.constants.find? name |>.map (·.type)
+
+private def installedRuleRhs? (env : Environment) (recursor constructor : Name) : Option Expr := do
+  match env.constants.find? recursor with
+  | some (.recInfo information) =>
+    information.rules.find? (·.ctor == constructor) |>.map (·.rhs)
+  | _ => none
 
 private def addInstalledCoverage (env : Environment) (name : Name) (expected : Expr)
     (missing mismatch : ShadowReason)
@@ -580,8 +587,22 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           reasons := reasons.push (.missingInterfaceRule key .privateModel)
         let publicIota := (publicIota? iso member rule.ctor).getD .anonymous
         if publicIota.isAnonymous then reasons := reasons.push (.missingInterfaceRule key .publicModel)
+        let implementationRhs? := installedRuleRhs? environment implementationIota
+          constructor.implementationName
+        let publicRhs? := installedRuleRhs? environment publicIota constructor.publicName
+        let expectedImplementationRhs := rewriteWith implementationMapping rule.rhs
+        let expectedPublicRhs := rewriteWith publicMapping rule.rhs
+        unless implementationRhs? == some expectedImplementationRhs do
+          reasons := reasons.push (.installedRuleMismatch key .privateModel)
+          uncoveredRules := uncoveredRules.push key
+        unless publicRhs? == some expectedPublicRhs do
+          reasons := reasons.push (.installedRuleMismatch key .publicModel)
+          uncoveredRules := uncoveredRules.push key
         rulePlans := rulePlans.push
-          { key, ruleIndex, exactRhs := rule.rhs, implementationIota, publicIota,
+          { key, ruleIndex, exactRhs := rule.rhs,
+            publicRhs := publicRhs?.getD expectedPublicRhs,
+            implementationRhs := implementationRhs?.getD expectedImplementationRhs,
+            implementationIota, publicIota,
             implementationIotaType := (installedType? environment implementationIota).getD
               (.sort .zero),
             publicIotaType := (installedType? environment publicIota).getD (.sort .zero),

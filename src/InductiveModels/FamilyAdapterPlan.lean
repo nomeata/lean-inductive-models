@@ -350,6 +350,10 @@ structure RulePlan where
   key : RuleKey
   ruleIndex : Nat
   exactRhs : Expr
+  /-- Exact installed computation RHS on the public/source interface. -/
+  publicRhs : Expr
+  /-- Exact installed computation RHS on the private implementation. -/
+  implementationRhs : Expr
   implementationIota : Name
   publicIota : Name
   implementationIotaType : Expr
