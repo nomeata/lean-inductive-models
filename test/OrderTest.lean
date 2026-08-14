@@ -72,6 +72,34 @@ def exportOf (decls : Array EDecl) : Export := { metaLine := .null, decls }
 def declarationIndex? (x : Export) (name : Name) : Option Nat :=
   x.decls.findIdx? fun declaration => declaration.names.contains name
 
+/-- Test-only source variant making a prerequisite-first positive case
+explicit without changing production source order. -/
+def withCompletePrerequisiteBefore (x : Export) (prerequisite owner : Name) : IO Export := do
+  let prerequisiteIndices := (Array.range x.decls.size).filter fun index =>
+    x.decls[index]!.names.contains prerequisite
+  let ownerIndices := (Array.range x.decls.size).filter fun index =>
+    x.decls[index]!.names.contains owner
+  unless prerequisiteIndices.size == 1 do
+    throw <| IO.userError s!"expected one complete {prerequisite} record, got {prerequisiteIndices}"
+  unless ownerIndices.size == 1 do
+    throw <| IO.userError s!"expected one complete {owner} record, got {ownerIndices}"
+  let prerequisiteIndex := prerequisiteIndices[0]!
+  let ownerIndex := ownerIndices[0]!
+  if prerequisiteIndex < ownerIndex then return x
+  let prerequisiteRecord := x.decls[prerequisiteIndex]!
+  return { x with decls :=
+    x.decls.extract 0 ownerIndex ++ #[prerequisiteRecord] ++
+      x.decls.extract ownerIndex prerequisiteIndex ++
+      x.decls.extract (prerequisiteIndex + 1) x.decls.size }
+
+/-- No declaration-local model descendant of the complete source block was
+emitted for a declined owner. -/
+def noModeledBlockDescendants (input output : Export) (owner : Name) : Bool :=
+  (input.decls.find? (·.names.contains owner)).any fun sourceBlock =>
+    let roots := sourceBlock.names.toArray.map Naming.modelName
+    output.decls.all fun declaration => declaration.names.all fun name =>
+      roots.all fun root => !root.isPrefixOf name
+
 def declarationType? (x : Export) (name : Name) : Option Expr := do
   let declaration ← x.decls.find? (·.names.contains name)
   match declaration with
@@ -763,27 +791,26 @@ def run (root : String) : IO UInt32 := do
       neutralDiscarded.plan.retainedGeneratedRecords == 0 &&
       neutral.env.constants.contains `NeutralOwner && neutral.env.constants.contains `NeutralDependent
 
-  -- The declaration-wise filter seam consumes the logical dependency stream,
-  -- not raw file order.  Pin that existing contract before extracting the
-  -- loop: a source consumer may occur first in the export, but its provider is
-  -- replayed first and both exact records remain otherwise unchanged.
+  -- The declaration-wise filter consumes source records in raw order. Use an
+  -- already-valid dependency stream so both retained and planned paths can
+  -- pin the identity ordinal mapping.
   let feedConsumer := axDecl `FeedConsumer (.const `FeedProvider [])
   let feedProvider := axDecl `FeedProvider
-  let feedInput := exportOf #[feedConsumer, feedProvider]
+  let feedInput := exportOf #[feedProvider, feedConsumer]
   let feedRun ← runFilterState feedInput noGeneration
   let feedTrace ← runFilterTraceState feedInput noGeneration
   let feedDiscarded ← runFilterDiscardedState feedInput noGeneration
   let feedPlanned ← runFilterPlannedDiscardedState s!"{root}/_tmp" feedInput noGeneration
   let feedCensus ← runFilterPlannedCensusState s!"{root}/_tmp" feedInput noGeneration
-  state := state.check "filter consumes one dependency-ordered source record at a time" <|
-    feedRun.output.decls == #[feedProvider, feedConsumer] &&
+  state := state.check "filter consumes one raw-order source record at a time" <|
+    feedRun.output.decls == feedInput.decls &&
       feedRun.report == ({} : Report) &&
       feedRun.env.constants.contains `FeedProvider &&
       feedRun.env.constants.contains `FeedConsumer
   state := state.check "one-record trace preserves output and records logical/raw ordinals" <|
     feedTrace.output.decls == feedRun.output.decls && feedTrace.report == feedRun.report &&
       feedTrace.steps.map (·.scheduledOrdinal) == #[0, 1] &&
-      feedTrace.steps.map (·.rawOrdinal) == #[1, 0] &&
+      feedTrace.steps.map (·.rawOrdinal) == #[0, 1] &&
       feedTrace.steps.map (·.sourceNames) == #[#[`FeedProvider], #[`FeedConsumer]] &&
       feedTrace.steps.all fun step =>
         !step.sourceIsInductive && step.sourceInstalled &&
@@ -795,7 +822,7 @@ def run (root : String) : IO UInt32 := do
       feedPlanned.plan.unavailable? == feedDiscarded.plan.unavailable? &&
       feedPlanned.plan.retainedGeneratedRecords ==
         feedDiscarded.plan.retainedGeneratedRecords &&
-      feedPlanned.plan.declarations == #[.source 1, .source 0] &&
+      feedPlanned.plan.declarations == #[.source 0, .source 1] &&
       feedPlanned.plan.retainedGeneratedRecords == 0
   state := state.check "planned census releases source records and preserves dependency replay" <|
     feedCensus.input.envelope.retainedDeclarations == 0 &&
@@ -868,8 +895,9 @@ def run (root : String) : IO UInt32 := do
     decls := #[futureModelProbe] ++ nestedRun.input.decls }
   let futureModelDiscarded ← runFilterDiscardedState futureModelInput
     { noGeneration with nested := true }
-  state := state.check "later generated provider marks compact checking unavailable" <|
-      futureModelDiscarded.plan.unavailable?.isSome &&
+  state := state.check "early source consumer of a later model fails without a partial plan" <|
+      futureModelDiscarded.report.unreplayable.isSome &&
+      futureModelDiscarded.plan.declarations.isEmpty &&
       futureModelDiscarded.plan.retainedGeneratedRecords == 0
 
   -- The default pipeline extends the same island through the generated nested
@@ -888,9 +916,11 @@ def run (root : String) : IO UInt32 := do
       !composedRun.env.constants.contains nestedImpl &&
       finalEnvironmentIsIsolated composedRun
 
-  let simpleRun ← generatedFixtureState
+  let simpleRawRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/prim_shapes.ndjson"
     { noGeneration with simple := true }
+  let simpleInput ← withCompletePrerequisiteBefore simpleRawRun.input `Eq `Tri
+  let simpleRun ← runFilterState simpleInput { noGeneration with simple := true }
   let simple := simpleRun.output
   let simple' ← mustReorder "simple declaration-local output" simple
   state := state.check "complete simple output checks literally" <|
@@ -946,7 +976,7 @@ def run (root : String) : IO UInt32 := do
         discarded.plan.checkReport == Check.checkReport legacy.output &&
         discarded.plan.declarations.size == legacy.output.decls.size &&
         discarded.plan.retainedGeneratedRecords == 0
-    state := state.check s!"planned-census {label} equals full compact oracle" <|
+    state := state.check s!"planned-census {label} equals compact full output" <|
       plannedCensus.input.envelope.retainedDeclarations == 0 &&
         plannedCensus.input.envelope.declarationCount == input.decls.size &&
         plannedCensus.report == discarded.report &&
@@ -1025,8 +1055,10 @@ def run (root : String) : IO UInt32 := do
   -- A W model has the largest fixed splice: the reusable `_wcore` fragment.
   -- The core survives for later source owners, while the public W model and its
   -- per-owner implementation forest remain confined to this island.
-  let wRun ← generatedFixtureState s!"{root}/test/fixtures/inductive-models/prim_w.ndjson"
+  let wRawRun ← generatedFixtureState s!"{root}/test/fixtures/inductive-models/prim_w.ndjson"
     { noGeneration with simple := true }
+  let wInput ← withCompletePrerequisiteBefore wRawRun.input `Eq `Tree
+  let wRun ← runFilterState wInput { noGeneration with simple := true }
   let wDiscarded ← runFilterDiscardedState wRun.input
     { noGeneration with simple := true }
   let wCensus := isolationCensus wRun
@@ -1043,30 +1075,39 @@ def run (root : String) : IO UInt32 := do
       wDiscarded.plan.checkReport == Check.checkReport wRun.output &&
       wDiscarded.plan.retainedGeneratedRecords == 0
 
-  -- Scheduling moves the input's exact PUnit bundle before the owner that
-  -- needs it. It is source state, not a generated splice, and remains present
-  -- after the owner's generated interface has been discarded.
-  let latePUnitRun ← generatedFixtureState
+  -- A prerequisite after its owner causes an exact decline and no partial
+  -- island. A test-only prerequisite-first variant then pins constructive
+  -- island-before-owner emission while every source step remains raw-order.
+  let latePUnitRawRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/tight_prop_field_late.ndjson"
     { noGeneration with simple := true }
-  state := state.check "late input PUnit survives scheduled owner-free generation" <|
+  state := state.check "late input PUnit declines without a partial model island" <|
+    latePUnitRawRun.report.declined ==
+      #[(`PFP, "prim model name taken (PUnit)")] &&
+      noModeledBlockDescendants latePUnitRawRun.input latePUnitRawRun.output `PFP
+  let latePUnitInput ←
+    withCompletePrerequisiteBefore latePUnitRawRun.input `PUnit `PFP
+  let latePUnitRun ← runFilterState latePUnitInput
+    { noGeneration with simple := true }
+  state := state.check "prerequisite-first PUnit supports owner-local generation" <|
     latePUnitRun.report.generated.any (·.1 == `PFP) &&
       !latePUnitRun.report.spliced.any (fun (_, names) => names.contains `PUnit) &&
       latePUnitRun.env.constants.contains `PUnit &&
       latePUnitRun.env.constants.contains `PFP &&
       !latePUnitRun.env.constants.contains (Naming.modelName `PFP) &&
       finalEnvironmentIsIsolated latePUnitRun
-  let latePUnitTrace ← runFilterTraceState latePUnitRun.input
+  let latePUnitTrace ← runFilterTraceState latePUnitInput
     { noGeneration with simple := true }
   let pfpSteps := latePUnitTrace.steps.filter fun step =>
     step.generated.any (·.1 == `PFP)
-  state := state.check "one inductive transition owns pre/post generation and island close" <|
+  state := state.check "one raw-order transition emits the island immediately before its owner" <|
     latePUnitTrace.output.decls == latePUnitRun.output.decls &&
       latePUnitTrace.report == latePUnitRun.report &&
       latePUnitTrace.steps.size == latePUnitRun.input.decls.size &&
       latePUnitTrace.steps.map (·.scheduledOrdinal) ==
         Array.range latePUnitRun.input.decls.size &&
-      latePUnitTrace.steps.map (·.rawOrdinal) == #[0, 2, 1] &&
+      latePUnitTrace.steps.map (·.rawOrdinal) ==
+        Array.range latePUnitRun.input.decls.size &&
       pfpSteps.size == 1 && pfpSteps[0]!.sourceNames.contains `PFP &&
       pfpSteps[0]!.sourceIsInductive && pfpSteps[0]!.sourceInstalled &&
       pfpSteps[0]!.generatedRecords > 0 &&
