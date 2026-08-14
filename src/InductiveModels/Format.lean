@@ -1399,8 +1399,14 @@ private def emitRaw (sink : RawSink) (state : IO.Ref RawCertState)
   state.modify fun current =>
     let current := current.addBytes kind bytes.size
     let spelling := terminated && json?.isSome && compressedJsonSpelling line
-    let current := { current with certificate.canonical :=
-      current.certificate.canonical && spelling }
+    let current := { current with certificate := { current.certificate with
+      canonical := current.certificate.canonical && spelling
+      -- `DeclarationArena.decode` consumes one complete NDJSON declaration
+      -- record. An otherwise valid declaration at EOF without LF is accepted
+      -- by the whole parser, but its declaration-only span must select the
+      -- exact raw-snapshot fallback rather than fail during planned replay.
+      replayable := current.certificate.replayable &&
+        (kind != .declaration || terminated) } }
     if kind == .arena then json?.elim current current.observeArena else current
 
 /-- **The same parse, off a handle, a chunk at a time.**

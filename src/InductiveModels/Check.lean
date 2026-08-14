@@ -333,21 +333,43 @@ def ruleKProposition? (x : Export) (ownerDecl : Nat) (recursorName : Name) :
     { name := `major, type := majorType, info := .default, value := arbitrary }
   return (levelParams, closeForalls (pre.push majorBinder) result)
 
-/-- The correspondence table determined by one inductive record and its exact
-syntax context, independent of whether any model declarations are present. -/
-private def correspondenceFor? (normalizer : ExactNormalizationEnv)
+private structure CorrespondenceRecursorSeed where
+  name : Name
+  ruleCount : Nat
+  k : Bool
+
+/-- Compact owner facts retained by declaration-wise source indexing. Type and
+constructor syntax is required by exact projection/eta reconstruction after
+the complete normalizer exists; recursor types and rule RHS graphs are not. -/
+private structure SourceFamilySeed where
+  ownerDecl : Nat
+  root : Name
+  types : List EIndType
+  ctors : List ECtor
+  recursors : Array CorrespondenceRecursorSeed
+
+private def SourceFamilySeed.ofDeclaration? (ownerDecl : Nat) :
+    EDecl → Option SourceFamilySeed
+  | .induct types ctors recursors => do
+    let root ← types.head?.map (·.name)
+    return {
+      ownerDecl, root, types, ctors
+      recursors := recursors.toArray.map fun recursor =>
+        { name := recursor.name, ruleCount := recursor.rules.length, k := recursor.k } }
+  | _ => none
+
+private def correspondenceForParts (normalizer : ExactNormalizationEnv)
     (projectionFields : EIndType → List ECtor → Array Nat)
-    (declaration : EDecl) : Option Correspondence := do
-  let .induct types ctors recursors := declaration | none
+    (types : List EIndType) (ctors : List ECtor)
+    (recursorRecords : Array CorrespondenceRecursorSeed) : Correspondence := Id.run do
   let typeFormers := types.toArray.map fun type =>
     { owner := type.name, model := Naming.modelName type.name }
   let constructors := ctors.toArray.map fun ctor =>
     { owner := ctor.name, model := Naming.modelName ctor.name }
-  let recursorRecords := recursors.toArray
   let recursors := recursorRecords.map fun recursor =>
     { owner := recursor.name, model := Naming.modelName recursor.name }
   let iotas := recursorRecords.flatMap fun recursor =>
-    (Array.range recursor.rules.length).map (Naming.Iota.ofRecursor recursor.name)
+    (Array.range recursor.ruleCount).map (Naming.Iota.ofRecursor recursor.name)
   let unitlikeMetadata := types.toArray.filterMap fun type =>
     if type.isKernelUnitlike ctors then some (Naming.Metadata.ofOwner .unitlike type.name)
     else none
@@ -364,6 +386,16 @@ private def correspondenceFor? (normalizer : ExactNormalizationEnv)
       projections := projections.push (.ofField type.name fieldIndex)
   let metadata := unitlikeMetadata ++ etaMetadata ++ ruleKMetadata
   return { typeFormers, constructors, recursors, projections, iotas, metadata }
+
+/-- The correspondence table determined by one inductive record and its exact
+syntax context, independent of whether any model declarations are present. -/
+private def correspondenceFor? (normalizer : ExactNormalizationEnv)
+    (projectionFields : EIndType → List ECtor → Array Nat)
+    (declaration : EDecl) : Option Correspondence := do
+  let .induct types ctors recursors := declaration | none
+  return correspondenceForParts normalizer projectionFields types ctors <|
+    recursors.toArray.map fun recursor =>
+      { name := recursor.name, ruleCount := recursor.rules.length, k := recursor.k }
 
 /-- The correspondence table determined by an inductive record, independent
 of whether any model declarations are present. -/
@@ -1423,9 +1455,9 @@ structure SyntaxIndex where
   private names : Lean.PersistentHashSet Name := {}
 
 /-- Mutable construction state for an immutable [`SyntaxIndex`].  The builder
-is fed in declaration order.  It retains only exact declaration-facing syntax
-tables plus inductive owner records until `freeze`; ordinary declaration
-values are not accumulated. -/
+is fed in declaration order. It retains declaration-facing syntax tables plus
+compact inductive owner seeds until `freeze`; recursor types/rule RHS graphs
+and complete `EDecl` values die after each callback. -/
 structure SyntaxIndex.Builder where
   private declarations : DeclarationTypes := {}
   private constructors : Constructors := {}
@@ -1434,7 +1466,7 @@ structure SyntaxIndex.Builder where
   private definitions : Std.HashMap Name ExactNormalizationDef := {}
   private records : Std.HashMap Name (Array Nat) := {}
   private names : Lean.PersistentHashSet Name := {}
-  private owners : Array (Nat × EDecl) := #[]
+  private owners : Array SourceFamilySeed := #[]
   private nextOrdinal : Nat := 0
 
 /-- Add one exact export record to a syntax-index builder.  Duplicate handling
@@ -1454,7 +1486,8 @@ def SyntaxIndex.Builder.push (builder : SyntaxIndex.Builder)
   if let .induct types ctors _ := declaration then
     for ctor in ctors do constructors := constructors.insert ctor.name ctor
     for type in types do structures := structures.insert type.name (type, ctors)
-    owners := owners.push (ordinal, declaration)
+    if let some owner := SourceFamilySeed.ofDeclaration? ordinal declaration then
+      owners := owners.push owner
   let mut ruleSlots := builder.ruleSlots
   let mut records := builder.records
   let mut names := builder.names
@@ -1785,8 +1818,9 @@ private def sourceFamilyTable (families : Array Family) : Std.HashMap Name (Arra
     table.insert family.owner ((table.getD family.owner #[]).push template)
 
 /-- Freeze declaration callbacks into one immutable source syntax index.
-Owner templates are computed directly from the retained inductive records;
-they do not require a second whole-export discovery/index construction. -/
+Owner templates are computed from compact seeds after the complete transparent
+normalizer exists; no full inductive record or recursor proof graph survives
+the declaration callback. -/
 def SyntaxIndex.Builder.freeze (builder : SyntaxIndex.Builder) : SyntaxIndex := Id.run do
   let index : SyntaxIndex :=
     { declarations := builder.declarations
@@ -1797,15 +1831,13 @@ def SyntaxIndex.Builder.freeze (builder : SyntaxIndex.Builder) : SyntaxIndex := 
       records := builder.records
       names := builder.names }
   let mut families : Array Family := #[]
-  for (ownerDecl, declaration) in builder.owners do
-    let .induct types _ _ := declaration | continue
-    let some root := types.head?.map (·.name) | continue
-    let some correspondence := correspondenceFor? index.normalizer
-        (intrinsicProjectionFieldsWithIndex index) declaration
-      | continue
-    let modelRoot := Naming.modelName root
+  for owner in builder.owners do
+    let correspondence := correspondenceForParts index.normalizer
+      (intrinsicProjectionFieldsWithIndex index) owner.types owner.ctors owner.recursors
+    let modelRoot := Naming.modelName owner.root
     families := families.push
-      { owner := root, modelRoot, carrier := modelRoot, ownerDecl, correspondence
+      { owner := owner.root, modelRoot, carrier := modelRoot,
+        ownerDecl := owner.ownerDecl, correspondence
         decls := #[], names := #[] }
   return { index with sourceFamilies := sourceFamilyTable families }
 

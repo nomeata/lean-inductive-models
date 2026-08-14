@@ -544,6 +544,8 @@ def main (args : List String) : IO UInt32 := do
     ← directInputReplayAccepted scratch rawWhitespacePath rawWhitespace #[first, second]
   state := state.check "planned source falls back for missing final LF" <|
     ← plannedSourceRejected scratch rawNoLfPath rawNoLf
+  state := state.check "direct input preserves exact EOF-declaration fallback" <|
+    ← directInputFallbackExact scratch rawNoLfPath rawNoLf
   state := state.check "planned source falls back for CRLF input" <|
     ← plannedSourceRejected scratch rawCrlfPath rawCrlf
   state := state.check "declaration-discarding planned source preserves raw-certificate fallback" <|
