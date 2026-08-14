@@ -2135,6 +2135,18 @@ private def sameKernelCheckResult (left right : Except String Unit) : Bool :=
 def FilterKernelCheckShadow.result (shadow : FilterKernelCheckShadow) : Except String Unit :=
   shadow.batchResult
 
+/-- Environment-free result of direct compact kernel replay.  The checker has
+already been sealed and its exact `Kernel.Environment` is unreachable.  A
+`fallback?` means the chronological compact feed was not a complete final
+schedule (for example, a generated provider appeared later); the eventual
+caller must use the ordinary reordered batch oracle and its diagnostics. -/
+structure CompactKernelCheckVerdict where
+  result : Except String Unit
+  recordsPushed : Nat
+  scheduledRecords : Nat
+  fallback? : Option String := none
+  deriving Repr
+
 /-- Output retention is an explicit policy, not an accidental consequence of
 whether a physical sink happens to exist. `shadowSpool` is the test-only mode
 which retains both the historical full output and compact physical commits so
@@ -2143,19 +2155,24 @@ private inductive RetentionMode where
   | fullOracle
   | shadowSpool (sink : IslandSink)
   | compactDiscard
+  | compactDirect
   | compactSpool (sink : IslandSink)
 
 private def RetentionMode.isCompact : RetentionMode → Bool
   | .fullOracle => false
-  | .shadowSpool .. | .compactDiscard | .compactSpool .. => true
+  | .shadowSpool .. | .compactDiscard | .compactDirect | .compactSpool .. => true
 
 private def RetentionMode.retainsOracle : RetentionMode → Bool
   | .fullOracle | .shadowSpool .. => true
-  | .compactDiscard | .compactSpool .. => false
+  | .compactDiscard | .compactDirect | .compactSpool .. => false
 
 private def RetentionMode.sink? : RetentionMode → Option IslandSink
   | .shadowSpool sink | .compactSpool sink => some sink
-  | .fullOracle | .compactDiscard => none
+  | .fullOracle | .compactDiscard | .compactDirect => none
+
+private def RetentionMode.checksKernelDirect : RetentionMode → Bool
+  | .compactDirect => true
+  | _ => false
 
 /-- Value-free facts used by the planned scheduler after the source
 declaration callback has returned.  `root?` and the three shape bits reproduce
@@ -2691,7 +2708,10 @@ private structure FilterState where
   futureSupportRemaining : Std.HashMap Nat EDecl := {}
   emissionByRaw : Std.HashMap Nat (Array EDecl) := {}
   sourceSteps : Array FilterSourceStep := #[]
-  kernelCheckShadow? : Option KernelCheck.State := none
+  kernelCheckState? : Option KernelCheck.State := none
+  /-- Exact name rows captured atomically with direct compact pushes.  Names
+  only: retaining this array cannot retain a declaration expression graph. -/
+  kernelCheckRows : Array (Array Name) := #[]
 
 private inductive FilterFeedResult where
   | next (state : FilterState)
@@ -2741,7 +2761,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut futureSupportRemaining := state.futureSupportRemaining
   let mut emissionByRaw := state.emissionByRaw
   let mut sourceSteps := state.sourceSteps
-  let mut kernelCheckShadow? := state.kernelCheckShadow?
+  let mut kernelCheckState? := state.kernelCheckState?
+  let mut kernelCheckRows := state.kernelCheckRows
   let emissionStart := legacyOut.size
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
@@ -2984,12 +3005,13 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         throwError "accepted island cardinality mismatch for {d.names}: \
           records={orderedGenerated.size}, summaries={compact.summaries.size}, \
           extras={compact.globalExtras.size}, families={compact.families.size}"
-      if let some checker := kernelCheckShadow? then
-        let mut checker := checker
-        for localOrdinal in [:orderedGenerated.size] do
-          checker ← checker.pushBound orderedGenerated[localOrdinal]!
-            compact.summaries[localOrdinal]!.introduced
-        kernelCheckShadow? := some checker
+      unless compactMode do
+        if let some checker := kernelCheckState? then
+          let mut checker := checker
+          for localOrdinal in [:orderedGenerated.size] do
+            checker ← checker.pushBound orderedGenerated[localOrdinal]!
+              compact.summaries[localOrdinal]!.introduced
+          kernelCheckState? := some checker
       modeledSourceFamilies := compact.sourceFamilies
       modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
       if compactMode then
@@ -3004,12 +3026,17 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
               extras={compact.globalExtras.size}, spans={commit.declarations.size}"
           commits := commits.push commit
         for localOrdinal in [:tagged.size] do
-          stagedRecords := stagedRecords.push {
+          let row : StagedRecord := {
             summary := tagged[localOrdinal]!
             globalExtra := compact.globalExtras[localOrdinal]!
             families := compact.families[localOrdinal]!.map (·.inIsland islandNumber)
             checkIsland? := some islandNumber
             locator := .generated islandNumber localOrdinal }
+          if let some checker := kernelCheckState? then
+            kernelCheckState? := some (← checker.pushBound orderedGenerated[localOrdinal]!
+              row.summary.introduced)
+            kernelCheckRows := kernelCheckRows.push row.summary.introduced
+          stagedRecords := stagedRecords.push row
         compactIslands := compactIslands.push compact
       let persistentRecords := generatedSupportRecords orderedGenerated exactIslandModels
       if compactMode then
@@ -3036,8 +3063,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             sourceSteps
   else
     mainEnv ← getEnv
-  if let some checker := kernelCheckShadow? then
-    kernelCheckShadow? := some (← checker.pushBound d sourceSummary.introduced)
+  unless compactMode do
+    if let some checker := kernelCheckState? then
+      kernelCheckState? := some (← checker.pushBound d sourceSummary.introduced)
   if retainOracle then legacyOut := legacyOut.push d
   if retainOracle && context.outputSourceOrder?.isSome then
     let some rawSourceOrdinal := rawSourceOrdinal?
@@ -3052,7 +3080,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       match compactIslands.size with
       | 0 => throwError "modeled source family {d.names} has no committed generated island"
       | size + 1 => pure (some size)
-    stagedRecords := stagedRecords.push {
+    let row : StagedRecord := {
       summary := sourceSummaries[scheduledOrdinal]!
       globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtra
       families := sourceFamilyRecord ++
@@ -3060,6 +3088,10 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           modeledIsland?.elim family family.inIsland)
       checkIsland? := modeledIsland?
       locator := .source rawOrdinal }
+    if let some checker := kernelCheckState? then
+      kernelCheckState? := some (← checker.pushBound d row.summary.introduced)
+      kernelCheckRows := kernelCheckRows.push row.summary.introduced
+    stagedRecords := stagedRecords.push row
   if context.checkRecursors then
     if let .induct _ _ rs := replayD then
       let (n, b) ← checkRecs rs
@@ -3082,7 +3114,121 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, commits, stagedRecords,
     scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
     persistentSupportOrigins, futureSupportRemaining, emissionByRaw, sourceSteps,
-    kernelCheckShadow? }
+    kernelCheckState?, kernelCheckRows }
+
+/-- Payload-free handoff from logical generation to compact finalization.  It
+contains neither an `Environment`, `Kernel.Environment`, `EDecl`, sink, writer,
+nor spool commit. The private constructor keeps that retention claim local to
+the consuming seal below. -/
+private structure CompactDirectSealed where
+  report : Report
+  compactIslands : Array CompactIsland
+  stagedRecords : Array StagedRecord
+  islandStatements : Check.StatementReport
+  persistentSupportOrigins : Std.HashMap Name Nat
+  kernelVerdict : KernelCheck.Verdict
+
+/-- Consume the complete direct state at the last expression-bearing boundary.
+Every exact record was already submitted through `pushBound`.  This function
+binds the feed rows to the compact rows, seals away `Kernel.Environment`, and
+resets Meta state to the invocation base before returning value-only data. -/
+private def FilterState.sealCompactDirect (state : FilterState) (context : FilterContext) :
+    MetaM CompactDirectSealed := do
+  unless context.retention.checksKernelDirect do
+    throwError "compact direct seal selected outside direct retention"
+  unless state.futureSupportRemaining.isEmpty do
+    throwError "future support shadow retained undischarged source records"
+  unless state.legacyOut.isEmpty do
+    throwError "compact direct checker retained {state.legacyOut.size} declaration records"
+  unless state.commits.isEmpty do
+    throwError "compact direct checker retained {state.commits.size} physical spool commits"
+  unless state.scheduledOrdinal == context.sourceSummaries.size do
+    throwError "compact direct source schedule consumed {state.scheduledOrdinal} of \
+      {context.sourceSummaries.size} rows"
+  let compactRows := state.stagedRecords.map (·.summary.introduced)
+  unless state.kernelCheckRows == compactRows do
+    throwError "compact direct kernel rows differ from staged rows: \
+      kernel={repr state.kernelCheckRows}, compact={repr compactRows}"
+  let sourceRows := state.stagedRecords.foldl (init := 0) fun count record =>
+    match record.locator with
+    | .source _ => count + 1
+    | .generated .. => count
+  unless sourceRows == state.scheduledOrdinal do
+    throwError "compact direct staged {sourceRows} source rows for \
+      {state.scheduledOrdinal} transitions"
+  let some checker := state.kernelCheckState?
+    | throwError "compact direct state lost its exact kernel checker"
+  let kernelVerdict := checker.seal
+  unless kernelVerdict.recordsPushed == state.stagedRecords.size do
+    throwError "compact direct kernel consumed {kernelVerdict.recordsPushed} records, \
+      but staged {state.stagedRecords.size} rows"
+  let some base := context.kernelCheckBase?
+    | throwError "compact direct state lost its exact base environment"
+  -- No later compact operation may observe construction declarations. The
+  -- returned structure cannot retain either this Lean environment or the
+  -- checker's exact kernel environment.
+  setEnv base
+  return {
+    report := state.report
+    compactIslands := state.compactIslands
+    stagedRecords := state.stagedRecords
+    islandStatements := state.islandStatements
+    persistentSupportOrigins := state.persistentSupportOrigins
+    kernelVerdict }
+
+/-- Finish ordering and structural checks from the value-only direct handoff. -/
+private def CompactDirectSealed.finalize (sealed : CompactDirectSealed) :
+    MetaM (Report × CompactPlan × CompactKernelCheckVerdict) := do
+  let stagedOrder ← match Order.summaryRecordOrder (sealed.stagedRecords.map (·.summary)) with
+    | .ok order => pure order
+    | .error error => throwError "cannot compactly order direct records: {repr error}"
+  let mut scheduled : Std.HashSet Nat := {}
+  for index in stagedOrder do
+    unless index < sealed.stagedRecords.size do
+      throwError "compact direct schedule index {index} exceeds \
+        {sealed.stagedRecords.size} rows"
+    if scheduled.contains index then
+      throwError "compact direct schedule repeats row {index}"
+    scheduled := scheduled.insert index
+  unless scheduled.size == sealed.stagedRecords.size do
+    throwError "compact direct schedule covers {scheduled.size} of \
+      {sealed.stagedRecords.size} rows"
+  let orderedRecords := stagedOrder.map fun i =>
+    { owner := sealed.stagedRecords[i]!.summary.owner
+      modelSlots := sealed.stagedRecords[i]!.summary.modelSlots
+      globalExtra := sealed.stagedRecords[i]!.globalExtra
+      families := sealed.stagedRecords[i]!.families : Check.CompactCheckRecord }
+  let compactCheckReport ← match Check.compactOrderedReport orderedRecords with
+    | .ok report => pure report
+    | .error message => throwError "invalid compact direct output certificate: {message}"
+  let compactUnavailable? :=
+    compactAvailabilityError? sealed.stagedRecords sealed.persistentSupportOrigins
+  let orderedGlobals := stagedOrder.map fun i => sealed.stagedRecords[i]!.globalExtra
+  let diagnosticOwners := sealed.compactIslands.foldl (init := ({} : Std.HashSet Name))
+    fun owners island => island.diagnosticOwners.toArray.foldl
+      (fun owners owner => owners.insert owner) owners
+  let compactGlobal := Check.globalExtrasFromRecordsFor orderedGlobals diagnosticOwners
+  let statementReport : Check.StatementReport :=
+    { sealed.islandStatements with
+      violations := sealed.islandStatements.violations ++ compactGlobal }
+  let rep := { sealed.report with
+    stmtChecked := statementReport.statementsChecked
+    stmtErrors := statementReport.violations.map fun violation => violation.message }
+  let declarations := stagedOrder.map fun index => sealed.stagedRecords[index]!.locator
+  unless declarations.size == sealed.kernelVerdict.recordsPushed do
+    throwError "compact direct final schedule has {declarations.size} rows after checking \
+      {sealed.kernelVerdict.recordsPushed} exact records"
+  let compactPlan : CompactPlan := {
+    declarations
+    checkReport := compactCheckReport
+    unavailable? := compactUnavailable?
+    retainedGeneratedRecords := 0 }
+  let kernelVerdict : CompactKernelCheckVerdict := {
+    result := sealed.kernelVerdict.result
+    recordsPushed := sealed.kernelVerdict.recordsPushed
+    scheduledRecords := declarations.size
+    fallback? := compactUnavailable? }
+  return (rep, compactPlan, kernelVerdict)
 
 /-- Complete compact ordering and checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
@@ -3200,7 +3346,7 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
     declarations
     checkReport := compactCheckReport
     unavailable? := compactUnavailable? }
-  let kernelCheckShadow? ← match state.kernelCheckShadow? with
+  let kernelCheckShadow? ← match state.kernelCheckState? with
     | none => pure none
     | some checker => do
       let streamed := checker.seal
@@ -3240,7 +3386,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     (sourceCensus? : Option SourceCensus := none)
     (kernelCheckShadow : Bool := false) :
     MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep ×
-      Option FilterKernelCheckShadow) := do
+      Option FilterKernelCheckShadow × Option CompactKernelCheckVerdict) := do
   let plannedCensus := sourceCensus?.isSome
   let sourceCensus := sourceCensus?.getD (SourceCensus.ofSource x)
   let plannedAliases ← match sourceCensus.replayAliases with
@@ -3307,7 +3453,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
     sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
     rawOrdinals, reserved, constructionReserved,
-    kernelCheckBase? := if kernelCheckShadow then some fallbackEnv else none,
+    kernelCheckBase? := if kernelCheckShadow || retention.checksKernelDirect then
+      some fallbackEnv else none,
     futureSupport?, outputSourceOrder?, collectTrace }
   let initialFutureSupport := futureSupport?.map (·.records) |>.getD
     ({} : Std.HashMap Nat EDecl)
@@ -3315,7 +3462,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     { mainEnv := mainEnv
       persistentSyntax := sourceSyntax
       futureSupportRemaining := initialFutureSupport
-      kernelCheckShadow? := if kernelCheckShadow then
+      kernelCheckState? := if kernelCheckShadow || retention.checksKernelDirect then
         some (KernelCheck.State.create fallbackEnv) else none }
   for rawOrdinal in sourceOrder do
     let declaration ← match plannedSource? with
@@ -3339,14 +3486,19 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     match ← current.feedSource context declaration with
     | .next next => state := next
     | .unreplayable report sourceSteps =>
-      return (x.decls, report, {}, {}, sourceSteps, none)
+      return (x.decls, report, {}, {}, sourceSteps, none, none)
+  if retention.checksKernelDirect then
+    let sourceSteps := state.sourceSteps
+    let sealed ← state.sealCompactDirect context
+    let (report, compact, kernelVerdict) ← sealed.finalize
+    return (#[], report, compact, {}, sourceSteps, none, some kernelVerdict)
   let (decls, report, compact, plan, kernelCheckShadow?) ← state.finalize context
-  return (decls, report, compact, plan, state.sourceSteps, kernelCheckShadow?)
+  return (decls, report, compact, plan, state.sourceSteps, kernelCheckShadow?, none)
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
+  let (decls, report, _, _, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
   return (decls, report)
 
 /-- Test-facing full-output oracle with an exact declaration-wise kernel
@@ -3358,7 +3510,7 @@ stream to seal, so it returns its unchanged output/report with `none`. -/
 def runFilterWithKernelCheckShadow (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) :
     MetaM (Array EDecl × Report × Option FilterKernelCheckShadow) := do
-  let (decls, report, _, _, _, shadow?) ← runFilterCore x checkRecursors generation
+  let (decls, report, _, _, _, shadow?, _) ← runFilterCore x checkRecursors generation
     .fullOracle (kernelCheckShadow := true)
   return (decls, report, shadow?)
 
@@ -3411,7 +3563,7 @@ def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
   let outputOrder ← match census.scheduleOrder x generation with
     | .ok order => pure order
     | .error error => throwError "cannot retain support-priority output order: {repr error}"
-  let (decls, report, _, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
+  let (decls, report, _, _, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
     (sourceOrder? := some ordinaryOrder) (futureSupport? := some shadow)
       (outputSourceOrder? := some outputOrder)
   return (decls, report, true)
@@ -3421,7 +3573,7 @@ output and report are produced by the same core invocation as the snapshots;
 ordinary production callers collect no snapshots. -/
 def runFilterWithSourceTrace (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Array EDecl × Report × Array FilterSourceStep) := do
-  let (decls, report, _, _, steps, _) ←
+  let (decls, report, _, _, steps, _, _) ←
     runFilterCore x checkRecursors generation .fullOracle (collectTrace := true)
   return (decls, report, steps)
 
@@ -3431,7 +3583,7 @@ composed consumer sees them; ordinary production callers use [`runFilter`]. -/
 def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) (transform : EDecl → EDecl) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _, _, _) ←
+  let (decls, report, _, _, _, _, _) ←
     runFilterCore x checkRecursors generation .fullOracle transform
   return (decls, report)
 
@@ -3440,16 +3592,28 @@ the full output remains live for comparison with final Order/Check. The
 returned plan has already discarded the compact checking summaries. -/
 def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) := do
-  let (decls, report, _, plan, _, _) ←
+  let (decls, report, _, plan, _, _, _) ←
     runFilterCore x checkRecursors generation (.shadowSpool sink)
   return (decls, report, plan)
+
+/-- Phase-three direct compact kernel path. It is intentionally not selected by
+Main yet. Exact generated and source records are consumed only while their
+compact rows are live; the returned report, plan, and optional deferred verdict
+contain no declaration, environment, writer, sink, or spool payload. An
+unreplayable source terminates like the ordinary filter and returns `none`. -/
+def runFilterDirectChecking (x : Export) (checkRecursors : Bool)
+    (generation : Cli.Config) :
+    MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict) := do
+  let (_, report, compact, _, _, _, kernelVerdict?) ←
+    runFilterCore x checkRecursors generation .compactDirect
+  return (report, compact, kernelVerdict?)
 
 /-- AST-dropping no-output generation. Accepted generated records are checked
 and summarized at island close, then discarded without opening a workspace or
 retaining any physical span. -/
 def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Report × CompactPlan) := do
-  let (_, report, compact, _, _, _) ←
+  let (_, report, compact, _, _, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard
   return (report, compact)
 
@@ -3459,7 +3623,7 @@ record is nevertheless the value consumed by `feedSource`, and compact mode
 does not retain it after that transition. -/
 def runFilterDiscardingPlanned (x : Export) (reader : Spool.PlannedSourceReader)
     (checkRecursors : Bool) (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
-  let (_, report, compact, _, _, _) ←
+  let (_, report, compact, _, _, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard (plannedSource? := some reader)
   return (report, compact)
 
@@ -3479,7 +3643,7 @@ def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
       input.envelope.declarationCount == input.census.scheduling.size &&
       input.envelope.declarationCount == reader.size do
     throwError "planned source parser/census/reader cardinalities disagree"
-  let (_, report, compact, _, _, _) ← runFilterCore input.envelope.template
+  let (_, report, compact, _, _, _, _) ← runFilterCore input.envelope.template
     checkRecursors generation .compactDiscard (plannedSource? := some reader)
     (sourceCensus? := some input.census)
   return (report, compact)
@@ -3489,7 +3653,7 @@ island close and never appended to a cumulative declaration array. The result
 contains only ordered declaration locators and spool spans. -/
 def runFilterStaged (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Report × StagedPlan) := do
-  let (_, report, _, plan, _, _) ←
+  let (_, report, _, plan, _, _, _) ←
     runFilterCore x checkRecursors generation (.compactSpool sink)
   return (report, plan)
 

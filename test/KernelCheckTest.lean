@@ -2,6 +2,12 @@ import InductiveModels.Driver
 
 set_option maxRecDepth 8192
 
+/--
+error: Unknown identifier `InductiveModels.CompactDirectSealed`
+-/
+#guard_msgs in
+#check InductiveModels.CompactDirectSealed
+
 /-!
 # Incremental kernel-check regression tests
 
@@ -86,13 +92,26 @@ def runFilterOrdinary (x : Export) (generation : Cli.Config)
     (runFilter x checkRecursors generation)) context { env }
   return result
 
-def runDiscarding (x : Export) (generation : Cli.Config) : IO (Report × CompactPlan) := do
+def runFilterDirectObserved (x : Export) (generation : Cli.Config)
+    (checkRecursors : Bool := false) :
+    IO ((Report × CompactPlan × Option CompactKernelCheckVerdict) × Environment) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<filter-direct-kernel-check-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+    let result ← runFilterDirectChecking x checkRecursors generation
+    return (result, ← getEnv))) context { env }
+  return result
+
+def runDiscarding (x : Export) (generation : Cli.Config)
+    (checkRecursors : Bool := false) : IO (Report × CompactPlan) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<filter-kernel-check-compact-boundary-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
-    (runFilterDiscarding x false generation)) context { env }
+    (runFilterDiscarding x checkRecursors generation)) context { env }
   return result
 
 def readFixture (root file : String) : IO Export := do
@@ -107,6 +126,17 @@ def shadowAgrees : Option FilterKernelCheckShadow → Bool
     accepted shadow.streamedResult && accepted shadow.batchResult &&
       accepted shadow.result && !shadow.usedFallback &&
       shadow.recordsPushed == shadow.finalRecords
+
+def directAccepted : Option CompactKernelCheckVerdict → Bool
+  | none => false
+  | some verdict =>
+    accepted verdict.result && verdict.fallback?.isNone &&
+      verdict.recordsPushed == verdict.scheduledRecords
+
+def sameCompactPlan (left right : CompactPlan) : Bool :=
+  left.declarations == right.declarations && left.checkReport == right.checkReport &&
+    left.unavailable? == right.unavailable? &&
+    left.retainedGeneratedRecords == right.retainedGeneratedRecords
 
 def mapConstructor (input : Export) (target : Name) (f : ECtor → ECtor) : Export :=
   { input with decls := input.decls.map fun declaration => match declaration with
@@ -408,6 +438,59 @@ def run (root : String) : IO UInt32 := do
       accepted futureShadow.batchResult && accepted futureShadow.result &&
       futureShadow.recordsPushed == futureShadow.finalRecords &&
       futureCompact.unavailable?.isSome
+
+  -- Direct compact retention seals before ordering/check finalization. Its
+  -- public result is value-only, while the post-call Meta environment has
+  -- already returned to the exact invocation base (neither source nor model
+  -- construction declarations remain visible).
+  let ((directSuccessReport, directSuccessPlan, directSuccess?), directSuccessEnv) ←
+    runFilterDirectObserved futureBase futureGeneration
+  let (discardSuccessReport, discardSuccessPlan) ←
+    runDiscarding futureBase futureGeneration
+  state := state.check "compact direct success equals compact discard after early seal" <|
+    directAccepted directSuccess? && directSuccessReport == discardSuccessReport &&
+      sameCompactPlan directSuccessPlan discardSuccessPlan &&
+      directSuccessPlan.retainedGeneratedRecords == 0 &&
+      directSuccess?.any (fun verdict =>
+        verdict.scheduledRecords == directSuccessPlan.declarations.size) &&
+      !directSuccessEnv.constants.contains `Tree &&
+      !directSuccessEnv.constants.contains (Naming.modelName `Tree)
+
+  let ((directDeclineReport, directDeclinePlan, directDecline?), _) ←
+    runFilterDirectObserved declineInput {}
+  let (discardDeclineReport, discardDeclinePlan) ← runDiscarding declineInput {}
+  state := state.check "compact direct generation decline retains the compact verdict" <|
+    directAccepted directDecline? && !directDeclineReport.declined.isEmpty &&
+      directDeclineReport == discardDeclineReport &&
+      sameCompactPlan directDeclinePlan discardDeclinePlan &&
+      directDeclinePlan.retainedGeneratedRecords == 0
+
+  let ((directAliasReport, directAliasPlan, directAlias?), directAliasEnv) ←
+    runFilterDirectObserved collidingShapes collisionGeneration true
+  let (discardAliasReport, discardAliasPlan) ←
+    runDiscarding collidingShapes collisionGeneration true
+  state := state.check "compact direct generated aliases retain exact bound rows only" <|
+    directAccepted directAlias? && directAliasReport == collidingReport &&
+      directAliasReport == discardAliasReport &&
+      sameCompactPlan directAliasPlan discardAliasPlan &&
+      directAliasPlan.retainedGeneratedRecords == 0 &&
+      !directAliasEnv.constants.contains publicOwner &&
+      !directAliasEnv.constants.contains privateOwner &&
+      !directAliasEnv.constants.contains (Naming.modelName privateOwner)
+
+  let ((directFutureReport, directFuturePlan, directFuture?), directFutureEnv) ←
+    runFilterDirectObserved futureInput futureGeneration
+  let some directFuture := directFuture?
+    | IO.eprintln "kernelchecktest: compact future-provider run did not seal"; return 1
+  state := state.check "compact direct late provider returns value-only fallback" <|
+    directFuture.fallback? == directFuturePlan.unavailable? &&
+      directFuture.fallback?.isSome && !accepted directFuture.result &&
+      directFuture.recordsPushed == directFuture.scheduledRecords &&
+      directFuture.scheduledRecords == directFuturePlan.declarations.size &&
+      directFutureReport.stmtErrors.isEmpty &&
+      directFuturePlan.retainedGeneratedRecords == 0 &&
+      !directFutureEnv.constants.contains `Tree &&
+      !directFutureEnv.constants.contains (Naming.modelName `Tree)
 
   if state.failed.isEmpty then
     IO.println s!"kernel check: {state.passed}/{state.passed} passed"
