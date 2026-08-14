@@ -991,6 +991,17 @@ def addStructureModels (types : Array EIndType) (constructors : Array ECtor)
 private abbrev ModelIslandState :=
   Array EDecl × Report × Array PendingModel × Array FamilyAdapter.ShadowObservation
 
+/-- Place one newly generated model at its constructive emission boundary. A
+source owner is not in the private forest yet, so its model appends and the
+source callback follows it. A recursively generated owner is already present
+inside a dependency-ordered parent segment; splice immediately before that
+complete record, preserving every earlier support record the child may use. -/
+private def appendModelRecords (out records : Array EDecl) (owner : Name) : Array EDecl :=
+  match out.findIdx? (fun declaration => declaration.names.contains owner) with
+  | none => out ++ records
+  | some ownerIndex =>
+    out.extract 0 ownerIndex ++ records ++ out.extract ownerIndex out.size
+
 /-- Read one inductive block back out of the environment, including the
 recursors the **kernel** generated for it. -/
 def indEDecl (names : Array Name) : MetaM EDecl := do
@@ -1604,9 +1615,8 @@ well-founded and must stay unmodelled. That is also what bounds the recursion
 — a model's own splices are basis members or already present.
 
 **Ordering is constructive.** A spliced inductive enters the private forest as
-part of its consumer's model. Physical append of that consumer is delayed while
-the spliced inductive's model is generated, so the child model precedes the
-generated owner without a final order pass. -/
+part of its consumer's model. Its model is placed immediately before that exact
+owner record while retaining the parent's earlier dependency prefix. -/
 partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (ctors : Array (Name × Expr))
     (projections : Array EProjection)
@@ -1717,13 +1727,11 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let serialised ← serialiseIso source is exactTransform collectAdapterShadows
     let records := serialised.records
     let is := serialised.model
+    let out := appendModelRecords out records tname
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
     let adapterShadows := serialised.adapterShadow?.elim adapterShadows adapterShadows.push
-    -- Keep this owner's physical records out of the forest until every model
-    -- for an inductive it introduced has been generated. Construction still
-    -- runs in the installed environment above; only output append is delayed.
     let mut st2 := (out, rep, pending.push { spliced := is.spliced }, adapterShadows)
     if basicModels then
       for n in is.spliced do
@@ -1761,9 +1769,10 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
       for n in is.requires do
         unless (← getEnv).constants.contains (Naming.modelName n) do
           -- **Withdraw everything**, and off `st` rather than off the locals:
-          -- `rep` and `pending`, plus child output from the descent above, have
-          -- all changed; returning any of those would leave part of the
-          -- withdrawn forest visible. `st` is the state before this model.
+          -- `out`, `rep` and `pending` have all been added to by the emission
+          -- and the descent above, and returning any of those would leave the
+          -- skeleton's records in the export with the model that needed them
+          -- gone. `st` is the state as it stood before this declaration.
           setEnv saved
           -- **Carry the skeleton's own reason.** The descent recorded why it
           -- could not model it, and that entry is about to be discarded with
@@ -1781,8 +1790,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
             (the splice-closure rule) — {inner.getD "and the descent recorded no reason"}"
           return ((st.1, { st.2.1 with declined := st.2.1.declined.push (tname, why) },
             st.2.2.1, st.2.2.2), none)
-    let (childRecords, finalReport, finalPending, finalShadows) := st2
-    return ((childRecords ++ records, finalReport, finalPending, finalShadows), none)
+    return (st2, none)
 
 /-- **The composition's third step**: the implementation inductives a mutual
 model just emitted — `T._model._impl.tag` and `T._model._impl.aux` — are
@@ -1877,18 +1885,17 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     let serialised ← serialiseIso source is exactTransform collectAdapterShadows
     let records := serialised.records
     let is := serialised.model
+    let out := appendModelRecords out records all[0]!
     let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
     let adapterShadows := serialised.adapterShadow?.elim adapterShadows adapterShadows.push
     let st := (out, rep, pending.push { spliced := is.spliced }, adapterShadows)
-    let st ← if simpleModels then
-        primCompose is.members is.levelParams np reserved basicModels serialised.exactBlocks st
-          exactTransform collectAdapterShadows
-      else
-        pure st
-    let (childRecords, finalReport, finalPending, finalShadows) := st
-    return (childRecords ++ records, finalReport, finalPending, finalShadows)
+    if simpleModels then
+      primCompose is.members is.levelParams np reserved basicModels serialised.exactBlocks st
+        exactTransform collectAdapterShadows
+    else
+      return st
 
 /-- Generation settings used by the aggregate fixture suite: nested and mutual
 models remain enabled, while simple models and their bootstrap closure move
@@ -2365,8 +2372,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             let serialised ← serialiseIso replayD is exactTransform context.collectAdapterShadows
             if let some shadow := serialised.adapterShadow? then
               islandAdapterShadows := islandAdapterShadows.push shadow
-            let nestedRecords := serialised.records
+            let records := serialised.records
             let is := serialised.model
+            out := appendModelRecords out records t.name
             rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
             unless is.spliced.isEmpty do
               rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
@@ -2399,8 +2407,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
                   serialiseIso exactBlock is2 exactTransform context.collectAdapterShadows
                 if let some shadow := serialised2.adapterShadow? then
                   islandAdapterShadows := islandAdapterShadows.push shadow
-                let mutualRecords := serialised2.records
+                let records := serialised2.records
                 let is2 := serialised2.model
+                out := appendModelRecords out records is.members[0]!
                 rep := { rep with
                   generated := rep.generated.push (is.members[0]!, is2.decls.size) }
                 pending := pending.push { spliced := is2.spliced }
@@ -2410,8 +2419,6 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
                       (out, rep, pending, islandAdapterShadows) exactTransform
                       context.collectAdapterShadows
                   (out, rep, pending, islandAdapterShadows) ← pure st3
-                out := out ++ mutualRecords
-            out := out ++ nestedRecords
   -- Replay the source record between its pre-owner and post-owner generation
   -- phases.  An unreplayable source record terminates the complete machine and
   -- discards every private island, matching the historical loop return.
