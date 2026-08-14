@@ -142,11 +142,20 @@ def run (root : String) : IO UInt32 := do
   let duplicatePreflight := exportOf #[missing, provider, provider]
   let duplicateNew ← runNew duplicatePreflight
   let duplicateLegacy ← runLegacy duplicatePreflight
+  let duplicateDirect ← runIncremental duplicatePreflight.decls
   state := state.check "batch duplicate preflight retains precedence over kernel replay" <|
     !accepted duplicateNew && sameResult duplicateNew duplicateLegacy &&
+      sameResult duplicateDirect.1 duplicateNew && duplicateDirect.2 == 3 &&
       errorSatisfies duplicateNew (fun message =>
         message.contains "duplicate declaration Provider" &&
           !message.contains "DefinitelyMissing")
+
+  let unknownSafety : EDecl :=
+    .defn `UnknownSafety [] (.sort (.succ .zero)) (.sort .zero) .opaque "mystery" []
+  let unknownDirect ← runIncremental #[unknownSafety]
+  state := state.check "incremental preflight rejects unknown definition safety" <|
+    unknownDirect.2 == 1 && errorSatisfies unknownDirect.1
+      (fun message => message == "unknown definition safety mystery")
 
   if state.failed.isEmpty then
     IO.println s!"kernel check: {state.passed}/{state.passed} passed"

@@ -309,6 +309,8 @@ the unusable environment is released, but later pushes are still counted so a
 streaming caller can bind the verdict to its compact schedule. -/
 structure State where
   private checked : Option Kernel.Environment
+  private ownership : Std.HashMap Name Nat := {}
+  private preflightFailure : Option String := none
   private replayFailure : Option String := none
   private metadataMismatches : Array String := #[]
   recordsPushed : Nat := 0
@@ -316,28 +318,48 @@ structure State where
 def State.create (base : Environment) : State :=
   { checked := some base.toKernelEnv }
 
+private def recordPreflight : EDecl → Except String Unit
+  | .defn _ _ _ _ _ safety _ =>
+    if (safetyOf? safety).isSome then .ok ()
+    else .error s!"unknown definition safety {safety}"
+  | .quot _ _ _ kind =>
+    if (quotKindOf? kind).isSome then .ok ()
+    else .error s!"unknown quotient kind {kind}"
+  | _ => .ok ()
+
 def State.push (state : State) (record : EDecl) : MetaM State := do
   let recordsPushed := state.recordsPushed + 1
+  let mut state := state
+  for name in record.names do
+    if state.preflightFailure.isNone && state.ownership.contains name then
+      state := { state with preflightFailure := some s!"duplicate declaration {name}" }
+    state := { state with ownership := state.ownership.insert name state.recordsPushed }
+  if state.preflightFailure.isNone then
+    if let .error message := recordPreflight record then
+      state := { state with preflightFailure := some message }
+  if state.preflightFailure.isSome then
+    state := { state with checked := none }
+    return { state with recordsPushed }
   let some checked := state.checked
     | return { state with recordsPushed }
   match replayDeclaration record with
   | .error message =>
-    let state := { state with checked := none }
-    let state := { state with replayFailure := some message }
+    state := { state with checked := none }
+    state := { state with replayFailure := some message }
     return { state with recordsPushed }
   | .ok none => return { state with recordsPushed }
   | .ok (some declaration) =>
     match checked.addDeclCore 0 declaration none with
     | .error exception =>
       let message := s!"{record.names}: {← (exception.toMessageData {}).toString}"
-      let state := { state with checked := none }
-      let state := { state with replayFailure := some message }
+      state := { state with checked := none }
+      state := { state with replayFailure := some message }
       return { state with recordsPushed }
     | .ok next =>
       let replayEnv := Environment.ofKernelEnv next
-      let state := { state with checked := some next }
-      let state := { state with replayFailure := none }
-      let state := { state with metadataMismatches := state.metadataMismatches ++
+      state := { state with checked := some next }
+      state := { state with replayFailure := none }
+      state := { state with metadataMismatches := state.metadataMismatches ++
         ordinaryMetadataMismatches replayEnv record }
       return { state with recordsPushed }
 
@@ -347,6 +369,7 @@ def State.pushAll (state : State) (records : Array EDecl) : MetaM State := do
   return state
 
 def State.finish (state : State) : Except String Unit := do
+  if let some message := state.preflightFailure then throw message
   if let some message := state.replayFailure then throw message
   unless state.metadataMismatches.isEmpty do
     throw s!"serialized declaration metadata differs from Lean's kernel:\n  \
