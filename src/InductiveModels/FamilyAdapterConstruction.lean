@@ -127,7 +127,6 @@ certificate, never eligibility predicates or cardinality limits. -/
 inductive PublicRecursorResultBoundary where
   | transportedResult
   | agreementMotive
-  | agreementType
   deriving Inhabited, BEq, Repr
 
 inductive ConstructionIssue where
@@ -153,6 +152,8 @@ inductive ConstructionIssue where
   | recursorResultMismatch (member : MemberKey)
   | publicRecursorResultMismatch (member : MemberKey)
       (boundary : PublicRecursorResultBoundary)
+  | publicRecursorAgreementMismatch (member : MemberKey)
+      (actual expected : Expr)
   | malformedRecursorMinor (member : MemberKey) (minorIndex : Nat)
   | dependentRecursorMinorTransport (member : MemberKey) (minorIndex binderIndex : Nat)
   | missingMemberMap (member : MemberKey)
@@ -2570,8 +2571,9 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
       let resultType ← liftGen <| inferType privateCall
       let expected := eqi.mk' (← liftGen <| ilevel resultType) resultType
         privateCall publicCall
-      unless ← liftGen <| isDefEq (← inferType proof) expected do
-        failConstruction (.publicRecursorResultMismatch member.key .agreementType)
+      let actual ← liftGen <| inferType proof
+      unless ← liftGen <| isDefEq actual expected do
+        failConstruction (.publicRecursorAgreementMismatch member.key actual expected)
       liftGen <| mkLambdaFVars (publicPrefix ++ privateTailArguments) proof
   let agreementType ← liftGen <| inferType agreementValue
   let agreementDeclaration := Declaration.thmDecl
