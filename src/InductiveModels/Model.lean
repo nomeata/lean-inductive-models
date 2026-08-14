@@ -569,9 +569,11 @@ def declineWith (d : Decline) : GenM α := throwThe Decline d
 
 This is deliberately *not* a [`Decline`]. A decline says that the generator
 positively recognized a valid shape it has chosen not to support. Once a route
-has committed to constructing declarations, malformed intermediate syntax,
-missing metadata, or kernel rejection is a tool failure and must reach the
-CLI's exit-3 containment boundary. -/
+has committed to constructing declarations, malformed intermediate syntax or
+missing metadata is a tool failure and must reach the CLI's exit-3 containment
+boundary. Optional exact generated-output kernel rejection is recorded by the
+Driver as `Report.outputKernelRejected` and reaches the CLI's rejection exit;
+it is not raised through this trusted construction helper. -/
 def badShape (msg : String) : GenM α :=
   ExceptT.lift (show MetaM α from Lean.throwError msg)
 
