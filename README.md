@@ -147,8 +147,9 @@ validation rejects a model declaration that occurs after its owner.
 
 Canonical generation retains compact structural certificates while model
 islands are live. Actual generated output receives the exact island and then
-its source owner at that transition, re-interns one declaration at a time, and
-retains no cumulative output declaration array. Named output remains in a
+its source owner at that transition and feeds each declaration into one
+persistent standard arena writer. The writer retains global interning maps but
+no cumulative output declaration array. Named output remains in a
 private sibling until the final compact semantic/structural verdict commits it;
 standard output is direct and can therefore contain a parseable declaration
 prefix after a late failure. When input kernel checking is disabled, both actual

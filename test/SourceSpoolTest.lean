@@ -322,13 +322,15 @@ def main (args : List String) : IO UInt32 := do
     stream.flush
     return writer
   let streamedText ← IO.FS.readFile declarationStreamPath
-  state := state.check "fresh per-declaration interning remains parse-equivalent" <|
+  state := state.check "persistent streaming writer remains parse-equivalent" <|
     match InductiveModels.parse streamedText with
     | .ok output => output.decls == #[first, second]
     | .error _ => false
-  state := state.check "declaration stream retains only monotone cursor and bounded counters" <|
+  state := state.check "streaming writer reuses cross-declaration arena IDs exactly" <|
     streamStats.declarationsWritten == 2 && streamStats.maxRecordLines == 6 &&
-      streamStats.cursor == secondSplit.after && streamedText != splitRender
+      streamStats.cursor == sharedSecondSplit.after &&
+      streamedText == splitRender &&
+      (streamedText.splitOn "\n").length == (splitRender.splitOn "\n").length
 
   -- Parse-time source capture sees exact bytes while the input descriptor is still
   -- open.  The source arena remains interleaved here; the three spools split
