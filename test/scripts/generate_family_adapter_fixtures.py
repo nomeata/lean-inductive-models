@@ -169,6 +169,8 @@ are regression inputs only: the generator accepts arbitrary finite counts.
 -/
 prelude
 
+namespace FamilyAdapterGenerated
+
 unsafe axiom lcErased : Type
 unsafe axiom lcAny : Type
 unsafe axiom lcVoid : Type
@@ -187,8 +189,11 @@ inductive GeneratedList (alpha : Type) : Type where
   | nil : GeneratedList alpha
   | cons (head : alpha) (tail : GeneratedList alpha) : GeneratedList alpha
 """
-        export_line = "--#export " + " ".join(exported) + "\n"
-        return header + "\n" + "\n".join(sections) + "\n" + export_line
+        export_line = "--#export " + " ".join(
+            f"FamilyAdapterGenerated.{name}" for name in exported
+        ) + "\n"
+        return header + "\n" + "\n".join(sections) + \
+            "\nend FamilyAdapterGenerated\n\n" + export_line
 
 
 def parser() -> argparse.ArgumentParser:

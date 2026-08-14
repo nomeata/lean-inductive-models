@@ -187,6 +187,10 @@ lean_exe familyadaptershadowtest where
   root := `FamilyAdapterShadowTest
   supportInterpreter := true
 
+lean_lib FamilyAdapterGeneratedFixtures where
+  srcDir := "test/fixtures/inductive-models"
+  roots := #[`family_adapter_generated]
+
 lean_lib OneLayerProjectionPrototype where
   srcDir := "test"
   roots := #[`OneLayerProjectionPrototype]

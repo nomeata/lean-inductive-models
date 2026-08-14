@@ -24,12 +24,16 @@ inductive ShadowReason where
   | sourceNotInductive
   | emptySourceFamily
   | missingSourceRecursor (member : MemberKey) (recursor : Name)
+  | unrepresentedSourceRecursor (recursor : Name)
   | missingInterfaceMember (member : MemberKey) (side : InterfaceSide)
   | missingInterfaceConstructor (constructor : ConstructorKey) (side : InterfaceSide)
   | missingInterfaceRule (rule : RuleKey) (side : InterfaceSide)
   | missingInstalledDeclaration (name : Name) (side : InterfaceSide)
   | installedTypeMismatch (name : Name) (side : InterfaceSide)
   | malformedConstructorTelescope (constructor : ConstructorKey)
+  | malformedMinorTelescope (rule : RuleKey)
+  | missingMinorHypothesis (constructor : ConstructorKey) (fieldIndex : Nat)
+  | minorHypothesisMismatch (rule : RuleKey)
   | unknownRuleConstructor (rule : RuleKey)
   | invalidPlan (error : PlanError)
   deriving Inhabited, BEq, Repr
@@ -39,6 +43,7 @@ keyed [`ShadowReason`]. Occurrences have no declaration of their own; coverage
 there means both exact source and rewritten implementation types were derived. -/
 structure ShadowCoverage where
   members : Array MemberKey := #[]
+  recursors : Array Name := #[]
   constructors : Array ConstructorKey := #[]
   rules : Array RuleKey := #[]
   occurrences : Array OccurrenceKey := #[]
@@ -55,7 +60,8 @@ def ShadowReport.complete (report : ShadowReport) : Bool :=
   report.plan?.isSome && report.reasons.isEmpty
 
 def ShadowReport.summary (report : ShadowReport) : String :=
-  s!"{report.root}: members {report.coverage.members.size}, constructors {
+  s!"{report.root}: members {report.coverage.members.size}, recursors {
+    report.coverage.recursors.size}, constructors {
     report.coverage.constructors.size}, rules {report.coverage.rules.size}, occurrences {
     report.coverage.occurrences.size}, reasons {report.reasons.size}"
 
@@ -78,6 +84,11 @@ private structure SourceBinder where
   info : BinderInfo
   type : Expr
   deriving Inhabited, BEq, Repr
+
+private structure ExactBinder where
+  type : Expr
+  value : Expr
+  deriving Inhabited
 
 private structure OccurrenceSite where
   fieldIndex : Nat
@@ -137,6 +148,58 @@ private def openBinders (count : Nat) (expression : Expr) :
     binders := binders.push { info, type }
     body := next
   return some (binders, body)
+
+private partial def openExactForalls (tag : Name) (expression : Expr) :
+    Array ExactBinder × Expr :=
+  let rec loop (expression : Expr) (binders : Array ExactBinder) :=
+    match expression with
+    | .forallE _ type body _ =>
+      let value := mkFVar (FVarId.mk (tag.mkNum binders.size))
+      loop (body.instantiate1 value) (binders.push { type, value })
+    | body => (binders, body)
+  loop expression #[]
+
+/-- Exact minor-hypothesis position for every literal constructor field. A
+field under binders is matched through the major argument of the motive
+application, so several syntactic occurrences inside one nested field share
+the one hypothesis Lean actually provides. -/
+private def minorHypothesisIndices? (recursor : ERec) (ruleIndex : Nat) :
+    Option (Array (Option Nat)) := do
+  let rule ← recursor.rules[ruleIndex]?
+  let (recBinders, _) := openExactForalls ((`_family_adapter_rec).append recursor.name)
+    recursor.type
+  let numPre := recursor.numParams + recursor.numMotives + recursor.numMinors
+  unless recBinders.size >= numPre do none
+  let motives := recBinders.extract recursor.numParams
+    (recursor.numParams + recursor.numMotives) |>.map (·.value)
+  let minors := recBinders.extract (recursor.numParams + recursor.numMotives) numPre
+  minors.findSome? fun minor => do
+    let (minorBinders, motiveResult) :=
+      openExactForalls ((`_family_adapter_minor).append rule.ctor) minor.type
+    let major ← motiveResult.getAppArgs.back?
+    let .const constructor _ := major.getAppFn | none
+    unless constructor == rule.ctor do none
+    let majorArgs := major.getAppArgs
+    unless majorArgs.size >= rule.nfields do none
+    let fieldValues := majorArgs.extract (majorArgs.size - rule.nfields) majorArgs.size
+    let mut fields : Array ExactBinder := #[]
+    for value in fieldValues do
+      let binder ← minorBinders.find? (·.value == value)
+      fields := fields.push binder
+    let mut hypotheses : Array ExactBinder := #[]
+    for binder in minorBinders do
+      if fields.any (·.value == binder.value) then continue
+      let (_, body) := openExactForalls (`_family_adapter_hypothesis) binder.type
+      if motives.contains body.getAppFn then hypotheses := hypotheses.push binder
+    let mut result : Array (Option Nat) := #[]
+    for field in fields do
+      let candidates := hypotheses.filter fun hypothesis =>
+        let (_, body) := openExactForalls (`_family_adapter_hypothesis_body) hypothesis.type
+        (body.getAppArgs.back?.map (·.getAppFn == field.value)).getD false
+      if candidates.size > 1 then none
+      result := result.push (candidates[0]?.bind fun candidate =>
+        hypotheses.findIdx? (·.value == candidate.value))
+    return result
 
 private partial def occurrenceSites (targets : Array MemberKey)
     (fieldIndex : Nat) (expression : Expr) (path : Array ExprPathStep := #[])
@@ -271,6 +334,11 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       { index, source := sourceType, key, sourceRecursor?, implementationCarrier,
         publicCarrier, implementationRecursor, publicRecursor, representation }
 
+  let representedRecursors := resolvedMembers.filterMap (·.sourceRecursor?.map (·.name))
+  for recursor in sourceRecursors do
+    unless representedRecursors.contains recursor.name do
+      reasons := reasons.push (.unrepresentedSourceRecursor recursor.name)
+
   let mut resolvedConstructors : Array ResolvedConstructor := #[]
   for constructor in sourceConstructors do
     let some owner := constructorOwner? resolvedMembers constructor | continue
@@ -303,26 +371,46 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   let targets := resolvedMembers.map (·.key)
   let mut constructorPlans := #[]
   let mut occurrencePlans := #[]
+  let mut uncoveredOccurrences : Array OccurrenceKey := #[]
+  let mut uncoveredRules : Array RuleKey := #[]
   for constructor in resolvedConstructors do
+    let owner := resolvedMembers.find? (·.key == constructor.key.owner) |>.get!
+    let sourceRule? := owner.sourceRecursor?.bind fun recursor =>
+      recursor.rules.toArray.findIdx? (·.ctor == constructor.source.name) |>.map fun index =>
+        (recursor, index)
+    let hypothesisIndices? := sourceRule?.bind fun (recursor, index) =>
+      minorHypothesisIndices? recursor index
+    if sourceRule?.isSome && hypothesisIndices?.isNone then
+      let (recursor, _) := sourceRule?.get!
+      let key : RuleKey :=
+        { recursorOwner := owner.key, recursor := recursor.name, constructor := constructor.key }
+      reasons := reasons.push (.malformedMinorTelescope key)
+      uncoveredRules := uncoveredRules.push key
     let totalBinders := constructor.source.numParams + constructor.source.numFields
     let opened? := openBinders totalBinders constructor.source.type
     if opened?.isNone then
       reasons := reasons.push (.malformedConstructorTelescope constructor.key)
     let (opened, result) := opened?.getD (#[], constructor.source.type)
+    if result matches .forallE .. then
+      reasons := reasons.push (.malformedConstructorTelescope constructor.key)
+    unless result.getAppFn.constName? == some owner.source.name do
+      reasons := reasons.push (.malformedConstructorTelescope constructor.key)
     let parameterBinders := opened.extract 0 (min constructor.source.numParams opened.size)
     let fieldBinders := opened.extract (min constructor.source.numParams opened.size) opened.size
     let mut telescopeBinders := #[]
-    let mut hypothesisIndex := 0
     for fieldIndex in [:fieldBinders.size] do
       let field := fieldBinders[fieldIndex]!
       let sites := occurrenceSites targets fieldIndex field.type
+      let hypothesisIndex? := hypothesisIndices?.bind fun indices => indices[fieldIndex]?.join
+      if !sites.isEmpty && hypothesisIndex?.isNone then
+        reasons := reasons.push (.missingMinorHypothesis constructor.key fieldIndex)
       let mut keys := #[]
       for site in sites do
         let key : OccurrenceKey :=
           { constructor := constructor.key, fieldIndex := site.fieldIndex,
             expressionPath := site.path, binderDepth := site.binderDepth,
-            hypothesisIndex, target := site.target }
-        hypothesisIndex := hypothesisIndex + 1
+            hypothesisIndex := hypothesisIndex?.getD 0, target := site.target }
+        if hypothesisIndex?.isNone then uncoveredOccurrences := uncoveredOccurrences.push key
         keys := keys.push key
         occurrencePlans := occurrencePlans.push
           { key, sourceType := site.type,
@@ -331,7 +419,6 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         { fieldIndex, info := field.info, sourceType := field.type,
           implementationType := rewriteWith implementationMapping field.type,
           occurrences := keys }
-    let owner := resolvedMembers.find? (·.key == constructor.key.owner) |>.get!
     let resultArguments := result.getAppArgs
     let sourceIndices := resultArguments.extract owner.source.numParams
       (min resultArguments.size (owner.source.numParams + owner.source.numIndices))
@@ -367,6 +454,17 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         let key : RuleKey :=
           { recursorOwner := member.key, recursor := recursor.name,
             constructor := constructor.key }
+        match minorHypothesisIndices? recursor ruleIndex with
+        | none =>
+          reasons := reasons.push (.malformedMinorTelescope key)
+          uncoveredRules := uncoveredRules.push key
+          uncoveredOccurrences := uncoveredOccurrences ++ occurrencesFor constructor.key
+        | some indices =>
+          unless (occurrencesFor constructor.key).all fun occurrence =>
+              indices[occurrence.fieldIndex]?.join == some occurrence.hypothesisIndex do
+            reasons := reasons.push (.minorHypothesisMismatch key)
+            uncoveredRules := uncoveredRules.push key
+            uncoveredOccurrences := uncoveredOccurrences ++ occurrencesFor constructor.key
         let implementationIota := (implementationIota? iso member rule.ctor).getD .anonymous
         if implementationIota.isAnonymous then
           reasons := reasons.push (.missingInterfaceRule key .privateModel)
@@ -405,7 +503,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   for error in plan.validate do reasons := reasons.push (.invalidPlan error)
 
   let env ← getEnv
-  let mut coverage : ShadowCoverage := {}
+  let mut coverage : ShadowCoverage := { recursors := representedRecursors }
   for member in resolvedMembers do
     let implementationExpected := rewriteWith implementationMapping member.source.type
     let publicExpected := rewriteWith publicMapping member.source.type
@@ -450,8 +548,10 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       | _, _ => false
     if implementationType?.isSome && publicType?.isSome && !typesAgree then
       reasons := reasons.push (.installedTypeMismatch rule.implementationIota .privateModel)
-    if typesAgree then coverage := { coverage with rules := coverage.rules.push rule.key }
-  coverage := { coverage with occurrences := occurrencePlans.map (·.key) }
+    if typesAgree && !uncoveredRules.contains rule.key then
+      coverage := { coverage with rules := coverage.rules.push rule.key }
+  coverage := { coverage with occurrences := occurrencePlans.filterMap fun occurrence =>
+    if uncoveredOccurrences.contains occurrence.key then none else some occurrence.key }
   return { root := firstType.name, plan? := some plan, coverage, reasons }
 
 end InductiveModels.FamilyAdapter

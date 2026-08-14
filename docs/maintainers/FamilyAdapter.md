@@ -9,6 +9,12 @@ result for route selection, rejection, serialized output, logs, or normal
 reports. `runFilterWithFamilyAdapterShadow` is the test-only value observer;
 ordinary filtering retains no observations.
 
+The shadow is deliberately incomplete for an exact nested block until its
+extra mimic recursors are represented as plan members. Every omitted exact
+recursor produces `unrepresentedSourceRecursor`; such a report is not
+`complete`. This is an explicit next construction obligation, not a bounded
+fallback route.
+
 ## Input and identity
 
 The shadow builder consumes an exact source `EDecl`, the private/public names
@@ -26,6 +32,13 @@ expression path, binder depth, minor-hypothesis offset, and target member. A
 field may contain any finite number of occurrences; a component may contain
 any finite number of source or mimic members. Parameter and result-index
 telescopes are arrays retained separately for each member and constructor.
+The minor-hypothesis offset is read from the exact `ERec` minor telescope. In
+particular, multiple syntactic occurrences inside one nested field share the
+single hypothesis Lean provides for that field; source syntax does not invent
+additional hypothesis slots.
+If that exact association cannot be recovered, the affected occurrence and
+rule are omitted from `ShadowCoverage` and a keyed minor-telescope reason is
+reported; a dummy ordinal never counts as covered evidence.
 
 The plan contains no fabricated proof names. A separate
 `FamilyAdapterCertificate` will hold declaration-backed maps and telescope

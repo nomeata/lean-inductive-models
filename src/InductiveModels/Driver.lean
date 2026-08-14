@@ -1551,15 +1551,21 @@ structure SerialisedIso where
   records : Array EDecl
   exactBlocks : ExactGeneratedBlocks
   model : Iso
-  adapterShadow : FamilyAdapter.ShadowObservation
+  adapterShadow? : Option FamilyAdapter.ShadowObservation
 
 /-- Read a generated model back from the construction environment, register
 every name Lean minted for its inductive blocks, and serialize through exact
 alias lookups. The returned `Iso` carries the completed alias and splice
 witnesses used for reporting and shared-support persistence. -/
 def serialiseIso (source : EDecl) (is : Iso)
-    (exactTransform : EDecl → EDecl := id) : MetaM SerialisedIso := do
-  let adapterShadow ← FamilyAdapter.deriveShadowPlan source is
+    (exactTransform : EDecl → EDecl := id) (observeAdapter : Bool := false) :
+    MetaM SerialisedIso := do
+  let adapterShadow? ← if observeAdapter then do
+      let report ← FamilyAdapter.deriveShadowPlan source is
+      pure (some (FamilyAdapter.ShadowReport.observe report))
+    else do
+      let _ ← FamilyAdapter.deriveShadowPlan source is
+      pure none
   let mut rawRecords : Array EDecl := #[]
   for declaration in is.decls do
     rawRecords := rawRecords ++ (← toEDecls declaration)
@@ -1586,7 +1592,7 @@ def serialiseIso (source : EDecl) (is : Iso)
     records := renamed
     exactBlocks := exactBlocks
     model := model
-    adapterShadow := FamilyAdapter.ShadowReport.observe adapterShadow }
+    adapterShadow? }
 
 /-- The exact exported metadata of one inductive record must be what Lean's
 kernel regenerated from that record's type-former and constructor inputs.
@@ -1940,7 +1946,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let source ← match sourceBlock? with
       | some (block, _) => pure block
       | none => indEDecl #[tname]
-    let serialised ← serialiseIso source is exactTransform
+    let serialised ← serialiseIso source is exactTransform collectAdapterShadows
     let records := serialised.records
     let is := serialised.model
     let mut out := out
@@ -1948,9 +1954,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
-    let adapterShadows := if collectAdapterShadows then
-        adapterShadows.push serialised.adapterShadow
-      else adapterShadows
+    let adapterShadows := serialised.adapterShadow?.elim adapterShadows adapterShadows.push
     let mut st2 := (out, rep, pending.push { spliced := is.spliced }, adapterShadows)
     if basicModels then
       for n in is.spliced do
@@ -2092,7 +2096,7 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     let source ← match sourceBlock? with
       | some block => pure block
       | none => indEDecl all
-    let serialised ← serialiseIso source is exactTransform
+    let serialised ← serialiseIso source is exactTransform collectAdapterShadows
     let records := serialised.records
     let is := serialised.model
     let mut out := out
@@ -2100,9 +2104,7 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
-    let adapterShadows := if collectAdapterShadows then
-        adapterShadows.push serialised.adapterShadow
-      else adapterShadows
+    let adapterShadows := serialised.adapterShadow?.elim adapterShadows adapterShadows.push
     let st := (out, rep, pending.push { spliced := is.spliced }, adapterShadows)
     if simpleModels then
       primCompose is.members is.levelParams np reserved basicModels serialised.exactBlocks st
@@ -2855,9 +2857,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             setEnv saved
             rep := { rep with declined := rep.declined.push (t.name, dec.label) }
           | .ok is =>
-            let serialised ← serialiseIso replayD is exactTransform
-            if context.collectAdapterShadows then
-              islandAdapterShadows := islandAdapterShadows.push serialised.adapterShadow
+            let serialised ← serialiseIso replayD is exactTransform context.collectAdapterShadows
+            if let some shadow := serialised.adapterShadow? then
+              islandAdapterShadows := islandAdapterShadows.push shadow
             let records := serialised.records
             let is := serialised.model
             out := out ++ records
@@ -2889,9 +2891,10 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
                 rep := { rep with
                   declined := rep.declined.push (is.members[0]!, dec.labelAs "mutual") }
               | .ok is2 =>
-                let serialised2 ← serialiseIso exactBlock is2 exactTransform
-                if context.collectAdapterShadows then
-                  islandAdapterShadows := islandAdapterShadows.push serialised2.adapterShadow
+                let serialised2 ←
+                  serialiseIso exactBlock is2 exactTransform context.collectAdapterShadows
+                if let some shadow := serialised2.adapterShadow? then
+                  islandAdapterShadows := islandAdapterShadows.push shadow
                 let records := serialised2.records
                 let is2 := serialised2.model
                 out := out ++ records

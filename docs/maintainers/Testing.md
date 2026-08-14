@@ -37,6 +37,7 @@ The executable correctness targets are:
 ```bash
 correctness_targets=(
   test monotest clitest supervisortest generationflagstest checktest kernelchecktest ordertest
+  familyadapterplantest familyadaptershadowtest
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
   composedrecursorsyntaxtest mainclitest projectiontest indexedfibrediagnostictest
@@ -65,6 +66,8 @@ lake exe supervisortest --run-tests "$PWD/.lake/build/bin/supervisortest"
 lake exe generationflagstest
 lake exe checktest "$PWD"
 lake exe kernelchecktest "$PWD"
+lake exe familyadapterplantest
+lake exe familyadaptershadowtest
 lake exe ordertest "$PWD"
 lake exe incrementalordertest "$PWD"
 lake exe namingtest
@@ -90,6 +93,9 @@ lake exe transparentowneraliasestest
 lake exe exportsyntaxnormalizationtest
 lake exe basisvalidationtest
 lake exe stagedwritertest "$PWD"
+PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
+python3 test/scripts/generate_family_adapter_fixtures.py \
+  --output test/fixtures/inductive-models/family_adapter_generated.lean --check
 test/scripts/check_arena_corpus.py
 test/scripts/check-hard-nested-a.sh
 test/scripts/check-hard-nested-c.sh
