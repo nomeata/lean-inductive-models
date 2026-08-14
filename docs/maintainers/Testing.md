@@ -116,6 +116,9 @@ cleanup, checker failure cleanup, and private-status containment.
 suites. The focused CI workflow splits the matrix across fixture, focused, and
 monomorphization jobs and limits each process to 12 GiB. The Mathlib workflow
 uses its separately documented 10/12 GiB phase envelopes and artifact gates.
+Its generation pass explicitly defers output kernel replay so named output is
+staged; a serialized `--type-check-input --no-output` pass supplies the
+authoritative whole-output kernel verdict after the generation process exits.
 
 ## Fixture regeneration
 

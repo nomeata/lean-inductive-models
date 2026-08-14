@@ -237,14 +237,17 @@ gzip -dc "$INPUT_GZ" > "$INPUT_FIFO" &
 feeder_pid=$!
 feeder_job="$feeder_pid"
 
-# No selection flags: this deliberately exercises the documented default,
-# including inductive generation and structural input/output checking.
+# Keep the documented generation and structural-check defaults. Defer only the
+# whole-output kernel gate so named output uses the bounded staged backend; the
+# separate serialized input pass below is the authoritative kernel verdict.
 set +e
 (
   set -o pipefail
   run_worker_measured generate \
     env -u LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER \
+      LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1 \
     "$BIN_DIR/lean-inductive-models" "$INPUT_FIFO" -o "$OUTPUT" \
+      --no-type-check-output \
     2>&1 | tee "$LOG_DIR/generate.log" >&2
 ) &
 generator_pid=$!

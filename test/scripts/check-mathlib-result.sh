@@ -20,6 +20,7 @@ printf '%s\n' \
   "PUnit: exempt — prim model: a basis primitive" \
   "statements: 48699 compared, 0 differ" \
   "levels: 211 planner comparisons, 0 escapes" \
+  "output backend: staged" \
   "output check: 12001 model families checked" > "$generate"
 printf '%s\n' "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"PSigma'\"}}" > "$output"
 printf '%s\n' \
@@ -51,6 +52,26 @@ for phase in generate check-input; do
   }
 done
 
+generate_phase="$(sed -n '/run_worker_measured generate \\/,/tee "\$LOG_DIR\/generate.log"/p' \
+  "$ci_harness")"
+grep -Fq 'LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1' <<<"$generate_phase" || {
+  echo "mathlib CI does not expose the generation backend" >&2
+  exit 1
+}
+grep -Fq -- '--no-type-check-output' <<<"$generate_phase" || {
+  echo "mathlib CI generation does not defer its kernel gate" >&2
+  exit 1
+}
+
+check_phase="$(sed -n '/run_worker_measured check-input \\/,/tee "\$LOG_DIR\/check-input.log"/p' \
+  "$ci_harness")"
+for flag in --type-check-input --no-type-check-output --no-output; do
+  grep -Fq -- "$flag" <<<"$check_phase" || {
+    echo "mathlib CI serialized kernel gate is missing $flag" >&2
+    exit 1
+  }
+done
+
 # GitHub's stock Ubuntu runner does not provide ripgrep. Shadow any host copy
 # so this regression test also proves the checker has no hidden rg dependency.
 rg() {
@@ -70,6 +91,24 @@ fi
 grep -vF 'input kernel check: accepted' "$recheck" > "$WORK/no-kernel-check.log"
 if "$checker" "$generate" "$output" "$WORK/no-kernel-check.log" >/dev/null 2>&1; then
   echo "mathlib result parser accepted a missing kernel reread" >&2
+  exit 1
+fi
+
+grep -vF 'output backend: staged' "$generate" > "$WORK/no-staged-backend.log"
+if "$checker" "$WORK/no-staged-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
+  echo "mathlib result parser accepted a missing staged backend" >&2
+  exit 1
+fi
+
+sed 's/output backend: staged/output backend: legacy/' "$generate" > "$WORK/legacy-backend.log"
+if "$checker" "$WORK/legacy-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
+  echo "mathlib result parser accepted the legacy generation backend" >&2
+  exit 1
+fi
+
+sed '/output backend: staged/p' "$generate" > "$WORK/duplicate-backend.log"
+if "$checker" "$WORK/duplicate-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
+  echo "mathlib result parser accepted duplicate backend reports" >&2
   exit 1
 fi
 
