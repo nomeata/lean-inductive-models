@@ -312,9 +312,12 @@ structure State where
   private ownership : Std.HashMap Name Nat := {}
   private preflightFailure : Option String := none
   private replayFailure : Option String := none
-  private metadataMismatches : Array String := #[]
+  private metadataMismatchesRev : List String := []
   recordsPushed : Nat := 0
 
+/-- Start from the exact kernel-check base.  A direct output checker must pass
+the invocation's initial empty environment here, never the evolving model
+construction environment: construction-only aliases are not output constants. -/
 def State.create (base : Environment) : State :=
   { checked := some base.toKernelEnv }
 
@@ -330,13 +333,16 @@ private def recordPreflight : EDecl → Except String Unit
 def State.push (state : State) (record : EDecl) : MetaM State := do
   let recordsPushed := state.recordsPushed + 1
   let mut state := state
+  -- `constantInfos` validates a record's fields before registering the name
+  -- it introduces. Preserve that within-record precedence even when a
+  -- malformed record also duplicates an earlier exact name.
+  if state.preflightFailure.isNone then
+    if let .error message := recordPreflight record then
+      state := { state with preflightFailure := some message }
   for name in record.names do
     if state.preflightFailure.isNone && state.ownership.contains name then
       state := { state with preflightFailure := some s!"duplicate declaration {name}" }
     state := { state with ownership := state.ownership.insert name state.recordsPushed }
-  if state.preflightFailure.isNone then
-    if let .error message := recordPreflight record then
-      state := { state with preflightFailure := some message }
   if state.preflightFailure.isSome then
     state := { state with checked := none }
     return { state with recordsPushed }
@@ -359,8 +365,9 @@ def State.push (state : State) (record : EDecl) : MetaM State := do
       let replayEnv := Environment.ofKernelEnv next
       state := { state with checked := some next }
       state := { state with replayFailure := none }
-      state := { state with metadataMismatches := state.metadataMismatches ++
-        ordinaryMetadataMismatches replayEnv record }
+      let metadataMismatchesRev := (ordinaryMetadataMismatches replayEnv record).foldl
+        (fun mismatches message => message :: mismatches) state.metadataMismatchesRev
+      state := { state with metadataMismatchesRev }
       return { state with recordsPushed }
 
 def State.pushAll (state : State) (records : Array EDecl) : MetaM State := do
@@ -368,13 +375,78 @@ def State.pushAll (state : State) (records : Array EDecl) : MetaM State := do
   for record in records do state ← state.push record
   return state
 
-def State.finish (state : State) : Except String Unit := do
+/-- Bind one live exact declaration to the name row captured for the compact
+schedule.  Equal final counts alone cannot prove that the checker consumed the
+same declaration multiset.  A mismatch is an internal caller error, not a
+kernel rejection. -/
+def State.pushBound (state : State) (record : EDecl) (expectedNames : Array Name) :
+    MetaM State := do
+  unless record.names.toArray == expectedNames do
+    throwError "kernel-check row names {record.names} differ from compact row {expectedNames}"
+  state.push record
+
+/-- The successfully replayed environment, before metadata verdicts.  The
+batch compatibility wrapper uses this to preserve its historical `setEnv`
+side effect.  Direct streaming callers should use `seal` instead. -/
+def State.replayedEnvironment (state : State) : Except String Environment := do
   if let some message := state.preflightFailure then throw message
   if let some message := state.replayFailure then throw message
-  unless state.metadataMismatches.isEmpty do
-    throw s!"serialized declaration metadata differs from Lean's kernel:\n  \
-      {"\n  ".intercalate state.metadataMismatches.toList}"
-  return ()
+  let some checked := state.checked | throw "kernel replay lost its environment"
+  return Environment.ofKernelEnv checked
+
+/-- Value-only terminal result.  It deliberately contains no environment, so
+the caller can let the cumulative kernel heap die before compact finalization.
+Metadata diagnostics follow feed order here. A future compact CLI integration
+must either supply final-order rendering or rerun the full value-level fallback
+before exposing a multi-metadata failure; the unchanged batch wrapper below
+retains its historical diagnostic order. -/
+structure Verdict where
+  result : Except String Unit
+  recordsPushed : Nat
+
+def State.seal (state : State) : Verdict :=
+  let result : Except String Unit := do
+    discard <| state.replayedEnvironment
+    unless state.metadataMismatchesRev.isEmpty do
+      throw s!"serialized declaration metadata differs from Lean's kernel:\n  \
+        {"\n  ".intercalate state.metadataMismatchesRev.reverse}"
+    return ()
+  { result, recordsPushed := state.recordsPushed }
+
+def State.finish (state : State) : Except String Unit := state.seal.result
+
+/-- Reproduce the former whole-export metadata traversal exactly: ordinary
+constants follow the preflight hash-map iteration, then inductive records
+follow export order. -/
+private def batchMetadataMismatches (constants : Std.HashMap Name ConstantInfo)
+    (x : Export) (checked : Environment) : Array String := Id.run do
+  let mut mismatches : Array String := #[]
+  for (_, expected) in constants do
+    if expected.isUnsafe || expected.isPartial then continue
+    match expected, checked.constants.find? expected.name with
+    | .axiomInfo expected, some (.axiomInfo actual) =>
+      unless actual == expected do
+        mismatches := mismatches.push (metadataMismatch expected.name "axiom" "metadata")
+    | .defnInfo expected, some (.defnInfo actual) =>
+      unless actual == expected do
+        mismatches := mismatches.push (metadataMismatch expected.name "definition" "metadata")
+    | .thmInfo expected, some (.thmInfo actual) =>
+      unless actual == expected do
+        mismatches := mismatches.push (metadataMismatch expected.name "theorem" "metadata")
+    | .opaqueInfo expected, some (.opaqueInfo actual) =>
+      unless actual == expected do
+        mismatches := mismatches.push
+          (metadataMismatch expected.name "opaque declaration" "metadata")
+    | .quotInfo _, _ | .inductInfo _, _ | .ctorInfo _, _ | .recInfo _, _ => pure ()
+    | _, _ =>
+      mismatches := mismatches.push
+        (metadataMismatch expected.name "declaration" "kind or presence")
+  for declaration in x.decls do
+    if let .induct types constructors recursors := declaration then
+      unless replaySkipped declaration do
+        mismatches := mismatches ++
+          checkInductiveMetadataIn checked types constructors recursors
+  return mismatches
 
 end KernelCheck
 
@@ -387,12 +459,24 @@ declaration-wise callers.  The batch API preserves its historical preflight
 and private dependency schedule. -/
 def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   let base ← getEnv
-  if let .error message := x.constantInfos then return .error message
+  let constants ← match x.constantInfos with
+    | .error message => return .error message
+    | .ok constants => pure constants
   let order ← match KernelCheck.replayOrder x with
     | .error message => return .error message
     | .ok order => pure order
   let mut state := KernelCheck.State.create base
   for index in order do state ← state.push x.decls[index]!
-  return state.finish
+  let checked ← match state.replayedEnvironment with
+    | .error message => return .error message
+    | .ok checked => pure checked
+  -- Preserve the batch API's historical observable state even when the later
+  -- serialized-metadata comparison rejects the export.
+  setEnv checked
+  let mismatches := KernelCheck.batchMetadataMismatches constants x checked
+  unless mismatches.isEmpty do
+    return .error s!"serialized declaration metadata differs from Lean's kernel:\n  \
+      {"\n  ".intercalate mismatches.toList}"
+  return .ok ()
 
 end InductiveModels

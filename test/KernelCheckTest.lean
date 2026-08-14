@@ -5,10 +5,9 @@ set_option maxRecDepth 8192
 /-!
 # Incremental kernel-check regression tests
 
-The old whole-export implementation remains temporarily exposed as an oracle
-while `KernelCheck.State` is established.  These tests compare exact verdicts
-at the behavior-sensitive boundaries, and exercise direct state feeding
-without passing through an export writer or parser intermediate.
+These tests pin exact verdicts at behavior-sensitive boundaries and exercise
+direct state feeding without passing through an export writer or parser
+intermediate.  The existing Order suite remains the broad whole-export oracle.
 -/
 
 open Lean Meta InductiveModels
@@ -51,9 +50,6 @@ def runMeta (action : MetaM (Except String Unit)) : IO (Except String Unit) := d
 def runNew (x : Export) : IO (Except String Unit) :=
   runMeta (typeCheckExport x)
 
-def runLegacy (x : Export) : IO (Except String Unit) :=
-  runMeta (typeCheckExportLegacyOracle x)
-
 def runIncremental (records : Array EDecl) : IO (Except String Unit × Nat) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -63,6 +59,32 @@ def runIncremental (records : Array EDecl) : IO (Except String Unit × Nat) := d
     let base ← getEnv
     let state ← (KernelCheck.State.create base).pushAll records
     return (state.finish, state.recordsPushed)
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }
+  return result
+
+def runBound (rows : Array (EDecl × Array Name)) : IO (Except String Unit) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<bound-kernel-check-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let action : MetaM (Except String Unit) := do
+    try
+      let mut state := KernelCheck.State.create (← getEnv)
+      for (record, expectedNames) in rows do
+        state ← state.pushBound record expectedNames
+      return state.finish
+    catch error => return .error (← error.toMessageData.toString)
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }
+  return result
+
+def metadataFailureInstalls (x : Export) (name : Name) : IO Bool := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<kernel-check-state-compatibility-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let action : MetaM Bool := do
+    let result ← typeCheckExport x
+    return !accepted result && (← getEnv).constants.contains name
   let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }
   return result
 
@@ -84,9 +106,8 @@ def run (root : String) : IO UInt32 := do
   let consumer : EDecl := .ax `Consumer [] (.const `Provider []) false
   let reordered := exportOf #[consumer, provider]
   let reorderedNew ← runNew reordered
-  let reorderedLegacy ← runLegacy reordered
   state := state.check "batch replay accepts valid reversed dependencies" <|
-    accepted reorderedNew && sameResult reorderedNew reorderedLegacy
+    accepted reorderedNew
 
   let directForward ← runIncremental #[provider, consumer]
   state := state.check "incremental state accepts an already valid schedule" <|
@@ -94,6 +115,11 @@ def run (root : String) : IO UInt32 := do
   let directBackward ← runIncremental #[consumer, provider]
   state := state.check "incremental state rejects a backward schedule but counts every push" <|
     !accepted directBackward.1 && directBackward.2 == 2
+  let boundForward ← runBound #[(provider, #[`Provider]), (consumer, #[`Consumer])]
+  let boundSwapped ← runBound #[(provider, #[`Consumer]), (consumer, #[`Provider])]
+  state := state.check "bound pushes reject a swapped equal-count compact schedule" <|
+    accepted boundForward && errorSatisfies boundSwapped
+      (fun message => message.contains "differ from compact row")
 
   -- `Kernel.Environment` retains exact private identities even when
   -- `Lean.Environment`'s async lookup normalizes them to the same spelling.
@@ -103,12 +129,10 @@ def run (root : String) : IO UInt32 := do
     .ax publicName [] (.sort (.succ .zero)) false,
     .ax privateName [] (.sort (.succ .zero)) false]
   let collisionNew ← runNew collision
-  let collisionLegacy ← runLegacy collision
   let collisionDirect ← runIncremental collision.decls
   state := state.check "exact kernel state accepts normalized-private collisions" <|
     privateToUserName privateName == publicName && accepted collisionNew &&
-      sameResult collisionNew collisionLegacy && accepted collisionDirect.1 &&
-      collisionDirect.2 == 2
+      accepted collisionDirect.1 && collisionDirect.2 == 2
 
   let fixturePath := s!"{root}/test/fixtures/inductive-models/nested_iota.ndjson"
   let fixtureText ← IO.FS.readFile fixturePath
@@ -117,10 +141,16 @@ def run (root : String) : IO UInt32 := do
   let some malformedMetadata := corruptFirstRecursor fixture
     | IO.eprintln "kernelchecktest: fixture has no recursor"; return 1
   let metadataNew ← runNew malformedMetadata
-  let metadataLegacy ← runLegacy malformedMetadata
-  state := state.check "malformed regenerated metadata has the legacy exact verdict" <|
-    !accepted metadataNew && sameResult metadataNew metadataLegacy &&
+  state := state.check "malformed regenerated metadata is rejected exactly" <|
+    !accepted metadataNew &&
       errorSatisfies metadataNew (fun message => message.contains "recursor numMinors differs")
+  let malformedOwner? := malformedMetadata.decls.findSome? fun declaration => match declaration with
+    | .induct (type :: _) _ _ => some type.name
+    | _ => none
+  let malformedStateInstalled ← malformedOwner?.elim (pure false)
+    (metadataFailureInstalls malformedMetadata)
+  state := state.check "batch metadata rejection preserves its checked Meta environment" <|
+    malformedStateInstalled
 
   -- Kernel insertion failure precedes metadata diagnostics even when the bad
   -- metadata was observed first.  State must keep checking after metadata
@@ -129,11 +159,9 @@ def run (root : String) : IO UInt32 := do
   let metadataThenReplayFailure :=
     { malformedMetadata with decls := malformedMetadata.decls.push missing }
   let precedenceNew ← runNew metadataThenReplayFailure
-  let precedenceLegacy ← runLegacy metadataThenReplayFailure
   let precedenceDirect ← runIncremental metadataThenReplayFailure.decls
   state := state.check "kernel insertion failure retains precedence over earlier metadata mismatch" <|
-    !accepted precedenceNew && sameResult precedenceNew precedenceLegacy &&
-      sameResult precedenceDirect.1 precedenceNew &&
+    !accepted precedenceNew && sameResult precedenceDirect.1 precedenceNew &&
       errorSatisfies precedenceNew (fun message =>
         message.contains "DefinitelyMissing" && !message.contains "numMinors differs")
 
@@ -141,11 +169,10 @@ def run (root : String) : IO UInt32 := do
   -- data dominates a separate earlier kernel failure exactly as before.
   let duplicatePreflight := exportOf #[missing, provider, provider]
   let duplicateNew ← runNew duplicatePreflight
-  let duplicateLegacy ← runLegacy duplicatePreflight
   let duplicateDirect ← runIncremental duplicatePreflight.decls
   state := state.check "batch duplicate preflight retains precedence over kernel replay" <|
-    !accepted duplicateNew && sameResult duplicateNew duplicateLegacy &&
-      sameResult duplicateDirect.1 duplicateNew && duplicateDirect.2 == 3 &&
+    !accepted duplicateNew && sameResult duplicateDirect.1 duplicateNew &&
+      duplicateDirect.2 == 3 &&
       errorSatisfies duplicateNew (fun message =>
         message.contains "duplicate declaration Provider" &&
           !message.contains "DefinitelyMissing")
@@ -156,6 +183,61 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental preflight rejects unknown definition safety" <|
     unknownDirect.2 == 1 && errorSatisfies unknownDirect.1
       (fun message => message == "unknown definition safety mystery")
+
+  let malformedDuplicate : EDecl :=
+    .defn `Provider [] (.sort (.succ .zero)) (.sort .zero) .opaque "mystery" []
+  let malformedDuplicateExport := exportOf #[provider, malformedDuplicate]
+  let malformedDuplicateBatch ← runNew malformedDuplicateExport
+  let malformedDuplicateDirect ← runIncremental malformedDuplicateExport.decls
+  state := state.check "malformed safety precedes a duplicate in the same record" <|
+    sameResult malformedDuplicateBatch malformedDuplicateDirect.1 &&
+      errorSatisfies malformedDuplicateBatch
+        (fun message => message == "unknown definition safety mystery")
+
+  let malformedQuotient : EDecl :=
+    .quot `Provider [] (.sort (.succ .zero)) "mystery"
+  let malformedQuotientExport := exportOf #[provider, malformedQuotient]
+  let malformedQuotientBatch ← runNew malformedQuotientExport
+  let malformedQuotientDirect ← runIncremental malformedQuotientExport.decls
+  state := state.check "malformed quotient kind precedes a duplicate in the same record" <|
+    sameResult malformedQuotientBatch malformedQuotientDirect.1 &&
+      errorSatisfies malformedQuotientBatch
+        (fun message => message == "unknown quotient kind mystery")
+
+  let skippedUnsafe : EDecl :=
+    .ax `SkippedUnsafe [] (.const `MissingUnsafeType []) true
+  let skippedPartial : EDecl :=
+    .defn `SkippedPartial [] (.const `MissingPartialType []) (.const `MissingPartialValue [])
+      .opaque "partial" []
+  let skippedDirect ← runIncremental #[skippedUnsafe, skippedPartial]
+  state := state.check "unsafe and partial declarations retain arena skip behavior" <|
+    accepted skippedDirect.1 && skippedDirect.2 == 2
+
+  let emptyInductive : EDecl := .induct [] [] []
+  let emptyDirect ← runIncremental #[emptyInductive]
+  state := state.check "empty active inductive record is rejected" <|
+    emptyDirect.2 == 1 && errorSatisfies emptyDirect.1
+      (fun message => message == "empty inductive declaration")
+
+  let cycle := exportOf #[
+    .ax `CycleA [] (.const `CycleB []) false,
+    .ax `CycleB [] (.const `CycleA []) false]
+  let cycleBatch ← runNew cycle
+  state := state.check "batch replay rejects a declaration dependency cycle before insertion" <|
+    errorSatisfies cycleBatch (fun message =>
+      message.contains "cyclic kernel declaration dependencies")
+
+  let duplicateType : EIndType :=
+    { name := `DuplicateMember, levelParams := [], type := .sort (.succ .zero)
+      all := [`DuplicateMember], ctors := [], numParams := 0, numIndices := 0
+      numNested := 0, isRec := false, isReflexive := false, isUnsafe := false }
+  let duplicateMembers : EDecl := .induct [duplicateType, duplicateType] [] []
+  let duplicateMembersBatch ← runNew (exportOf #[duplicateMembers])
+  let duplicateMembersDirect ← runIncremental #[duplicateMembers]
+  state := state.check "duplicate names inside one inductive record are preflight errors" <|
+    sameResult duplicateMembersBatch duplicateMembersDirect.1 &&
+      errorSatisfies duplicateMembersBatch
+        (fun message => message == "duplicate declaration DuplicateMember")
 
   if state.failed.isEmpty then
     IO.println s!"kernel check: {state.passed}/{state.passed} passed"
