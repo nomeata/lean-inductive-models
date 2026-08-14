@@ -253,6 +253,75 @@ def EDecl.renameAliases (aliases : Naming.AliasMap) : EDecl → EDecl :=
   EDecl.mapNames aliases.exact
     (mapConstsE fun n => aliases.exact? n)
 
+/-! ## Collision-safe source replay names
+
+`Lean.Environment` indexes locally replayed constants by
+`privateToUserName`.  A flattened export legitimately contains distinct
+module-private constants with the same user spelling, so that index cannot
+represent every exact source name.  The kernel can: this table is only the
+injective build-name view used while generating models.  Source records and
+serialized output always retain the exact names in the right-hand column.
+-/
+
+/-- One exact source name and its collision-free build name. -/
+structure SourceReplayAlias where
+  exact : Name
+  build : Name
+  deriving Inhabited, Repr, BEq
+
+/-- Explicit whole-name aliases for the source replay environment.
+
+There is deliberately no namespace or suffix fallback.  Every changed name
+comes from the complete source-name census, and every inverse rewrite is the
+same finite table in the opposite direction. -/
+structure SourceReplayAliases where
+  entries : Array SourceReplayAlias := #[]
+  private forward : Std.HashMap Name Name := {}
+  private inverse : Std.HashMap Name Name := {}
+  deriving Inhabited
+
+/-- Construct and validate both directions of an explicit alias table. -/
+def SourceReplayAliases.ofEntries (entries : Array SourceReplayAlias) :
+    Except String SourceReplayAliases := do
+  let mut forward : Std.HashMap Name Name := {}
+  let mut inverse : Std.HashMap Name Name := {}
+  for entry in entries do
+    if let some first := forward[entry.exact]? then
+      throw s!"source replay name {entry.exact} has aliases {first} and {entry.build}"
+    if let some first := inverse[entry.build]? then
+      throw s!"source replay alias {entry.build} represents {first} and {entry.exact}"
+    forward := forward.insert entry.exact entry.build
+    inverse := inverse.insert entry.build entry.exact
+  return { entries, forward, inverse }
+
+def SourceReplayAliases.isEmpty (aliases : SourceReplayAliases) : Bool :=
+  aliases.entries.isEmpty
+
+def SourceReplayAliases.build? (aliases : SourceReplayAliases) (exact : Name) : Option Name :=
+  aliases.forward[exact]?
+
+def SourceReplayAliases.exact? (aliases : SourceReplayAliases) (build : Name) : Option Name :=
+  aliases.inverse[build]?
+
+def SourceReplayAliases.hasExact (aliases : SourceReplayAliases) (exact : Name) : Bool :=
+  aliases.forward.contains exact
+
+def SourceReplayAliases.buildName (aliases : SourceReplayAliases) (exact : Name) : Name :=
+  aliases.build? exact |>.getD exact
+
+def SourceReplayAliases.exactName (aliases : SourceReplayAliases) (build : Name) : Name :=
+  aliases.exact? build |>.getD build
+
+/-- Rename an exact source/output record into the collision-free replay view. -/
+def SourceReplayAliases.buildRecord (aliases : SourceReplayAliases) : EDecl → EDecl :=
+  EDecl.mapNames aliases.buildName
+    (mapConstsE fun name => aliases.build? name)
+
+/-- Return a generated build record to the exact source/output view. -/
+def SourceReplayAliases.exactRecord (aliases : SourceReplayAliases) : EDecl → EDecl :=
+  EDecl.mapNames aliases.exactName
+    (mapConstsE fun name => aliases.exact? name)
+
 /-- A whole export: the `meta` line verbatim, then the declarations in order. -/
 structure Export where
   metaLine : Json

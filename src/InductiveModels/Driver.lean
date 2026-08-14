@@ -2513,6 +2513,63 @@ def SourceScheduleFact.modelOwner (fact : SourceScheduleFact)
        (generation.mutualModels && fact.mutualOwner) ||
        (fact.simpleOwner && generation.modelsSimpleInput root))
 
+private structure SourceNameOccurrence where
+  exact : Name
+  rawOrdinal : Nat
+  position : Nat
+
+/-- Deterministic collision-free aliases from the complete source-name census.
+
+Distinct public names never normalize alike, so a public member is the unique
+preferred identity of its class.  A private-only class keeps its earliest raw
+member exact.  Every other member is embedded below a public internal root
+carrying its raw record and within-record position; the salt is used only when
+an adversarial input already reserves that exact or normalized spelling. -/
+private def sourceReplayAliasesFromSummaries
+    (summaries : Array Order.DeclSummary) (reserved : Std.HashSet Name) :
+    Except String SourceReplayAliases := do
+  let mut occurrences : Array SourceNameOccurrence := #[]
+  let mut exactOwner : Std.HashMap Name (Nat × Nat) := {}
+  let mut canonical : Std.HashMap Name Name := {}
+  for summary in summaries do
+    for position in [:summary.introduced.size] do
+      let exact := summary.introduced[position]!
+      if let some first := exactOwner[exact]? then
+        throw s!"duplicate source declaration name {exact} at {first.1}:{first.2} and \
+          {summary.ordinal}:{position}"
+      exactOwner := exactOwner.insert exact (summary.ordinal, position)
+      occurrences := occurrences.push { exact, rawOrdinal := summary.ordinal, position }
+      let normalized := privateToUserName exact
+      match canonical[normalized]? with
+      | none => canonical := canonical.insert normalized exact
+      | some first =>
+        if isPrivateName first && !isPrivateName exact then
+          canonical := canonical.insert normalized exact
+  let mut occupiedExact := reserved
+  let mut occupiedNormalized : Std.HashSet Name := {}
+  for name in reserved do
+    occupiedNormalized := occupiedNormalized.insert (privateToUserName name)
+  let mut entries : Array SourceReplayAlias := #[]
+  for occurrence in occurrences do
+    let normalized := privateToUserName occurrence.exact
+    let some keep := canonical[normalized]?
+      | throw "normalized source class lost its canonical member"
+    if occurrence.exact == keep then continue
+    let base := (Name.num (Name.num `_inductive_models_source_alias
+      occurrence.rawOrdinal) occurrence.position)
+    let mut salt := 0
+    let mut build := (Name.num base salt) ++ occurrence.exact
+    while occupiedExact.contains build ||
+        occupiedNormalized.contains (privateToUserName build) do
+      salt := salt + 1
+      build := (Name.num base salt) ++ occurrence.exact
+    if isPrivateName build then
+      throw s!"source replay alias {build} unexpectedly remains private"
+    occupiedExact := occupiedExact.insert build
+    occupiedNormalized := occupiedNormalized.insert (privateToUserName build)
+    entries := entries.push { exact := occurrence.exact, build }
+  SourceReplayAliases.ofEntries entries
+
 /-- Immutable source products accumulated declaration by declaration.  The
 syntax index intentionally owns exact declaration types, constructor/owner
 records, and transparent definition values. Summaries, scheduling facts,
@@ -2523,6 +2580,7 @@ structure SourceCensus where
   scheduling : Array SourceScheduleFact
   reserved : Std.HashSet Name
   rawOrdinals : Std.HashMap Name Nat
+  replayAliases : Except String SourceReplayAliases
 
 /-- Single callback state for all raw-source products. -/
 structure SourceCensus.Builder where
@@ -2554,11 +2612,14 @@ def SourceCensus.Builder.push (builder : SourceCensus.Builder)
 syntax index with the summary-family attachment pass. -/
 def SourceCensus.Builder.freeze (builder : SourceCensus.Builder) : SourceCensus :=
   let sourceSyntax := builder.syntaxBuilder.freeze
+  let summaries := builder.summaryBuilder.freeze sourceSyntax
+  let replayAliases := sourceReplayAliasesFromSummaries summaries builder.reserved
   { sourceSyntax
-    summaries := builder.summaryBuilder.freeze sourceSyntax
+    summaries
     scheduling := builder.scheduling
     reserved := builder.reserved
-    rawOrdinals := builder.rawOrdinals }
+    rawOrdinals := builder.rawOrdinals
+    replayAliases }
 
 /-- Build one source census through declaration callbacks.  The last raw
 ordinal for a duplicate name deliberately matches the historical Driver loop;
