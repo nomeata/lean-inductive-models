@@ -2164,6 +2164,17 @@ structure IsoContainerImplementation where
   parameterArity : Nat
   indexArity : Nat
   implementationCarrier : Name
+  /-- Exact source nested recursor represented by the private mimic recursor. -/
+  sourceRecursor : Name
+  /-- Exact installed recursor of the named private mimic. -/
+  implementationRecursor : Name
+  /-- Installed types retained so consumers can validate both endpoints before
+  using the association in a source-to-implementation rewrite. -/
+  sourceRecursorType : Expr
+  implementationRecursorType : Expr
+  /-- Exact source/private constructor keys of every installed recursor rule.
+  The sequence is metadata, not an array-position matching contract. -/
+  recursorRuleKeys : Array (Name × Name)
   forward : Name
   backward : Name
   backwardForward : Name
@@ -3239,6 +3250,20 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
         aliases := aliases.insert (g.iotaName k j) (Naming.iotaName exportRecs[k]! j)
   let containerImplementations ← (Array.range pl.mimics.size).mapM fun i => do
     let implementationCarrier := g.members[r + i]!
+    let sourceRecursor := g.exportRecs[r + i]!
+    let implementationRecursor := g.recName (r + i)
+    let sourceRecursorInfo ← constInfo sourceRecursor
+    let implementationRecursorInfo ← constInfo implementationRecursor
+    let .recInfo sourceRecursorValue := sourceRecursorInfo
+      | badShape s!"{sourceRecursor} is not an installed source recursor"
+    let .recInfo implementationRecursorValue := implementationRecursorInfo
+      | badShape s!"{implementationRecursor} is not an installed mimic recursor"
+    let sourceRuleKeys := sourceRecursorValue.rules.toArray.map (·.ctor)
+    let implementationRuleKeys := implementationRecursorValue.rules.toArray.map (·.ctor)
+    unless sourceRuleKeys.all implementationRuleKeys.contains &&
+        implementationRuleKeys.all sourceRuleKeys.contains do
+      badShape s!"{sourceRecursor} and {implementationRecursor} have different rule keys"
+    let recursorRuleKeys := sourceRuleKeys.map fun key => (key, key)
     let forward := g.packName i
     let backward := g.unpackName i
     let backwardForward := g.retractName i
@@ -3247,6 +3272,11 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       parameterArity := np
       indexArity := g.midx i
       implementationCarrier
+      sourceRecursor
+      implementationRecursor
+      sourceRecursorType := sourceRecursorInfo.type
+      implementationRecursorType := implementationRecursorInfo.type
+      recursorRuleKeys
       forward
       backward
       backwardForward

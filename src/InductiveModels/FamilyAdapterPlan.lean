@@ -369,6 +369,11 @@ structure ContainerMapPlan where
   parameterArity : Nat
   indexArity : Nat
   implementationCarrier : Name
+  sourceRecursor : Name
+  implementationRecursor : Name
+  sourceRecursorType : Expr
+  implementationRecursorType : Expr
+  recursorRuleKeys : Array (Name × Name)
   maps : EquivalenceCertificate
   forwardType : Expr
   backwardType : Expr

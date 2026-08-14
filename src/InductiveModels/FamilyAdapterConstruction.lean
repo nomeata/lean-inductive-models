@@ -921,6 +921,11 @@ private def applyContainerMapInfer? (plan : FamilyAdapterPlan)
 private def sameContainerBoundary (left right : ContainerMapPlan) : Bool :=
   left.parameterArity == right.parameterArity && left.indexArity == right.indexArity &&
     left.implementationCarrier == right.implementationCarrier && left.maps == right.maps &&
+    left.sourceRecursor == right.sourceRecursor &&
+    left.implementationRecursor == right.implementationRecursor &&
+    left.sourceRecursorType == right.sourceRecursorType &&
+    left.implementationRecursorType == right.implementationRecursorType &&
+    left.recursorRuleKeys == right.recursorRuleKeys &&
     left.forwardType == right.forwardType && left.backwardType == right.backwardType &&
     left.backwardForwardType == right.backwardForwardType &&
     left.forwardBackwardType == right.forwardBackwardType

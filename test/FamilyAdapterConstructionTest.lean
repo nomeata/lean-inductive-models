@@ -60,6 +60,8 @@ def identityIso (source : EDecl) : Iso :=
 
 structure ChangedContainerBoundary where
   implementationCarrier : Name
+  sourceRecursor : Name
+  implementationRecursor : Name
   forward : Name
   backward : Name
   backwardForward : Name
@@ -100,10 +102,24 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
         let some information := (← getEnv).constants.find? name
           | throwError "changed container map {name} is not installed"
         return information.type
+      let recursorRules := fun name => do
+        let some (.recInfo recursor) := (← getEnv).constants.find? name
+          | throwError "changed container recursor {name} is not installed"
+        return recursor.rules.toArray.map (·.ctor)
+      let sourceRuleKeys ← recursorRules container.sourceRecursor
+      let implementationRuleKeys ← recursorRules container.implementationRecursor
+      unless sourceRuleKeys.all implementationRuleKeys.contains &&
+          implementationRuleKeys.all sourceRuleKeys.contains do
+        throwError "changed container recursors have different rule keys"
       pure #[{
         parameterArity := 0
         indexArity := 0
         implementationCarrier := container.implementationCarrier
+        sourceRecursor := container.sourceRecursor
+        implementationRecursor := container.implementationRecursor
+        sourceRecursorType := (← typeOf container.sourceRecursor)
+        implementationRecursorType := (← typeOf container.implementationRecursor)
+        recursorRuleKeys := sourceRuleKeys.map fun key => (key, key)
         forward := container.forward
         backward := container.backward
         backwardForward := container.backwardForward
@@ -151,6 +167,8 @@ def changedNested : ChangedBoundary :=
     forwardBackward := `FamilyAdapterGenerated.generatedChangedNestedRollUnroll
     container? := some
       { implementationCarrier := `FamilyAdapterGenerated.GeneratedList
+        sourceRecursor := `FamilyAdapterGenerated.GeneratedChangedNestedPublic.rec_1
+        implementationRecursor := `FamilyAdapterGenerated.GeneratedChangedNestedPrivate.rec_1
         forward := `FamilyAdapterGenerated.generatedChangedNestedContainerForward
         backward := `FamilyAdapterGenerated.generatedChangedNestedContainerBackward
         backwardForward :=
@@ -467,6 +485,7 @@ structure Result where
   invalidIotas : Nat := 0
   lateInvalidIotas : Nat := 0
   invalidContainerMaps : Nat := 0
+  invalidContainerRecursors : Nat := 0
   wrongTargetMaps : Nat := 0
   sharedHypothesis : Nat := 0
   directNestedRule : Nat := 0
@@ -751,6 +770,38 @@ def runSamples : MetaM Result := do
         s!"invalid container metadata was not rejected atomically: shadow={
           repr invalidContainerReport.reasons}, construction={repr built.issues}"
       result := { result with failures }
+  let invalidContainerRecursor :=
+    { validContainer with
+      implementationRecursor := validContainer.sourceRecursor
+      implementationRecursorType := validContainer.sourceRecursorType
+      recursorRuleKeys := validContainer.recursorRuleKeys.map fun (source, _) =>
+        (source, source) }
+  let invalidContainerRecursorIso :=
+    { validContainerIso with containerImplementations := #[invalidContainerRecursor] }
+  let invalidContainerRecursorReport ←
+    FamilyAdapter.deriveShadowPlan invalidContainerSource invalidContainerRecursorIso
+  let invalidContainerRecursorBuilt ←
+    (FamilyAdapter.buildFamilyPrototype invalidContainerRecursorReport
+      invalidContainerRecursorIso
+      `_family_adapter_construction_test_invalid_container_recursor).run
+  match invalidContainerRecursorBuilt with
+  | .error decline =>
+    let failures := result.failures.push s!"invalid container recursor: {decline.label}"
+    result := { result with failures }
+  | .ok built =>
+    let exactMismatch := invalidContainerRecursorReport.reasons.any fun
+      | .invalidContainerRecursorAssociation occurrence =>
+          occurrence.target.owner == changedNested.publicOwner
+      | _ => false
+    if exactMismatch && invalidContainerRecursorReport.coverage.containerMaps.isEmpty &&
+        built.certificate.isNone && built.declarations.isEmpty then
+      result := { result with
+        invalidContainerRecursors := result.invalidContainerRecursors + 1 }
+    else
+      let failures := result.failures.push
+        s!"invalid container recursor association was not rejected atomically: shadow={
+          repr invalidContainerRecursorReport.reasons}, construction={repr built.issues}"
+      result := { result with failures }
   let wrongTargetName :=
     `FamilyAdapterGenerated.generatedChangedNestedContainerWrongTarget
   let wrongTargetType := (← getEnv).constants.find! wrongTargetName |>.type
@@ -841,6 +892,7 @@ def runMain : IO UInt32 := do
       result.changedPublicConstructors == 4 &&
       result.changedPublicRecursors == 4 &&
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
+      result.invalidContainerRecursors == 1 &&
       result.invalidIotas == 1 && result.lateInvalidIotas == 1 && result.wrongTargetMaps == 1 &&
       result.sharedHypothesis == 1 && result.directNestedRule == 1 &&
       result.repeatedSpecialisations == 1 &&
@@ -851,7 +903,7 @@ def runMain : IO UInt32 := do
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
       {result.identityNested} definitional nested plans, {result.changed} changed plans, \
       one installed family, {result.closedContainers} keyed container map, \
-      validated member/container map metadata"
+      validated member/container map and recursion metadata"
     return 0
   for failure in result.failures do IO.eprintln failure
   for message in state.messages.toArray do IO.eprintln (← message.toString)
@@ -870,6 +922,7 @@ def runMain : IO UInt32 := do
     invalidMaps={result.invalidMaps}, invalidIotas={result.invalidIotas}, \
     lateInvalidIotas={result.lateInvalidIotas}, \
     invalidContainerMaps={result.invalidContainerMaps}, \
+    invalidContainerRecursors={result.invalidContainerRecursors}, \
     wrongTargetMaps={result.wrongTargetMaps}, sharedHypothesis={result.sharedHypothesis}, \
     directNestedRule={result.directNestedRule}, \
     repeatedSpecialisations={result.repeatedSpecialisations}, \

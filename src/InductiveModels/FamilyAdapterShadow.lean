@@ -40,6 +40,10 @@ inductive ShadowReason where
   | ambiguousContainerMap (occurrence : OccurrenceKey)
   | missingInstalledContainerMap (occurrence : OccurrenceKey) (name : Name)
   | installedContainerMapTypeMismatch (occurrence : OccurrenceKey) (name : Name)
+  | missingInstalledContainerRecursor (occurrence : OccurrenceKey) (name : Name)
+  | installedContainerRecursorTypeMismatch (occurrence : OccurrenceKey) (name : Name)
+  | installedContainerRecursorRulesMismatch (occurrence : OccurrenceKey) (name : Name)
+  | invalidContainerRecursorAssociation (occurrence : OccurrenceKey)
   | unknownRuleConstructor (rule : RuleKey)
   | invalidPlan (error : PlanError)
   deriving Inhabited, BEq, Repr
@@ -291,9 +295,21 @@ private def addInstalledCoverage (env : Environment) (name : Name) (expected : E
 private def isContainerOccurrence (key : OccurrenceKey) : Bool :=
   key.expressionPath.any (· != .binderBody)
 
+private def recursorMajorMatches (recursor : RecursorVal) (recursorType : Expr)
+    (parameters : Array Expr) (expected : Expr) : MetaM Bool := do
+  if parameters.size > recursor.majorPos then return false
+  let mut type ← instantiateForall recursorType parameters
+  for _ in [parameters.size:recursor.majorPos] do
+    let .forallE name domain body _ := type | return false
+    let value ← mkFreshExprMVar domain .natural name
+    type := body.instantiate1 value
+  let .forallE _ domain _ _ := type | return false
+  return ← isDefEq domain expected
+
 private def containerMetadataInstalled (environment : Environment)
+    (parameters : Array Expr) (sourceType implementationType : Expr)
     (occurrence : OccurrenceKey) (container : IsoContainerImplementation) :
-    Array ShadowReason := Id.run do
+    MetaM (Array ShadowReason) := do
   let mut reasons := #[]
   for (name, expected) in #[(container.forward, container.forwardType),
       (container.backward, container.backwardType),
@@ -304,6 +320,23 @@ private def containerMetadataInstalled (environment : Environment)
     | none => reasons := reasons.push (.missingInstalledContainerMap occurrence name)
     | some actual => unless actual == expected do
         reasons := reasons.push (.installedContainerMapTypeMismatch occurrence name)
+  for (name, expected, ruleKeys, majorType) in
+      #[(container.sourceRecursor, container.sourceRecursorType,
+          container.recursorRuleKeys.map (·.1), sourceType),
+        (container.implementationRecursor, container.implementationRecursorType,
+          container.recursorRuleKeys.map (·.2), implementationType)] do
+    match environment.constants.find? name with
+    | none => reasons := reasons.push (.missingInstalledContainerRecursor occurrence name)
+    | some information =>
+      unless information.type == expected do
+        reasons := reasons.push (.installedContainerRecursorTypeMismatch occurrence name)
+      match information with
+      | .recInfo recursor =>
+        unless recursor.rules.toArray.map (·.ctor) == ruleKeys do
+          reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
+        unless ← recursorMajorMatches recursor expected parameters majorType do
+          reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
+      | _ => reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
   return reasons
 
 private def containerTarget? (container : IsoContainerImplementation)
@@ -525,18 +558,24 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
               -- Domain unification assigns an occurrence to a generated map;
               -- the inferred target must be the exact recorded private mimic.
               let target? ← try containerTarget? container parameters body catch _ => pure none
-              return target?.map fun _ => container
+              return target?.map fun target => (container, target)
           if candidates.size > 1 then
             addedReasons := addedReasons.push (.ambiguousContainerMap occurrence)
             continue
-          if let some container := candidates[0]? then
-            let metadataReasons := containerMetadataInstalled environment occurrence container
+          if let some (container, implementationType) := candidates[0]? then
+            let metadataReasons ← containerMetadataInstalled environment parameters body
+              implementationType occurrence container
             if metadataReasons.isEmpty then
               addedPlans := addedPlans.push
                 { key := occurrence
                   parameterArity := container.parameterArity
                   indexArity := container.indexArity
                   implementationCarrier := container.implementationCarrier
+                  sourceRecursor := container.sourceRecursor
+                  implementationRecursor := container.implementationRecursor
+                  sourceRecursorType := container.sourceRecursorType
+                  implementationRecursorType := container.implementationRecursorType
+                  recursorRuleKeys := container.recursorRuleKeys
                   maps :=
                     { forward := container.forward
                       backward := container.backward
@@ -557,6 +596,10 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         return (addedPlans, addedReasons)
     containerMapPlans := containerMapPlans ++ addedPlans
     reasons := reasons ++ addedReasons
+  let containerRecursorMapping := containerMapPlans.flatMap fun container =>
+    #[(container.sourceRecursor, container.implementationRecursor)] ++
+      container.recursorRuleKeys
+  let implementationRuleMapping := implementationMapping ++ containerRecursorMapping
   let mut rulePlans := #[]
   for member in resolvedMembers do
     if let some recursor := member.sourceRecursor? then
@@ -590,7 +633,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         let implementationRhs? := installedRuleRhs? environment implementationIota
           constructor.implementationName
         let publicRhs? := installedRuleRhs? environment publicIota constructor.publicName
-        let expectedImplementationRhs := rewriteWith implementationMapping rule.rhs
+        let expectedImplementationRhs := rewriteWith implementationRuleMapping rule.rhs
         let expectedPublicRhs := rewriteWith publicMapping rule.rhs
         unless implementationRhs? == some expectedImplementationRhs do
           reasons := reasons.push (.installedRuleMismatch key .privateModel)
