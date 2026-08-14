@@ -1241,6 +1241,49 @@ private def constructorFor? (plan : FamilyAdapterPlan) (key : ConstructorKey) :
     Option ConstructorPlan :=
   plan.constructors.find? (·.key == key)
 
+private def minorHypothesisBinder? (member : MemberPlan) (recursorType : Expr)
+    (constructorName : Name) (fieldCount : Nat) (occurrence : OccurrenceKey) :
+    Option (Nat × Nat × Nat) := do
+  let (recursorBinders, _) := openExactForalls
+    ((`_family_adapter_exact_hypothesis_rec).append member.key.owner) recursorType
+  let prefixSize := member.parameterArity + member.recursorMotiveArity +
+    member.recursorMinorArity
+  unless recursorBinders.size >= prefixSize do none
+  let motives := recursorBinders.extract member.parameterArity
+    (member.parameterArity + member.recursorMotiveArity) |>.map (·.value)
+  let minors := recursorBinders.extract
+    (member.parameterArity + member.recursorMotiveArity) prefixSize
+  let matching := minors.mapIdx fun minorIndex minor =>
+    let (binders, result) := openExactForalls
+      ((`_family_adapter_exact_hypothesis_minor).append member.key.owner |>.mkNum minorIndex)
+      minor.type
+    (minorIndex, binders, result)
+  let matching := matching.filter fun (_, _, result) =>
+    (result.getAppArgs.back?.bind (·.getAppFn.constName?)) == some constructorName
+  unless matching.size == 1 do none
+  let (minorIndex, binders, result) := matching[0]!
+  let major ← result.getAppArgs.back?
+  let arguments := major.getAppArgs
+  unless arguments.size >= fieldCount do none
+  let fields := arguments.extract (arguments.size - fieldCount) arguments.size
+  let field ← fields[occurrence.fieldIndex]?
+  let mut hypotheses : Array (Nat × Nat × InstalledBinder) := #[]
+  for binderIndex in [:binders.size] do
+    let binder := binders[binderIndex]!
+    if fields.contains binder.value then continue
+    let body := eventualBody (`_family_adapter_exact_hypothesis) binder.type
+    if let some motiveIndex := motives.findIdx? (· == body.getAppFn) then
+      hypotheses := hypotheses.push (binderIndex, motiveIndex, binder)
+  let candidates := hypotheses.filter fun (_, _, hypothesis) =>
+    let body := eventualBody (`_family_adapter_exact_hypothesis_body) hypothesis.type
+    (body.getAppArgs.back?.map (·.getAppFn == field)).getD false
+  unless candidates.size == 1 do none
+  let (binderIndex, motiveIndex, _) := candidates[0]!
+  let actual := hypotheses.findIdx? (fun (index, _, _) => index == binderIndex)
+    |>.getD hypotheses.size
+  unless actual == occurrence.hypothesisIndex do none
+  return (minorIndex, binderIndex, motiveIndex)
+
 /-- Associate every source occurrence with the literal induction-hypothesis
 binder of its installed private minor.  Constructor and recursor names are
 looked up by source keys; no array zip or unary/binary shape test is involved.
@@ -1251,6 +1294,9 @@ def deriveInstalledMinorHypotheses (plan : FamilyAdapterPlan) : MetaM
   let mut certificates := #[]
   let mut issues := #[]
   for member in plan.members do
+    let some publicRecursorType := installedType? environment member.publicRecursor | do
+      issues := issues.push (.missingInstalledRecursor member.key member.publicRecursor)
+      continue
     let some recursorType := installedType? environment member.implementationRecursor | do
       issues := issues.push
         (.missingInstalledRecursor member.key member.implementationRecursor)
@@ -1334,9 +1380,19 @@ def deriveInstalledMinorHypotheses (plan : FamilyAdapterPlan) : MetaM
           issues := issues.push (.installedHypothesisMismatch rule.key occurrence
             occurrence.hypothesisIndex actual)
           continue
+        let some (publicMinorIndex, publicBinderIndex, publicMotiveIndex) :=
+            minorHypothesisBinder? member publicRecursorType constructor.publicName fieldCount
+              occurrence | do
+          issues := issues.push (.missingInstalledHypothesis rule.key occurrence)
+          continue
+        unless publicMinorIndex == minorIndex do
+          issues := issues.push (.installedHypothesisMismatch rule.key occurrence
+            minorIndex publicMinorIndex)
+          continue
         certificates := certificates.push
           { rule := rule.key, occurrence, minorIndex,
-            hypothesisIndex := actual, binderIndex, motiveIndex }
+            hypothesisIndex := actual, publicBinderIndex, publicMotiveIndex,
+            binderIndex, motiveIndex }
   return (certificates, issues)
 
 private def uniqueBinderIndices (certificates : Array MinorHypothesisCertificate) : Array Nat :=
@@ -1544,7 +1600,10 @@ def derivePublicIotaProofSchemas (plan : FamilyAdapterPlan)
       let some first := grouped[0]?
         | throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
       unless first.minorIndex == compatibility.minorIndex && grouped.all fun current =>
-          current.minorIndex == first.minorIndex && current.motiveIndex == first.motiveIndex do
+          current.minorIndex == first.minorIndex &&
+            current.publicBinderIndex == first.publicBinderIndex &&
+            current.publicMotiveIndex == first.publicMotiveIndex &&
+            current.motiveIndex == first.motiveIndex do
         throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
       let mut occurrenceCertificates : Array OccurrenceCertificate := #[]
       for current in grouped do
@@ -1556,7 +1615,9 @@ def derivePublicIotaProofSchemas (plan : FamilyAdapterPlan)
       unless occurrenceCertificates.all (·.maps == firstOccurrence.maps) do
         throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
       hypotheses := hypotheses.push
-        { rule := rule.key, minorIndex := first.minorIndex, binderIndex,
+        { rule := rule.key, minorIndex := first.minorIndex,
+          publicBinderIndex := first.publicBinderIndex,
+          publicMotiveIndex := first.publicMotiveIndex, binderIndex,
           motiveIndex := first.motiveIndex,
           occurrences := grouped.map (·.occurrence), maps := firstOccurrence.maps }
     unless (hypotheses.flatMap (·.occurrences)).size == rule.occurrences.size &&

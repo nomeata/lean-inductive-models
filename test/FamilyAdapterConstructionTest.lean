@@ -275,6 +275,8 @@ def iotaSchemasComplete (plan : FamilyAdapterPlan)
                   step.motiveIndex < member.recursorMotiveArity &&
                     step.occurrences.all fun occurrence =>
                       keyed.any fun hypothesis => hypothesis.occurrence == occurrence &&
+                        hypothesis.publicBinderIndex == step.publicBinderIndex &&
+                        hypothesis.publicMotiveIndex == step.publicMotiveIndex &&
                         hypothesis.binderIndex == step.binderIndex &&
                         hypothesis.motiveIndex == step.motiveIndex
 

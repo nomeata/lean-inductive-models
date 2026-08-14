@@ -178,6 +178,11 @@ structure MinorHypothesisCertificate where
   occurrence : OccurrenceKey
   minorIndex : Nat
   hypothesisIndex : Nat
+  /-- Literal binder position in the exact public/source minor telescope. -/
+  publicBinderIndex : Nat
+  /-- Literal public/source motive slot used by that binder. -/
+  publicMotiveIndex : Nat
+  /-- Literal binder position in the exact installed private minor telescope. -/
   binderIndex : Nat
   /-- Literal motive binder used at this installed IH position.  This is read
   from the exact private minor type; it is not inferred from the source member
@@ -257,6 +262,8 @@ boundary are literal installed metadata. -/
 structure PublicIotaHypothesisStep where
   rule : RuleKey
   minorIndex : Nat
+  publicBinderIndex : Nat
+  publicMotiveIndex : Nat
   binderIndex : Nat
   motiveIndex : Nat
   occurrences : Array OccurrenceKey
