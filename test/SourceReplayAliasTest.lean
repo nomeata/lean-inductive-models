@@ -393,7 +393,8 @@ def main : IO UInt32 := do
     { metaLine := .null, decls := #[typeAxiom `OverlapRoot, overlapBlock] }
   let .ok overlapPlanned := aliasesOf overlapInput
     | throw <| IO.userError "cannot plan overlapping owner aliases"
-  let .ok overlapAliases := sourceReplayInductiveDerivations overlapInput overlapPlanned
+  let overlapRoles := (SourceCensus.ofSource overlapInput).replayRoles
+  let .ok overlapAliases := sourceReplayInductiveDerivations overlapRoles overlapPlanned
     | throw <| IO.userError "cannot derive overlapping owner recursor aliases"
   let some overlapShortBuild := overlapAliases.build? overlapShort
     | throw <| IO.userError "short overlapping owner did not move"
