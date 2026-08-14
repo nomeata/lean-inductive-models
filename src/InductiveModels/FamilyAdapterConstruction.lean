@@ -1310,6 +1310,7 @@ not an occurrence depth or arity classifier, determines the finite fold. -/
 private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
     (recursors : Array PublicRecursorCertificate) (rule : RuleKey)
+    (role? : Option PublicIotaRecursiveCallRole)
     (publicRecursorPrefix : Array Expr)
     (expectedPublic expectedPrivate : Expr) : ConstructionM Expr := do
   if ← liftGen <| isDefEq expectedPrivate expectedPublic then
@@ -1327,22 +1328,29 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
       failConstruction (.missingPublicIotaInput rule)
     withLocalDecl publicName publicInfo publicDomain fun argument => do
       let pointwise ← recursorHypothesisAgreement plan memberCertificates recursors rule
-        publicRecursorPrefix
+        role? publicRecursorPrefix
         (mkApp expectedPublic argument) (mkApp expectedPrivate argument)
       let functionProof ← liftGen <| mkLambdaFVars #[argument] pointwise
       liftGen <| mkAppM ``funext #[functionProof]
   | .forallE .., _ | _, .forallE .. =>
     failConstruction (.missingPublicIotaInput rule)
   | _, _ =>
+    let some role := role? | failConstruction (.missingPublicIotaInput rule)
+    let some memberKey := role.member?
+      | failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
+    let some member := plan.members.find? fun member =>
+        member.key == memberKey && member.publicRecursor == role.publicRecursor &&
+          member.implementationRecursor == role.implementationRecursor
+      | failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
+    let some recursor := recursors.find? fun recursor =>
+        recursor.member == member.key &&
+          recursor.implementationRecursor == role.implementationRecursor
+      | failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
+    unless expectedPublic.getAppFn.constName? == some recursor.adapter do
+      failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
     let reducedPrivate ← liftGen <| whnf expectedPrivate
-    let candidates := recursors.filter fun recursor =>
-      reducedPrivate.getAppFn.constName? == some recursor.implementationRecursor
-    let some recursor := candidates[0]?
-      | failConstruction (.missingPublicIotaInput rule)
-    unless candidates.all (·.member == recursor.member) do
-      failConstruction (.missingMemberMap recursor.member)
-    let some member := plan.members.find? (·.key == recursor.member)
-      | failConstruction (.missingMemberMap recursor.member)
+    unless reducedPrivate.getAppFn.constName? == some role.implementationRecursor do
+      failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
     recursorAgreementAt plan memberCertificates member recursor publicRecursorPrefix
       expectedPublic expectedPrivate
 
@@ -1839,7 +1847,7 @@ private def exactRhsArgument? (tag : Name) (rhs : Expr) (binderIndex : Nat) : Op
 private def exactRecursiveCallHead (tag : Name) (value : Expr) : Expr :=
   (openExactLambdas tag value).2.getAppFn
 
-private def publicIotaRecursiveCallRole (rule : RulePlan)
+private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RulePlan)
     (publicBinderIndex implementationBinderIndex : Nat) :
     Except ConstructionIssue (Option PublicIotaRecursiveCallRole) := do
   let some publicValue := exactRhsArgument?
@@ -1855,7 +1863,12 @@ private def publicIotaRecursiveCallRole (rule : RulePlan)
     `_family_adapter_implementation_iota_call implementationValue
   match publicHead.constName?, implementationHead.constName? with
   | some publicRecursor, some implementationRecursor =>
-    return some ⟨rule.key.recursorOwner, publicRecursor, implementationRecursor⟩
+    let candidates := plan.members.filter fun member =>
+      member.publicRecursor == publicRecursor &&
+        member.implementationRecursor == implementationRecursor
+    unless candidates.size <= 1 do
+      throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+    return some ⟨publicRecursor, implementationRecursor, candidates[0]?.map (·.key)⟩
   | none, none =>
     unless publicHead.isFVar && implementationHead.isFVar do
       throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
@@ -1906,7 +1919,8 @@ def derivePublicIotaProofSchemas (plan : FamilyAdapterPlan)
         | throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
       unless occurrenceCertificates.all (·.maps == firstOccurrence.maps) do
         throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
-      let recursiveCall? ← publicIotaRecursiveCallRole rule first.publicBinderIndex binderIndex
+      let recursiveCall? ← publicIotaRecursiveCallRole plan rule
+        first.publicBinderIndex binderIndex
       hypotheses := hypotheses.push
         { rule := rule.key, minorIndex := first.minorIndex,
           publicBinderIndex := first.publicBinderIndex,
@@ -2623,9 +2637,11 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
       let publicMinorHypotheses ← liftGen <|
         motiveHypothesisValues publicMotives publicMinorFields publicMinorBinders
       unless schema.hypotheses.size == publicMinorHypotheses.size &&
-          (Array.range schema.hypotheses.size).all fun position =>
-            publicMinorBinders[schema.hypotheses[position]!.publicBinderIndex]? ==
-              publicMinorHypotheses[position]? do
+          (Array.range publicMinorHypotheses.size).all fun position =>
+            schema.hypotheses.any fun step =>
+              step.publicHypothesisPosition == position &&
+                publicMinorBinders[step.publicBinderIndex]? ==
+                  publicMinorHypotheses[position]? do
         failConstruction (.missingPublicIotaInput rule.key)
       forallBoundedTelescope fieldsTail (some constructor.telescope.binders.size)
           fun publicFields proposition => do
@@ -2765,7 +2781,8 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               let expectedType := eqi.mk' (← liftGen <| ilevel (← inferType expectedPrivate))
                 (← liftGen <| inferType expectedPrivate) expectedPrivate expectedPublic
               let direct ← liftGen <| (recursorHypothesisAgreement plan base.members recursors
-                rule.key publicPrefix rawPublicValues[stepIndex]! expectedPrivate).run
+                rule.key step.recursiveCall? publicPrefix rawPublicValues[stepIndex]!
+                  expectedPrivate).run
               let proof ← match direct with
                 | .ok candidate => do
                   if ← liftGen <| isDefEq (← inferType candidate) expectedType then

@@ -284,8 +284,7 @@ def iotaSchemasComplete (plan : FamilyAdapterPlan)
                         hypothesis.implementationHypothesisPosition ==
                           step.implementationHypothesisPosition &&
                         step.recursiveCall?.all fun role =>
-                          role.recursorOwner == rule.key.recursorOwner &&
-                            !role.publicRecursor.isAnonymous &&
+                          !role.publicRecursor.isAnonymous &&
                             !role.implementationRecursor.isAnonymous
 
 def ruleCertificatesComplete (plan : FamilyAdapterPlan)

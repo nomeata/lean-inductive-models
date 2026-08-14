@@ -264,9 +264,11 @@ structure PublicRecursorCertificate where
 supplies the owner while both literal recursor names are retained independently;
 neither side is inferred from an array position or a spelling classifier. -/
 structure PublicIotaRecursiveCallRole where
-  recursorOwner : MemberKey
   publicRecursor : Name
   implementationRecursor : Name
+  /-- Direct family member when the exact name pair names one.  Specialised
+  mimic calls deliberately remain keyed by their independent name pair. -/
+  member? : Option MemberKey
   deriving Inhabited, BEq, Repr
 
 /-- One distinct installed IH binder in the deterministic public-iota proof.
