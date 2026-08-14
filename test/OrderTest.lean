@@ -866,6 +866,7 @@ def run (root : String) : IO UInt32 := do
         full={repr (composedCheck[0]?)}" <|
     composedStreamed.output.decls == composedRun.output.decls &&
       familiesBeforeOwners composedStreamed.output &&
+      composedStreamed.report.generatedKernelRejected.isNone &&
       composedStreamed.plan.checkReport.violations.isEmpty &&
       composedCheck.isEmpty
 
