@@ -171,7 +171,7 @@ inductive CompactLocator where
   deriving Inhabited, Repr, BEq
 
 /-- Atomic value-free output row. `summary` and `globalExtra` are captured
-together with their logical locator and must always be permuted as one value. -/
+together with their logical locator as one value. -/
 structure CompactRecord where
   summary : Order.DeclSummary
   globalExtra : Check.GlobalExtraRecord
@@ -2496,11 +2496,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
       if compactMode then
         let islandNumber := compactIslands.size
-        let tagged := Order.tagIsland islandNumber compact.summaries
-        let compact := { compact with summaries := tagged }
-        for localOrdinal in [:tagged.size] do
+        for localOrdinal in [:compact.summaries.size] do
           let row : CompactRecord := {
-            summary := tagged[localOrdinal]!
+            summary := compact.summaries[localOrdinal]!
             globalExtra := compact.globalExtras[localOrdinal]!
             families := compact.families[localOrdinal]!
             locator := .generated islandNumber localOrdinal }
@@ -2562,7 +2560,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     sourceOrdinal := sourceOrdinal + 1, islandStatements, invalidBasis,
     sourceSteps, adapterShadows }
 
-/-- Complete compact ordering and checking after the logical source stream has
+/-- Complete compact structural checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
 private def FilterState.finalize (state : FilterState) (context : FilterContext) :
     MetaM (Array EDecl × Report × CompactPlan) := do

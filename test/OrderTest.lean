@@ -429,7 +429,7 @@ def finalEnvironmentIsIsolated (run : FilterRun) : Bool :=
 
 def summaryEqual (left right : Order.DeclSummary) : Bool :=
   left.ordinal == right.ordinal && left.introduced == right.introduced &&
-    left.referenced == right.referenced && left.origin == right.origin &&
+    left.referenced == right.referenced &&
     left.owner == right.owner && left.support == right.support &&
     left.modelSlots == right.modelSlots && left.modelBefore == right.modelBefore
 
@@ -694,8 +694,8 @@ def run (root : String) : IO UInt32 := do
   state := state.check "exact serialized owner reference is rejected owner-free"
     (← ownerDependentRecordIsRejected)
 
-  -- With generation disabled, scheduling has no preferred class. The filter
-  -- is byte/order neutral even when the original order is not alphabetical.
+  -- With generation disabled, the filter is byte/order neutral even when the
+  -- original order is not alphabetical.
   let neutralOwner := inductiveRecord [`NeutralOwner]
   let neutralDependent := axDecl `NeutralDependent (.const `NeutralOwner [])
   let neutralInput := exportOf #[axDecl `NeutralB, neutralOwner,

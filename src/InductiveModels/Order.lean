@@ -53,13 +53,6 @@ indices.  Besides surviving a reorder, these are the useful incremental
 representation: owner expectations are observed while the owner value is
 live; later serialized records can be related using names alone. -/
 
-/-- Where a declaration came from.  Island numbers are diagnostic provenance;
-they do not affect dependency ordering. -/
-inductive SummaryOrigin where
-  | source
-  | island (number : Nat)
-  deriving Inhabited, Repr, BEq
-
 /-- The compact information needed by record ordering and its diagnostics.
 
 `introduced` and `referenced` carry names only. `owner` marks an inductive
@@ -70,7 +63,6 @@ structure DeclSummary where
   ordinal : Nat
   introduced : Array Name
   referenced : Std.HashSet Name
-  origin : SummaryOrigin := .source
   owner : Option Name := none
   support : Bool := false
   modelSlots : Array Name := #[]
@@ -178,7 +170,7 @@ def resolveModelEdges (summaries : Array DeclSummary) : Array DeclSummary := Id.
   return result
 
 private def summariesForFamilies (x : Export) (families : Array Check.Family)
-    (prefer : EDecl → Bool) (origin : SummaryOrigin) : Array DeclSummary := Id.run do
+    (prefer : EDecl → Bool) : Array DeclSummary := Id.run do
   let mut result := x.decls.mapIdx fun ordinal declaration =>
     let owner := match declaration with
       | .induct types _ _ => types.head?.map (·.name)
@@ -186,7 +178,6 @@ private def summariesForFamilies (x : Export) (families : Array Check.Family)
     { ordinal
       introduced := declaration.names.toArray
       referenced := references declaration
-      origin
       owner
       support := prefer declaration }
   for family in families do
@@ -197,28 +188,26 @@ private def summariesForFamilies (x : Export) (families : Array Check.Family)
 
 /-- Declaration-wise construction state for ordering summaries.  Syntax
 families are attached only when the builder freezes, so the same callback
-logic can summarize raw or scheduled declaration views without conflating
-their ordinals. -/
+logic can summarize any declaration view using its own ordinals. -/
 structure SummaryBuilder where
   private rows : Array DeclSummary := #[]
 
 /-- Add one declaration at the next ordinal in this summary view. -/
 def SummaryBuilder.push (builder : SummaryBuilder) (declaration : EDecl)
-    (prefer : EDecl → Bool := fun _ => false)
-    (origin : SummaryOrigin := .source) : SummaryBuilder :=
+    (prefer : EDecl → Bool := fun _ => false) : SummaryBuilder :=
   let ordinal := builder.rows.size
   let owner := match declaration with
     | .induct types _ _ => types.head?.map (·.name)
     | _ => none
   { rows := builder.rows.push
       { ordinal, introduced := declaration.names.toArray
-        referenced := references declaration, origin, owner
+        referenced := references declaration, owner
         support := prefer declaration } }
 
 /-- Attach exact source-family slots and resolve model edges after all
 declaration callbacks have arrived.  Family templates are looked up by owner
-name rather than record ordinal, which keeps scheduled-view ordinals separate
-from the raw source index.  Duplicate owner names are malformed independently
+name rather than record ordinal, which keeps view ordinals separate from the
+source syntax index. Duplicate owner names are malformed independently
 and still receive the same duplicate-name diagnostic before ordering. -/
 def SummaryBuilder.freeze (builder : SummaryBuilder)
     (index : Check.SyntaxIndex) : Array DeclSummary := Id.run do
@@ -234,39 +223,31 @@ def SummaryBuilder.freeze (builder : SummaryBuilder)
 /-- Incrementally summarize a declaration view against one frozen source
 syntax index. -/
 def summariesIncremental (x : Export) (index : Check.SyntaxIndex)
-    (prefer : EDecl → Bool := fun _ => false)
-    (origin : SummaryOrigin := .source) : Array DeclSummary :=
+    (prefer : EDecl → Bool := fun _ => false) : Array DeclSummary :=
   (x.decls.foldl (fun builder declaration =>
-      builder.push declaration prefer origin) ({} : SummaryBuilder)).freeze index
+      builder.push declaration prefer) ({} : SummaryBuilder)).freeze index
 
 /-- Summarize an export while its declaration values are available.
 
 The public-model edges are computed by the same exact discovery used by the
 current ordering pass.  After this function returns, ordering no longer needs
 the `Export` or any declaration value. -/
-def summaries (x : Export) (prefer : EDecl → Bool := fun _ => false)
-    (origin : SummaryOrigin := .source) : Array DeclSummary :=
+def summaries (x : Export) (prefer : EDecl → Bool := fun _ => false) : Array DeclSummary :=
   let roots := x.decls.foldl (fun roots declaration => match declaration with
     | .induct (type :: _) _ _ => roots.insert type.name
     | _ => roots) ({} : Std.HashSet Name)
   -- `statementFamiliesFor` retains owners even if no public model slot exists
   -- yet. This is essential for a source summary built before its generated
   -- island: `Check.discover` alone would forget precisely that future edge.
-  summariesForFamilies x (Check.statementFamiliesFor x roots) prefer origin
+  summariesForFamilies x (Check.statementFamiliesFor x roots) prefer
 
 /-- Source-aware island summary. Public model slots are discovered through the
 same overlay used by statement checking, so transparent aliases outside the
 disposable island still influence exact projection eligibility. -/
 def summariesWithIndex (x : Export) (index : Check.SyntaxIndex)
-    (owners : Std.HashSet Name) (origin : SummaryOrigin := .source) : Array DeclSummary :=
+    (owners : Std.HashSet Name) : Array DeclSummary :=
   summariesForFamilies x
-    (Check.statementFamiliesForRecordsWithIndex x index owners) (fun _ => false) origin
-
-/-- Re-tag summaries belonging to one disposable model island.  The owner may
-itself be generated by a composed construction; its `owner` and `modelBefore`
-roles remain orthogonal to provenance. -/
-def tagIsland (number : Nat) (summaries : Array DeclSummary) : Array DeclSummary :=
-  summaries.map fun summary => { summary with origin := .island number }
+    (Check.statementFamiliesForRecordsWithIndex x index owners) (fun _ => false)
 
 
 private def addEdge (outgoing : Array (Std.HashSet Nat)) (indegree : Array Nat)
