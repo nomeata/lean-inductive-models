@@ -20,22 +20,23 @@ The generator instantiates this theorem only with exact keyed maps and laws;
 it performs no proof search. -/
 theorem packedRecursorCompatibility
     {M : Sort uM} {P : Sort uP} {Q : Sort uQ} {R : Sort uR}
-    {C : P → Sort v} {H : R → Sort x}
+    {C : P → Sort v} {HP : R → Sort x} {HI : Q → Sort y}
     (forward : P → M) (backward : M → P)
     (backwardForward : ∀ p, backward (forward p) = p)
     (encode : R → Q) (decode : Q → R)
     (decodeEncode : ∀ p, decode (encode p) = p)
     (privateCtor : Q → M) (publicCtor : R → P)
     (forwardCtor : ∀ p, forward (publicCtor p) = privateCtor (encode p))
-    (privateIH : ∀ q, H (decode q)) (publicIH : ∀ p, H p)
-    (ihAgreement : ∀ q, publicIH (decode q) = privateIH q)
-    (minor : ∀ p, H p → C (publicCtor p))
+    (privateIH : ∀ q, HI q) (publicIH : ∀ p, HP p)
+    (decodeIH : ∀ q, HI q → HP (decode q))
+    (ihAgreement : ∀ q, publicIH (decode q) = decodeIH q (privateIH q))
+    (minor : ∀ p, HP p → C (publicCtor p))
     (core : ∀ q, C (backward q))
     (constructorAgreement : ∀ q,
       publicCtor (decode q) = backward (privateCtor q))
     (coreIota : ∀ q, core (privateCtor q) =
       Eq.mp (congrArg C (constructorAgreement q))
-        (minor (decode q) (privateIH q))) :
+        (minor (decode q) (decodeIH q (privateIH q)))) :
     let publicRec : ∀ p, C p := fun p =>
       Eq.mp (congrArg C (backwardForward p)) (core (forward p))
     ∀ p, publicRec (publicCtor p) = minor p (publicIH p) := by
@@ -65,7 +66,7 @@ theorem packedRecursorCompatibility
             let move := fun value : C (backward (privateCtor q)) =>
               Eq.mp (congrArg C hout) value
             let first := congrArg move (coreIota q)
-            let privateResult := minor (decode q) (privateIH q)
+            let privateResult := minor (decode q) (decodeIH q (privateIH q))
             let middle : move
                 (Eq.mp (congrArg C (constructorAgreement q)) privateResult) =
                 privateResult := by
@@ -2646,17 +2647,9 @@ private def installedMinorArguments (rule : RulePlan) (owner : MemberPlan)
       failConstruction (.missingPublicIotaInput rule.key)
     return probed.getAppArgs.map (·.replaceFVars #[probe] #[privateMinor])
 
-/-- Assemble the two complete dependent IH packages at one private constructor
-package and prove them equal.  Component recursor equalities are consumed only
-while constructing the single packed equality; later proof steps never project
-that equality back into dependent fields. -/
-private def packedIotaHypothesisAgreement (plan : FamilyAdapterPlan)
-    (recursors : Array PublicRecursorCertificate)
-    (rule : RulePlan)
-    (schema : PublicIotaProofSchema) (publicFields decodedFields : Array Expr)
-    (theoremRightArguments : Array Expr)
-    (privateMinorType : Expr) (privateFields privateArguments : Array Expr) :
-    ConstructionM (Expr × Expr × Expr) := do
+private def withPrivateIotaHypotheses (rule : RulePlan) (schema : PublicIotaProofSchema)
+    (privateMinorType : Expr) (privateFields privateArguments : Array Expr)
+    (k : Array Expr → ConstructionM α) : ConstructionM α := do
   forallBoundedTelescope privateMinorType (some (numForalls privateMinorType))
       fun privateBinders _ => do
     let mut privateMinorFields := #[]
@@ -2680,39 +2673,65 @@ private def packedIotaHypothesisAgreement (plan : FamilyAdapterPlan)
               privateBinders[step.binderIndex]? == privateHypotheses[position]? do
       failConstruction (.missingPublicIotaInput rule.key)
     withReboundTelescope privateMinorFields privateFields privateHypotheses 0 #[]
-        fun reboundHypotheses => do
+      k
+
+/-- Assemble exact private, decoded-public, and source-public IH packages at
+one constructor package.  The only equality produced is the whole public
+package equality; it is never projected back into dependent fields. -/
+private def packedIotaHypothesisAgreement (plan : FamilyAdapterPlan)
+    (recursors : Array PublicRecursorCertificate)
+    (rule : RulePlan)
+    (schema : PublicIotaProofSchema)
+    (publicFields publicMinorFields publicMinorHypotheses decodedFields : Array Expr)
+    (theoremRightArguments : Array Expr)
+    (privateMinorType : Expr) (privateFields privateArguments : Array Expr) :
+    ConstructionM (Expr × Expr × Expr × Expr) := do
+  withPrivateIotaHypotheses rule schema privateMinorType privateFields privateArguments
+      fun reboundPrivateHypotheses => do
       let eqi ← match EqInfo.check (← getEnv) with
         | .ok information => pure information
         | .error _ => failConstruction (.missingPublicIotaInput rule.key)
       let mut actualValues := #[]
-      let mut expectedValues := #[]
-      let mut proofs := #[]
-      for position in [:reboundHypotheses.size] do
+      for position in [:reboundPrivateHypotheses.size] do
         let some step := schema.hypotheses.find?
             (·.implementationHypothesisPosition == position)
           | failConstruction (.missingPublicIotaInput rule.key)
         let some actual := privateArguments[step.binderIndex]?
           | failConstruction (.missingPublicIotaInput rule.key)
-        let some rawPublic := theoremRightArguments[step.publicBinderIndex]?
-          | failConstruction (.missingPublicIotaInput rule.key)
-        let expected := rawPublic.replaceFVars publicFields decodedFields
-        let proof ← recursorHypothesisAgreement plan recursors rule.key
-          step.recursiveCall? step.publicBinderIndex step.binderIndex expected actual
-        let type ← liftGen <| inferType actual
-        let expectedEquality := eqi.mk' (← liftGen <| ilevel type) type actual expected
-        unless ← liftGen <| isDefEq (← inferType proof) expectedEquality do
-          failConstruction (.missingPublicIotaInput rule.key)
         actualValues := actualValues.push actual
-        expectedValues := expectedValues.push expected
-        proofs := proofs.push proof
-      let packageType ← liftGen <| packedTelescopeType reboundHypotheses
-      let actualPackage ← liftGen <|
-        packTelescopeValue reboundHypotheses actualValues
-      let expectedPackage ← liftGen <|
-        packTelescopeValue reboundHypotheses expectedValues
-      let proof ← liftGen <| packageCongruence eqi reboundHypotheses packageType
-        actualValues expectedValues proofs
-      return (actualPackage, expectedPackage, proof)
+      let privatePackage ← liftGen <|
+        packTelescopeValue reboundPrivateHypotheses actualValues
+      withReboundTelescope publicMinorFields decodedFields publicMinorHypotheses 0 #[]
+          fun reboundPublicHypotheses => do
+        let mut decodedValues := #[]
+        let mut expectedValues := #[]
+        let mut proofs := #[]
+        for position in [:reboundPublicHypotheses.size] do
+          let some step := schema.hypotheses.find?
+              (·.publicHypothesisPosition == position)
+            | failConstruction (.missingPublicIotaInput rule.key)
+          let some actual := privateArguments[step.binderIndex]?
+            | failConstruction (.missingPublicIotaInput rule.key)
+          let some rawPublic := theoremRightArguments[step.publicBinderIndex]?
+            | failConstruction (.missingPublicIotaInput rule.key)
+          let expected := rawPublic.replaceFVars publicFields decodedFields
+          let proof ← recursorHypothesisAgreement plan recursors rule.key
+            step.recursiveCall? step.publicBinderIndex step.binderIndex expected actual
+          let type ← liftGen <| inferType actual
+          let expectedEquality := eqi.mk' (← liftGen <| ilevel type) type actual expected
+          unless ← liftGen <| isDefEq (← inferType proof) expectedEquality do
+            failConstruction (.missingPublicIotaInput rule.key)
+          decodedValues := decodedValues.push actual
+          expectedValues := expectedValues.push expected
+          proofs := proofs.push proof
+        let publicPackageType ← liftGen <| packedTelescopeType reboundPublicHypotheses
+        let decodedPackage ← liftGen <|
+          packTelescopeValue reboundPublicHypotheses decodedValues
+        let expectedPackage ← liftGen <|
+          packTelescopeValue reboundPublicHypotheses expectedValues
+        let proof ← liftGen <| packageCongruence eqi reboundPublicHypotheses
+          publicPackageType decodedValues expectedValues proofs
+        return (privatePackage, decodedPackage, expectedPackage, proof)
 
 private def publicIotaDeclaration (plan : FamilyAdapterPlan)
     (base : FamilyAdapterCertificate)
@@ -2839,13 +2858,14 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
         let implementationFieldsTail ← instantiateForall implementationConstructorType parameters
         forallBoundedTelescope implementationFieldsTail
             (some constructor.telescope.binders.size) fun implementationFields _ => do
-          let makeHypothesisFamily := withLocalDeclD `package constructorBoundary.publicFieldsType
+          let makePublicHypothesisFamily := withLocalDeclD `package
+              constructorBoundary.publicFieldsType
               fun package => do
             let fields ← liftGen <| unpackTelescopeValue publicMinorFields package
             withReboundTelescope publicMinorFields fields publicMinorHypotheses 0 #[] fun hypotheses => do
               let type ← liftGen <| packedTelescopeType hypotheses
               liftGen <| mkLambdaFVars #[package] type
-          let hypothesisFamily ← makeHypothesisFamily
+          let publicHypothesisFamily ← makePublicHypothesisFamily
           let publicIH ← withLocalDeclD `package constructorBoundary.publicFieldsType
               fun package => do
             let fields ← liftGen <| unpackTelescopeValue publicMinorFields package
@@ -2858,7 +2878,18 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               liftGen <| mkLambdaFVars #[package] packed
           let privateMinor := privateMinors[compatibility.minorIndex]!
           let privateMinorType ← liftGen <| inferType privateMinor
-          let packageData (package : Expr) : ConstructionM (Expr × Expr × Expr) := do
+          let implementationHypothesisFamily ← withLocalDeclD `package
+              constructorBoundary.implementationFieldsType fun package => do
+            let privateFields ← liftGen <|
+              unpackTelescopeValue implementationFields package
+            let privateArguments ← installedMinorArguments rule owner compatibility
+              privatePrefix privateMinor privateMinorType privateFields
+            withPrivateIotaHypotheses rule schema privateMinorType privateFields privateArguments
+                fun privateHypotheses => do
+              let type ← liftGen <| packedTelescopeType privateHypotheses
+              liftGen <| mkLambdaFVars #[package] type
+          let packageData (package : Expr) :
+              ConstructionM (Expr × Expr × Expr × Expr) := do
             let privateFields ← liftGen <|
               unpackTelescopeValue implementationFields package
             let privateArguments ← installedMinorArguments rule owner compatibility
@@ -2867,26 +2898,60 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
             let decodedFields ← liftGen <|
               unpackTelescopeValue publicMinorFields decodedPackage
             packedIotaHypothesisAgreement plan recursors rule schema
-              publicFields decodedFields theoremRightArguments
+              publicFields publicMinorFields publicMinorHypotheses decodedFields
+              theoremRightArguments
               privateMinorType privateFields privateArguments
           let privateIH ← withLocalDeclD `package constructorBoundary.implementationFieldsType
               fun package => do
-            let (actualPackage, _, _) ← packageData package
+            let (actualPackage, _, _, _) ← packageData package
             liftGen <| mkLambdaFVars #[package] actualPackage
+          let decodeIH ← withLocalDeclD `package
+              constructorBoundary.implementationFieldsType fun package => do
+            let privateFields ← liftGen <|
+              unpackTelescopeValue implementationFields package
+            let privateArguments ← installedMinorArguments rule owner compatibility
+              privatePrefix privateMinor privateMinorType privateFields
+            let privateHypothesisType := mkApp implementationHypothesisFamily package
+            withLocalDeclD `privateHypotheses privateHypothesisType
+                fun privatePackage => do
+              withPrivateIotaHypotheses rule schema privateMinorType privateFields
+                  privateArguments fun privateHypotheses => do
+                let privateValues ← liftGen <|
+                  unpackTelescopeValue privateHypotheses privatePackage
+                let decodedPackage := mkApp constructorBoundary.decode package
+                let decodedFields ← liftGen <|
+                  unpackTelescopeValue publicMinorFields decodedPackage
+                withReboundTelescope publicMinorFields decodedFields
+                    publicMinorHypotheses 0 #[] fun publicHypotheses => do
+                  let mut decodedValues := #[]
+                  for position in [:publicHypotheses.size] do
+                    let some step := schema.hypotheses.find?
+                        (·.publicHypothesisPosition == position)
+                      | failConstruction (.missingPublicIotaInput rule.key)
+                    let some value := privateValues[step.implementationHypothesisPosition]?
+                      | failConstruction (.missingPublicIotaInput rule.key)
+                    decodedValues := decodedValues.push value
+                  let decoded ← liftGen <|
+                    packTelescopeValue publicHypotheses decodedValues
+                  liftGen <| mkLambdaFVars #[package, privatePackage] decoded
           let ihAgreement ← withLocalDeclD `package constructorBoundary.implementationFieldsType
               fun package => do
-            let (actualPackage, expectedPackage, packageProof) ← packageData package
+            let (actualPrivate, decodedActual, expectedPublic, packageProof) ←
+              packageData package
             let expected := mkApp publicIH (mkApp constructorBoundary.decode package)
-            let actual := mkApp privateIH package
-            unless ← liftGen <| isDefEq expectedPackage expected do
+            let actualPrivateIH := mkApp privateIH package
+            let decodedPrivateIH := mkAppN decodeIH #[package, actualPrivateIH]
+            unless ← liftGen <| isDefEq expectedPublic expected do
               failConstruction (.missingPublicIotaInput rule.key)
-            unless ← liftGen <| isDefEq actualPackage actual do
+            unless ← liftGen <| isDefEq actualPrivate actualPrivateIH do
+              failConstruction (.missingPublicIotaInput rule.key)
+            unless ← liftGen <| isDefEq decodedActual decodedPrivateIH do
               failConstruction (.missingPublicIotaInput rule.key)
             let proof ← liftGen <| mkAppM ``Eq.symm #[packageProof]
             liftGen <| mkLambdaFVars #[package] proof
           let minor ← withLocalDeclD `package constructorBoundary.publicFieldsType fun package => do
             let fields ← liftGen <| unpackTelescopeValue publicMinorFields package
-            let hypothesisType := mkApp hypothesisFamily package
+            let hypothesisType := mkApp publicHypothesisFamily package
             withLocalDeclD `hypotheses hypothesisType fun hypothesisPackage => do
               let hypothesisValues ← liftGen <|
                 unpackTelescopeValue publicMinorHypotheses hypothesisPackage
@@ -2932,9 +2997,10 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
             let decodedPackage := mkApp constructorBoundary.decode package
             let decodedFields ← liftGen <|
               unpackTelescopeValue publicMinorFields decodedPackage
+            let decodedPrivateIH := mkAppN decodeIH #[package, mkApp privateIH package]
             let replacementValues ← withReboundTelescope publicMinorFields decodedFields
                 publicMinorHypotheses 0 #[] fun hypotheses =>
-              liftGen <| unpackTelescopeValue hypotheses (mkApp privateIH package)
+              liftGen <| unpackTelescopeValue hypotheses decodedPrivateIH
             let mut extra := #[]
             for step in schema.hypotheses do
               let expectedPrivate := privateArguments[step.binderIndex]!
@@ -2960,7 +3026,7 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               compatibilityRight
               iotaProof compatibilityProof
             let expected := mkAppN minor
-              #[decodedPackage, mkApp privateIH package]
+              #[decodedPackage, decodedPrivateIH]
             let constructorProof := mkApp constructorBoundary.constructorAgreement package
             let congruence ← liftGen <| mkAppM ``congrArg #[motive, constructorProof]
             let transported ← liftGen <| mkAppM ``Eq.mp #[congruence, expected]
@@ -2972,12 +3038,13 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
           let proof ← liftGen <| mkAppOptM ``packedRecursorCompatibility <|
             #[ownerBoundary.implementationType, ownerBoundary.publicType,
               constructorBoundary.implementationFieldsType,
-              constructorBoundary.publicFieldsType, motive, hypothesisFamily,
+              constructorBoundary.publicFieldsType, motive, publicHypothesisFamily,
+              implementationHypothesisFamily,
               ownerBoundary.forward, ownerBoundary.backward, ownerBoundary.backwardForward,
               constructorBoundary.encode, constructorBoundary.decode,
               constructorBoundary.decodeEncode, constructorBoundary.implementationCtor,
               constructorBoundary.publicCtor, constructorBoundary.forwardCtor,
-              privateIH, publicIH, ihAgreement, minor, core,
+              privateIH, publicIH, decodeIH, ihAgreement, minor, core,
               constructorBoundary.constructorAgreement, coreIota].map some
           let applied := mkApp proof publicPackage
           unless ← liftGen <| isDefEq (← inferType applied) proposition do
