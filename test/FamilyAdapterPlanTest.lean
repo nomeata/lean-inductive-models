@@ -126,6 +126,7 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
     { key := occurrence.key
       parameterArity
       indexArity
+      implementationCarrier := numbered "FamilyAdapterPlanTest.containerCarrier" index
       maps :=
         { forward := numbered "FamilyAdapterPlanTest.containerForward" index
           backward := numbered "FamilyAdapterPlanTest.containerBackward" index
@@ -134,7 +135,8 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
       forwardType := .sort .zero
       backwardType := .sort .zero
       backwardForwardType := .sort .zero
-      forwardBackwardType := .sort .zero }
+      forwardBackwardType := .sort .zero
+      implementationCarrierType := .sort .zero }
   return { root := memberKey 0
            levelParams := []
            components :=

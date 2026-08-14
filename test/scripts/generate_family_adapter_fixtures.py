@@ -139,6 +139,7 @@ class FixtureMatrix:
             "generatedChangedNestedRoll", "generatedChangedNestedUnroll",
             "generatedChangedNestedUnrollRoll", "generatedChangedNestedRollUnroll",
             "generatedChangedNestedContainerForward",
+            "generatedChangedNestedContainerWrongTarget",
             "generatedChangedNestedContainerBackward",
             "generatedChangedNestedContainerBackwardForward",
             "generatedChangedNestedContainerForwardBackward",
@@ -245,11 +246,11 @@ axiom generatedChangedIndexedRollUnroll (index : GeneratedIndex)
   generatedChangedIndexedRoll index (generatedChangedIndexedUnroll index value) = value
 
 inductive GeneratedChangedNestedPublic : Type where
-  | mk (children : GeneratedList GeneratedChangedNestedPublic) :
+  | mk (children : GeneratedIndex -> GeneratedList GeneratedChangedNestedPublic) :
       GeneratedChangedNestedPublic
 
 inductive GeneratedChangedNestedPrivate : Type where
-  | mk (children : GeneratedList GeneratedChangedNestedPrivate) :
+  | mk (children : GeneratedIndex -> GeneratedList GeneratedChangedNestedPrivate) :
       GeneratedChangedNestedPrivate
 
 axiom generatedChangedNestedRoll :
@@ -264,6 +265,8 @@ axiom generatedChangedNestedRollUnroll (value : GeneratedChangedNestedPrivate) :
 axiom generatedChangedNestedContainerForward :
   GeneratedList GeneratedChangedNestedPublic ->
     GeneratedList GeneratedChangedNestedPrivate
+axiom generatedChangedNestedContainerWrongTarget :
+  GeneratedList GeneratedChangedNestedPublic -> GeneratedIndex
 axiom generatedChangedNestedContainerBackward :
   GeneratedList GeneratedChangedNestedPrivate ->
     GeneratedList GeneratedChangedNestedPublic

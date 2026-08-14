@@ -59,6 +59,7 @@ def identityIso (source : EDecl) : Iso :=
   | _ => default
 
 structure ChangedContainerBoundary where
+  implementationCarrier : Name
   forward : Name
   backward : Name
   backwardForward : Name
@@ -102,6 +103,7 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
       pure #[{
         parameterArity := 0
         indexArity := 0
+        implementationCarrier := container.implementationCarrier
         forward := container.forward
         backward := container.backward
         backwardForward := container.backwardForward
@@ -109,7 +111,8 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
         forwardType := (← typeOf container.forward)
         backwardType := (← typeOf container.backward)
         backwardForwardType := (← typeOf container.backwardForward)
-        forwardBackwardType := (← typeOf container.forwardBackward) }]
+        forwardBackwardType := (← typeOf container.forwardBackward)
+        implementationCarrierType := (← typeOf container.implementationCarrier) }]
   return { publicIso with
     familyImplementation? := some
       { root := boundary.publicOwner, support := #[], members := #[member] }
@@ -139,7 +142,8 @@ def changedNested : ChangedBoundary :=
     backwardForward := `FamilyAdapterGenerated.generatedChangedNestedUnrollRoll
     forwardBackward := `FamilyAdapterGenerated.generatedChangedNestedRollUnroll
     container? := some
-      { forward := `FamilyAdapterGenerated.generatedChangedNestedContainerForward
+      { implementationCarrier := `FamilyAdapterGenerated.GeneratedList
+        forward := `FamilyAdapterGenerated.generatedChangedNestedContainerForward
         backward := `FamilyAdapterGenerated.generatedChangedNestedContainerBackward
         backwardForward :=
           `FamilyAdapterGenerated.generatedChangedNestedContainerBackwardForward
@@ -220,6 +224,7 @@ structure Result where
   closedContainers : Nat := 0
   invalidMaps : Nat := 0
   invalidContainerMaps : Nat := 0
+  wrongTargetMaps : Nat := 0
   failures : Array String := #[]
 
 def runSamples : MetaM Result := do
@@ -361,6 +366,33 @@ def runSamples : MetaM Result := do
         s!"invalid container metadata was not rejected atomically: shadow={
           repr invalidContainerReport.reasons}, construction={repr built.issues}"
       result := { result with failures }
+  let wrongTargetName :=
+    `FamilyAdapterGenerated.generatedChangedNestedContainerWrongTarget
+  let wrongTargetType := (← getEnv).constants.find! wrongTargetName |>.type
+  let wrongTargetContainer :=
+    { validContainer with forward := wrongTargetName, forwardType := wrongTargetType }
+  let wrongTargetIso :=
+    { validContainerIso with containerImplementations := #[wrongTargetContainer] }
+  let wrongTargetReport ← FamilyAdapter.deriveShadowPlan invalidContainerSource wrongTargetIso
+  let wrongTargetBuilt ← (FamilyAdapter.buildFamilyPrototype wrongTargetReport wrongTargetIso
+    `_family_adapter_construction_test_wrong_container_target).run
+  match wrongTargetBuilt with
+  | .error decline =>
+    let failures := result.failures.push s!"wrong container target: {decline.label}"
+    result := { result with failures }
+  | .ok built =>
+    let keyedMissing := wrongTargetReport.reasons.any fun
+      | .missingContainerMap occurrence =>
+          occurrence.target.owner == changedNested.publicOwner
+      | _ => false
+    if keyedMissing && wrongTargetReport.coverage.containerMaps.isEmpty &&
+        built.certificate.isNone && built.declarations.isEmpty then
+      result := { result with wrongTargetMaps := result.wrongTargetMaps + 1 }
+    else
+      let failures := result.failures.push
+        s!"wrong container target entered the plan: shadow={repr wrongTargetReport.reasons}, \
+          construction={repr built.issues}"
+      result := { result with failures }
   let installedOwners := #[`FamilyAdapterGenerated.GeneratedLayerA,
     `FamilyAdapterGenerated.GeneratedLayerB]
   let installedSource ← indEDecl installedOwners
@@ -397,6 +429,7 @@ def runMain : IO UInt32 := do
   if result.failures.isEmpty && result.complete == completeSamples.size &&
       result.identityNested == nestedSamples.size && result.changed == 3 &&
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
+      result.wrongTargetMaps == 1 &&
       result.installedFamily == 1 &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
@@ -409,7 +442,8 @@ def runMain : IO UInt32 := do
   IO.eprintln s!"family adapter construction: complete={result.complete}, \
     identityNested={result.identityNested}, changed={result.changed}, \
     installedFamily={result.installedFamily}, closedContainers={result.closedContainers}, \
-    invalidMaps={result.invalidMaps}, invalidContainerMaps={result.invalidContainerMaps}"
+    invalidMaps={result.invalidMaps}, invalidContainerMaps={result.invalidContainerMaps}, \
+    wrongTargetMaps={result.wrongTargetMaps}"
   return 1
 
 end FamilyAdapterConstructionTest

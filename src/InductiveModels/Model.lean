@@ -2156,13 +2156,14 @@ structure IsoFamilyImplementation where
   deriving Inhabited
 
 /-- One already checked equivalence between a source-shaped nested container
-and the corresponding private mimic member. `parameterArity` and `indexArity`
+and the corresponding named private mimic member. `parameterArity` and `indexArity`
 describe the exact prefix of all four declarations; neither is an eligibility
 bound. The declaration types are retained so a later shadow can compare the
-installed constants before assigning the maps to source occurrence keys. -/
+installed constants and target carrier before assigning maps to source keys. -/
 structure IsoContainerImplementation where
   parameterArity : Nat
   indexArity : Nat
+  implementationCarrier : Name
   forward : Name
   backward : Name
   backwardForward : Name
@@ -2171,6 +2172,7 @@ structure IsoContainerImplementation where
   backwardType : Expr
   backwardForwardType : Expr
   forwardBackwardType : Expr
+  implementationCarrierType : Expr
   deriving Inhabited, BEq, Repr
 
 /-- Everything one nested declaration's model came to. -/
@@ -3236,6 +3238,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       for j in [0:pl.types[k]!.ctors.size] do
         aliases := aliases.insert (g.iotaName k j) (Naming.iotaName exportRecs[k]! j)
   let containerImplementations ← (Array.range pl.mimics.size).mapM fun i => do
+    let implementationCarrier := g.members[r + i]!
     let forward := g.packName i
     let backward := g.unpackName i
     let backwardForward := g.retractName i
@@ -3243,6 +3246,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     return {
       parameterArity := np
       indexArity := g.midx i
+      implementationCarrier
       forward
       backward
       backwardForward
@@ -3250,7 +3254,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       forwardType := (← constInfo forward).type
       backwardType := (← constInfo backward).type
       backwardForwardType := (← constInfo backwardForward).type
-      forwardBackwardType := (← constInfo forwardBackward).type }
+      forwardBackwardType := (← constInfo forwardBackward).type
+      implementationCarrierType := (← constInfo implementationCarrier).type }
   return { decls := out, levelParams := lparams, members := g.members, selfNames
            numAll := r, ctors
            recs := (Array.range pl.types.size).map g.recName, iotas, ruleKs, spliced, aliases,

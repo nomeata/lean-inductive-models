@@ -291,7 +291,8 @@ private def containerMetadataInstalled (environment : Environment)
   for (name, expected) in #[(container.forward, container.forwardType),
       (container.backward, container.backwardType),
       (container.backwardForward, container.backwardForwardType),
-      (container.forwardBackward, container.forwardBackwardType)] do
+      (container.forwardBackward, container.forwardBackwardType),
+      (container.implementationCarrier, container.implementationCarrierType)] do
     match installedType? environment name with
     | none => reasons := reasons.push (.missingInstalledContainerMap occurrence name)
     | some actual => unless actual == expected do
@@ -310,6 +311,7 @@ private def containerTarget? (container : IsoContainerImplementation)
   unless ← isDefEq domain sourceType do return none
   let target ← instantiateMVars target
   if ← hasAssignableMVar target then return none
+  unless target.getAppFn.constName? == some container.implementationCarrier do return none
   return some target
 
 private partial def withBinderBody (type : Expr) (depth : Nat)
@@ -513,10 +515,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           let fieldType ← inferType field
           let candidates ← withBinderBody fieldType occurrence.binderDepth fun body =>
             iso.containerImplementations.filterMapM fun container => do
-              -- Candidate probes are independent: an unrelated mimic can have
-              -- index domains which mention declarations absent from this
-              -- exact source family.  Such a map is not a match, rather than
-              -- a reason to abort the complete shadow derivation.
+              -- Domain unification assigns an occurrence to a generated map;
+              -- the inferred target must be the exact recorded private mimic.
               let target? ← try containerTarget? container parameters body catch _ => pure none
               return target?.map fun _ => container
           if candidates.size > 1 then
@@ -529,6 +529,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
                 { key := occurrence
                   parameterArity := container.parameterArity
                   indexArity := container.indexArity
+                  implementationCarrier := container.implementationCarrier
                   maps :=
                     { forward := container.forward
                       backward := container.backward
@@ -537,7 +538,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
                   forwardType := container.forwardType
                   backwardType := container.backwardType
                   backwardForwardType := container.backwardForwardType
-                  forwardBackwardType := container.forwardBackwardType }
+                  forwardBackwardType := container.forwardBackwardType
+                  implementationCarrierType := container.implementationCarrierType }
             else
               addedReasons := addedReasons ++ metadataReasons
           else

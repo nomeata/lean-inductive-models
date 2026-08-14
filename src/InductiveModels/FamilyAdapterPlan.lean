@@ -201,17 +201,21 @@ structure OccurrencePlan where
   deriving Inhabited, BEq, Repr
 
 /-- Installed container/mimic equivalence assigned to one exact source
-occurrence. Several occurrences in one field may intentionally carry the same
-four declarations; the occurrence key, not an array offset, is authoritative. -/
+occurrence. The named implementation carrier binds its codomain to the private
+mimic rather than trusting an otherwise self-consistent function type. Several
+occurrences in one field may intentionally carry the same four declarations;
+the occurrence key, not an array offset, is authoritative. -/
 structure ContainerMapPlan where
   key : OccurrenceKey
   parameterArity : Nat
   indexArity : Nat
+  implementationCarrier : Name
   maps : EquivalenceCertificate
   forwardType : Expr
   backwardType : Expr
   backwardForwardType : Expr
   forwardBackwardType : Expr
+  implementationCarrierType : Expr
   deriving Inhabited, BEq, Repr
 
 /-- One exact public rule and its private proof oracle.  Occurrences are keyed

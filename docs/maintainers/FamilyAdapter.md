@@ -53,13 +53,15 @@ environment; they are never serialized through JSON.
 The prototype closes direct and infinitary occurrences through arbitrary
 finite binder telescopes. A definitionally unchanged nested field is reused
 directly. `Iso.containerImplementations` now exposes every generated mimic's
-pack, unpack, and two inverse laws together with their exact installed types
-and finite parameter/index prefix arities. The shadow unifies those types with
-the whole source field beneath its exact binder path and assigns a unique map
-to each matching `OccurrenceKey`. Construction consumes that key and the
-installed law, so a changed nested field closes without recognizing `List` or
-any other container name. Missing, ambiguous, or changed installed metadata
-remains a keyed incomplete report rather than selecting a fallback route.
+pack, unpack, and two inverse laws together with their named private mimic,
+exact installed types, and finite parameter/index prefix arities. The shadow
+unifies those types with the whole source field beneath its exact binder path,
+requires the inferred target head to be that installed mimic, and assigns a
+unique map to each matching `OccurrenceKey`. Construction descends the same
+binder path before consuming that key and installed law, so a changed nested
+field closes without recognizing `List` or any other container name. Missing,
+ambiguous, wrong-target, or changed installed metadata remains a keyed
+incomplete report rather than selecting a fallback route.
 
 ## Proof construction
 
@@ -128,7 +130,8 @@ tests exercise structural rejection. These are property-style regression
 samples, not a supported-shape list. `FamilyAdapterConstructionTest` also
 checks distinct public/private direct and indexed carriers, one real
 `mutualOneLayerIso` family, definitionally unchanged nesting, and a distinct
-carrier nested field closed by an exact keyed container equivalence. The
+carrier nested field under a function binder closed by an exact keyed
+container equivalence. The
 shadow regression also requires maps exposed by real nested-model generation.
 Source-level guards pin Lean's rejection of a later field or result index that
 depends on a recursive constructor value.
