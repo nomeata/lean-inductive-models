@@ -50,6 +50,40 @@ def runMeta (action : MetaM (Except String Unit)) : IO (Except String Unit) := d
 def runNew (x : Export) : IO (Except String Unit) :=
   runMeta (typeCheckExport x)
 
+def noGeneration : Cli.Config :=
+  { nested := false, mutualModels := false, simple := false, basic := false }
+
+def runFilterShadow (x : Export) (generation : Cli.Config)
+    (checkRecursors : Bool := false) :
+    IO (Array EDecl × Report × FilterKernelCheckShadow) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<filter-kernel-check-shadow-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+    (runFilterWithKernelCheckShadow x checkRecursors generation)) context { env }
+  return result
+
+def runDiscarding (x : Export) (generation : Cli.Config) : IO (Report × CompactPlan) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<filter-kernel-check-compact-boundary-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+    (runFilterDiscarding x false generation)) context { env }
+  return result
+
+def readFixture (root file : String) : IO Export := do
+  let text ← IO.FS.readFile s!"{root}/test/fixtures/inductive-models/{file}"
+  let .ok parsed := InductiveModels.parse text (analyse := false)
+    | throw <| IO.userError s!"kernelchecktest: cannot parse {file}"
+  return parsed
+
+def shadowAgrees (shadow : FilterKernelCheckShadow) : Bool :=
+  accepted shadow.streamedResult && accepted shadow.batchResult &&
+    accepted shadow.result && !shadow.usedFallback &&
+    shadow.recordsPushed == shadow.finalRecords
+
 def runIncremental (records : Array EDecl) : IO (Except String Unit × Nat) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -238,6 +272,64 @@ def run (root : String) : IO UInt32 := do
     sameResult duplicateMembersBatch duplicateMembersDirect.1 &&
       errorSatisfies duplicateMembersBatch
         (fun message => message == "duplicate declaration DuplicateMember")
+
+  -- The full-output shadow is driven by the same declaration-wise transition
+  -- as generation.  These routes deliberately differ in model shape; none is
+  -- modeled as a special recursive `Type` form in the checker.
+  let routeMatrix : Array (String × String × Cli.Config × Bool) := #[
+    ("simple", "prim_shapes.ndjson", { noGeneration with simple := true }, false),
+    ("nested", "nested_iota.ndjson", { noGeneration with nested := true }, false),
+    ("mutual", "mutual_shapes.ndjson", { noGeneration with mutualModels := true }, false),
+    ("indexed", "indexed_fibre_boundary.ndjson",
+      { noGeneration with simple := true }, false),
+    ("composed", "nested_iota.ndjson", {}, true)]
+  for (label, file, generation, checkRecursors) in routeMatrix do
+    let input ← readFixture root file
+    let (output, report, shadow) ← runFilterShadow input generation checkRecursors
+    state := state.check s!"filter kernel shadow agrees for {label} generation" <|
+      shadowAgrees shadow && output.size == shadow.finalRecords &&
+        !report.generated.isEmpty
+
+  let declineBase ← readFixture root "nested_iota.ndjson"
+  let occupiedTreeModel : EDecl :=
+    .ax (Naming.modelName `Tree) [] (.sort (.succ .zero)) false
+  let declineInput := { declineBase with decls := declineBase.decls.push occupiedTreeModel }
+  let (declineOutput, declineReport, declineShadow) ← runFilterShadow declineInput {}
+  state := state.check "generation declines still feed the exact source stream" <|
+    shadowAgrees declineShadow && !declineReport.declined.isEmpty &&
+      declineOutput.size == declineShadow.finalRecords
+
+  let privateA : Name := (`_private.FilterKernelShadowA).mkNum 0 |>.str "Collision"
+  let privateB : Name := (`_private.FilterKernelShadowB).mkNum 0 |>.str "Collision"
+  let privateCollision := exportOf #[
+    .ax privateA [] (.sort (.succ .zero)) false,
+    .ax privateB [] (.sort (.succ .zero)) false,
+    .ax `UsePrivateA [] (.const privateA []) false,
+    .ax `UsePrivateB [] (.const privateB []) false]
+  let (privateOutput, privateReport, privateShadow) ←
+    runFilterShadow privateCollision noGeneration
+  state := state.check "filter kernel shadow consumes normalized-private aliases exactly" <|
+    privateToUserName privateA == privateToUserName privateB &&
+      privateOutput == privateCollision.decls && privateReport == ({} : Report) &&
+      shadowAgrees privateShadow
+
+  -- A source consumer can precede the generated declaration it names.  The
+  -- compact planner already marks this future-provider shape unavailable;
+  -- direct chronological kernel replay must likewise fall back to the final
+  -- reordered batch verdict instead of exposing its early unknown-constant
+  -- diagnostic.
+  let futureBase ← readFixture root "nested_iota.ndjson"
+  let futureProbe : EDecl :=
+    .ax `CompactFallbackProbe [] (.const (Naming.modelName `Tree) []) false
+  let futureInput := { futureBase with decls := #[futureProbe] ++ futureBase.decls }
+  let futureGeneration := { noGeneration with nested := true }
+  let (_, _, futureShadow) ← runFilterShadow futureInput futureGeneration
+  let (_, futureCompact) ← runDiscarding futureInput futureGeneration
+  state := state.check "future generated provider preserves the batch diagnostic fallback" <|
+    futureShadow.usedFallback && !accepted futureShadow.streamedResult &&
+      accepted futureShadow.batchResult && accepted futureShadow.result &&
+      futureShadow.recordsPushed == futureShadow.finalRecords &&
+      futureCompact.unavailable?.isSome
 
   if state.failed.isEmpty then
     IO.println s!"kernel check: {state.passed}/{state.passed} passed"

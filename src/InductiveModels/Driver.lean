@@ -2113,6 +2113,28 @@ structure FilterSourceStep where
   generatedRecords : Nat
   deriving Inhabited, Repr, BEq
 
+/-- Value-only comparison between declaration-wise exact kernel replay and the
+historical batch oracle over the final reordered export.  `batchResult` is
+always authoritative: a feed-order miss or differently ordered diagnostic
+sets `usedFallback`, without exposing the shadow diagnostic to a caller. -/
+structure FilterKernelCheckShadow where
+  streamedResult : Except String Unit
+  batchResult : Except String Unit
+  recordsPushed : Nat
+  finalRecords : Nat
+  usedFallback : Bool
+  deriving Repr
+
+private def sameKernelCheckResult (left right : Except String Unit) : Bool :=
+  match left, right with
+  | .ok (), .ok () => true
+  | .error left, .error right => left == right
+  | _, _ => false
+
+/-- The diagnostic-order-preserving result of a full-oracle shadow run. -/
+def FilterKernelCheckShadow.result (shadow : FilterKernelCheckShadow) : Except String Unit :=
+  shadow.batchResult
+
 /-- Output retention is an explicit policy, not an accidental consequence of
 whether a physical sink happens to exist. `shadowSpool` is the test-only mode
 which retains both the historical full output and compact physical commits so
@@ -2633,6 +2655,7 @@ private structure FilterContext where
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
   constructionReserved : Std.HashSet Name
+  kernelCheckBase : Environment
   futureSupport? : Option FutureSourceSupport := none
   outputSourceOrder? : Option (Array Nat) := none
   collectTrace : Bool := false
@@ -2668,6 +2691,7 @@ private structure FilterState where
   futureSupportRemaining : Std.HashMap Nat EDecl := {}
   emissionByRaw : Std.HashMap Nat (Array EDecl) := {}
   sourceSteps : Array FilterSourceStep := #[]
+  kernelCheckShadow? : Option KernelCheck.State := none
 
 private inductive FilterFeedResult where
   | next (state : FilterState)
@@ -2717,6 +2741,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut futureSupportRemaining := state.futureSupportRemaining
   let mut emissionByRaw := state.emissionByRaw
   let mut sourceSteps := state.sourceSteps
+  let mut kernelCheckShadow? := state.kernelCheckShadow?
   let emissionStart := legacyOut.size
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
@@ -2959,6 +2984,12 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         throwError "accepted island cardinality mismatch for {d.names}: \
           records={orderedGenerated.size}, summaries={compact.summaries.size}, \
           extras={compact.globalExtras.size}, families={compact.families.size}"
+      if let some checker := kernelCheckShadow? then
+        let mut checker := checker
+        for localOrdinal in [:orderedGenerated.size] do
+          checker ← checker.pushBound orderedGenerated[localOrdinal]!
+            compact.summaries[localOrdinal]!.introduced
+        kernelCheckShadow? := some checker
       modeledSourceFamilies := compact.sourceFamilies
       modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
       if compactMode then
@@ -3005,6 +3036,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             sourceSteps
   else
     mainEnv ← getEnv
+  if let some checker := kernelCheckShadow? then
+    kernelCheckShadow? := some (← checker.pushBound d sourceSummary.introduced)
   if retainOracle then legacyOut := legacyOut.push d
   if retainOracle && context.outputSourceOrder?.isSome then
     let some rawSourceOrdinal := rawSourceOrdinal?
@@ -3048,12 +3081,14 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, commits, stagedRecords,
     scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
-    persistentSupportOrigins, futureSupportRemaining, emissionByRaw, sourceSteps }
+    persistentSupportOrigins, futureSupportRemaining, emissionByRaw, sourceSteps,
+    kernelCheckShadow? }
 
 /-- Complete compact ordering and checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
 private def FilterState.finalize (state : FilterState) (context : FilterContext) :
-    MetaM (Array EDecl × Report × CompactPlan × StagedPlan) := do
+    MetaM (Array EDecl × Report × CompactPlan × StagedPlan ×
+      Option FilterKernelCheckShadow) := do
   let x := context.source
   let retention := context.retention
   let sink? := retention.sink?
@@ -3165,7 +3200,30 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
     declarations
     checkReport := compactCheckReport
     unavailable? := compactUnavailable? }
-  return (legacyOut, rep, compactPlan, emissionPlan)
+  let kernelCheckShadow? ← match state.kernelCheckShadow? with
+    | none => pure none
+    | some checker => do
+      let streamed := checker.seal
+      unless streamed.recordsPushed == legacyOut.size do
+        throwError "kernel-check shadow consumed {streamed.recordsPushed} records, \
+          but the final full oracle retained {legacyOut.size}"
+      let finalExport := { x with decls := legacyOut }
+      let orderedExport ← match Order.reorder finalExport with
+        | .ok ordered => pure ordered
+        | .error error => throwError "kernel-check full oracle cannot order final export: {repr error}"
+      let saved ← getEnv
+      let batchResult ← try
+        setEnv context.kernelCheckBase
+        typeCheckExport orderedExport
+      finally
+        setEnv saved
+      pure (some {
+        streamedResult := streamed.result
+        batchResult
+        recordsPushed := streamed.recordsPushed
+        finalRecords := orderedExport.decls.size
+        usedFallback := !sameKernelCheckResult streamed.result batchResult })
+  return (legacyOut, rep, compactPlan, emissionPlan, kernelCheckShadow?)
 
 /-- Shared generation loop. Compact modes summarize every accepted island at
 its close boundary. Spool modes additionally serialize it; oracle modes retain
@@ -3177,8 +3235,10 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     (sourceOrder? : Option (Array Nat) := none)
     (futureSupport? : Option FutureSourceSupport := none)
     (outputSourceOrder? : Option (Array Nat) := none)
-    (sourceCensus? : Option SourceCensus := none) :
-    MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep) := do
+    (sourceCensus? : Option SourceCensus := none)
+    (kernelCheckShadow : Bool := false) :
+    MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep ×
+      Option FilterKernelCheckShadow) := do
   let plannedCensus := sourceCensus?.isSome
   let sourceCensus := sourceCensus?.getD (SourceCensus.ofSource x)
   let plannedAliases ← match sourceCensus.replayAliases with
@@ -3244,14 +3304,16 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
     sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
-    rawOrdinals, reserved, constructionReserved,
+    rawOrdinals, reserved, constructionReserved, kernelCheckBase := fallbackEnv,
     futureSupport?, outputSourceOrder?, collectTrace }
   let initialFutureSupport := futureSupport?.map (·.records) |>.getD
     ({} : Std.HashMap Nat EDecl)
   let mut state : FilterState :=
     { mainEnv := mainEnv
       persistentSyntax := sourceSyntax
-      futureSupportRemaining := initialFutureSupport }
+      futureSupportRemaining := initialFutureSupport
+      kernelCheckShadow? := if kernelCheckShadow then
+        some (KernelCheck.State.create fallbackEnv) else none }
   for rawOrdinal in sourceOrder do
     let declaration ← match plannedSource? with
       | none => match x.decls[rawOrdinal]? with
@@ -3274,15 +3336,29 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     match ← current.feedSource context declaration with
     | .next next => state := next
     | .unreplayable report sourceSteps =>
-      return (x.decls, report, {}, {}, sourceSteps)
-  let (decls, report, compact, plan) ← state.finalize context
-  return (decls, report, compact, plan, state.sourceSteps)
+      return (x.decls, report, {}, {}, sourceSteps, none)
+  let (decls, report, compact, plan, kernelCheckShadow?) ← state.finalize context
+  return (decls, report, compact, plan, state.sourceSteps, kernelCheckShadow?)
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
+  let (decls, report, _, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
   return (decls, report)
+
+/-- Test-facing full-output oracle with an exact declaration-wise kernel
+shadow.  The ordinary filter and CLI do not select this path.  Each transition
+feeds exact generated values and the exact source value; final comparison uses
+the batch checker over the reordered full export and preserves its result on
+any mismatch. -/
+def runFilterWithKernelCheckShadow (x : Export) (checkRecursors : Bool)
+    (generation : Cli.Config) :
+    MetaM (Array EDecl × Report × FilterKernelCheckShadow) := do
+  let (decls, report, _, _, _, shadow?) ← runFilterCore x checkRecursors generation
+    .fullOracle (kernelCheckShadow := true)
+  let some shadow := shadow?
+    | throwError "kernel-check full oracle did not produce a sealed shadow verdict"
+  return (decls, report, shadow)
 
 /-- Internal phase-one A/B path for replacing support-priority execution.
 Only a complete exact [`FutureSourceSupport`] ledger selects it; every
@@ -3333,7 +3409,7 @@ def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
   let outputOrder ← match census.scheduleOrder x generation with
     | .ok order => pure order
     | .error error => throwError "cannot retain support-priority output order: {repr error}"
-  let (decls, report, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
+  let (decls, report, _, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
     (sourceOrder? := some ordinaryOrder) (futureSupport? := some shadow)
       (outputSourceOrder? := some outputOrder)
   return (decls, report, true)
@@ -3343,7 +3419,7 @@ output and report are produced by the same core invocation as the snapshots;
 ordinary production callers collect no snapshots. -/
 def runFilterWithSourceTrace (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Array EDecl × Report × Array FilterSourceStep) := do
-  let (decls, report, _, _, steps) ←
+  let (decls, report, _, _, steps, _) ←
     runFilterCore x checkRecursors generation .fullOracle (collectTrace := true)
   return (decls, report, steps)
 
@@ -3353,7 +3429,7 @@ composed consumer sees them; ordinary production callers use [`runFilter`]. -/
 def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) (transform : EDecl → EDecl) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _, _) ←
+  let (decls, report, _, _, _, _) ←
     runFilterCore x checkRecursors generation .fullOracle transform
   return (decls, report)
 
@@ -3362,7 +3438,7 @@ the full output remains live for comparison with final Order/Check. The
 returned plan has already discarded the compact checking summaries. -/
 def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) := do
-  let (decls, report, _, plan, _) ←
+  let (decls, report, _, plan, _, _) ←
     runFilterCore x checkRecursors generation (.shadowSpool sink)
   return (decls, report, plan)
 
@@ -3371,7 +3447,7 @@ and summarized at island close, then discarded without opening a workspace or
 retaining any physical span. -/
 def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Report × CompactPlan) := do
-  let (_, report, compact, _, _) ←
+  let (_, report, compact, _, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard
   return (report, compact)
 
@@ -3381,7 +3457,7 @@ record is nevertheless the value consumed by `feedSource`, and compact mode
 does not retain it after that transition. -/
 def runFilterDiscardingPlanned (x : Export) (reader : Spool.PlannedSourceReader)
     (checkRecursors : Bool) (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
-  let (_, report, compact, _, _) ←
+  let (_, report, compact, _, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard (plannedSource? := some reader)
   return (report, compact)
 
@@ -3401,7 +3477,7 @@ def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
       input.envelope.declarationCount == input.census.scheduling.size &&
       input.envelope.declarationCount == reader.size do
     throwError "planned source parser/census/reader cardinalities disagree"
-  let (_, report, compact, _, _) ← runFilterCore input.envelope.template
+  let (_, report, compact, _, _, _) ← runFilterCore input.envelope.template
     checkRecursors generation .compactDiscard (plannedSource? := some reader)
     (sourceCensus? := some input.census)
   return (report, compact)
@@ -3411,7 +3487,7 @@ island close and never appended to a cumulative declaration array. The result
 contains only ordered declaration locators and spool spans. -/
 def runFilterStaged (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Report × StagedPlan) := do
-  let (_, report, _, plan, _) ←
+  let (_, report, _, plan, _, _) ←
     runFilterCore x checkRecursors generation (.compactSpool sink)
   return (report, plan)
 
