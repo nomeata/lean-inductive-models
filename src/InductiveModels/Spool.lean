@@ -159,7 +159,7 @@ structure SourceProvenance where private mk ::
 
 /-- The three logical parser payloads. This is not yet a byte-exact snapshot:
 noncanonical ignored records are intentionally absent, and such a certificate
-always selects the existing full writer. -/
+disqualifies declaration-wise planned source replay. -/
 structure ParseTee where private mk ::
   metadata : SpoolFile
   arena : SpoolFile
