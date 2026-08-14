@@ -1273,11 +1273,9 @@ private def recursorForwardAgreementAt (plan : FamilyAdapterPlan)
 function telescope of its installed minor hypothesis.  The telescope itself,
 not an occurrence depth or arity classifier, determines the finite fold. -/
 private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
-    (memberCertificates : Array MemberCertificate)
     (recursors : Array PublicRecursorCertificate) (rule : RuleKey)
     (role? : Option PublicIotaRecursiveCallRole)
     (publicBinderIndex implementationBinderIndex : Nat)
-    (publicRecursorPrefix : Array Expr)
     (expectedPublic expectedPrivate : Expr) : ConstructionM Expr := do
   if ← liftGen <| isDefEq expectedPrivate expectedPublic then
     let type ← liftGen <| inferType expectedPrivate
@@ -1285,6 +1283,31 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
       | .ok information => pure information
       | .error _ => failConstruction (.missingPublicIotaInput rule)
     return eqi.refl' (← liftGen <| ilevel type) type expectedPrivate
+  let direct? ← match role? with
+    | none => pure none
+    | some role => do
+      let some memberKey := role.member? | pure none
+      let some member := plan.members.find? fun member =>
+          member.key == memberKey && member.publicRecursor == role.publicRecursor &&
+            member.implementationRecursor == role.implementationRecursor
+        | failConstruction (.missingPublicIotaRecursiveCall rule
+            publicBinderIndex implementationBinderIndex)
+      let some recursor := recursors.find? fun recursor =>
+          recursor.member == member.key &&
+            recursor.implementationRecursor == role.implementationRecursor
+        | failConstruction (.missingPublicIotaRecursiveCall rule
+            publicBinderIndex implementationBinderIndex)
+      let reducedPrivate ← liftGen <| whnf expectedPrivate
+      let publicMatches := expectedPublic.getAppFn.constName? == some recursor.adapter
+      let privateMatches :=
+        reducedPrivate.getAppFn.constName? == some role.implementationRecursor
+      if publicMatches || privateMatches then
+        unless publicMatches && privateMatches do
+          failConstruction (.missingPublicIotaRecursiveCall rule
+            publicBinderIndex implementationBinderIndex)
+        return some (← recursorAgreementAt member recursor expectedPublic expectedPrivate)
+      return none
+  if let some proof := direct? then return proof
   let publicType ← liftGen <| whnf (← inferType expectedPublic)
   let privateType ← liftGen <| whnf (← inferType expectedPrivate)
   match publicType, privateType with
@@ -1293,36 +1316,18 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
     unless ← liftGen <| isDefEq publicDomain privateDomain do
       failConstruction (.missingPublicIotaInput rule)
     withLocalDecl publicName publicInfo publicDomain fun argument => do
-      let pointwise ← recursorHypothesisAgreement plan memberCertificates recursors rule
-        role? publicBinderIndex implementationBinderIndex publicRecursorPrefix
+      let pointwise ← recursorHypothesisAgreement plan recursors rule
+        role? publicBinderIndex implementationBinderIndex
         (mkApp expectedPublic argument) (mkApp expectedPrivate argument)
       let functionProof ← liftGen <| mkLambdaFVars #[argument] pointwise
       liftGen <| mkAppM ``funext #[functionProof]
   | .forallE .., _ | _, .forallE .. =>
     failConstruction (.missingPublicIotaInput rule)
   | _, _ =>
-    let some role := role? | failConstruction (.missingPublicIotaInput rule)
-    let some memberKey := role.member?
-      | failConstruction (.missingPublicIotaRecursiveCall rule
-          publicBinderIndex implementationBinderIndex)
-    let some member := plan.members.find? fun member =>
-        member.key == memberKey && member.publicRecursor == role.publicRecursor &&
-          member.implementationRecursor == role.implementationRecursor
-      | failConstruction (.missingPublicIotaRecursiveCall rule
-          publicBinderIndex implementationBinderIndex)
-    let some recursor := recursors.find? fun recursor =>
-        recursor.member == member.key &&
-          recursor.implementationRecursor == role.implementationRecursor
-      | failConstruction (.missingPublicIotaRecursiveCall rule
-          publicBinderIndex implementationBinderIndex)
-    unless expectedPublic.getAppFn.constName? == some recursor.adapter do
+    if role?.isSome then
       failConstruction (.missingPublicIotaRecursiveCall rule
         publicBinderIndex implementationBinderIndex)
-    let reducedPrivate ← liftGen <| whnf expectedPrivate
-    unless reducedPrivate.getAppFn.constName? == some role.implementationRecursor do
-      failConstruction (.missingPublicIotaRecursiveCall rule
-        publicBinderIndex implementationBinderIndex)
-    recursorAgreementAt member recursor expectedPublic expectedPrivate
+    failConstruction (.missingPublicIotaInput rule)
 
 private partial def withReboundTelescope (fixedOriginal fixedReplacement binders : Array Expr)
     (position : Nat) (rebound : Array Expr)
@@ -2645,9 +2650,9 @@ package and prove them equal.  Component recursor equalities are consumed only
 while constructing the single packed equality; later proof steps never project
 that equality back into dependent fields. -/
 private def packedIotaHypothesisAgreement (plan : FamilyAdapterPlan)
-    (base : FamilyAdapterCertificate) (recursors : Array PublicRecursorCertificate)
+    (recursors : Array PublicRecursorCertificate)
     (rule : RulePlan)
-    (schema : PublicIotaProofSchema) (publicPrefix publicFields decodedFields : Array Expr)
+    (schema : PublicIotaProofSchema) (publicFields decodedFields : Array Expr)
     (theoremRightArguments : Array Expr)
     (privateMinorType : Expr) (privateFields privateArguments : Array Expr) :
     ConstructionM (Expr × Expr × Expr) := do
@@ -2690,8 +2695,8 @@ private def packedIotaHypothesisAgreement (plan : FamilyAdapterPlan)
         let some rawPublic := theoremRightArguments[step.publicBinderIndex]?
           | failConstruction (.missingPublicIotaInput rule.key)
         let expected := rawPublic.replaceFVars publicFields decodedFields
-        let proof ← recursorHypothesisAgreement plan base.members recursors rule.key
-          step.recursiveCall? step.publicBinderIndex step.binderIndex publicPrefix expected actual
+        let proof ← recursorHypothesisAgreement plan recursors rule.key
+          step.recursiveCall? step.publicBinderIndex step.binderIndex expected actual
         let type ← liftGen <| inferType actual
         let expectedEquality := eqi.mk' (← liftGen <| ilevel type) type actual expected
         unless ← liftGen <| isDefEq (← inferType proof) expectedEquality do
@@ -2860,8 +2865,8 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
             let decodedPackage := mkApp constructorBoundary.decode package
             let decodedFields ← liftGen <|
               unpackTelescopeValue publicMinorFields decodedPackage
-            packedIotaHypothesisAgreement plan base recursors rule schema
-              publicPrefix publicFields decodedFields theoremRightArguments
+            packedIotaHypothesisAgreement plan recursors rule schema
+              publicFields decodedFields theoremRightArguments
               privateMinorType privateFields privateArguments
           let privateIH ← withLocalDeclD `package constructorBoundary.implementationFieldsType
               fun package => do

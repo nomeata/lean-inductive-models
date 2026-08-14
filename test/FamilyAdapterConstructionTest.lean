@@ -134,6 +134,14 @@ def changedIndexed : ChangedBoundary :=
     backwardForward := `FamilyAdapterGenerated.generatedChangedIndexedUnrollRoll
     forwardBackward := `FamilyAdapterGenerated.generatedChangedIndexedRollUnroll }
 
+def changedFunction : ChangedBoundary :=
+  { publicOwner := `FamilyAdapterGenerated.GeneratedChangedFunctionPublic
+    privateOwner := `FamilyAdapterGenerated.GeneratedChangedFunctionPrivate
+    forward := `FamilyAdapterGenerated.generatedChangedFunctionRoll
+    backward := `FamilyAdapterGenerated.generatedChangedFunctionUnroll
+    backwardForward := `FamilyAdapterGenerated.generatedChangedFunctionUnrollRoll
+    forwardBackward := `FamilyAdapterGenerated.generatedChangedFunctionRollUnroll }
+
 def changedNested : ChangedBoundary :=
   { publicOwner := `FamilyAdapterGenerated.GeneratedChangedNestedPublic
     privateOwner := `FamilyAdapterGenerated.GeneratedChangedNestedPrivate
@@ -528,7 +536,7 @@ def runSamples : MetaM Result := do
         let failures := result.failures.push
           s!"{owner}: definitionally equal nested field did not close: {repr built.issues}"
         result := { result with failures }
-  for boundary in #[changedDirect, changedIndexed, changedNested] do
+  for boundary in #[changedDirect, changedFunction, changedIndexed, changedNested] do
     let source ← indEDecl #[boundary.publicOwner]
     let iso ← changedIso source boundary
     let report ← FamilyAdapter.deriveShadowPlan source iso
@@ -779,10 +787,10 @@ def runMain : IO UInt32 := do
       result.publicConstructors == completeSamples.size &&
       result.publicRecursors == completeSamples.size &&
       result.identityNested == nestedSamples.size &&
-      result.nestedPublicConstructors == nestedSamples.size && result.changed == 3 &&
+      result.nestedPublicConstructors == nestedSamples.size && result.changed == 4 &&
       result.nestedPublicRecursors == nestedSamples.size &&
-      result.changedPublicConstructors == 3 &&
-      result.changedPublicRecursors == 3 &&
+      result.changedPublicConstructors == 4 &&
+      result.changedPublicRecursors == 4 &&
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
       result.invalidIotas == 1 && result.lateInvalidIotas == 1 && result.wrongTargetMaps == 1 &&
       result.sharedHypothesis == 1 && result.directNestedRule == 1 &&

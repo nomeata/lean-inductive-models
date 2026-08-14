@@ -253,6 +253,25 @@ axiom generatedChangedDirectUnrollRoll (value : GeneratedChangedDirectPublic) :
 axiom generatedChangedDirectRollUnroll (value : GeneratedChangedDirectPrivate) :
   generatedChangedDirectRoll (generatedChangedDirectUnroll value) = value
 
+/- A changed recursive call whose motive result is a function.  The exact
+recursor-call agreement must be consumed before descending that forall. -/
+inductive GeneratedChangedFunctionPublic : Type where
+  | mk (children : GeneratedKey -> GeneratedChangedFunctionPublic) :
+      GeneratedChangedFunctionPublic
+
+inductive GeneratedChangedFunctionPrivate : Type where
+  | mk (children : GeneratedKey -> GeneratedChangedFunctionPrivate) :
+      GeneratedChangedFunctionPrivate
+
+axiom generatedChangedFunctionRoll :
+  GeneratedChangedFunctionPublic -> GeneratedChangedFunctionPrivate
+axiom generatedChangedFunctionUnroll :
+  GeneratedChangedFunctionPrivate -> GeneratedChangedFunctionPublic
+axiom generatedChangedFunctionUnrollRoll (value : GeneratedChangedFunctionPublic) :
+  generatedChangedFunctionUnroll (generatedChangedFunctionRoll value) = value
+axiom generatedChangedFunctionRollUnroll (value : GeneratedChangedFunctionPrivate) :
+  generatedChangedFunctionRoll (generatedChangedFunctionUnroll value) = value
+
 inductive GeneratedChangedIndexedPublic : GeneratedIndex -> Type where
   | mk (index : GeneratedIndex) (child : GeneratedChangedIndexedPublic index) :
       GeneratedChangedIndexedPublic index
@@ -320,8 +339,15 @@ end
         export_line = "--#export " + " ".join(
             f"FamilyAdapterGenerated.{name}" for name in exported
         ) + "\n"
+        function_export_line = "--#export " + " ".join(
+            f"FamilyAdapterGenerated.{name}" for name in (
+                "GeneratedChangedFunctionPublic", "GeneratedChangedFunctionPrivate",
+                "generatedChangedFunctionRoll", "generatedChangedFunctionUnroll",
+                "generatedChangedFunctionUnrollRoll", "generatedChangedFunctionRollUnroll",
+            )
+        ) + "\n"
         return header + "\n" + "\n".join(sections) + \
-            "\nend FamilyAdapterGenerated\n\n" + export_line
+            "\nend FamilyAdapterGenerated\n\n" + export_line + function_export_line
 
 
 def parser() -> argparse.ArgumentParser:
