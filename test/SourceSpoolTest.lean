@@ -95,7 +95,7 @@ def plannedDiscardingSourceRejected (scratch path text : String) : IO Bool := do
     return (← Spool.PlannedSourceReader.create tee certificate sizes
       envelope.declarationCount (some envelope.arena)) matches .error _
 
-/-- Exercise the compact-direct input tee without retaining declaration ASTs.
+/-- Exercise the checked no-output input tee without retaining declaration ASTs.
 The certified case must decode from the parser's transferred arena and may
 then release the exact raw fallback snapshot. -/
 def directInputReplayAccepted (scratch path text : String)
@@ -104,7 +104,7 @@ def directInputReplayAccepted (scratch path text : String)
   let cleanedDirectory ← IO.mkRef (none : Option System.FilePath)
   let accepted ← Spool.withWorkspace scratch fun workspace => do
     cleanedDirectory.set (some workspace.directory)
-    let tee ← Spool.DirectInputTee.create workspace
+    let tee ← Spool.PlannedInputTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
         (options := { allowDuplicateNames := true })
@@ -112,7 +112,7 @@ def directInputReplayAccepted (scratch path text : String)
     if let some expectedRootCount := expectedRootCount? then
       unless envelope.arena.retainedExprRoots == expectedRootCount do return false
     let sizes ← tee.finish
-    let .ok reader ← Spool.PlannedSourceReader.createDirect tee certificate sizes
+    let .ok reader ← Spool.PlannedSourceReader.createFromInputTee tee certificate sizes
         envelope.declarationCount envelope.arena | return false
     let mut decoded := #[]
     for ordinal in [:reader.size] do
@@ -141,13 +141,13 @@ def directInputFallbackExact (scratch path text : String) : IO Bool := do
   let cleanedDirectory ← IO.mkRef (none : Option System.FilePath)
   let preserved ← Spool.withWorkspace scratch fun workspace => do
     cleanedDirectory.set (some workspace.directory)
-    let tee ← Spool.DirectInputTee.create workspace
+    let tee ← Spool.PlannedInputTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
         (options := { allowDuplicateNames := true })
     let .ok (envelope, certificate) := captured | return false
     let sizes ← tee.finish
-    let replay ← Spool.PlannedSourceReader.createDirect tee certificate sizes
+    let replay ← Spool.PlannedSourceReader.createFromInputTee tee certificate sizes
       envelope.declarationCount envelope.arena
     let fallback ← tee.parseFallback (options := { allowDuplicateNames := true })
     return (replay matches .error _) && match ordinary, fallback with
@@ -166,13 +166,13 @@ and inductive recursor-rule RHS roots. -/
 def directInputFixtureParity (scratch path : String) : IO Bool := do
   let .ok ordinary ← parseHandleAt path | return false
   Spool.withWorkspace scratch fun workspace => do
-    let tee ← Spool.DirectInputTee.create workspace
+    let tee ← Spool.PlannedInputTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
         (options := { allowDuplicateNames := true })
     let .ok (envelope, certificate) := captured | return false
     let sizes ← tee.finish
-    let .ok reader ← Spool.PlannedSourceReader.createDirect tee certificate sizes
+    let .ok reader ← Spool.PlannedSourceReader.createFromInputTee tee certificate sizes
         envelope.declarationCount envelope.arena | return false
     let mut declarations := #[]
     for ordinal in [:reader.size] do

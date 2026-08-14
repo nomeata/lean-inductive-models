@@ -100,7 +100,7 @@ if "$checker" "$WORK/no-full-backend.log" "$output" "$recheck" >/dev/null 2>&1; 
   exit 1
 fi
 
-sed 's/output backend: legacy/output backend: compact-direct/' "$generate" > "$WORK/wrong-backend.log"
+sed 's/output backend: legacy/output backend: compact-discard/' "$generate" > "$WORK/wrong-backend.log"
 if "$checker" "$WORK/wrong-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
   echo "mathlib result parser accepted a non-output generation backend" >&2
   exit 1

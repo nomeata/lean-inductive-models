@@ -1903,8 +1903,9 @@ def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
 
 /-! ## Declaration-wise filter state
 
-The source scheduler still materialises a complete `Export` in this phase, but
-the generation loop below no longer owns its mutable state as local variables.
+Retained-input routes materialise a complete `Export`, while planned-input
+routes decode one certified declaration at a time. The generation loop below
+does not own its mutable state as local variables.
 `FilterState.feedSource` is the one-record logical transition and
 `FilterState.finalize` consumes only its accumulated compact/output state.
 This is the boundary a later census/span reader can drive without changing an
@@ -2136,7 +2137,7 @@ def sourceReplayInductiveDerivations (roles : SourceReplayRoles)
 /-- Declaration-discarding parser result for the internal planned route.  The
 raw certificate is not an eligibility promise: callers must still finish the
 tee and construct a `PlannedSourceReader`. Generic raw composition requires a
-canonical stream; the compact-direct CLI needs only a progressive arena and
+canonical stream; the checked no-output CLI needs only a progressive arena and
 falls back to the exact input snapshot when declaration replay is unsafe. -/
 structure PlannedSourceInput where private mk ::
   envelope : ParsedEnvelope
@@ -2166,16 +2167,16 @@ def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
   parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
     options
 
-/-- Parse the compact-direct CLI input into a frozen census plus one exact raw
+/-- Parse checked no-output CLI input into a frozen census plus one exact raw
 fallback snapshot and declaration spans. Generated output is not involved. -/
-def parsePlannedSourceWithDirectTee (handle : IO.FS.Handle)
-    (tee : Spool.DirectInputTee) (options : ParseOptions := {}) :
+def parsePlannedSourceWithInputTee (handle : IO.FS.Handle)
+    (tee : Spool.PlannedInputTee) (options : ParseOptions := {}) :
     IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
     options
 
-def parsePlannedSourceStreamWithDirectTee (stream : IO.FS.Stream)
-    (tee : Spool.DirectInputTee) (options : ParseOptions := {}) :
+def parsePlannedSourceStreamWithInputTee (stream : IO.FS.Stream)
+    (tee : Spool.PlannedInputTee) (options : ParseOptions := {}) :
     IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink stream tee.sink tee.sourceProvenance
     options
@@ -2690,7 +2691,7 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
       if compactMode then
         let fullOrder ← match Order.recordOrder finalExport with
           | .ok order => pure order
-          | .error error => throwError "full oracle cannot order compact records: {repr error}"
+          | .error error => throwError "full output cannot order compact records: {repr error}"
         let compactNames := compactOrder.map fun i => compactRecords[i]!.summary.introduced
         let fullNames := fullOrder.map fun i => finalExport.decls[i]!.names.toArray
         unless compactNames == fullNames do
@@ -2751,7 +2752,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
   -- Source records are consumed in their original stream order. A model
   -- owner whose fixed support occurs later declines at that owner; the normal
-  -- route never moves input declarations or preinstalls future support.
+  -- route never moves input declarations or preinstalls later prerequisites.
   let mainEnv ← getEnv
   -- Reuse the immutable census products. Retained sources may still supply
   -- whole-export row caches; planned sources derive missing rows from each

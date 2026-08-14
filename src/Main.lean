@@ -112,8 +112,8 @@ def unsupportedDeclines (input : Export) (report : InductiveModels.Report) : Arr
     report.declined.filter fun entry =>
       InductiveModels.declineIsUnsupported alreadyCovered generated entry.1
 
-/-- Shared compact-generation boundary. Structural and direct kernel checking
-consume records while each family is live. -/
+/-- Shared compact-generation boundary. Structural validation and optional
+generated-island checking consume records while each family is live. -/
 def compactModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   InductiveModels.generationEnabled config
 
@@ -312,15 +312,15 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
   try
     IO.FS.createDirAll scratch
     InductiveModels.Spool.withWorkspace scratch fun workspace => do
-      let tee ← InductiveModels.Spool.DirectInputTee.create workspace
+      let tee ← InductiveModels.Spool.PlannedInputTee.create workspace
       let parsedResult ← if input == "-" then
           consumed.set true
-          InductiveModels.parsePlannedSourceStreamWithDirectTee (← IO.getStdin) tee
+          InductiveModels.parsePlannedSourceStreamWithInputTee (← IO.getStdin) tee
             (options := { allowDuplicateNames := true })
         else
           IO.FS.withFile input .read fun handle => do
             consumed.set true
-            InductiveModels.parsePlannedSourceWithDirectTee handle tee
+            InductiveModels.parsePlannedSourceWithInputTee handle tee
               (options := { allowDuplicateNames := true })
       let planned ← match parsedResult with
         | .error message =>
@@ -335,7 +335,7 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
         reportViolations input "input" inputOrderViolations
         return exitRejected
       let sizes ← tee.finish
-      let readerResult ← InductiveModels.Spool.PlannedSourceReader.createDirect
+      let readerResult ← InductiveModels.Spool.PlannedSourceReader.createFromInputTee
         tee planned.certificate sizes planned.envelope.declarationCount planned.envelope.arena
       let reader ← match readerResult with
         | .ok reader => pure reader

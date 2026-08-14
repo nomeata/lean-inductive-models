@@ -921,7 +921,7 @@ def run (root : String) : IO UInt32 := do
           family.correspondence.iotas.any (fun rule =>
             rule.recursor == `IdxP.rec && rule.name == Naming.iotaName `IdxP.rec 1))
 
-  -- Compare the full oracle, compact discard, and planned source reader across
+  -- Compare full output, compact discard, and the planned source reader across
   -- each generation route.
   let compactMatrix : Array (String × String × InductiveModels.Cli.Config × Bool) := #[
     ("nested", "nested_iota.ndjson", { noGeneration with nested := true }, false),
@@ -941,7 +941,7 @@ def run (root : String) : IO UInt32 := do
     let discarded ← runFilterDiscardedState input generation checkRecursors
     let plannedCensus ←
       runFilterPlannedCensusState s!"{root}/_tmp" input generation checkRecursors
-    state := state.check s!"compact-discard {label} equals full oracle" <|
+    state := state.check s!"compact-discard {label} equals full output" <|
       discarded.report == legacy.report && discarded.plan.unavailable?.isNone &&
         discarded.plan.checkReport == Check.checkReport legacy.output &&
         discarded.plan.declarations.size == legacy.output.decls.size &&

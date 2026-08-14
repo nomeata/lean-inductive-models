@@ -288,7 +288,7 @@ def run (root : String) : IO UInt32 := do
   state := state.check "duplicate ownership has the exact diagnostic"
     (sameOutcome (fullOutcome duplicate) (compactOutcome duplicate))
 
-  -- This is the composition shape produced by source scheduling followed by
+  -- This is the composition shape produced by source replay followed by
   -- one locally ordered generated island. It contains only names and edges:
   -- no declaration value is available to this check. Ordinary stable ordering
   -- is therefore the identity, which makes a final full Export reorder

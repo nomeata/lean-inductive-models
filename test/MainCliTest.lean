@@ -899,7 +899,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "generated-provider run stays on planned compact discard" <|
     tracedDirectFallback.exitCode == directFallback.exitCode &&
       tracedDirectFallback.stdout.isEmpty &&
-      !tracedDirectFallback.stderr.contains "direct kernel route:" &&
       hasDiagnostic tracedDirectFallback.stderr "output backend: compact-discard"
   let outputPath := s!"{scratch}/main-cli-output.ndjson"
   if ← System.FilePath.pathExists outputPath then IO.FS.removeFile outputPath

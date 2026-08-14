@@ -721,10 +721,10 @@ def expectedPrim : List Row :=
   -- It is no longer support: earlier owners use the fixed `PSigma'` bundle,
   -- while the source `PSigma` remains at its dependency position and receives
   -- its own model. This row distinguishes ordinary source order from support
-  -- scheduling across direct, mutual and nested model islands.
+  -- placement across direct, mutual and nested model islands.
   --
-  -- **The order in this row is the claim.** After support scheduling, `N`, `L`
-  -- and `Pre` model at their dependency positions, followed by `MA` and its
+  -- **The order in this row is the claim.** With required support already seen,
+  -- `N`, `L` and `Pre` model at their source positions, followed by `MA` and its
   -- composed simple models, then `Nd` and its two composed layers. No generated
   -- job survives its owner island or depends on replaying a subsequent owner.
   --
