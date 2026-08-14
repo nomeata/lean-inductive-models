@@ -188,6 +188,8 @@ def main (args : List String) : IO UInt32 := do
   -- A new island deliberately forgets the first island's structural keys,
   -- but starts after all of its arena IDs.
   let (_, secondSplit) := (Writer.fromCursor firstSplit.after).splitDecl second
+  let (sharedAfterFirst, sharedFirstSplit) := (Writer.fromCursor {}).splitDecl first
+  let (_, sharedSecondSplit) := sharedAfterFirst.splitDecl second
 
   IO.FS.writeFile arenaPath (lines (firstSplit.arena ++ secondSplit.arena))
   IO.FS.writeFile firstPath (firstSplit.declaration ++ "\n")
@@ -293,6 +295,10 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "whole-text random declaration oracle preserves exact records" <|
     referenceDecodesTo arenaText secondText second &&
       referenceDecodesTo arenaText firstText first
+  let splitRender := lines sharedFirstSplit.arena ++ sharedFirstSplit.declaration ++ "\n" ++
+    lines sharedSecondSplit.arena ++ sharedSecondSplit.declaration ++ "\n"
+  state := state.check "split declaration stream is byte-identical to whole export rendering" <|
+    splitRender == Export.render { metaLine := .null, decls := #[first, second] }
 
   let largeForwardPath := s!"{scratch}/staged-writer-large-forward.bin"
   removeIfPresent largeForwardPath
@@ -319,11 +325,9 @@ def main (args : List String) : IO UInt32 := do
 
   -- Within one island, the ordinary structural maps still share the common
   -- name prefix, level and expression.
-  let (within, _) := (Writer.fromCursor {}).splitDecl first
-  let (_, sharedSplit) := within.splitDecl second
   state := state.check "one island still hash-conses shared structure" <|
-    sharedSplit.arena.size == 1 &&
-      sharedSplit.after == { nextName := 5, nextLevel := 2, nextExpr := 1 }
+    sharedSecondSplit.arena.size == 1 &&
+      sharedSecondSplit.after == { nextName := 5, nextLevel := 2, nextExpr := 1 }
 
   -- Parse-time staging sees exact bytes while the input descriptor is still
   -- open.  The source arena remains interleaved here; the three spools split

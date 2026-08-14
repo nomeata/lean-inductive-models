@@ -1805,12 +1805,18 @@ def DeclSplit.validateStart (split : DeclSplit) (expected : Cursor) : Except Str
 separate.  The returned writer retains only this island's interning maps, but
 its line buffer is empty and ready for the next declaration in the island. -/
 def splitDecl (w : Writer) (d : EDecl) : Writer × DeclSplit :=
-  let before := w.cursor
-  let completed := { w with out := #[] } |>.decl d
-  let declaration := completed.out.back!
-  let arena := completed.out.pop
-  let after := completed.cursor
-  ({ completed with out := #[] }, { before, arena, declaration, after })
+  match w with
+  | { names, levels, exprs, nextName, nextLevel, nextExpr, .. } =>
+    let before := { nextName, nextLevel, nextExpr : Cursor }
+    let completed :=
+      ({ out := #[], names, levels, exprs, nextName, nextLevel, nextExpr } : Writer).decl d
+    match completed with
+    | { out, names, levels, exprs, nextName, nextLevel, nextExpr } =>
+      let declaration := out.back!
+      let arena := out.pop
+      let after := { nextName, nextLevel, nextExpr : Cursor }
+      ({ out := #[], names, levels, exprs, nextName, nextLevel, nextExpr },
+        { before, arena, declaration, after })
 
 end Writer
 
