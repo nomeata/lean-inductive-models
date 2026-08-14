@@ -31,7 +31,8 @@ structure Config where
   typeCheckInput : Bool := false
   /-- Submit the complete final transformed stream to Lean's kernel. Enabled by
   default so an ordinary CLI run never publishes a stream the official kernel
-  rejects. Generated no-output runs serialize and replay in a fresh worker. -/
+  rejects. Generated no-output runs feed exact records directly to an
+  incremental in-process kernel environment. -/
   typeCheckOutput : Bool := true
   monoLevels : Bool := false
   /-- Whether an export is written. -/

@@ -695,14 +695,14 @@ def main (args : List String) : IO UInt32 := do
   let noncanonicalKernelLegacy ← runInductiveModelsLegacy binary noncanonicalKernelArgs
     (some noncanonicalInput)
   let noncanonicalKernelBefore ← System.FilePath.readDir scratch
-  let noncanonicalKernelFresh ← runInductiveModels binary noncanonicalKernelArgs
+  let noncanonicalKernelDirect ← runInductiveModels binary noncanonicalKernelArgs
     (some noncanonicalInput)
   let noncanonicalKernelAfter ← System.FilePath.readDir scratch
   state := state.check "direct kernel replay preserves noncanonical report and exit" <|
-    noncanonicalKernelFresh.exitCode == noncanonicalKernelLegacy.exitCode &&
-      noncanonicalKernelFresh.stdout.isEmpty && noncanonicalKernelLegacy.stdout.isEmpty &&
-      noncanonicalKernelFresh.stderr == noncanonicalKernelLegacy.stderr &&
-      hasDiagnostic noncanonicalKernelFresh.stderr "output kernel check: accepted"
+    noncanonicalKernelDirect.exitCode == noncanonicalKernelLegacy.exitCode &&
+      noncanonicalKernelDirect.stdout.isEmpty && noncanonicalKernelLegacy.stdout.isEmpty &&
+      noncanonicalKernelDirect.stderr == noncanonicalKernelLegacy.stderr &&
+      hasDiagnostic noncanonicalKernelDirect.stderr "output kernel check: accepted"
   state := state.check "noncanonical direct kernel opens no private workspace" <|
     sameDirectoryEntries noncanonicalKernelBefore noncanonicalKernelAfter
 
@@ -816,19 +816,19 @@ def main (args : List String) : IO UInt32 := do
       fallbackStaged.stderr == fallbackLegacy.stderr
   state := state.check "compact availability fallback preserves exact ordinary output" <|
     fallbackStaged.stdout == fallbackLegacy.stdout
-  let freshFallbackArgs :=
+  let directFallbackArgs :=
     ["--no-type-check-input", "--type-check-output", "--no-output", "-"]
-  let freshFallbackLegacy ← runInductiveModelsLegacy binary freshFallbackArgs
+  let directFallbackLegacy ← runInductiveModelsLegacy binary directFallbackArgs
     (some stabilityMiss.render)
-  let freshFallbackBefore ← System.FilePath.readDir scratch
-  let freshFallback ← runInductiveModels binary freshFallbackArgs (some stabilityMiss.render)
-  let freshFallbackAfter ← System.FilePath.readDir scratch
+  let directFallbackBefore ← System.FilePath.readDir scratch
+  let directFallback ← runInductiveModels binary directFallbackArgs (some stabilityMiss.render)
+  let directFallbackAfter ← System.FilePath.readDir scratch
   state := state.check "direct kernel replay preserves compact-availability fallback" <|
-    freshFallback.exitCode == freshFallbackLegacy.exitCode && freshFallback.stdout.isEmpty &&
-      freshFallbackLegacy.stdout.isEmpty && freshFallback.stderr == freshFallbackLegacy.stderr &&
-      hasDiagnostic freshFallback.stderr "output kernel check: accepted"
+    directFallback.exitCode == directFallbackLegacy.exitCode && directFallback.stdout.isEmpty &&
+      directFallbackLegacy.stdout.isEmpty && directFallback.stderr == directFallbackLegacy.stderr &&
+      hasDiagnostic directFallback.stderr "output kernel check: accepted"
   state := state.check "compact-availability direct fallback opens no private workspace" <|
-    sameDirectoryEntries freshFallbackBefore freshFallbackAfter
+    sameDirectoryEntries directFallbackBefore directFallbackAfter
   let leakedGeneratedSpools ← System.FilePath.readDir scratch
   state := state.check "staged generated output removes its workspace" <|
     !leakedGeneratedSpools.any (fun entry => entry.fileName.startsWith "lean-inductive-models-spool-")

@@ -140,7 +140,7 @@ def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   !config.output && !config.typeCheckOutput && compactModeEligible config
 
 /-- The only production direct-kernel route. Output bytes, writers, spools,
-and fresh worker phases are all unnecessary when generated output is discarded. -/
+and extra subprocess phases are unnecessary when generated output is discarded. -/
 def directKernelModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   !config.output && config.typeCheckOutput && compactModeEligible config
 
