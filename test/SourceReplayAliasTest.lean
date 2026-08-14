@@ -208,6 +208,16 @@ def main : IO UInt32 := do
     pure <| (toString error).contains "collision moves inductive role"
   state := state.check "one atomic inductive collision fails closed before replay" atomicRejected
 
+  let duplicateInput : Export :=
+    { metaLine := .null, decls := #[typeAxiom `ExactDuplicate, typeAxiom `ExactDuplicate] }
+  let duplicateRejected ← try
+    discard <| runExport duplicateInput
+    pure false
+  catch error =>
+    pure <| (toString error).contains "duplicate source declaration name ExactDuplicate"
+  state := state.check "genuine exact duplicates are rejected rather than aliased"
+    duplicateRejected
+
   -- Occupying salt zero forces the bounded deterministic root search to use
   -- another spelling without changing the chosen class survivor.
   let occupied := Name.str (Name.num `_inductive_models_source_alias 0) "taken"
