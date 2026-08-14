@@ -734,15 +734,20 @@ def main (args : List String) : IO UInt32 := do
     (some outputMetadataCorruption.render)
   let metadataFallbackDirect ← runInductiveModels binary metadataFallbackArgs
     (some outputMetadataCorruption.render)
+  -- Exact source-layout validation precedes final output checking in both
+  -- routes. The direct route must preserve that ordinary generation failure,
+  -- including its diagnostic, rather than exposing a feed-order kernel error.
+  let expectedMetadataFailure :=
+    "-: internal error: N.rec's exact recursor layout differs from its installed metadata\n"
   let metadataFallbackParity :=
     metadataFallbackDirect.exitCode == metadataFallbackLegacy.exitCode &&
       metadataFallbackDirect.stdout.isEmpty && metadataFallbackLegacy.stdout.isEmpty &&
       metadataFallbackDirect.stderr == metadataFallbackLegacy.stderr &&
-      metadataFallbackDirect.stderr.contains "recursor numMinors differs"
+      metadataFallbackDirect.stderr == expectedMetadataFailure
   unless metadataFallbackParity do
     IO.eprintln s!"metadata fallback legacy stderr: {repr metadataFallbackLegacy.stderr}"
     IO.eprintln s!"metadata fallback direct stderr: {repr metadataFallbackDirect.stderr}"
-  state := state.check "direct metadata rejection preserves final batch diagnostic"
+  state := state.check "direct metadata rejection preserves ordinary generation diagnostic"
     metadataFallbackParity
   let directCwd : System.FilePath := s!"{scratch}/main-cli-direct-cwd"
   let externalDirectTmp : System.FilePath := s!"{scratch}/main-cli-external-direct-tmp"
