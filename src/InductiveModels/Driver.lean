@@ -1068,8 +1068,7 @@ def toEDecl : Declaration → MetaM EDecl
 
 /-- The export's word for each of the four quotient records. Read off the
 `QuotKind` the kernel stamped on the constant, so the record is recognised
-**structurally** on the way back out, just as the monomorphizer's carried
-built-ins recognise it on the way in. -/
+**structurally** on the way back out. -/
 def quotKindStr : QuotKind → String
   | .type => "type" | .ctor => "ctor" | .lift => "lift" | .ind => "ind"
 
@@ -2364,12 +2363,12 @@ structure PlannedSourceInput where private mk ::
 
 private def parsePlannedSourceWithSink (stream : IO.FS.Stream) (sink : RawSink)
     (provenance : Spool.SourceProvenance)
-    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    (allowDuplicateNames : Bool := false) :
     IO (Except String PlannedSourceInput) := do
   let builder ← IO.mkRef ({} : SourceCensus.Builder)
   let result ← parseStreamDiscardingDeclarations stream sink
     { emit := fun declaration => builder.modify (·.push declaration) }
-    analyse allowDuplicateNames
+    allowDuplicateNames
   match result with
   | .error error => return .error error
   | .ok (envelope, certificate) =>
@@ -2380,24 +2379,24 @@ private def parsePlannedSourceWithSink (stream : IO.FS.Stream) (sink : RawSink)
     return .ok (.mk envelope census certificate provenance)
 
 def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
-    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    (allowDuplicateNames : Bool := false) :
     IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
-    analyse allowDuplicateNames
+    allowDuplicateNames
 
 /-- Parse the compact-direct CLI input into a frozen census plus one exact raw
 fallback snapshot and declaration spans. Generated output is not involved. -/
 def parsePlannedSourceWithDirectTee (handle : IO.FS.Handle)
-    (tee : Spool.DirectInputTee) (analyse : Bool := true)
-    (allowDuplicateNames : Bool := false) : IO (Except String PlannedSourceInput) :=
+    (tee : Spool.DirectInputTee) (allowDuplicateNames : Bool := false) :
+    IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
-    analyse allowDuplicateNames
+    allowDuplicateNames
 
 def parsePlannedSourceStreamWithDirectTee (stream : IO.FS.Stream)
-    (tee : Spool.DirectInputTee) (analyse : Bool := true)
-    (allowDuplicateNames : Bool := false) : IO (Except String PlannedSourceInput) :=
+    (tee : Spool.DirectInputTee) (allowDuplicateNames : Bool := false) :
+    IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink stream tee.sink tee.sourceProvenance
-    analyse allowDuplicateNames
+    allowDuplicateNames
 
 /-- Rebind declaration-local frozen summaries to a logical source order.
 Every summary field except `ordinal` is a function of the declaration itself

@@ -6,8 +6,7 @@
 # `FIXTURE_DIR` selects the source directory and defaults to the lean-inductive-models
 # fixtures. `OUT_DIR` defaults to the same directory. `LEAN_INDUCTIVE_MODELS_FILTER=0`
 # retains the raw lean4export result; otherwise the export is passed through
-# lean-inductive-models. A source line containing exactly `--#monomorph` additionally
-# enables `lean-inductive-models --mono-levels`.
+# lean-inductive-models.
 #
 # The exporter checkout, compiler output, and intermediate exports all live
 # below the repository-local `_tmp/` directory. `LEAN4EXPORT_DIR` and
@@ -84,21 +83,13 @@ for source in "${SOURCES[@]}"; do
   fi
   unset ONLY
 
-  MONO=0
-  grep -q '^--#monomorph *$' "$source" && MONO=1
-  if ((FILTER || MONO)); then
+  if ((FILTER)); then
     ensure_inductive_models
-    declare -a LEAN_INDUCTIVE_MODELS_ARGS=()
-    ((MONO)) && LEAN_INDUCTIVE_MODELS_ARGS+=(--mono-levels)
-    ((!FILTER)) && LEAN_INDUCTIVE_MODELS_ARGS+=(--no-inductives)
-    "$LEAN_INDUCTIVE_MODELS_BIN" "${LEAN_INDUCTIVE_MODELS_ARGS[@]}" \
-      "$OUT/$base.ndjson" -o "$WORK/$base.filtered.ndjson"
+    "$LEAN_INDUCTIVE_MODELS_BIN" "$OUT/$base.ndjson" -o "$WORK/$base.filtered.ndjson"
     mv "$WORK/$base.filtered.ndjson" "$OUT/$base.ndjson"
-    unset LEAN_INDUCTIVE_MODELS_ARGS
   fi
 
   suffix=""
   ((!FILTER)) && suffix=" (unfiltered)"
-  ((MONO)) && suffix="$suffix (monomorphized)"
   echo "$base.ndjson: $(wc -l < "$OUT/$base.ndjson") lines$suffix" >&2
 done

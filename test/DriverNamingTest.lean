@@ -39,7 +39,7 @@ def runExport (label : String) (input : Export) (checkRecursors : Bool)
 
 def runFixture (path : String) (generation : InductiveModels.Cli.Config) : IO FixtureResult := do
   let text ← IO.FS.readFile path
-  let .ok input := InductiveModels.parse text (analyse := false)
+  let .ok input := InductiveModels.parse text
     | throw <| IO.userError s!"cannot parse {path}"
   runExport path input false generation
 
@@ -147,7 +147,7 @@ def main : IO UInt32 := do
   for (fixture, generation) in passThrough do
     let path := s!"test/fixtures/inductive-models/filtered/{fixture}"
     let text ← IO.FS.readFile path
-    let .ok input := InductiveModels.parse text (analyse := false)
+    let .ok input := InductiveModels.parse text
       | throw <| IO.userError s!"cannot parse {path}"
     state := state.check s!"{fixture} source scheduling is a fixed point" <|
       match scheduleSource input generation with
@@ -165,7 +165,7 @@ def main : IO UInt32 := do
   -- idempotence check: the missing ordinary models must still be added.
   let partialText ← IO.FS.readFile
     "test/fixtures/inductive-models/filtered/nested_iota.ndjson"
-  let .ok partialInput := InductiveModels.parse partialText (analyse := false)
+  let .ok partialInput := InductiveModels.parse partialText
     | throw <| IO.userError "cannot parse the partially filtered nested_iota fixture"
   let allBranches ← runExport "partially filtered nested_iota with every branch"
     partialInput false {}
@@ -175,7 +175,7 @@ def main : IO UInt32 := do
     ([`N, `List, `Box].all allBranches.generated)
 
   let safetyText ← IO.FS.readFile "test/fixtures/inductive-models/nested_iota_arm.ndjson"
-  let .ok safetyInput := InductiveModels.parse safetyText (analyse := false)
+  let .ok safetyInput := InductiveModels.parse safetyText
     | throw <| IO.userError "cannot parse test/fixtures/inductive-models/nested_iota_arm.ndjson"
   let some (wrongSafety, recursorName) := flipFirstRecursorSafety safetyInput
     | throw <| IO.userError "no recursor to mutate in test/fixtures/inductive-models/nested_iota_arm.ndjson"
@@ -203,7 +203,7 @@ def main : IO UInt32 := do
   -- Its first basis wait drains at Eq; the late wait must remain atomic until
   -- Iff, both of its kernel-owned declarations, and propext are all installed.
   let lateText ← IO.FS.readFile "test/fixtures/inductive-models/w_late_iff.ndjson"
-  let .ok lateInput := InductiveModels.parse lateText (analyse := false)
+  let .ok lateInput := InductiveModels.parse lateText
     | throw <| IO.userError "cannot parse test/fixtures/inductive-models/w_late_iff.ndjson"
   let lateW ← runExport "late W logical basis" lateInput false
     { noGeneration with simple := true, basic := true }
@@ -212,7 +212,7 @@ def main : IO UInt32 := do
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order late W output: {repr error}"
   let lateOutputCheck := Check.checkReport lateOrdered
-  let .ok lateSerialized := InductiveModels.parse lateOrdered.render (analyse := false)
+  let .ok lateSerialized := InductiveModels.parse lateOrdered.render
     | throw <| IO.userError "cannot parse serialized late W output"
   let lateInputCheck := Check.checkReport lateSerialized
   state := state.check "W target retries after the complete later logical basis"
@@ -252,7 +252,7 @@ def main : IO UInt32 := do
   -- composed owners. The reserved-name guards must remain strict; source
   -- scheduling, not a prelude splice, is what makes every construction work.
   let lateEqText ← IO.FS.readFile "test/fixtures/inductive-models/prim_late_basis.ndjson"
-  let .ok lateEqSource := InductiveModels.parse lateEqText (analyse := false)
+  let .ok lateEqSource := InductiveModels.parse lateEqText
     | throw <| IO.userError "cannot parse the late-Eq source fixture"
   let lateEqInput := postponeRecords lateEqSource fun declaration =>
     declaration.names.contains `Eq
@@ -331,10 +331,10 @@ def main : IO UInt32 := do
   -- short-circuit the route, recursive support closure must use the scheduled
   -- quotient while ensureFunext's reserved-name checks remain untouched.
   let graphText ← IO.FS.readFile "test/fixtures/inductive-models/prim_graph.ndjson"
-  let .ok graphSource := InductiveModels.parse graphText (analyse := false)
+  let .ok graphSource := InductiveModels.parse graphText
     | throw <| IO.userError "cannot parse the graph source fixture"
   let quotientText ← IO.FS.readFile "test/fixtures/inductive-models/prim_graph_pre.ndjson"
-  let .ok quotientSource := InductiveModels.parse quotientText (analyse := false)
+  let .ok quotientSource := InductiveModels.parse quotientText
     | throw <| IO.userError "cannot parse the quotient support fixture"
   let psigmaNames : Array Name := #[`PSigma', `PSigma'.mk, `PSigma'.rec,
     `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk, `PSigma'.snd_mk,
@@ -373,7 +373,7 @@ def main : IO UInt32 := do
   -- late source quotient therefore blocks its historical splice and must not
   -- become available merely because Eq selects the shadow comparison path.
   let infinitaryText ← IO.FS.readFile "test/fixtures/inductive-models/infinitary.ndjson"
-  let .ok infinitarySource := InductiveModels.parse infinitaryText (analyse := false)
+  let .ok infinitarySource := InductiveModels.parse infinitaryText
     | throw <| IO.userError "cannot parse the infinitary fixture"
   let nestedLateSupport := postponeRecords infinitarySource fun declaration =>
     declaration.names.contains `Eq
@@ -391,7 +391,7 @@ def main : IO UInt32 := do
 
   let natText ← IO.FS.readFile
     "test/fixtures/inductive-models/filtered/nat_char_equations.ndjson"
-  let .ok natSource := InductiveModels.parse natText (analyse := false)
+  let .ok natSource := InductiveModels.parse natText
     | throw <| IO.userError "cannot parse the filtered Nat fixture"
   let some natRecord := natSource.decls.find? (·.names.contains `Nat)
     | throw <| IO.userError "filtered Nat fixture has no Nat owner"

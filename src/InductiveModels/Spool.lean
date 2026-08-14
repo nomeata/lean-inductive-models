@@ -244,10 +244,10 @@ def DirectInputTee.finish (tee : DirectInputTee) : IO DirectInputSizes := do
 
 /-- Reparse the exact consumed input snapshot for an ordinary compatibility
 fallback. This is input JSON, never generated logical output. -/
-def DirectInputTee.parseFallback (tee : DirectInputTee) (analyse : Bool := false)
+def DirectInputTee.parseFallback (tee : DirectInputTee)
     (allowDuplicateNames : Bool := true) : IO (Except String Export) :=
   IO.FS.withFile tee.raw.path .read fun handle =>
-    parseHandle handle analyse allowDuplicateNames
+    parseHandle handle allowDuplicateNames
 
 /-- Release the exact fallback snapshot once declaration replay is certified;
 late compact-direct fallback materializes from the transferred arena instead. -/

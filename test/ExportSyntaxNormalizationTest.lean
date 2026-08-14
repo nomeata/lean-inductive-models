@@ -34,7 +34,7 @@ def declarationType? (x : Export) (name : Name) : Option Expr :=
       (recursors.find? (·.name == name)).map (·.type)
 
 def readExport (path : String) : IO Export := do
-  let .ok result := parse (← IO.FS.readFile path) (analyse := false)
+  let .ok result := parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   return result
 

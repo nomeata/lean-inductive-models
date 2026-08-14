@@ -2407,7 +2407,7 @@ def ensureFunext (model : Name) (eqi : EqInfo) (reserved : Std.HashSet Name) :
   let mut out : Array Declaration := #[]
   -- ── the quotient ──
   -- Recognised **structurally**, by the record kind the kernel gives it, and
-  -- not by name, just like the monomorphizer's carried built-ins.
+  -- not by name.
   match (← getEnv).constants.find? `Quot with
   | some (.quotInfo _) => pure ()
   | some _ => declineWith (.notLeans `Quot "it is declared and is not the kernel's quotient type")
@@ -2641,7 +2641,7 @@ wrong answer, which is the property that matters. -/
 def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
   if (← getEnv).constants.contains wCoreSelf then return #[]
   let ex ←
-    match InductiveModels.parse wCoreText (analyse := false) with
+    match InductiveModels.parse wCoreText with
     | .ok ex => pure ex
     | .error msg => badShape s!"the W core fragment does not parse ({msg})"
   let mut out : Array Declaration := #[]

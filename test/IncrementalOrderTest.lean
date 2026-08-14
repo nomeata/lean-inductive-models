@@ -83,7 +83,7 @@ def isExactOrder (outcome : Except Order.Error (Array (Array Name)))
 
 def readExport (path : System.FilePath) : IO Export := do
   let text ← IO.FS.readFile path
-  match InductiveModels.parse text (analyse := false) with
+  match InductiveModels.parse text with
   | .ok x => return x
   | .error error => throw <| IO.userError s!"cannot parse {path}: {error}"
 

@@ -1,5 +1,4 @@
 import InductiveModels.Driver
-import InductiveModels.Mono
 import InductiveModels.Order
 
 /-!
@@ -157,13 +156,6 @@ def expectedOwn : List Row :=
   [ ("poly_nested",
       [("PTree", 15), ("PTree._model._impl.0", 14), ("QTree", 22),
        ("QTree._model._impl.0", 28)], [])
-    -- **`poly_nested` with use sites**, because `poly_nested` has none: nothing
-    -- in it instantiates `PTree.{u}` or `QTree.{u,v}`, so the monomorphization pass
-    -- downstream gives every group in it exactly one copy and the pipeline's
-    -- per-instantiation behaviour is unobservable. Here `PTree.{u}` is used at
-    -- 0, 1 and 2. For `lean-inductive-models` alone it is one more polymorphic nested shape;
-    -- it exists to verify that a model does **not** survive monomorphization.
-  , ("poly_nested_used", [("PTree", 15), ("PTree._model._impl.0", 14)], [])
   , ("indexed_decl",
       [("ITree", 15), ("ITree._model._impl.0", 14), ("I2", 15), ("I2._model._impl.0", 14),
        ("I3", 15), ("I3._model._impl.0", 14)], [])
@@ -986,7 +978,7 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
     s!"the compiled-in W core fragment is {InductiveModels.wCoreText.length} bytes and \
        the w_core fixture is {onDisk.length} — the fragment was re-exported and \
        the binary was not rebuilt, which `lake build` will not tell you"
-  let nFrag := match InductiveModels.parse InductiveModels.wCoreText (analyse := false) with
+  let nFrag := match InductiveModels.parse InductiveModels.wCoreText with
     | .ok x => x.decls.size
     | .error _ => 0
   let act : MetaM (Array (Bool × String)) := do
@@ -1339,120 +1331,6 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
   a := check a (n.exitCode == 3) s!"CLI: a missing input exited {n.exitCode}, expected 3"
   return a
 
-/-! ## The composition: model generation, then universe monomorphization
-
-This is the only place the two passes meet inside one process, and it is here
-because the two properties it pins are invisible to everything else in either
-suite. **One is about the marker**: it encodes `|σ|`, so if the nine families of
-a model do not agree on their level-parameter arity, one model comes out under
-two markers and a consumer that derives the family from the type's name finds
-part of it. **The other is about demand**: nothing in the file *references* a
-model, so left to the backward sweep every model group takes `--default` and
-`T`'s second and third copies have no model at all. No kernel sees either — the
-fixture's output replays with **0 rejected** in both states.
-
-`poly_nested_used` is the fixture because it is the one where the composition
-can be measured at all: `PTree.{u}` is *used* at universes 0, 1 and 2, so thirty
-of its thirty-six groups come out at three copies. On a file where every group
-lands at exactly one instantiation, "the model came out at the instantiation its
-declaration did" and "everything defaulted and the defaults agreed" are the same
-observation, and a previous seat's claim that the composition worked was vacuous
-for precisely that reason. `copies per group` is the check that says so, and it
-is the first one below. -/
-def runMonoCompose (root : String) (a : TAcc) : IO TAcc := do
-  let text ← IO.FS.readFile s!"{root}/test/fixtures/inductive-models/poly_nested_used.ndjson"
-  let .ok x := InductiveModels.parse text | return check a false "poly_nested_used does not parse"
-  let env ← importModules #[] {}
-  let ctx : Core.Context :=
-    { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
-  let ((decls, _), _) ←
-    Lean.Core.CoreM.toIO
-      (Lean.Meta.MetaM.run' (runFilter x false (legacyGenerationConfig false))) ctx { env }
-  let modelled : Export := { x with decls }
-  let mut a := a
-  for (tag, opts) in [("A", ({ check := true } : Mono.Opts)),
-                      ("B", { monoRecursors := true })] do
-    let ((y, rep), _) ←
-      Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (Mono.monomorphize modelled opts)) ctx { env }
-    a := check a rep.refused.isNone s!"compose[{tag}]: refused: {rep.refused}"
-    a := check a (rep.rejected == 0) s!"compose[{tag}]: the kernel rejected {rep.rejected}"
-    -- **Not vacuous, and this is the row that says so.** Three universes, so
-    -- `PTree`'s group is at three copies — and so, now, are all 30 groups in
-    -- the composed output. The six at one copy are `Eq` and `List`
-    -- (carried), `N`, and the three `atK` that do the using. A composition
-    -- measured on a file whose every group lands at one instantiation is
-    -- measuring the defaults agreeing with themselves.
-    --
-    -- It was `#[(1, 35), (3, 1)]`: one three-copy row, the type, while the model
-    -- incorrectly defaulted to a single copy beside it.
-    a := check a (rep.hist == #[(1, 6), (3, 30)])
-      s!"compose[{tag}]: copies per group {rep.hist}, expected #[(1, 6), (3, 30)]"
-    -- Exact-role counting keys the 21 public declaration-local model roles
-    -- plus one structurally proved model-of-model helper bridge. Other `_impl`
-    -- helpers are copied by actual dependency demand, not by nominal `_model`
-    -- ancestry, hence 22 keyed groups although the histogram has 30 triples.
-    a := check a (rep.modelGroups == 22)
-      s!"compose[{tag}]: {rep.modelGroups} model groups keyed, expected 22"
-    a := check a (rep.modelDeclined == 0)
-      s!"compose[{tag}]: the keying declined {rep.modelDeclined} model groups"
-    -- **One model per copy of `PTree`, and the same model under each.** Every
-    -- name is split at the `_at` marker; a name whose remainder has a `_model`
-    -- component is a model's, and it is filed under the marker it carries.
-    -- `T._model._impl.funext` is excluded: a spliced prelude theorem is
-    -- polymorphic in universes that are nobody's motive, nothing
-    -- derives its name, and it is not one of the nine families.
-    --
-    -- Two things are then checked, and the second is what reaches the *second*
-    -- layer of the composed naming. The marker set the model's names use must
-    -- be exactly the marker set `PTree` itself uses — three, not one, and not
-    -- four. And the **suffixes** filed under each marker must be the same set:
-    -- `PTree._model._impl.0._model` is a suffix like any other, so a copy that
-    -- got the outer model and not the inner one fails here by name.
-    -- Naming inversion removes the trailing `._elim.⟨w⟩` first.
-    -- Mode B folds the *motive's* universe into it, and that numeral is a
-    -- property of the copy, so the suffix sets would differ by construction if
-    -- it stayed on — `PTree._model.1.rec._elim.1` under one marker against
-    -- `._elim.3` under another is the same family member.
-    let split (n : Name) : String × List String :=
-      let ps0 := n.componentsRev.reverse.map toString
-      let ps := match ps0.reverse with
-        | w :: "_elim" :: r => if w.toNat?.isSome then r.reverse else ps0
-        | _ => ps0
-      match ps with
-      | "_at" :: k :: r =>
-        match k.toNat? with
-        | some i => (".".intercalate ("_at" :: k :: r.take i), r.drop i)
-        | none => ("", ps)
-      | _ => ("", ps)
-    let mut per : Std.HashMap String (Array String) := {}
-    let mut ptreeMarks : Array String := #[]
-    for d in y.decls do
-      for n in d.names do
-        let (mk, rest) := split n
-        if rest == ["PTree"] then
-          unless ptreeMarks.contains mk do ptreeMarks := ptreeMarks.push mk
-        let some i := rest.findIdx? (· == "_model") | continue
-        if rest.drop (i + 1) == ["funext"] then continue
-        let seen := per.getD mk #[]
-        let suffix := ".".intercalate rest
-        unless seen.contains suffix do per := per.insert mk (seen.push suffix)
-    a := check a (ptreeMarks.size == 3)
-      s!"compose[{tag}]: PTree is at {ptreeMarks.size} markers, expected 3: {ptreeMarks}"
-    for mk in ptreeMarks do
-      a := check a (per.contains mk) s!"compose[{tag}]: no model under {mk}"
-    a := check a (per.size == ptreeMarks.size)
-      s!"compose[{tag}]: models under {per.size} markers, PTree at {ptreeMarks.size}: \
-        {per.toArray.map (·.1)}"
-    let ref := (per.getD (ptreeMarks.getD 0 "") #[]).qsort (· < ·)
-    a := check a (ref.size == 44)
-      s!"compose[{tag}]: {ref.size} model names under one marker, expected 44"
-    for (mk, ns) in per.toArray do
-      let ns := ns.qsort (· < ·)
-      a := check a (ns == ref)
-        s!"compose[{tag}]: the model under {mk} differs: \
-          {ns.filter (!ref.contains ·)} / {ref.filter (!ns.contains ·)}"
-  return a
-
 def main (args : List String) : IO UInt32 := do
   initSearchPath (← findSysroot)
   let root := args.head?.getD "."
@@ -1467,7 +1345,6 @@ def main (args : List String) : IO UInt32 := do
   a ← runWSpliceProbe root a
   a ← runCollisionProbe a
   a ← runAliasProbe root a
-  a ← runMonoCompose root a
   a ← runCli root a
   IO.println s!"{a.checks} checks, {a.failures.size} failed"
   for f in a.failures do IO.println s!"  FAIL {f}"

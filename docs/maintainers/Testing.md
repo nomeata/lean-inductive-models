@@ -36,7 +36,7 @@ The executable correctness targets are:
 
 ```bash
 correctness_targets=(
-  test monotest clitest supervisortest generationflagstest checktest kernelchecktest ordertest
+  test clitest supervisortest generationflagstest checktest kernelchecktest ordertest
   familyadapterplantest familyadaptershadowtest familyadapterconstructiontest
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
@@ -60,7 +60,6 @@ The individual execution matrix, useful when isolating a failure, is:
 
 ```console
 lake exe test "$PWD"
-lake exe monotest "$PWD"
 lake exe clitest
 lake exe supervisortest --run-tests "$PWD/.lake/build/bin/supervisortest"
 lake exe generationflagstest
@@ -106,9 +105,8 @@ test/scripts/check-shared-prefix-ownership.sh
 test/scripts/check-ci-serialized-builds.sh
 ```
 
-`mainclitest` exercises the public process boundary, including universe
-monomorphization and default final-output kernel replay. `monotest` exercises
-the underlying universe pass directly. The Arena corpus runner accepts every
+`mainclitest` exercises the public process boundary, including independent
+input/generated kernel-check flags and streaming output. The Arena corpus runner accepts every
 published `good/` case and requires each `bad/` case to be rejected or to stop
 at the documented internal-invariant boundary; unsupported exit 2 is a corpus
 failure.
@@ -127,7 +125,7 @@ never serialized through it.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and
-monomorphization jobs and limits each process to 12 GiB. The Mathlib workflow
+CLI jobs and limits each process to 12 GiB. The Mathlib workflow
 uses its separately documented 10/12 GiB phase envelopes and artifact gates.
 Its generation pass uses the ordinary full-AST named-output backend and
 explicitly defers output kernel replay; a serialized
@@ -139,12 +137,11 @@ route is pending.
 ## Fixture regeneration
 
 Human-readable sources and committed exports live in
-`test/fixtures/inductive-models/` and `test/fixtures/mono/`. Regenerate them
+`test/fixtures/inductive-models/`. Regenerate them
 with the pinned exporter:
 
 ```console
 test/scripts/export-inductive-models.sh prim_shapes
-test/scripts/export-mono.sh mono_proj
 ```
 
 `LEAN4EXPORT_DIFFERENTIAL=1 test/scripts/check-lean4export-patch.sh` compares a

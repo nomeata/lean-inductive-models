@@ -168,7 +168,7 @@ def runSharedPrefixPlannedObserved (scratch : String) (x : Export)
     let tee ← Spool.ParseTee.create workspace
     let planned ← IO.FS.withFile inputFile.path .read fun handle => do
       match ← parsePlannedSourceWithTee handle tee
-          (analyse := false) (allowDuplicateNames := true) with
+          (allowDuplicateNames := true) with
       | .ok input => pure input
       | .error message => throw <| IO.userError message
     let sizes ← tee.finish
@@ -200,7 +200,7 @@ def runFilterDirectPlannedObserved (scratch : String) (x : Export)
     let tee ← Spool.ParseTee.create workspace
     let planned ← IO.FS.withFile inputFile.path .read fun handle => do
       match ← parsePlannedSourceWithTee handle tee
-          (analyse := false) (allowDuplicateNames := true) with
+          (allowDuplicateNames := true) with
       | .ok input => pure input
       | .error message => throw <| IO.userError message
     let sizes ← tee.finish
@@ -234,7 +234,7 @@ def runDiscarding (x : Export) (generation : Cli.Config)
 
 def readFixture (root file : String) : IO Export := do
   let text ← IO.FS.readFile s!"{root}/test/fixtures/inductive-models/{file}"
-  let .ok parsed := InductiveModels.parse text (analyse := false)
+  let .ok parsed := InductiveModels.parse text
     | throw <| IO.userError s!"kernelchecktest: cannot parse {file}"
   return parsed
 
@@ -411,7 +411,7 @@ def run (root : String) : IO UInt32 := do
 
   let fixturePath := s!"{root}/test/fixtures/inductive-models/nested_iota.ndjson"
   let fixtureText ← IO.FS.readFile fixturePath
-  let .ok fixture := InductiveModels.parse fixtureText (analyse := false)
+  let .ok fixture := InductiveModels.parse fixtureText
     | IO.eprintln "kernelchecktest: fixture parse failed"; return 1
   let some malformedMetadata := corruptFirstRecursor fixture
     | IO.eprintln "kernelchecktest: fixture has no recursor"; return 1

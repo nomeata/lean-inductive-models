@@ -9,7 +9,7 @@
 {"ie":1,"sort":3}
 {"forallE":{"binderInfo":"default","body":1,"name":3,"type":0},"ie":2}
 {"in":4,"str":{"pre":0,"str":"_private"}}
-{"in":5,"str":{"pre":4,"str":"MonoOffname"}}
+{"in":5,"str":{"pre":4,"str":"PrivateConstructor"}}
 {"in":6,"num":{"i":0,"pre":5}}
 {"in":7,"str":{"pre":6,"str":"Off"}}
 {"in":8,"str":{"pre":7,"str":"mk"}}

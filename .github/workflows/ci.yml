@@ -55,7 +55,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suite: [fixtures, focused, mono]
+        suite: [fixtures, focused, cli]
 
     steps:
       - uses: actions/checkout@v6
@@ -158,17 +158,15 @@ jobs:
                 --output test/fixtures/inductive-models/family_adapter_generated.lean --check
               count=32
               ;;
-            mono)
-              build_serially lean-inductive-models monotest mainclitest
-              lake exe monotest "$GITHUB_WORKSPACE" | tee _tmp/mono.log
-              mono_count="$(sed -nE 's/^monotest: ([0-9]+) checks, all pass$/\1/p' _tmp/mono.log | tail -n1)"
+            cli)
+              build_serially lean-inductive-models mainclitest
               lake exe mainclitest "$GITHUB_WORKSPACE" | tee _tmp/maincli.log
               cli_count="$(sed -nE 's/^main CLI: ([0-9]+) passed, 0 failed$/\1/p' _tmp/maincli.log | tail -n1)"
-              if [[ -z "$mono_count" || -z "$cli_count" ]]; then
-                echo "mono suite did not report both library and lean-inductive-models CLI checks" >&2
+              if [[ -z "$cli_count" ]]; then
+                echo "CLI suite did not report lean-inductive-models CLI checks" >&2
                 exit 1
               fi
-              count="$((mono_count + cli_count))"
+              count="$cli_count"
               ;;
             *)
               echo "unknown suite: $SUITE" >&2

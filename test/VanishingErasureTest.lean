@@ -23,7 +23,7 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else { state with failed := state.failed.push label }
 
 def readExport (path : String) : IO Export := do
-  let .ok result := parse (← IO.FS.readFile path) (analyse := false)
+  let .ok result := parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   return result
 

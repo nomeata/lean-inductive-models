@@ -120,7 +120,6 @@ lean-inductive-models --type-check-input --no-output "$IN"
 | `--check` | on | Set both structural-check options. |
 | `--type-check-input` | off | Replay the parsed input through Lean's kernel. |
 | `--type-check-output` | on | Replay the complete final output through Lean's kernel. |
-| `--mono-levels` | off | Monomorphize universe levels before generation. |
 | `--output` | on | Write the transformed export. |
 | `-o PATH` | `-` | Select the output path and enable output. |
 | `--quiet` | off | Suppress successful-pass diagnostics. |
@@ -149,7 +148,7 @@ owner and rejects dependency cycles or ambiguous ownership.
 
 Canonical generation retains compact ordering and structural-check
 certificates while model islands are live. All named and stdout output uses
-the ordinary full-memory AST path, as does universe monomorphization. With
+the ordinary full-memory AST path. With
 generated `--no-output`, the default output kernel gate first builds a compact
 source census, then feeds each exact declaration directly to an incremental
 in-process kernel environment while its compact schedule row is live. The
@@ -168,8 +167,7 @@ environment so its established diagnostics remain authoritative. With both
 `--no-output` and `--no-type-check-output`, accepted
 islands are likewise checked and summarized while live and then discarded: no
 workspace is opened and no cumulative generated declaration array is retained.
-Monomorphization and deliberate legacy/planner
-diagnostic modes remain on the full-memory path.
+Deliberate legacy/planner diagnostic modes remain on the full-memory path.
 
 Unsupported shapes pass through unchanged and are reported as declines. A
 consumer using models as an inductive front end must implement the five-member

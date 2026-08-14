@@ -1,6 +1,5 @@
 import InductiveModels.Driver
 import InductiveModels.Check
-import InductiveModels.Mono
 import InductiveModels.Order
 import InductiveModels.Output
 import InductiveModels.Supervisor
@@ -15,12 +14,9 @@ passes:
 1. parse the input export;
 2. optionally submit the complete input stream to Lean's kernel;
 3. structurally check model families already in the input;
-4. optionally monomorphize the input's universe levels;
-5. put the resulting records in dependency and model-before-owner order;
-6. generate the selected inductive models;
-7. order the generated records;
-8. structurally check and optionally kernel-check the final export;
-9. emit it, unless output was disabled.
+4. generate the selected inductive models;
+5. structurally check and optionally kernel-check generated declarations;
+6. emit them immediately before their source owner, unless output was disabled.
 
 The export is the only stream written to stdout.  Reports and errors go to
 stderr, and `--quiet` suppresses successful pass reports without hiding fatal
@@ -58,15 +54,6 @@ def reportGeneration (config : InductiveModels.Cli.Config) (rep : InductiveModel
   let escapes ← InductiveModels.LevelAlgebra.levelEscapes.get
   IO.eprintln s!"levels: {calls} planner comparisons, {escapes} escapes\
     {if InductiveModels.LevelAlgebra.stockLevels then " (widening OFF — control run)" else ""}"
-
-def reportMono (config : InductiveModels.Cli.Config) (rep : InductiveModels.Mono.Report) : IO Unit := do
-  if config.quiet then return
-  IO.eprintln s!"monomorphization: {rep.declsIn} declarations in, {rep.declsOut} out \
-    ({rep.recordsIn} → {rep.recordsOut} records), {rep.groups} groups, \
-    {rep.defaulted} defaulted"
-  IO.eprintln s!"  copies per group: {rep.hist.toList}"
-  IO.eprintln s!"  model groups: {rep.modelGroups} keyed, {rep.modelLoose} loose, \
-    {rep.modelDeclined} declined; {rep.recRegen} recursors regenerated"
 
 def violationMessage (violation : InductiveModels.Check.Violation) : String :=
   violation.message
@@ -124,10 +111,9 @@ def unsupportedDeclines (input : Export) (report : InductiveModels.Report) : Arr
       InductiveModels.declineIsUnsupported alreadyCovered generated entry.1
 
 /-- Shared compact-generation boundary. Structural and direct kernel checking
-consume records while each family is live. Monomorphization still rewrites
-source declarations and therefore remains on the full-AST path. -/
+consume records while each family is live. -/
 def compactModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  InductiveModels.generationEnabled config && !config.monoLevels
+  InductiveModels.generationEnabled config
 
 /-- No-output compact generation retains the same value-only verdict
 certificates but deliberately has no workspace or physical spool. -/
@@ -200,51 +186,7 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
       return exitRejected
     reportCheckSuccess config "input" report
 
-  -- Monomorphize before generation.  Generated simple/bootstrap support is
-  -- already monomorphic at this point; feeding that support back through Mono
-  -- would instead ask the optional pass to infer instantiations for its
-  -- carried primitive basis, which has no such instantiation relation.
-  if config.monoLevels then
-    match (InductiveModels.SourceCensus.ofSource parsed).replayAliases with
-    | .error message =>
-        IO.eprintln s!"{input}: cannot plan collision-safe source replay: {message}"
-        return exitToolError
-    | .ok aliases => unless aliases.isEmpty do
-        -- Mono owns an independent exact-name replay loop.  Refuse before it
-        -- reaches Lean's normalized async map until that loop shares Driver's
-        -- explicit exact/replay alias view.
-        IO.eprintln s!"{input}: --mono-levels does not yet support normalized source-name \
-          collisions ({aliases.entries.size} declaration names require replay aliases)"
-        return exitToolError
-  let generationInput ← if config.monoLevels then do
-      let result ← try
-          let ((output, report), _) ← Lean.Core.CoreM.toIO
-            (Lean.Meta.MetaM.run'
-              (InductiveModels.Mono.monomorphize parsed { check := true })) context { env }
-          pure (Except.ok (output, report))
-        catch error =>
-          pure (Except.error (toString error))
-      match result with
-      | .error message =>
-          IO.eprintln s!"{input}: monomorphization failed: {message}"
-          return exitToolError
-      | .ok (output, report) =>
-          if let some why := report.refused then
-            IO.eprintln s!"{input}: monomorphization refused the export: {why}"
-            return exitToolError
-          unless report.errors.isEmpty do
-            IO.eprintln s!"{input}: monomorphization produced {report.errors.size} errors"
-            for error in report.errors do IO.eprintln s!"  ! {error}"
-            return exitToolError
-          reportMono config report
-          match InductiveModels.Order.reorder output with
-          | .error error =>
-              IO.eprintln s!"{input}: cannot order monomorphized input: \
-                {orderErrorMessage error}"
-              return exitToolError
-          | .ok orderedOutput => pure orderedOutput
-    else
-      pure parsed
+  let generationInput := parsed
 
   let (filterOutput, generationReport) ← if InductiveModels.generationEnabled config then do
       let generated : Except String (FilterOutput × InductiveModels.Report) ← try
@@ -347,7 +289,7 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
     return outcome
   | .full decls =>
     let transformed : Export := { generationInput with decls }
-    let finalExport ← if InductiveModels.generationEnabled config || config.monoLevels then
+    let finalExport ← if InductiveModels.generationEnabled config then
         match InductiveModels.Order.reorder transformed with
         | .error error =>
             IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
@@ -388,11 +330,11 @@ private def runPipeline (config : InductiveModels.Cli.Config)
       if input == "-" then
         let stdin ← IO.getStdin
         pure (some (← InductiveModels.parseStream stdin
-          (analyse := config.monoLevels) (allowDuplicateNames := true)))
+          (allowDuplicateNames := true)))
       else
         IO.FS.withFile input .read fun handle => do
           pure (some (← InductiveModels.parseHandle handle
-            (analyse := config.monoLevels) (allowDuplicateNames := true)))
+            (allowDuplicateNames := true)))
     catch error =>
       IO.eprintln s!"{input}: {error}"
       pure none
@@ -418,12 +360,12 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
       let parsedResult ← if input == "-" then
           consumed.set true
           InductiveModels.parsePlannedSourceStreamWithDirectTee (← IO.getStdin) tee
-            (analyse := false) (allowDuplicateNames := true)
+            (allowDuplicateNames := true)
         else
           IO.FS.withFile input .read fun handle => do
             consumed.set true
             InductiveModels.parsePlannedSourceWithDirectTee handle tee
-              (analyse := false) (allowDuplicateNames := true)
+              (allowDuplicateNames := true)
       let planned ← match parsedResult with
         | .error message =>
           IO.eprintln s!"{input}: parse error: {message}"
@@ -441,7 +383,7 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
           -- Parser-compatible arena overwrites cannot be reconstructed from a
           -- completed arena. Reparse the exact consumed input snapshot and use
           -- the ordinary full-AST pipeline with unchanged diagnostics.
-          let fallback ← tee.parseFallback (analyse := false) (allowDuplicateNames := true)
+          let fallback ← tee.parseFallback (allowDuplicateNames := true)
           let parsed ← match fallback with
             | .ok parsed => pure parsed
             | .error message =>

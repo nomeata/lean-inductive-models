@@ -6,7 +6,7 @@ def shadowGeneration : Cli.Config :=
   { nested := true, mutualModels := true, simple := true, basic := true }
 
 def readFixture (path : String) : IO Export := do
-  let .ok parsed := parse (← IO.FS.readFile path) (analyse := false)
+  let .ok parsed := parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   return parsed
 

@@ -82,7 +82,7 @@ def breakRuleLayout (owner : Name) (declaration : EDecl) : EDecl :=
 
 def runRoute (root : String) (route : Route) : IO Bool := do
   let path := s!"{root}/test/fixtures/inductive-models/{route.fixture}"
-  let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok input := InductiveModels.parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -105,7 +105,7 @@ def runRoute (root : String) (route : Route) : IO Bool := do
 
 def runLayoutFailure (root : String) (route : Route) : IO Bool := do
   let path := s!"{root}/test/fixtures/inductive-models/{route.fixture}"
-  let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok input := InductiveModels.parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -125,7 +125,7 @@ def runLayoutFailure (root : String) (route : Route) : IO Bool := do
 
 def runPublicRawRecursor (root : String) : IO Bool := do
   let path := s!"{root}/test/fixtures/inductive-models/nested_default_iota.ndjson"
-  let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok input := InductiveModels.parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}
   let context : Core.Context :=

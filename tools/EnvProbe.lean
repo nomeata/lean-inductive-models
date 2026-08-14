@@ -89,7 +89,7 @@ def probeW (x : Export) (env0 : Environment) : IO Unit := do
       -- The total is read off the compiled-in fragment rather than written
       -- down, so that re-exporting `w_core.ndjson` does not leave a literal
       -- here saying what it used to hold.
-      let nFrag := match InductiveModels.parse InductiveModels.wCoreText (analyse := false) with
+      let nFrag := match InductiveModels.parse InductiveModels.wCoreText with
         | .ok x => x.decls.size
         | .error _ => 0
       IO.println s!"W splice: {ds.size} records added, {nFrag - ds.size} the input \
@@ -123,7 +123,7 @@ def probeB (x : Export) (names : Array Name) (env0 : Environment) : IO Unit := d
 def main (args : List String) : IO UInt32 := do
   let path :: rest := args | do IO.eprintln "usage: envprobe IN.ndjson [P|A|B]"; return 1
   let text ← IO.FS.readFile path
-  let .ok x := InductiveModels.parse text (analyse := false) | do IO.eprintln s!"{path}: parse error"; return 2
+  let .ok x := InductiveModels.parse text | do IO.eprintln s!"{path}: parse error"; return 2
   initSearchPath (← findSysroot)
   let env0 ← importModules #[] {}
   let mut names : Array Name := #[]

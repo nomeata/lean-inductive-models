@@ -9,8 +9,8 @@ set_option maxRecDepth 4096
 End-to-end tests for the public `lean-inductive-models` process boundary.
 
 These deliberately execute the built binary: parser-only tests cannot observe
-the stdout/stderr split, output suppression, pass ordering, or the integrated
-mode-A monomorphization pass.
+the stdout/stderr split, output suppression, pass ordering, or transactional
+output behavior.
 -/
 
 structure TestState where
@@ -63,11 +63,11 @@ def hasDiagnostic (stderr diagnostic : String) : Bool :=
   (stderr.splitOn "\n").contains diagnostic
 
 def familyCount? (text : String) : Option Nat := do
-  let parsed ← (InductiveModels.parse text (analyse := false)).toOption
+  let parsed ← (InductiveModels.parse text).toOption
   return (InductiveModels.Check.discover parsed).size
 
 def sameSemanticExport (left right : String) : Bool :=
-  match InductiveModels.parse left (analyse := false), InductiveModels.parse right (analyse := false) with
+  match InductiveModels.parse left, InductiveModels.parse right with
   | .ok left, .ok right => left.metaLine == right.metaLine && left.decls == right.decls
   | _, _ => false
 
@@ -129,12 +129,9 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.createDirAll scratch
   let nested := s!"{root}/test/fixtures/inductive-models/nested_iota.ndjson"
   let nestedText ← IO.FS.readFile nested
-  let .ok nestedExport := InductiveModels.parse nestedText (analyse := false) | do
+  let .ok nestedExport := InductiveModels.parse nestedText | do
     IO.eprintln "mainclitest: nested fixture did not parse"
     return 1
-  -- This fixture contains `Expr.proj`, so success also pins that the integrated
-  -- path asked the reader for projection analysis.
-  let mono := s!"{root}/test/fixtures/mono/mono_proj.ndjson"
   let mut state : TestState := {}
 
   -- A kernel-valid declaration under a reserved basis name is unsupported
@@ -415,7 +412,7 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "unknown quotient kind is a parse/tool error with exit 3" <|
     unknownQuotient != quotientText && badQuotient.exitCode == 3 &&
       (badQuotient.stderr.splitOn "parse error:").length > 1
-  let .ok quotientExport := InductiveModels.parse quotientText (analyse := false) | do
+  let .ok quotientExport := InductiveModels.parse quotientText | do
     IO.eprintln "mainclitest: quotient fixture did not parse"
     return 1
   let quotientRecords := quotientExport.decls.filter fun declaration =>
@@ -504,7 +501,7 @@ def main (args : List String) : IO UInt32 := do
   let metadataDecl : InductiveModels.EDecl := .ax `ArenaMetadata [] (.sort .zero) false
   state := state.check "metadata expression input passes both arena kernel gates" <|
     metadataRun.exitCode == 0 &&
-      match InductiveModels.parse metadataRun.stdout (analyse := false) with
+      match InductiveModels.parse metadataRun.stdout with
       | .ok output => output.decls == #[metadataDecl]
       | .error _ => false
   let missing ← runInductiveModels binary [
@@ -513,13 +510,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "missing $IN path is a tool error with exit 3" (missing.exitCode == 3)
   let badOption ← runInductiveModels binary ["--unknown-arena-option", nested]
   state := state.check "CLI misuse is a tool error with exit 3" (badOption.exitCode == 3)
-  let monoRefusal := s!"{root}/test/fixtures/mono/marker_taken.ndjson"
-  let internal ← runInductiveModels binary [
-    "--no-inductives", "--no-check", "--mono-levels", "--no-output", monoRefusal]
-  state := state.check "internal transform refusal is a tool error with exit 3" <|
-    internal.exitCode == 3 &&
-      (internal.stderr.splitOn "monomorphization refused the export:").length > 1
-
   -- A literal `-` is standard input, not an unknown option.  The streaming
   -- reader sees the same records as a file reader; stdin cannot use the
   -- verbatim-copy shortcut after it has been consumed, so compare exports
@@ -529,8 +519,8 @@ def main (args : List String) : IO UInt32 := do
     ["--no-inductives", "--no-check", "--quiet", "-"] (some nestedText)
   state := state.check "stdin input succeeds" (stdinRun.exitCode == 0)
   state := state.check "stdin and file parse to the same export" <|
-    match InductiveModels.parse stdinRun.stdout (analyse := false),
-        InductiveModels.parse nestedText (analyse := false) with
+    match InductiveModels.parse stdinRun.stdout,
+        InductiveModels.parse nestedText with
     | .ok stdinExport, .ok fileExport => stdinExport.decls == fileExport.decls
     | _, _ => false
 
@@ -831,7 +821,7 @@ def main (args : List String) : IO UInt32 := do
   for (label, fixture) in #[
       ("nested multi-model island", nested),
       ("late scheduled support", s!"{root}/test/fixtures/inductive-models/prim_late_basis.ndjson")] do
-    let args := #["--no-check-output", "--no-type-check-output", "--no-mono-levels", fixture]
+    let args := #["--no-check-output", "--no-type-check-output", fixture]
     let legacy ← runInductiveModelsLegacy binary args.toList
     let full ← runInductiveModels binary args.toList
     state := state.check s!"opt-out full {label} preserves report and exit" <|
@@ -931,7 +921,7 @@ def main (args : List String) : IO UInt32 := do
     state := state.check "named output replaces a symlink, not its referent" <|
       symbolicRun.exitCode == 0 && (← IO.FS.readFile linkReferent) == linkSentinel &&
         (← symbolicTarget.symlinkMetadata).type == .file &&
-        (InductiveModels.parse (← IO.FS.readFile symbolicTarget) (analyse := false)).isOk
+        (InductiveModels.parse (← IO.FS.readFile symbolicTarget)).isOk
   removeIfPresent symbolicTarget
   IO.FS.removeFile linkReferent
 
@@ -946,7 +936,7 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "named output replaces only the selected hardlink entry" <|
     hardRun.exitCode == 0 && (← IO.FS.readFile hardSource) == nestedText &&
       (← hardSource.metadata).numLinks == 1 && (← hardTarget.metadata).numLinks == 1 &&
-      (InductiveModels.parse (← IO.FS.readFile hardTarget) (analyse := false)).isOk
+      (InductiveModels.parse (← IO.FS.readFile hardTarget)).isOk
   IO.FS.removeFile hardTarget
   IO.FS.removeFile hardSource
 
@@ -958,7 +948,7 @@ def main (args : List String) : IO UInt32 := do
   let boundaryText :=
     "{\"meta\":{},\"padding\":\"" ++ String.ofList (List.replicate (5 * 1024 * 1024) 'x') ++
       "\"}\r\n"
-  let .ok boundaryExport := InductiveModels.parse boundaryText (analyse := false) | do
+  let .ok boundaryExport := InductiveModels.parse boundaryText | do
     IO.eprintln "mainclitest: chunk-boundary input did not parse"
     return 1
   IO.FS.writeFile boundaryPath boundaryText
@@ -966,8 +956,8 @@ def main (args : List String) : IO UInt32 := do
     ["--no-inductives", "--no-check", "--quiet", boundaryPath]
   state := state.check "line spanning the chunk boundary parses" (boundaryRun.exitCode == 0)
   state := state.check "chunk-boundary output is the parsed snapshot" <|
-    match InductiveModels.parse boundaryRun.stdout (analyse := false),
-        InductiveModels.parse boundaryText (analyse := false) with
+    match InductiveModels.parse boundaryRun.stdout,
+        InductiveModels.parse boundaryText with
     | .ok output, .ok input => output.decls == input.decls && output.metaLine == input.metaLine
     | _, _ => false
   let inPlaceRun ← runInductiveModels binary
@@ -975,7 +965,7 @@ def main (args : List String) : IO UInt32 := do
   let boundaryAfter ← IO.FS.readFile boundaryPath
   state := state.check "literal in-place output is a complete parsed snapshot" <|
     inPlaceRun.exitCode == 0 && inPlaceRun.stdout.isEmpty &&
-      match InductiveModels.parse boundaryAfter (analyse := false) with
+      match InductiveModels.parse boundaryAfter with
       | .ok output => output.metaLine == boundaryExport.metaLine
       | .error _ => false
   let aliasPath := s!"{scratch}/./main-cli-chunk-boundary.ndjson"
@@ -984,7 +974,7 @@ def main (args : List String) : IO UInt32 := do
   let boundaryAfterAlias ← IO.FS.readFile boundaryPath
   state := state.check "canonical-path in-place output remains complete" <|
     aliasRun.exitCode == 0 && aliasRun.stdout.isEmpty &&
-      (InductiveModels.parse boundaryAfterAlias (analyse := false)).isOk
+      (InductiveModels.parse boundaryAfterAlias).isOk
   IO.FS.removeFile boundaryPath
 
   let malformedPath := s!"{scratch}/main-cli-malformed.ndjson"
@@ -1018,46 +1008,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "quiet suppresses successful check diagnostics" <|
     (nestedOnly.stderr.splitOn "input check:").length == 1 &&
       (nestedOnly.stderr.splitOn "output check:").length == 1
-
-  -- The integrated switch is mode A: it keeps recursor elimination levels,
-  -- runs before inductive generation, and performs Mono's kernel replay.
-  let monoRun ← runInductiveModelsWithEnv binary
-    ["--no-inductives", "--mono-levels", "--quiet", mono]
-    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "mono-levels mode A succeeds" (monoRun.exitCode == 0)
-  state := state.check "mono-levels selects the legacy backend" <|
-    hasDiagnostic monoRun.stderr "output backend: legacy"
-  state := state.check "mono-levels writes marker-renamed declarations" <|
-    (monoRun.stdout.splitOn "_at").length > 1
-
-  -- Monomorphization runs before generation, so the default inductive branches
-  -- can model its result without asking Mono to infer instantiations for the
-  -- generated bootstrap basis.  This fixture has distinct universe use sites
-  -- and exercises the full default `--inductives --check` pipeline.
-  let poly := s!"{root}/test/fixtures/inductive-models/poly_nested_used.ndjson"
-  let monoModels ← runInductiveModels binary ["--mono-levels", "--quiet", poly]
-  state := state.check "monomorphized generated models pass the final check"
-    (monoModels.exitCode == 0 && !monoModels.stdout.isEmpty)
-
-  -- Check the serialized bytes again.  This pins both ordering passes and the
-  -- stdout writer: an in-memory result cannot make this second
-  -- input check green if serialization changes the declaration order.
-  let monoModeledPath := s!"{scratch}/main-cli-mono-modeled.ndjson"
-  IO.FS.writeFile monoModeledPath monoModels.stdout
-  let monoCheckedAgain ← runInductiveModels binary [
-    "--no-inductives", "--check-input", "--no-check-output", "--no-output",
-    monoModeledPath]
-  state := state.check "serialized monomorphized models remain ordered and check"
-    (monoCheckedAgain.exitCode == 0 && monoCheckedAgain.stdout.isEmpty)
-  let some monoFamilies := familyCount? monoModels.stdout | do
-    IO.eprintln "mainclitest: monomorphized model output did not parse"
-    return 1
-  state := state.check "serialized input-only check reports its exact family count" <|
-    monoFamilies > 0 && hasDiagnostic monoCheckedAgain.stderr
-      s!"input check: {monoFamilies} model families checked"
-  state := state.check "disabled output check emits no success diagnostic" <|
-    (monoCheckedAgain.stderr.splitOn "output check:").length == 1
-  IO.FS.removeFile monoModeledPath
 
   IO.println s!"main CLI: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

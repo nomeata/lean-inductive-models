@@ -28,7 +28,7 @@ def runExport (parsed : Export) (generation : InductiveModels.Cli.Config) : IO (
 
 def readFixture (path : String) : IO Export := do
   let text ← IO.FS.readFile path
-  let .ok parsed := InductiveModels.parse text (analyse := false)
+  let .ok parsed := InductiveModels.parse text
     | throw <| IO.userError s!"cannot parse {path}"
   return parsed
 

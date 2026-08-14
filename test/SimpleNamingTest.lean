@@ -23,7 +23,7 @@ def noGeneration : InductiveModels.Cli.Config :=
 
 def runFixture (path : String) (generation : InductiveModels.Cli.Config) : IO FixtureResult := do
   let text ← IO.FS.readFile path
-  let .ok input := InductiveModels.parse text (analyse := false)
+  let .ok input := InductiveModels.parse text
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -110,7 +110,8 @@ def main : IO UInt32 := do
     (basicAcc.hasInterface `Acc `Acc.rec #[`Acc.intro] 1)
   state := state.check "basic Acc has no legacy slots" (basicAcc.noLegacySlots `Acc)
 
-  let privateCtor ← runFixture "test/fixtures/mono/mono_offname.ndjson" simpleOnly
+  let privateCtor ← runFixture
+    "test/fixtures/inductive-models/private_constructor.ndjson" simpleOnly
   let privateCtors := inputConstructors privateCtor.input `Off
   state := state.check "private constructor keeps its exact raw exported name"
     (privateCtors.size == 1 && privateCtor.hasName (modelName privateCtors[0]!))

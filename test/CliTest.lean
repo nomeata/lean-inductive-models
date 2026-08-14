@@ -31,17 +31,17 @@ def main : IO UInt32 := do
     config.input == some "in.ndjson" &&
     config.nested && config.mutualModels && config.simple && config.basic &&
     config.checkInput && config.checkOutput &&
-    !config.typeCheckInput && config.typeCheckOutput && !config.monoLevels &&
+    !config.typeCheckInput && config.typeCheckOutput &&
     config.output && config.outputTarget == "-" && !config.quiet
 
   state ← state.expect "all individual negative forms" [
       "--no-nested", "--no-mutual", "--no-simple", "--no-basic",
-      "--no-check-input", "--no-check-output", "--no-mono-levels",
+      "--no-check-input", "--no-check-output",
       "--no-type-check-input", "--no-type-check-output",
       "--no-output", "--no-quiet", "in.ndjson"] fun config =>
     !config.nested && !config.mutualModels && !config.simple && !config.basic &&
     !config.checkInput && !config.checkOutput &&
-    !config.typeCheckInput && !config.typeCheckOutput && !config.monoLevels &&
+    !config.typeCheckInput && !config.typeCheckOutput &&
     !config.output && !config.quiet
 
   state ← state.expect "inductives bundle then individual override"
@@ -74,10 +74,6 @@ def main : IO UInt32 := do
       config.typeCheckInput && config.typeCheckOutput && !config.output
   state ← state.expect "positive option restores default-on boolean"
     ["--no-mutual", "--mutual", "in.ndjson"] fun config => config.mutualModels
-  state ← state.expect "mono levels is opt-in and reversible"
-    ["--mono-levels", "--no-mono-levels", "in.ndjson"] fun config =>
-      !config.monoLevels
-
   state ← state.expect "short output target"
     ["in.ndjson", "-o", "out.ndjson"] fun config =>
       config.output && config.outputTarget == "out.ndjson"

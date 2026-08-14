@@ -1,6 +1,6 @@
 import InductiveModels.Driver
 import InductiveModels.Check
-import InductiveModels.Mono
+import InductiveModels.ModelRoles
 import InductiveModels.Order
 
 set_option maxRecDepth 2048
@@ -19,7 +19,7 @@ def projectionGeneration : Cli.Config :=
   { nested := true, mutualModels := true, simple := true, basic := true }
 
 def readExport (path : String) : IO Export := do
-  let .ok x := parse (← IO.FS.readFile path) (analyse := false)
+  let .ok x := parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   return x
 
@@ -885,12 +885,12 @@ def main : IO UInt32 := do
   state := state.check "raised-Eq projection theorem remains kernel-valid" <|
     raisedEqReplay.unreplayable.isNone
 
-  let monoTable := Mono.modelTable generated
-  state := state.check "Mono keys projection definitions to the owner record" <|
-    (monoTable[payloadModel]?).any fun entry =>
+  let roleTable := ModelRoles.table generated
+  state := state.check "projection definitions are keyed to the owner record" <|
+    (roleTable[payloadModel]?).any fun entry =>
       entry.owner == `Dep && entry.role == .projection
-  state := state.check "Mono keys projection rules without an eliminating universe" <|
-    (monoTable[payloadRule]?).any fun entry =>
+  state := state.check "projection rules are keyed without an eliminating universe" <|
+    (roleTable[payloadRule]?).any fun entry =>
       entry.owner == `Dep && entry.role == .projectionIota
 
   -- A real collision retry requires both spellings in the flattened export.
@@ -969,9 +969,9 @@ def main : IO UInt32 := do
   state := state.check "checker accepts mutual projection interfaces per member" <|
     Check.check mutualGenerated |>.all fun violation =>
       violation.familyOwner != `MLeft && violation.familyOwner != `MRight
-  let mutualMono := Mono.modelTable mutualGenerated
-  state := state.check "Mono attaches a later member's projection to the mutual owner record" <|
-    (mutualMono[rightPayloadProjection]?).any fun entry =>
+  let mutualRoles := ModelRoles.table mutualGenerated
+  state := state.check "a later member's projection is attached to the mutual owner record" <|
+    (mutualRoles[rightPayloadProjection]?).any fun entry =>
       entry.owner == `MLeft && entry.role == .projection
 
   IO.println s!"structure projections: {state.passed} passed, {state.failed.size} failed"

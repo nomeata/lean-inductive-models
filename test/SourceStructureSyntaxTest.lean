@@ -187,7 +187,7 @@ def projectionExpectations (x : Export) (family : Check.Family)
   return result
 
 def collectEvidence (path : String) : IO Evidence := do
-  let .ok parsed := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok parsed := InductiveModels.parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   let input := injectFieldSyntax parsed
   let base ← importModules #[] {}

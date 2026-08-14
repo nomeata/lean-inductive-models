@@ -184,7 +184,7 @@ def runFilterPlannedDiscardedState (scratch : String) (input : Export)
     let tee ← Spool.ParseTee.create workspace
     let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
       parseHandleWithSink handle tee.sink
-        (analyse := false) (allowDuplicateNames := true)
+        (allowDuplicateNames := true)
     let (parsed, certificate) ← match parsedResult with
       | .ok parsed => pure parsed
       | .error error => throw <| IO.userError s!"planned source parse failed: {error}"
@@ -211,7 +211,7 @@ def runFilterPlannedCensusState (scratch : String) (input : Export)
     let tee ← Spool.ParseTee.create workspace
     let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
       parsePlannedSourceWithTee handle tee
-        (analyse := false) (allowDuplicateNames := true)
+        (allowDuplicateNames := true)
     let parsed ← match parsedResult with
       | .ok parsed => pure parsed
       | .error error => throw <| IO.userError s!"planned census parse failed: {error}"
@@ -237,7 +237,7 @@ def preparePlannedCensus (workspace : Spool.Workspace) (input : Export) :
   let tee ← Spool.ParseTee.create workspace
   let parsed ← IO.FS.withFile inputFile.path .read fun handle => do
     match ← parsePlannedSourceWithTee handle tee
-        (analyse := false) (allowDuplicateNames := true) with
+        (allowDuplicateNames := true) with
     | .ok parsed => pure parsed
     | .error error => throw <| IO.userError s!"planned provenance parse failed: {error}"
   let sizes ← tee.finish
@@ -269,7 +269,7 @@ def swappedPlannedReaderRejected (scratch : String) (left right : Export) : IO B
 def generatedFixtureState (path : String) (generation : InductiveModels.Cli.Config) :
     IO FilterRun := do
   let text ← IO.FS.readFile path
-  let .ok parsed := InductiveModels.parse text (analyse := false)
+  let .ok parsed := InductiveModels.parse text
     | throw <| IO.userError s!"cannot parse {path}"
   runFilterState parsed generation
 
@@ -1056,7 +1056,7 @@ def run (root : String) : IO UInt32 := do
   for (label, fixture, generation, checkRecursors) in compactMatrix do
     let fixturePath := s!"{root}/test/fixtures/inductive-models/{fixture}"
     let text ← IO.FS.readFile fixturePath
-    let .ok input := InductiveModels.parse text (analyse := false) | do
+    let .ok input := InductiveModels.parse text | do
       state := state.check s!"compact {label} fixture parses" false
       continue
     let legacy ← runFilterState input generation checkRecursors
