@@ -79,7 +79,7 @@ def reportCheckSuccess (config : InductiveModels.Cli.Config) (stage : String)
   unless config.quiet do
     IO.eprintln s!"{stage} check: {report.familiesChecked} model families checked"
 
-/-- Run the whole-stream kernel gate in a genuinely empty environment.  The
+/-- Run the requested input-only kernel gate in a genuinely empty environment. The
 outer `Except` reports a tool failure; the inner one is Lean's rejection of
 the submitted export. -/
 def typeCheckExportIO (context : Core.Context) (x : Export) :
@@ -128,11 +128,12 @@ private inductive FilterOutput where
 
 /-- Optional A/B and test diagnostic. This observes the actual filter result;
 it never changes output retention or route eligibility. -/
-private def reportOutputBackend (output : FilterOutput) : IO Unit := do
+private def reportOutputBackend (output : FilterOutput) (outputKernelChecks : Nat) : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
     IO.eprintln s!"output backend: {match output with
       | .full .. => "legacy"
       | .discarded .. => "compact-discard"}"
+    IO.eprintln s!"generated kernel checks: {outputKernelChecks}"
 
 private def runParsedPipeline (config : InductiveModels.Cli.Config)
     (compactEnabled : Bool) (parsed : Export) : IO UInt32 := do
@@ -204,7 +205,7 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
     else
       pure (FilterOutput.full generationInput.decls, ({} : InductiveModels.Report))
 
-  reportOutputBackend filterOutput
+  reportOutputBackend filterOutput generationReport.outputKernelChecks
   reportGeneration config generationReport
   if let some why := generationReport.unreplayable then
     IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -380,7 +381,7 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
               return exitToolError
           return ← runParsedPipeline { config with checkInput := false } true parsed
         | Except.ok result => pure result
-      reportOutputBackend (.discarded plan)
+      reportOutputBackend (.discarded plan) generationReport.outputKernelChecks
       reportGeneration config generationReport
       if let some why := generationReport.unreplayable then
         IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"

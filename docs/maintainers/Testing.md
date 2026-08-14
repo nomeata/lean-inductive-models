@@ -106,17 +106,17 @@ test/scripts/check-ci-serialized-builds.sh
 ```
 
 `mainclitest` exercises the public process boundary, including independent
-input/generated kernel-check flags and streaming output. The Arena corpus runner accepts every
+input/generated kernel-check flags and constructive model-before-owner output.
+The Arena corpus runner accepts every
 published `good/` case and requires each `bad/` case to be rejected or to stop
 at the documented internal-invariant boundary; unsupported exit 2 is a corpus
 failure.
 
-`ordertest` compares the full-AST oracle with sink-free compact discard over
-the same generation fixtures and exercises planned declaration-wise source
-replay. `mainclitest`
-selects compact discard explicitly with `--no-output --no-type-check-output`;
-generated `--no-output --type-check-output` feeds exact records directly to an
-incremental in-process kernel environment. It pins exit-2 precedence,
+`ordertest` compares the full-AST path with sink-free compact discard over the
+same generation fixtures and exercises planned declaration-wise source
+replay. `mainclitest` selects compact discard explicitly with `--no-output`;
+`--type-check-output` checks each exact generated island directly in process,
+while `--no-type-check-output` invokes no generated checker. It pins exit-2 precedence,
 noncanonical and compact-availability fallback equivalence, cleanup of the
 input-only source snapshot workspace, and ordinary fallback before input is
 consumed when `_tmp` is unusable. The snapshot exists only to preserve exact
@@ -127,10 +127,10 @@ never serialized through it.
 suites. The focused CI workflow splits the matrix across fixture, focused, and
 CLI jobs and limits each process to 12 GiB. The Mathlib workflow
 uses its separately documented 10/12 GiB phase envelopes and artifact gates.
-Its generation pass uses the ordinary full-AST named-output backend and
-explicitly defers output kernel replay; a serialized
-`--type-check-input --no-output` pass supplies the authoritative whole-output
-kernel verdict after generation exits. The existing 10 GiB generation cap is
+Its generation pass uses the ordinary full-AST named-output backend with the
+generated-island gate disabled; a separate artifact-validation invocation uses
+`--type-check-input --no-output` to check the serialized export as input after
+generation exits. The existing 10 GiB generation cap is
 unchanged while an authoritative hosted-runner measurement of the full-AST
 route is pending.
 

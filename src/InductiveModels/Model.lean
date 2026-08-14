@@ -19,9 +19,9 @@ emits ordinary Lean declarations —
 the block under fresh names, a carrier, one `pack`/`unpack` pair per mimic with
 **both round trips as theorems**, the declared type's own constructors, one
 recursor per block member, one congruence per mimic, and **every one of those
-recursors' ι rules, as theorems with proofs**. Every declaration goes through
-`Environment.addDeclCore` with checking on, so a proof this module builds and
-the kernel rejects is a decline, never an emission.
+recursors' ι rules, as theorems with proofs**. Declarations are trusted-installed
+in a disposable construction environment; the exact serialized island is
+kernel-checked once at its close boundary iff output checking is enabled.
 
 The construction can also be written by hand at `Tree`, which makes the target
 shape explicit independently of the generator.
@@ -200,7 +200,8 @@ reported.** This is the one place `lean-inductive-models` writes a declaration t
   (`Eq`, `init_quot`) and `Init/Core.lean` (`Quot.sound`, `funext`), and
   `test/fixtures/inductive-models/funext_binder.lean` is that development written as a
   fixture. Each goes through [`InductiveModels.addChecked`] like everything else here,
-  so the kernel has agreed to it before it is emitted.
+  so construction can use it; the exact emitted island is kernel-checked only
+  when `--type-check-output` is enabled.
 * **Present beats spliced.** If the input declares one, the input's own is
   used and nothing is written. A splice adds; it never substitutes.
 
@@ -291,7 +292,7 @@ pointwise-equality relation, and `E (Quot.mk eqv f)` is `f`: the `Quot.lift` ι
 rule gives `f x` at each point and η closes the lambda. So the base case of the
 `Eq.rec` — `Eq.refl f` — has the motive's type at `Quot.mk eqv f`, and the
 conclusion `Eq f (E (Quot.mk eqv g))` is the declared `Eq f g`. Both steps are
-definitional and the kernel does them; `addChecked` is what says so.
+definitional and the optional generated-island kernel check verifies them.
 
 `congrArg` is **not** emitted as a declaration of its own. It is one `Eq.rec`,
 built here the way [`InductiveModels.Gen.congrFunFor`] and [`InductiveModels.Gen.congrOne`]
@@ -2356,11 +2357,11 @@ def addChecked (d : Declaration) : GenM Unit := do
   match (← getEnv).addDeclCore 0 d none false with
   | .ok e =>
     setEnv e
-    -- **`find?`, not `constants`.** `Environment.constants` is the *kernel*
-    -- map, which has the constant — the kernel accepted it. `Environment.find?`
-    -- is the one that consults the async map, and it is the one `MetaM` goes
-    -- through, so it is the one that must see it. The test suite's `runEnvProbe`
-    -- pins the same distinction from the other side.
+    -- **`find?`, not `constants`.** `Environment.constants` is the trusted
+    -- construction kernel map; `Environment.find?` also consults the async
+    -- map used by MetaM, so it is the visibility boundary generation needs.
+    -- The test suite's `runEnvProbe` pins the same distinction from the other
+    -- side.
     for n in d.getNames do
       if ((← getEnv).find? n).isNone then
         declineWith (.nameLost n)
@@ -2395,9 +2396,9 @@ whatever it takes to have one.
 
 The input's own is used when it declares a `funext` at Lean's statement. When
 it does not, this derives one from `Quot` (the kernel's quotient, four names)
-and `Quot.sound` (Lean's axiom, at Lean's statement), with every added
-declaration checked by the kernel. Only the declarations the input is missing
-are emitted.
+and `Quot.sound` (Lean's axiom, at Lean's statement). Only the declarations the
+input is missing are emitted; the completed exact island is kernel-checked iff
+the output gate is enabled.
 
 `T._model.funext` is namespaced and the quotient names are not, and that
 asymmetry is forced rather than chosen: standard-axiom recognition selects the
@@ -2632,16 +2633,17 @@ Three things can happen to a fragment record:
 
 * every name it introduces is already in the environment — it is one of the
   shared twelve and the input had it, so it is the *input's* and this skips it;
-* it is new — the reserved guard runs and it goes through `addChecked`;
+* it is new — the reserved guard runs and it is installed in the disposable
+  construction environment;
 * some of its names are present and some are not, which can only happen to a
   shared declaration and means the input has half of a quotient or of `Eq`.
   That is a shape this cannot repair, and it says so.
 
 **No shared declaration is separately checked against Lean's statement, and it
 does not need to be.** If the input's `Eq` or `Iff` or `propext` is not Lean's,
-the fragment's 200-odd proofs are stated and proved against it and `addChecked`
-rejects one of them. That is a decline with a name on it rather than a silent
-wrong answer, which is the property that matters. -/
+the fragment's 200-odd proofs are stated and proved against it. With output
+checking enabled, the exact generated island is then checked once at its close
+boundary. -/
 def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
   if (← getEnv).constants.contains wCoreSelf then return #[]
   let ex ←
@@ -2833,8 +2835,9 @@ def mimicGroups (pl : Plan) : Except String (Array (Array Nat)) := Id.run do
 
 /-- **Build the model, or say which shape stopped it.**
 
-The whole of the checker interaction is [`InductiveModels.addChecked`], once per
-generated declaration. Nothing is emitted unchecked. -/
+Generated declarations are first installed through [`InductiveModels.addChecked`]
+in the disposable construction view. The exact serialized island is checked
+once at its close boundary iff output kernel checking is enabled. -/
 def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     (exportCtors : Array (Array (Name × Expr))) (exportRecursors : Array ERec) (pl : Plan)
     (reserved : Std.HashSet Name) (buildRoot? : Option Name := none) : GenM Iso := do

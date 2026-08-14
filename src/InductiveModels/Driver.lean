@@ -12,14 +12,15 @@ import InductiveModels.Spool
 
 `.ndjson` in, `.ndjson` out. Generation replays source declarations into its
 analysis environment without checking their values; the independent
-`--type-check-input` and `--type-check-output` gates request whole-stream kernel
-verdicts. Every declaration this tool generates is always checked in an
-owner-free environment before it can be emitted.
+`--type-check-input` gate checks only input declarations, while
+`--type-check-output` checks each exact generated island once in an owner-free
+environment as it is produced. Turning either gate off skips kernel checking
+for that declaration class.
 
 Beside each supported inductive the output carries that declaration's complete
-public model family. Final ordering places every model record before its owner
-and preserves the dependency constraints of the complete transformed export.
-Input declarations themselves retain their exact exported records.
+public model family. Each island is appended immediately before its owner and
+all other source declarations retain input order. Input declarations
+themselves retain their exact exported records.
 
 There are **three** constructions and they are separate files.
 `src/InductiveModels/Model.lean` specialises a nested declaration into a mutual block
@@ -120,7 +121,7 @@ structure Report where
   is a retention invariant, not an output statistic. -/
   maxLivePendingModels : Nat := 0
   /-- Peak number of generated declaration records retained by one island
-  before ordering, checking, and either full output or compact discard. -/
+  before validation, optional checking, and either full output or compact discard. -/
   maxLiveIslandRecords : Nat := 0
   /-- The input stopped replaying here: a declaration Lean's kernel will not
   load at all. The filter then becomes the identity, which is what a filter
@@ -129,6 +130,9 @@ structure Report where
   /-- First exact generated-island kernel rejection. Input declarations are
   trusted dependencies and are never submitted through this gate. -/
   outputKernelRejected : Option String := none
+  /-- Number of generated-island kernel invocations. This value-level counter
+  pins that disabling output checking bypasses the gate entirely. -/
+  outputKernelChecks : Nat := 0
   deriving Inhabited, Repr, BEq
 
 /-- Whether one reported decline still represents unsupported generation after
@@ -1521,7 +1525,7 @@ def checkInductiveMetadata (types : List EIndType) (constructors : List ECtor)
   return KernelCheck.checkInductiveMetadataIn (← getEnv) types constructors recursors
 
 /-- Optional generation-time recursor audit retained for the library driver.
-The whole-stream CLI gate additionally checks types and constructors above. -/
+The generated-island output gate additionally checks types and constructors. -/
 def checkRecs (recursors : List ERec) : MetaM (Nat × Array Name) := do
   let env ← getEnv
   let mut bad : Array Name := #[]
@@ -3353,6 +3357,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           records={orderedGenerated.size}, summaries={compact.summaries.size}, \
           extras={compact.globalExtras.size}, families={compact.families.size}"
       if generation.typeCheckOutput && rep.outputKernelRejected.isNone then
+        rep := { rep with outputKernelChecks := rep.outputKernelChecks + 1 }
         match ← checkGeneratedIn mainBefore (orderedGenerated.map islandAliases.buildRecord) with
         | .ok _ => pure ()
         | .error message =>
@@ -4371,11 +4376,10 @@ def runFilterDirectCheckingSharedPrefixPlannedCensus (input : PlannedSourceInput
       source := sourceObservation
       fallback? := some message })
 
-/-- Phase-four internal route: the parser has released its complete source
-declaration array, and scheduled replay decodes exactly one certified raw
-record for each `FilterState.feedSource` transition.  Main does not select this
-path yet; the retained full parser/filter remains its independent fallback and
-property oracle. -/
+/-- Planned no-output route: the parser has released its complete source
+declaration array, and stream-order replay decodes exactly one certified raw
+record for each `FilterState.feedSource` transition. Main selects this path
+when generated output is discarded and input kernel checking is disabled. -/
 def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
     (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Report × CompactPlan) := do

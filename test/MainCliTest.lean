@@ -149,7 +149,8 @@ def main (args : List String) : IO UInt32 := do
       (malformedBasisRun.stderr.splitOn "input's Eq is not Lean's").length > 1
 
   -- The Arena CI path exercises the complete tool: all generation branches,
-  -- both structural checks, and both whole-stream kernel verdict gates. A
+  -- both structural checks, the input kernel gate, and the generated-island
+  -- kernel gate. A
   -- checker can receive its NDJSON path as `$IN`, or read the same bytes from
   -- stdin; `--no-output` suppresses only publication.
   let arenaPath ← runInductiveModels binary [
@@ -183,6 +184,20 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "online input guard rejects a model after its owner" <|
     arenaModelCycle.exitCode == 1 && arenaModelCycle.stdout.isEmpty &&
       arenaModelCycle.stderr.contains "is not before Tree at record"
+  let plannedModelCycle ← runInductiveModelsStdin binary [
+    "--no-check", "--no-type-check-output", "--no-output", "-"] modelCycleText
+  state := state.check "planned input guard rejects a model after its owner" <|
+    plannedModelCycle.exitCode == 1 && plannedModelCycle.stdout.isEmpty &&
+      plannedModelCycle.stderr.contains "is not before Tree at record"
+
+  let plannedUncheckedOutput ← runInductiveModelsWithEnv binary
+    ["--no-check", "--no-type-check-output", "--no-output", nested]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "planned output-check-off bypasses the generated kernel gate" <|
+    plannedUncheckedOutput.exitCode == 0 && plannedUncheckedOutput.stdout.isEmpty &&
+      plannedUncheckedOutput.stderr.contains "model of" &&
+      hasDiagnostic plannedUncheckedOutput.stderr "output backend: compact-discard" &&
+      hasDiagnostic plannedUncheckedOutput.stderr "generated kernel checks: 0"
 
   let badName := `ArenaBad
   let badDeclaration : InductiveModels.EDecl :=
@@ -540,9 +555,7 @@ def main (args : List String) : IO UInt32 := do
     | _, _ => false
 
   -- All defaults are exercised here, including stdout output, both structural
-  -- checks, and the final whole-stream kernel verdict.
-  -- This succeeds once all generated model families precede their owners; it
-  -- is the integration seam between the CLI and the ordering repair.
+  -- checks, and incremental generated-island kernel checking.
   let defaults ← runInductiveModels binary [nested]
   let directWorker ← runInductiveModelsWithEnv binary [nested]
     #[(InductiveModels.Supervisor.workerMarker, some "1")]
@@ -608,7 +621,7 @@ def main (args : List String) : IO UInt32 := do
       hasDiagnostic fallbackRun.stderr "output backend: legacy"
   IO.FS.removeDir fallbackCwd
   -- Every actual output uses one ordinary full-AST backend, independently of
-  -- whether the final output kernel gate is enabled.
+  -- whether the generated-island kernel gate is enabled.
   let observedDefault ← runInductiveModelsWithEnv binary [nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "ordinary default output kernel gate selects legacy output" <|
