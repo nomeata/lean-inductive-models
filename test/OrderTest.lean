@@ -134,6 +134,9 @@ structure DiscardedFilterRun where
   report : Report
   plan : CompactPlan
 
+structure PlannedCensusFilterRun extends DiscardedFilterRun where
+  input : PlannedSourceInput
+
 def cursorAfter (records : Array EDecl) : Writer.Cursor :=
   let writer := records.foldl (fun writer record => (writer.splitDecl record).1) (Writer.fromCursor {})
   writer.cursor
@@ -276,6 +279,34 @@ def runFilterPlannedDiscardedState (scratch : String) (input : Export)
       (Lean.Meta.MetaM.run'
         (runFilterDiscardingPlanned parsed reader checkRecursors generation)) context { env }
     return { report, plan }
+
+def runFilterPlannedCensusState (scratch : String) (input : Export)
+    (generation : InductiveModels.Cli.Config)
+    (checkRecursors : Bool := false) : IO PlannedCensusFilterRun :=
+  Spool.withWorkspace scratch fun workspace => do
+    let inputFile ← workspace.createFile "planned-census-input.ndjson"
+    discard <| inputFile.append input.render.toUTF8
+    discard <| inputFile.finish
+    let tee ← Spool.ParseTee.create workspace
+    let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
+      parsePlannedSourceWithSink handle tee.sink
+        (analyse := false) (allowDuplicateNames := true)
+    let parsed ← match parsedResult with
+      | .ok parsed => pure parsed
+      | .error error => throw <| IO.userError s!"planned census parse failed: {error}"
+    let sizes ← tee.finish
+    let reader ← match ← Spool.PlannedSourceReader.create tee parsed.certificate sizes
+        parsed.envelope.declarationCount with
+      | .ok reader => pure reader
+      | .error error => throw <| IO.userError s!"planned census reader failed: {error}"
+    let env ← importModules #[] {}
+    let context : Core.Context :=
+      { fileName := "<planned-census-order-test>", fileMap := default,
+        maxHeartbeats := 0, maxRecDepth := 8192 }
+    let ((report, plan), _) ← Lean.Core.CoreM.toIO
+      (Lean.Meta.MetaM.run'
+        (runFilterDiscardingPlannedCensus parsed reader checkRecursors generation)) context { env }
+    return { report, plan, input := parsed }
 
 def generatedFixtureState (path : String) (generation : InductiveModels.Cli.Config) :
     IO FilterRun := do
@@ -482,6 +513,27 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental duplicate diagnostics equal full record ordering" <|
     orderOutcomesEqual (Order.summaryRecordOrder census.summaries)
       (Order.recordOrder censusInput)
+  let schedulingConfigs : Array Cli.Config := #[
+    noGeneration,
+    { noGeneration with nested := true },
+    { noGeneration with mutualModels := true },
+    { noGeneration with simple := true },
+    { noGeneration with basic := true },
+    {}]
+  state := state.check "callback scheduling facts equal declaration classifiers field-for-field" <|
+    census.scheduling.size == censusInput.decls.size && schedulingConfigs.all fun generation =>
+      (Array.range censusInput.decls.size).all fun ordinal =>
+        let fact := census.scheduling[ordinal]!
+        let declaration := censusInput.decls[ordinal]!
+        fact.support generation == scheduledSupportRecord generation declaration &&
+          fact.modelOwner generation census.reserved ==
+            scheduledModelOwner generation census.reserved declaration &&
+          fact.modelOwner generation census.reserved ==
+            generationMayAttemptOwner generation census.reserved declaration
+  state := state.check "callback planned schedule equals retained declaration scheduler" <|
+    schedulingConfigs.all fun generation =>
+      orderOutcomesEqual (census.plannedScheduleOrder generation)
+        (census.scheduleOrder censusInput generation)
   let censusCycle := exportOf #[
     axDecl `CensusCycleA (.const `CensusCycleB []),
     axDecl `CensusCycleB (.const `CensusCycleA [])]
@@ -489,6 +541,9 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental cycle diagnostics equal full record ordering" <|
     orderOutcomesEqual (Order.summaryRecordOrder cycleCensus.summaries)
       (Order.recordOrder censusCycle)
+  state := state.check "planned cycle error equals retained scheduler" <|
+    orderOutcomesEqual (cycleCensus.plannedScheduleOrder noGeneration)
+      (cycleCensus.scheduleOrder censusCycle noGeneration)
   let censusScheduled := exportOf #[
     axDecl `CensusConsumer (.const `CensusProvider []), axDecl `CensusProvider]
   let .ok censusScheduledView := Order.reorder censusScheduled
@@ -892,6 +947,7 @@ def run (root : String) : IO UInt32 := do
   let feedTrace ← runFilterTraceState feedInput noGeneration
   let feedDiscarded ← runFilterDiscardedState feedInput noGeneration
   let feedPlanned ← runFilterPlannedDiscardedState s!"{root}/_tmp" feedInput noGeneration
+  let feedCensus ← runFilterPlannedCensusState s!"{root}/_tmp" feedInput noGeneration
   state := state.check "filter consumes one dependency-ordered source record at a time" <|
     feedRun.output.decls == #[feedProvider, feedConsumer] &&
       feedRun.report == ({} : Report) &&
@@ -914,6 +970,14 @@ def run (root : String) : IO UInt32 := do
         feedDiscarded.plan.retainedGeneratedRecords &&
       feedPlanned.plan.declarations == #[.source 1, .source 0] &&
       feedPlanned.plan.retainedGeneratedRecords == 0
+  state := state.check "planned census releases source records and preserves dependency replay" <|
+    feedCensus.input.envelope.retainedDeclarations == 0 &&
+      feedCensus.input.envelope.declarationCount == feedInput.decls.size &&
+      feedCensus.report == feedDiscarded.report &&
+      feedCensus.plan.declarations == feedDiscarded.plan.declarations &&
+      feedCensus.plan.checkReport == feedDiscarded.plan.checkReport &&
+      feedCensus.plan.unavailable? == feedDiscarded.plan.unavailable? &&
+      feedCensus.plan.retainedGeneratedRecords == feedDiscarded.plan.retainedGeneratedRecords
 
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,
@@ -1035,6 +1099,8 @@ def run (root : String) : IO UInt32 := do
     ("nested", "nested_iota.ndjson", { noGeneration with nested := true }, false),
     ("mutual", "mutual_shapes.ndjson", { noGeneration with mutualModels := true }, false),
     ("simple", "prim_shapes.ndjson", { noGeneration with simple := true }, false),
+    ("recursive indexed", "indexed_fibre_boundary.ndjson",
+      { noGeneration with simple := true }, false),
     ("composed", "nested_iota.ndjson", {}, true),
     ("late support", "prim_late_basis.ndjson", {}, false)]
   for (label, fixture, generation, checkRecursors) in stagedMatrix do
@@ -1047,6 +1113,8 @@ def run (root : String) : IO UInt32 := do
     let shadow ← runFilterStagedState s!"{root}/_tmp" input generation checkRecursors
     let dropped ← runFilterDroppedState s!"{root}/_tmp" input generation checkRecursors
     let discarded ← runFilterDiscardedState input generation checkRecursors
+    let plannedCensus ←
+      runFilterPlannedCensusState s!"{root}/_tmp" input generation checkRecursors
     state := state.check s!"staged {label} shadow equals legacy" <|
       shadow.output.decls == legacy.output.decls && shadow.report == legacy.report &&
         shadow.plan.checkReport == Check.checkReport shadow.output && shadow.planValid
@@ -1060,6 +1128,25 @@ def run (root : String) : IO UInt32 := do
         discarded.plan.checkReport == shadow.plan.checkReport &&
         discarded.plan.declarations == shadow.plan.declarations &&
         discarded.plan.retainedGeneratedRecords == 0
+    state := state.check s!"planned-census {label} equals full compact oracle" <|
+      plannedCensus.input.envelope.retainedDeclarations == 0 &&
+        plannedCensus.input.envelope.declarationCount == input.decls.size &&
+        plannedCensus.report == discarded.report &&
+        plannedCensus.plan.checkReport == discarded.plan.checkReport &&
+        plannedCensus.plan.declarations == discarded.plan.declarations &&
+        plannedCensus.plan.unavailable? == discarded.plan.unavailable? &&
+        plannedCensus.plan.retainedGeneratedRecords == discarded.plan.retainedGeneratedRecords
+
+  let existingDiscarded ← runFilterDiscardedState nestedRun.output
+    { noGeneration with nested := true }
+  let existingPlanned ← runFilterPlannedCensusState s!"{root}/_tmp" nestedRun.output
+    { noGeneration with nested := true }
+  state := state.check "planned-census existing model preserves family/check certificates" <|
+    existingPlanned.input.envelope.retainedDeclarations == 0 &&
+      existingPlanned.report == existingDiscarded.report &&
+      existingPlanned.plan.checkReport == existingDiscarded.plan.checkReport &&
+      existingPlanned.plan.declarations == existingDiscarded.plan.declarations &&
+      existingPlanned.plan.unavailable? == existingDiscarded.plan.unavailable?
 
   -- A malformed later inductive rejects after earlier owners may already have
   -- committed physical islands. The report/output verdict must still agree;

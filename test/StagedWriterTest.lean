@@ -46,6 +46,17 @@ def rawCertificateAt (path : String) : IO (Except String (Export × RawCertifica
   IO.FS.withFile path .read fun handle =>
     InductiveModels.parseHandleWithSink handle { emit := fun _ => pure () } (analyse := false)
 
+def discardingCertificateAt (path : String) (allowDuplicateNames : Bool := false) :
+    IO (Except String (ParsedEnvelope × RawCertificate × Nat)) := do
+  let callbacks ← IO.mkRef 0
+  let result ← IO.FS.withFile path .read fun handle =>
+    InductiveModels.parseHandleDiscardingDeclarations handle
+      { emit := fun _ => pure () }
+      { emit := fun _ => callbacks.modify (· + 1) }
+      (analyse := false) allowDuplicateNames
+  let count ← callbacks.get
+  return result.map fun (envelope, certificate) => (envelope, certificate, count)
+
 def rawFastPathRejected (path text : String) : IO Bool := do
   IO.FS.writeFile path text
   match ← rawCertificateAt path with
@@ -70,6 +81,18 @@ def plannedSourceRejected (scratch path text : String) : IO Bool := do
     let sizes ← tee.finish
     return (← Spool.PlannedSourceReader.create tee certificate sizes output.decls.size) matches
       .error _
+
+def plannedDiscardingSourceRejected (scratch path text : String) : IO Bool := do
+  IO.FS.writeFile path text
+  Spool.withWorkspace scratch fun workspace => do
+    let tee ← Spool.ParseTee.create workspace
+    let staged ← IO.FS.withFile path .read fun handle =>
+      parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
+        (analyse := false) (allowDuplicateNames := true)
+    let .ok (envelope, certificate) := staged | return false
+    let sizes ← tee.finish
+    return (← Spool.PlannedSourceReader.create tee certificate sizes
+      envelope.declarationCount) matches .error _
 
 def bothReject (whole streamed : Except String Export) : Bool :=
   match whole, streamed with
@@ -400,6 +423,45 @@ def main (args : List String) : IO UInt32 := do
       stagedExport.metaLine == ordinary.metaLine && stagedExport.decls == ordinary.decls &&
         stagedExport.projNodes.isEmpty && ordinary.projNodes.isEmpty
     | _, _ => false
+  let discardedParse ← discardingCertificateAt rawCanonicalPath
+  state := state.check "declaration-discarding parser shares the exact canonical parse" <|
+    match stagedParse, discardedParse with
+    | .ok (retained, retainedCertificate), .ok (envelope, certificate, callbacks) =>
+      envelope.metaLine == retained.metaLine && envelope.projNodes.isEmpty &&
+        envelope.declarationCount == retained.decls.size &&
+        envelope.retainedDeclarations == 0 && callbacks == retained.decls.size &&
+        certificate == retainedCertificate
+    | _, _ => false
+  let duplicateInput := rawCanonical ++ rawFirstDecl
+  IO.FS.writeFile parserCompatibilityPath duplicateInput
+  let retainedDuplicate ← rawCertificateAt parserCompatibilityPath
+  let discardedDuplicate ← discardingCertificateAt parserCompatibilityPath
+  state := state.check "discarding parser preserves delayed duplicate diagnostics" <|
+    match retainedDuplicate, discardedDuplicate with
+    | .error retained, .error discarded =>
+      retained == discarded && retained == "duplicate declaration Island.A"
+    | _, _ => false
+  let duplicateThenSyntaxError := duplicateInput ++ "{\n"
+  IO.FS.writeFile parserCompatibilityPath duplicateThenSyntaxError
+  let retainedSyntax ← rawCertificateAt parserCompatibilityPath
+  let discardedSyntax ← discardingCertificateAt parserCompatibilityPath
+  state := state.check "later syntax error retains precedence over an earlier duplicate" <|
+    match retainedSyntax, discardedSyntax with
+    | .error retained, .error discarded =>
+      retained == discarded && retained != "duplicate declaration Island.A"
+    | _, _ => false
+  IO.FS.writeFile parserCompatibilityPath duplicateInput
+  let retainedAllowed ← IO.FS.withFile parserCompatibilityPath .read fun handle =>
+    parseHandleWithSink handle { emit := fun _ => pure () }
+      (analyse := false) (allowDuplicateNames := true)
+  let discardedAllowed ← discardingCertificateAt parserCompatibilityPath true
+  state := state.check "permitted duplicates preserve certificate and callback cardinality" <|
+    match retainedAllowed, discardedAllowed with
+    | .ok (retained, retainedCertificate), .ok (envelope, certificate, callbacks) =>
+      envelope.declarationCount == retained.decls.size &&
+        envelope.retainedDeclarations == 0 && callbacks == retained.decls.size &&
+        certificate == retainedCertificate
+    | _, _ => false
   state := state.check "raw spool files are removed after success" <|
     (← stagedPaths.allM fun path => return !(← path.pathExists))
 
@@ -712,6 +774,8 @@ def main (args : List String) : IO UInt32 := do
     ← plannedSourceRejected scratch rawNoLfPath rawNoLf
   state := state.check "planned source falls back for CRLF input" <|
     ← plannedSourceRejected scratch rawCrlfPath rawCrlf
+  state := state.check "declaration-discarding planned source preserves raw-certificate fallback" <|
+    ← plannedDiscardingSourceRejected scratch rawWhitespacePath rawWhitespace
   let rawAlternateKeyOrder := lines #[
     "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"KeyOrderA\"}}",
     "{\"in\":2,\"str\":{\"pre\":0,\"str\":\"KeyOrderB\"}}",

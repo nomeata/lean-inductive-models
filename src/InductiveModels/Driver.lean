@@ -1315,10 +1315,17 @@ def closeModelIsland (template : Export) (main : Environment)
     | _ => none
   let generatedOnlyOwners := sourceRoot?.elim generatedOwners generatedOwners.erase
   let generatedView := { template with decls := generated }
+  -- Source-local checks need the complete atomic owner record (including all
+  -- mutual members), not unrelated source values. Every cross-record syntax
+  -- table and public-slot occurrence is already frozen in `sourceSyntax`.
+  let ownerView := { template with decls := #[owner] }
   let generatedFamilies :=
     Check.statementFamiliesForRecordsWithIndex generatedView index generatedOnlyOwners
   let sourceFamilies := sourceRoot?.elim #[] fun root =>
-    if generatedOwners.contains root then sourceSyntax.sourceStatementFamilies root else #[]
+    if generatedOwners.contains root then
+      (sourceSyntax.sourceStatementFamilies root).map fun family =>
+        { family with ownerDecl := 0 }
+    else #[]
   let allFamilies := generatedFamilies ++ sourceFamilies
   let diagnosticOwners := allFamilies.foldl
     (fun result family => family.correspondence.diagnosticOwners.foldl
@@ -1331,7 +1338,7 @@ def closeModelIsland (template : Export) (main : Environment)
   let generatedFamilyRecords :=
     Check.compactFamilyCertificateRecordsWithIndex generatedView index generatedFamilies
   let sourceFamilyCertificates := sourceFamilies.map
-    (Check.compactFamilyCertificateWithIndex template index)
+    (Check.compactFamilyCertificateWithIndex ownerView index)
   let sourceGlobalExtra? := if sourceFamilies.isEmpty then none else
     (Check.globalExtraRecordsWithIndex index #[owner])[0]?
   let compact : CompactIsland :=
@@ -1348,7 +1355,7 @@ def closeModelIsland (template : Export) (main : Environment)
       let generatedReport :=
         Check.checkStatementFamiliesLocalWithIndex generatedView index generatedFamilies
       let sourceReport :=
-        Check.checkStatementFamiliesLocalWithIndex template index sourceFamilies
+        Check.checkStatementFamiliesLocalWithIndex ownerView index sourceFamilies
       let checkedCount := generatedReport.statementsChecked + sourceReport.statementsChecked
       let combinedViolations := generatedReport.violations ++ sourceReport.violations
       ({ statementsChecked := checkedCount, violations := combinedViolations } :
@@ -1389,19 +1396,23 @@ def scheduledPrimBasisNames : List Name :=
 can need them.  Public core interfaces are selected by exact name.  The one
 prefix exception is this tool's private `_wcore` namespace: its sentinel is
 only sound when the complete fixed fragment has been replayed. -/
+private def broadScheduledSupportRecord (declaration : EDecl) : Bool :=
+  declaration.names.any fun name =>
+    scheduledPrimBasisNames.contains name || lateSpliceNames.contains name ||
+      wLogicalLateNames.contains name || wCoreRoot.isPrefixOf name
+
+private def structuralScheduledSupportRecord (declaration : EDecl) : Bool :=
+  declaration.names.any fun name =>
+    [`Eq, `Eq.refl, `Eq.rec,
+     `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
+     `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
+     `PUnit, `PUnit.unit, `PUnit.rec].contains name
+
 def scheduledSupportRecord (generation : Cli.Config) (declaration : EDecl) : Bool :=
-  if generation.simple || generation.basic then
-    declaration.names.any fun name =>
-      scheduledPrimBasisNames.contains name || lateSpliceNames.contains name ||
-        wLogicalLateNames.contains name || wCoreRoot.isPrefixOf name
+  if generation.simple || generation.basic then broadScheduledSupportRecord declaration
   else if generation.nested || generation.mutualModels then
-    declaration.names.any fun name =>
-      [`Eq, `Eq.refl, `Eq.rec,
-       `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
-       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
-       `PUnit, `PUnit.unit, `PUnit.rec].contains name
-  else
-    false
+    structuralScheduledSupportRecord declaration
+  else false
 
 /-- Whether this input record reaches any enabled model-generation branch.
 
@@ -2460,12 +2471,56 @@ private def RetentionMode.sink? : RetentionMode → Option IslandSink
   | .shadowSpool sink | .compactSpool sink => some sink
   | .fullOracle | .compactDiscard => none
 
+/-- Value-free facts used by the planned scheduler after the source
+declaration callback has returned.  `root?` and the three shape bits reproduce
+the exact enabled-owner classification; the support bits preserve the two
+configuration-dependent fixed interfaces. -/
+structure SourceScheduleFact where
+  root? : Option Name := none
+  nestedOwner : Bool := false
+  mutualOwner : Bool := false
+  simpleOwner : Bool := false
+  broadSupport : Bool := false
+  structuralSupport : Bool := false
+  deriving Inhabited, Repr, BEq
+
+def SourceScheduleFact.ofDeclaration (declaration : EDecl) : SourceScheduleFact :=
+  let (root?, nestedOwner, mutualOwner, simpleOwner) := match declaration with
+    | .induct types _ _ => match types with
+      | [] => (none, false, false, false)
+      | first :: _ =>
+        (some first.name, types.any (·.numNested > 0),
+          types.length > 1 && !types.any (·.numNested > 0),
+          types.length == 1 && first.numNested == 0)
+    | _ => (none, false, false, false)
+  { root?, nestedOwner, mutualOwner, simpleOwner
+    broadSupport := broadScheduledSupportRecord declaration
+    structuralSupport := structuralScheduledSupportRecord declaration }
+
+def SourceScheduleFact.support (fact : SourceScheduleFact)
+    (generation : Cli.Config) : Bool :=
+  if generation.simple || generation.basic then fact.broadSupport
+  else if generation.nested || generation.mutualModels then fact.structuralSupport
+  else false
+
+def SourceScheduleFact.modelOwner (fact : SourceScheduleFact)
+    (generation : Cli.Config) (reserved : Std.HashSet Name) : Bool :=
+  match fact.root? with
+  | none => false
+  | some root =>
+    !fact.support generation && !reserved.contains (Naming.modelName root) &&
+      ((generation.nested && fact.nestedOwner) ||
+       (generation.mutualModels && fact.mutualOwner) ||
+       (fact.simpleOwner && generation.modelsSimpleInput root))
+
 /-- Immutable source products accumulated declaration by declaration.  The
-syntax index owns the shared expression-facing tables; summaries, reserved
-names and raw ordinals are value-free frozen views. -/
+syntax index intentionally owns exact declaration types, constructor/owner
+records, and transparent definition values. Summaries, scheduling facts,
+reserved names and raw ordinals do not retain complete `EDecl` values. -/
 structure SourceCensus where
   sourceSyntax : Check.SyntaxIndex
   summaries : Array Order.DeclSummary
+  scheduling : Array SourceScheduleFact
   reserved : Std.HashSet Name
   rawOrdinals : Std.HashMap Name Nat
 
@@ -2473,6 +2528,7 @@ structure SourceCensus where
 structure SourceCensus.Builder where
   private syntaxBuilder : Check.SyntaxIndex.Builder := {}
   private summaryBuilder : Order.SummaryBuilder := {}
+  private scheduling : Array SourceScheduleFact := #[]
   private reserved : Std.HashSet Name := {}
   private rawOrdinals : Std.HashMap Name Nat := {}
   private nextOrdinal : Nat := 0
@@ -2482,6 +2538,7 @@ def SourceCensus.Builder.push (builder : SourceCensus.Builder)
     (declaration : EDecl) : SourceCensus.Builder :=
   { syntaxBuilder := builder.syntaxBuilder.push declaration
     summaryBuilder := builder.summaryBuilder.push declaration
+    scheduling := builder.scheduling.push (.ofDeclaration declaration)
     reserved := declaration.names.foldl (·.insert ·) builder.reserved
     rawOrdinals := declaration.names.foldl
       (fun ordinals name => ordinals.insert name builder.nextOrdinal) builder.rawOrdinals
@@ -2493,6 +2550,7 @@ def SourceCensus.Builder.freeze (builder : SourceCensus.Builder) : SourceCensus 
   let sourceSyntax := builder.syntaxBuilder.freeze
   { sourceSyntax
     summaries := builder.summaryBuilder.freeze sourceSyntax
+    scheduling := builder.scheduling
     reserved := builder.reserved
     rawOrdinals := builder.rawOrdinals }
 
@@ -2502,6 +2560,31 @@ ordering still reports the duplicate before consuming that map. -/
 def SourceCensus.ofSource (source : Export) : SourceCensus :=
   (source.decls.foldl (fun builder declaration => builder.push declaration)
     ({} : SourceCensus.Builder)).freeze
+
+/-- Declaration-discarding parser result for the internal planned route.  The
+raw certificate is not an eligibility promise: callers must still finish the
+tee and construct a `PlannedSourceReader`, falling back to the ordinary full
+path if canonical validation fails. -/
+structure PlannedSourceInput where
+  envelope : ParsedEnvelope
+  census : SourceCensus
+  certificate : RawCertificate
+
+def parsePlannedSourceWithSink (handle : IO.FS.Handle) (rawSink : RawSink)
+    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    IO (Except String PlannedSourceInput) := do
+  let builder ← IO.mkRef ({} : SourceCensus.Builder)
+  let result ← parseHandleDiscardingDeclarations handle rawSink
+    { emit := fun declaration => builder.modify (·.push declaration) }
+    analyse allowDuplicateNames
+  match result with
+  | .error error => return .error error
+  | .ok (envelope, certificate) =>
+    let census := (← builder.get).freeze
+    unless census.summaries.size == envelope.declarationCount &&
+        census.scheduling.size == envelope.declarationCount do
+      return .error "planned source census cardinality disagrees with parser"
+    return .ok { envelope, census, certificate }
 
 /-- Rebind declaration-local frozen summaries to a logical source order.
 Every summary field except `ordinal` is a function of the declaration itself
@@ -2550,6 +2633,51 @@ def SourceCensus.scheduleOrder (census : SourceCensus) (source : Export)
             scheduledSupportRecord generation source.decls[summary.ordinal]! }
     else census.summaries
   Order.summaryRecordOrderPrioritizing summaries
+
+/-- Exact support-hazard decision from callback facts only.  This is kept
+separate from `sourceNeedsSupportScheduling` so the full-Export scheduler
+remains an independent property oracle during migration. -/
+def SourceCensus.needsPlannedSupportScheduling (census : SourceCensus)
+    (generation : Cli.Config) : Bool := Id.run do
+  let mut candidateSeen := false
+  for fact in census.scheduling do
+    if fact.modelOwner generation census.reserved then candidateSeen := true
+    if candidateSeen && fact.support generation then return true
+  return false
+
+/-- Planned dependency order without a retained declaration array. -/
+def SourceCensus.plannedScheduleOrder (census : SourceCensus)
+    (generation : Cli.Config) : Except Order.Error (Array Nat) :=
+  let preferSupport := census.needsPlannedSupportScheduling generation
+  let summaries := if preferSupport then
+      census.summaries.mapIdx fun ordinal summary =>
+        { summary with support := census.scheduling[ordinal]!.support generation }
+    else census.summaries
+  Order.summaryRecordOrderPrioritizing summaries
+
+/-- Recheck the post-schedule fixed-support invariant using only callback
+facts. This mirrors, but does not call, the retained-Export certificate. -/
+def SourceCensus.validatePlannedSupport (census : SourceCensus)
+    (order : Array Nat) (generation : Cli.Config) : Except String Unit := do
+  unless generationEnabled generation do return
+  unless order.size == census.scheduling.size do
+    throw "planned support order has the wrong number of records"
+  let mut latestSupport? : Option (Nat × Array Name) := none
+  for scheduledOrdinal in [:order.size] do
+    let rawOrdinal := order[scheduledOrdinal]!
+    unless rawOrdinal < census.scheduling.size do
+      throw s!"planned support order contains out-of-range record {rawOrdinal}"
+    if census.scheduling[rawOrdinal]!.support generation then
+      latestSupport? := some (scheduledOrdinal, census.summaries[rawOrdinal]!.introduced)
+  let some (supportIndex, supportNames) := latestSupport? | return
+  for ownerIndex in [:order.size] do
+    let rawOrdinal := order[ownerIndex]!
+    let owner := census.scheduling[rawOrdinal]!
+    if owner.support generation then continue
+    unless owner.modelOwner generation census.reserved do continue
+    unless supportIndex < ownerIndex do
+      throw s!"latest fixed support {supportNames} remains at record {supportIndex} \
+        after selected owner {census.summaries[rawOrdinal]!.introduced} at record {ownerIndex}"
 
 /-- Produce today's complete scheduled `Export` from frozen summaries.  The
 historical value-retaining scheduler remains as a property oracle; both use
@@ -2726,8 +2854,8 @@ private structure FilterContext where
   sourceSyntax : Check.SyntaxIndex
   sourceNormalizer : ExactNormalizationEnv
   sourceSummaries : Array Order.DeclSummary
-  sourceGlobalExtras : Array Check.GlobalExtraRecord
-  sourceFamilyRecords : Array (Array Check.CompactFamilyCertificate)
+  sourceGlobalExtras? : Option (Array Check.GlobalExtraRecord)
+  sourceFamilyRecords? : Option (Array (Array Check.CompactFamilyCertificate))
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
   futureSupport? : Option FutureSourceSupport := none
@@ -2770,8 +2898,13 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let sourceSyntax := context.sourceSyntax
   let sourceNormalizer := context.sourceNormalizer
   let sourceSummaries := context.sourceSummaries
-  let sourceGlobalExtras := context.sourceGlobalExtras
-  let sourceFamilyRecords := context.sourceFamilyRecords
+  let scheduledOrdinal := state.scheduledOrdinal
+  let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[scheduledOrdinal]?) with
+    | some record => record
+    | none => (Check.globalExtraRecordsWithIndex sourceSyntax #[d])[0]!
+  let sourceFamilyRecord := match context.sourceFamilyRecords?.bind (·[scheduledOrdinal]?) with
+    | some records => records
+    | none => sourceSyntax.sourceFamilyCertificatesForRecord x d
   let rawOrdinals := context.rawOrdinals
   let reserved := context.reserved
   let mut mainEnv := state.mainEnv
@@ -2781,7 +2914,6 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut compactIslands := state.compactIslands
   let mut commits := state.commits
   let mut stagedRecords := state.stagedRecords
-  let scheduledOrdinal := state.scheduledOrdinal
   let mut islandStatements := state.islandStatements
   let mut invalidBasis := state.invalidBasis
   let mut persistentSupportOrigins := state.persistentSupportOrigins
@@ -3053,8 +3185,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       | size + 1 => pure (some size)
     stagedRecords := stagedRecords.push {
       summary := sourceSummaries[scheduledOrdinal]!
-      globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtras[scheduledOrdinal]!
-      families := sourceFamilyRecords[scheduledOrdinal]! ++
+      globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtra
+      families := sourceFamilyRecord ++
         (modeledSourceFamilies.map fun family =>
           modeledIsland?.elim family family.inIsland)
       checkIsland? := modeledIsland?
@@ -3206,17 +3338,22 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     (plannedSource? : Option Spool.PlannedSourceReader := none)
     (sourceOrder? : Option (Array Nat) := none)
     (futureSupport? : Option FutureSourceSupport := none)
-    (outputSourceOrder? : Option (Array Nat) := none) :
+    (outputSourceOrder? : Option (Array Nat) := none)
+    (sourceCensus? : Option SourceCensus := none) :
     MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep) := do
-  let sourceCensus := SourceCensus.ofSource x
+  let plannedCensus := sourceCensus?.isSome
+  let sourceCensus := sourceCensus?.getD (SourceCensus.ofSource x)
   let sourceOrder ← match sourceOrder? with
     | some order => pure order
-    | none => match sourceCensus.scheduleOrder x generation with
+    | none => match if plannedCensus then sourceCensus.plannedScheduleOrder generation
+        else sourceCensus.scheduleOrder x generation with
       | .ok order => pure order
       | .error error => throwError "cannot schedule shared support: {repr error}"
-  let scheduled := { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
+  let scheduled := if plannedCensus then x else
+    { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
   if futureSupport?.isNone then
-    match validateScheduledSupport scheduled generation with
+    match if plannedCensus then sourceCensus.validatePlannedSupport sourceOrder generation
+        else validateScheduledSupport scheduled generation with
     | .ok () => pure ()
     | .error message => throwError "invalid shared-support schedule: {message}"
   let fallbackEnv ← getEnv
@@ -3229,14 +3366,17 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let sourceSummaries ← match sourceCensus.summariesForOrder sourceOrder with
     | .ok summaries => pure summaries
     | .error error => throwError "cannot rebind frozen source summaries: {error}"
-  let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
-  let sourceFamilyRecords := sourceCensus.familyCertificateRecords x scheduled
+  let sourceGlobalExtras? := if plannedCensus then none else
+    some (Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls)
+  let sourceFamilyRecords? := if plannedCensus then none else
+    some (sourceCensus.familyCertificateRecords x scheduled)
   let rawOrdinals := sourceCensus.rawOrdinals
   let reserved := sourceCensus.reserved
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
-    sourceSyntax, sourceNormalizer, sourceSummaries, sourceGlobalExtras,
-    sourceFamilyRecords, rawOrdinals, reserved, futureSupport?, outputSourceOrder?, collectTrace }
+    sourceSyntax, sourceNormalizer, sourceSummaries,
+    sourceGlobalExtras?, sourceFamilyRecords?,
+    rawOrdinals, reserved, futureSupport?, outputSourceOrder?, collectTrace }
   let initialFutureSupport := futureSupport?.map (·.records) |>.getD
     ({} : Std.HashMap Nat EDecl)
   let mut state : FilterState :=
@@ -3244,15 +3384,17 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       persistentSyntax := sourceSyntax
       futureSupportRemaining := initialFutureSupport }
   for rawOrdinal in sourceOrder do
-    let oracle := x.decls[rawOrdinal]!
     let declaration ← match plannedSource? with
-      | none => pure oracle
+      | none => match x.decls[rawOrdinal]? with
+        | some oracle => pure oracle
+        | none => throwError "source record {rawOrdinal} has neither retained nor planned payload"
       | some reader => do
         match ← reader.read rawOrdinal with
         | .error error => throwError "cannot decode planned source record {rawOrdinal}: {error}"
         | .ok declaration =>
-          unless declaration == oracle do
-            throwError "planned source record {rawOrdinal} differs from the validated parse"
+          if let some oracle := x.decls[rawOrdinal]? then
+            unless declaration == oracle do
+              throwError "planned source record {rawOrdinal} differs from the validated parse"
           pure declaration
     match ← state.feedSource context declaration with
     | .next next => state := next
@@ -3357,6 +3499,25 @@ def runFilterDiscardingPlanned (x : Export) (reader : Spool.PlannedSourceReader)
     (checkRecursors : Bool) (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
   let (_, report, compact, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard (plannedSource? := some reader)
+  return (report, compact)
+
+/-- Phase-four internal route: the parser has released its complete source
+declaration array, and scheduled replay decodes exactly one certified raw
+record for each `FilterState.feedSource` transition.  Main does not select this
+path yet; the retained full parser/filter remains its independent fallback and
+property oracle. -/
+def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
+    (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
+    (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
+  unless input.envelope.retainedDeclarations == 0 do
+    throwError "planned source parser retained complete declaration values"
+  unless input.envelope.declarationCount == input.census.summaries.size &&
+      input.envelope.declarationCount == input.census.scheduling.size &&
+      input.envelope.declarationCount == reader.size do
+    throwError "planned source parser/census/reader cardinalities disagree"
+  let (_, report, compact, _, _) ← runFilterCore input.envelope.template
+    checkRecursors generation .compactDiscard (plannedSource? := some reader)
+    (sourceCensus? := some input.census)
   return (report, compact)
 
 /-- AST-dropping staged generation. Accepted generated records are committed at

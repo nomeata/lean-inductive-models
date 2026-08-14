@@ -1003,6 +1003,26 @@ structure RawRecord where
 structure RawSink where
   emit : RawRecord → IO Unit
 
+/-- A declaration callback sharing the parser's exact `readLine` result.  The
+callback must consume the value during `emit`: discard-mode parsing does not
+retain declaration records after the call returns. -/
+structure DeclarationSink where
+  emit : EDecl → IO Unit
+
+/-- The whole-input facts which survive declaration-discarding parsing.  The
+arena itself is owned by the raw tee/`PlannedSourceReader`; this envelope owns
+only metadata, projection facts, and cardinality. -/
+structure ParsedEnvelope where
+  metaLine : Json := .null
+  projNodes : Std.HashSet Expr := {}
+  declarationCount : Nat := 0
+  /-- Observable retention contract for regression tests. -/
+  retainedDeclarations : Nat := 0
+  deriving Inhabited
+
+def ParsedEnvelope.template (envelope : ParsedEnvelope) : Export :=
+  { metaLine := envelope.metaLine, decls := #[], projNodes := envelope.projNodes }
+
 /-- A compact byte span in the declaration-only spool. Both coordinates are
 fixed-width and every conversion/addition is checked before publication. -/
 structure RawSpan where
@@ -1205,8 +1225,9 @@ the 10-million-line prefix it takes the parse's peak from 2,381,888 KB to
 finish a 1-million-line prefix in ten minutes.
 -/
 private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
-    (sink? : Option RawSink) (allowDuplicateNames : Bool) :
-    IO (Except String (Export × RawCertificate)) := do
+    (sink? : Option RawSink) (declarationSink? : Option DeclarationSink)
+    (retainDeclarations allowDuplicateNames : Bool) :
+    IO (Except String (Export × RawCertificate × Nat)) := do
   -- **One ref per growing array, and `modifyGet`.** `RCtx` holds three arrays
   -- that grow by `push`, and a `push` is in-place only while the array is
   -- uniquely referenced. Two shapes lose that and both were measured on a 20 MB
@@ -1219,6 +1240,9 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
   -- the only reference to it.
   let cRef ← IO.mkRef ({ analyse } : RCtx)
   let declsRef ← IO.mkRef (#[] : Array EDecl)
+  let declarationCountRef ← IO.mkRef 0
+  let declarationNamesRef ← IO.mkRef ({} : Std.HashSet Name)
+  let duplicateRef ← IO.mkRef (none : Option Name)
   let rawRef ← IO.mkRef ({} : RawCertState)
   let mut metaLine : Json := .null
   let mut first := true
@@ -1283,7 +1307,20 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
             if let some sink := sink? then
               emitRaw sink rawRef (if d?.isSome then .declaration else .arena)
                 line terminated (some j)
-            if let some d := d? then declsRef.modify (·.push d)
+            if let some d := d? then
+              declarationCountRef.modify (· + 1)
+              -- Match `Export.validateUniqueDeclarationNames`: remember the
+              -- first collision, but report it only after the complete parse
+              -- so a later syntax/arena error retains historical precedence.
+              unless retainDeclarations do
+                for name in d.names do
+                  let already ← declarationNamesRef.modifyGet fun names =>
+                    (names.contains name, names.insert name)
+                  if already then
+                    duplicateRef.modify fun duplicate => duplicate.orElse (fun _ => some name)
+              if let some declarationSink := declarationSink? then
+                declarationSink.emit d
+              if retainDeclarations then declsRef.modify (·.push d)
   match err with
   | some e => return .error e
   | none =>
@@ -1291,24 +1328,42 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
     -- Take the result out while dropping every arena table held by the ref.
     let projNodes ← cRef.modifyGet fun c => (c.projNodes, {})
     let rawState ← rawRef.get
+    let declarationCount ← declarationCountRef.get
     let certificate := if sink?.isSome then rawState.certificate else {}
     let resultExport := { metaLine, decls, projNodes }
     unless allowDuplicateNames do
-      if let .error message := resultExport.validateUniqueDeclarationNames then
-        return .error message
-    return .ok (resultExport, certificate)
+      if retainDeclarations then
+        if let .error message := resultExport.validateUniqueDeclarationNames then
+          return .error message
+      else if let some name ← duplicateRef.get then
+          return .error s!"duplicate declaration {name}"
+    return .ok (resultExport, certificate, declarationCount)
 
 /-- Parse while sending exact input records to `sink`. The compact returned
 certificate is necessary but not sufficient for a later raw-hoist fast path;
 a false certificate unconditionally requires the ordinary writer. -/
 def parseStreamWithSink (h : IO.FS.Stream) (sink : RawSink)
     (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
-    IO (Except String (Export × RawCertificate)) :=
-  parseStreamCore h analyse (some sink) allowDuplicateNames
+    IO (Except String (Export × RawCertificate)) := do
+  return (← parseStreamCore h analyse (some sink) none true allowDuplicateNames).map
+    fun (parsed, certificate, _) => (parsed, certificate)
+
+/-- Parse and certify the exact stream while delivering each decoded
+declaration to one callback instead of retaining a whole `Export.decls`.
+The callback and raw sink observe the same successful `readLine` transition;
+there is no second JSON or arena pass. -/
+def parseStreamDiscardingDeclarations (h : IO.FS.Stream) (rawSink : RawSink)
+    (declarationSink : DeclarationSink) (analyse : Bool := true)
+    (allowDuplicateNames : Bool := false) :
+    IO (Except String (ParsedEnvelope × RawCertificate)) := do
+  return (← parseStreamCore h analyse (some rawSink) (some declarationSink)
+    false allowDuplicateNames).map fun (parsed, certificate, declarationCount) =>
+      ({ metaLine := parsed.metaLine, projNodes := parsed.projNodes,
+         declarationCount, retainedDeclarations := parsed.decls.size }, certificate)
 
 def parseStream (h : IO.FS.Stream) (analyse : Bool := true)
     (allowDuplicateNames : Bool := false) : IO (Except String Export) := do
-  return (← parseStreamCore h analyse none allowDuplicateNames).map (·.1)
+  return (← parseStreamCore h analyse none none true allowDuplicateNames).map (·.1)
 
 /-- Handle-specialized wrapper around [`parseStream`]. -/
 def parseHandle (h : IO.FS.Handle) (analyse : Bool := true)
@@ -1320,6 +1375,14 @@ def parseHandleWithSink (h : IO.FS.Handle) (sink : RawSink)
     (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
     IO (Except String (Export × RawCertificate)) :=
   parseStreamWithSink (IO.FS.Stream.ofHandle h) sink analyse allowDuplicateNames
+
+/-- Handle-specialized declaration-discarding parser. -/
+def parseHandleDiscardingDeclarations (h : IO.FS.Handle) (rawSink : RawSink)
+    (declarationSink : DeclarationSink) (analyse : Bool := true)
+    (allowDuplicateNames : Bool := false) :
+    IO (Except String (ParsedEnvelope × RawCertificate)) :=
+  parseStreamDiscardingDeclarations (IO.FS.Stream.ofHandle h) rawSink declarationSink
+    analyse allowDuplicateNames
 
 /-- Lowercase hexadecimal encoding used for random spool leaf names. Exposed
 so the secure workspace tests can pin the entropy-preserving representation. -/
