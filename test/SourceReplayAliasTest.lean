@@ -307,10 +307,11 @@ def main : IO UInt32 := do
       collidingCompact.retainedGeneratedRecords == 0 &&
       collidingCompact.checkReport == Check.checkReport collidingExport)
 
-  let privateCarrier := Naming.modelName privateOwner
-  let some reservedPrivateModel := collidingOutput.flatMap (·.names.toArray) |>.find? fun name =>
-    privateCarrier.isPrefixOf name && name != privateCarrier
-    | throw <| IO.userError "private Sv model has no deeper generated slot"
+  let some privateMember := privateOwnerRecord.names.find? (· != privateOwner)
+    | throw <| IO.userError "private Sv block has no member model slot"
+  let reservedPrivateModel := Naming.modelName privateMember
+  unless collidingOutput.any (·.names.contains reservedPrivateModel) do
+    throw <| IO.userError "private Sv member model slot was not generated"
   let reservedPublicModel := reservedPrivateModel.replacePrefix privateOwner publicOwner
   let reservedShapes := { collidingShapes with decls := (
     collidingShapes.decls.extract 0 (ownerOrdinal + 1) ++
