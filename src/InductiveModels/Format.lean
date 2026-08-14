@@ -1075,9 +1075,10 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
       (← (← jArr o "recs").toList.mapM (readRec c)))
   .error s!"unrecognised record: {j.compress}"
 
-/-- Complete name/level/expression tables sufficient to decode declaration
-records in any order.  The context is opaque so callers cannot mutate or
-observe parser implementation tables. -/
+/-- Complete name/level tables and expression roots sufficient to decode
+declaration records in any order. The parser-backed form retains only roots
+named directly by declarations; every root already owns its expression DAG.
+The context is opaque so callers cannot mutate parser implementation tables. -/
 structure DeclarationArena where private context : RCtx
   deriving Inhabited
 
@@ -1104,8 +1105,9 @@ def DeclarationArena.retainedExprRoots (arena : DeclarationArena) : Nat :=
   arena.context.exprs.dense.size + arena.context.exprs.sparse.size
 
 /-- Build the random-decode arena from an arena-only stream using the same
-bounded chunk/UTF-8 boundary discipline as the full streaming parser.  This
-retains the completed interning tables, but no declaration value. -/
+bounded chunk/UTF-8 boundary discipline as the full streaming parser. This
+fallback has no declaration records from which to derive the compact root set,
+so it retains the completed interning tables but no declaration value. -/
 def DeclarationArena.ofStream (stream : IO.FS.Stream) : IO (Except String DeclarationArena) := do
   let context ← IO.mkRef ({ analyse := false } : RCtx)
   let mut carry : ByteArray := .empty
@@ -1212,15 +1214,16 @@ retain declaration records after the call returns. -/
 structure DeclarationSink where
   emit : EDecl → IO Unit
 
-/-- The whole-input facts which survive declaration-discarding parsing.  The
-arena itself is owned by the raw tee/`PlannedSourceReader`; this envelope owns
-only metadata, projection facts, and cardinality. -/
+/-- The whole-input facts which survive declaration-discarding parsing. The
+arena holds complete name/level tables plus only exact declaration expression
+roots; `PlannedSourceReader` receives this value without reparsing. -/
 structure ParsedEnvelope where
   metaLine : Json := .null
   projNodes : Std.HashSet Expr := {}
   declarationCount : Nat := 0
-  /-- The exact completed parser arena. Planned replay decodes declaration
-  spans against this value instead of reparsing a second arena graph. -/
+  /-- The exact compacted parser arena. Planned replay decodes declaration
+  spans against this value instead of retaining the dense expression-ID table
+  or reparsing a second expression graph. -/
   private declarationArena : DeclarationArena := { context := {} }
   /-- Observable retention contract for regression tests. -/
   retainedDeclarations : Nat := 0
