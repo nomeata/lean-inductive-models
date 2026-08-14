@@ -2557,7 +2557,9 @@ private def sourceReplayAliasesFromSummaries
   let mut root? : Option Name := none
   for salt in [:reserved.size + 1] do
     if root?.isSome then continue
-    let candidate := Name.num `_inductive_models_source_alias salt
+    -- Sibling top-level components make the `reserved.size + 1` bound
+    -- constructive: one reserved namespace can overlap at most one attempt.
+    let candidate := Name.str .anonymous s!"_inductive_models_source_alias_{salt}"
     let overlaps := fun name : Name =>
       candidate.isPrefixOf name || name.isPrefixOf candidate
     unless reserved.any fun name => overlaps name || overlaps (privateToUserName name) do

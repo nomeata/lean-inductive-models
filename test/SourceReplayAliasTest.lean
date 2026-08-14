@@ -220,13 +220,15 @@ def main : IO UInt32 := do
 
   -- Occupying salt zero forces the bounded deterministic root search to use
   -- another spelling without changing the chosen class survivor.
-  let occupied := Name.str (Name.num `_inductive_models_source_alias 0) "taken"
+  let root0 := Name.str .anonymous "_inductive_models_source_alias_0"
+  let root1 := Name.str .anonymous "_inductive_models_source_alias_1"
+  let occupied := Name.str root0 "taken"
   let saltedInput := { privateInput with decls := privateInput.decls.push (typeAxiom occupied) }
   let .ok saltedAliases := aliasesOf saltedInput
     | throw <| IO.userError "cannot plan salted source alias"
   state := state.check "reserved source spelling deterministically advances alias salt"
     ((saltedAliases.build? privateB).any fun build =>
-      (Name.num `_inductive_models_source_alias 1).isPrefixOf build)
+      root1.isPrefixOf build)
 
   IO.println s!"source replay aliases: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
