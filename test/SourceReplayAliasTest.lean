@@ -16,14 +16,15 @@ def privateName (module discriminator leaf : String) : Name :=
 def noGeneration : InductiveModels.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
 
-def runExportWith (input : Export) (generation : InductiveModels.Cli.Config) :
+def runExportWith (input : Export) (generation : InductiveModels.Cli.Config)
+    (checkRecursors : Bool := false) :
     IO (Array EDecl × Report) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<source-replay-alias-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let (result, _) ← Lean.Core.CoreM.toIO
-    (Lean.Meta.MetaM.run' (runFilter input false generation)) context { env }
+    (Lean.Meta.MetaM.run' (runFilter input checkRecursors generation)) context { env }
   return result
 
 def runExport (input : Export) : IO (Array EDecl × Report) :=
@@ -77,6 +78,23 @@ def emptyInductiveType (name : Name) : EIndType :=
   { name, levelParams := [], type := .sort (.succ .zero), all := [name], ctors := []
     numParams := 0, numIndices := 0, numNested := 0, isRec := false
     isReflexive := false, isUnsafe := false }
+
+def declarationConstantNames : EDecl → Array Name
+  | .ax name _ type _ => #[name] ++ type.getUsedConstants
+  | .defn name _ type value _ _ all | .thm name _ type value all =>
+    #[name] ++ all.toArray ++ type.getUsedConstants ++ value.getUsedConstants
+  | .opaq name _ type value _ all =>
+    #[name] ++ all.toArray ++ type.getUsedConstants ++ value.getUsedConstants
+  | .quot name _ type _ => #[name] ++ type.getUsedConstants
+  | .induct types constructors recursors =>
+    (types.toArray.flatMap fun type =>
+      #[type.name] ++ type.all.toArray ++ type.ctors.toArray ++ type.type.getUsedConstants) ++
+    (constructors.toArray.flatMap fun constructor =>
+      #[constructor.name, constructor.induct] ++ constructor.type.getUsedConstants) ++
+    (recursors.toArray.flatMap fun recursor =>
+      #[recursor.name] ++ recursor.all.toArray ++ recursor.type.getUsedConstants ++
+        recursor.rules.toArray.flatMap fun rule =>
+          #[rule.ctor] ++ rule.rhs.getUsedConstants)
 
 def wrappedBox (wrapper : Name) : EDecl :=
   let owner := `AliasWrappedBox
@@ -212,15 +230,52 @@ def main : IO UInt32 := do
   state := state.check "future-support shadow falls back before exact replay"
     (!shadowSelected && shadowOutput == generationOutput && shadowReport == generationReport)
 
+  -- Preserve the pre-existing collision capability: two exact inductive
+  -- blocks whose complete role families normalize alike both model, while the
+  -- construction-only source alias namespace remains absent from output.
+  let shapesText ← IO.FS.readFile "test/fixtures/inductive-models/prim_shapes.ndjson"
+  let .ok shapes := InductiveModels.parse shapesText
+    | throw <| IO.userError "cannot parse prim_shapes for atomic alias regression"
+  let publicOwner : Name := `Sv
+  let privateOwner : Name := (`_private.M).mkNum 0 |>.str "Sv"
+  let some ownerOrdinal := shapes.decls.findIdx? (·.names.contains publicOwner)
+    | throw <| IO.userError "prim_shapes has no Sv owner"
+  let privateRoles := shapes.decls[ownerOrdinal]!.names.foldl
+    (init := Naming.AliasMap.empty) fun aliases name =>
+      aliases.insert name (name.replacePrefix publicOwner privateOwner)
+  let privateOwnerRecord := shapes.decls[ownerOrdinal]!.renameAliases privateRoles
+  let collidingShapes := { shapes with decls := (
+    shapes.decls.extract 0 (ownerOrdinal + 1) ++ #[privateOwnerRecord] ++
+      shapes.decls.extract (ownerOrdinal + 1) shapes.decls.size) }
+  let (collidingOutput, collidingReport) ← runExportWith collidingShapes
+    (legacyGenerationConfig true) true
+  let collidingExport := { collidingShapes with decls := collidingOutput }
+  let collidingKernelValid ← match Order.reorder collidingExport with
+    | .error _ => pure false
+    | .ok ordered => kernelChecks ordered
+  let leakedSourceAliases := collidingOutput.flatMap declarationConstantNames |>.filter
+    fun name => name.components.any fun component =>
+      component.toString.startsWith "_inductive_models_source_alias_"
+  state := state.check "public and private normalized-colliding inductives both model exactly"
+    (collidingReport.generated.any (·.1 == publicOwner) &&
+      collidingReport.generated.any (·.1 == privateOwner) &&
+      collidingReport.stmtErrors.isEmpty && collidingKernelValid &&
+      collidingOutput.any (·.names.contains (Naming.modelName privateOwner)) &&
+      leakedSourceAliases.isEmpty)
+
   let atomicInput : Export :=
     { metaLine := .null
-      decls := #[.induct [emptyInductiveType privateA, emptyInductiveType privateB] [] []] }
-  let atomicRejected ← try
-    discard <| runExport atomicInput
-    pure false
-  catch error =>
-    pure <| (toString error).contains "collision moves inductive role"
-  state := state.check "one atomic inductive collision fails closed before replay" atomicRejected
+      decls := #[.induct
+        [{ (emptyInductiveType privateA) with all := [privateA, privateB] },
+         { (emptyInductiveType privateB) with all := [privateA, privateB] }] [] []] }
+  let (atomicOutput, atomicReport) ← runExport atomicInput
+  let .ok atomicAliases := aliasesOf atomicInput
+    | throw <| IO.userError "cannot plan atomic inductive aliases"
+  let some atomicBuild := atomicAliases.build? privateB
+    | throw <| IO.userError "second atomic inductive has no replay alias"
+  state := state.check "one atomic inductive collision replays both identities exactly"
+    (atomicOutput == atomicInput.decls && atomicReport == {} &&
+      (← replayNamesVisible atomicInput #[privateA, atomicBuild]) == #[true, true])
 
   let duplicateInput : Export :=
     { metaLine := .null, decls := #[typeAxiom `ExactDuplicate, typeAxiom `ExactDuplicate] }

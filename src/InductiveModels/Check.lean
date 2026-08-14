@@ -1506,11 +1506,6 @@ def SyntaxIndex.withReplayRecords (source : SyntaxIndex)
     let replay := replayRecords[ordinal]!
     unless exact.names.length == replay.names.length do
       throw s!"replay syntax replacement {ordinal} changed declaration arity"
-    if exact matches .induct .. then
-      unless replay matches .induct .. do
-        throw s!"replay syntax replacement {ordinal} changed an inductive record's kind"
-      unless exact.names == replay.names do
-        throw s!"replay syntax replacement {ordinal} moved an atomic inductive role"
     if exact matches .quot .. then
       unless replay matches .quot .. do
         throw s!"replay syntax replacement {ordinal} changed a quotient record's kind"

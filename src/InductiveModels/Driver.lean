@@ -2648,6 +2648,31 @@ def SourceCensus.ofSource (source : Export) : SourceCensus :=
   (source.decls.foldl (fun builder declaration => builder.push declaration)
     ({} : SourceCensus.Builder)).freeze
 
+/-- Kernel recursor names are derived from their inductive type-former names,
+not accepted as independent inputs to `Declaration.inductDecl`.  When a type
+is moved for replay, register each exported recursor at the name the kernel
+will actually mint. -/
+private def sourceReplayInductiveDerivations (source : Export)
+    (initial : SourceReplayAliases) : Except String SourceReplayAliases := do
+  let mut aliases := initial
+  for declaration in source.decls do
+    if let .induct types _ recursors := declaration then
+      for recursor in recursors do
+        let owner? := types.foldl (init := none) fun best type =>
+          if type.name.isPrefixOf recursor.name && aliases.hasExact type.name &&
+              best.all (fun prior =>
+                prior.name.components.length < type.name.components.length) then
+            some type
+          else best
+        if let some owner := owner? then
+          let some buildOwner := aliases.build? owner.name
+            | throw "moved inductive owner lost its replay alias"
+          let buildRecursor := recursor.name.replacePrefix owner.name buildOwner
+          aliases ← aliases.replace recursor.name buildRecursor
+        else if aliases.hasExact recursor.name then
+          throw s!"moved recursor {recursor.name} has no uniquely moved inductive owner"
+  return aliases
+
 /-- Declaration-discarding parser result for the internal planned route.  The
 raw certificate is not an eligibility promise: callers must still finish the
 tee and construct a `PlannedSourceReader`, falling back to the ordinary full
@@ -2948,6 +2973,7 @@ private structure FilterContext where
   sourceFamilyRecords? : Option (Array (Array Check.CompactFamilyCertificate))
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
+  constructionReserved : Std.HashSet Name
   futureSupport? : Option FutureSourceSupport := none
   outputSourceOrder? : Option (Array Nat) := none
   collectTrace : Bool := false
@@ -3016,7 +3042,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     | some records => records
     | none => sourceSyntax.sourceFamilyCertificatesForRecord x d
   let rawOrdinals := context.rawOrdinals
-  let reserved := context.reserved
+  let reserved := context.constructionReserved
   let mut mainEnv := state.mainEnv
   let mut persistentSyntax := state.persistentSyntax
   let mut legacyOut := state.legacyOut
@@ -3048,6 +3074,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mainBefore := mainEnv
   let mut replayedOwnerEnv? : Option Environment := none
   let reportedBefore := rep.generated.size
+  let declinedBefore := rep.declined.size
+  let exemptBefore := rep.exempt.size
+  let splicedBefore := rep.spliced.size
   -- The model, if this is a nested declaration. Generated **before** the
   -- declaration is added: nothing in the model mentions `T`.
   if let .induct ts cs inputRecursors := replayD then
@@ -3166,6 +3195,16 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         let msg ← (ex.toMessageData {}).toString
         return .unreplayable
           { rep with unreplayable := some s!"{d.names}: {msg}" }
+    let replayEnv ← getEnv
+    for name in replayD.names do
+      unless (replayEnv.find? name).isSome do
+        throwError "source replay lost Meta visibility for {name} while installing {d.names}"
+    if sourceUsesAlias then
+      if let .induct types constructors recursors := replayD then
+        let mismatches ← checkInductiveMetadata types constructors recursors
+        unless mismatches.isEmpty do
+          throwError "collision-safe inductive replay metadata differs for {d.names}: \
+            {mismatches.toList}"
   if let some root := basisRoot? then
     match ← (validateBasisOwner root replayD).run with
     | .ok () =>
@@ -3208,6 +3247,25 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   if d matches .induct .. then
     let generated := out
     let islandModels := pending
+    let islandAliases ← match sourceAliases.registerRecords generated with
+      | .ok aliases => pure aliases
+      | .error message => throwError
+          "cannot register generated source replay aliases for {d.names}: {message}"
+    rep := { rep with
+      generated := rep.generated.extract 0 reportedBefore ++
+        (rep.generated.extract reportedBefore rep.generated.size).map fun (name, count) =>
+          (islandAliases.exactName name, count)
+      declined := rep.declined.extract 0 declinedBefore ++
+        (rep.declined.extract declinedBefore rep.declined.size).map fun (name, reason) =>
+          (islandAliases.exactName name, reason)
+      exempt := rep.exempt.extract 0 exemptBefore ++
+        (rep.exempt.extract exemptBefore rep.exempt.size).map fun (name, reason) =>
+          (islandAliases.exactName name, reason)
+      spliced := rep.spliced.extract 0 splicedBefore ++
+        (rep.spliced.extract splicedBefore rep.spliced.size).map fun (name, names) =>
+          (islandAliases.exactName name, names.map islandAliases.exactName) }
+    let exactIslandModels := islandModels.map fun model =>
+      { model with spliced := model.spliced.map islandAliases.exactName }
     rep := { rep with
       maxLivePendingModels := max rep.maxLivePendingModels islandModels.size
       maxLiveIslandRecords := max rep.maxLiveIslandRecords generated.size }
@@ -3222,7 +3280,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     else
       let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
           ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners
-            sourceAliases with
+            islandAliases with
         | .ok result => pure result
         | .error message => throwError
             "owner-free generated declaration rejected for {d.names}: {message}"
@@ -3257,7 +3315,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             checkIsland? := some islandNumber
             locator := .generated islandNumber localOrdinal }
         compactIslands := compactIslands.push compact
-      let persistentRecords := generatedSupportRecords orderedGenerated islandModels
+      let persistentRecords := generatedSupportRecords orderedGenerated exactIslandModels
       if compactMode then
         let islandNumber := compactIslands.size - 1
         for record in persistentRecords do
@@ -3305,7 +3363,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   if context.checkRecursors then
     if let .induct _ _ rs := replayD then
       let (n, b) ← checkRecs rs
-      rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
+      rep := { rep with
+        recChecked := rep.recChecked + n
+        recMismatch := rep.recMismatch ++ b.map (fun name => sourceAliases.exactName name) }
   if context.collectTrace then
     let some firstName := d.names.head? | throwError "source declaration has no name"
     let some rawOrdinal := rawOrdinals[firstName]?
@@ -3454,23 +3514,18 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep) := do
   let plannedCensus := sourceCensus?.isSome
   let sourceCensus := sourceCensus?.getD (SourceCensus.ofSource x)
-  let sourceAliases ← match sourceCensus.replayAliases with
+  let plannedAliases ← match sourceCensus.replayAliases with
     | .ok aliases => pure aliases
     | .error message => throwError "cannot plan collision-safe source replay: {message}"
-  unless sourceAliases.isEmpty do
+  unless plannedAliases.isEmpty do
     if plannedCensus then
       throwError "planned source replay does not retain the records needed for normalized-name aliases"
-    -- An inductive declaration is one atomic kernel operation whose type,
-    -- constructor, recursor, and rule roles are minted together.  Moving a
-    -- subset requires a dual-role certificate that this first tranche does
-    -- not pretend to have.  Reject the complete input before replay instead
-    -- of letting `AsyncConsts.add` panic part-way through the stream.
+  let sourceAliases ← match sourceReplayInductiveDerivations x plannedAliases with
+    | .ok aliases => pure aliases
+    | .error message => throwError "cannot derive collision-safe inductive replay: {message}"
+  unless sourceAliases.isEmpty do
     for declaration in x.decls do
       match declaration with
-      | .induct .. =>
-        if let some name := declaration.names.find? sourceAliases.hasExact then
-          throwError "normalized source-name collision moves inductive role {name}; \
-            collision-safe inductive replay is not supported"
       | .quot name .. =>
         if sourceAliases.hasExact name then
           throwError "normalized source-name collision moves quotient role {name}; \
@@ -3516,11 +3571,15 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     some (sourceCensus.familyCertificateRecords x scheduled)
   let rawOrdinals := sourceCensus.rawOrdinals
   let reserved := sourceCensus.reserved
+  let constructionReserved := reserved.fold
+    (fun names name => names.insert (sourceAliases.buildDerivedName name))
+    reserved
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
     sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
-    rawOrdinals, reserved, futureSupport?, outputSourceOrder?, collectTrace }
+    rawOrdinals, reserved, constructionReserved,
+    futureSupport?, outputSourceOrder?, collectTrace }
   let initialFutureSupport := futureSupport?.map (·.records) |>.getD
     ({} : Std.HashMap Nat EDecl)
   let mut state : FilterState :=

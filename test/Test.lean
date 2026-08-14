@@ -1114,13 +1114,18 @@ the shape the export has.  The copy is made with an explicit whole-name
 `AliasMap` and `EDecl.renameAliases`, the same exact substitution machinery
 used to serialize a collision retry.
 
-Source replay now moves ordinary declarations before they reach Lean's
-normalized async map. An inductive block is different: its type former,
-constructors, recursors, and rule roles are minted by one atomic kernel
-operation. Until that whole role family has a dual exact/replay certificate,
-the collision is rejected before the first source declaration is replayed.
-This probe pins that deterministic fail-closed boundary; it must never regress
-to the nonfatal PANIC followed by partially invisible environment state. -/
+Three checks, and the third is the one that would catch a half-done renaming:
+
+1. **both model.** Before the retry the second lost its carrier and declined.
+2. **the output carries the contract names.** `_private.M.0.Sv._model` and
+   not the alias, so the declaration-local role names still mean what they say
+   and no consumer sees the difference.
+3. **the alias root appears nowhere in the output at all** — not as a
+   declaration name, not in an `all` list, not as a constant inside any type or
+   value. A renaming that missed one field of one record would leave a
+   reference to a constant the output does not declare, and neither the
+   statement oracle nor the kernel would see it: both read the *environment*,
+   which keeps the alias on purpose. -/
 def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
   let path := s!"{root}/test/fixtures/inductive-models/prim_shapes.ndjson"
   let text ← IO.FS.readFile path
@@ -1139,15 +1144,26 @@ def runAliasProbe (root : String) (a : TAcc) : IO TAcc := do
   let env ← importModules #[] {}
   let ctx : Core.Context :=
     { fileName := "<test>", fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
-  let rejected ← try
-    discard <| Lean.Core.CoreM.toIO
-      (Lean.Meta.MetaM.run'
-        (runFilter { x with decls } true (legacyGenerationConfig true))) ctx { env }
-    pure false
-  catch error =>
-    pure <| (toString error).contains "collision moves inductive role"
-  return check a rejected
-    "alias: a normalized inductive-role collision did not fail closed before replay"
+  let ((outD, rep), _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run'
+      (runFilter { x with decls } true (legacyGenerationConfig true))) ctx { env }
+  let gen := rep.generated.map (·.1)
+  a := check a (gen.contains tgt) "alias: the public Sv no longer models"
+  a := check a (gen.contains priv)
+    s!"alias: the private copy did not model — the normalized-name collision is not \
+       escaped; it declined as {rep.declined.filter (·.1 == priv) |>.map (·.2)}"
+  a := check a (rep.stmtChecked > 0)
+    "alias: no generated recursor statement was compared"
+  a := check a rep.stmtErrors.isEmpty
+    s!"alias: generated recursor statements lost their exported owners: {rep.stmtErrors}"
+  let modelN := Naming.modelName priv
+  a := check a (outD.any (·.names.contains modelN))
+    s!"alias: the output does not carry {modelN}, so the declaration-local contract moved"
+  let leaked := outD.flatMap edeclNames |>.filter fun n =>
+    n.components.any (· == `_inductive_models_alias)
+  a := check a leaked.isEmpty
+    s!"alias: the alias root leaked into the output on {leaked.toList.take 4}"
+  return a
 
 /-- `def n : Nat → Nat := fun x => x`, under whatever name is asked for. The
 collision probe needs two declarations that differ in nothing but their name. -/

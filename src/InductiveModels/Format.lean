@@ -312,6 +312,61 @@ def SourceReplayAliases.buildName (aliases : SourceReplayAliases) (exact : Name)
 def SourceReplayAliases.exactName (aliases : SourceReplayAliases) (build : Name) : Name :=
   aliases.exact? build |>.getD build
 
+private def longestAliasPrefix? (entries : Array SourceReplayAlias)
+    (name : Name) (buildSide : Bool) : Option SourceReplayAlias :=
+  entries.foldl (init := none) fun best entry =>
+    let rolePrefix := if buildSide then entry.build else entry.exact
+    if rolePrefix.isPrefixOf name &&
+        best.all (fun prior =>
+          (if buildSide then prior.build else prior.exact).components.length <
+            rolePrefix.components.length) then
+      some entry
+    else best
+
+/-- Rewrite a name below an explicitly aliased source role.  This is used only
+to register concrete generated names; record serialization still performs
+whole-name table lookup. -/
+def SourceReplayAliases.exactDerivedName (aliases : SourceReplayAliases) (build : Name) : Name :=
+  match longestAliasPrefix? aliases.entries build true with
+  | some entry => build.replacePrefix entry.build entry.exact
+  | none => build
+
+def SourceReplayAliases.buildDerivedName (aliases : SourceReplayAliases) (exact : Name) : Name :=
+  match longestAliasPrefix? aliases.entries exact false with
+  | some entry => exact.replacePrefix entry.exact entry.build
+  | none => exact
+
+/-- Replace one source role while deriving the atomic kernel replay plan. -/
+def SourceReplayAliases.replace (aliases : SourceReplayAliases) (exact build : Name) :
+    Except String SourceReplayAliases :=
+  SourceReplayAliases.ofEntries <|
+    if aliases.entries.any (fun entry => entry.exact == exact) then
+      aliases.entries.map fun entry => if entry.exact == exact then { exact, build } else entry
+    else aliases.entries.push { exact, build }
+
+/-- Register a newly discovered generated name without changing an existing
+exact identity. Conflicting registrations fail closed. -/
+def SourceReplayAliases.insert (aliases : SourceReplayAliases) (exact build : Name) :
+    Except String SourceReplayAliases :=
+  match aliases.build? exact with
+  | some prior =>
+    if prior == build then .ok aliases
+    else .error s!"generated exact name {exact} maps to both {prior} and {build}"
+  | none => SourceReplayAliases.ofEntries (aliases.entries.push { exact, build })
+
+/-- Explicitly register every generated declaration name lying below a moved
+source role. References are then covered because a valid generated record can
+refer only to source constants or declarations introduced by its island. -/
+def SourceReplayAliases.registerRecords (aliases : SourceReplayAliases)
+    (records : Array EDecl) : Except String SourceReplayAliases := do
+  let mut result := aliases
+  for record in records do
+    for build in record.names do
+      let exact := aliases.exactDerivedName build
+      if exact != build then
+        result ← result.insert exact build
+  return result
+
 /-- Rename an exact source/output record into the collision-free replay view. -/
 def SourceReplayAliases.buildRecord (aliases : SourceReplayAliases) : EDecl → EDecl :=
   EDecl.mapNames aliases.buildName
