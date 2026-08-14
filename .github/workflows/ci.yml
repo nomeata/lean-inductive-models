@@ -120,7 +120,6 @@ jobs:
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
                 vanishingerasuretest transparentowneraliasestest \
                 exportsyntaxnormalizationtest basisvalidationtest sourcespooltest
-              test/scripts/check-shared-prefix-ownership.sh
               lake exe clitest
               lake exe supervisortest --run-tests "$GITHUB_WORKSPACE/.lake/build/bin/supervisortest"
               lake exe generationflagstest

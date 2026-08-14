@@ -26,7 +26,6 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
 def defaultInductiveModelsEnv : Array (String × Option String) :=
   #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", none),
     ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", none),
-    ("LEAN_INDUCTIVE_MODELS_TEST_SHARED_PREFIX_FAIL_AFTER_OWNERS", none),
     ("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", none),
     (InductiveModels.Supervisor.workerMarker, none)]
 
@@ -770,18 +769,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "planned generated route preserves exact ordinary diagnostics" <|
     directPlain.exitCode == directPlainLegacy.exitCode && directPlain.stdout.isEmpty &&
       directPlainLegacy.stdout.isEmpty && directPlain.stderr == directPlainLegacy.stderr
-  let injectedDirectBefore ← System.FilePath.readDir scratch
-  let injectedDirect ← runInductiveModelsWithEnv binary directPlainArgs #[(
-    "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1"),
-    ("LEAN_INDUCTIVE_MODELS_TEST_SHARED_PREFIX_FAIL_AFTER_OWNERS", some "1")]
-  let injectedDirectAfter ← System.FilePath.readDir scratch
-  state := state.check "obsolete shared-prefix injection does not affect planned generation" <|
-    injectedDirect.exitCode == directPlain.exitCode && injectedDirect.stdout.isEmpty &&
-      hasDiagnostic injectedDirect.stderr "output backend: compact-discard" &&
-      !injectedDirect.stderr.contains "direct kernel route:" &&
-      hasDiagnostic injectedDirect.stderr "output kernel check: accepted"
-  state := state.check "planned generated route cleans its input workspace" <|
-    sameDirectoryEntries injectedDirectBefore injectedDirectAfter
   let outputMetadataCorruption := mapRecursor nestedExport `N.rec fun recursor =>
     { recursor with numMinors := recursor.numMinors + 1 }
   let metadataFallbackArgs :=
