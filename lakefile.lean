@@ -48,6 +48,11 @@ lean_exe ordertest where
   root := `OrderTest
   supportInterpreter := true
 
+lean_exe kernelchecktest where
+  srcDir := "test"
+  root := `KernelCheckTest
+  supportInterpreter := true
+
 lean_exe incrementalordertest where
   srcDir := "test"
   root := `IncrementalOrderTest
