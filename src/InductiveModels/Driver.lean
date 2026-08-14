@@ -1300,6 +1300,12 @@ def closeModelIsland (template : Export) (main : Environment)
   let exactRecords := records.map sourceAliases.exactRecord
   unless exactRecords.map sourceAliases.buildRecord == records do
     return .error "generated source-alias round trip changed a declaration"
+  -- Round-trip equality alone cannot see an unregistered derived build name:
+  -- both exactRecord and buildRecord would leave it unchanged.  The exhaustive
+  -- record mapper must find no construction prefix after exactification, even
+  -- when output typechecking has been disabled by the caller.
+  unless exactRecords.map sourceAliases.exactDerivedRecord == exactRecords do
+    return .error "generated declaration retained an unregistered source replay alias"
   let island := { template with decls := exactRecords.push owner }
   let ordered ← match Order.reorder island with
     | .ok ordered => pure ordered

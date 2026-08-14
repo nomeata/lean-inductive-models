@@ -210,6 +210,17 @@ def main : IO UInt32 := do
       | _ => false)
   state := state.check "every generated-record source alias inverts exactly"
     (publicAliases.exactRecord replayGenerated == generated)
+  let unregisteredBuild := Name.str publicPrivateBuild "unregistered"
+  let unregisteredExact := Name.str privateA "unregistered"
+  let unregisteredRecord : EDecl := .defn unregisteredBuild [] (.const unregisteredBuild [])
+    (.proj unregisteredBuild 0 (.const unregisteredBuild [])) (.regular 0) "safe"
+    [unregisteredBuild]
+  state := state.check "release audit catches every unregistered derived build-name field"
+    (publicAliases.exactRecord unregisteredRecord == unregisteredRecord &&
+      publicAliases.exactDerivedRecord unregisteredRecord ==
+        (.defn unregisteredExact [] (.const unregisteredExact [])
+          (.proj unregisteredExact 0 (.const unregisteredExact [])) (.regular 0) "safe"
+          [unregisteredExact]))
 
   -- The moved constant is hidden behind an unchanged transparent definition.
   -- This exercises the construction normalizer's replacement view, not just

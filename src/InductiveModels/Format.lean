@@ -392,6 +392,15 @@ def SourceReplayAliases.exactRecord (aliases : SourceReplayAliases) : EDecl → 
   EDecl.mapNames aliases.exactName
     (mapConstsE fun name => aliases.exact? name)
 
+/-- Generated-record audit transform for construction identities below an
+aliased source role. Unlike `exactRecord`, this follows role prefixes and is
+therefore deliberately confined to the post-generation release invariant. -/
+def SourceReplayAliases.exactDerivedRecord (aliases : SourceReplayAliases) : EDecl → EDecl :=
+  EDecl.mapNames aliases.exactDerivedName
+    (mapConstsE fun name =>
+      let exact := aliases.exactDerivedName name
+      if exact == name then none else some exact)
+
 /-- A whole export: the `meta` line verbatim, then the declarations in order. -/
 structure Export where
   metaLine : Json
