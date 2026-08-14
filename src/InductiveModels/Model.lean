@@ -21,7 +21,7 @@ the block under fresh names, a carrier, one `pack`/`unpack` pair per mimic with
 recursor per block member, one congruence per mimic, and **every one of those
 recursors' ι rules, as theorems with proofs**. Declarations are trusted-installed
 in a disposable construction environment; the exact serialized island is
-kernel-checked once at its close boundary iff output checking is enabled.
+kernel-checked once at its close boundary iff generated checking is enabled.
 
 The construction can also be written by hand at `Tree`, which makes the target
 shape explicit independently of the generator.

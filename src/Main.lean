@@ -558,15 +558,11 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
           statements differ from their exact exported owner interface; no output written"
         for error in generationReport.stmtErrors do IO.eprintln s!"  ! {error}"
         return exitToolError
-      let outcome ← if generationReport.declined.isEmpty then pure exitAccepted else do
-        let fallback ← InductiveModels.materializePlannedSource planned reader
-        let source ← match fallback with
-          | .ok source => pure source
-          | .error message =>
-            IO.eprintln s!"{input}: internal error: cannot classify planned declines: {message}"
-            return exitToolError
-        pure <| if (unsupportedDeclines source generationReport).isEmpty then
-          exitAccepted else exitDeclined
+      let outcome := if (unsupportedDeclinesFromOwners
+          plan.coveredInputOwners generationReport).isEmpty then
+        exitAccepted
+      else
+        exitDeclined
       if config.checkOutput then
         unless plan.checkReport.violations.isEmpty do
           reportViolations input "output" plan.checkReport.violations

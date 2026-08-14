@@ -12,7 +12,7 @@ each member's index telescope, one *single* inductive indexed by it, one carrier
 per member, the block's constructors, one recursor per member and every one of
 those recursors' ι rules as theorems. Declarations are trusted-installed in the
 disposable construction view; the exact serialized island is kernel-checked
-iff output checking is enabled.
+iff generated checking is enabled.
 
 The target shape can also be written by hand at a three-member block; doing so
 answers the load-bearing question — *are the ι rules definitional?* — before

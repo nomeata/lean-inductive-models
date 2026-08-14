@@ -122,7 +122,7 @@ structure Report where
   is a retention invariant, not an output statistic. -/
   maxLivePendingModels : Nat := 0
   /-- Peak number of generated declaration records retained by one island
-  before validation, optional checking, and either full output or compact discard. -/
+  before validation, optional generated checking, and emission or compact discard. -/
   maxLiveIslandRecords : Nat := 0
   /-- The input stopped replaying here: a declaration Lean's kernel will not
   load at all. The filter then becomes the identity, which is what a filter
@@ -132,7 +132,7 @@ structure Report where
   trusted dependencies and are never submitted through this gate. -/
   generatedKernelRejected : Option String := none
   /-- Number of generated-island kernel invocations. This value-level counter
-  pins that disabling output checking bypasses the gate entirely. -/
+  pins that disabling generated checking bypasses the gate entirely. -/
   generatedKernelChecks : Nat := 0
   deriving Inhabited, Repr, BEq
 
@@ -1182,7 +1182,7 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
       if installedQuotRecord main record then continue
       return .error s!"{record.names}: cannot reconstruct shared support"
     -- Reusable support belongs to the construction view. The complete exact
-    -- emitted island is checked once, separately, when output checking is on.
+    -- emitted island is checked once, separately, when generated checking is on.
     match main.addDeclCore 0 declaration none false with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
@@ -2839,7 +2839,7 @@ def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
   return (decls, report)
 
 /-- AST-dropping no-output generation. Accepted generated records are
-summarized at island close, optionally kernel-checked according to the output
+summarized at island close, optionally kernel-checked according to the generated
 gate, then discarded without opening a workspace or retaining a physical span. -/
 def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Report × CompactPlan) := do
