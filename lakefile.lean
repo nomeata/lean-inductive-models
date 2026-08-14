@@ -112,9 +112,9 @@ lean_exe memoryprobe where
   root := `MemoryProbe
   supportInterpreter := true
 
-lean_exe stagedwritertest where
+lean_exe sourcespooltest where
   srcDir := "test"
-  root := `StagedWriterTest
+  root := `SourceSpoolTest
   supportInterpreter := true
 
 lean_exe projectiontest where

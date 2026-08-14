@@ -1221,10 +1221,9 @@ level, and expression IDs progress exactly `1,2,…`, `1,2,…`, and `0,1,…`.
 Sparse, repeated, or out-of-order arenas therefore fall back to full
 re-interning instead of changing the snapshot seen by an earlier declaration.
 
-This is evidence about the byte stream, not permission to use a staged output
-path. A later composition/Main layer must additionally reject modes which
-rewrite the whole export (notably universe monomorphization), validate every
-span against the finished spool size, and validate its generated-writer cursor.
+This is evidence about the input byte stream, not an output backend. Planned
+source replay additionally validates every span against the finished spool
+size before reading declarations by index.
 -/
 structure RawCertificate where
   canonical : Bool := true

@@ -146,7 +146,7 @@ private inductive FilterOutput where
       (kernelVerdict : InductiveModels.CompactKernelCheckVerdict)
 
 /-- Optional A/B and test diagnostic. This observes the actual filter result;
-it never enables staging or changes eligibility. -/
+it never changes output retention or route eligibility. -/
 private def reportOutputBackend (output : FilterOutput) : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
     IO.eprintln s!"output backend: {match output with

@@ -12,7 +12,7 @@ def rawFastPathEligible (certificate : RawCertificate) (sizes : RawSpoolSizes)
     | .ok _ => true
     | .error _ => false
 
-/-- Largest spool offset admitted by the staged format. Keeping the historical
+/-- Largest spool offset admitted by the source spool format. Keeping the historical
 signed-64 bound makes validation independent of host integer and filesystem
 limits even though the pure-Lean copier advances with bounded reads. -/
 def maxSeekOffset : Nat := 9223372036854775807
@@ -137,8 +137,8 @@ def Workspace.create (root : System.FilePath) : IO Workspace := do
   -- former Linux shim this does not inspect the parent's UID or mode. Instead
   -- the runtime temporary directory must canonically remain inside the
   -- caller's project `_tmp`; CI and documented invocations set `TMPDIR`
-  -- accordingly. Optional staging falls back before doing work when it does
-  -- not. The exact empty directory is removed on a containment failure.
+  -- accordingly. Input source replay refuses to proceed when it does not. The
+  -- exact empty directory is removed on a containment failure.
   let directory ← IO.FS.createTempDir
   let canonicalDirectory ← IO.FS.realPath directory
   let rootParts := canonicalRoot.components

@@ -146,10 +146,10 @@ syntax authority and uses installed kernel metadata only as a layout and proof
 oracle. Final ordering places each complete model family before its source
 owner and rejects dependency cycles or ambiguous ownership.
 
-Canonical generation can stage model islands and retain compact ordering and
-structural-check certificates. Operations that need the complete transformed
-AST—currently universe monomorphization and published named/stdout output
-kernel replay—use the full-memory path. With generated `--no-output`, the
+Canonical generation retains compact ordering and structural-check
+certificates while model islands are live. All named and stdout output uses
+the ordinary full-memory AST path, as does universe monomorphization. With
+generated `--no-output`, the
 default output kernel gate instead feeds each exact declaration directly to an
 incremental in-process kernel environment while its compact schedule row is
 live. The checker and construction environments are dropped at the explicit

@@ -45,7 +45,7 @@ correctness_targets=(
   deepimaxboxtest psigmaprimetest exactsortlifttest
   tightpsigmaprimeroutetest vanishingerasuretest
   transparentowneraliasestest exportsyntaxnormalizationtest
-  basisvalidationtest stagedwritertest
+  basisvalidationtest sourcespooltest
 )
 ```
 
@@ -92,7 +92,7 @@ lake exe vanishingerasuretest
 lake exe transparentowneraliasestest
 lake exe exportsyntaxnormalizationtest
 lake exe basisvalidationtest
-lake exe stagedwritertest "$PWD"
+lake exe sourcespooltest "$PWD"
 PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
 python3 test/scripts/generate_family_adapter_fixtures.py \
   --output test/fixtures/inductive-models/family_adapter_generated.lean --check
@@ -111,9 +111,9 @@ published `good/` case and requires each `bad/` case to be rejected or to stop
 at the documented internal-invariant boundary; unsupported exit 2 is a corpus
 failure.
 
-`ordertest` compares four retention policies over the same generation
-fixtures: the full-AST oracle, the test-only full-AST shadow spool, the
-AST-dropping physical spool, and sink-free compact discard. `mainclitest`
+`ordertest` compares the full-AST oracle with sink-free compact discard over
+the same generation fixtures and exercises planned declaration-wise source
+replay. `mainclitest`
 selects compact discard explicitly with `--no-output --no-type-check-output`;
 generated `--no-output --type-check-output` feeds exact records directly to an
 incremental in-process kernel environment. It pins exit-2 precedence,
@@ -124,9 +124,12 @@ checking does not open a workspace even when `_tmp` is unusable.
 suites. The focused CI workflow splits the matrix across fixture, focused, and
 monomorphization jobs and limits each process to 12 GiB. The Mathlib workflow
 uses its separately documented 10/12 GiB phase envelopes and artifact gates.
-Its generation pass explicitly defers output kernel replay so named output is
-staged; a serialized `--type-check-input --no-output` pass supplies the
-authoritative whole-output kernel verdict after the generation process exits.
+Its generation pass uses the ordinary full-AST named-output backend and
+explicitly defers output kernel replay; a serialized
+`--type-check-input --no-output` pass supplies the authoritative whole-output
+kernel verdict after generation exits. The existing 10 GiB generation cap is
+unchanged while an authoritative hosted-runner measurement of the full-AST
+route is pending.
 
 ## Fixture regeneration
 

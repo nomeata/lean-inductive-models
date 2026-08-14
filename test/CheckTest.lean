@@ -75,7 +75,7 @@ def compactRejected (result : Except String Report) : Bool :=
   | .error _ => true
   | .ok _ => false
 
-/-- Exercise the staged-output representation: owner decisions are captured
+/-- Exercise compact no-output representation: owner decisions are captured
 record-by-record, then only ordered names and value-free templates survive for
 the one global-extra sweep. -/
 def compactIndexedStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=

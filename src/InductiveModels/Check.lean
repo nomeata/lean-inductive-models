@@ -1827,8 +1827,9 @@ def SyntaxIndex.ofSource (x : Export) : SyntaxIndex :=
 /-! ## Value-free global-extra summaries
 
 The whole-export unexpected-slot sweep historically revisits every owner
-record after generation.  Staged output cannot retain generated `EDecl`s just
-for that pass, so record the eligibility decisions while each owner is live.
+record after generation. Compact no-output modes cannot retain generated
+`EDecl`s just for that pass, so record the eligibility decisions while each
+owner is live.
 These summaries contain names, field indices, and booleans only; in
 particular, they cannot retain an island's expression graph.
 
@@ -1857,8 +1858,8 @@ def GlobalExtraTemplate.owner : GlobalExtraTemplate → Name
 /-- Capture unexpected-slot eligibility for each record without retaining an
 `Expr`.  Projection eligibility and proposition-former tests use the supplied
 overlay index, so generated owners may depend on transparent source aliases.
-As with the staging pipeline generally, duplicate owner declarations must be
-rejected by compact ordering before capture; the index's owner table is not a
+Duplicate owner declarations must be rejected by compact ordering before
+capture; the index's owner table is not a
 substitute for that collision check. -/
 def globalExtraRecordsWithIndex (index : SyntaxIndex)
     (records : Array EDecl) : Array GlobalExtraRecord :=
@@ -1954,7 +1955,7 @@ def globalExtrasFromRecordsFor (records : Array GlobalExtraRecord)
     { record with templates := record.templates.filter fun template =>
         owners.contains template.owner }
 
-/-- Convenience form for an in-memory export. Staged callers instead retain
+/-- Convenience form for an in-memory export. Compact callers instead retain
 the bound per-record summaries and reorder them with compact declaration
 locators before calling `globalExtrasFromRecords`. -/
 def compactGlobalExtrasWithIndex (index : SyntaxIndex) (records : Array EDecl) :
@@ -2077,7 +2078,7 @@ def SyntaxIndex.sourceFamilyCertificatesForRecord (index : SyntaxIndex)
       else none
 
 /-- Capture every currently discoverable family in owner-record order. This is
-the full-export convenience form; staged generation captures source and island
+the full-export convenience form; compact generation captures source and island
 families separately through `compactFamilyCertificateWithIndex`. -/
 def compactFamilyCertificates (x : Export) : Array CompactFamilyCertificate :=
   let index := SyntaxIndex.ofSource x
@@ -2168,7 +2169,7 @@ structure StatementReport where
   deriving Inhabited, Repr, BEq
 
 /-- Check one already-discovered family against reusable syntax tables.  This
-is the island-sized form needed by staged generation: family-local interface
+is the island-sized form needed by compact generation: family-local interface
 checks do not rebuild the source declaration, constructor, and rule indexes.
 Global extra-slot diagnostics are retained only when they belong to this
 family's exact source declarations. -/
@@ -2181,7 +2182,7 @@ def checkFamilyStatementsWithIndex (x : Export) (index : SyntaxIndex)
   { statementsChecked := family.correspondence.statementCount
     violations := checkFamilyWithIndex x index family false ++ global }
 
-/-- Batch only family-local statement diagnostics.  Staged generation uses
+/-- Batch only family-local statement diagnostics. Compact generation uses
 this form for each island and leaves the whole-export unexpected-slot sweep to
 the final aggregate pass, preserving its historical order and multiplicity. -/
 def checkStatementFamiliesLocalWithIndex (x : Export) (index : SyntaxIndex)

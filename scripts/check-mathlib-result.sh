@@ -32,10 +32,10 @@ grep -Eq '^output check: [1-9][0-9]* model families checked$' "$GENERATE_LOG" ||
 [[ "$(grep -Ec '^output check: ' "$GENERATE_LOG")" == 1 ]] ||
   fail "generation reported more than one output-check result"
 
-grep -Fxq 'output backend: staged' "$GENERATE_LOG" ||
-  fail "generation did not select the staged output backend"
-[[ "$(grep -Fxc 'output backend: staged' "$GENERATE_LOG")" == 1 ]] ||
-  fail "generation reported the staged output backend more than once"
+grep -Fxq 'output backend: legacy' "$GENERATE_LOG" ||
+  fail "generation did not select the full-AST output backend"
+[[ "$(grep -Fxc 'output backend: legacy' "$GENERATE_LOG")" == 1 ]] ||
+  fail "generation reported the full-AST output backend more than once"
 
 grep -Eq '^levels: [1-9][0-9]* planner comparisons, 0 escapes$' "$GENERATE_LOG" ||
   fail "universe planning was absent, empty, or escaped"

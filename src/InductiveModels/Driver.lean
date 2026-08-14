@@ -120,7 +120,7 @@ structure Report where
   is a retention invariant, not an output statistic. -/
   maxLivePendingModels : Nat := 0
   /-- Peak number of generated declaration records retained by one island
-  before ordering, checking, and eventual staged serialization. -/
+  before ordering, checking, and either full output or compact discard. -/
   maxLiveIslandRecords : Nat := 0
   /-- The input stopped replaying here: a declaration Lean's kernel will not
   load at all. The filter then becomes the identity, which is what a filter
@@ -146,7 +146,7 @@ structure PendingModel where
 
 /-- Value-free information captured while one accepted island's declarations
 are still live. The arrays remain aligned with the island's checked record
-order and therefore with a later `Spool.IslandCommit.declarations`. -/
+order and compact schedule rows. -/
 structure CompactIsland where
   summaries : Array Order.DeclSummary
   globalExtras : Array Check.GlobalExtraRecord
@@ -156,27 +156,27 @@ structure CompactIsland where
   diagnosticOwners : Std.HashSet Name
 
 /-- Origin of one declaration in the eventual compact record schedule. Source
-indices address the parser certificate's declaration spans; generated indices
-address an accepted island and its declaration span within that island. -/
-inductive StagedLocator where
+indices address exact input declarations; generated indices address an
+accepted island and the declaration's position within that island. -/
+inductive CompactLocator where
   | source (index : Nat)
   | generated (island declaration : Nat)
   deriving Inhabited, Repr, BEq
 
 /-- Atomic value-free scheduling row. `summary` and `globalExtra` are captured
-together with their byte locator and must always be permuted as one value. -/
-structure StagedRecord where
+together with their logical locator and must always be permuted as one value. -/
+structure CompactRecord where
   summary : Order.DeclSummary
   globalExtra : Check.GlobalExtraRecord
   families : Array Check.CompactFamilyCertificate := #[]
   /-- Syntax availability at certificate capture. Source payload can be
-  recaptured with its current generated island while retaining a source byte
+  recaptured with its current generated island while retaining its logical
   locator and scheduling origin. -/
   checkIsland? : Option Nat := none
-  locator : StagedLocator
+  locator : CompactLocator
   deriving Inhabited, Repr
 
-private def compactAvailabilityError? (records : Array StagedRecord)
+private def compactAvailabilityError? (records : Array CompactRecord)
     (persistentSupportOrigins : Std.HashMap Name Nat) : Option String := Id.run do
   let mut generatedProviders : Std.HashMap Name Nat := {}
   for record in records do
@@ -208,7 +208,7 @@ private def compactAvailabilityError? (records : Array StagedRecord)
 /-- Value-only shadow of a compact generation pass, with no physical payloads
 or generated declaration expressions. -/
 structure CompactPlan where
-  declarations : Array StagedLocator := #[]
+  declarations : Array CompactLocator := #[]
   checkReport : Check.Report := { familiesChecked := 0, violations := #[] }
   unavailable? : Option String := none
   /-- A regression counter for the payload-retention contract. Compact discard
@@ -2627,7 +2627,7 @@ private structure FilterState where
   legacyOut : Array EDecl := #[]
   report : Report := {}
   compactIslands : Array CompactIsland := #[]
-  stagedRecords : Array StagedRecord := #[]
+  compactRecords : Array CompactRecord := #[]
   scheduledOrdinal : Nat := 0
   islandStatements : Check.StatementReport :=
     { statementsChecked := 0, violations := #[] }
@@ -2681,7 +2681,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut legacyOut := state.legacyOut
   let mut rep := state.report
   let mut compactIslands := state.compactIslands
-  let mut stagedRecords := state.stagedRecords
+  let mut compactRecords := state.compactRecords
   let mut islandStatements := state.islandStatements
   let mut invalidBasis := state.invalidBasis
   let mut persistentSupportOrigins := state.persistentSupportOrigins
@@ -2956,7 +2956,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         let tagged := Order.tagIsland islandNumber compact.summaries
         let compact := { compact with summaries := tagged }
         for localOrdinal in [:tagged.size] do
-          let row : StagedRecord := {
+          let row : CompactRecord := {
             summary := tagged[localOrdinal]!
             globalExtra := compact.globalExtras[localOrdinal]!
             families := compact.families[localOrdinal]!.map (·.inIsland islandNumber)
@@ -2966,7 +2966,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             kernelCheckState? := some (← checker.pushBound orderedGenerated[localOrdinal]!
               row.summary.introduced)
             kernelCheckRows := kernelCheckRows.push row.summary.introduced
-          stagedRecords := stagedRecords.push row
+          compactRecords := compactRecords.push row
         compactIslands := compactIslands.push compact
       let persistentRecords := generatedSupportRecords orderedGenerated exactIslandModels
       if compactMode then
@@ -3010,7 +3010,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       match compactIslands.size with
       | 0 => throwError "modeled source family {d.names} has no committed generated island"
       | size + 1 => pure (some size)
-    let row : StagedRecord := {
+    let row : CompactRecord := {
       summary := sourceSummaries[scheduledOrdinal]!
       globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtra
       families := sourceFamilyRecord ++
@@ -3021,7 +3021,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     if let some checker := kernelCheckState? then
       kernelCheckState? := some (← checker.pushBound d row.summary.introduced)
       kernelCheckRows := kernelCheckRows.push row.summary.introduced
-    stagedRecords := stagedRecords.push row
+    compactRecords := compactRecords.push row
   if context.checkRecursors then
     if let .induct _ _ rs := replayD then
       let (n, b) ← checkRecs rs
@@ -3043,7 +3043,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   if context.collectAdapterShadows then
     adapterShadows := adapterShadows ++ islandAdapterShadows
   return .next {
-    mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, stagedRecords,
+    mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, compactRecords,
     scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
     persistentSupportOrigins, futureSupportRemaining, emissionByRaw, sourceSteps,
     kernelCheckState?, kernelCheckRows, adapterShadows }
@@ -3055,7 +3055,7 @@ the consuming seal below. -/
 private structure CompactDirectSealed where
   report : Report
   compactIslands : Array CompactIsland
-  stagedRecords : Array StagedRecord
+  compactRecords : Array CompactRecord
   islandStatements : Check.StatementReport
   persistentSupportOrigins : Std.HashMap Name Nat
   kernelVerdict : KernelCheck.Verdict
@@ -3075,23 +3075,23 @@ private def FilterState.sealCompactDirect (state : FilterState) (context : Filte
   unless state.scheduledOrdinal == context.sourceSummaries.size do
     throwError "compact direct source schedule consumed {state.scheduledOrdinal} of \
       {context.sourceSummaries.size} rows"
-  let compactRows := state.stagedRecords.map (·.summary.introduced)
+  let compactRows := state.compactRecords.map (·.summary.introduced)
   unless state.kernelCheckRows == compactRows do
-    throwError "compact direct kernel rows differ from staged rows: \
+    throwError "compact direct kernel rows differ from compact rows: \
       kernel={repr state.kernelCheckRows}, compact={repr compactRows}"
-  let sourceRows := state.stagedRecords.foldl (init := 0) fun count record =>
+  let sourceRows := state.compactRecords.foldl (init := 0) fun count record =>
     match record.locator with
     | .source _ => count + 1
     | .generated .. => count
   unless sourceRows == state.scheduledOrdinal do
-    throwError "compact direct staged {sourceRows} source rows for \
+    throwError "compact direct retained {sourceRows} source rows for \
       {state.scheduledOrdinal} transitions"
   let some checker := state.kernelCheckState?
     | throwError "compact direct state lost its exact kernel checker"
   let kernelVerdict := checker.seal
-  unless kernelVerdict.recordsPushed == state.stagedRecords.size do
+  unless kernelVerdict.recordsPushed == state.compactRecords.size do
     throwError "compact direct kernel consumed {kernelVerdict.recordsPushed} records, \
-      but staged {state.stagedRecords.size} rows"
+      but retained {state.compactRecords.size} compact rows"
   let some base := context.kernelCheckBase?
     | throwError "compact direct state lost its exact base environment"
   -- No later compact operation may observe construction declarations. The
@@ -3101,7 +3101,7 @@ private def FilterState.sealCompactDirect (state : FilterState) (context : Filte
   return {
     report := state.report
     compactIslands := state.compactIslands
-    stagedRecords := state.stagedRecords
+    compactRecords := state.compactRecords
     islandStatements := state.islandStatements
     persistentSupportOrigins := state.persistentSupportOrigins
     kernelVerdict }
@@ -3109,31 +3109,31 @@ private def FilterState.sealCompactDirect (state : FilterState) (context : Filte
 /-- Finish ordering and structural checks from the value-only direct handoff. -/
 private def CompactDirectSealed.finalize (sealed : CompactDirectSealed) :
     MetaM (Report × CompactPlan × CompactKernelCheckVerdict) := do
-  let stagedOrder ← match Order.summaryRecordOrder (sealed.stagedRecords.map (·.summary)) with
+  let compactOrder ← match Order.summaryRecordOrder (sealed.compactRecords.map (·.summary)) with
     | .ok order => pure order
     | .error error => throwError "cannot compactly order direct records: {repr error}"
   let mut scheduled : Std.HashSet Nat := {}
-  for index in stagedOrder do
-    unless index < sealed.stagedRecords.size do
+  for index in compactOrder do
+    unless index < sealed.compactRecords.size do
       throwError "compact direct schedule index {index} exceeds \
-        {sealed.stagedRecords.size} rows"
+        {sealed.compactRecords.size} rows"
     if scheduled.contains index then
       throwError "compact direct schedule repeats row {index}"
     scheduled := scheduled.insert index
-  unless scheduled.size == sealed.stagedRecords.size do
+  unless scheduled.size == sealed.compactRecords.size do
     throwError "compact direct schedule covers {scheduled.size} of \
-      {sealed.stagedRecords.size} rows"
-  let orderedRecords := stagedOrder.map fun i =>
-    { owner := sealed.stagedRecords[i]!.summary.owner
-      modelSlots := sealed.stagedRecords[i]!.summary.modelSlots
-      globalExtra := sealed.stagedRecords[i]!.globalExtra
-      families := sealed.stagedRecords[i]!.families : Check.CompactCheckRecord }
+      {sealed.compactRecords.size} rows"
+  let orderedRecords := compactOrder.map fun i =>
+    { owner := sealed.compactRecords[i]!.summary.owner
+      modelSlots := sealed.compactRecords[i]!.summary.modelSlots
+      globalExtra := sealed.compactRecords[i]!.globalExtra
+      families := sealed.compactRecords[i]!.families : Check.CompactCheckRecord }
   let compactCheckReport ← match Check.compactOrderedReport orderedRecords with
     | .ok report => pure report
     | .error message => throwError "invalid compact direct output certificate: {message}"
   let compactUnavailable? :=
-    compactAvailabilityError? sealed.stagedRecords sealed.persistentSupportOrigins
-  let orderedGlobals := stagedOrder.map fun i => sealed.stagedRecords[i]!.globalExtra
+    compactAvailabilityError? sealed.compactRecords sealed.persistentSupportOrigins
+  let orderedGlobals := compactOrder.map fun i => sealed.compactRecords[i]!.globalExtra
   let diagnosticOwners := sealed.compactIslands.foldl (init := ({} : Std.HashSet Name))
     fun owners island => island.diagnosticOwners.toArray.foldl
       (fun owners owner => owners.insert owner) owners
@@ -3144,7 +3144,7 @@ private def CompactDirectSealed.finalize (sealed : CompactDirectSealed) :
   let rep := { sealed.report with
     stmtChecked := statementReport.statementsChecked
     stmtErrors := statementReport.violations.map fun violation => violation.message }
-  let declarations := stagedOrder.map fun index => sealed.stagedRecords[index]!.locator
+  let declarations := compactOrder.map fun index => sealed.compactRecords[index]!.locator
   unless declarations.size == sealed.kernelVerdict.recordsPushed do
     throwError "compact direct final schedule has {declarations.size} rows after checking \
       {sealed.kernelVerdict.recordsPushed} exact records"
@@ -3186,33 +3186,33 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
         reordered := reordered ++ records
       pure reordered
   let compactIslands := state.compactIslands
-  let stagedRecords := state.stagedRecords
+  let compactRecords := state.compactRecords
   let islandStatements := state.islandStatements
   let persistentSupportOrigins := state.persistentSupportOrigins
   unless state.futureSupportRemaining.isEmpty do
     throwError "future support shadow retained undischarged source records"
   let mut rep := state.report
-  let stagedOrder ← if compactMode then
-      match Order.summaryRecordOrder (stagedRecords.map (·.summary)) with
+  let compactOrder ← if compactMode then
+      match Order.summaryRecordOrder (compactRecords.map (·.summary)) with
       | .ok order => pure order
-      | .error error => throwError "cannot compactly order staged records: {repr error}"
+      | .error error => throwError "cannot order compact records: {repr error}"
     else pure #[]
   let compactCheckReport : Check.Report ← if compactMode then
-      let orderedRecords := stagedOrder.map fun i =>
-        { owner := stagedRecords[i]!.summary.owner
-          modelSlots := stagedRecords[i]!.summary.modelSlots
-          globalExtra := stagedRecords[i]!.globalExtra
-          families := stagedRecords[i]!.families : Check.CompactCheckRecord }
+      let orderedRecords := compactOrder.map fun i =>
+        { owner := compactRecords[i]!.summary.owner
+          modelSlots := compactRecords[i]!.summary.modelSlots
+          globalExtra := compactRecords[i]!.globalExtra
+          families := compactRecords[i]!.families : Check.CompactCheckRecord }
       match Check.compactOrderedReport orderedRecords with
       | .ok report => pure report
       | .error message => throwError "invalid compact output certificate: {message}"
     else
       pure ({ familiesChecked := 0, violations := #[] } : Check.Report)
   let compactUnavailable? := if compactMode then
-      compactAvailabilityError? stagedRecords persistentSupportOrigins
+      compactAvailabilityError? compactRecords persistentSupportOrigins
     else none
   let compactStatementReport := if compactMode then
-    let orderedGlobals := stagedOrder.map fun i => stagedRecords[i]!.globalExtra
+    let orderedGlobals := compactOrder.map fun i => compactRecords[i]!.globalExtra
     let diagnosticOwners := compactIslands.foldl (init := ({} : Std.HashSet Name))
       fun owners island => island.diagnosticOwners.toArray.foldl
         (fun owners owner => owners.insert owner) owners
@@ -3240,14 +3240,14 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
       if compactMode then
         let fullOrder ← match Order.recordOrder finalExport with
           | .ok order => pure order
-          | .error error => throwError "full oracle cannot order staged records: {repr error}"
-        let compactNames := stagedOrder.map fun i => stagedRecords[i]!.summary.introduced
+          | .error error => throwError "full oracle cannot order compact records: {repr error}"
+        let compactNames := compactOrder.map fun i => compactRecords[i]!.summary.introduced
         let fullNames := fullOrder.map fun i => finalExport.decls[i]!.names.toArray
         unless compactNames == fullNames do
-          throwError "compact staged order disagrees with full export: \
+          throwError "compact order disagrees with full export: \
             compact={repr compactNames}, full={repr fullNames}"
         unless compactStatementReport == fullReport do
-          throwError "compact staged statements disagree with full export: \
+          throwError "compact statements disagree with full export: \
             compact={repr compactStatementReport}, full={repr fullReport}"
         let orderedExport := { finalExport with
           decls := fullOrder.map fun index => finalExport.decls[index]! }
@@ -3263,7 +3263,7 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
     stmtErrors := statementReport.violations.map fun violation => violation.message }
   unless retainOracle || legacyOut.isEmpty do
     throwError "compact filter retained {legacyOut.size} cumulative declaration records"
-  let declarations := stagedOrder.map fun index => stagedRecords[index]!.locator
+  let declarations := compactOrder.map fun index => compactRecords[index]!.locator
   let compactPlan : CompactPlan := {
     declarations
     checkReport := compactCheckReport

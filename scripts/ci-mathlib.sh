@@ -4,7 +4,7 @@
 #
 # This harness is intentionally shaped for a standard GitHub-hosted runner:
 # it never materializes the uncompressed source export, and it removes build
-# and checkout phases before the staged generator needs their disk space.
+# and checkout phases before the full-AST generator needs their disk space.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,9 +27,10 @@ EXPORTER_PATCH_SHA="151c25f6adbfd915ce62786da33352c089653f62d5d3445cc3b38879de19
 WORKER_LIMIT_KIB=$((10 * 1024 * 1024))
 BUILD_LIMIT_KIB=$((12 * 1024 * 1024))
 EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))
-# The measured staged spool and output are each about 6 GB. This is a
-# generation-phase guard, after all disposable builds and checkouts are gone;
-# it is not a runner-size preflight.
+# Keep the prior conservative generation-phase disk guard until the full-AST
+# named-output route has an authoritative hosted-runner measurement. This is
+# applied after all disposable builds and checkouts are gone; it is not a
+# runner-size preflight.
 GENERATION_FREE_KIB=$((12 * 1024 * 1024))
 
 mkdir -p "$BIN_DIR" "$LOG_DIR" "$PERF_DIR" "$TMP_DIR"
@@ -219,7 +220,7 @@ set -e
 echo "compressed Mathlib export bytes: $(stat -c '%s' "$INPUT_GZ")"
 
 # The export is self-contained. Remove both checkouts and every cache/build
-# artifact before the staged spool and final output begin to coexist.
+# artifact before the full transformed AST and final output coexist.
 cleanup_tree "$MATHLIB_DIR"
 cleanup_tree "$ROOT/.lake/build"
 disk_census pre-generation-cleanup
@@ -237,9 +238,10 @@ gzip -dc "$INPUT_GZ" > "$INPUT_FIFO" &
 feeder_pid=$!
 feeder_job="$feeder_pid"
 
-# Keep the documented generation and structural-check defaults. Defer only the
-# whole-output kernel gate so named output uses the bounded staged backend; the
-# separate serialized input pass below is the authoritative kernel verdict.
+# Keep the documented generation and structural-check defaults. Named output
+# now uses the ordinary full-AST backend. The 10 GiB worker cap is intentionally
+# unchanged pending an authoritative hosted-runner measurement; the separate
+# serialized input pass below remains the authoritative kernel verdict.
 set +e
 (
   set -o pipefail
@@ -288,7 +290,7 @@ grep -Eq ': model of [1-9][0-9]* declarations' "$LOG_DIR/generate.log" ||
 
 # Re-read the bytes that were actually written. Keep structural input checking
 # enabled and additionally ask Lean's kernel to validate every declaration.
-# This pass is serialized after the first process and its private spool exit.
+# This pass is serialized after the full-AST generation process exits.
 (
   set -o pipefail
   run_worker_measured check-input \

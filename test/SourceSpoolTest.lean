@@ -65,9 +65,9 @@ def plannedSourceRejected (scratch path text : String) : IO Bool := do
   unless ordinary matches .ok _ do return false
   Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
-    let staged ← IO.FS.withFile path .read fun handle =>
+    let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleWithSink handle tee.sink (analyse := false) (allowDuplicateNames := true)
-    let .ok (output, certificate) := staged | return false
+    let .ok (output, certificate) := captured | return false
     let sizes ← tee.finish
     return (← Spool.PlannedSourceReader.create tee certificate sizes output.decls.size) matches
       .error _
@@ -76,10 +76,10 @@ def plannedDiscardingSourceRejected (scratch path text : String) : IO Bool := do
   IO.FS.writeFile path text
   Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
-    let staged ← IO.FS.withFile path .read fun handle =>
+    let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
         (analyse := false) (allowDuplicateNames := true)
-    let .ok (envelope, certificate) := staged | return false
+    let .ok (envelope, certificate) := captured | return false
     let sizes ← tee.finish
     return (← Spool.PlannedSourceReader.create tee certificate sizes
       envelope.declarationCount) matches .error _
@@ -111,18 +111,18 @@ def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let scratch := s!"{root}/_tmp"
   IO.FS.createDirAll scratch
-  let arenaPath := s!"{scratch}/staged-writer-arena.ndjson"
-  let firstPath := s!"{scratch}/staged-writer-first.ndjson"
-  let secondPath := s!"{scratch}/staged-writer-second.ndjson"
-  let malformedPath := s!"{scratch}/staged-writer-malformed.ndjson"
-  let nameHolePath := s!"{scratch}/staged-writer-name-hole.ndjson"
-  let levelHolePath := s!"{scratch}/staged-writer-level-hole.ndjson"
-  let exprHolePath := s!"{scratch}/staged-writer-expr-hole.ndjson"
-  let sparsePath := s!"{scratch}/staged-writer-sparse.ndjson"
-  let overwritePath := s!"{scratch}/staged-writer-overwrite.ndjson"
-  let projectionOrderPath := s!"{scratch}/staged-writer-projection-order.ndjson"
-  let projectionOverwritePath := s!"{scratch}/staged-writer-projection-overwrite.ndjson"
-  let parserCompatibilityPath := s!"{scratch}/staged-writer-parser-compatibility.ndjson"
+  let arenaPath := s!"{scratch}/source-spool-arena.ndjson"
+  let firstPath := s!"{scratch}/source-spool-first.ndjson"
+  let secondPath := s!"{scratch}/source-spool-second.ndjson"
+  let malformedPath := s!"{scratch}/source-spool-malformed.ndjson"
+  let nameHolePath := s!"{scratch}/source-spool-name-hole.ndjson"
+  let levelHolePath := s!"{scratch}/source-spool-level-hole.ndjson"
+  let exprHolePath := s!"{scratch}/source-spool-expr-hole.ndjson"
+  let sparsePath := s!"{scratch}/source-spool-sparse.ndjson"
+  let overwritePath := s!"{scratch}/source-spool-overwrite.ndjson"
+  let projectionOrderPath := s!"{scratch}/source-spool-projection-order.ndjson"
+  let projectionOverwritePath := s!"{scratch}/source-spool-projection-overwrite.ndjson"
+  let parserCompatibilityPath := s!"{scratch}/source-spool-parser-compatibility.ndjson"
   let rawCanonicalPath := s!"{scratch}/raw-spool-canonical.ndjson"
   let rawNameGapPath := s!"{scratch}/raw-spool-name-gap.ndjson"
   let rawLevelGapPath := s!"{scratch}/raw-spool-level-gap.ndjson"
@@ -217,7 +217,7 @@ def main (args : List String) : IO UInt32 := do
     sharedSecondSplit.arena.size == 1 &&
       sharedSecondSplit.after == { nextName := 5, nextLevel := 2, nextExpr := 1 }
 
-  -- Parse-time staging sees exact bytes while the input descriptor is still
+  -- Parse-time source capture sees exact bytes while the input descriptor is still
   -- open.  The source arena remains interleaved here; the three spools split
   -- it without retaining any raw line in the parsed Export.
   let rawMeta := "{\"meta\":\"raw-spool-test\"}\n"
@@ -226,7 +226,7 @@ def main (args : List String) : IO UInt32 := do
   let rawCanonical := rawMeta ++ lines firstSplit.arena ++ rawFirstDecl ++
     lines secondSplit.arena ++ rawSecondDecl
   IO.FS.writeFile rawCanonicalPath rawCanonical
-  let staged ← Spool.withWorkspace scratch fun workspace => do
+  let captured ← Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
     let parsed ← IO.FS.withFile rawCanonicalPath .read fun handle =>
       parseHandleWithSink handle tee.sink (analyse := false)
@@ -251,15 +251,15 @@ def main (args : List String) : IO UInt32 := do
     let declarations ← IO.FS.readFile tee.declarations.path
     return (parsed, decodedParity, metadata, arena, declarations,
       #[tee.metadata.path, tee.arena.path, tee.declarations.path])
-  let (stagedParse, stagedDecodedParity, stagedMetadata, stagedArena, stagedDeclarations,
-      stagedPaths) := staged
+  let (capturedParse, capturedDecodedParity, capturedMetadata, capturedArena, capturedDeclarations,
+      capturedPaths) := captured
   let expectedArena := lines (firstSplit.arena ++ secondSplit.arena)
   let expectedDeclarations := rawFirstDecl ++ rawSecondDecl
   state := state.check "canonical parse-time spool preserves exact split bytes" <|
-    stagedMetadata == rawMeta && stagedArena == expectedArena &&
-      stagedDeclarations == expectedDeclarations
+    capturedMetadata == rawMeta && capturedArena == expectedArena &&
+      capturedDeclarations == expectedDeclarations
   state := state.check "canonical parse-time spool records exact cursor and spans" <|
-    match stagedParse with
+    match capturedParse with
     | .ok (output, certificate) =>
       output.decls == #[first, second] && certificate.canonical &&
         certificate.cursor == { nextName := 7, nextLevel := 3, nextExpr := 2 } &&
@@ -272,13 +272,13 @@ def main (args : List String) : IO UInt32 := do
             bytes := rawSecondDecl.utf8ByteSize.toUInt64 }]
     | .error _ => false
   state := state.check "planned source reader decodes arbitrary and backward ordinals" <|
-    stagedDecodedParity
+    capturedDecodedParity
   let spoolSizes : RawSpoolSizes :=
-    { metadata := stagedMetadata.utf8ByteSize.toUInt64
-      arena := stagedArena.utf8ByteSize.toUInt64
-      declarations := stagedDeclarations.utf8ByteSize.toUInt64 }
+    { metadata := capturedMetadata.utf8ByteSize.toUInt64
+      arena := capturedArena.utf8ByteSize.toUInt64
+      declarations := capturedDeclarations.utf8ByteSize.toUInt64 }
   state := state.check "completed raw spool validates totals, spans and exact cursor" <|
-    match stagedParse with
+    match capturedParse with
     | .ok (_, certificate) =>
       match certificate.validate spoolSizes 2 with
       | .ok cursor => cursor == certificate.cursor && Writer.Cursor.ofRaw cursor ==
@@ -286,17 +286,17 @@ def main (args : List String) : IO UInt32 := do
       | .error _ => false
     | .error _ => false
   state := state.check "raw spool validation rejects declaration-count drift" <|
-    match stagedParse with
+    match capturedParse with
     | .ok (_, certificate) => isExceptError (certificate.validate spoolSizes 1)
     | .error _ => false
   state := state.check "raw spool validation rejects file-total drift" <|
-    match stagedParse with
+    match capturedParse with
     | .ok (_, certificate) =>
       isExceptError <| certificate.validate
         { spoolSizes with declarations := spoolSizes.declarations + 1 } 2
     | .error _ => false
   state := state.check "raw spool validation rejects span endpoint drift" <|
-    match stagedParse with
+    match capturedParse with
     | .ok (_, certificate) =>
       let malformedSpans := certificate.declarations.set! 1
         { certificate.declarations[1]! with offset := 0 }
@@ -304,20 +304,20 @@ def main (args : List String) : IO UInt32 := do
       isExceptError (malformedCertificate.validate spoolSizes 2)
     | .error _ => false
   state := state.check "monomorphization forces the ordinary writer" <|
-    match stagedParse with
+    match capturedParse with
     | .ok (_, certificate) =>
       Spool.rawFastPathEligible certificate spoolSizes 2 false &&
         !Spool.rawFastPathEligible certificate spoolSizes 2 true
     | .error _ => false
-  state := state.check "ordinary and staged streaming parses are identical" <|
-    match stagedParse, (← parseHandleAt rawCanonicalPath) with
-    | .ok (stagedExport, _), .ok ordinary =>
-      stagedExport.metaLine == ordinary.metaLine && stagedExport.decls == ordinary.decls &&
-        stagedExport.projNodes.isEmpty && ordinary.projNodes.isEmpty
+  state := state.check "ordinary and captured streaming parses are identical" <|
+    match capturedParse, (← parseHandleAt rawCanonicalPath) with
+    | .ok (capturedExport, _), .ok ordinary =>
+      capturedExport.metaLine == ordinary.metaLine && capturedExport.decls == ordinary.decls &&
+        capturedExport.projNodes.isEmpty && ordinary.projNodes.isEmpty
     | _, _ => false
   let discardedParse ← discardingCertificateAt rawCanonicalPath
   state := state.check "declaration-discarding parser shares the exact canonical parse" <|
-    match stagedParse, discardedParse with
+    match capturedParse, discardedParse with
     | .ok (retained, retainedCertificate), .ok (envelope, certificate, callbacks) =>
       envelope.metaLine == retained.metaLine && envelope.projNodes.isEmpty &&
         envelope.declarationCount == retained.decls.size &&
@@ -355,7 +355,7 @@ def main (args : List String) : IO UInt32 := do
         certificate == retainedCertificate
     | _, _ => false
   state := state.check "raw spool files are removed after success" <|
-    (← stagedPaths.allM fun path => return !(← path.pathExists))
+    (← capturedPaths.allM fun path => return !(← path.pathExists))
 
   -- Starting the second independent writer at the old cursor reuses arena
   -- IDs. The parser must reject that rather than silently binding the later
@@ -674,6 +674,6 @@ def main (args : List String) : IO UInt32 := do
       #[legacyOpaqueDecl]
 
   for path in paths do removeIfPresent path
-  IO.println s!"staged writer: {state.passed} passed, {state.failed.size} failed"
+  IO.println s!"source spool: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
