@@ -1181,6 +1181,7 @@ private def recursorAgreementAt (plan : FamilyAdapterPlan)
     (member : MemberPlan) (recursor : PublicRecursorCertificate)
     (publicRecursorPrefix : Array Expr)
     (expectedPublic expectedPrivate : Expr) : ConstructionM Expr := do
+  let reducedPublic ← liftGen <| whnf expectedPublic
   let reducedPrivate ← liftGen <| whnf expectedPrivate
   unless reducedPrivate.getAppFn.constName? == some member.implementationRecursor do
     failConstruction (.recursorResultMismatch recursor.member)
@@ -1239,7 +1240,7 @@ private def recursorAgreementAt (plan : FamilyAdapterPlan)
     | .error _ => failConstruction (.missingMemberMap member.key)
   let resultType ← liftGen <| inferType expectedPrivate
   unless ← liftGen <| isDefEq (← inferType privateToPublic)
-      (eqi.mk' (← ilevel resultType) resultType expectedPrivate expectedPublic) do
+      (eqi.mk' (← ilevel resultType) resultType expectedPrivate reducedPublic) do
     failConstruction (.recursorResultMismatch recursor.member)
   return privateToPublic
 
@@ -2591,18 +2592,26 @@ while constructing the single packed equality; later proof steps never project
 that equality back into dependent fields. -/
 private def packedIotaHypothesisAgreement (plan : FamilyAdapterPlan)
     (base : FamilyAdapterCertificate) (recursors : Array PublicRecursorCertificate)
-    (rule : RulePlan) (owner : MemberPlan) (constructor : ConstructorPlan)
+    (rule : RulePlan)
     (schema : PublicIotaProofSchema) (publicPrefix publicFields decodedFields : Array Expr)
-    (theoremRightArguments privateMotives privatePrefix : Array Expr)
-    (privateMinor privateMinorType : Expr) (privateFields privateArguments : Array Expr) :
+    (theoremRightArguments : Array Expr)
+    (privateMinorType : Expr) (privateFields privateArguments : Array Expr) :
     ConstructionM (Expr × Expr × Expr) := do
   forallBoundedTelescope privateMinorType (some (numForalls privateMinorType))
-      fun privateBinders privateResult => do
-    let some privateMinorFields := minorFieldValues? constructor privateBinders privateResult
-        (some constructor.implementationName)
-      | failConstruction (.missingPublicIotaInput rule.key)
-    let privateHypotheses ← liftGen <|
-      motiveHypothesisValues privateMotives privateMinorFields privateBinders
+      fun privateBinders _ => do
+    let mut privateMinorFields := #[]
+    for field in privateFields do
+      let positions := (Array.range privateArguments.size).filter fun position =>
+        privateArguments[position]! == field
+      let some position := positions[0]?
+        | failConstruction (.missingPublicIotaInput rule.key)
+      unless positions.size == 1 do
+        failConstruction (.missingPublicIotaInput rule.key)
+      let some binder := privateBinders[position]?
+        | failConstruction (.missingPublicIotaInput rule.key)
+      privateMinorFields := privateMinorFields.push binder
+    let privateHypotheses := privateBinders.filter fun binder =>
+      !privateMinorFields.contains binder
     unless privateHypotheses.size == schema.hypotheses.size &&
         privateArguments.size == privateBinders.size &&
         (Array.range privateHypotheses.size).all fun position =>
@@ -2797,9 +2806,9 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
             let decodedPackage := mkApp constructorBoundary.decode package
             let decodedFields ← liftGen <|
               unpackTelescopeValue publicMinorFields decodedPackage
-            packedIotaHypothesisAgreement plan base recursors rule owner constructor schema
-              publicPrefix publicFields decodedFields theoremRightArguments privateMotives
-              privatePrefix privateMinor privateMinorType privateFields privateArguments
+            packedIotaHypothesisAgreement plan base recursors rule schema
+              publicPrefix publicFields decodedFields theoremRightArguments
+              privateMinorType privateFields privateArguments
           let privateIH ← withLocalDeclD `package constructorBoundary.implementationFieldsType
               fun package => do
             let (actualPackage, _, _) ← packageData package
