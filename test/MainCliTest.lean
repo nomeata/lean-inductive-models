@@ -734,11 +734,16 @@ def main (args : List String) : IO UInt32 := do
     (some outputMetadataCorruption.render)
   let metadataFallbackDirect ← runInductiveModels binary metadataFallbackArgs
     (some outputMetadataCorruption.render)
-  state := state.check "direct metadata rejection preserves final batch diagnostic" <|
+  let metadataFallbackParity :=
     metadataFallbackDirect.exitCode == metadataFallbackLegacy.exitCode &&
       metadataFallbackDirect.stdout.isEmpty && metadataFallbackLegacy.stdout.isEmpty &&
       metadataFallbackDirect.stderr == metadataFallbackLegacy.stderr &&
       metadataFallbackDirect.stderr.contains "recursor numMinors differs"
+  unless metadataFallbackParity do
+    IO.eprintln s!"metadata fallback legacy stderr: {repr metadataFallbackLegacy.stderr}"
+    IO.eprintln s!"metadata fallback direct stderr: {repr metadataFallbackDirect.stderr}"
+  state := state.check "direct metadata rejection preserves final batch diagnostic"
+    metadataFallbackParity
   let directCwd : System.FilePath := s!"{scratch}/main-cli-direct-cwd"
   let externalDirectTmp : System.FilePath := s!"{scratch}/main-cli-external-direct-tmp"
   IO.FS.createDir directCwd
