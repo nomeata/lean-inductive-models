@@ -205,10 +205,12 @@ inductive GeneratedList (alpha : Type) : Type where
 axioms are test metadata: the construction prototype must still validate their
 exact types before it can use them in a kernel-checked declaration. -/
 inductive GeneratedChangedDirectPublic : Type where
-  | mk (child : GeneratedChangedDirectPublic) : GeneratedChangedDirectPublic
+  | mk (which : GeneratedKey) (payload : GeneratedPayload which)
+      (child : GeneratedChangedDirectPublic) : GeneratedChangedDirectPublic
 
 inductive GeneratedChangedDirectPrivate : Type where
-  | mk (child : GeneratedChangedDirectPrivate) : GeneratedChangedDirectPrivate
+  | mk (which : GeneratedKey) (payload : GeneratedPayload which)
+      (child : GeneratedChangedDirectPrivate) : GeneratedChangedDirectPrivate
 
 axiom generatedChangedDirectRoll :
   GeneratedChangedDirectPublic -> GeneratedChangedDirectPrivate
