@@ -706,7 +706,7 @@ def main (args : List String) : IO UInt32 := do
   let fullNamedText ← if ← System.FilePath.pathExists fullNamedPath then
       IO.FS.readFile fullNamedPath
     else pure ""
-  state := state.check "output-kernel opt-out named output streams without a gate" <|
+  state := state.check "generated-kernel opt-out named output streams without a gate" <|
     fullNamed.exitCode == defaults.exitCode && fullNamed.stdout.isEmpty &&
       hasDiagnostic fullNamed.stderr "output backend: declaration-stream" &&
       hasDiagnostic fullNamed.stderr "input route: planned-census" &&
@@ -717,7 +717,7 @@ def main (args : List String) : IO UInt32 := do
     !(← hasOutputSibling scratch)
 
   -- Parseable but noncanonical raw bytes retain the accepted semantic output
-  -- on the ordinary full-AST path.
+  -- on the ordinary retained-input streaming path.
   let noncanonicalInput := "\n" ++ nestedExport.render
   let noncanonicalDefault ← runInductiveModelsWithEnv binary
     ["--no-check", "--no-type-check-generated", "-"]
@@ -869,27 +869,26 @@ def main (args : List String) : IO UInt32 := do
     failedPlannedKernel.exitCode == 1 && failedPlannedKernel.stdout.isEmpty &&
       hasDiagnostic failedPlannedKernel.stderr "output backend: compact-discard" &&
       sameDirectoryEntries plannedFailureEntriesBefore plannedFailureEntriesAfter
-  -- Generated arena IDs may differ from the legacy global writer, so compare
-  -- parsed exports, exact declaration order, diagnostics, and exit status
-  -- rather than raw bytes.
+  -- Compare parsed exports, exact declaration order, diagnostics, and exit
+  -- status so this pins the semantic contract independently of byte layout.
   for (label, fixture) in #[
       ("nested multi-model island", nested),
       ("late source support", s!"{root}/test/fixtures/inductive-models/prim_late_basis.ndjson")] do
     let args := #["--no-check-output", "--no-type-check-generated", fixture]
     let legacy ← runInductiveModelsLegacy binary args.toList
     let full ← runInductiveModels binary args.toList
-    state := state.check s!"opt-out full {label} preserves report and exit" <|
+    state := state.check s!"opt-out stream {label} preserves report and exit" <|
       full.exitCode == legacy.exitCode && full.stderr == legacy.stderr
-    state := state.check s!"opt-out full {label} preserves semantic output and order" <|
+    state := state.check s!"opt-out stream {label} preserves semantic output and order" <|
       sameSemanticExport full.stdout legacy.stdout
   let checkedLegacy ← runInductiveModelsLegacy binary ["--no-type-check-generated", nested]
   let checkedFull ← runInductiveModels binary ["--no-type-check-generated", nested]
-  state := state.check "opt-out full output check preserves report and exit" <|
+  state := state.check "opt-out stream output check preserves report and exit" <|
     checkedFull.exitCode == checkedLegacy.exitCode && checkedFull.stderr == checkedLegacy.stderr
-  state := state.check "opt-out full output check preserves semantic output and order" <|
+  state := state.check "opt-out stream output check preserves semantic output and order" <|
     sameSemanticExport checkedFull.stdout checkedLegacy.stdout
-  -- Actual output stays on the full path even when compact syntax for a future
-  -- generated provider would be unavailable.
+  -- Actual output stays on the declaration stream even when a future generated
+  -- provider is unavailable at an earlier source transition.
   let futureModel := InductiveModels.Naming.modelName `Tree
   let stabilityMiss := { nestedExport with decls :=
     #[InductiveModels.EDecl.ax `CompactFallbackProbe [] (.const futureModel []) false] ++

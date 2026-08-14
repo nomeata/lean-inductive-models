@@ -1192,7 +1192,7 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
 /-- Finalize one atomic generated forest. Generated records stay in generator
 append order, and only fixed shared support is copied back into the persistent
 construction environment. The caller may separately submit the exact returned
-island to the generated-generated kernel gate. -/
+island to the generated kernel gate. -/
 def closeModelIsland (template : Export) (main : Environment)
     (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
     (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name)
@@ -1210,7 +1210,7 @@ def closeModelIsland (template : Export) (main : Environment)
   -- Round-trip equality alone cannot see an unregistered derived build name:
   -- both exactRecord and buildRecord would leave it unchanged.  The exhaustive
   -- record mapper must find no construction prefix after exactification, even
-  -- when output typechecking has been disabled by the caller.
+  -- when generated-declaration checking has been disabled by the caller.
   unless exactRecords.map sourceAliases.exactDerivedRecord == exactRecords do
     return .error "generated declaration retained an unregistered source replay alias"
   -- Generation appends every declaration in dependency order. The island is

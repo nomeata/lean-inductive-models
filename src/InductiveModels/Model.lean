@@ -2402,7 +2402,7 @@ The input's own is used when it declares a `funext` at Lean's statement. When
 it does not, this derives one from `Quot` (the kernel's quotient, four names)
 and `Quot.sound` (Lean's axiom, at Lean's statement). Only the declarations the
 input is missing are emitted; the completed exact island is kernel-checked iff
-the output gate is enabled.
+the generated-declaration gate is enabled.
 
 `T._model.funext` is namespaced and the quotient names are not, and that
 asymmetry is forced rather than chosen: standard-axiom recognition selects the

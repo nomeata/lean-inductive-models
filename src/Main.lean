@@ -184,7 +184,7 @@ private def writeStreamEvent (writer : StreamWriterRef)
     -- Atomically remove the writer from the ref before extending its persistent
     -- maps. A plain `get` would leave an RC sibling in the ref and force COW.
     let some current ← writer.modifyGet fun current => (current, none)
-      | throw <| IO.userError "declaration stream writer is already in use"
+      | throwError "declaration stream writer is already in use"
     writer.set (some (← current.writeDeclaration stream declaration))
 
 /-- Apply every post-generation verdict before deciding whether a named
