@@ -1329,7 +1329,8 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
     withLocalDecl publicName publicInfo publicDomain fun argument => do
       let pointwise ← recursorHypothesisAgreement plan recursors rule
         role? publicBinderIndex implementationBinderIndex
-        (mkApp expectedPublic argument) (mkApp expectedPrivate argument)
+        (mkApp expectedPublic argument).headBeta
+        (mkApp expectedPrivate argument).headBeta
       let functionProof ← liftGen <| mkLambdaFVars #[argument] pointwise
       liftGen <| mkAppM ``funext #[functionProof]
   | .forallE .., _ | _, .forallE .. =>
@@ -2973,8 +2974,23 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               failConstruction (.missingPublicIotaInput rule.key)
             unless ← liftGen <| isDefEq (← inferType implementationRight) resultType do
               failConstruction (.missingPublicIotaInput rule.key)
-            let iotaProof := eqi.refl' (← liftGen <| ilevel resultType) resultType
-              implementationLeft
+            let some implementationIotaInfo :=
+                (← getEnv).constants.find? schema.implementationIota
+              | failConstruction (.missingInstalledIota rule.key schema.implementationIota)
+            let iotaProof := mkAppN
+              (.const schema.implementationIota
+                (implementationIotaInfo.levelParams.map Level.param))
+              (privatePrefix ++ privateFields)
+            let some (_, installedLeft, installedRight) ←
+                liftGen <| matchEq? (← inferType iotaProof)
+              | failConstruction (.installedIotaTypeMismatch rule.key
+                  schema.implementationIota)
+            unless ← liftGen <| isDefEq installedLeft implementationLeft do
+              failConstruction (.installedIotaTypeMismatch rule.key
+                schema.implementationIota)
+            unless ← liftGen <| isDefEq installedRight implementationRight do
+              failConstruction (.installedIotaTypeMismatch rule.key
+                schema.implementationIota)
             let decodedPackage := mkApp constructorBoundary.decode package
             let decodedFields ← liftGen <|
               unpackTelescopeValue publicMinorFields decodedPackage
