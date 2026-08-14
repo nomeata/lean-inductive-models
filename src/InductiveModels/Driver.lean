@@ -3616,11 +3616,11 @@ def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : C
     runFilterCore x checkRecursors generation (.shadowSpool sink)
   return (decls, report, plan)
 
-/-- Phase-three direct compact kernel path. It is intentionally not selected by
-Main yet. Exact generated and source records are consumed only while their
-compact rows are live; the returned report, plan, and optional deferred verdict
-contain no declaration, environment, writer, sink, or spool payload. An
-unreplayable source terminates like the ordinary filter and returns `none`. -/
+/-- Direct compact kernel path used by generated no-output checking. Exact
+generated and source records are consumed only while their compact rows are
+live; the returned report, plan, and optional deferred verdict contain no
+declaration, environment, writer, sink, or spool payload. An unreplayable
+source terminates like the ordinary filter and returns `none`. -/
 def runFilterDirectChecking (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) :
     MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict) := do

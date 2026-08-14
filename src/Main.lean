@@ -144,23 +144,25 @@ def unsupportedDeclines (input : Export) (report : InductiveModels.Report) : Arr
     report.declined.filter fun entry =>
       InductiveModels.declineIsUnsupported alreadyCovered generated entry.1
 
-/-- Shared compact-generation boundary. Structural output checking consumes
-the compact report certified while each family was live. A worker doing kernel
-replay itself still needs the complete AST; the public generated no-output path
-instead gives this worker `typeCheckOutput = false`, serializes privately, and
-starts a fresh checker. Monomorphization rewrites source declarations. -/
+/-- Shared compact-generation boundary. Structural and direct kernel checking
+consume records while each family is live. Monomorphization still rewrites
+source declarations and therefore remains on the full-AST path. -/
 def compactModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  InductiveModels.generationEnabled config && !config.monoLevels &&
-    !config.typeCheckOutput
+  InductiveModels.generationEnabled config && !config.monoLevels
 
 /-- Physical staging is needed only when compact generation must emit bytes. -/
 def stagedModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  config.output && compactModeEligible config
+  config.output && !config.typeCheckOutput && compactModeEligible config
 
 /-- No-output compact generation retains the same value-only verdict
 certificates but deliberately has no workspace or physical spool. -/
 def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  !config.output && compactModeEligible config
+  !config.output && !config.typeCheckOutput && compactModeEligible config
+
+/-- The only production direct-kernel route. Output bytes, writers, spools,
+and fresh worker phases are all unnecessary when generated output is discarded. -/
+def directKernelModeEligible (config : InductiveModels.Cli.Config) : Bool :=
+  !config.output && config.typeCheckOutput && compactModeEligible config
 
 private structure RawStage where
   workspace : InductiveModels.Spool.Workspace
@@ -171,6 +173,8 @@ private structure RawStage where
 private inductive FilterOutput where
   | full (declarations : Array InductiveModels.EDecl)
   | discarded (plan : InductiveModels.CompactPlan)
+  | direct (plan : InductiveModels.CompactPlan)
+      (kernelVerdict : InductiveModels.CompactKernelCheckVerdict)
   | staged (raw : RawStage) (stage : InductiveModels.Spool.IslandStage)
       (plan : InductiveModels.StagedPlan)
 
@@ -181,6 +185,7 @@ private def reportOutputBackend (output : FilterOutput) : IO Unit := do
     IO.eprintln s!"output backend: {match output with
       | .full .. => "legacy"
       | .discarded .. => "compact-discard"
+      | .direct .. => "compact-direct"
       | .staged .. => "staged"}"
 
 private def mixedComposition (raw : RawStage) (sealed : InductiveModels.Spool.SealedIsland)
@@ -334,7 +339,32 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
 
   let (filterOutput, generationReport) ← if InductiveModels.generationEnabled config then do
       let generated : Except String (FilterOutput × InductiveModels.Report) ← try
-          if compactEnabled && discardModeEligible config then
+          if compactEnabled && directKernelModeEligible config then
+            let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
+            let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
+            let ((report, plan, kernelVerdict?), _) ← Lean.Core.CoreM.toIO
+              (Lean.Meta.MetaM.run'
+                (InductiveModels.runFilterDirectChecking generationInput false config))
+              context { env }
+            match kernelVerdict? with
+            | some kernelVerdict => match kernelVerdict.fallback?, kernelVerdict.result with
+              | none, .ok () =>
+                pure (Except.ok (FilterOutput.direct plan kernelVerdict, report))
+              | _, _ =>
+                InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
+                InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
+                let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
+                  (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
+                  context { env }
+                pure (Except.ok (FilterOutput.full decls, fallbackReport))
+            | none =>
+              InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
+              InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
+              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
+                (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
+                context { env }
+              pure (Except.ok (FilterOutput.full decls, fallbackReport))
+          else if compactEnabled && discardModeEligible config then
             let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
             let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
             let ((report, plan), _) ← Lean.Core.CoreM.toIO
@@ -401,6 +431,22 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
     if (unsupportedDeclines parsed generationReport).isEmpty then exitAccepted
     else exitDeclined
   match filterOutput with
+  | .direct plan kernelVerdict =>
+    if config.checkOutput then
+      unless plan.checkReport.violations.isEmpty do
+        reportViolations input "output" plan.checkReport.violations
+        return exitRejected
+      reportCheckSuccess config "output" plan.checkReport
+    -- Eligibility guarantees this flag, but keep the output-success diagnostic
+    -- at the historical precedence point: after generation/statement/structural
+    -- verdicts and immediately before the final accepted/declined exit.
+    if config.typeCheckOutput then
+      match kernelVerdict.result with
+      | .ok () => reportTypeCheckSuccess config "output"
+      | .error _ =>
+        IO.eprintln s!"{input}: internal error: compact direct rejection escaped fallback"
+        return exitToolError
+    return outcome
   | .discarded plan =>
     if config.checkOutput then
       unless plan.checkReport.violations.isEmpty do
@@ -733,9 +779,7 @@ private def supervisedMain (args : List String) : IO UInt32 := do
         return exitToolError
   else
     match InductiveModels.Cli.parseArgs args with
-    | .ok config =>
-      if ← freshKernelEligible config then runFreshKernelPipeline args
-      else InductiveModels.Supervisor.runWorkerWithEnv args clearedFreshEnvironment
+    | .ok _ => InductiveModels.Supervisor.runWorkerWithEnv args clearedFreshEnvironment
     | .error _ => InductiveModels.Supervisor.runWorkerWithEnv args clearedFreshEnvironment
 
 def main (args : List String) : IO UInt32 :=

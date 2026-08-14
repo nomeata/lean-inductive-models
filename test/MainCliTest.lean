@@ -58,53 +58,6 @@ def runInductiveModelsStdin (binary : String) (args : List String) (input : Stri
     IO IO.Process.Output :=
   runInductiveModels binary args (some input)
 
-private structure SignaledFreshOutput where
-  process : IO.Process.Output
-  injector : IO.Process.Output
-
-/-- Stop the real producer at a private-candidate write boundary. The test hook
-only holds that worker at a deterministic point; Python delivers the actual
-SIGTERM to the coordinator's live child. -/
-def runSignaledFreshOutput (binary cwd fixture point : String) : IO SignaledFreshOutput := do
-  let child ← IO.Process.spawn {
-    cmd := binary
-    args := #["--no-output", "--type-check-output", "--no-check", fixture]
-    cwd := some cwd
-    env := defaultInductiveModelsEnv ++ #[
-      ("LEAN_INDUCTIVE_MODELS_TEST_FRESH_SIGNAL_POINT", some point)]
-    stdin := .null
-    stdout := .piped
-    stderr := .piped }
-  let stdout ← IO.asTask child.stdout.readToEnd Task.Priority.dedicated
-  let stderr ← IO.asTask child.stderr.readToEnd Task.Priority.dedicated
-  let script :=
-    "import glob, os, signal, sys, time\n" ++
-    "parent = int(sys.argv[1])\n" ++
-    "scratch = sys.argv[2]\n" ++
-    "point = sys.argv[3]\n" ++
-    "children = f'/proc/{parent}/task/{parent}/children'\n" ++
-    "deadline = time.monotonic() + 20\n" ++
-    "while time.monotonic() < deadline:\n" ++
-    "    try: pids = open(children, encoding='ascii').read().split()\n" ++
-    "    except FileNotFoundError: pids = []\n" ++
-    "    paths = glob.glob(scratch + '/*/output-kernel-candidate.ndjson')\n" ++
-    "    ready = paths and (point == 'during-write' or os.path.getsize(paths[0]) > 0)\n" ++
-    "    if pids and ready:\n" ++
-    "        os.kill(int(pids[0]), signal.SIGTERM)\n" ++
-    "        sys.exit(0)\n" ++
-    "    time.sleep(0.01)\n" ++
-    "sys.exit(4)\n"
-  let injector ← IO.Process.output {
-    cmd := "python3"
-    args := #["-c", script, toString child.pid, s!"{cwd}/_tmp", point] }
-  let exitCode ← child.wait
-  return {
-    process := {
-      exitCode
-      stdout := ← IO.ofExcept stdout.get
-      stderr := ← IO.ofExcept stderr.get }
-    injector }
-
 def hasDiagnostic (stderr diagnostic : String) : Bool :=
   (stderr.splitOn "\n").contains diagnostic
 
@@ -510,7 +463,7 @@ def main (args : List String) : IO UInt32 := do
     declined.exitCode == 2 && (declined.stderr.splitOn "declined").length > 1
   let kernelCheckedDecline ← runInductiveModelsStdin binary
     ["--no-check", "--type-check-output", "--no-output", "-"] declinedText
-  state := state.check "fresh output kernel acceptance preserves generation exit 2" <|
+  state := state.check "direct output kernel acceptance preserves generation exit 2" <|
     kernelCheckedDecline.exitCode == 2 && kernelCheckedDecline.stdout.isEmpty &&
       (kernelCheckedDecline.stderr.splitOn "declined").length > 1 &&
       hasDiagnostic kernelCheckedDecline.stderr "output kernel check: accepted"
@@ -745,12 +698,12 @@ def main (args : List String) : IO UInt32 := do
   let noncanonicalKernelFresh ← runInductiveModels binary noncanonicalKernelArgs
     (some noncanonicalInput)
   let noncanonicalKernelAfter ← System.FilePath.readDir scratch
-  state := state.check "fresh kernel replay preserves noncanonical fallback report and exit" <|
+  state := state.check "direct kernel replay preserves noncanonical report and exit" <|
     noncanonicalKernelFresh.exitCode == noncanonicalKernelLegacy.exitCode &&
       noncanonicalKernelFresh.stdout.isEmpty && noncanonicalKernelLegacy.stdout.isEmpty &&
       noncanonicalKernelFresh.stderr == noncanonicalKernelLegacy.stderr &&
       hasDiagnostic noncanonicalKernelFresh.stderr "output kernel check: accepted"
-  state := state.check "noncanonical fresh kernel fallback cleans its private workspace" <|
+  state := state.check "noncanonical direct kernel opens no private workspace" <|
     sameDirectoryEntries noncanonicalKernelBefore noncanonicalKernelAfter
 
   let traceMode ← runInductiveModelsWithEnv binary
@@ -773,44 +726,60 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "output kernel checking selects legacy output" <|
     kernelOutputMode.exitCode == 0 &&
       hasDiagnostic kernelOutputMode.stderr "output backend: legacy"
-  let freshSuccessBefore ← System.FilePath.readDir scratch
+  let directSuccessBefore ← System.FilePath.readDir scratch
   let kernelDiscardMode ← runInductiveModelsWithEnv binary
     ["--no-output", "--no-check", "--type-check-output", nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "no-output kernel checking stages for a fresh worker" <|
+  state := state.check "no-output kernel checking selects compact direct" <|
     kernelDiscardMode.exitCode == 0 && kernelDiscardMode.stdout.isEmpty &&
-      hasDiagnostic kernelDiscardMode.stderr "output backend: staged"
-  let freshSuccessAfter ← System.FilePath.readDir scratch
-  state := state.check "successful fresh kernel replay cleans its private candidate workspace" <|
-    sameDirectoryEntries freshSuccessBefore freshSuccessAfter
+      hasDiagnostic kernelDiscardMode.stderr "output backend: compact-direct" &&
+      hasDiagnostic kernelDiscardMode.stderr "output kernel check: accepted"
+  let directSuccessAfter ← System.FilePath.readDir scratch
+  state := state.check "successful direct kernel replay opens no private workspace" <|
+    sameDirectoryEntries directSuccessBefore directSuccessAfter
+  let outputMetadataCorruption := mapRecursor nestedExport `N.rec fun recursor =>
+    { recursor with numMinors := recursor.numMinors + 1 }
+  let metadataFallbackArgs :=
+    ["--no-output", "--no-check", "--no-type-check-input", "--type-check-output", "-"]
+  let metadataFallbackLegacy ← runInductiveModelsLegacy binary metadataFallbackArgs
+    (some outputMetadataCorruption.render)
+  let metadataFallbackDirect ← runInductiveModels binary metadataFallbackArgs
+    (some outputMetadataCorruption.render)
+  state := state.check "direct metadata rejection preserves final batch diagnostic" <|
+    metadataFallbackDirect.exitCode == metadataFallbackLegacy.exitCode &&
+      metadataFallbackDirect.stdout.isEmpty && metadataFallbackLegacy.stdout.isEmpty &&
+      metadataFallbackDirect.stderr == metadataFallbackLegacy.stderr &&
+      metadataFallbackDirect.stderr.contains "recursor numMinors differs"
   let freshCwd : System.FilePath := s!"{scratch}/main-cli-fresh-cwd"
   let externalFreshTmp : System.FilePath := s!"{scratch}/main-cli-external-fresh-tmp"
   IO.FS.createDir freshCwd
   IO.FS.createDir externalFreshTmp
+  let freshCwdScratch := freshCwd / "_tmp"
+  IO.FS.writeFile freshCwdScratch "not a directory\n"
   let freshCwdRun ← runInductiveModelsAt binaryAbsolute.toString
     ["--no-output", "--type-check-output", "--no-check", nestedAbsolute.toString]
     freshCwd.toString #[
       ("TMPDIR", some externalFreshTmp.toString),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  let freshCwdScratch := freshCwd / "_tmp"
-  state := state.check "fresh kernel pipeline creates its root despite external TMPDIR" <|
+  state := state.check "compact direct ignores unusable roots and external TMPDIR" <|
     freshCwdRun.exitCode == 0 && freshCwdRun.stdout.isEmpty &&
-      hasDiagnostic freshCwdRun.stderr "output backend: staged" &&
-      (← freshCwdScratch.pathExists) && (← freshCwdScratch.readDir).isEmpty &&
+      hasDiagnostic freshCwdRun.stderr "output backend: compact-direct" &&
+      (← IO.FS.readFile freshCwdScratch) == "not a directory\n" &&
       (← externalFreshTmp.readDir).isEmpty
-  IO.FS.removeDir freshCwdScratch
+  IO.FS.removeFile freshCwdScratch
   IO.FS.removeDir freshCwd
   IO.FS.removeDir externalFreshTmp
 
   for point in ["during-write", "post-write"] do
     let before ← System.FilePath.readDir scratch
-    let signaled ← runSignaledFreshOutput binary root nested point
+    let directHook ← runInductiveModelsWithEnv binary
+      ["--no-output", "--type-check-output", "--no-check", nested] #[
+        ("LEAN_INDUCTIVE_MODELS_TEST_FRESH_SIGNAL_POINT", some point),
+        ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
     let after ← System.FilePath.readDir scratch
-    state := state.check s!"real producer signal at {point} is delivered" <|
-      signaled.injector.exitCode == 0 && signaled.injector.stderr.isEmpty
-    state := state.check s!"producer signal at {point} is contained and cleaned" <|
-      signaled.process.exitCode == 3 && signaled.process.stdout.isEmpty &&
-        signaled.process.stderr.contains "producer terminated with native status 143" &&
+    state := state.check s!"obsolete fresh write hook {point} is inert on compact direct" <|
+      directHook.exitCode == 0 && directHook.stdout.isEmpty &&
+        hasDiagnostic directHook.stderr "output backend: compact-direct" &&
         sameDirectoryEntries before after
 
   let checkerFailureBefore ← System.FilePath.readDir scratch
@@ -818,18 +787,20 @@ def main (args : List String) : IO UInt32 := do
     ["--no-output", "--type-check-output", "--no-check", nested] #[
       ("LEAN_INDUCTIVE_MODELS_TEST_FRESH_CHECKER_FAILURE", some "1")]
   let checkerFailureAfter ← System.FilePath.readDir scratch
-  state := state.check "fresh checker failure is contained and cleans the candidate" <|
-    checkerFailure.exitCode == 3 && checkerFailure.stdout.isEmpty &&
-      checkerFailure.stderr.contains "injected fresh output-kernel checker failure" &&
+  state := state.check "obsolete fresh checker failure hook is inert on compact direct" <|
+    checkerFailure.exitCode == 0 && checkerFailure.stdout.isEmpty &&
+      !checkerFailure.stderr.contains "injected fresh output-kernel checker failure" &&
       sameDirectoryEntries checkerFailureBefore checkerFailureAfter
-  let freshEntriesBefore ← System.FilePath.readDir scratch
-  let failedFreshKernel ← runInductiveModels binary
+  let directFailureEntriesBefore ← System.FilePath.readDir scratch
+  let failedDirectKernel ← runInductiveModelsWithEnv binary
     ["--no-output", "--no-check", "--type-check-output", "-"]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
     (some lateReplayCorruption.render)
-  let freshEntriesAfter ← System.FilePath.readDir scratch
-  state := state.check "failed fresh producer cleans its private candidate workspace" <|
-    failedFreshKernel.exitCode == 1 && failedFreshKernel.stdout.isEmpty &&
-      sameDirectoryEntries freshEntriesBefore freshEntriesAfter
+  let directFailureEntriesAfter ← System.FilePath.readDir scratch
+  state := state.check "unreplayable compact direct falls back without a workspace" <|
+    failedDirectKernel.exitCode == 1 && failedDirectKernel.stdout.isEmpty &&
+      hasDiagnostic failedDirectKernel.stderr "output backend: legacy" &&
+      sameDirectoryEntries directFailureEntriesBefore directFailureEntriesAfter
   let spoofedPhase ← runInductiveModelsWithEnv binary
     ["--no-inductives", "--no-check", "--no-type-check-output", "--no-output", nested] #[
       ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_PHASE", some "produce"),
@@ -897,11 +868,11 @@ def main (args : List String) : IO UInt32 := do
   let freshFallbackBefore ← System.FilePath.readDir scratch
   let freshFallback ← runInductiveModels binary freshFallbackArgs (some stabilityMiss.render)
   let freshFallbackAfter ← System.FilePath.readDir scratch
-  state := state.check "fresh kernel replay preserves compact-availability fallback" <|
+  state := state.check "direct kernel replay preserves compact-availability fallback" <|
     freshFallback.exitCode == freshFallbackLegacy.exitCode && freshFallback.stdout.isEmpty &&
       freshFallbackLegacy.stdout.isEmpty && freshFallback.stderr == freshFallbackLegacy.stderr &&
       hasDiagnostic freshFallback.stderr "output kernel check: accepted"
-  state := state.check "compact-availability fresh fallback cleans its private workspace" <|
+  state := state.check "compact-availability direct fallback opens no private workspace" <|
     sameDirectoryEntries freshFallbackBefore freshFallbackAfter
   let leakedGeneratedSpools ← System.FilePath.readDir scratch
   state := state.check "staged generated output removes its workspace" <|
