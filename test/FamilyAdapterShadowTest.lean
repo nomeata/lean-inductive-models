@@ -28,6 +28,26 @@ def runFixture (path : String) (collectShadow : Bool) :
   let messages ← state.messages.toArray.mapM (·.toString)
   return (result.1, result.2, messages)
 
+/-- An exact source block paired with an intentionally absent public/private
+interface.  The shadow must preserve the source keys in its reasons while
+excluding every result that depends on the unresolved carrier or recursor. -/
+def runMalformedInterface : IO FamilyAdapter.ShadowObservation := do
+  let env ← importModules #[`Init] {}
+  let context : Core.Context :=
+    { fileName := "<family-adapter-malformed-interface-test>", fileMap := default,
+      options := {}, maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (observation, _) ← Core.CoreM.toIO
+    (MetaM.run' do
+      let source ← indEDecl #[`Nat]
+      let .induct _ constructors _ := source | unreachable!
+      let constructorNames := constructors.toArray.map fun constructor =>
+        (constructor.name, constructor.name)
+      let malformed : Iso :=
+        { decls := #[], levelParams := [], members := #[`Nat], selfNames := #[],
+          numAll := 1, ctors := constructorNames, recs := #[], iotas := #[], spliced := #[] }
+      return (← FamilyAdapter.deriveShadowPlan source malformed).observe) context { env }
+  return observation
+
 def observationIsKeyed (observation : FamilyAdapter.ShadowObservation) : Bool :=
   !observation.root.isAnonymous &&
     observation.coverage.members.all (fun key => !key.owner.isAnonymous) &&
@@ -59,6 +79,18 @@ def multipleSitesShareExactHypothesis (shadows : Array FamilyAdapter.ShadowObser
     | some first =>
       occurrences.size >= 2 && occurrences.all (·.hypothesisIndex == first.hypothesisIndex)
 
+def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
+  let missingMember := fun side => observation.reasons.any fun
+    | .missingInterfaceMember member actual => member.owner == `Nat && actual == side
+    | _ => false
+  let missingRecursor := fun side => observation.reasons.any fun
+    | .missingInterfaceRecursor member actual => member.owner == `Nat && actual == side
+    | _ => false
+  missingMember .privateModel && missingMember .publicModel &&
+    missingRecursor .privateModel && missingRecursor .publicModel &&
+    observation.coverage.members.isEmpty && observation.coverage.recursors.isEmpty &&
+    observation.coverage.rules.isEmpty && observation.coverage.occurrences.isEmpty
+
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let nestedPath := "test/fixtures/inductive-models/nested_iota.ndjson"
@@ -67,6 +99,7 @@ def main : IO UInt32 := do
   let (observed, shadows, observedMessages) ← runFixture nestedPath true
   let (familyPlain, _, familyPlainMessages) ← runFixture familyPath false
   let (familyObserved, familyShadows, familyObservedMessages) ← runFixture familyPath true
+  let malformed ← runMalformedInterface
   let sameResult := plain == observed
     && familyPlain == familyObserved
   let outputQuiet := (plainMessages ++ observedMessages ++ familyPlainMessages ++
@@ -77,16 +110,19 @@ def main : IO UInt32 := do
   let everyOutcomeExplicit := (shadows ++ familyShadows).all hasOnlyExplicitGaps
   let nestedGapVisible := (shadows ++ familyShadows).any fun shadow => !shadow.complete
   let exactHypothesisSharing := multipleSitesShareExactHypothesis familyShadows
+  let malformedRejected := malformedDependenciesAreExcluded malformed
   if sameResult && outputQuiet && everyAcceptedFamilyRan && keyedReportVisible &&
-      everyOutcomeExplicit && nestedGapVisible && exactHypothesisSharing then
+      everyOutcomeExplicit && nestedGapVisible && exactHypothesisSharing && malformedRejected then
     IO.println s!"family adapter shadow: {shadows.size + familyShadows.size} accepted families, \
       exact gaps reported, output unchanged"
     return 0
   IO.eprintln s!"family adapter shadow failure: same={sameResult}, quiet={outputQuiet}, \
     shadows={shadows.size + familyShadows.size}, keyed={keyedReportVisible}, \
-    explicit={everyOutcomeExplicit}, gaps={nestedGapVisible}, hypotheses={exactHypothesisSharing}"
+    explicit={everyOutcomeExplicit}, gaps={nestedGapVisible}, hypotheses={exactHypothesisSharing}, \
+    malformed={malformedRejected}"
   for message in plainMessages ++ observedMessages ++ familyPlainMessages ++ familyObservedMessages do
     IO.eprintln message
   for shadow in shadows ++ familyShadows do
     unless shadow.complete do IO.eprintln s!"{shadow.root}: {repr shadow.reasons}"
+  unless malformedRejected do IO.eprintln s!"malformed Nat: {repr malformed}"
   return 1

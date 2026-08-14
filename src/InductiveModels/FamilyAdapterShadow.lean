@@ -26,6 +26,7 @@ inductive ShadowReason where
   | missingSourceRecursor (member : MemberKey) (recursor : Name)
   | unrepresentedSourceRecursor (recursor : Name)
   | missingInterfaceMember (member : MemberKey) (side : InterfaceSide)
+  | missingInterfaceRecursor (member : MemberKey) (side : InterfaceSide)
   | missingInterfaceConstructor (constructor : ConstructorKey) (side : InterfaceSide)
   | missingInterfaceRule (rule : RuleKey) (side : InterfaceSide)
   | missingInstalledDeclaration (name : Name) (side : InterfaceSide)
@@ -325,8 +326,12 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     if implementationCarrier.isAnonymous then
       reasons := reasons.push (.missingInterfaceMember key .privateModel)
     let publicRecursor := (interfaceMemberName? publicInterface.recs index).getD .anonymous
+    if publicRecursor.isAnonymous then
+      reasons := reasons.push (.missingInterfaceRecursor key .publicModel)
     let implementationRecursor := (familyMember.map (·.privateRecursor)).orElse
       (fun _ => interfaceMemberName? implementationInterface.recs index) |>.getD .anonymous
+    if implementationRecursor.isAnonymous then
+      reasons := reasons.push (.missingInterfaceRecursor key .privateModel)
     let representation := match familyMember with
       | some member => if member.changed then .layer else .identity
       | none => if implementationCarrier == publicCarrier then .identity else .layer
@@ -411,6 +416,11 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             expressionPath := site.path, binderDepth := site.binderDepth,
             hypothesisIndex := hypothesisIndex?.getD 0, target := site.target }
         if hypothesisIndex?.isNone then uncoveredOccurrences := uncoveredOccurrences.push key
+        if let some target := resolvedMembers.find? (·.key == site.target) then
+          if target.implementationCarrier.isAnonymous || target.publicCarrier.isAnonymous then
+            uncoveredOccurrences := uncoveredOccurrences.push key
+        else
+          uncoveredOccurrences := uncoveredOccurrences.push key
         keys := keys.push key
         occurrencePlans := occurrencePlans.push
           { key, sourceType := site.type,
@@ -503,7 +513,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   for error in plan.validate do reasons := reasons.push (.invalidPlan error)
 
   let env ← getEnv
-  let mut coverage : ShadowCoverage := { recursors := representedRecursors }
+  let mut coverage : ShadowCoverage := {}
   for member in resolvedMembers do
     let implementationExpected := rewriteWith implementationMapping member.source.type
     let publicExpected := rewriteWith publicMapping member.source.type
@@ -517,6 +527,22 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       (.installedTypeMismatch member.publicCarrier .publicModel) reasons
     reasons := next
     if implementationOk && publicOk then coverage := { coverage with members := coverage.members.push member.key }
+    if let some recursor := member.sourceRecursor? then
+      let implementationRecursorExpected := rewriteWith implementationMapping recursor.type
+      let publicRecursorExpected := rewriteWith publicMapping recursor.type
+      let (next, implementationRecursorOk) := addInstalledCoverage env
+        member.implementationRecursor implementationRecursorExpected
+        (.missingInstalledDeclaration member.implementationRecursor .privateModel)
+        (.installedTypeMismatch member.implementationRecursor .privateModel) reasons
+      reasons := next
+      let (next, publicRecursorOk) := addInstalledCoverage env member.publicRecursor
+        publicRecursorExpected
+        (.missingInstalledDeclaration member.publicRecursor .publicModel)
+        (.installedTypeMismatch member.publicRecursor .publicModel) reasons
+      reasons := next
+      if implementationRecursorOk && publicRecursorOk &&
+          coverage.members.contains member.key then
+        coverage := { coverage with recursors := coverage.recursors.push recursor.name }
   for constructor in constructorPlans do
     let (next, implementationOk) := addInstalledCoverage env constructor.implementationName
       constructor.implementationType
@@ -548,10 +574,23 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       | _, _ => false
     if implementationType?.isSome && publicType?.isSome && !typesAgree then
       reasons := reasons.push (.installedTypeMismatch rule.implementationIota .privateModel)
-    if typesAgree && !uncoveredRules.contains rule.key then
+    if typesAgree && !uncoveredRules.contains rule.key &&
+        coverage.recursors.contains rule.key.recursor &&
+        coverage.members.contains rule.key.recursorOwner &&
+        coverage.members.contains rule.key.constructor.owner &&
+        coverage.constructors.contains rule.key.constructor then
       coverage := { coverage with rules := coverage.rules.push rule.key }
-  coverage := { coverage with occurrences := occurrencePlans.filterMap fun occurrence =>
-    if uncoveredOccurrences.contains occurrence.key then none else some occurrence.key }
+  let coveredOccurrences := occurrencePlans.filterMap fun occurrence =>
+    let rules := rulePlans.filter (·.key.constructor == occurrence.key.constructor)
+    if uncoveredOccurrences.contains occurrence.key ||
+        !coverage.members.contains occurrence.key.constructor.owner ||
+        !coverage.members.contains occurrence.key.target ||
+        !coverage.constructors.contains occurrence.key.constructor || rules.isEmpty ||
+        !(rules.all fun rule => coverage.rules.contains rule.key) then
+      none
+    else
+      some occurrence.key
+  coverage := { coverage with occurrences := coveredOccurrences }
   return { root := firstType.name, plan? := some plan, coverage, reasons }
 
 end InductiveModels.FamilyAdapter
