@@ -261,10 +261,18 @@ def Table.collisionCensus (table : Table) (occupied : Array Name) : CollisionCen
 
 /-- Census exact public-name collisions directly against a reserved-name set.
 
-This is the model-generation path: its cost is proportional to the small
-declaration-local requirement table, not to the file-wide set. -/
+This is the model-generation path: unlike array materialization, its cost does
+not depend linearly on the file-wide set size. -/
 def Table.collisionCensusReserved (table : Table) (reserved : Std.HashSet Name) :
     CollisionCensus :=
   table.collisionCensusWhere reserved.contains
+
+/-- Census against a file-wide reserved set and a small independent helper set.
+
+Keeping the sets separate matters: extending a retained file-wide `HashSet`
+can copy its complete bucket array even when only a few helpers are added. -/
+def Table.collisionCensusReservedWith (table : Table) (reserved helpers : Std.HashSet Name) :
+    CollisionCensus :=
+  table.collisionCensusWhere fun name => reserved.contains name || helpers.contains name
 
 end InductiveModels.Naming
