@@ -1781,8 +1781,8 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
             (the splice-closure rule) — {inner.getD "and the descent recorded no reason"}"
           return ((st.1, { st.2.1 with declined := st.2.1.declined.push (tname, why) },
             st.2.2.1, st.2.2.2), none)
-    let (childRecords, rep, pending, adapterShadows) := st2
-    return ((childRecords ++ records, rep, pending, adapterShadows), none)
+    let (childRecords, finalReport, finalPending, finalShadows) := st2
+    return ((childRecords ++ records, finalReport, finalPending, finalShadows), none)
 
 /-- **The composition's third step**: the implementation inductives a mutual
 model just emitted — `T._model._impl.tag` and `T._model._impl.aux` — are
@@ -1887,8 +1887,8 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
           exactTransform collectAdapterShadows
       else
         pure st
-    let (childRecords, rep, pending, adapterShadows) := st
-    return (childRecords ++ records, rep, pending, adapterShadows)
+    let (childRecords, finalReport, finalPending, finalShadows) := st
+    return (childRecords ++ records, finalReport, finalPending, finalShadows)
 
 /-- Generation settings used by the aggregate fixture suite: nested and mutual
 models remain enabled, while simple models and their bootstrap closure move
