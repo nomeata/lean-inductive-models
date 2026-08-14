@@ -129,7 +129,8 @@ class FixtureMatrix:
         sections: list[str] = []
         exported = [
             "GeneratedIndex", "GeneratedKey", "GeneratedPayload", "GeneratedList",
-            "GeneratedPair", "GeneratedShared", "GeneratedMixed", "GeneratedUniverse",
+            "GeneratedPair", "GeneratedShared", "GeneratedMixed",
+            "GeneratedRepeatedSpecialisation", "GeneratedUniverse",
             "GeneratedChangedDirectPublic", "GeneratedChangedDirectPrivate",
             "generatedChangedDirectRoll", "generatedChangedDirectUnroll",
             "generatedChangedDirectUnrollRoll", "generatedChangedDirectRollUnroll",
@@ -218,6 +219,13 @@ inductive GeneratedShared : Type where
 inductive GeneratedMixed : Type where
   | mk (direct : GeneratedMixed)
       (children : GeneratedPair GeneratedMixed GeneratedMixed) : GeneratedMixed
+
+/- The two nested fields induce distinct installed minor specialisations while
+reusing the same `GeneratedList.nil`/`cons` constructor names. -/
+inductive GeneratedRepeatedSpecialisation : Type where
+  | mk (direct : GeneratedList GeneratedRepeatedSpecialisation)
+      (nested : GeneratedList (GeneratedList GeneratedRepeatedSpecialisation)) :
+      GeneratedRepeatedSpecialisation
 
 universe u
 

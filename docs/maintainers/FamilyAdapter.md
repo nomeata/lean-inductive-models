@@ -151,7 +151,10 @@ container equivalence. The
 shadow regression also requires maps exposed by real nested-model generation.
 Rule construction additionally checks generated multi-member and
 multi-constructor matrices, shared nested IH slots, and one rule interleaving
-direct and nested occurrences. A universe-polymorphic recursive family pins
+direct and nested occurrences. A repeated-specialisation fixture requires two
+different recursor-minor positions using the same mimic constructor names to
+use their own exact, position-keyed adapters. A universe-polymorphic recursive
+family pins
 the generated theorem's nonempty level-parameter list; a malformed late rule
 must roll back the whole prototype rather than retain the preceding checked
 declarations.

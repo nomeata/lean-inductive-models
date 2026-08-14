@@ -1457,35 +1457,58 @@ private def specialisedMinorConstructorDeclaration (plan : FamilyAdapterPlan)
         { recursor := member.key, minorIndex, publicConstructor, implementationConstructor,
           adapter := name, exactType, fieldArity := publicFields.size })
 
-private partial def familyParametersIn (owner : MemberPlan) (expression : Expr) :
-    Option (Array Expr) :=
-  if expression.getAppFn.constName? == some owner.publicCarrier &&
-      expression.getAppArgs.size == owner.parameterArity + owner.indexArity then
-    some (expression.getAppArgs.extract 0 owner.parameterArity)
-  else match expression with
-    | .app function argument =>
-      familyParametersIn owner function <|> familyParametersIn owner argument
-    | .lam _ type body _ | .forallE _ type body _ =>
-      familyParametersIn owner type <|> familyParametersIn owner body
-    | .letE _ type value body _ =>
-      familyParametersIn owner type <|> familyParametersIn owner value <|>
-        familyParametersIn owner body
-    | .mdata _ body => familyParametersIn owner body
-    | .proj _ _ value => familyParametersIn owner value
-    | _ => none
+private def rewriteSpecialisedMinorType (plan : FamilyAdapterPlan)
+    (member : MemberPlan) (parameters : Array Expr)
+    (certificate : PublicMinorConstructorCertificate) (minorType : Expr) : ConstructionM Expr := do
+  forallBoundedTelescope minorType (some (numForalls minorType)) fun binders result => do
+    let some major := result.getAppArgs.back?
+      | failConstruction (.malformedRecursorMinor member.key certificate.minorIndex)
+    unless major.getAppFn.constName? == some certificate.publicConstructor do
+      failConstruction (.malformedRecursorMinor member.key certificate.minorIndex)
+    let fields := major.getAppArgs.filter binders.contains
+    unless fields.size == certificate.fieldArity do
+      failConstruction (.malformedRecursorMinor member.key certificate.minorIndex)
+    let replacement := mkAppN
+      (.const certificate.adapter (plan.levelParams.map Level.param)) (parameters ++ fields)
+    unless ← isDefEq (← inferType replacement) (← inferType major) do
+      failConstruction (.malformedRecursorMinor member.key certificate.minorIndex)
+    let arguments := result.getAppArgs
+    let rewrittenResult := mkAppN result.getAppFn
+      (arguments.extract 0 (arguments.size - 1) |>.push replacement)
+    mkForallFVars binders rewrittenResult
 
-private def rewriteMinorConstructors (owner : MemberPlan)
-    (minorConstructors : Array PublicMinorConstructorCertificate) (expression : Expr) : Expr :=
-  expression.replace fun subexpression => do
-    let .const name levels := subexpression.getAppFn | none
-    let certificate ← minorConstructors.find? (·.publicConstructor == name)
-    let arguments := subexpression.getAppArgs
-    unless arguments.size >= certificate.fieldArity do none
-    let fields := arguments.extract (arguments.size - certificate.fieldArity) arguments.size
-    let parameters ← if owner.parameterArity == 0 then some #[]
-      else familyParametersIn owner subexpression
-    return mkAppN (.const certificate.adapter levels)
-      (parameters ++ fields)
+/-- Rewrite each specialised constructor only in its exact recursor-minor binder.
+The recursor parameters are opened once and threaded directly; no constructor
+name search or carrier-occurrence search chooses between minor positions. -/
+private def rewriteMinorConstructors (plan : FamilyAdapterPlan) (member : MemberPlan)
+    (minorConstructors : Array PublicMinorConstructorCertificate)
+    (expression : Expr) : ConstructionM Expr := do
+  let prefixSize := member.parameterArity + member.recursorMotiveArity +
+    member.recursorMinorArity
+  forallBoundedTelescope expression (some prefixSize) fun recursorPrefix tail => do
+    let minorStart := member.parameterArity + member.recursorMotiveArity
+    let outer := recursorPrefix.extract 0 minorStart
+    let parameters := recursorPrefix.extract 0 member.parameterArity
+    let originalMinors := recursorPrefix.extract minorStart prefixSize
+    let rec rebuild (minorIndex : Nat) (rewrittenMinors : Array Expr) : ConstructionM Expr := do
+      if h : minorIndex < originalMinors.size then
+        let originalMinor := originalMinors[minorIndex]
+        let originalType ← inferType originalMinor
+        let currentType := originalType.replaceFVars
+          (originalMinors.extract 0 minorIndex) rewrittenMinors
+        let rewrittenType ← match minorConstructors.find? (·.minorIndex == minorIndex) with
+          | some certificate =>
+            rewriteSpecialisedMinorType plan member parameters certificate currentType
+          | none => pure currentType
+        let declaration ← getFVarLocalDecl originalMinor
+        withLocalDecl declaration.userName declaration.binderInfo rewrittenType fun rewrittenMinor =>
+          rebuild (minorIndex + 1) (rewrittenMinors.push rewrittenMinor)
+      else
+        let originalPrefix := outer ++ originalMinors
+        let rewrittenPrefix := outer ++ rewrittenMinors
+        let rewrittenTail := tail.replaceFVars originalPrefix rewrittenPrefix
+        mkForallFVars rewrittenPrefix rewrittenTail
+    rebuild 0 #[]
 
 private def buildMinorConstructorAdapters (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
@@ -1663,7 +1686,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
     !plan.constructors.any fun constructor =>
       constructor.publicName == certificate.publicConstructor &&
         constructor.implementationName == certificate.implementationConstructor
-  let publicType := rewriteMinorConstructors member specialisedMinors sourceMappedType
+  let publicType ← rewriteMinorConstructors plan member specialisedMinors sourceMappedType
   let motiveCertificates ← match recursorMotiveCertificates member publicSourceType privateType with
     | .ok certificates => pure certificates
     | .error issue => failConstruction issue

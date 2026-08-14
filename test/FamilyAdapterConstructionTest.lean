@@ -213,6 +213,7 @@ def completeSamples : Array (Array Name) :=
 def nestedSamples : Array Name :=
   #[`FamilyAdapterGenerated.GeneratedShared,
     `FamilyAdapterGenerated.GeneratedMixed,
+    `FamilyAdapterGenerated.GeneratedRepeatedSpecialisation,
     `FamilyAdapterGenerated.GeneratedNested1,
     `FamilyAdapterGenerated.GeneratedNested2,
     `FamilyAdapterGenerated.GeneratedNested3,
@@ -283,6 +284,22 @@ def publicConstructorsComplete (plan : FamilyAdapterPlan)
             adapter.telescope.constructor == constructor.key &&
             (environment.constants.find? adapter.adapter).any (·.type == constructor.publicType)
 
+partial def forallBinderTypes : Expr → Array Expr
+  | .forallE _ domain body _ => #[domain] ++ forallBinderTypes body
+  | _ => #[]
+
+partial def minorResultMajorName? : Expr → Option Name
+  | .forallE _ _ body _ => minorResultMajorName? body
+  | result => result.getAppArgs.back? >>= (·.getAppFn.constName?)
+
+def recursorUsesRecordedMinorAdapters (member : MemberPlan)
+    (adapter : PublicRecursorCertificate) : Bool :=
+  let binderTypes := forallBinderTypes adapter.exactType
+  let minorStart := member.parameterArity + member.recursorMotiveArity
+  adapter.minors.all fun minor =>
+    (binderTypes[minorStart + minor.minorIndex]?).any fun binderType =>
+      minorResultMajorName? binderType == some minor.adapter
+
 def publicRecursorsComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
   let constructorsBuilt ← (FamilyAdapter.buildPublicConstructorPrototypes plan certificate.members
@@ -304,9 +321,26 @@ def publicRecursorsComplete (plan : FamilyAdapterPlan)
             (adapter.minors.all fun minor =>
               minor.recursor == member.key &&
                 (environment.constants.find? minor.adapter).any (·.type == minor.exactType)) &&
+            recursorUsesRecordedMinorAdapters member adapter &&
             adapter.rules == member.sourceRules &&
             (environment.constants.find? adapter.adapter).any (·.type == adapter.exactType)
     return valid
+
+def repeatedSpecialisedMinorsComplete (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
+  let constructorsBuilt ← (FamilyAdapter.buildPublicConstructorPrototypes plan certificate.members
+    certificate.telescopes (Name.str root "constructors")).run
+  let .ok (.ok (_, constructors)) := constructorsBuilt | return false
+  let recursorsBuilt ← (FamilyAdapter.buildPublicRecursorPrototypes plan certificate.members
+    certificate.telescopes constructors root).run
+  let .ok (.ok (_, recursors)) := recursorsBuilt | return false
+  return recursors.any fun recursor => recursor.minors.any fun first =>
+    recursor.minors.any fun second =>
+      first.minorIndex != second.minorIndex &&
+        first.publicConstructor == second.publicConstructor &&
+        first.exactType != second.exactType && first.adapter != second.adapter &&
+        (plan.members.find? (·.key == recursor.member)).any fun member =>
+          recursorUsesRecordedMinorAdapters member recursor
 
 structure Result where
   complete : Nat := 0
@@ -329,6 +363,7 @@ structure Result where
   wrongTargetMaps : Nat := 0
   sharedHypothesis : Nat := 0
   directNestedRule : Nat := 0
+  repeatedSpecialisations : Nat := 0
   universeLevels : Nat := 0
   failures : Array String := #[]
 
@@ -410,6 +445,15 @@ def runSamples : MetaM Result := do
         | _, _ => pure false
       if recursorsComplete then
         result := { result with nestedPublicRecursors := result.nestedPublicRecursors + 1 }
+      if owner == `FamilyAdapterGenerated.GeneratedRepeatedSpecialisation then
+        let repeated ← match report.plan?, built.certificate with
+          | some plan, some certificate =>
+            repeatedSpecialisedMinorsComplete plan certificate
+              `_family_adapter_repeated_specialisation_test
+          | _, _ => pure false
+        if repeated then
+          result := { result with
+            repeatedSpecialisations := result.repeatedSpecialisations + 1 }
       if built.certificate.isSome && built.issues.isEmpty && rulesComplete then
         result := { result with identityNested := result.identityNested + 1 }
         if owner == `FamilyAdapterGenerated.GeneratedShared then
@@ -686,6 +730,7 @@ def runMain : IO UInt32 := do
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
       result.invalidIotas == 1 && result.lateInvalidIotas == 1 && result.wrongTargetMaps == 1 &&
       result.sharedHypothesis == 1 && result.directNestedRule == 1 &&
+      result.repeatedSpecialisations == 1 &&
       result.universeLevels == 1 &&
       result.installedFamily == 1 && result.installedPublicConstructors == 1 &&
       result.installedPublicRecursors == 1 &&
@@ -713,7 +758,9 @@ def runMain : IO UInt32 := do
     lateInvalidIotas={result.lateInvalidIotas}, \
     invalidContainerMaps={result.invalidContainerMaps}, \
     wrongTargetMaps={result.wrongTargetMaps}, sharedHypothesis={result.sharedHypothesis}, \
-    directNestedRule={result.directNestedRule}, universeLevels={result.universeLevels}"
+    directNestedRule={result.directNestedRule}, \
+    repeatedSpecialisations={result.repeatedSpecialisations}, \
+    universeLevels={result.universeLevels}"
   return 1
 
 end FamilyAdapterConstructionTest
