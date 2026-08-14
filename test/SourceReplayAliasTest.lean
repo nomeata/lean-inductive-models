@@ -16,14 +16,18 @@ def privateName (module discriminator leaf : String) : Name :=
 def noGeneration : InductiveModels.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
 
-def runExport (input : Export) : IO (Array EDecl × Report) := do
+def runExportWith (input : Export) (generation : InductiveModels.Cli.Config) :
+    IO (Array EDecl × Report) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<source-replay-alias-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let (result, _) ← Lean.Core.CoreM.toIO
-    (Lean.Meta.MetaM.run' (runFilter input false noGeneration)) context { env }
+    (Lean.Meta.MetaM.run' (runFilter input false generation)) context { env }
   return result
+
+def runExport (input : Export) : IO (Array EDecl × Report) :=
+  runExportWith input noGeneration
 
 def replayNamesVisible (input : Export) (names : Array Name) : IO (Array Bool) := do
   let env ← importModules #[] {}
@@ -63,6 +67,48 @@ def emptyInductiveType (name : Name) : EIndType :=
   { name, levelParams := [], type := .sort (.succ .zero), all := [name], ctors := []
     numParams := 0, numIndices := 0, numNested := 0, isRec := false
     isReflexive := false, isUnsafe := false }
+
+def wrappedBox (wrapper : Name) : EDecl :=
+  let owner := `AliasWrappedBox
+  let ctor := `AliasWrappedBox.mk
+  let type : EIndType :=
+    { name := owner, levelParams := [], type := .sort (.succ .zero), all := [owner]
+      ctors := [ctor], numParams := 0, numIndices := 0, numNested := 0
+      isRec := false, isReflexive := false, isUnsafe := false }
+  let constructor : ECtor :=
+    { name := ctor, levelParams := []
+      type := .forallE `value (.const wrapper []) (.const owner []) .default
+      cidx := 0, numParams := 0, numFields := 1, induct := owner, isUnsafe := false }
+  .induct [type] [constructor] []
+
+def completeWrappedBox (wrapper dependency : Name) : IO EDecl := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<source-replay-alias-owner-builder>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (record, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+    let wrapperDecl : EDecl := .defn wrapper [] (.sort (.succ .zero))
+      (.const dependency []) (.regular 0) "safe" [wrapper]
+    let mut replayEnv ← getEnv
+    for source in #[typeAxiom dependency, wrapperDecl] do
+      let some declaration := toDeclaration replayEnv source
+        | throwError "cannot reconstruct wrapped-box prerequisite"
+      replayEnv ← match replayEnv.addDeclCore 0 declaration none true with
+        | .ok next => pure next
+        | .error exception =>
+          throwError "wrapped-box prerequisite failed: {← (exception.toMessageData {}).toString}"
+    let some declaration := toDeclaration replayEnv (wrappedBox wrapper)
+      | throwError "cannot reconstruct wrapped-box owner"
+    replayEnv ← match replayEnv.addDeclCore 0 declaration none true with
+      | .ok next => pure next
+      | .error exception =>
+        throwError "wrapped-box owner failed: {← (exception.toMessageData {}).toString}"
+    setEnv replayEnv
+    let records ← toEDecls declaration
+    let some record := records.find? (fun record => record matches .induct ..)
+      | throwError "wrapped-box owner did not serialize as an inductive record"
+    return record)) context { env }
+  return record
 
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
@@ -121,6 +167,36 @@ def main : IO UInt32 := do
       | _ => false)
   state := state.check "every generated-record source alias inverts exactly"
     (publicAliases.exactRecord replayGenerated == generated)
+
+  -- The moved constant is hidden behind an unchanged transparent definition.
+  -- This exercises the construction normalizer's replacement view, not just
+  -- the direct expression rewrite above.
+  let wrapper := `AliasWrapper
+  let wrapperDecl : EDecl := .defn wrapper [] (.sort (.succ .zero))
+    (.const privateA []) (.regular 0) "safe" [wrapper]
+  let box ← completeWrappedBox wrapper privateA
+  let generationInput : Export :=
+    { metaLine := .null
+      decls := #[typeAxiom privateA, typeAxiom `X, wrapperDecl, box] }
+  let .ok generationAliases := aliasesOf generationInput
+    | throw <| IO.userError "cannot plan transparent-wrapper source aliases"
+  let some generationBuild := generationAliases.build? privateA
+    | throw <| IO.userError "transparent-wrapper private name has no replay alias"
+  let baseIndex := Check.SyntaxIndex.ofSource generationInput
+  let replayWrapper := generationAliases.buildRecord wrapperDecl
+  let .ok replayIndex := baseIndex.withReplayRecords #[wrapperDecl] #[replayWrapper]
+    | throw <| IO.userError "cannot construct replay syntax replacement"
+  state := state.check "transparent normalization unfolds to the replay identity"
+    (replayIndex.exactNormalizer.whnf (.const wrapper []) == .const generationBuild [])
+  let (generationOutput, generationReport) ← runExportWith generationInput
+    { noGeneration with simple := true }
+  let leakedBuildName := generationOutput.any fun declaration =>
+    declaration.names.contains generationBuild ||
+      (Order.references declaration).contains generationBuild
+  state := state.check "enabled generation through an aliased wrapper succeeds exactly"
+    (generationReport.generated.any (·.1 == `AliasWrappedBox) &&
+      generationReport.unreplayable.isNone && generationReport.stmtErrors.isEmpty &&
+      !leakedBuildName)
 
   let atomicInput : Export :=
     { metaLine := .null

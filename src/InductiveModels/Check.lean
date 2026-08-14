@@ -1484,6 +1484,46 @@ than rebuilding a second whole-export map. -/
 def SyntaxIndex.exactNormalizer (index : SyntaxIndex) : ExactNormalizationEnv :=
   index.normalizer
 
+/-- Replace the declaration-facing portion of a syntax index with an explicit
+collision-free replay view while retaining exact source occurrence/family
+certificates.
+
+Only records which mention a moved source name need appear in `exactRecords` /
+`replayRecords`.  The two arrays are positional pairs.  Updating persistent
+hash maps here avoids rebuilding a second whole-source index for the rare
+flattened-export normalized-name collision. -/
+def SyntaxIndex.withReplayRecords (source : SyntaxIndex)
+    (exactRecords replayRecords : Array EDecl) : Except String SyntaxIndex := do
+  unless exactRecords.size == replayRecords.size do
+    throw "replay syntax replacement arrays have different sizes"
+  let mut declarations := source.declarations
+  let mut constructors := source.constructors
+  let mut structures := source.structures
+  let mut definitions := source.normalizer.definitions
+  let mut names := source.names
+  for ordinal in [:exactRecords.size] do
+    let exact := exactRecords[ordinal]!
+    let replay := replayRecords[ordinal]!
+    unless exact.names.length == replay.names.length do
+      throw s!"replay syntax replacement {ordinal} changed declaration arity"
+    for name in exact.names do
+      declarations := declarations.erase name
+      definitions := definitions.erase name
+    if let .induct types ctors _ := exact then
+      for type in types do structures := structures.erase type.name
+      for ctor in ctors do constructors := constructors.erase ctor.name
+    for info in declTypes replay do
+      declarations := declarations.insert info.name #[info]
+      names := names.insert info.name
+    if let .induct types ctors _ := replay then
+      for ctor in ctors do constructors := constructors.insert ctor.name ctor
+      for type in types do structures := structures.insert type.name (type, ctors)
+    if let .defn name levelParams _ value .. := replay then
+      definitions := definitions.insert name { levelParams, value }
+  return { source with
+    declarations, constructors, structures,
+    normalizer := { definitions }, names }
+
 private def declarationRecords (x : Export) : Std.HashMap Name (Array Nat) := Id.run do
   let mut records : Std.HashMap Name (Array Nat) := {}
   for i in [0:x.decls.size] do

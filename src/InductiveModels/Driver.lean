@@ -2522,11 +2522,6 @@ def SourceScheduleFact.modelOwner (fact : SourceScheduleFact)
        (generation.mutualModels && fact.mutualOwner) ||
        (fact.simpleOwner && generation.modelsSimpleInput root))
 
-private structure SourceNameOccurrence where
-  exact : Name
-  rawOrdinal : Nat
-  position : Nat
-
 /-- Deterministic collision-free aliases from the complete source-name census.
 
 Distinct public names never normalize alike, so a public member is the unique
@@ -2535,32 +2530,29 @@ member exact.  Every other member is embedded below a public internal root
 carrying its raw record and within-record position; the salt is used only when
 an adversarial input already reserves that exact or normalized spelling. -/
 private def sourceReplayAliasesFromSummaries
-    (summaries : Array Order.DeclSummary) (reserved : Std.HashSet Name) :
+    (summaries : Array Order.DeclSummary) (reserved : Std.HashSet Name)
+    (duplicate? : Option (Name × Nat × Nat)) :
     Except String SourceReplayAliases := do
-  let mut occurrences : Array SourceNameOccurrence := #[]
-  let mut exactOwner : Std.HashMap Name (Nat × Nat) := {}
-  let mut canonical : Std.HashMap Name Name := {}
+  if let some (name, first, second) := duplicate? then
+    throw s!"duplicate source declaration name {name} at {first} and {second}"
+  -- Public names are their own normalized class and are already in `reserved`.
+  -- Retain only the earliest private representative of private-only classes;
+  -- this avoids another all-source-name map and occurrence array.
+  let mut privateCanonical : Std.HashMap Name Name := {}
   for summary in summaries do
-    for position in [:summary.introduced.size] do
-      let exact := summary.introduced[position]!
-      if let some first := exactOwner[exact]? then
-        throw s!"duplicate source declaration name {exact} at {first.1}:{first.2} and \
-          {summary.ordinal}:{position}"
-      exactOwner := exactOwner.insert exact (summary.ordinal, position)
-      occurrences := occurrences.push { exact, rawOrdinal := summary.ordinal, position }
+    for exact in summary.introduced do
+      unless isPrivateName exact do continue
       let normalized := privateToUserName exact
-      match canonical[normalized]? with
-      | none => canonical := canonical.insert normalized exact
-      | some first =>
-        if isPrivateName first && !isPrivateName exact then
-          canonical := canonical.insert normalized exact
-  let mut occupiedExact := reserved
-  let mut occupiedNormalized : Std.HashSet Name := {}
-  for name in reserved do
-    occupiedNormalized := occupiedNormalized.insert (privateToUserName name)
-  let moved := occurrences.filter fun occurrence =>
-    canonical[privateToUserName occurrence.exact]? != some occurrence.exact
-  if moved.isEmpty then
+      unless reserved.contains normalized || privateCanonical.contains normalized do
+        privateCanonical := privateCanonical.insert normalized exact
+  let mut hasMoved := false
+  for summary in summaries do
+    for exact in summary.introduced do
+      if isPrivateName exact then
+        let normalized := privateToUserName exact
+        if reserved.contains normalized || privateCanonical[normalized]? != some exact then
+          hasMoved := true
+  unless hasMoved do
     return ← SourceReplayAliases.ofEntries #[]
   let mut root? : Option Name := none
   for salt in [:reserved.size + 1] do
@@ -2568,27 +2560,23 @@ private def sourceReplayAliasesFromSummaries
     let candidate := Name.num `_inductive_models_source_alias salt
     let overlaps := fun name : Name =>
       candidate.isPrefixOf name || name.isPrefixOf candidate
-    unless reserved.any overlaps || occupiedNormalized.any overlaps do
+    unless reserved.any fun name => overlaps name || overlaps (privateToUserName name) do
       root? := some candidate
   let some root := root?
     | throw "source reserves every bounded collision-safe replay namespace"
   let mut entries : Array SourceReplayAlias := #[]
-  for occurrence in moved do
-    let normalized := privateToUserName occurrence.exact
-    let some keep := canonical[normalized]?
-      | throw "normalized source class lost its canonical member"
-    if occurrence.exact == keep then
-      throw "source replay move set retained its canonical member"
-    let build := (Name.num (Name.num root occurrence.rawOrdinal) occurrence.position) ++
-      occurrence.exact
-    if occupiedExact.contains build ||
-        occupiedNormalized.contains (privateToUserName build) then
-      throw s!"source replay alias {build} was not fresh below {root}"
-    if isPrivateName build then
-      throw s!"source replay alias {build} unexpectedly remains private"
-    occupiedExact := occupiedExact.insert build
-    occupiedNormalized := occupiedNormalized.insert (privateToUserName build)
-    entries := entries.push { exact := occurrence.exact, build }
+  for summary in summaries do
+    for position in [:summary.introduced.size] do
+      let exact := summary.introduced[position]!
+      unless isPrivateName exact do continue
+      let normalized := privateToUserName exact
+      let keep := if reserved.contains normalized then normalized else
+        privateCanonical[normalized]?.getD exact
+      if exact == keep then continue
+      let build := (Name.num (Name.num root summary.ordinal) position) ++ exact
+      if isPrivateName build then
+        throw s!"source replay alias {build} unexpectedly remains private"
+      entries := entries.push { exact, build }
   SourceReplayAliases.ofEntries entries
 
 /-- Immutable source products accumulated declaration by declaration.  The
@@ -2610,6 +2598,7 @@ structure SourceCensus.Builder where
   private scheduling : Array SourceScheduleFact := #[]
   private reserved : Std.HashSet Name := {}
   private rawOrdinals : Std.HashMap Name Nat := {}
+  private duplicate? : Option (Name × Nat × Nat) := none
   private nextOrdinal : Nat := 0
 
 /-- Accumulate one raw source declaration into every census axis. -/
@@ -2620,13 +2609,17 @@ def SourceCensus.Builder.push (builder : SourceCensus.Builder)
   -- live here would share that array and copy its complete prefix on every
   -- declaration.
   match builder with
-  | { syntaxBuilder, summaryBuilder, scheduling, reserved, rawOrdinals, nextOrdinal } =>
+  | { syntaxBuilder, summaryBuilder, scheduling, reserved, rawOrdinals, duplicate?,
+      nextOrdinal } =>
+    let duplicate? := declaration.names.foldl (init := duplicate?) fun duplicate? name =>
+      duplicate?.orElse fun _ => rawOrdinals[name]?.map fun first => (name, first, nextOrdinal)
     { syntaxBuilder := syntaxBuilder.push declaration
       summaryBuilder := summaryBuilder.push declaration
       scheduling := scheduling.push (.ofDeclaration declaration)
       reserved := declaration.names.foldl (·.insert ·) reserved
       rawOrdinals := declaration.names.foldl
         (fun ordinals name => ordinals.insert name nextOrdinal) rawOrdinals
+      duplicate?
       nextOrdinal := nextOrdinal + 1 }
 
 /-- Freeze all callback products while structurally sharing the one immutable
@@ -2634,7 +2627,7 @@ syntax index with the summary-family attachment pass. -/
 def SourceCensus.Builder.freeze (builder : SourceCensus.Builder) : SourceCensus :=
   let sourceSyntax := builder.syntaxBuilder.freeze
   let summaries := builder.summaryBuilder.freeze sourceSyntax
-  let replayAliases := sourceReplayAliasesFromSummaries summaries builder.reserved
+  let replayAliases := sourceReplayAliasesFromSummaries summaries builder.reserved builder.duplicate?
   { sourceSyntax
     summaries
     scheduling := builder.scheduling
@@ -2953,6 +2946,21 @@ private structure FilterContext where
   outputSourceOrder? : Option (Array Nat) := none
   collectTrace : Bool := false
 
+/-- Cheap summary-first test for whether an exhaustive record rewrite can
+change anything. `all` fields are bookkeeping rather than dependencies, so
+they are the only constant-bearing fields not already covered by a summary. -/
+private def sourceRecordUsesAliases (aliases : SourceReplayAliases)
+    (summary : Order.DeclSummary) (declaration : EDecl) : Bool :=
+  let bookkeepingUsesAlias := match declaration with
+    | .defn _ _ _ _ _ _ all | .thm _ _ _ _ all | .opaq _ _ _ _ _ all =>
+      all.any aliases.hasExact
+    | .induct types _ recursors =>
+      types.any (fun type => type.all.any aliases.hasExact) ||
+        recursors.any (fun recursor => recursor.all.any aliases.hasExact)
+    | _ => false
+  summary.introduced.any aliases.hasExact ||
+    summary.referenced.any aliases.hasExact || bookkeepingUsesAlias
+
 private structure FilterState where
   mainEnv : Environment
   persistentSyntax : Check.SyntaxIndex
@@ -2993,15 +3001,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let sourceSummaries := context.sourceSummaries
   let scheduledOrdinal := state.scheduledOrdinal
   let sourceSummary := sourceSummaries[scheduledOrdinal]!
-  let bookkeepingUsesAlias := match d with
-    | .defn _ _ _ _ _ _ all | .thm _ _ _ _ all | .opaq _ _ _ _ _ all =>
-      all.any sourceAliases.hasExact
-    | .induct types _ recursors =>
-      types.any (fun type => type.all.any sourceAliases.hasExact) ||
-        recursors.any (fun recursor => recursor.all.any sourceAliases.hasExact)
-    | _ => false
-  let sourceUsesAlias := sourceSummary.introduced.any sourceAliases.hasExact ||
-    sourceSummary.referenced.any sourceAliases.hasExact || bookkeepingUsesAlias
+  let sourceUsesAlias := sourceRecordUsesAliases sourceAliases sourceSummary d
   let replayD := if sourceUsesAlias then sourceAliases.buildRecord d else d
   let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[scheduledOrdinal]?) with
     | some record => record
@@ -3490,11 +3490,14 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- declaration transition is extracted in this phase.
   let sourceSyntax := sourceCensus.sourceSyntax
   let constructionSyntax ← if sourceAliases.isEmpty then pure sourceSyntax else do
-    let aliasRecords := x.decls.filterMap fun declaration =>
-      if declaration.names.any sourceAliases.hasExact then
-        some (sourceAliases.buildRecord declaration)
-      else none
-    match sourceSyntax.prependRecords aliasRecords with
+    let mut exactRecords : Array EDecl := #[]
+    let mut replayRecords : Array EDecl := #[]
+    for ordinal in [:x.decls.size] do
+      let declaration := x.decls[ordinal]!
+      if sourceRecordUsesAliases sourceAliases sourceCensus.summaries[ordinal]! declaration then
+        exactRecords := exactRecords.push declaration
+        replayRecords := replayRecords.push (sourceAliases.buildRecord declaration)
+    match sourceSyntax.withReplayRecords exactRecords replayRecords with
     | .ok index => pure index
     | .error message => throwError "cannot index collision-safe source replay: {message}"
   let constructionNormalizer := constructionSyntax.exactNormalizer
