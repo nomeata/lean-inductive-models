@@ -117,6 +117,12 @@ def main (args : List String) : IO UInt32 := do
   let exactPrivateCensus := privateTable.collisionCensus #[modelName privateOwner]
   state ← state.check "private raw name is an exact collision"
     (exactPrivateCensus.taken == #[modelName privateOwner])
+  let normalizedPrivateSet := ({} : Std.HashSet Name).insert normalizedPrivateModel
+  state ← state.check "reserved-set census does not normalize private names"
+    (privateTable.collisionCensusReserved normalizedPrivateSet).isEmpty
+  let exactPrivateSet := ({} : Std.HashSet Name).insert (modelName privateOwner)
+  state ← state.check "reserved-set census retains exact private names"
+    ((privateTable.collisionCensusReserved exactPrivateSet).taken == #[modelName privateOwner])
 
   let duplicate := table.addMetadata .eta `Data.Tree
   let duplicateCensus := duplicate.collisionCensus #[]
