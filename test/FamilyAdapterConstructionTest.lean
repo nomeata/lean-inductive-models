@@ -366,7 +366,7 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
     (FamilyAdapter.validatePackedCarrierBoundaries plan certificate.members).run
   let packedCount ← match packedCarrier with
     | .error decline => return .prerequisite decline.label
-    | .ok (.error issue) => return .prerequisite (repr issue)
+    | .ok (.error issue) => return .prerequisite (toString (repr issue))
     | .ok (.ok count) => pure count
   unless packedCount == plan.members.size do
     return .prerequisite "incomplete packed carrier validation"
@@ -374,13 +374,13 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
     certificate.telescopes (Name.str root "constructors")).run
   let constructors ← match constructorsBuilt with
     | .error decline => return .prerequisite decline.label
-    | .ok (.error issue) => return .prerequisite (repr issue)
+    | .ok (.error issue) => return .prerequisite (toString (repr issue))
     | .ok (.ok (_, constructors)) => pure constructors
   let packedConstructors ←
     (FamilyAdapter.validatePackedConstructorBoundaries plan certificate.members constructors).run
   let packedConstructorCount ← match packedConstructors with
     | .error decline => return .prerequisite decline.label
-    | .ok (.error issue) => return .prerequisite (repr issue)
+    | .ok (.error issue) => return .prerequisite (toString (repr issue))
     | .ok (.ok count) => pure count
   unless packedConstructorCount == plan.constructors.size do
     return .prerequisite "incomplete packed constructor validation"
