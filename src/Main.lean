@@ -408,7 +408,7 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
         let source ← match fallback with
           | .ok source => pure source
           | .error message =>
-            IO.eprintln s!"{input}: internal error: cannot classify direct declines: {message}"
+              IO.eprintln s!"{input}: internal error: cannot classify planned declines: {message}"
             return exitToolError
         pure <| if (unsupportedDeclines source generationReport).isEmpty then
           exitAccepted else exitDeclined
