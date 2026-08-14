@@ -25,6 +25,17 @@ def runExport (input : Export) : IO (Array EDecl × Report) := do
     (Lean.Meta.MetaM.run' (runFilter input false noGeneration)) context { env }
   return result
 
+def replayNamesVisible (input : Export) (names : Array Name) : IO (Array Bool) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<source-replay-alias-visibility-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (visible, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+    discard <| runFilter input false noGeneration
+    let replayEnv ← getEnv
+    return names.map fun name => (replayEnv.find? name).isSome)) context { env }
+  return visible
+
 def kernelChecks (input : Export) : IO Bool := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -67,6 +78,10 @@ def main : IO UInt32 := do
   let (privateOutput, privateReport) ← runExport privateInput
   state := state.check "private/private replay preserves exact source records and report"
     (privateOutput == privateInput.decls && privateReport == {})
+  let some privateBuild := privateAliases.build? privateB
+    | throw <| IO.userError "second private source name has no replay alias"
+  state := state.check "private/private keeps both replay identities Meta-visible"
+    ((← replayNamesVisible privateInput #[privateA, privateBuild]) == #[true, true])
   state := state.check "private/private exact output is kernel-valid"
     (← kernelChecks { privateInput with decls := privateOutput })
 
@@ -93,7 +108,7 @@ def main : IO UInt32 := do
 
   -- The generated-record boundary is the same exhaustive record transform as
   -- source replay, including the otherwise easy-to-miss projection type name.
-  let some privateBuild := publicAliases.build? privateA
+  let some publicPrivateBuild := publicAliases.build? privateA
     | throw <| IO.userError "private source name has no replay alias"
   let generated : EDecl := .defn `Generated.helper [] (.const privateA [])
     (.proj privateA 0 (.const privateA [])) (.regular 0) "safe" [privateA]
@@ -101,8 +116,8 @@ def main : IO UInt32 := do
   state := state.check "generated records use the replay source identity"
     (match replayGenerated with
       | .defn _ _ (.const typeName _) (.proj projectionName _ (.const valueName _)) _ _ all =>
-        typeName == privateBuild && projectionName == privateBuild &&
-          valueName == privateBuild && all == [privateBuild]
+        typeName == publicPrivateBuild && projectionName == publicPrivateBuild &&
+          valueName == publicPrivateBuild && all == [publicPrivateBuild]
       | _ => false)
   state := state.check "every generated-record source alias inverts exactly"
     (publicAliases.exactRecord replayGenerated == generated)
