@@ -155,6 +155,27 @@ def directInputFallbackExact (scratch path text : String) : IO Bool := do
     | none => pure false
   return preserved && cleaned
 
+/-- Compare compact random replay with the ordinary parser on a checked-in
+fixture. Together the selected fixtures exercise every declaration variant
+and inductive recursor-rule RHS roots. -/
+def directInputFixtureParity (scratch path : String) : IO Bool := do
+  let .ok ordinary ← parseHandleAt path | return false
+  Spool.withWorkspace scratch fun workspace => do
+    let tee ← Spool.DirectInputTee.create workspace
+    let captured ← IO.FS.withFile path .read fun handle =>
+      parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
+        (analyse := false) (allowDuplicateNames := true)
+    let .ok (envelope, certificate) := captured | return false
+    let sizes ← tee.finish
+    let .ok reader ← Spool.PlannedSourceReader.createDirect tee certificate sizes
+        envelope.declarationCount envelope.arena | return false
+    let mut declarations := #[]
+    for ordinal in [:reader.size] do
+      let .ok declaration ← reader.read ordinal | return false
+      declarations := declarations.push declaration
+    return declarations == ordinary.decls &&
+      envelope.arena.retainedExprRoots ≤ certificate.cursor.nextExpr
+
 def bothReject (whole streamed : Except String Export) : Bool :=
   match whole, streamed with
   | .error _, .error _ => true
@@ -317,6 +338,10 @@ def main (args : List String) : IO UInt32 := do
       "declaration replay retains only directly referenced expression roots" <|
     ← directInputReplayAccepted scratch compactArenaPath compactArenaInput
       #[compactArenaDeclaration] (some 1)
+  state := state.check "compact replay preserves every ordinary declaration root kind" <|
+    ← directInputFixtureParity scratch s!"{root}/test/fixtures/inductive-models/w_core.ndjson"
+  state := state.check "compact replay preserves opaque declaration roots" <|
+    ← directInputFixtureParity scratch s!"{root}/test/fixtures/mono/mono_split.ndjson"
   IO.FS.writeFile rawCanonicalPath rawCanonical
   let captured ← Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
