@@ -14,14 +14,9 @@ namespace InductiveModels.Supervisor
 /-- Private recursion guard inherited only by the supervised worker. -/
 def workerMarker : String := "LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER"
 
-/-- Make runtime panics terminate the private worker instead of returning a
-default value which may accidentally become a successful public result. -/
-@[extern "lean_internal_set_exit_on_panic"]
-private opaque setExitOnPanic (exit : Bool) : BaseIO Unit
-
-/-- Normal worker results are encoded across the process boundary so the
-parent can distinguish a genuine result `1` from the runtime's panic exit. -/
-private def encodedStatusBase : UInt32 := 64
+/-- Runtime panics in the private worker must become native failures rather
+than status `1`, which is a valid public decline result. -/
+private def abortOnPanic : String := "LEAN_ABORT_ON_PANIC"
 
 private def reportFailure (message : String) : IO Unit := do
   try IO.eprintln message
@@ -37,7 +32,7 @@ def runWorkerRaw (args : List String)
     let child ← IO.Process.spawn {
       cmd := executable.toString
       args := args.toArray
-      env := environment ++ #[(workerMarker, some "1")]
+      env := environment ++ #[(workerMarker, some "1"), (abortOnPanic, some "1")]
       stdin := .inherit
       stdout := .inherit
       stderr := .inherit }
@@ -51,8 +46,7 @@ def runWorkerRaw (args : List String)
 def runWorkerWithEnv (args : List String)
     (environment : Array (String × Option String)) : IO UInt32 := do
   let status ← runWorkerRaw args environment
-  if encodedStatusBase ≤ status && status ≤ encodedStatusBase + 3 then
-    return status - encodedStatusBase
+  if status ≤ 3 then return status
   reportFailure s!"lean-inductive-models: worker terminated with native status {status}; \
     reporting internal tool error 3"
   return 3
@@ -64,11 +58,6 @@ def runWorker (args : List String) : IO UInt32 :=
 /-- Enter the worker exactly once. A normal worker result is returned byte for
 byte and code for code; only native/impossible process statuses are contained. -/
 def supervise (worker : List String → IO UInt32) (args : List String) : IO UInt32 := do
-  if (← IO.getEnv workerMarker) == some "1" then
-    setExitOnPanic true
-    let status ← worker args
-    return if status ≤ 3 then encodedStatusBase + status else status
-  else
-    runWorker args
+  if (← IO.getEnv workerMarker) == some "1" then worker args else runWorker args
 
 end InductiveModels.Supervisor
