@@ -726,8 +726,8 @@ def run (root : String) : IO UInt32 := do
       (Check.check boundaryGenerated).all
         (·.familyOwner != `TwoRecursiveDependentResults)
 
-  for owner in [`InfinitaryRecursiveResult, `FieldIndexedRecursiveResult,
-      `TransparentRecursiveResult] do
+  for owner in [`ThreeRecursiveResults, `InfinitaryRecursiveResult,
+      `FieldIndexedRecursiveResult, `TransparentRecursiveResult] do
     let ownerRoot := Name.str (Naming.modelName owner) "_impl"
     let ownerCertificate := #[Name.str ownerRoot "self", Name.str ownerRoot "ctor_0",
       Name.str ownerRoot "rec", Name.str ownerRoot "rec_iota_0",

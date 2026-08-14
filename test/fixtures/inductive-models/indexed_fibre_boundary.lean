@@ -99,6 +99,12 @@ inductive TwoRecursiveDependentResults : FibreIx -> Type where
       (left right : TwoRecursiveDependentResults FibreIx.here) (tail : FibreKey) :
       TwoRecursiveDependentResults FibreIx.here
 
+/-- Three otherwise identical direct children pin the deliberate two-child
+certificate cap. -/
+inductive ThreeRecursiveResults : FibreIx -> Type where
+  | mk (first second third : ThreeRecursiveResults FibreIx.here) :
+      ThreeRecursiveResults FibreIx.here
+
 /-- Recursion below a function former remains outside the direct-field
 tranche even though the constructor result index is fixed. -/
 inductive InfinitaryRecursiveResult : FibreIx -> Type where
@@ -121,5 +127,6 @@ inductive TransparentRecursiveResult : FibreIx -> Type where
 --#export IndexedUnit HiddenIndexedResult HiddenIndexed erasedResultIndex
 --#export FixedRecursiveResult IndexedRecursiveLayer ParametricRecursiveLayer
 --#export TwoRecursiveResults TwoRecursiveDependentResults
+--#export ThreeRecursiveResults
 --#export InfinitaryRecursiveResult FieldIndexedRecursiveResult
 --#export TransparentRecursiveResult

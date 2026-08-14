@@ -105,13 +105,14 @@ private partial def openIndexedFibreShapeForalls (tag : Name) (expression : Expr
     | body => (binders, body)
   loop expression #[]
 
-/-- Exact serialized boundary for the first recursive indexed fibre tranche.
+/-- Exact serialized boundary for the bounded recursive indexed fibre tranche.
 
-The sole recursive occurrence must itself be one constructor field, rather
-than occur below another former.  Its index is fixed with respect to all
-constructor fields, its binder is absent from the constructor result and all
-later field types, and the exported recursor has the one-owner/one-rule layout
-which the existing Arm-C public interface implements. -/
+Each of at most two recursive occurrences must itself be one constructor
+field, rather than occur below another former.  Its index is fixed with
+respect to all constructor fields, its binder is absent from the constructor
+result and all later field types, and the exported recursor has the
+one-owner/one-rule layout which the existing Arm-C public interface
+implements. -/
 def recursiveIndexedFibreOneLayerShape (type : EIndType) (constructor : ECtor)
     (recursor : ERec) : Bool := Id.run do
   unless type.isRec && constructor.induct == type.name &&
@@ -131,29 +132,29 @@ def recursiveIndexedFibreOneLayerShape (type : EIndType) (constructor : ECtor)
   let .const resultOwner _ := result.getAppFn | return false
   unless resultOwner == type.name &&
       result.getAppArgs.size == type.numParams + type.numIndices do return false
-  let mut recursiveIndex? : Option Nat := none
+  let mut recursiveFields : Array Nat := #[]
   for fieldIndex in [:fields.size] do
     let fieldType := fields[fieldIndex]!.type
     if fieldType.getUsedConstants.contains type.name then
       let .const fieldOwner _ := fieldType.getAppFn | return false
       unless fieldOwner == type.name &&
           fieldType.getAppArgs.size == type.numParams + type.numIndices do return false
-      unless recursiveIndex?.isNone do return false
       let recursiveIndices := fieldType.getAppArgs.extract type.numParams
         (type.numParams + type.numIndices)
       for index in recursiveIndices do
         for field in fields do
           if index.containsFVar field.value.fvarId! then return false
-      recursiveIndex? := some fieldIndex
-  let some recursiveIndex := recursiveIndex? | return false
-  let recursiveId := fields[recursiveIndex]!.value.fvarId!
-  if result.containsFVar recursiveId then return false
-  for later in [recursiveIndex + 1:fields.size] do
-    if fields[later]!.type.containsFVar recursiveId then return false
+      recursiveFields := recursiveFields.push fieldIndex
+  if recursiveFields.isEmpty || recursiveFields.size > 2 then return false
+  for recursiveIndex in recursiveFields do
+    let recursiveId := fields[recursiveIndex]!.value.fvarId!
+    if result.containsFVar recursiveId then return false
+    for later in [recursiveIndex + 1:fields.size] do
+      if fields[later]!.type.containsFVar recursiveId then return false
   return true
 
 /-- The indexed fibre adapter's complete source-syntax boundary.  The original
-nonrecursive family and the first fixed-index recursive family share this
+nonrecursive family and the bounded fixed-index recursive families share this
 predicate in generation and checking; the complete eight-declaration
 certificate, not shape alone, authorizes literal dependent projection rules. -/
 def indexedFibreOneLayerProjectionFamily (types : Array EIndType)
