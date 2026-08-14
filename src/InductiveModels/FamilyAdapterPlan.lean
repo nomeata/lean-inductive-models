@@ -209,6 +209,31 @@ structure PublicConstructorCertificate where
   ownerMaps : EquivalenceCertificate
   deriving Inhabited, BEq, Repr
 
+/-- One exact minor constructor in an installed recursor telescope.  Nested
+recursors also bind minors for specialised mimic members, so this key is the
+literal recursor owner/index/name association rather than a source-constructor
+key.  `adapter` has the source-specialised constructor type used by the public
+recursor wrapper. -/
+structure PublicMinorConstructorCertificate where
+  recursor : MemberKey
+  minorIndex : Nat
+  publicConstructor : Name
+  implementationConstructor : Name
+  adapter : Name
+  exactType : Expr
+  fieldArity : Nat
+  deriving Inhabited, BEq, Repr
+
+/-- One literal motive slot in an installed recursor telescope.  Mimic motives
+need not correspond to a source `MemberKey`, so the exact public/private
+carrier heads are retained under the recursor/index key. -/
+structure PublicRecursorMotiveCertificate where
+  recursor : MemberKey
+  motiveIndex : Nat
+  publicCarrier : Name
+  implementationCarrier : Name
+  deriving Inhabited, BEq, Repr
+
 /-- A fresh recursor with the exact public recursor type. `motives` and
 `rules` are the literal keyed sequences consumed while wrapping the installed
 private recursor; neither sequence is inferred from a cardinality. -/
@@ -217,7 +242,8 @@ structure PublicRecursorCertificate where
   adapter : Name
   exactType : Expr
   implementationRecursor : Name
-  motives : Array MemberKey
+  motives : Array PublicRecursorMotiveCertificate
+  minors : Array PublicMinorConstructorCertificate
   rules : Array RuleKey
   deriving Inhabited, BEq, Repr
 

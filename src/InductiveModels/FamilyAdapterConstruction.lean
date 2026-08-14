@@ -33,6 +33,9 @@ inductive ConstructionIssue where
   | dependentMinorTransport (rule : RuleKey) (binderIndex : Nat)
   | missingInstalledIota (rule : RuleKey) (iota : Name)
   | installedIotaTypeMismatch (rule : RuleKey) (iota : Name)
+  | recursorResultMismatch (member : MemberKey)
+  | malformedRecursorMinor (member : MemberKey) (minorIndex : Nat)
+  | dependentRecursorMinorTransport (member : MemberKey) (minorIndex binderIndex : Nat)
   | missingMemberMap (member : MemberKey)
   | missingOccurrenceMap (occurrence : OccurrenceKey)
   | missingContainerMap (occurrence : OccurrenceKey)
@@ -701,6 +704,10 @@ private def publicConstructorAdapterName (root : Name) (constructor : Constructo
 private def publicRecursorAdapterName (root : Name) (member : MemberKey) : Name :=
   prototypeName root member.owner `publicRecursor
 
+private def publicMinorConstructorAdapterName (root : Name) (member : MemberKey)
+    (minorIndex : Nat) : Name :=
+  prototypeName root (member.owner.mkNum minorIndex) `publicMinorConstructor
+
 private def publicIotaAdapterName (root : Name) (rule : RuleKey) : Name :=
   prototypeName root (rule.recursor.append rule.constructor.constructor) `publicIota
 
@@ -748,12 +755,60 @@ private def applyContainerMap? (plan : FamilyAdapterPlan) (container : Container
   unless ← isDefEq (← inferType application) targetType do return none
   return some application
 
+private def applyContainerMapInfer? (plan : FamilyAdapterPlan)
+    (container : ContainerMapPlan) (forward : Bool) (parameters : Array Expr)
+    (sourceType value : Expr) : MetaM (Option (Expr × Expr)) := do
+  unless parameters.size == container.parameterArity do return none
+  let name := if forward then container.maps.forward else container.maps.backward
+  let recordedType := if forward then container.forwardType else container.backwardType
+  let some installed := (← getEnv).constants.find? name |>.map (·.type) | return none
+  unless installed == recordedType do return none
+  let mut type ← instantiateForall recordedType parameters
+  let mut indices := #[]
+  for _ in [:container.indexArity] do
+    let .forallE binderName domain body _ := type | return none
+    let index ← mkFreshExprMVar domain .natural binderName
+    indices := indices.push index
+    type := body.instantiate1 index
+  let .forallE _ domain _ _ := type | return none
+  unless ← isDefEq domain sourceType do return none
+  let resolvedIndices ← indices.mapM instantiateMVars
+  for index in resolvedIndices do if ← hasAssignableMVar index then return none
+  let application := mkAppN (.const name (plan.levelParams.map Level.param))
+    (parameters ++ resolvedIndices ++ #[value])
+  let targetType ← instantiateMVars (← inferType application)
+  if ← hasAssignableMVar targetType then return none
+  return some (application, targetType)
+
 private def sameContainerBoundary (left right : ContainerMapPlan) : Bool :=
   left.parameterArity == right.parameterArity && left.indexArity == right.indexArity &&
     left.implementationCarrier == right.implementationCarrier && left.maps == right.maps &&
     left.forwardType == right.forwardType && left.backwardType == right.backwardType &&
     left.backwardForwardType == right.backwardForwardType &&
     left.forwardBackwardType == right.forwardBackwardType
+
+private def mapCarrierValueInfer (plan : FamilyAdapterPlan)
+    (certificates : Array MemberCertificate) (parameters : Array Expr)
+    (member : MemberPlan) (forward : Bool) (sourceType value : Expr) :
+    ConstructionM (Expr × Expr × EquivalenceCertificate) := do
+  let parameters := rootParameters plan parameters
+  let candidates ← liftGen <| plan.containerMaps.filterMapM fun container => do
+    let application? ← applyContainerMapInfer? plan container forward parameters sourceType value
+    return application?.map fun (application, targetType) => (container, application, targetType)
+  if let some first := candidates[0]? then
+    unless candidates.all (sameContainerBoundary first.1 ·.1) do
+      failConstruction (.missingMemberMap member.key)
+    return (first.2.1, first.2.2, first.1.maps)
+  let some certificate := certificateFor? certificates member.key
+    | failConstruction (.missingMemberMap member.key)
+  let source := if forward then member.publicCarrier else member.implementationCarrier
+  if sourceType.getAppFn.constName? != some source then
+    return (value, sourceType, certificate.maps)
+  let arguments := sourceType.getAppArgs
+  let application := mkAppN (.const (mapName certificate forward)
+    (plan.levelParams.map Level.param)) (arguments.push value)
+  let targetType ← inferType application
+  return (application, targetType, certificate.maps)
 
 /-- Map an exact carrier application without classifying its syntax. Direct
 members use their keyed family equivalence; specialised mimics are selected by
@@ -776,6 +831,31 @@ private def mapCarrierValue (plan : FamilyAdapterPlan)
   unless candidates.all (sameContainerBoundary first.1 ·.1) do
     failConstruction (.missingMemberMap member.key)
   return (first.2, first.1.maps)
+
+private def carrierRoundTrip (plan : FamilyAdapterPlan)
+    (certificates : Array MemberCertificate) (parameters : Array Expr)
+    (member : MemberPlan) (forward : Bool) (sourceType targetType value : Expr) :
+    ConstructionM Expr := do
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok information => pure information
+    | .error _ => failConstruction (.missingMemberMap member.key)
+  if ← isDefEq sourceType targetType then
+    return eqi.refl' (← ilevel sourceType) sourceType value
+  let some memberCertificate := certificateFor? certificates member.key
+    | failConstruction (.missingMemberMap member.key)
+  if (← liftGen <| applyMemberMap? plan member memberCertificate forward sourceType targetType
+      value).isSome then
+    let law := lawName memberCertificate forward
+    return mkAppN (.const law (plan.levelParams.map Level.param))
+      (sourceType.getAppArgs.push value)
+  let parameters := rootParameters plan parameters
+  let candidates ← liftGen <| plan.containerMaps.filterMapM fun container => do
+    let application? ← applyContainerMap? plan container forward parameters sourceType targetType value
+    return application?.map fun _ => container
+  let some first := candidates[0]? | failConstruction (.missingMemberMap member.key)
+  unless candidates.all (sameContainerBoundary first ·) do
+    failConstruction (.missingMemberMap member.key)
+  applyContainerLaw plan first forward parameters sourceType value
 
 private def publicConstructorDeclaration (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
@@ -1132,6 +1212,584 @@ def buildRuleCompatibilityPrototypes (plan : FamilyAdapterPlan)
   let saved ← getEnv
   match ← ExceptT.lift
       (buildRuleCompatibilityPrototypesCore plan minorHypotheses root).run with
+  | .error decline =>
+    setEnv saved
+    declineWith decline
+  | .ok (.error issue) =>
+    setEnv saved
+    return .error issue
+  | .ok (.ok built) => return .ok built
+
+private def minorFieldValues? (constructor : ConstructorPlan)
+    (binders : Array Expr) (result : Expr) (adapter? : Option Name := none) :
+    Option (Array Expr) := do
+  let major ← result.getAppArgs.back?
+  unless major.getAppFn.constName? == some constructor.publicName ||
+      major.getAppFn.constName? == some constructor.implementationName ||
+      adapter?.any (some · == major.getAppFn.constName?) do none
+  let arguments := major.getAppArgs
+  let count := constructor.telescope.binders.size
+  unless arguments.size >= count do none
+  let fields := arguments.extract (arguments.size - count) arguments.size
+  for field in fields do unless binders.contains field do none
+  return fields
+
+private def minorConstructorName? (type : Expr) : Option Name := do
+  let (_, result) := openExactForalls `_family_adapter_public_recursor_minor type
+  let major ← result.getAppArgs.back?
+  major.getAppFn.constName?
+
+private def minorConstructorParts? (type : Expr) :
+    Option (Array Expr × Array Expr × Expr) := do
+  let (binders, result) := openExactForalls `_family_adapter_minor_constructor type
+  let major ← result.getAppArgs.back?
+  let values := binders.map (·.value)
+  let fields := major.getAppArgs.filter values.contains
+  return (values, fields, major)
+
+private def motiveCarrierName? (type : Expr) : Option Name := do
+  let (binders, _) := openExactForalls `_family_adapter_recursor_motive type
+  let value ← binders.back?
+  value.type.getAppFn.constName?
+
+private def recursorMotiveCertificates (member : MemberPlan)
+    (publicType privateType : Expr) : Except ConstructionIssue
+    (Array PublicRecursorMotiveCertificate) := do
+  let (publicBinders, _) := openExactForalls `_family_adapter_public_motives publicType
+  let (privateBinders, _) := openExactForalls `_family_adapter_private_motives privateType
+  let stop := member.parameterArity + member.recursorMotiveArity
+  unless publicBinders.size >= stop && privateBinders.size >= stop do
+    throw (.shortInstalledRecursorPrefix member.key member.publicRecursor)
+  let mut result := #[]
+  for motiveIndex in [:member.recursorMotiveArity] do
+    let binderIndex := member.parameterArity + motiveIndex
+    let some publicCarrier := motiveCarrierName? publicBinders[binderIndex]!.type
+      | throw (.recursorResultMismatch member.key)
+    let some implementationCarrier := motiveCarrierName? privateBinders[binderIndex]!.type
+      | throw (.recursorResultMismatch member.key)
+    result := result.push
+      { recursor := member.key, motiveIndex, publicCarrier, implementationCarrier }
+  return result
+
+private def uniqueOccurrenceHypothesisIndices (constructor : ConstructorPlan) : Array Nat :=
+  Id.run do
+    let mut result := #[]
+    for binder in constructor.telescope.binders do
+      for occurrence in binder.occurrences do
+        unless result.contains occurrence.hypothesisIndex do
+          result := result.push occurrence.hypothesisIndex
+    return result
+
+private def minorConstructorSequence (member : MemberPlan) (isPublic : Bool)
+    (recursorType : Expr) : Except ConstructionIssue (Array Name) := do
+  let (binders, _) := openExactForalls `_family_adapter_public_recursor_prefix recursorType
+  let start := member.parameterArity + member.recursorMotiveArity
+  let stop := start + member.recursorMinorArity
+  unless binders.size >= stop do
+    throw (.shortInstalledRecursorPrefix member.key
+      (if isPublic then member.publicRecursor else member.implementationRecursor))
+  let mut result := #[]
+  for minorIndex in [:member.recursorMinorArity] do
+    let some constructor := minorConstructorName? binders[start + minorIndex]!.type
+      | throw (.malformedRecursorMinor member.key minorIndex)
+    result := result.push constructor
+  return result
+
+private def motiveHypothesisValues (motives fields binders : Array Expr) : MetaM (Array Expr) := do
+  let mut result := #[]
+  for binder in binders do
+    unless fields.contains binder do
+      let type ← inferType binder
+      if motives.contains (eventualBody `_family_adapter_public_minor_hypothesis type).getAppFn then
+        result := result.push binder
+  return result
+
+private def privateMotiveValue (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate) (parameters : Array Expr)
+    (member : MemberPlan) (publicMotive expectedType : Expr) : ConstructionM Expr := do
+  forallBoundedTelescope expectedType (some (numForalls expectedType)) fun binders _ => do
+    let some privateValue := binders.back? | failConstruction (.missingMemberMap member.key)
+    let indices := binders.extract 0 (binders.size - 1)
+    let publicMotiveType ← inferType publicMotive
+    let publicAfterIndices ← instantiateForall publicMotiveType indices
+    let .forallE _ publicType _ _ := publicAfterIndices
+      | failConstruction (.missingMemberMap member.key)
+    let privateType ← inferType privateValue
+    let (publicValue, _) ← mapCarrierValue plan memberCertificates parameters member false
+      privateType publicType privateValue
+    mkLambdaFVars binders (mkAppN publicMotive (indices.push publicValue))
+
+private def privateMinorValue (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (telescopeCertificates : Array TelescopeCertificate)
+    (constructorCertificates : Array PublicConstructorCertificate)
+    (parameters publicMotives privateMotives : Array Expr)
+    (member : MemberPlan) (minorIndex : Nat) (constructor : ConstructorPlan)
+    (publicMinor expectedType : Expr) : ConstructionM Expr := do
+  forallBoundedTelescope expectedType (some (numForalls expectedType))
+      fun privateBinders privateResult => do
+    let some privateFields := minorFieldValues? constructor privateBinders privateResult
+      | failConstruction (.malformedRecursorMinor member.key minorIndex)
+    let publicMinorType ← inferType publicMinor
+    forallBoundedTelescope publicMinorType (some (numForalls publicMinorType))
+        fun publicBinders publicResult => do
+      let some constructorAdapter := constructorCertificates.find?
+          (·.key == constructor.key)
+        | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let some publicFields := minorFieldValues? constructor publicBinders publicResult
+          (some constructorAdapter.adapter)
+        | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let publicValues ← mapFields plan memberCertificates constructor parameters false
+        privateFields publicFields privateFields
+      let publicHypotheses ← liftGen <|
+        motiveHypothesisValues publicMotives publicFields publicBinders
+      let privateHypotheses ← liftGen <|
+        motiveHypothesisValues privateMotives privateFields privateBinders
+      let expectedHypothesisIndices := uniqueOccurrenceHypothesisIndices constructor
+      unless expectedHypothesisIndices == Array.range publicHypotheses.size &&
+          privateHypotheses.size == publicHypotheses.size do
+        failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let mut arguments := #[]
+      for binderIndex in [:publicBinders.size] do
+        let binder := publicBinders[binderIndex]!
+        let value? := if let some fieldIndex := publicFields.findIdx? (· == binder) then
+            publicValues[fieldIndex]?
+          else if let some hypothesisIndex := publicHypotheses.findIdx? (· == binder) then
+            privateHypotheses[hypothesisIndex]?
+          else none
+        let some value := value?
+          | failConstruction (.malformedRecursorMinor member.key minorIndex)
+        let expected := (← inferType binder).replaceFVars
+          (publicBinders.extract 0 binderIndex) arguments
+        unless ← isDefEq (← inferType value) expected do
+          failConstruction (.dependentRecursorMinorTransport member.key minorIndex binderIndex)
+        arguments := arguments.push value
+      let base := mkAppN publicMinor arguments
+      let some telescope := telescopeCertificates.find? (·.constructor == constructor.key)
+        | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let privatePackageType ← liftGen <| packedTelescopeType privateFields
+      let privatePackage ← liftGen <| packTelescopeValue privateFields privateFields
+      let levels := plan.levelParams.map Level.param
+      let decoded := mkAppN (.const telescope.decode levels) (parameters.push privatePackage)
+      let encodedDecoded := mkAppN (.const telescope.encode levels) (parameters.push decoded)
+      let roundTrip := mkAppN (.const telescope.encodeDecode levels)
+        (parameters.push privatePackage)
+      let some owner := plan.members.find? (·.key == constructor.key.owner)
+        | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let some ownerIndex := plan.members.findIdx? (·.key == owner.key)
+        | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let ownerMotive := publicMotives[ownerIndex]!
+      let eqi ← match EqInfo.check (← getEnv) with
+        | .ok information => pure information
+        | .error _ => failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let baseType ← inferType base
+      let resultLevel ← ilevel baseType
+      let packageLevel ← ilevel privatePackageType
+      let transported ← liftGen <| transportAlong eqi resultLevel packageLevel
+        privatePackageType encodedDecoded privatePackage roundTrip base fun package => do
+          let values ← unpackTelescopeValue privateFields package
+          let privateMajor := mkAppN
+            (.const constructor.implementationName (plan.levelParams.map Level.param))
+            (parameters ++ values)
+          let privateMajorType ← inferType privateMajor
+          let mapped ← (mapCarrierValueInfer plan memberCertificates parameters owner false
+            privateMajorType privateMajor).run
+          let (publicMajor, publicMajorType, _) ← match mapped with
+            | .ok mapped => pure mapped
+            | .error issue => badShape s!"family-adapter recursor minor map failed: {repr issue}"
+          let indices := resultIndices owner publicMajorType
+          return mkAppN ownerMotive (indices.push publicMajor)
+      unless ← isDefEq (← inferType transported) privateResult do
+        failConstruction (.dependentRecursorMinorTransport member.key minorIndex
+          privateBinders.size)
+      let _ := constructorAdapter
+      mkLambdaFVars privateBinders transported
+
+/-- A nested recursor can bind minors for specialised mimic constructors that
+are not source constructors.  Build their source-specialised constructor
+boundary from the two exact minor telescopes: fields are the literal binders
+used by the constructor application, and every changed field crosses only an
+already checked family/container equivalence. -/
+private def specialisedMinorConstructorDeclaration (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate) (parameters : Array Expr)
+    (root : Name) (member : MemberPlan) (minorIndex : Nat)
+    (publicMinorType privateMinorType : Expr) : ConstructionM
+    (Declaration × PublicMinorConstructorCertificate) := do
+  forallBoundedTelescope publicMinorType (some (numForalls publicMinorType))
+      fun publicBinders publicResult => do
+    let some publicMajor := publicResult.getAppArgs.back?
+      | failConstruction (.malformedRecursorMinor member.key minorIndex)
+    let some publicConstructor := publicMajor.getAppFn.constName?
+      | failConstruction (.malformedRecursorMinor member.key minorIndex)
+    let publicFields := publicMajor.getAppArgs.filter publicBinders.contains
+    forallBoundedTelescope privateMinorType (some (numForalls privateMinorType))
+        fun privateBinders privateResult => do
+      let some privateMajor := privateResult.getAppArgs.back?
+        | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let some implementationConstructor := privateMajor.getAppFn.constName?
+        | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let privateFields := privateMajor.getAppArgs.filter privateBinders.contains
+      unless publicFields.size == privateFields.size do
+        failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let name := publicMinorConstructorAdapterName root member.key minorIndex
+      liftGen <| ensurePrototypeFresh name
+      let publicMajorType ← liftGen <| inferType publicMajor
+      let exactType ← liftGen <| mkForallFVars (parameters ++ publicFields) publicMajorType
+      let mut privateValues := #[]
+      for fieldIndex in [:publicFields.size] do
+        let publicValue := publicFields[fieldIndex]!
+        let publicType ← liftGen <| inferType publicValue
+        let privateType := (← liftGen <| inferType privateFields[fieldIndex]!).replaceFVars
+          (privateFields.extract 0 fieldIndex) privateValues
+        let (privateValue, _) ← mapCarrierValue plan memberCertificates parameters member true
+          publicType privateType publicValue
+        privateValues := privateValues.push privateValue
+      let privateMajor := privateMajor.replaceFVars privateFields privateValues
+      let privateMajorType ← liftGen <| inferType privateMajor
+      let (publicValue, _) ← mapCarrierValue plan memberCertificates parameters member false
+        privateMajorType publicMajorType privateMajor
+      let value ← liftGen <| mkLambdaFVars (parameters ++ publicFields) publicValue
+      let declaration := Declaration.defnDecl
+        { name, levelParams := plan.levelParams, type := exactType, value,
+          hints := .abbrev, safety := .safe }
+      liftGen <| addChecked declaration
+      return (declaration,
+        { recursor := member.key, minorIndex, publicConstructor, implementationConstructor,
+          adapter := name, exactType, fieldArity := publicFields.size })
+
+private partial def familyParametersIn (owner : MemberPlan) (expression : Expr) :
+    Option (Array Expr) :=
+  if expression.getAppFn.constName? == some owner.publicCarrier &&
+      expression.getAppArgs.size == owner.parameterArity + owner.indexArity then
+    some (expression.getAppArgs.extract 0 owner.parameterArity)
+  else match expression with
+    | .app function argument =>
+      familyParametersIn owner function <|> familyParametersIn owner argument
+    | .lam _ type body _ | .forallE _ type body _ =>
+      familyParametersIn owner type <|> familyParametersIn owner body
+    | .letE _ type value body _ =>
+      familyParametersIn owner type <|> familyParametersIn owner value <|>
+        familyParametersIn owner body
+    | .mdata _ body => familyParametersIn owner body
+    | .proj _ _ value => familyParametersIn owner value
+    | _ => none
+
+private def rewriteMinorConstructors (owner : MemberPlan)
+    (minorConstructors : Array PublicMinorConstructorCertificate) (expression : Expr) : Expr :=
+  expression.replace fun subexpression => do
+    let .const name levels := subexpression.getAppFn | none
+    let certificate ← minorConstructors.find? (·.publicConstructor == name)
+    let arguments := subexpression.getAppArgs
+    unless arguments.size >= certificate.fieldArity do none
+    let fields := arguments.extract (arguments.size - certificate.fieldArity) arguments.size
+    let parameters ← if owner.parameterArity == 0 then some #[]
+      else familyParametersIn owner subexpression
+    return mkAppN (.const certificate.adapter levels)
+      (parameters ++ fields)
+
+private def buildMinorConstructorAdapters (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (constructorCertificates : Array PublicConstructorCertificate)
+    (root : Name) (member : MemberPlan) (publicType privateType : Expr) : ConstructionM
+    (Array Declaration × Array PublicMinorConstructorCertificate) := do
+  let prefixSize := member.parameterArity + member.recursorMotiveArity +
+    member.recursorMinorArity
+  forallBoundedTelescope publicType (some prefixSize) fun publicPrefix _ => do
+    let parameters := publicPrefix.extract 0 member.parameterArity
+    let publicMotives := publicPrefix.extract member.parameterArity
+      (member.parameterArity + member.recursorMotiveArity)
+    let publicMinors := publicPrefix.extract
+      (member.parameterArity + member.recursorMotiveArity) prefixSize
+    let mut privateTail ← instantiateForall privateType parameters
+    for motiveIndex in [:member.recursorMotiveArity] do
+      let .forallE _ expected rest _ := privateTail
+        | failConstruction (.shortInstalledRecursorPrefix member.key member.implementationRecursor)
+      let motiveMember := plan.members[motiveIndex]?.getD member
+      let motive ← privateMotiveValue plan memberCertificates parameters
+        motiveMember publicMotives[motiveIndex]! expected
+      privateTail := rest.instantiate1 motive
+    let (privateBinders, _) := openExactForalls `_family_adapter_private_minor_types privateTail
+    unless privateBinders.size >= member.recursorMinorArity do
+      failConstruction (.shortInstalledRecursorPrefix member.key member.implementationRecursor)
+    let mut declarations := #[]
+    let mut certificates := #[]
+    for minorIndex in [:member.recursorMinorArity] do
+      let publicMinorType ← liftGen <| inferType publicMinors[minorIndex]!
+      let privateMinorType := privateBinders[minorIndex]!.type
+      let some publicName := minorConstructorName? publicMinorType
+        | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      let some privateName := minorConstructorName? privateMinorType
+        | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      if let some constructor := plan.constructors.find? fun constructor =>
+          constructor.publicName == publicName && constructor.implementationName == privateName then
+        let some adapter := constructorCertificates.find? (·.key == constructor.key)
+          | failConstruction (.malformedRecursorMinor member.key minorIndex)
+        certificates := certificates.push
+          { recursor := member.key, minorIndex, publicConstructor := publicName,
+            implementationConstructor := privateName, adapter := adapter.adapter,
+            exactType := adapter.exactType,
+            fieldArity := constructor.telescope.binders.size }
+      else
+        let (declaration, certificate) ← specialisedMinorConstructorDeclaration plan
+          memberCertificates parameters root member minorIndex publicMinorType privateMinorType
+        declarations := declarations.push declaration
+        certificates := certificates.push certificate
+    return (declarations, certificates)
+
+private def privateSpecialisedMinorValue (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (parameters publicMotives privateMotives : Array Expr)
+    (member : MemberPlan) (minor : PublicMinorConstructorCertificate)
+    (publicMinor expectedType : Expr) : ConstructionM Expr := do
+  forallBoundedTelescope expectedType (some (numForalls expectedType))
+      fun privateBinders privateResult => do
+    let privateValues := privateBinders
+    let some privateMajor := privateResult.getAppArgs.back?
+      | failConstruction (.malformedRecursorMinor member.key minor.minorIndex)
+    let privateFields := privateMajor.getAppArgs.filter privateValues.contains
+    let publicMinorType ← liftGen <| inferType publicMinor
+    forallBoundedTelescope publicMinorType (some (numForalls publicMinorType))
+        fun publicBinders publicResult => do
+      let some publicMajor := publicResult.getAppArgs.back?
+        | failConstruction (.malformedRecursorMinor member.key minor.minorIndex)
+      let publicFields := publicMajor.getAppArgs.filter publicBinders.contains
+      unless publicFields.size == privateFields.size do
+        failConstruction (.malformedRecursorMinor member.key minor.minorIndex)
+      let mut mappedPublic := #[]
+      for fieldIndex in [:privateFields.size] do
+        let privateValue := privateFields[fieldIndex]!
+        let privateType ← liftGen <| inferType privateValue
+        let publicType := (← liftGen <| inferType publicFields[fieldIndex]!).replaceFVars
+          (publicFields.extract 0 fieldIndex) mappedPublic
+        let (publicValue, _) ← mapCarrierValue plan memberCertificates parameters member false
+          privateType publicType privateValue
+        mappedPublic := mappedPublic.push publicValue
+      let publicHypotheses ← liftGen <|
+        motiveHypothesisValues publicMotives publicFields publicBinders
+      let privateHypotheses ← liftGen <|
+        motiveHypothesisValues privateMotives privateFields privateBinders
+      unless publicHypotheses.size == privateHypotheses.size do
+        failConstruction (.malformedRecursorMinor member.key minor.minorIndex)
+      let mut arguments := #[]
+      for binderIndex in [:publicBinders.size] do
+        let binder := publicBinders[binderIndex]!
+        let value? := if let some fieldIndex := publicFields.findIdx? (· == binder) then
+            mappedPublic[fieldIndex]?
+          else if let some hypothesisIndex := publicHypotheses.findIdx? (· == binder) then
+            privateHypotheses[hypothesisIndex]?
+          else none
+        let some value := value?
+          | failConstruction (.malformedRecursorMinor member.key minor.minorIndex)
+        let expected := (← liftGen <| inferType binder).replaceFVars
+          (publicBinders.extract 0 binderIndex) arguments
+        unless ← liftGen <| isDefEq (← inferType value) expected do
+          failConstruction (.dependentRecursorMinorTransport member.key minor.minorIndex binderIndex)
+        arguments := arguments.push value
+      let base := mkAppN publicMinor arguments
+      let mut remappedPrivate := #[]
+      let mut proofs := #[]
+      for fieldIndex in [:privateFields.size] do
+        let publicValue := mappedPublic[fieldIndex]!
+        let publicType ← liftGen <| inferType publicValue
+        let privateType := (← liftGen <| inferType privateFields[fieldIndex]!).replaceFVars
+          (privateFields.extract 0 fieldIndex) remappedPrivate
+        let (privateValue, _) ← mapCarrierValue plan memberCertificates parameters member true
+          publicType privateType publicValue
+        remappedPrivate := remappedPrivate.push privateValue
+        let originalType ← liftGen <| inferType privateFields[fieldIndex]!
+        let proof ← carrierRoundTrip plan memberCertificates parameters member false
+          originalType publicType privateFields[fieldIndex]!
+        proofs := proofs.push proof
+      let privatePackageType ← liftGen <| packedTelescopeType privateFields
+      let privatePackage ← liftGen <| packTelescopeValue privateFields privateFields
+      let remappedPackage ← liftGen <| packTelescopeValue privateFields remappedPrivate
+      let eqi ← match EqInfo.check (← getEnv) with
+        | .ok information => pure information
+        | .error _ => failConstruction (.malformedRecursorMinor member.key minor.minorIndex)
+      let packageProof ← liftGen <| packageCongruence eqi privateFields privatePackageType
+        remappedPrivate privateFields proofs
+      let some motiveIndex := privateMotives.findIdx? fun motive =>
+          privateResult.getAppFn == motive
+        | failConstruction (.malformedRecursorMinor member.key minor.minorIndex)
+      let ownerMotive := publicMotives[motiveIndex]!
+      let baseType ← liftGen <| inferType base
+      let resultLevel ← liftGen <| ilevel baseType
+      let packageLevel ← liftGen <| ilevel privatePackageType
+      let transported ← liftGen <| transportAlong eqi resultLevel packageLevel
+        privatePackageType remappedPackage privatePackage packageProof base fun package => do
+          let values ← unpackTelescopeValue privateFields package
+          let major := privateMajor.replaceFVars privateFields values
+          let majorType ← inferType major
+          let fallbackOwner := plan.members[motiveIndex]?.getD member
+          let mapped ← (mapCarrierValueInfer plan memberCertificates parameters fallbackOwner false
+            majorType major).run
+          let (publicMajor, publicMajorType, _) ← match mapped with
+            | .ok mapped => pure mapped
+            | .error issue =>
+              badShape s!"family-adapter specialised minor map failed: {repr issue}"
+          let motiveArity := numForalls (← inferType ownerMotive)
+          let indexArity := motiveArity - 1
+          let majorArguments := publicMajorType.getAppArgs
+          let indices := majorArguments.extract (majorArguments.size - indexArity)
+            majorArguments.size
+          return mkAppN ownerMotive (indices.push publicMajor)
+      unless ← liftGen <| isDefEq (← inferType transported) privateResult do
+        failConstruction (.dependentRecursorMinorTransport member.key minor.minorIndex
+          privateBinders.size)
+      mkLambdaFVars privateBinders transported
+
+private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (telescopeCertificates : Array TelescopeCertificate)
+    (constructorCertificates : Array PublicConstructorCertificate)
+    (root : Name) (member : MemberPlan) : ConstructionM
+    (Array Declaration × PublicRecursorCertificate) := do
+  let name := publicRecursorAdapterName root member.key
+  liftGen <| ensurePrototypeFresh name
+  let some publicRecursorInfo := (← getEnv).constants.find? member.publicRecursor
+    | failConstruction (.missingInstalledRecursor member.key member.publicRecursor)
+  let some privateRecursorInfo := (← getEnv).constants.find? member.implementationRecursor
+    | failConstruction (.missingInstalledRecursor member.key member.implementationRecursor)
+  let constructorMapping := constructorCertificates.map fun certificate =>
+    let constructor := (plan.constructors.find? (·.key == certificate.key)).get!
+    (constructor.publicName, certificate.adapter)
+  let publicSourceType := publicRecursorInfo.type
+  let privateType := privateRecursorInfo.type
+  let (minorDeclarations, minorCertificates) ← buildMinorConstructorAdapters plan
+    memberCertificates constructorCertificates root member publicSourceType privateType
+  let sourceMappedType := mapConstsE
+    (fun name => constructorMapping.find? (·.1 == name) |>.map (·.2)) publicSourceType
+  let specialisedMinors := minorCertificates.filter fun certificate =>
+    !plan.constructors.any fun constructor =>
+      constructor.publicName == certificate.publicConstructor &&
+        constructor.implementationName == certificate.implementationConstructor
+  let publicType := rewriteMinorConstructors member specialisedMinors sourceMappedType
+  let motiveCertificates ← match recursorMotiveCertificates member publicSourceType privateType with
+    | .ok certificates => pure certificates
+    | .error issue => failConstruction issue
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok information => pure information
+    | .error _ => failConstruction (.recursorResultMismatch member.key)
+  let prefixSize := member.parameterArity + member.recursorMotiveArity +
+    member.recursorMinorArity
+  let publicMinorNames ← match minorConstructorSequence member true publicSourceType with
+    | .ok keys => pure keys
+    | .error issue => failConstruction issue
+  let privateMinorNames ← match minorConstructorSequence member false privateType with
+    | .ok keys => pure keys
+    | .error issue => failConstruction issue
+  unless minorCertificates.size == member.recursorMinorArity &&
+      (Array.range member.recursorMinorArity).all fun minorIndex =>
+        (minorCertificates[minorIndex]?).any fun certificate =>
+          certificate.minorIndex == minorIndex &&
+            publicMinorNames[minorIndex]? == some certificate.publicConstructor &&
+            privateMinorNames[minorIndex]? == some certificate.implementationConstructor do
+    failConstruction (.malformedRecursorMinor member.key minorCertificates.size)
+  let value ← forallBoundedTelescope publicType (some prefixSize)
+      fun publicPrefix publicTailType => do
+    let parameters := publicPrefix.extract 0 member.parameterArity
+    let publicMotives := publicPrefix.extract member.parameterArity
+      (member.parameterArity + member.recursorMotiveArity)
+    let publicMinors := publicPrefix.extract
+      (member.parameterArity + member.recursorMotiveArity) prefixSize
+    unless publicMotives.size == motiveCertificates.size &&
+        publicMinors.size == minorCertificates.size do
+      failConstruction (.shortInstalledRecursorPrefix member.key member.publicRecursor)
+    let mut privateTail ← instantiateForall privateType parameters
+    let mut privateMotives := #[]
+    for motiveIndex in [:motiveCertificates.size] do
+      let .forallE _ expected rest _ := privateTail
+        | do
+          failConstruction (.shortInstalledRecursorPrefix member.key member.implementationRecursor)
+      let motiveMember := plan.members[motiveIndex]?.getD member
+      let motive ← privateMotiveValue plan memberCertificates parameters
+        motiveMember publicMotives[motiveIndex]! expected
+      privateMotives := privateMotives.push motive
+      privateTail := rest.instantiate1 motive
+    let mut privateMinors := #[]
+    for minorIndex in [:minorCertificates.size] do
+      let .forallE _ expected rest _ := privateTail
+        | do
+          failConstruction (.shortInstalledRecursorPrefix member.key member.implementationRecursor)
+      let certificate := minorCertificates[minorIndex]!
+      let minor ← if let some constructor := plan.constructors.find? fun constructor =>
+          constructor.publicName == certificate.publicConstructor &&
+            constructor.implementationName == certificate.implementationConstructor then
+        privateMinorValue plan memberCertificates telescopeCertificates
+          constructorCertificates parameters publicMotives privateMotives member minorIndex
+          constructor publicMinors[minorIndex]! expected
+      else
+        privateSpecialisedMinorValue plan memberCertificates parameters publicMotives
+          privateMotives member certificate publicMinors[minorIndex]! expected
+      privateMinors := privateMinors.push minor
+      privateTail := rest.instantiate1 minor
+    forallBoundedTelescope publicTailType (some (numForalls publicTailType))
+        fun publicTail publicResult => do
+      let some publicMajor := publicTail.back?
+        | failConstruction (.shortInstalledRecursorPrefix member.key member.publicRecursor)
+      let indices := publicTail.extract 0 (publicTail.size - 1)
+      let privateMajorTail ← instantiateForall privateTail indices
+      let .forallE _ privateMajorType _ _ := privateMajorTail
+        | do
+          failConstruction (.shortInstalledRecursorPrefix member.key member.implementationRecursor)
+      let publicMajorType ← inferType publicMajor
+      let (privateMajor, _) ← mapCarrierValue plan memberCertificates parameters member true
+        publicMajorType privateMajorType publicMajor
+      let privateCall := mkAppN
+        (.const member.implementationRecursor
+          (privateRecursorInfo.levelParams.map Level.param))
+        (parameters ++ privateMotives ++ privateMinors ++ indices ++ #[privateMajor])
+      let privateCallType ← inferType privateCall
+      let (roundTripMajor, _) ← mapCarrierValue plan memberCertificates parameters member false
+        privateMajorType publicMajorType privateMajor
+      let roundTrip ← carrierRoundTrip plan memberCertificates parameters member true
+        publicMajorType privateMajorType publicMajor
+      let some ownerIndex := plan.members.findIdx? (·.key == member.key)
+        | failConstruction (.missingMemberMap member.key)
+      let publicMotive := publicMotives[ownerIndex]!
+      let resultLevel ← ilevel privateCallType
+      let majorLevel ← ilevel publicMajorType
+      let transported ← liftGen <| transportAlong eqi
+        resultLevel majorLevel publicMajorType roundTripMajor publicMajor roundTrip privateCall
+        fun value => pure (mkAppN publicMotive (indices.push value))
+      unless ← isDefEq (← inferType transported) publicResult do
+        failConstruction (.recursorResultMismatch member.key)
+      mkLambdaFVars (publicPrefix ++ publicTail) transported
+  let declaration := Declaration.defnDecl
+    { name, levelParams := publicRecursorInfo.levelParams, type := publicType, value,
+      hints := .abbrev, safety := .safe }
+  liftGen <| addChecked declaration
+  return (minorDeclarations.push declaration,
+    { member := member.key, adapter := name, exactType := publicType,
+      implementationRecursor := member.implementationRecursor,
+      motives := motiveCertificates, minors := minorCertificates,
+      rules := member.sourceRules })
+
+private def buildPublicRecursorPrototypesCore (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (telescopeCertificates : Array TelescopeCertificate)
+    (constructorCertificates : Array PublicConstructorCertificate)
+    (root : Name) : ConstructionM
+    (Array Declaration × Array PublicRecursorCertificate) := do
+  let mut declarations := #[]
+  let mut certificates := #[]
+  for member in plan.members do
+    let (memberDeclarations, certificate) ← publicRecursorDeclaration plan memberCertificates
+      telescopeCertificates constructorCertificates root member
+    declarations := declarations ++ memberDeclarations
+    certificates := certificates.push certificate
+  return (declarations, certificates)
+
+/-- Disabled exact-public recursor tranche. -/
+def buildPublicRecursorPrototypes (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (telescopeCertificates : Array TelescopeCertificate)
+    (constructorCertificates : Array PublicConstructorCertificate) (root : Name) : GenM
+    (Except ConstructionIssue (Array Declaration × Array PublicRecursorCertificate)) := do
+  let saved ← getEnv
+  match ← ExceptT.lift
+      (buildPublicRecursorPrototypesCore plan memberCertificates telescopeCertificates
+        constructorCertificates root).run with
   | .error decline =>
     setEnv saved
     declineWith decline

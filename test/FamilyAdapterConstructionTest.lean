@@ -283,15 +283,44 @@ def publicConstructorsComplete (plan : FamilyAdapterPlan)
             adapter.telescope.constructor == constructor.key &&
             (environment.constants.find? adapter.adapter).any (·.type == constructor.publicType)
 
+def publicRecursorsComplete (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
+  let constructorsBuilt ← (FamilyAdapter.buildPublicConstructorPrototypes plan certificate.members
+    certificate.telescopes (Name.str root "constructors")).run
+  let .ok (.ok (_, constructors)) := constructorsBuilt | return false
+  match ← (FamilyAdapter.buildPublicRecursorPrototypes plan certificate.members
+      certificate.telescopes constructors root).run with
+  | .error _ => return false
+  | .ok (.error _) => return false
+  | .ok (.ok (declarations, recursors)) =>
+    let environment ← getEnv
+    let valid := declarations.size >= plan.members.size && recursors.size == plan.members.size &&
+      plan.members.all fun member =>
+        (recursors.find? (·.member == member.key)).any fun adapter =>
+          adapter.implementationRecursor == member.implementationRecursor &&
+            adapter.motives.size == member.recursorMotiveArity &&
+            adapter.motives.all (·.recursor == member.key) &&
+            adapter.minors.size == member.recursorMinorArity &&
+            (adapter.minors.all fun minor =>
+              minor.recursor == member.key &&
+                (environment.constants.find? minor.adapter).any (·.type == minor.exactType)) &&
+            adapter.rules == member.sourceRules &&
+            (environment.constants.find? adapter.adapter).any (·.type == adapter.exactType)
+    return valid
+
 structure Result where
   complete : Nat := 0
   publicConstructors : Nat := 0
+  publicRecursors : Nat := 0
   identityNested : Nat := 0
   nestedPublicConstructors : Nat := 0
+  nestedPublicRecursors : Nat := 0
   changed : Nat := 0
   changedPublicConstructors : Nat := 0
+  changedPublicRecursors : Nat := 0
   installedFamily : Nat := 0
   installedPublicConstructors : Nat := 0
+  installedPublicRecursors : Nat := 0
   closedContainers : Nat := 0
   invalidMaps : Nat := 0
   invalidIotas : Nat := 0
@@ -332,6 +361,14 @@ def runSamples : MetaM Result := do
           ((`_family_adapter_public_constructor_test).append owner)
         if constructorsComplete then
           result := { result with publicConstructors := result.publicConstructors + 1 }
+        let recursorsComplete ← publicRecursorsComplete plan certificate
+          ((`_family_adapter_public_recursor_test).append owner)
+        if recursorsComplete then
+          result := { result with publicRecursors := result.publicRecursors + 1 }
+        else
+          let failures := result.failures.push
+            s!"{owner}: exact public recursor prototype did not close"
+          result := { result with failures }
         if certificate.telescopes.size == plan.constructors.size &&
             certificate.minorHypotheses.size == expectedHypotheses && declarationsInstalled &&
             ruleCertificatesComplete plan certificate environment then
@@ -366,6 +403,13 @@ def runSamples : MetaM Result := do
       if constructorsComplete then
         result := { result with
           nestedPublicConstructors := result.nestedPublicConstructors + 1 }
+      let recursorsComplete ← match report.plan?, built.certificate with
+        | some plan, some certificate => do
+          publicRecursorsComplete plan certificate
+            ((`_family_adapter_nested_public_recursor_test).append owner)
+        | _, _ => pure false
+      if recursorsComplete then
+        result := { result with nestedPublicRecursors := result.nestedPublicRecursors + 1 }
       if built.certificate.isSome && built.issues.isEmpty && rulesComplete then
         result := { result with identityNested := result.identityNested + 1 }
         if owner == `FamilyAdapterGenerated.GeneratedShared then
@@ -409,6 +453,13 @@ def runSamples : MetaM Result := do
       if constructorsComplete then
         result := { result with
           changedPublicConstructors := result.changedPublicConstructors + 1 }
+      let recursorsComplete ← match report.plan?, built.certificate with
+        | some plan, some certificate => do
+          publicRecursorsComplete plan certificate
+            ((`_family_adapter_changed_public_recursor_test).append boundary.publicOwner)
+        | _, _ => pure false
+      if recursorsComplete then
+        result := { result with changedPublicRecursors := result.changedPublicRecursors + 1 }
       if boundary.publicOwner == changedNested.publicOwner then
         let keyedPlan := report.plan?.any fun plan => plan.containerMaps.any fun container =>
           container.key.target.owner == boundary.publicOwner &&
@@ -599,6 +650,14 @@ def runSamples : MetaM Result := do
       if constructorsComplete then
         result := { result with
           installedPublicConstructors := result.installedPublicConstructors + 1 }
+      let recursorsComplete ← match installedReport.plan?, built.certificate with
+        | some plan, some certificate => do
+          publicRecursorsComplete plan certificate
+            `_family_adapter_installed_public_recursor_test
+        | _, _ => pure false
+      if recursorsComplete then
+        result := { result with
+          installedPublicRecursors := result.installedPublicRecursors + 1 }
       if installedIso.familyImplementation?.isSome && built.certificate.isSome &&
           built.issues.isEmpty && rulesComplete then
         result := { result with installedFamily := result.installedFamily + 1 }
@@ -618,14 +677,18 @@ def runMain : IO UInt32 := do
   let (result, state) ← Core.CoreM.toIO (MetaM.run' runSamples) context { env := environment }
   if result.failures.isEmpty && result.complete == completeSamples.size &&
       result.publicConstructors == completeSamples.size &&
+      result.publicRecursors == completeSamples.size &&
       result.identityNested == nestedSamples.size &&
       result.nestedPublicConstructors == nestedSamples.size && result.changed == 3 &&
+      result.nestedPublicRecursors == nestedSamples.size &&
       result.changedPublicConstructors == 3 &&
+      result.changedPublicRecursors == 3 &&
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
       result.invalidIotas == 1 && result.lateInvalidIotas == 1 && result.wrongTargetMaps == 1 &&
       result.sharedHypothesis == 1 && result.directNestedRule == 1 &&
       result.universeLevels == 1 &&
       result.installedFamily == 1 && result.installedPublicConstructors == 1 &&
+      result.installedPublicRecursors == 1 &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
       {result.identityNested} definitional nested plans, {result.changed} changed plans, \
@@ -636,11 +699,15 @@ def runMain : IO UInt32 := do
   for message in state.messages.toArray do IO.eprintln (← message.toString)
   IO.eprintln s!"family adapter construction: complete={result.complete}, \
     publicConstructors={result.publicConstructors}, \
+    publicRecursors={result.publicRecursors}, \
     identityNested={result.identityNested}, \
     nestedPublicConstructors={result.nestedPublicConstructors}, changed={result.changed}, \
+    nestedPublicRecursors={result.nestedPublicRecursors}, \
     changedPublicConstructors={result.changedPublicConstructors}, \
+    changedPublicRecursors={result.changedPublicRecursors}, \
     installedFamily={result.installedFamily}, \
     installedPublicConstructors={result.installedPublicConstructors}, \
+    installedPublicRecursors={result.installedPublicRecursors}, \
     closedContainers={result.closedContainers}, \
     invalidMaps={result.invalidMaps}, invalidIotas={result.invalidIotas}, \
     lateInvalidIotas={result.lateInvalidIotas}, \
