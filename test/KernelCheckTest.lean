@@ -456,6 +456,29 @@ def run (root : String) : IO UInt32 := do
       !directSuccessEnv.constants.contains `Tree &&
       !directSuccessEnv.constants.contains (Naming.modelName `Tree)
 
+  let ((directMalformedReport, directMalformedPlan, directMalformed?),
+      directMalformedEnv) ← runFilterDirectObserved lateMalformed {}
+  state := state.check "compact direct unreplayable resets Meta before returning none" <|
+    directMalformed?.isNone && directMalformedReport == ordinaryMalformedReport &&
+      directMalformedReport.unreplayable.isSome &&
+      directMalformedPlan.declarations.isEmpty &&
+      directMalformedPlan.retainedGeneratedRecords == 0 &&
+      !directMalformedEnv.constants.contains `Tree &&
+      !directMalformedEnv.constants.contains `PT
+
+  let ((directMetadataReport, directMetadataPlan, directMetadata?),
+      directMetadataEnv) ← runFilterDirectObserved malformedMetadata noGeneration
+  let some directMetadata := directMetadata?
+    | IO.eprintln "kernelchecktest: malformed metadata direct run did not seal"; return 1
+  state := state.check "compact direct metadata rejection defers final-order diagnostics" <|
+    directMetadataPlan.unavailable?.isNone && directMetadata.fallback?.isSome &&
+      errorSatisfies directMetadata.result (fun message =>
+        message == "direct kernel rejection requires the final reordered batch diagnostic" &&
+          !message.contains "numMinors differs") &&
+      directMetadata.recordsPushed == directMetadata.scheduledRecords &&
+      directMetadataReport.unreplayable.isNone &&
+      !directMetadataEnv.constants.contains `Tree
+
   let ((directDeclineReport, directDeclinePlan, directDecline?), _) ←
     runFilterDirectObserved declineInput {}
   let (discardDeclineReport, discardDeclinePlan) ← runDiscarding declineInput {}

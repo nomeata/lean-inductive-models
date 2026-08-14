@@ -2139,7 +2139,9 @@ def FilterKernelCheckShadow.result (shadow : FilterKernelCheckShadow) : Except S
 already been sealed and its exact `Kernel.Environment` is unreachable.  A
 `fallback?` means the chronological compact feed was not a complete final
 schedule (for example, a generated provider appeared later); the eventual
-caller must use the ordinary reordered batch oracle and its diagnostics. -/
+caller must use the ordinary reordered batch oracle and its diagnostics. A
+streamed rejection is represented only by a generic deferred error, never its
+feed-order diagnostic. -/
 structure CompactKernelCheckVerdict where
   result : Except String Unit
   recordsPushed : Nat
@@ -3223,11 +3225,17 @@ private def CompactDirectSealed.finalize (sealed : CompactDirectSealed) :
     checkReport := compactCheckReport
     unavailable? := compactUnavailable?
     retainedGeneratedRecords := 0 }
+  let (deferredResult, kernelFallback?) := match sealed.kernelVerdict.result with
+    | .ok () => (.ok (), compactUnavailable?)
+    | .error _ =>
+      let fallback := compactUnavailable?.getD
+        "direct kernel rejection requires the final reordered batch diagnostic"
+      (.error fallback, some fallback)
   let kernelVerdict : CompactKernelCheckVerdict := {
-    result := sealed.kernelVerdict.result
+    result := deferredResult
     recordsPushed := sealed.kernelVerdict.recordsPushed
     scheduledRecords := declarations.size
-    fallback? := compactUnavailable? }
+    fallback? := kernelFallback? }
   return (rep, compactPlan, kernelVerdict)
 
 /-- Complete compact ordering and checking after the logical source stream has
@@ -3486,10 +3494,22 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     match ← current.feedSource context declaration with
     | .next next => state := next
     | .unreplayable report sourceSteps =>
+      if retention.checksKernelDirect then
+        let some base := context.kernelCheckBase?
+          | throwError "unreplayable compact direct state lost its exact base environment"
+        setEnv base
+        return (#[], report, {}, {}, sourceSteps, none, none)
       return (x.decls, report, {}, {}, sourceSteps, none, none)
   if retention.checksKernelDirect then
     let sourceSteps := state.sourceSteps
-    let sealed ← state.sealCompactDirect context
+    let some base := context.kernelCheckBase?
+      | throwError "compact direct finalization lost its exact base environment"
+    let sealed ← try
+      state.sealCompactDirect context
+    finally
+      -- Validation errors must not strand construction declarations in the
+      -- caller's Meta state either.
+      setEnv base
     let (report, compact, kernelVerdict) ← sealed.finalize
     return (#[], report, compact, {}, sourceSteps, none, some kernelVerdict)
   let (decls, report, compact, plan, kernelCheckShadow?) ← state.finalize context
