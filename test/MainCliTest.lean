@@ -184,21 +184,21 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "online input guard rejects a model after its owner" <|
     arenaModelCycle.exitCode == 1 && arenaModelCycle.stdout.isEmpty &&
       arenaModelCycle.stderr.contains "is not before Tree at record"
-  let plannedModelCycle ← runInductiveModelsStdin binary [
+  let uncheckedModelCycle ← runInductiveModelsStdin binary [
     "--no-check", "--no-type-check-output", "--no-output", "-"] modelCycleText
-  state := state.check "planned input guard rejects a model after its owner" <|
-    plannedModelCycle.exitCode == 1 && plannedModelCycle.stdout.isEmpty &&
-      plannedModelCycle.stderr.contains "is not before Tree at record"
+  state := state.check "in-memory input guard rejects a model after its owner" <|
+    uncheckedModelCycle.exitCode == 1 && uncheckedModelCycle.stdout.isEmpty &&
+      uncheckedModelCycle.stderr.contains "is not before Tree at record"
 
-  let plannedUncheckedOutput ← runInductiveModelsWithEnv binary
+  let uncheckedOutput ← runInductiveModelsWithEnv binary
     ["--no-check", "--no-type-check-output", "--no-output", nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "planned output-check-off bypasses the generated kernel gate" <|
-    plannedUncheckedOutput.exitCode == 0 && plannedUncheckedOutput.stdout.isEmpty &&
-      plannedUncheckedOutput.stderr.contains "model of" &&
-      hasDiagnostic plannedUncheckedOutput.stderr "input route: planned-census" &&
-      hasDiagnostic plannedUncheckedOutput.stderr "output backend: compact-discard" &&
-      hasDiagnostic plannedUncheckedOutput.stderr "generated kernel checks: 0"
+  state := state.check "in-memory output-check-off bypasses the generated kernel gate" <|
+    uncheckedOutput.exitCode == 0 && uncheckedOutput.stdout.isEmpty &&
+      uncheckedOutput.stderr.contains "model of" &&
+      !hasDiagnostic uncheckedOutput.stderr "input route: planned-census" &&
+      hasDiagnostic uncheckedOutput.stderr "output backend: compact-discard" &&
+      hasDiagnostic uncheckedOutput.stderr "generated kernel checks: 0"
 
   let badName := `ArenaBad
   let badDeclaration : InductiveModels.EDecl :=

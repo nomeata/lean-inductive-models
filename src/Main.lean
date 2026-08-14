@@ -117,8 +117,9 @@ consume records while each family is live. -/
 def compactModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   InductiveModels.generationEnabled config
 
-/-- No-output compact generation retains the same value-only verdict
-certificates but deliberately has no workspace or physical spool. -/
+/-- No-output compact generation retains value-only verdict certificates and
+never creates a generated-output workspace or spool. The checked planned
+subroute may separately use an input-only snapshot workspace. -/
 def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   !config.output && compactModeEligible config
 
