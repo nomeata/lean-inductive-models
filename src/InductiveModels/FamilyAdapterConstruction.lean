@@ -1179,73 +1179,34 @@ private def fixedCarrierBoundary (plan : FamilyAdapterPlan)
   return PackedCarrierBoundary.mk publicType implementationType forward backward
     backwardForward forwardBackward
 
-private def recursorAgreementAt (plan : FamilyAdapterPlan)
-    (memberCertificates : Array MemberCertificate)
-    (member : MemberPlan) (recursor : PublicRecursorCertificate)
-    (publicRecursorPrefix : Array Expr)
+private def recursorAgreementAt (member : MemberPlan)
+    (recursor : PublicRecursorCertificate)
     (expectedPublic expectedPrivate : Expr) : ConstructionM Expr := do
-  let reducedPublic ← liftGen <| whnf expectedPublic
   let reducedPrivate ← liftGen <| whnf expectedPrivate
-  unless reducedPrivate.getAppFn.constName? == some member.implementationRecursor do
+  unless expectedPublic.getAppFn.constName? == some recursor.adapter &&
+      reducedPrivate.getAppFn.constName? == some member.implementationRecursor do
     failConstruction (.recursorResultMismatch recursor.member)
+  let publicArguments := expectedPublic.getAppArgs
   let privateArguments := reducedPrivate.getAppArgs
   let prefixSize := member.parameterArity + member.recursorMotiveArity +
     member.recursorMinorArity
-  unless publicRecursorPrefix.size == prefixSize && privateArguments.size > prefixSize do
+  unless publicArguments.size > prefixSize && privateArguments.size > prefixSize do
     failConstruction (.recursorResultMismatch recursor.member)
-  let privatePrefix := privateArguments.extract 0 prefixSize
+  let publicPrefix := publicArguments.extract 0 prefixSize
   let privateTail := privateArguments.extract prefixSize privateArguments.size
-  let privateMajor := privateTail.back!
-  let privateIndices := privateTail.pop
-  let privateMajorType ← liftGen <| inferType privateMajor
-  let parameters := publicRecursorPrefix.extract 0 member.parameterArity
-  let (_, publicMajorType, _) ← mapCarrierValueInfer plan memberCertificates parameters member
-    false privateMajorType privateMajor
-  let boundary ← fixedCarrierBoundary plan memberCertificates parameters member
-    publicMajorType privateMajorType
-  let some privateRecursorInfo := (← getEnv).constants.find? member.implementationRecursor
-    | failConstruction (.missingInstalledRecursor member.key member.implementationRecursor)
-  let core ← withLocalDeclD `value boundary.implementationType fun value => do
-    let call := mkAppN
-      (.const member.implementationRecursor
-        (privateRecursorInfo.levelParams.map Level.param))
-      (privatePrefix ++ privateIndices ++ #[value])
-    liftGen <| mkLambdaFVars #[value] call
-  let carrier := publicMajorType.getAppFn.constName?
-  let motives := recursor.motives.filter fun motive =>
-    some motive.publicCarrier == carrier
-  let some motiveCertificate := motives[0]?
-    | failConstruction (.recursorResultMismatch recursor.member)
-  unless motives.all (·.motiveIndex == motiveCertificate.motiveIndex) do
-    failConstruction (.recursorResultMismatch recursor.member)
-  let some publicMotive := publicRecursorPrefix[
-      member.parameterArity + motiveCertificate.motiveIndex]?
-    | failConstruction (.recursorResultMismatch recursor.member)
-  let publicMotiveType ← liftGen <| whnf (← inferType publicMotive)
-  let motiveArity := numForalls publicMotiveType
-  unless motiveArity > 0 do
-    failConstruction (.recursorResultMismatch recursor.member)
-  let publicCarrierArguments := publicMajorType.getAppArgs
-  unless publicCarrierArguments.size >= motiveArity - 1 do
-    failConstruction (.recursorResultMismatch recursor.member)
-  let publicIndices := publicCarrierArguments.extract
-    (publicCarrierArguments.size - (motiveArity - 1)) publicCarrierArguments.size
-  let motive ← withLocalDeclD `value boundary.publicType fun value =>
-    liftGen <| mkLambdaFVars #[value] (mkAppN publicMotive (publicIndices.push value))
-  let agreement ← liftGen <| mkAppOptM ``packedRecursorAgreement <|
-    #[boundary.implementationType, boundary.publicType, motive,
-      boundary.forward, boundary.backward, boundary.backwardForward,
-      boundary.forwardBackward, core].map some
-  let publicToPrivate := mkApp agreement privateMajor
-  let privateToPublic ← liftGen <| mkAppM ``Eq.symm #[publicToPrivate]
+  let some agreementInfo := (← getEnv).constants.find? recursor.callAgreement
+    | failConstruction (.missingInstalledRecursor recursor.member recursor.callAgreement)
+  let proof := mkAppN
+    (.const recursor.callAgreement (agreementInfo.levelParams.map Level.param))
+    (publicPrefix ++ privateTail)
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
     | .error _ => failConstruction (.missingMemberMap member.key)
   let resultType ← liftGen <| inferType expectedPrivate
-  unless ← liftGen <| isDefEq (← inferType privateToPublic)
-      (eqi.mk' (← ilevel resultType) resultType expectedPrivate reducedPublic) do
+  unless ← liftGen <| isDefEq (← inferType proof)
+      (eqi.mk' (← ilevel resultType) resultType expectedPrivate expectedPublic) do
     failConstruction (.recursorResultMismatch recursor.member)
-  return privateToPublic
+  return proof
 
 private def recursorForwardAgreementAt (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
@@ -1361,8 +1322,7 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
     unless reducedPrivate.getAppFn.constName? == some role.implementationRecursor do
       failConstruction (.missingPublicIotaRecursiveCall rule
         publicBinderIndex implementationBinderIndex)
-    recursorAgreementAt plan memberCertificates member recursor publicRecursorPrefix
-      expectedPublic expectedPrivate
+    recursorAgreementAt member recursor expectedPublic expectedPrivate
 
 private partial def withReboundTelescope (fixedOriginal fixedReplacement binders : Array Expr)
     (position : Nat) (rebound : Array Expr)
