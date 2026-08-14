@@ -13,7 +13,38 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : IO
     IO.eprintln s!"FAIL: {label}"
     return { state with failed := state.failed + 1 }
 
-def main : IO UInt32 := do
+private def perfOwner (index : Nat) : Name :=
+  Name.num `CollisionCensusPerf index
+
+private def largeReserved (size : Nat) : Std.HashSet Name :=
+  (List.range size).foldl (fun names index => names.insert (perfOwner index)) {}
+
+private def perfTable : Table :=
+  Table.empty
+    |>.addDeclaration .typeFormer `CollisionCensusPerf.hit
+    |>.addRecursor `CollisionCensusPerf.rec 2
+    |>.addMetadata .eta `CollisionCensusPerf.meta
+    |>.addMetadata .eta `CollisionCensusPerf.meta
+
+private def perfReserved (size : Nat) : Std.HashSet Name :=
+  largeReserved size
+    |>.insert (modelName `CollisionCensusPerf.hit)
+    |>.insert (iotaName `CollisionCensusPerf.rec 1)
+    |>.insert (etaName `CollisionCensusPerf.meta)
+
+private def runPerf (direct : Bool) : IO UInt32 := do
+  let reserved := perfReserved 20000
+  let mut checksum := 0
+  for _ in [0:200] do
+    let census := if direct then perfTable.collisionCensusReserved reserved
+      else perfTable.collisionCensus reserved.toArray
+    checksum := checksum + census.taken.size + census.duplicateRequirements.size
+  IO.println s!"collision census checksum: {checksum}"
+  return if checksum == 800 then 0 else 1
+
+def main (args : List String) : IO UInt32 := do
+  if args == ["--perf-direct"] then return ← runPerf true
+  if args == ["--perf-materialized"] then return ← runPerf false
   let mut state : TestState := {}
 
   state ← state.check "ordinary declaration" (modelName `Tree == `Tree._model)
@@ -93,6 +124,15 @@ def main : IO UInt32 := do
     (duplicateCensus.duplicateRequirements == #[`Data.Tree._model.eta])
   state ← state.check "duplicate requirement makes census nonempty"
     (!duplicateCensus.isEmpty)
+
+  let largeCensus := perfTable.collisionCensusReserved (perfReserved 20000)
+  state ← state.check "reserved-set census preserves required-name order"
+    (largeCensus.taken == #[modelName `CollisionCensusPerf.hit,
+      iotaName `CollisionCensusPerf.rec 1, etaName `CollisionCensusPerf.meta])
+  state ← state.check "reserved-set census preserves duplicate diagnostic order"
+    (largeCensus.duplicateRequirements == #[etaName `CollisionCensusPerf.meta])
+  state ← state.check "reserved-set census matches materialized census"
+    (largeCensus == perfTable.collisionCensus (perfReserved 20000).toArray)
 
   if state.failed == 0 then
     IO.println s!"Naming: {state.passed} tests passed"
