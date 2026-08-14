@@ -128,6 +128,9 @@ def main : IO UInt32 := do
     let result ← runExport s!"pass-through {fixture}" input false generation
     state := state.check s!"{fixture} filtering is a byte-order fixed point"
       (result.report.generated.isEmpty && result.output == input.decls)
+    let shadow ← runExportShadow s!"pass-through shadow {fixture}" input false generation
+    state := state.check s!"{fixture} shadow mode preserves the scheduler fixed point"
+      (!shadow.selected && shadow.output == result.output && shadow.report == result.report)
 
   -- The committed nested fixture is filtered only for the nested and mutual
   -- branches. Enabling simple/basic generation is deliberately not an
@@ -321,6 +324,18 @@ def main : IO UInt32 := do
       lateQuotShadow.report == lateQuot.report &&
       Check.checkReport { lateQuotInput with decls := lateQuotShadow.output } ==
         Check.checkReport { lateQuotInput with decls := lateQuot.output }
+  let malformedSound := { lateQuotInput with decls := lateQuotInput.decls.map fun declaration =>
+    match declaration with
+    | .ax `Quot.sound levels _ isUnsafe => .ax `Quot.sound levels (.sort .zero) isUnsafe
+    | _ => declaration }
+  let malformedSoundScheduled ← runExport "malformed future Quot.sound scheduler"
+    malformedSound false { noGeneration with simple := true, basic := true }
+  let malformedSoundShadow ← runExportShadow "malformed future Quot.sound fallback"
+    malformedSound false { noGeneration with simple := true, basic := true }
+  state := state.check "noncanonical future Quot.sound is never shadowed" <|
+    !malformedSoundShadow.selected &&
+      malformedSoundShadow.output == malformedSoundScheduled.output &&
+      malformedSoundShadow.report == malformedSoundScheduled.report
 
   let composed ← runFixture "test/fixtures/inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true, simple := true }
