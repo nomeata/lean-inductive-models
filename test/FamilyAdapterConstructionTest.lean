@@ -327,6 +327,10 @@ def recursorUsesRecordedMinorAdapters (member : MemberPlan)
 
 def publicRecursorsComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
+  let .ok (.ok packedCount) ←
+      (FamilyAdapter.validatePackedCarrierBoundaries plan certificate.members).run
+    | return false
+  unless packedCount == plan.members.size do return false
   let constructorsBuilt ← (FamilyAdapter.buildPublicConstructorPrototypes plan certificate.members
     certificate.telescopes (Name.str root "constructors")).run
   let .ok (.ok (_, constructors)) := constructorsBuilt | return false

@@ -14,6 +14,70 @@ open Lean Meta
 
 namespace InductiveModels.FamilyAdapter
 
+/-- Arity-independent recursor compatibility after packing a complete
+dependent constructor telescope and its finite IH telescope into one value.
+The generator instantiates this theorem only with exact keyed maps and laws;
+it performs no proof search. -/
+theorem packedRecursorCompatibility
+    {M : Sort uM} {P : Sort uP} {Q : Sort uQ} {R : Sort uR}
+    {C : P → Sort v} {H : R → Sort x}
+    (forward : P → M) (backward : M → P)
+    (backwardForward : ∀ p, backward (forward p) = p)
+    (encode : R → Q) (decode : Q → R)
+    (decodeEncode : ∀ p, decode (encode p) = p)
+    (privateCtor : Q → M) (publicCtor : R → P)
+    (forwardCtor : ∀ p, forward (publicCtor p) = privateCtor (encode p))
+    (privateIH : ∀ q, H (decode q)) (publicIH : ∀ p, H p)
+    (ihAgreement : ∀ q, publicIH (decode q) = privateIH q)
+    (minor : ∀ p, H p → C (publicCtor p))
+    (core : ∀ q, C (backward q))
+    (constructorAgreement : ∀ q,
+      publicCtor (decode q) = backward (privateCtor q))
+    (coreIota : ∀ q, core (privateCtor q) =
+      Eq.mp (congrArg C (constructorAgreement q))
+        (minor (decode q) (privateIH q))) :
+    let publicRec : ∀ p, C p := fun p =>
+      Eq.mp (congrArg C (backwardForward p)) (core (forward p))
+    ∀ p, publicRec (publicCtor p) = minor p (publicIH p) := by
+  have cancel {a b : P} (h : a = b) (value : C a) :
+      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value := by
+    exact Eq.rec (motive := fun b h =>
+      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value) rfl h
+  intro publicRec p
+  unfold publicRec
+  have compat (q : Q) (r : M) (p : R)
+      (hp : decode q = p) (hc : r = privateCtor q)
+      (hout : backward r = publicCtor p) :
+      Eq.mp (congrArg C hout) (core r) = minor p (publicIH p) := by
+    let afterCtor : ∀ (r : M), r = privateCtor q →
+        ∀ (p : R) (hp : decode q = p)
+          (hout : backward r = publicCtor p),
+          Eq.mp (congrArg C hout) (core r) = minor p (publicIH p) :=
+      fun r hc => Eq.rec (motive := fun r _ =>
+          ∀ (p : R) (hp : decode q = p)
+            (hout : backward r = publicCtor p),
+            Eq.mp (congrArg C hout) (core r) = minor p (publicIH p))
+        (fun p hp => Eq.rec (motive := fun p _ =>
+            ∀ hout : backward (privateCtor q) = publicCtor p,
+              Eq.mp (congrArg C hout) (core (privateCtor q)) =
+                minor p (publicIH p))
+          (fun hout => by
+            let move := fun value : C (backward (privateCtor q)) =>
+              Eq.mp (congrArg C hout) value
+            let first := congrArg move (coreIota q)
+            let privateResult := minor (decode q) (privateIH q)
+            let middle : move
+                (Eq.mp (congrArg C (constructorAgreement q)) privateResult) =
+                privateResult := by
+              exact cancel (constructorAgreement q) _
+            let last := congrArg (minor (decode q)) (ihAgreement q)
+            exact first.trans (middle.trans last.symm))
+          hp)
+        hc.symm
+    exact afterCtor r hc p hp hout
+  exact compat (encode p) (forward (publicCtor p)) p
+    (decodeEncode p) (forwardCtor p) (backwardForward (publicCtor p))
+
 /-- A keyed construction obligation.  These are semantic failures of an exact
 certificate, never eligibility predicates or cardinality limits. -/
 inductive ConstructionIssue where
@@ -858,6 +922,108 @@ private def carrierRoundTrip (plan : FamilyAdapterPlan)
   unless candidates.all (sameContainerBoundary first ·) do
     failConstruction (.missingMemberMap member.key)
   applyContainerLaw plan first forward parameters sourceType value
+
+/-- A family member with all of its exact indices packed together with the
+carrier value.  Totalising the fibre lets one proof schema handle arbitrary
+finite index vectors without an index-arity branch. -/
+private structure PackedCarrierBoundary where
+  publicType : Expr
+  implementationType : Expr
+  forward : Expr
+  backward : Expr
+  backwardForward : Expr
+  forwardBackward : Expr
+
+private def packedCarrierBoundary (plan : FamilyAdapterPlan)
+    (certificates : Array MemberCertificate) (parameters : Array Expr)
+    (member : MemberPlan) : ConstructionM PackedCarrierBoundary := do
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok information => pure information
+    | .error _ => failConstruction (.missingMemberMap member.key)
+  withIndexTelescopes member parameters fun publicIndices implementationIndices => do
+    let levels := plan.levelParams.map Level.param
+    let publicCarrier := mkAppN (.const member.publicCarrier levels)
+      (parameters ++ publicIndices)
+    let implementationCarrier := mkAppN (.const member.implementationCarrier levels)
+      (parameters ++ implementationIndices)
+    withLocalDeclD `publicValue publicCarrier fun publicValue => do
+      withLocalDeclD `implementationValue implementationCarrier fun implementationValue => do
+        let publicFields := publicIndices.push publicValue
+        let implementationFields := implementationIndices.push implementationValue
+        let publicType ← liftGen <| packedTelescopeType publicFields
+        let implementationType ← liftGen <| packedTelescopeType implementationFields
+        let makeMap := fun (forward : Bool) => do
+          let sourceType := if forward then publicType else implementationType
+          let sourceFields := if forward then publicFields else implementationFields
+          let targetFields := if forward then implementationFields else publicFields
+          withLocalDeclD `total sourceType fun total => do
+            let sourceValues ← liftGen <| unpackTelescopeValue sourceFields total
+            let sourceValue := sourceValues.back!
+            let indices := sourceValues.pop
+            let sourceCarrierType ← liftGen <| inferType sourceValue
+            let targetCarrierName := if forward then member.implementationCarrier
+              else member.publicCarrier
+            let targetCarrierType := mkAppN (.const targetCarrierName levels)
+              (parameters ++ indices)
+            let (targetValue, _) ← mapCarrierValue plan certificates parameters member forward
+              sourceCarrierType targetCarrierType sourceValue
+            let target ← liftGen <| packTelescopeValue targetFields (indices.push targetValue)
+            liftGen <| mkLambdaFVars #[total] target
+        let forward ← makeMap true
+        let backward ← makeMap false
+        let makeLaw := fun (isForward : Bool) => do
+          let sourceType := if isForward then publicType else implementationType
+          let sourceFields := if isForward then publicFields else implementationFields
+          let targetFields := if isForward then implementationFields else publicFields
+          let first := if isForward then forward else backward
+          let second := if isForward then backward else forward
+          withLocalDeclD `total sourceType fun total => do
+            let sourceValues ← liftGen <| unpackTelescopeValue sourceFields total
+            let once := mkApp first total
+            let onceValues ← liftGen <| unpackTelescopeValue targetFields once
+            let twice := mkApp second once
+            let twiceValues ← liftGen <| unpackTelescopeValue sourceFields twice
+            let mut proofs := #[]
+            for index in [:member.indexArity] do
+              let type ← liftGen <| inferType sourceValues[index]!
+              proofs := proofs.push <| eqi.refl' (← liftGen <| ilevel type) type
+                sourceValues[index]!
+            let sourceValue := sourceValues.back!
+            let targetValue := onceValues.back!
+            let sourceCarrierType ← liftGen <| inferType sourceValue
+            let targetCarrierType ← liftGen <| inferType targetValue
+            let valueProof ← carrierRoundTrip plan certificates parameters member isForward
+              sourceCarrierType targetCarrierType sourceValue
+            proofs := proofs.push valueProof
+            let proof ← liftGen <| packageCongruence eqi sourceFields sourceType twiceValues
+              sourceValues proofs
+            unless ← liftGen <| isDefEq (← inferType proof)
+                (eqi.mk' (← ilevel sourceType) sourceType twice total) do
+              failConstruction (.missingMemberMap member.key)
+            liftGen <| mkLambdaFVars #[total] proof
+        let backwardForward ← makeLaw true
+        let forwardBackward ← makeLaw false
+        return PackedCarrierBoundary.mk publicType implementationType forward backward
+          backwardForward forwardBackward
+
+/-- Exercise totalised member boundaries in the disabled prototype. This is a
+source/interpreted regression seam for arbitrary finite index telescopes. -/
+def validatePackedCarrierBoundaries (plan : FamilyAdapterPlan)
+    (certificates : Array MemberCertificate) : GenM (Except ConstructionIssue Nat) := do
+  let action : ConstructionM Nat := do
+    let mut count := 0
+    for member in plan.members do
+      let _ ← forallBoundedTelescope member.sourceType (some member.parameterArity)
+          fun parameters _ => do
+        let boundary ← packedCarrierBoundary plan certificates parameters member
+        for expression in #[boundary.publicType, boundary.implementationType,
+            boundary.forward, boundary.backward, boundary.backwardForward,
+            boundary.forwardBackward] do
+          liftGen <| check expression
+        return ()
+      count := count + 1
+    return count
+  action.run
 
 private def publicConstructorDeclaration (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)

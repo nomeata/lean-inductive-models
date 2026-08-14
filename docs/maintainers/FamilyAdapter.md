@@ -112,7 +112,10 @@ source-shaped statement for the fresh constructor/recursor pair. Its
 private iota, dependent telescope cancellation, the installed finite sequence
 of grouped IH agreements, then the keyed minor-compatibility theorem. Every IH
 step records its literal private motive and binder indices; shared source
-occurrences remain one proof step. The family boundary is atomic: missing one
+occurrences remain one proof step. Member index vectors and their carrier value
+are packed into one dependent total-space boundary, so the proof uses the same
+kernel-checked compatibility theorem for every finite index arity. The family
+boundary is atomic: missing one
 keyed declaration leaves
 `FamilyAdapterCertificate.publicAdapter? = none` and restores the incremental
 environment. These structures do not authorize production selection.
