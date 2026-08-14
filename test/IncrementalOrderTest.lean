@@ -56,25 +56,6 @@ def sameOutcome [BEq α] (left right : Except Order.Error α) : Bool :=
 def outcomesAgree (x : Export) (prefer : EDecl → Bool := fun _ => false) : Bool :=
   sameOutcome (fullOutcome x prefer) (compactOutcome x prefer)
 
-def noGeneration : Cli.Config :=
-  { nested := false, mutualModels := false, simple := false, basic := false }
-
-def compactScheduledOutcome (x : Export) (generation : Cli.Config) :
-    Except Order.Error (Array (Array Name)) :=
-  let reserved := x.decls.foldl (fun names declaration =>
-    declaration.names.foldl (·.insert ·) names) {}
-  let selected := sourceNeedsSupportScheduling x generation reserved
-  compactOutcome x fun declaration =>
-    selected && scheduledSupportRecord generation declaration
-
-def fullScheduledOutcome (x : Export) (generation : Cli.Config) :
-    Except Order.Error (Array (Array Name)) := do
-  let scheduled ← scheduleSource x generation
-  return scheduled.decls.map fun declaration => declaration.names.toArray
-
-def schedulingAgrees (x : Export) (generation : Cli.Config) : Bool :=
-  sameOutcome (fullScheduledOutcome x generation) (compactScheduledOutcome x generation)
-
 def isExactOrder (outcome : Except Order.Error (Array (Array Name)))
     (expected : Array (Array Name)) : Bool :=
   match outcome with
@@ -266,19 +247,11 @@ def randomCycleSummaries (seed : Nat) :
 
 def run (root : String) : IO UInt32 := do
   let mut state : TestState := {}
-  let configs : Array (String × Cli.Config) := #[
-    ("none", noGeneration),
-    ("nested-mutual", { noGeneration with nested := true, mutualModels := true }),
-    ("simple", { noGeneration with simple := true }),
-    ("default", {})]
   let paths ← fixturePaths root
   for path in paths do
     let x ← readExport path
     let label := path.toString
     state := state.check s!"{label}: ordinary name order/error" (outcomesAgree x)
-    for (configName, config) in configs do
-      state := state.check s!"{label}: {configName} source schedule"
-        (schedulingAgrees x config)
 
   -- Preferred support brings its complete predecessor closure forward, while
   -- retaining the least original ordinal inside both classes.

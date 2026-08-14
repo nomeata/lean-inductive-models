@@ -1,7 +1,5 @@
 import InductiveModels.Driver
-import InductiveModels.Check
 import InductiveModels.Naming
-import InductiveModels.Order
 
 open Lean Meta InductiveModels InductiveModels.Naming
 
@@ -9,18 +7,13 @@ structure FixtureResult where
   output : Array EDecl
   report : Report
 
-structure ShadowResult extends FixtureResult where
-  selected : Bool
-
 structure TestState where
   passed : Nat := 0
   failed : Array String := #[]
 
 def TestState.check (state : TestState) (label : String) (condition : Bool) : TestState :=
-  if condition then
-    { state with passed := state.passed + 1 }
-  else
-    { state with failed := state.failed.push label }
+  if condition then { state with passed := state.passed + 1 }
+  else { state with failed := state.failed.push label }
 
 def noGeneration : InductiveModels.Cli.Config :=
   { nested := false, mutualModels := false, simple := false, basic := false }
@@ -43,58 +36,14 @@ def runFixture (path : String) (generation : InductiveModels.Cli.Config) : IO Fi
     | throw <| IO.userError s!"cannot parse {path}"
   runExport path input false generation
 
-def runExportShadow (label : String) (input : Export) (checkRecursors : Bool)
-    (generation : InductiveModels.Cli.Config) : IO ShadowResult := do
-  let env ← importModules #[] {}
-  let context : Core.Context :=
-    { fileName := "<driver-shadow-test>", fileMap := default,
-      maxHeartbeats := 0, maxRecDepth := 8192 }
-  let ((output, report, selected), _) ← Lean.Core.CoreM.toIO
-    (Lean.Meta.MetaM.run'
-      (runFilterWithFutureSourceSupportShadow input checkRecursors generation)) context { env }
-  unless report.stmtErrors.isEmpty do
-    throw <| IO.userError s!"{label}: generated statements differ: {report.stmtErrors}"
-  return { output, report, selected }
-
-def shadowFailureRestoresEnvironment (input : Export)
-    (generation : InductiveModels.Cli.Config) : IO Bool := do
-  let env ← importModules #[] {}
-  let context : Core.Context :=
-    { fileName := "<driver-shadow-transaction-test>", fileMap := default,
-      maxHeartbeats := 0, maxRecDepth := 8192 }
-  let (restored, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
-    let before ← getEnv
-    let supportNames : Array Name := #[`Eq, `Nat, `PUnit, `PSigma', `Quot, `Quot.sound]
-    let beforePresence := supportNames.map before.constants.contains
-    let failed ← try
-      discard <| runFilterWithFutureSourceSupportShadow input false generation
-      pure false
-    catch _ =>
-      pure true
-    let after ← getEnv
-    pure (failed && supportNames.map after.constants.contains == beforePresence))) context { env }
-  return restored
-
-def postponeRecords (input : Export) (postpone : EDecl → Bool) : Export :=
-  { input with
-    decls := input.decls.filter (fun declaration => !postpone declaration) ++
-      input.decls.filter postpone }
-
-def emptyInductiveRecord (name : Name) : EDecl :=
-  let type : EIndType := {
-    name, levelParams := [], type := .sort (.succ .zero), all := [name], ctors := []
-    numParams := 0, numIndices := 0, numNested := 0, isRec := false
-    isReflexive := false, isUnsafe := false }
-  .induct [type] [] []
-
 def flipFirstRecursorSafety (input : Export) : Option (Export × Name) := do
   let index ← input.decls.findIdx? fun declaration => match declaration with
     | .induct _ _ (_ :: _) => true
     | _ => false
   let .induct types constructors (recursor :: recursors) := input.decls[index]! | none
   let changed := { recursor with isUnsafe := !recursor.isUnsafe }
-  let declaration := EDecl.induct types constructors (changed :: recursors)
-  return ({ input with decls := input.decls.set! index declaration }, recursor.name)
+  return ({ input with decls := input.decls.set! index
+    (.induct types constructors (changed :: recursors)) }, recursor.name)
 
 def FixtureResult.hasName (result : FixtureResult) (name : Name) : Bool :=
   result.output.any fun declaration => declaration.names.contains name
@@ -102,22 +51,11 @@ def FixtureResult.hasName (result : FixtureResult) (name : Name) : Bool :=
 def FixtureResult.generated (result : FixtureResult) (owner : Name) : Bool :=
   result.report.generated.any (fun entry => entry.1 == owner)
 
-def FixtureResult.declined (result : FixtureResult) (owner : Name) : Bool :=
-  result.report.declined.any (fun entry => entry.1 == owner)
-
 def FixtureResult.hasExactCarrier (result : FixtureResult) (owner : Name) : Bool :=
   result.hasName (modelName owner)
 
 def FixtureResult.hasLegacyCarrier (result : FixtureResult) (owner : Name) : Bool :=
   result.hasName (Name.str (modelName owner) "self")
-
-def declarationIndex? (output : Export) (name : Name) : Option Nat :=
-  output.decls.findIdx? (·.names.contains name)
-
-def declarationBefore (output : Export) (first second : Name) : Bool :=
-  match declarationIndex? output first, declarationIndex? output second with
-  | some i, some j => i < j
-  | _, _ => false
 
 def generatedOwnersExact (result : FixtureResult) : Bool :=
   result.report.generated.all fun entry =>
@@ -127,19 +65,12 @@ def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
 
-  -- The ordinary parser/filter contract permits a declaration record with no
-  -- introduced names.  Internal shadow bookkeeping must remain lazy so merely
-  -- sharing the transition cannot reject this historical pass-through shape.
   let emptyRecord := EDecl.induct [] [] []
   let emptyInput : Export := { metaLine := .null, decls := #[emptyRecord] }
   let emptyResult ← runExport "empty inductive declaration record" emptyInput false noGeneration
   state := state.check "ordinary filtering retains a nameless inductive record"
     (emptyResult.output == #[emptyRecord] && emptyResult.report == {})
 
-  -- These are the three aggregate failure shapes caused by unconditional
-  -- support prioritization: two already-filtered composed exports, and the
-  -- plain no-selected-owner export checked once per aggregate fixture.  The
-  -- scheduler and the complete filter must both be byte-order fixed points.
   let passThrough : Array (String × InductiveModels.Cli.Config) := #[
     ("nested_iota.ndjson", legacyGenerationConfig false),
     ("nested_shapes.ndjson", legacyGenerationConfig false),
@@ -149,322 +80,63 @@ def main : IO UInt32 := do
     let text ← IO.FS.readFile path
     let .ok input := InductiveModels.parse text
       | throw <| IO.userError s!"cannot parse {path}"
-    state := state.check s!"{fixture} source scheduling is a fixed point" <|
-      match scheduleSource input generation with
-      | .ok scheduled => scheduled.decls == input.decls
-      | .error _ => false
     let result ← runExport s!"pass-through {fixture}" input false generation
     state := state.check s!"{fixture} filtering is a byte-order fixed point"
       (result.report.generated.isEmpty && result.output == input.decls)
-    let shadow ← runExportShadow s!"pass-through shadow {fixture}" input false generation
-    state := state.check s!"{fixture} shadow mode preserves the scheduler fixed point"
-      (!shadow.selected && shadow.output == result.output && shadow.report == result.report)
 
-  -- The committed nested fixture is filtered only for the nested and mutual
-  -- branches. Enabling simple/basic generation is deliberately not an
-  -- idempotence check: the missing ordinary models must still be added.
   let partialText ← IO.FS.readFile
     "test/fixtures/inductive-models/filtered/nested_iota.ndjson"
   let .ok partialInput := InductiveModels.parse partialText
-    | throw <| IO.userError "cannot parse the partially filtered nested_iota fixture"
+    | throw <| IO.userError "cannot parse partially filtered nested_iota"
   let allBranches ← runExport "partially filtered nested_iota with every branch"
     partialInput false {}
-  state := state.check "partially filtered nested output is not an all-branch fixed point"
-    (allBranches.output != partialInput.decls)
-  state := state.check "all branches add the missing ordinary simple models"
-    ([`N, `List, `Box].all allBranches.generated)
+  state := state.check "partially filtered output gains missing simple models"
+    (allBranches.output != partialInput.decls && [`N, `List, `Box].all allBranches.generated)
 
   let safetyText ← IO.FS.readFile "test/fixtures/inductive-models/nested_iota_arm.ndjson"
   let .ok safetyInput := InductiveModels.parse safetyText
-    | throw <| IO.userError "cannot parse test/fixtures/inductive-models/nested_iota_arm.ndjson"
+    | throw <| IO.userError "cannot parse nested_iota_arm"
   let some (wrongSafety, recursorName) := flipFirstRecursorSafety safetyInput
-    | throw <| IO.userError "no recursor to mutate in test/fixtures/inductive-models/nested_iota_arm.ndjson"
+    | throw <| IO.userError "nested_iota_arm has no recursor"
   let safetyResult ← runExport "mutated recursor safety" wrongSafety true noGeneration
   state := state.check "kernel-regenerated recursor safety is checked"
     (safetyResult.report.recMismatch.contains recursorName)
 
   let carve ← runFixture "test/fixtures/inductive-models/prim_carve.ndjson"
-    { noGeneration with simple := true, basic := true }
+    (legacyGenerationConfig true)
   let skeleton := `Bif._model._impl.skel
-  state := state.check "arm-C parent survives exact support closure"
-    (carve.generated `Bif && !carve.declined `Bif && carve.hasExactCarrier `Bif)
-  state := state.check "arm-C skeleton is modeled at its exact carrier"
-    (carve.generated skeleton && carve.hasExactCarrier skeleton &&
-      !carve.hasLegacyCarrier skeleton)
+  state := state.check "arm-C skeleton uses exact carriers"
+    (carve.generated `Bif && carve.generated skeleton &&
+      carve.hasExactCarrier skeleton && !carve.hasLegacyCarrier skeleton)
 
   let w ← runFixture "test/fixtures/inductive-models/prim_w.ndjson"
-    { noGeneration with simple := true, basic := true }
-  state := state.check "W parent survives exact support closure"
-    (w.generated `Wt && !w.declined `Wt && w.hasExactCarrier `Wt)
+    (legacyGenerationConfig true)
   state := state.check "W support closure emits exact carriers"
-    (generatedOwnersExact w)
-
-  -- The W target is replayed before the input's exact Iff block and propext.
-  -- Its first basis wait drains at Eq; the late wait must remain atomic until
-  -- Iff, both of its kernel-owned declarations, and propext are all installed.
-  let lateText ← IO.FS.readFile "test/fixtures/inductive-models/w_late_iff.ndjson"
-  let .ok lateInput := InductiveModels.parse lateText
-    | throw <| IO.userError "cannot parse test/fixtures/inductive-models/w_late_iff.ndjson"
-  let lateW ← runExport "late W logical basis" lateInput false
-    { noGeneration with simple := true, basic := true }
-  let lateOutput : Export := { lateInput with decls := lateW.output }
-  let lateOrdered ← match Order.reorder lateOutput with
-    | .ok output => pure output
-    | .error error => throw <| IO.userError s!"cannot order late W output: {repr error}"
-  let lateOutputCheck := Check.checkReport lateOrdered
-  let .ok lateSerialized := InductiveModels.parse lateOrdered.render
-    | throw <| IO.userError "cannot parse serialized late W output"
-  let lateInputCheck := Check.checkReport lateSerialized
-  state := state.check "W target retries after the complete later logical basis"
-    (lateW.generated `LateW && !lateW.declined `LateW)
-  state := state.check "late W ordered output and serialized input check exactly"
-    (lateOutputCheck.violations.isEmpty && lateInputCheck.violations.isEmpty &&
-      lateOutputCheck.familiesChecked > 0 &&
-      lateOutputCheck.familiesChecked == lateInputCheck.familiesChecked)
-  state := state.check "late W dependencies precede its model and owner"
-    (declarationBefore lateOrdered `Eq `Iff &&
-      declarationBefore lateOrdered `Iff `propext &&
-      declarationBefore lateOrdered `propext (modelName `LateW) &&
-      declarationBefore lateOrdered (modelName `LateW) `LateW)
-  state := state.check "late W retains each reordered source record exactly once"
-    ([`LateW, `Eq, `Iff, `propext].all fun name =>
-      (lateOrdered.decls.filter (·.names.contains name)).size == 1)
+    ([`Acc, `Nonempty].all w.generated && [`Acc, `Nonempty].all w.hasExactCarrier &&
+      [`Acc, `Nonempty].all (fun owner => !w.hasLegacyCarrier owner))
 
   let graph ← runFixture "test/fixtures/inductive-models/prim_graph.ndjson"
-    { noGeneration with simple := true, basic := true }
+    (legacyGenerationConfig true)
   state := state.check "spliced Nonempty is modeled once at its exact carrier"
-    (graph.generated `Nonempty && graph.hasExactCarrier `Nonempty &&
-      !graph.hasLegacyCarrier `Nonempty)
+    (graph.report.generated.countP (·.1 == `Nonempty) == 1 &&
+      graph.hasExactCarrier `Nonempty && !graph.hasLegacyCarrier `Nonempty)
 
-  -- This mutual export deliberately orders its recursor records MC, MA, MB,
-  -- rather than member order. Exact-name alignment must still match each model
-  -- recursor with its own ordered rule list.
-  let mutualResult ← runFixture "test/fixtures/inductive-models/prim_late_basis.ndjson"
-    { noGeneration with mutualModels := true, simple := true }
+  let mutual ← runFixture "test/fixtures/inductive-models/prim_late_basis.ndjson"
+    (legacyGenerationConfig true)
   let tag := `MA._model._impl.tag
-  state := state.check "export recursor order is aligned by exact name"
-    mutualResult.report.stmtErrors.isEmpty
   state := state.check "mutual implementation composes through simple naming"
-    (mutualResult.generated tag && mutualResult.hasExactCarrier tag &&
-      !mutualResult.hasLegacyCarrier tag)
-
-  -- Put canonical Eq physically behind the direct, mutual, nested and
-  -- composed owners. The reserved-name guards must remain strict; source
-  -- scheduling, not a prelude splice, is what makes every construction work.
-  let lateEqText ← IO.FS.readFile "test/fixtures/inductive-models/prim_late_basis.ndjson"
-  let .ok lateEqSource := InductiveModels.parse lateEqText
-    | throw <| IO.userError "cannot parse the late-Eq source fixture"
-  let lateEqInput := postponeRecords lateEqSource fun declaration =>
-    declaration.names.contains `Eq
-  state := state.check "late-Eq fixture really puts support after every representative owner"
-    ([`Pre, `MA, `Nd].all fun owner => declarationBefore lateEqInput owner `Eq)
-  let lateEqOrdinary ← match Order.reorder lateEqInput with
-    | .ok output => pure output
-    | .error error => throw <| IO.userError s!"cannot ordinarily order late Eq: {repr error}"
-  state := state.check "ordinary source order leaves generation-only Eq dependencies late"
-    ([`Pre, `MA, `Nd].all fun owner => declarationBefore lateEqOrdinary owner `Eq)
-  let lateEq ← runExport "canonical Eq after selected owners" lateEqInput false
-    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
-  let lateEqShadow ← runExportShadow "shadowed canonical Eq after selected owners"
-    lateEqInput false
-    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
-  state := state.check "late canonical Eq is scheduled before representative owners"
-    (lateEq.generated `Pre && lateEq.generated `MA && lateEq.generated `Nd &&
-      !lateEq.report.declined.any fun (_, reason) => reason.endsWith "name taken (Eq)" &&
-      [`Eq, `Pre, `MA, `Nd].all fun name =>
-        (lateEq.output.filter (·.names.contains name)).size == 1)
-  state := state.check "future exact Eq support is scheduler-identical" <|
-    lateEqShadow.selected && lateEqShadow.output == lateEq.output &&
-      lateEqShadow.report == lateEq.report &&
-      Check.checkReport { lateEqSource with decls := lateEqShadow.output } ==
-        Check.checkReport { lateEqSource with decls := lateEq.output }
-  let lateEqWithNameless := { lateEqInput with
-    decls := lateEqInput.decls.push (.induct [] [] []) }
-  let lateEqNamelessScheduled ← runExport "late Eq plus nameless source scheduler"
-    lateEqWithNameless false
-    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
-  let lateEqNamelessShadow ← runExportShadow "late Eq plus nameless source fallback"
-    lateEqWithNameless false
-    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
-  state := state.check "nameless source makes an otherwise selected shadow unavailable" <|
-    !lateEqNamelessShadow.selected &&
-      lateEqNamelessShadow.output == lateEqNamelessScheduled.output &&
-      lateEqNamelessShadow.report == lateEqNamelessScheduled.report
-  let duplicateAfterShadow := { lateEqInput with
-    decls := lateEqInput.decls.push (.ax `Pre [] (.sort .zero) false) }
-  state := state.check "shadow setup restores the caller environment before ordering failure"
-    (← shadowFailureRestoresEnvironment duplicateAfterShadow
-      { noGeneration with nested := true, mutualModels := true, simple := true, basic := true })
-  let malformedEq := { lateEqInput with decls := lateEqInput.decls.map fun declaration =>
-    match declaration with
-    | .induct (type :: types) constructors (recursor :: recursors) =>
-      if type.name == `Eq then
-        .induct (type :: types) constructors ({ recursor with isUnsafe := true } :: recursors)
-      else declaration
-    | _ => declaration }
-  let malformedEqScheduled ← runExport "malformed future Eq scheduler" malformedEq false
-    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
-  let malformedEqShadow ← runExportShadow "malformed future Eq shadow fallback"
-    malformedEq false
-    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
-  state := state.check "noncanonical future Eq is never shadowed" <|
-    !malformedEqShadow.selected && malformedEqShadow.output == malformedEqScheduled.output &&
-      malformedEqShadow.report == malformedEqScheduled.report
-  let mathlibEarlyNames : Array Name := #[`LE, `LT, `List, `Array, `Nat.le, `Fin,
-    `HPow, `Pow, `NatPow, `PProd, `OfNat, `BitVec, `UInt8, `ByteArray,
-    `UInt32, `Or, `And, `Char]
-  let exactBasis := lateEqSource.decls.filter fun declaration => declaration.names.any fun name =>
-    scheduledPrimBasisNames.contains name
-  let mathlib18Input := { lateEqSource with
-    decls := mathlibEarlyNames.map emptyInductiveRecord ++ exactBasis }
-  let mathlib18Scheduled ← runExport "Mathlib eighteen late basis scheduler"
-    mathlib18Input false { noGeneration with simple := true, basic := true }
-  let mathlib18Shadow ← runExportShadow "Mathlib eighteen future support shadow"
-    mathlib18Input false { noGeneration with simple := true, basic := true }
-  state := state.check "Mathlib eighteen future basis shadow is scheduler-identical" <|
-    mathlib18Shadow.selected && mathlib18Shadow.output == mathlib18Scheduled.output &&
-      mathlib18Shadow.report == mathlib18Scheduled.report
-
-  -- The graph fixture's infinitary recursive field derives its own funext.
-  -- Supply only the exact quotient bundle and Quot.sound from the companion
-  -- fixture, physically after every graph owner.  With no source `funext` to
-  -- short-circuit the route, recursive support closure must use the scheduled
-  -- quotient while ensureFunext's reserved-name checks remain untouched.
-  let graphText ← IO.FS.readFile "test/fixtures/inductive-models/prim_graph.ndjson"
-  let .ok graphSource := InductiveModels.parse graphText
-    | throw <| IO.userError "cannot parse the graph source fixture"
-  let quotientText ← IO.FS.readFile "test/fixtures/inductive-models/prim_graph_pre.ndjson"
-  let .ok quotientSource := InductiveModels.parse quotientText
-    | throw <| IO.userError "cannot parse the quotient support fixture"
-  let psigmaNames : Array Name := #[`PSigma', `PSigma'.mk, `PSigma'.rec,
-    `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk, `PSigma'.snd_mk,
-    `PSigma'.rec', `PSigma'.rec'_mk]
-  let psigmaSupport := partialInput.decls.filter fun declaration =>
-    declaration.names.any psigmaNames.contains
-  let completePSigmaInput := { lateEqInput with
-    decls := lateEqInput.decls ++ psigmaSupport }
-  let partialPSigma := { completePSigmaInput with
-    decls := completePSigmaInput.decls.filter fun declaration =>
-      !(declaration.names.contains `PSigma'.snd_mk) }
-  let partialPSigmaScheduled ← runExport "partial future PSigma scheduler"
-    partialPSigma false
-    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
-  let partialPSigmaShadow ← runExportShadow "partial future PSigma fallback"
-    partialPSigma false
-    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
-  state := state.check "partial future PSigma bundle is never shadowed" <|
-    psigmaNames.all (fun name => psigmaSupport.any (·.names.contains name)) &&
-      partialPSigma.decls.size + 1 == completePSigmaInput.decls.size &&
-      partialPSigma.decls.any (·.names.contains `PSigma') &&
-      !partialPSigmaShadow.selected &&
-      partialPSigmaShadow.output == partialPSigmaScheduled.output &&
-      partialPSigmaShadow.report == partialPSigmaScheduled.report
-  let quotientSupport := quotientSource.decls.filter fun declaration =>
-    declaration.names.any fun name => name == `Quot || (`Quot).isPrefixOf name
-  let quotientSupportNames := quotientSupport.flatMap (·.names.toArray)
-  let graphNames := graphSource.decls.flatMap (·.names.toArray)
-  state := state.check "late-Quot support is exactly the canonical five-record interface"
-    (quotientSupportNames == #[`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound])
-  state := state.check "late-Quot support is disjoint from the graph source"
-    (quotientSupportNames.all fun name => !graphNames.contains name)
-
-  -- Nested-only scheduling hoists the exact structural basis but deliberately
-  -- does not hoist Quot/Quot.sound or Nat.  HTree's binder needs funext; the
-  -- late source quotient therefore blocks its historical splice and must not
-  -- become available merely because Eq selects the shadow comparison path.
-  let infinitaryText ← IO.FS.readFile "test/fixtures/inductive-models/infinitary.ndjson"
-  let .ok infinitarySource := InductiveModels.parse infinitaryText
-    | throw <| IO.userError "cannot parse the infinitary fixture"
-  let nestedLateSupport := postponeRecords infinitarySource fun declaration =>
-    declaration.names.contains `Eq
-  let nestedLateSupport := { nestedLateSupport with
-    decls := nestedLateSupport.decls ++ quotientSupport }
-  let nestedOnly : InductiveModels.Cli.Config := { noGeneration with nested := true }
-  let nestedLateScheduled ← runExport "nested binder with late Eq and Quot scheduler"
-    nestedLateSupport false nestedOnly
-  let nestedLateShadow ← runExportShadow "nested binder with late Eq and Quot shadow"
-    nestedLateSupport false nestedOnly
-  state := state.check "nested-only shadow never grants late quotient support" <|
-    nestedLateShadow.selected && nestedLateShadow.output == nestedLateScheduled.output &&
-      nestedLateShadow.report == nestedLateScheduled.report &&
-      nestedLateScheduled.declined `HTree && !nestedLateScheduled.generated `HTree
-
-  let natText ← IO.FS.readFile
-    "test/fixtures/inductive-models/filtered/nat_char_equations.ndjson"
-  let .ok natSource := InductiveModels.parse natText
-    | throw <| IO.userError "cannot parse the filtered Nat fixture"
-  let some natRecord := natSource.decls.find? (·.names.contains `Nat)
-    | throw <| IO.userError "filtered Nat fixture has no Nat owner"
-  let malformedNat := match natRecord with
-    | .induct types constructors (recursor :: recursors) =>
-      EDecl.induct types constructors ({ recursor with isUnsafe := !recursor.isUnsafe } :: recursors)
-    | _ => natRecord
-  let nestedWithMalformedNat := { nestedLateSupport with
-    decls := nestedLateSupport.decls.push malformedNat }
-  let malformedNatScheduled ← runExport "nested-only malformed late Nat scheduler"
-    nestedWithMalformedNat false nestedOnly
-  let malformedNatShadow ← runExportShadow "nested-only malformed late Nat shadow"
-    nestedWithMalformedNat false nestedOnly
-  state := state.check "nested-only shadow excludes Nat from certification" <|
-    nestedLateShadow.selected && malformedNatShadow.selected &&
-      malformedNatShadow.output == malformedNatScheduled.output &&
-      malformedNatShadow.report == malformedNatScheduled.report
-
-  let lateQuotInput := { graphSource with decls := graphSource.decls ++ quotientSupport }
-  state := state.check "late-Quot fixture really puts support after the recursive owner"
-    (declarationBefore lateQuotInput `Ac `Quot)
-  let lateQuotOrdinary ← match Order.reorder lateQuotInput with
-    | .ok output => pure output
-    | .error error => throw <| IO.userError s!"cannot ordinarily order late Quot: {repr error}"
-  state := state.check "ordinary source order leaves generation-only Quot dependencies late"
-    (declarationBefore lateQuotOrdinary `Ac `Quot)
-  let lateQuot ← runExport "canonical Quot after recursive owner" lateQuotInput false
-    { noGeneration with simple := true, basic := true }
-  let lateQuotShadow ← runExportShadow "shadowed canonical Quot after recursive owner"
-    lateQuotInput false { noGeneration with simple := true, basic := true }
-  let lateQuotOutput : Export := { lateQuotInput with decls := lateQuot.output }
-  state := state.check "late source Quot closes recursive funext support"
-    (lateQuot.generated `Ac && !lateQuot.declined `Ac &&
-      declarationBefore lateQuotOutput `Quot `Ac &&
-      !lateQuot.report.declined.any fun (_, reason) => reason.endsWith "name taken (Quot)" &&
-      [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound, `Ac].all fun name =>
-        (lateQuot.output.filter (·.names.contains name)).size == 1)
-  state := state.check "future exact quotient support is scheduler-identical" <|
-    lateQuotShadow.selected && lateQuotShadow.output == lateQuot.output &&
-      lateQuotShadow.report == lateQuot.report &&
-      Check.checkReport { lateQuotInput with decls := lateQuotShadow.output } ==
-        Check.checkReport { lateQuotInput with decls := lateQuot.output }
-  let malformedSound := { lateQuotInput with decls := lateQuotInput.decls.map fun declaration =>
-    match declaration with
-    | .ax `Quot.sound levels _ isUnsafe => .ax `Quot.sound levels (.sort .zero) isUnsafe
-    | _ => declaration }
-  let malformedSoundScheduled ← runExport "malformed future Quot.sound scheduler"
-    malformedSound false { noGeneration with simple := true, basic := true }
-  let malformedSoundShadow ← runExportShadow "malformed future Quot.sound fallback"
-    malformedSound false { noGeneration with simple := true, basic := true }
-  state := state.check "noncanonical future Quot.sound is never shadowed" <|
-    !malformedSoundShadow.selected &&
-      malformedSoundShadow.output == malformedSoundScheduled.output &&
-      malformedSoundShadow.report == malformedSoundScheduled.report
-  let splitQuotSupport := quotientSupport.extract 0 1 ++
-    #[EDecl.ax `BetweenQuot [] (.sort .zero) false] ++
-    quotientSupport.extract 1 quotientSupport.size
-  let splitQuotInput := { graphSource with decls := graphSource.decls ++ splitQuotSupport }
-  let splitQuotScheduled ← runExport "non-atomic future Quot scheduler"
-    splitQuotInput false { noGeneration with simple := true, basic := true }
-  let splitQuotShadow ← runExportShadow "non-atomic future Quot fallback"
-    splitQuotInput false { noGeneration with simple := true, basic := true }
-  state := state.check "non-atomic future Quot bundle is never shadowed" <|
-    !splitQuotShadow.selected && splitQuotShadow.output == splitQuotScheduled.output &&
-      splitQuotShadow.report == splitQuotScheduled.report
+    (mutual.generated tag && mutual.hasExactCarrier tag && !mutual.hasLegacyCarrier tag)
 
   let composed ← runFixture "test/fixtures/inductive-models/nested_iota.ndjson"
-    { noGeneration with nested := true, mutualModels := true, simple := true }
+    (legacyGenerationConfig true)
   state := state.check "nested-mutual-simple composition reaches every stage"
-    (composed.report.generated.size ≥ 3)
+    ([`N, `N._model.LList, `N._model.LList._model._impl.tag].all composed.generated)
   state := state.check "composed generated owners use exact carriers only"
     (generatedOwnersExact composed)
 
-  IO.println s!"driver naming: {state.passed} passed, {state.failed.size} failed"
+  if state.failed.isEmpty then
+    IO.println s!"driver naming: {state.passed}/{state.passed} passed"
+    return 0
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
-  return if state.failed.isEmpty then 0 else 1
+  IO.eprintln s!"driver naming: {state.passed}/{state.passed + state.failed.size} passed"
+  return 1

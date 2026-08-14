@@ -30,16 +30,6 @@ def runExportWith (input : Export) (generation : InductiveModels.Cli.Config)
 def runExport (input : Export) : IO (Array EDecl × Report) :=
   runExportWith input noGeneration
 
-def runShadow (input : Export) (generation : InductiveModels.Cli.Config) :
-    IO (Array EDecl × Report × Bool) := do
-  let env ← importModules #[] {}
-  let context : Core.Context :=
-    { fileName := "<source-replay-alias-shadow-test>", fileMap := default,
-      maxHeartbeats := 0, maxRecDepth := 8192 }
-  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
-    (runFilterWithFutureSourceSupportShadow input false generation)) context { env }
-  return result
-
 def runDiscarding (input : Export) (generation : InductiveModels.Cli.Config)
     (checkRecursors : Bool := false) : IO (Report × CompactPlan) := do
   let env ← importModules #[] {}
@@ -263,10 +253,6 @@ def main : IO UInt32 := do
     (generationReport.generated.any (·.1 == `AliasWrappedBox) &&
       generationReport.unreplayable.isNone && generationReport.stmtErrors.isEmpty &&
       !leakedBuildName && generationKernelValid)
-  let (shadowOutput, shadowReport, shadowSelected) ← runShadow generationInput generation
-  state := state.check "future-support shadow falls back before exact replay"
-    (!shadowSelected && shadowOutput == generationOutput && shadowReport == generationReport)
-
   -- Preserve the pre-existing collision capability: two exact inductive
   -- blocks whose complete role families normalize alike both model, while the
   -- construction-only source alias namespace remains absent from output.

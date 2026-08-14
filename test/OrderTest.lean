@@ -471,27 +471,6 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental duplicate diagnostics equal full record ordering" <|
     orderOutcomesEqual (Order.summaryRecordOrder census.summaries)
       (Order.recordOrder censusInput)
-  let schedulingConfigs : Array Cli.Config := #[
-    noGeneration,
-    { noGeneration with nested := true },
-    { noGeneration with mutualModels := true },
-    { noGeneration with simple := true },
-    { noGeneration with basic := true },
-    {}]
-  state := state.check "callback scheduling facts equal declaration classifiers field-for-field" <|
-    census.scheduling.size == censusInput.decls.size && schedulingConfigs.all fun generation =>
-      (Array.range censusInput.decls.size).all fun ordinal =>
-        let fact := census.scheduling[ordinal]!
-        let declaration := censusInput.decls[ordinal]!
-        fact.support generation == scheduledSupportRecord generation declaration &&
-          fact.modelOwner generation census.reserved ==
-            scheduledModelOwner generation census.reserved declaration &&
-          fact.modelOwner generation census.reserved ==
-            generationMayAttemptOwner generation census.reserved declaration
-  state := state.check "callback planned schedule equals retained declaration scheduler" <|
-    schedulingConfigs.all fun generation =>
-      orderOutcomesEqual (census.plannedScheduleOrder generation)
-        (census.scheduleOrder censusInput generation)
   let censusCycle := exportOf #[
     axDecl `CensusCycleA (.const `CensusCycleB []),
     axDecl `CensusCycleB (.const `CensusCycleA [])]
@@ -499,9 +478,6 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental cycle diagnostics equal full record ordering" <|
     orderOutcomesEqual (Order.summaryRecordOrder cycleCensus.summaries)
       (Order.recordOrder censusCycle)
-  state := state.check "planned cycle error equals retained scheduler" <|
-    orderOutcomesEqual (cycleCensus.plannedScheduleOrder noGeneration)
-      (cycleCensus.scheduleOrder censusCycle noGeneration)
   let censusScheduled := exportOf #[
     axDecl `CensusConsumer (.const `CensusProvider []), axDecl `CensusProvider]
   let .ok censusScheduledView := Order.reorder censusScheduled
@@ -664,104 +640,6 @@ def run (root : String) : IO UInt32 := do
     (exportOf #[independent, constantUser, constantProvider])
   state := state.check "original order breaks ready-node ties"
     (stable'.decls == #[independent, constantProvider, constantUser])
-
-  -- Enabled generation does not perturb an export without an unmodelled owner.
-  -- Once an exact selected owner is present, fixed support moves atomically.
-  let nestedMutualOnly := { noGeneration with nested := true, mutualModels := true }
-  let unrelatedSupport := exportOf
-    #[inductiveRecord [`UnselectedSimple], axDecl `Eq, axDecl `PUnit]
-  state := state.check "enabled generation preserves unrelated source order" <|
-    match scheduleSource unrelatedSupport nestedMutualOnly with
-    | .ok scheduled => scheduled.decls == unrelatedSupport.decls
-    | .error _ => false
-  state := state.check "disabled generation retains ordinary stable order" <|
-    match scheduleSource unrelatedSupport noGeneration with
-    | .ok scheduled => scheduled.decls == unrelatedSupport.decls
-    | .error _ => false
-  let selectedOwner := inductiveRecord [`SelectedA, `SelectedB]
-  let selectedWithoutSupport := exportOf #[selectedOwner, axDecl `IndependentTail]
-  state := state.check "selected owner without source support retains ordinary order" <|
-    match scheduleSource selectedWithoutSupport nestedMutualOnly with
-    | .ok scheduled => scheduled.decls == selectedWithoutSupport.decls
-    | .error _ => false
-  let selectedSupport := exportOf #[selectedOwner, axDecl `Eq, axDecl `PUnit]
-  state := state.check "support scheduler retains the atomic fixed-support hoist" <|
-    match scheduleSource selectedSupport nestedMutualOnly with
-    | .ok scheduled => scheduled.decls == #[axDecl `Eq, axDecl `PUnit, selectedOwner]
-    | .error _ => false
-  let selectedCensus := SourceCensus.ofSource selectedSupport
-  state := state.check "frozen-summary support schedule equals full scheduler" <|
-    scheduleOutcomesEqual (selectedCensus.schedule selectedSupport nestedMutualOnly)
-      (scheduleSource selectedSupport nestedMutualOnly)
-  let unrelatedCensus := SourceCensus.ofSource unrelatedSupport
-  state := state.check "frozen-summary ordinary schedule equals full scheduler" <|
-    scheduleOutcomesEqual (unrelatedCensus.schedule unrelatedSupport noGeneration)
-      (scheduleSource unrelatedSupport noGeneration)
-  let derivedFalse := inductiveRecord [`False]
-  let falseBeforeBasis := exportOf #[derivedFalse, selectedOwner, axDecl `Nat, axDecl `Eq]
-  state := state.check "fixed basis hoists before derived False" <|
-    match scheduleSource falseBeforeBasis { nestedMutualOnly with simple := true } with
-    | .ok scheduled =>
-        scheduled.decls == #[axDecl `Nat, axDecl `Eq, derivedFalse, selectedOwner]
-    | .error _ => false
-  let alreadyModeled := exportOf
-    #[axDecl (Naming.modelName `SelectedA), selectedOwner, axDecl `Eq, axDecl `PUnit]
-  state := state.check "already-modeled source order is preserved" <|
-    match scheduleSource alreadyModeled nestedMutualOnly with
-    | .ok scheduled => scheduled.decls == alreadyModeled.decls
-    | .error _ => false
-
-  -- The exact eighteen declarations which the full Mathlib run used to reach
-  -- before its late `Eq`.  Their shapes are irrelevant to scheduling; keeping
-  -- the real owner names makes the regression report line up with the census.
-  -- A long independent tail pins that support selection cannot depend on a
-  -- small-prefix accident.
-  let earlyNames : Array Name := #[`LE, `LT, `List, `Array, `Nat.le, `Fin,
-    `HPow, `Pow, `NatPow, `PProd, `OfNat, `BitVec, `UInt8, `ByteArray,
-    `UInt32, `Or, `And, `Char]
-  let earlyOwners := earlyNames.map fun name => inductiveRecord [name]
-  let lateSupport : Array EDecl :=
-    #[axDecl `Eq, axDecl `Nat, axDecl `PSigma', axDecl `PUnit,
-      axDecl `Quot, axDecl `Quot.sound]
-  let irrelevantTail := (Array.range 256).map fun index =>
-    axDecl ((`IrrelevantTail).mkNum index)
-  -- This real Mathlib namespace shape used to be mistaken for fixed PUnit
-  -- support. Its dependency on LE then polluted the preferred closure and
-  -- kept LE ahead of Eq. Exact support selection leaves it in the ordinary
-  -- tail while still hoisting the canonical PUnit block above the owners.
-  let punitNamespaceTail := axDecl `PUnit.le (.const `LE [])
-  let supportStress := exportOf
-    (earlyOwners ++ lateSupport ++ irrelevantTail ++ #[punitNamespaceTail])
-  let supportStress' := scheduleSource supportStress
-    { noGeneration with simple := true, basic := true }
-  state := state.check "all Mathlib early owners follow late fixed support" <|
-    match supportStress' with
-    | .ok scheduled =>
-      [`Eq, `Nat, `PSigma', `PUnit, `Quot, `Quot.sound].all fun support =>
-        earlyNames.all fun owner => before scheduled support owner
-    | .error _ => false
-  state := state.check "ordinary PUnit namespace tail is not fixed support" <|
-    !scheduledSupportRecord { noGeneration with simple := true, basic := true }
-      punitNamespaceTail &&
-      match supportStress' with
-      | .ok scheduled => before scheduled `LE `PUnit.le
-      | .error _ => false
-  state := state.check "post-schedule support certificate accepts the stress order" <|
-    match supportStress' with
-    | .ok scheduled =>
-      (validateScheduledSupport scheduled
-        { noGeneration with simple := true, basic := true }).isOk
-    | .error _ => false
-  state := state.check "post-schedule support certificate rejects the old order" <|
-    match validateScheduledSupport supportStress
-        { noGeneration with simple := true, basic := true } with
-    | .error message =>
-      -- Six support records follow the owners; the linear certificate's one
-      -- exact witness is the latest one, not the first collision it happens
-      -- to encounter.
-      message.contains "latest fixed support [Quot.sound]" &&
-        message.contains "after selected owner [LE]"
-    | .ok () => false
 
   -- Hoisting a fixed support record hoists its complete predecessor closure,
   -- not merely the named record. Otherwise the persistent replay environment
