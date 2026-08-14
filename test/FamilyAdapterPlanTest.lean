@@ -21,6 +21,14 @@ private def equivalence (index : Nat) : EquivalenceCertificate :=
     backwardForward := numbered "FamilyAdapterPlanTest.backwardForward" index
     forwardBackward := numbered "FamilyAdapterPlanTest.forwardBackward" index }
 
+private def sourceRecursor (ownerIndex : Nat) : Name :=
+  numbered "FamilyAdapterPlanTest.sourceRecursor" ownerIndex
+
+private def ruleKey (constructorsPerMember ownerIndex constructorIndex : Nat) : RuleKey :=
+  { recursorOwner := memberKey ownerIndex
+    recursor := sourceRecursor ownerIndex
+    constructor := constructorKey constructorsPerMember ownerIndex constructorIndex }
+
 private def sorts (count : Nat) : Array Expr :=
   Array.replicate count (.sort .zero)
 
@@ -94,10 +102,7 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
           telescope
           certificate }
       rules := rules.push
-        { key :=
-            { recursorOwner := memberKey ownerIndex
-              recursor := numbered "FamilyAdapterPlanTest.recursor" ownerIndex
-              constructor := key }
+        { key := ruleKey constructorsPerMember ownerIndex constructorIndex
           ruleIndex := ordinal
           exactRhs := .sort .zero
           implementationIota := numbered "FamilyAdapterPlanTest.implIota" ordinal
@@ -116,7 +121,9 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
       representation := .layer
       constructors := (Array.range constructorsPerMember).map
         (constructorKey constructorsPerMember ownerIndex)
-      sourceRecursor := numbered "FamilyAdapterPlanTest.sourceRecursor" ownerIndex
+      rules := (Array.range constructorsPerMember).map
+        (ruleKey constructorsPerMember ownerIndex)
+      sourceRecursor := sourceRecursor ownerIndex
       implementationRecursor := numbered "FamilyAdapterPlanTest.implRecursor" ownerIndex
       publicRecursor := numbered "FamilyAdapterPlanTest.publicRecursor" ownerIndex
       equivalence := equivalence ownerIndex })

@@ -119,6 +119,7 @@ structure MemberPlan where
   publicCarrier : Name
   representation : MemberRepresentation
   constructors : Array ConstructorKey
+  rules : Array RuleKey
   sourceRecursor : Name
   implementationRecursor : Name
   publicRecursor : Name
@@ -222,6 +223,7 @@ inductive PlanError where
   | unknownConstructorOwner (key : ConstructorKey)
   | memberConstructorMismatch (member : MemberKey) (constructor : ConstructorKey)
   | duplicateRule (key : RuleKey)
+  | memberRuleMismatch (member : MemberKey) (rule : RuleKey)
   | unknownRuleOwner (key : RuleKey)
   | unknownRuleConstructor (key : RuleKey)
   | duplicateOccurrence (key : OccurrenceKey)
@@ -252,6 +254,9 @@ private def constructorExists (plan : FamilyAdapterPlan) (key : ConstructorKey) 
 
 private def componentExists (plan : FamilyAdapterPlan) (key : ComponentKey) : Bool :=
   plan.components.any (·.key == key)
+
+private def ruleExists (plan : FamilyAdapterPlan) (key : RuleKey) : Bool :=
+  plan.rules.any (·.key == key)
 
 private def telescopeFor? (plan : FamilyAdapterPlan)
     (key : ConstructorKey) : Option TelescopePlan :=
@@ -322,6 +327,12 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
     for constructor in member.constructors do
       unless constructor.owner == member.key && constructorExists plan constructor do
         errors := errors.push (.memberConstructorMismatch member.key constructor)
+    if let some rule := duplicateKey? member.rules then
+      errors := errors.push (.memberRuleMismatch member.key rule)
+    for rule in member.rules do
+      unless rule.recursorOwner == member.key && rule.recursor == member.sourceRecursor &&
+          ruleExists plan rule do
+        errors := errors.push (.memberRuleMismatch member.key rule)
 
   if let some key := duplicateKey? (plan.rules.map (·.key)) then
     errors := errors.push (.duplicateRule key)
@@ -330,6 +341,9 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
       errors := errors.push (.unknownRuleOwner rule.key)
     unless constructorExists plan rule.key.constructor do
       errors := errors.push (.unknownRuleConstructor rule.key)
+    if let some owner := plan.members.find? (·.key == rule.key.recursorOwner) then
+      unless owner.rules.contains rule.key do
+        errors := errors.push (.memberRuleMismatch owner.key rule.key)
     for key in rule.occurrences do
       unless key.constructor == rule.key.constructor do
         errors := errors.push (.ruleOccurrenceMismatch key)
