@@ -353,6 +353,7 @@ def recursorUsesRecordedMinorAdapters (member : MemberPlan)
 inductive PublicPrototypeDiagnostic where
   | complete
   | prerequisite (detail : String)
+  | shadowIssues (issues : Array ConstructionIssue)
   | recursorDecline (detail : String)
   | recursorIssue (issue : ConstructionIssue)
   | recursorInvalid
@@ -607,7 +608,8 @@ def runSamples : MetaM Result := do
         | some plan, some certificate => do
           publicPrototypeDiagnostic plan certificate
             ((`_family_adapter_changed_public_recursor_test).append boundary.publicOwner)
-        | _, _ => pure (.prerequisite "missing changed plan or base certificate")
+        | _, none => pure (.shadowIssues built.issues)
+        | none, _ => pure (.shadowIssues (report.reasons.map .incompleteShadow))
       if recursorDiagnostic.isComplete then
         result := { result with changedPublicRecursors := result.changedPublicRecursors + 1 }
       else
