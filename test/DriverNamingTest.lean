@@ -9,6 +9,9 @@ structure FixtureResult where
   output : Array EDecl
   report : Report
 
+structure ShadowResult extends FixtureResult where
+  selected : Bool
+
 structure TestState where
   passed : Nat := 0
   failed : Array String := #[]
@@ -40,10 +43,30 @@ def runFixture (path : String) (generation : InductiveModels.Cli.Config) : IO Fi
     | throw <| IO.userError s!"cannot parse {path}"
   runExport path input false generation
 
+def runExportShadow (label : String) (input : Export) (checkRecursors : Bool)
+    (generation : InductiveModels.Cli.Config) : IO ShadowResult := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<driver-shadow-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let ((output, report, selected), _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run'
+      (runFilterWithFutureSourceSupportShadow input checkRecursors generation)) context { env }
+  unless report.stmtErrors.isEmpty do
+    throw <| IO.userError s!"{label}: generated statements differ: {report.stmtErrors}"
+  return { output, report, selected }
+
 def postponeRecords (input : Export) (postpone : EDecl → Bool) : Export :=
   { input with
     decls := input.decls.filter (fun declaration => !postpone declaration) ++
       input.decls.filter postpone }
+
+def emptyInductiveRecord (name : Name) : EDecl :=
+  let type : EIndType := {
+    name, levelParams := [], type := .sort (.succ .zero), all := [name], ctors := []
+    numParams := 0, numIndices := 0, numNested := 0, isRec := false
+    isReflexive := false, isUnsafe := false }
+  .induct [type] [] []
 
 def flipFirstRecursorSafety (input : Export) : Option (Export × Name) := do
   let index ← input.decls.findIdx? fun declaration => match declaration with
@@ -211,11 +234,49 @@ def main : IO UInt32 := do
     ([`Pre, `MA, `Nd].all fun owner => declarationBefore lateEqOrdinary owner `Eq)
   let lateEq ← runExport "canonical Eq after selected owners" lateEqInput false
     { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
+  let lateEqShadow ← runExportShadow "shadowed canonical Eq after selected owners"
+    lateEqInput false
+    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
   state := state.check "late canonical Eq is scheduled before representative owners"
     (lateEq.generated `Pre && lateEq.generated `MA && lateEq.generated `Nd &&
       !lateEq.report.declined.any fun (_, reason) => reason.endsWith "name taken (Eq)" &&
       [`Eq, `Pre, `MA, `Nd].all fun name =>
         (lateEq.output.filter (·.names.contains name)).size == 1)
+  state := state.check "future exact Eq support is scheduler-identical" <|
+    lateEqShadow.selected && lateEqShadow.output == lateEq.output &&
+      lateEqShadow.report == lateEq.report &&
+      Check.checkReport { lateEqSource with decls := lateEqShadow.output } ==
+        Check.checkReport { lateEqSource with decls := lateEq.output }
+  let malformedEq := { lateEqInput with decls := lateEqInput.decls.map fun declaration =>
+    match declaration with
+    | .induct (type :: types) constructors (recursor :: recursors) =>
+      if type.name == `Eq then
+        .induct (type :: types) constructors ({ recursor with isUnsafe := true } :: recursors)
+      else declaration
+    | _ => declaration }
+  let malformedEqScheduled ← runExport "malformed future Eq scheduler" malformedEq false
+    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
+  let malformedEqShadow ← runExportShadow "malformed future Eq shadow fallback"
+    malformedEq false
+    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
+  state := state.check "noncanonical future Eq is never shadowed" <|
+    !malformedEqShadow.selected && malformedEqShadow.output == malformedEqScheduled.output &&
+      malformedEqShadow.report == malformedEqScheduled.report
+
+  let mathlibEarlyNames : Array Name := #[`LE, `LT, `List, `Array, `Nat.le, `Fin,
+    `HPow, `Pow, `NatPow, `PProd, `OfNat, `BitVec, `UInt8, `ByteArray,
+    `UInt32, `Or, `And, `Char]
+  let exactBasis := lateEqSource.decls.filter fun declaration => declaration.names.any fun name =>
+    scheduledPrimBasisNames.contains name
+  let mathlib18Input := { lateEqSource with
+    decls := mathlibEarlyNames.map emptyInductiveRecord ++ exactBasis }
+  let mathlib18Scheduled ← runExport "Mathlib eighteen late basis scheduler"
+    mathlib18Input false { noGeneration with simple := true, basic := true }
+  let mathlib18Shadow ← runExportShadow "Mathlib eighteen future support shadow"
+    mathlib18Input false { noGeneration with simple := true, basic := true }
+  state := state.check "Mathlib eighteen future basis shadow is scheduler-identical" <|
+    mathlib18Shadow.selected && mathlib18Shadow.output == mathlib18Scheduled.output &&
+      mathlib18Shadow.report == mathlib18Scheduled.report
 
   -- The graph fixture's infinitary recursive field derives its own funext.
   -- Supply only the exact quotient bundle and Quot.sound from the companion
@@ -246,6 +307,8 @@ def main : IO UInt32 := do
     (declarationBefore lateQuotOrdinary `Ac `Quot)
   let lateQuot ← runExport "canonical Quot after recursive owner" lateQuotInput false
     { noGeneration with simple := true, basic := true }
+  let lateQuotShadow ← runExportShadow "shadowed canonical Quot after recursive owner"
+    lateQuotInput false { noGeneration with simple := true, basic := true }
   let lateQuotOutput : Export := { lateQuotInput with decls := lateQuot.output }
   state := state.check "late source Quot closes recursive funext support"
     (lateQuot.generated `Ac && !lateQuot.declined `Ac &&
@@ -253,6 +316,11 @@ def main : IO UInt32 := do
       !lateQuot.report.declined.any fun (_, reason) => reason.endsWith "name taken (Quot)" &&
       [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound, `Ac].all fun name =>
         (lateQuot.output.filter (·.names.contains name)).size == 1)
+  state := state.check "future exact quotient support is scheduler-identical" <|
+    lateQuotShadow.selected && lateQuotShadow.output == lateQuot.output &&
+      lateQuotShadow.report == lateQuot.report &&
+      Check.checkReport { lateQuotInput with decls := lateQuotShadow.output } ==
+        Check.checkReport { lateQuotInput with decls := lateQuot.output }
 
   let composed ← runFixture "test/fixtures/inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true, simple := true }
