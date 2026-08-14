@@ -267,11 +267,31 @@ def ruleCertificatesComplete (plan : FamilyAdapterPlan)
         environment.constants.contains compatibility.compatibility &&
         compatibilityUsesTransport environment compatibility
 
+def publicConstructorsComplete (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
+  match ← (FamilyAdapter.buildPublicConstructorPrototypes plan certificate.members
+      certificate.telescopes root).run with
+  | .error _ => return false
+  | .ok (.error _) => return false
+  | .ok (.ok (declarations, constructors)) =>
+    let environment ← getEnv
+    return declarations.size == plan.constructors.size &&
+      constructors.size == plan.constructors.size && plan.constructors.all fun constructor =>
+        (constructors.find? (·.key == constructor.key)).any fun adapter =>
+          adapter.exactType == constructor.publicType &&
+            adapter.implementationConstructor == constructor.implementationName &&
+            adapter.telescope.constructor == constructor.key &&
+            (environment.constants.find? adapter.adapter).any (·.type == constructor.publicType)
+
 structure Result where
   complete : Nat := 0
+  publicConstructors : Nat := 0
   identityNested : Nat := 0
+  nestedPublicConstructors : Nat := 0
   changed : Nat := 0
+  changedPublicConstructors : Nat := 0
   installedFamily : Nat := 0
+  installedPublicConstructors : Nat := 0
   closedContainers : Nat := 0
   invalidMaps : Nat := 0
   invalidIotas : Nat := 0
@@ -308,6 +328,10 @@ def runSamples : MetaM Result := do
         let environment ← getEnv
         let declarationsInstalled := built.declarations.all fun declaration =>
           declaration.getNames.all (fun name => environment.constants.contains name)
+        let constructorsComplete ← publicConstructorsComplete plan certificate
+          ((`_family_adapter_public_constructor_test).append owner)
+        if constructorsComplete then
+          result := { result with publicConstructors := result.publicConstructors + 1 }
         if certificate.telescopes.size == plan.constructors.size &&
             certificate.minorHypotheses.size == expectedHypotheses && declarationsInstalled &&
             ruleCertificatesComplete plan certificate environment then
@@ -334,6 +358,14 @@ def runSamples : MetaM Result := do
       let environment ← getEnv
       let rulesComplete := report.plan?.any fun plan => built.certificate.any fun certificate =>
         ruleCertificatesComplete plan certificate environment
+      let constructorsComplete ← match report.plan?, built.certificate with
+        | some plan, some certificate => do
+          publicConstructorsComplete plan certificate
+            ((`_family_adapter_nested_public_constructor_test).append owner)
+        | _, _ => pure false
+      if constructorsComplete then
+        result := { result with
+          nestedPublicConstructors := result.nestedPublicConstructors + 1 }
       if built.certificate.isSome && built.issues.isEmpty && rulesComplete then
         result := { result with identityNested := result.identityNested + 1 }
         if owner == `FamilyAdapterGenerated.GeneratedShared then
@@ -369,6 +401,14 @@ def runSamples : MetaM Result := do
       let failures := result.failures.push s!"{boundary.publicOwner}: {decline.label}"
       result := { result with failures }
     | .ok built =>
+      let constructorsComplete ← match report.plan?, built.certificate with
+        | some plan, some certificate => do
+          publicConstructorsComplete plan certificate
+            ((`_family_adapter_changed_public_constructor_test).append boundary.publicOwner)
+        | _, _ => pure false
+      if constructorsComplete then
+        result := { result with
+          changedPublicConstructors := result.changedPublicConstructors + 1 }
       if boundary.publicOwner == changedNested.publicOwner then
         let keyedPlan := report.plan?.any fun plan => plan.containerMaps.any fun container =>
           container.key.target.owner == boundary.publicOwner &&
@@ -551,6 +591,14 @@ def runSamples : MetaM Result := do
       let rulesComplete := installedReport.plan?.any fun plan =>
         built.certificate.any fun certificate =>
           ruleCertificatesComplete plan certificate environment
+      let constructorsComplete ← match installedReport.plan?, built.certificate with
+        | some plan, some certificate => do
+          publicConstructorsComplete plan certificate
+            `_family_adapter_installed_public_constructor_test
+        | _, _ => pure false
+      if constructorsComplete then
+        result := { result with
+          installedPublicConstructors := result.installedPublicConstructors + 1 }
       if installedIso.familyImplementation?.isSome && built.certificate.isSome &&
           built.issues.isEmpty && rulesComplete then
         result := { result with installedFamily := result.installedFamily + 1 }
@@ -569,12 +617,15 @@ def runMain : IO UInt32 := do
       options := {}, maxHeartbeats := 0, maxRecDepth := 8192 }
   let (result, state) ← Core.CoreM.toIO (MetaM.run' runSamples) context { env := environment }
   if result.failures.isEmpty && result.complete == completeSamples.size &&
-      result.identityNested == nestedSamples.size && result.changed == 3 &&
+      result.publicConstructors == completeSamples.size &&
+      result.identityNested == nestedSamples.size &&
+      result.nestedPublicConstructors == nestedSamples.size && result.changed == 3 &&
+      result.changedPublicConstructors == 3 &&
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
       result.invalidIotas == 1 && result.lateInvalidIotas == 1 && result.wrongTargetMaps == 1 &&
       result.sharedHypothesis == 1 && result.directNestedRule == 1 &&
       result.universeLevels == 1 &&
-      result.installedFamily == 1 &&
+      result.installedFamily == 1 && result.installedPublicConstructors == 1 &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
       {result.identityNested} definitional nested plans, {result.changed} changed plans, \
@@ -584,8 +635,13 @@ def runMain : IO UInt32 := do
   for failure in result.failures do IO.eprintln failure
   for message in state.messages.toArray do IO.eprintln (← message.toString)
   IO.eprintln s!"family adapter construction: complete={result.complete}, \
-    identityNested={result.identityNested}, changed={result.changed}, \
-    installedFamily={result.installedFamily}, closedContainers={result.closedContainers}, \
+    publicConstructors={result.publicConstructors}, \
+    identityNested={result.identityNested}, \
+    nestedPublicConstructors={result.nestedPublicConstructors}, changed={result.changed}, \
+    changedPublicConstructors={result.changedPublicConstructors}, \
+    installedFamily={result.installedFamily}, \
+    installedPublicConstructors={result.installedPublicConstructors}, \
+    closedContainers={result.closedContainers}, \
     invalidMaps={result.invalidMaps}, invalidIotas={result.invalidIotas}, \
     lateInvalidIotas={result.lateInvalidIotas}, \
     invalidContainerMaps={result.invalidContainerMaps}, \

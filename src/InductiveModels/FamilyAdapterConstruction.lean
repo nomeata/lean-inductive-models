@@ -695,6 +695,150 @@ def buildTelescopePrototype (plan : FamilyAdapterPlan)
       encodeDecode, indexFibre], names)
   action.run
 
+private def publicConstructorAdapterName (root : Name) (constructor : ConstructorKey) : Name :=
+  prototypeName root constructor.constructor `publicConstructor
+
+private def publicRecursorAdapterName (root : Name) (member : MemberKey) : Name :=
+  prototypeName root member.owner `publicRecursor
+
+private def publicIotaAdapterName (root : Name) (rule : RuleKey) : Name :=
+  prototypeName root (rule.recursor.append rule.constructor.constructor) `publicIota
+
+private def rootParameters (plan : FamilyAdapterPlan) (parameters : Array Expr) : Array Expr :=
+  let arity := (plan.members.find? (·.key == plan.root)).map (·.parameterArity) |>.getD 0
+  parameters.extract 0 (min arity parameters.size)
+
+private def applyMemberMap? (plan : FamilyAdapterPlan) (member : MemberPlan)
+    (certificate : MemberCertificate) (forward : Bool)
+    (sourceType targetType value : Expr) : MetaM (Option Expr) := do
+  let source := if forward then member.publicCarrier else member.implementationCarrier
+  let target := if forward then member.implementationCarrier else member.publicCarrier
+  unless sourceType.getAppFn.constName? == some source &&
+      targetType.getAppFn.constName? == some target do return none
+  let arity := member.parameterArity + member.indexArity
+  let arguments := sourceType.getAppArgs
+  unless arguments.size == arity && targetType.getAppArgs == arguments do return none
+  let name := mapName certificate forward
+  let application := mkAppN (.const name (plan.levelParams.map Level.param))
+    (arguments.push value)
+  unless ← isDefEq (← inferType application) targetType do return none
+  return some application
+
+private def applyContainerMap? (plan : FamilyAdapterPlan) (container : ContainerMapPlan)
+    (forward : Bool) (parameters : Array Expr) (sourceType targetType value : Expr) :
+    MetaM (Option Expr) := do
+  unless parameters.size == container.parameterArity do return none
+  let name := if forward then container.maps.forward else container.maps.backward
+  let recordedType := if forward then container.forwardType else container.backwardType
+  let some installed := (← getEnv).constants.find? name |>.map (·.type) | return none
+  unless installed == recordedType do return none
+  let mut type ← instantiateForall recordedType parameters
+  let mut indices := #[]
+  for _ in [:container.indexArity] do
+    let .forallE binderName domain body _ := type | return none
+    let index ← mkFreshExprMVar domain .natural binderName
+    indices := indices.push index
+    type := body.instantiate1 index
+  let .forallE _ domain _ _ := type | return none
+  unless ← isDefEq domain sourceType do return none
+  let resolvedIndices ← indices.mapM instantiateMVars
+  for index in resolvedIndices do if ← hasAssignableMVar index then return none
+  let application := mkAppN (.const name (plan.levelParams.map Level.param))
+    (parameters ++ resolvedIndices ++ #[value])
+  unless ← isDefEq (← inferType application) targetType do return none
+  return some application
+
+private def sameContainerBoundary (left right : ContainerMapPlan) : Bool :=
+  left.parameterArity == right.parameterArity && left.indexArity == right.indexArity &&
+    left.implementationCarrier == right.implementationCarrier && left.maps == right.maps &&
+    left.forwardType == right.forwardType && left.backwardType == right.backwardType &&
+    left.backwardForwardType == right.backwardForwardType &&
+    left.forwardBackwardType == right.forwardBackwardType
+
+/-- Map an exact carrier application without classifying its syntax. Direct
+members use their keyed family equivalence; specialised mimics are selected by
+exact installed map domain/codomain unification. -/
+private def mapCarrierValue (plan : FamilyAdapterPlan)
+    (certificates : Array MemberCertificate) (parameters : Array Expr)
+    (member : MemberPlan) (forward : Bool) (sourceType targetType value : Expr) :
+    ConstructionM (Expr × EquivalenceCertificate) := do
+  let some memberCertificate := certificateFor? certificates member.key
+    | failConstruction (.missingMemberMap member.key)
+  if ← isDefEq sourceType targetType then return (value, memberCertificate.maps)
+  if let some application ← liftGen <|
+      applyMemberMap? plan member memberCertificate forward sourceType targetType value then
+    return (application, memberCertificate.maps)
+  let parameters := rootParameters plan parameters
+  let candidates ← liftGen <| plan.containerMaps.filterMapM fun container => do
+    let application? ← applyContainerMap? plan container forward parameters sourceType targetType value
+    return application?.map fun application => (container, application)
+  let some first := candidates[0]? | failConstruction (.missingMemberMap member.key)
+  unless candidates.all (sameContainerBoundary first.1 ·.1) do
+    failConstruction (.missingMemberMap member.key)
+  return (first.2, first.1.maps)
+
+private def publicConstructorDeclaration (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (telescopeCertificates : Array TelescopeCertificate) (root : Name)
+    (constructor : ConstructorPlan) : ConstructionM
+    (Declaration × PublicConstructorCertificate) := do
+  let some owner := plan.members.find? (·.key == constructor.key.owner)
+    | failConstruction (.missingMemberMap constructor.key.owner)
+  let some telescope := telescopeCertificates.find? (·.constructor == constructor.key)
+    | failConstruction (.dependentFieldTransport constructor.key 0)
+  let name := publicConstructorAdapterName root constructor.key
+  liftGen <| ensurePrototypeFresh name
+  let value ← withConstructorTelescopes plan constructor
+    fun _ parameters publicFields publicResult implementationFields _ => do
+      let implementationValues ← mapFields plan memberCertificates constructor parameters true
+        publicFields implementationFields publicFields
+      let privateMajor := mkAppN
+        (.const constructor.implementationName (plan.levelParams.map Level.param))
+        (parameters ++ implementationValues)
+      let privateType ← inferType privateMajor
+      let publicType := publicResult.replaceFVars publicFields publicFields
+      let (publicMajor, ownerMaps) ← mapCarrierValue plan memberCertificates parameters owner false
+        privateType publicType privateMajor
+      return (← mkLambdaFVars (parameters ++ publicFields) publicMajor, ownerMaps)
+  let declaration := Declaration.defnDecl
+    { name, levelParams := plan.levelParams, type := constructor.publicType, value := value.1,
+      hints := .abbrev, safety := .safe }
+  liftGen <| addChecked declaration
+  return (declaration,
+    { key := constructor.key, adapter := name, exactType := constructor.publicType,
+      implementationConstructor := constructor.implementationName,
+      telescope, ownerMaps := value.2 })
+
+private def buildPublicConstructorPrototypesCore (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (telescopeCertificates : Array TelescopeCertificate) (root : Name) : ConstructionM
+    (Array Declaration × Array PublicConstructorCertificate) := do
+  let mut declarations := #[]
+  let mut certificates := #[]
+  for constructor in plan.constructors do
+    let (declaration, certificate) ← publicConstructorDeclaration plan memberCertificates
+      telescopeCertificates root constructor
+    declarations := declarations.push declaration
+    certificates := certificates.push certificate
+  return (declarations, certificates)
+
+/-- Disabled constructor tranche, transactional independently of the whole
+family prototype. -/
+def buildPublicConstructorPrototypes (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (telescopeCertificates : Array TelescopeCertificate) (root : Name) : GenM
+    (Except ConstructionIssue (Array Declaration × Array PublicConstructorCertificate)) := do
+  let saved ← getEnv
+  match ← ExceptT.lift
+      (buildPublicConstructorPrototypesCore plan memberCertificates telescopeCertificates root).run with
+  | .error decline =>
+    setEnv saved
+    declineWith decline
+  | .ok (.error issue) =>
+    setEnv saved
+    return .error issue
+  | .ok (.ok built) => return .ok built
+
 private structure InstalledBinder where
   type : Expr
   value : Expr
