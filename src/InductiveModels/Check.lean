@@ -1431,7 +1431,7 @@ structure SyntaxIndex.Builder where
   private constructors : Constructors := {}
   private structures : StructureOwners := {}
   private ruleSlots : IotaSlots := {}
-  private definitions : Lean.PersistentHashMap Name ExactNormalizationDef := {}
+  private definitions : Std.HashMap Name ExactNormalizationDef := {}
   private records : Std.HashMap Name (Array Nat) := {}
   private names : Lean.PersistentHashSet Name := {}
   private owners : Array (Nat × EDecl) := #[]
@@ -1499,7 +1499,7 @@ def SyntaxIndex.withReplayRecords (source : SyntaxIndex)
   let mut declarations := source.declarations
   let mut constructors := source.constructors
   let mut structures := source.structures
-  let mut definitions := source.normalizer.definitions
+  let mut normalizer := source.normalizer
   let mut names := source.names
   for ordinal in [:exactRecords.size] do
     let exact := exactRecords[ordinal]!
@@ -1513,7 +1513,7 @@ def SyntaxIndex.withReplayRecords (source : SyntaxIndex)
         throw s!"replay syntax replacement {ordinal} moved an atomic quotient role"
     for name in exact.names do
       declarations := declarations.erase name
-      definitions := definitions.erase name
+      normalizer := normalizer.eraseDefinition name
     if let .induct types ctors _ := exact then
       for type in types do structures := structures.erase type.name
       for ctor in ctors do constructors := constructors.erase ctor.name
@@ -1524,10 +1524,10 @@ def SyntaxIndex.withReplayRecords (source : SyntaxIndex)
       for ctor in ctors do constructors := constructors.insert ctor.name ctor
       for type in types do structures := structures.insert type.name (type, ctors)
     if let .defn name levelParams _ value .. := replay then
-      definitions := definitions.insert name { levelParams, value }
+      normalizer := normalizer.insertDefinition name { levelParams, value }
   return { source with
     declarations, constructors, structures,
-    normalizer := { definitions }, names }
+    normalizer, names }
 
 private def declarationRecords (x : Export) : Std.HashMap Name (Array Nat) := Id.run do
   let mut records : Std.HashMap Name (Array Nat) := {}
@@ -1641,10 +1641,10 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
       for type in types do
         unless source.structures.contains type.name do
           structures := structures.insert type.name (type, ctors)
-  let mut definitions := source.normalizer.definitions
+  let mut normalizer := source.normalizer
   for declaration in records.reverse do
     if let .defn name levelParams _ value .. := declaration then
-      definitions := definitions.insert name { levelParams, value }
+      normalizer := normalizer.insertDefinition name { levelParams, value }
   -- `discoverWithIndex` may consume the resulting index together with the
   -- literal combined view `records ++ source`. Shift only the sparse existing
   -- overlay; base source occurrences retain their map and acquire one offset.
@@ -1661,7 +1661,7 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
     constructors := constructors
     structures := structures
     ruleSlots := ruleSlots
-    normalizer := { definitions := definitions }
+    normalizer := normalizer
     records := source.records
     recordPrefix := recordPrefix
     recordOffset := source.recordOffset + records.size

@@ -242,6 +242,17 @@ def main : IO UInt32 := do
     | throw <| IO.userError "cannot construct replay syntax replacement"
   state := state.check "transparent normalization unfolds to the replay identity"
     (replayIndex.exactNormalizer.whnf (.const wrapper []) == .const generationBuild [])
+  let overrideWrapper : EDecl := .defn wrapper [] (.sort (.succ .zero))
+    (.const `X []) (.regular 0) "safe" [wrapper]
+  let .ok overrideIndex := baseIndex.withReplayRecords #[wrapperDecl] #[overrideWrapper]
+    | throw <| IO.userError "cannot override replay normalization definition"
+  state := state.check "replay definition overrides the immutable source normalizer table"
+    (overrideIndex.exactNormalizer.whnf (.const wrapper []) == .const `X [])
+  let erasedWrapper : EDecl := .ax wrapper [] (.sort (.succ .zero)) false
+  let .ok erasedIndex := baseIndex.withReplayRecords #[wrapperDecl] #[erasedWrapper]
+    | throw <| IO.userError "cannot erase replay normalization definition"
+  state := state.check "replay tombstone hides an immutable source definition"
+    (erasedIndex.exactNormalizer.whnf (.const wrapper []) == .const wrapper [])
   let generation := { noGeneration with simple := true }
   let (generationOutput, generationReport) ← runExportWith generationInput generation
   let generationKernelValid ← kernelChecks { generationInput with decls := generationOutput }

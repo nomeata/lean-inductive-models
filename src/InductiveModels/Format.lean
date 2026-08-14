@@ -522,13 +522,36 @@ normalization.  It contains only values of transparent `defn` records from the
 export: opaque declarations, theorems, and any ambient kernel environment are
 invisible. -/
 structure ExactNormalizationEnv where
-  definitions : Lean.PersistentHashMap Name ExactNormalizationDef
+  /-- The immutable export-derived base table. Syntax-index replay/island
+  updates stay in the private sparse overlay so this public `Std.HashMap`
+  remains source-compatible and is never copied by a disposable overlay. -/
+  definitions : Std.HashMap Name ExactNormalizationDef
+  /-- Sparse replacements used by disposable syntax overlays. `none` is a
+  tombstone for a definition removed from the immutable public base table. -/
+  private overrides : Lean.PersistentHashMap Name (Option ExactNormalizationDef) := {}
+
+private def ExactNormalizationEnv.definition? (env : ExactNormalizationEnv)
+    (name : Name) : Option ExactNormalizationDef :=
+  match env.overrides.find? name with
+  | some replacement => replacement
+  | none => env.definitions[name]?
+
+/-- Add or replace one transparent definition without copying the public base
+table.  This is the sparse update operation used by syntax-index overlays. -/
+def ExactNormalizationEnv.insertDefinition (env : ExactNormalizationEnv)
+    (name : Name) (definition : ExactNormalizationDef) : ExactNormalizationEnv :=
+  { env with overrides := env.overrides.insert name (some definition) }
+
+/-- Hide one transparent definition without copying the public base table. -/
+def ExactNormalizationEnv.eraseDefinition (env : ExactNormalizationEnv)
+    (name : Name) : ExactNormalizationEnv :=
+  { env with overrides := env.overrides.insert name none }
 
 /-- Build the exact normalizer's environment from export records alone.
 Keeping the first occurrence agrees with the other format prepasses and makes
 malformed duplicate-name input deterministic. -/
 def Export.exactNormalizationEnv (x : Export) : ExactNormalizationEnv := Id.run do
-  let mut definitions : Lean.PersistentHashMap Name ExactNormalizationDef := {}
+  let mut definitions : Std.HashMap Name ExactNormalizationDef := {}
   for declaration in x.decls do
     if let .defn name levelParams _ value .. := declaration then
       unless definitions.contains name do
@@ -550,7 +573,7 @@ private partial def ExactNormalizationEnv.whnfCore (env : ExactNormalizationEnv)
     else match expression.getAppFn with
       | .const name levels =>
         if seen.contains name then expression
-        else match env.definitions.find? name with
+        else match env.definition? name with
           | some definition =>
             if definition.levelParams.length == levels.length then
               let value := definition.value.instantiateLevelParams definition.levelParams levels
@@ -561,7 +584,7 @@ private partial def ExactNormalizationEnv.whnfCore (env : ExactNormalizationEnv)
       | _ => expression
   | .const name levels =>
     if !unfoldDefinitions || seen.contains name then expression
-    else match env.definitions.find? name with
+    else match env.definition? name with
       | some definition =>
         if definition.levelParams.length == levels.length then
           env.whnfCore (definition.value.instantiateLevelParams definition.levelParams levels)

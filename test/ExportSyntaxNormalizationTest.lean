@@ -64,6 +64,15 @@ def run (root : String) : IO UInt32 := do
         .defn `Literal [] literalType (.sort .zero) .abbrev "safe" []] }
   let normalizer := synthetic.exactNormalizationEnv
   let mut state : TestState := {}
+  let publicDefinitions : Std.HashMap Name ExactNormalizationDef :=
+    ({} : Std.HashMap Name ExactNormalizationDef).insert `ExternalDefinition
+      { levelParams := [], value := .sort .zero }
+  let publicNormalizer : ExactNormalizationEnv := { definitions := publicDefinitions }
+  let visibleDefinitions : Std.HashMap Name ExactNormalizationDef :=
+    publicNormalizer.definitions
+  state := state.check "public Std definition table still constructs and projects" <|
+    visibleDefinitions.contains `ExternalDefinition &&
+      publicNormalizer.whnf (.const `ExternalDefinition []) == .sort .zero
   state := state.check "transparent exported definition unfolds"
     (normalizer.whnf (.const `Transparent []) == .sort .zero)
   state := state.check "opaque exported definition remains opaque"
