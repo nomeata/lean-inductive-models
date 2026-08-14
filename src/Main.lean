@@ -290,6 +290,18 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
   -- already monomorphic at this point; feeding that support back through Mono
   -- would instead ask the optional pass to infer instantiations for its
   -- carried primitive basis, which has no such instantiation relation.
+  if config.monoLevels then
+    match (InductiveModels.SourceCensus.ofSource parsed).replayAliases with
+    | .error message =>
+        IO.eprintln s!"{input}: cannot plan collision-safe source replay: {message}"
+        return exitToolError
+    | .ok aliases => unless aliases.isEmpty do
+        -- Mono owns an independent exact-name replay loop.  Refuse before it
+        -- reaches Lean's normalized async map until that loop shares Driver's
+        -- explicit exact/replay alias view.
+        IO.eprintln s!"{input}: --mono-levels does not yet support normalized source-name \
+          collisions ({aliases.entries.size} declaration names require replay aliases)"
+        return exitToolError
   let generationInput ← if config.monoLevels then do
       let result ← try
           let ((output, report), _) ← Lean.Core.CoreM.toIO

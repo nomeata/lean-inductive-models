@@ -1289,10 +1289,18 @@ exact serialized model declaration in the owner-free persistent environment.
 Only fixed shared support is copied back. -/
 def closeModelIsland (template : Export) (main : Environment)
     (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
-    (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name) :
+    (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name)
+    (sourceAliases : SourceReplayAliases := {}) :
     MetaM (Except String
       (Array EDecl × CompactIsland × Environment × Check.StatementReport)) := do
-  let island := { template with decls := records.push owner }
+  -- Generation runs in the collision-free replay environment, so generated
+  -- expressions can mention replay aliases.  Restore the exact source names
+  -- before every syntax/output operation.  Checked replay below converts the
+  -- ordered result back in the opposite direction.
+  let exactRecords := records.map sourceAliases.exactRecord
+  unless exactRecords.map sourceAliases.buildRecord == records do
+    return .error "generated source-alias round trip changed a declaration"
+  let island := { template with decls := exactRecords.push owner }
   let ordered ← match Order.reorder island with
     | .ok ordered => pure ordered
     | .error error => return .error s!"cannot order generated island: {repr error}"
@@ -1364,10 +1372,11 @@ def closeModelIsland (template : Export) (main : Environment)
   -- exact serialized records and compact splice witnesses above are the only
   -- state allowed to cross into owner-free checked replay.
   setEnv main
-  match ← checkGeneratedIn main generated with
+  let replayGenerated := generated.map sourceAliases.buildRecord
+  match ← checkGeneratedIn main replayGenerated with
   | .error message => return .error message
   | .ok _ =>
-    match ← installGeneratedSupportIn main generated models with
+    match ← installGeneratedSupportIn main replayGenerated models with
     | .error message => return .error message
     | .ok supported => return .ok (generated, compact, supported, statementReport)
 
@@ -2549,20 +2558,27 @@ private def sourceReplayAliasesFromSummaries
   let mut occupiedNormalized : Std.HashSet Name := {}
   for name in reserved do
     occupiedNormalized := occupiedNormalized.insert (privateToUserName name)
+  let mut root? : Option Name := none
+  for salt in [:reserved.size + 1] do
+    if root?.isSome then continue
+    let candidate := Name.num `_inductive_models_source_alias salt
+    let overlaps := fun name : Name =>
+      candidate.isPrefixOf name || name.isPrefixOf candidate
+    unless reserved.any overlaps || occupiedNormalized.any overlaps do
+      root? := some candidate
+  let some root := root?
+    | throw "source reserves every bounded collision-safe replay namespace"
   let mut entries : Array SourceReplayAlias := #[]
   for occurrence in occurrences do
     let normalized := privateToUserName occurrence.exact
     let some keep := canonical[normalized]?
       | throw "normalized source class lost its canonical member"
     if occurrence.exact == keep then continue
-    let base := (Name.num (Name.num `_inductive_models_source_alias
-      occurrence.rawOrdinal) occurrence.position)
-    let mut salt := 0
-    let mut build := (Name.num base salt) ++ occurrence.exact
-    while occupiedExact.contains build ||
-        occupiedNormalized.contains (privateToUserName build) do
-      salt := salt + 1
-      build := (Name.num base salt) ++ occurrence.exact
+    let build := (Name.num (Name.num root occurrence.rawOrdinal) occurrence.position) ++
+      occurrence.exact
+    if occupiedExact.contains build ||
+        occupiedNormalized.contains (privateToUserName build) then
+      throw s!"source replay alias {build} was not fresh below {root}"
     if isPrivateName build then
       throw s!"source replay alias {build} unexpectedly remains private"
     occupiedExact := occupiedExact.insert build
@@ -2920,7 +2936,9 @@ private structure FilterContext where
   retention : RetentionMode
   exactTransform : EDecl → EDecl
   sourceSyntax : Check.SyntaxIndex
-  sourceNormalizer : ExactNormalizationEnv
+  constructionSyntax : Check.SyntaxIndex
+  constructionNormalizer : ExactNormalizationEnv
+  sourceAliases : SourceReplayAliases
   sourceSummaries : Array Order.DeclSummary
   sourceGlobalExtras? : Option (Array Check.GlobalExtraRecord)
   sourceFamilyRecords? : Option (Array (Array Check.CompactFamilyCertificate))
@@ -2964,9 +2982,22 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let retainOracle := retention.retainsOracle
   let exactTransform := context.exactTransform
   let sourceSyntax := context.sourceSyntax
-  let sourceNormalizer := context.sourceNormalizer
+  let constructionSyntax := context.constructionSyntax
+  let constructionNormalizer := context.constructionNormalizer
+  let sourceAliases := context.sourceAliases
   let sourceSummaries := context.sourceSummaries
   let scheduledOrdinal := state.scheduledOrdinal
+  let sourceSummary := sourceSummaries[scheduledOrdinal]!
+  let bookkeepingUsesAlias := match d with
+    | .defn _ _ _ _ _ _ all | .thm _ _ _ _ all | .opaq _ _ _ _ _ all =>
+      all.any sourceAliases.hasExact
+    | .induct types _ recursors =>
+      types.any (fun type => type.all.any sourceAliases.hasExact) ||
+        recursors.any (fun recursor => recursor.all.any sourceAliases.hasExact)
+    | _ => false
+  let sourceUsesAlias := sourceSummary.introduced.any sourceAliases.hasExact ||
+    sourceSummary.referenced.any sourceAliases.hasExact || bookkeepingUsesAlias
+  let replayD := if sourceUsesAlias then sourceAliases.buildRecord d else d
   let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[scheduledOrdinal]?) with
     | some record => record
     | none => (Check.globalExtraRecordsWithIndex sourceSyntax #[d])[0]!
@@ -2995,7 +3026,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut pending : Array PendingModel := #[]
   let mut modeledSourceFamilies : Array Check.CompactFamilyCertificate := #[]
   let mut modeledSourceGlobalExtra? : Option Check.GlobalExtraRecord := none
-  let basisRoot? := match d with
+  let basisRoot? := match replayD with
     | .induct types _ _ => types.findSome? fun type =>
         if inductiveBasis.contains type.name then some type.name else none
     | _ => none
@@ -3008,7 +3039,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let reportedBefore := rep.generated.size
   -- The model, if this is a nested declaration. Generated **before** the
   -- declaration is added: nothing in the model mentions `T`.
-  if let .induct ts cs inputRecursors := d then
+  if let .induct ts cs inputRecursors := replayD then
     -- **A mutual block whose members nest is one block, not several.** Lean
     -- specialises the whole block at once — `nest_mutual_both`'s `A`/`B`
     -- become four members with four recursors over one shared motive vector
@@ -3115,7 +3146,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     | none => pure false
   | none => pure false
   unless shadowedSource do
-    if let some dcl := toDeclaration (← getEnv) d then
+    if let some dcl := toDeclaration (← getEnv) replayD then
       match (← getEnv).addDeclCore 0 dcl none false with
       | .ok e =>
         replayedOwnerEnv? := some e
@@ -3125,7 +3156,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         return .unreplayable
           { rep with unreplayable := some s!"{d.names}: {msg}" }
   if let some root := basisRoot? then
-    match ← (validateBasisOwner root d).run with
+    match ← (validateBasisOwner root replayD).run with
     | .ok () =>
       if generation.modelsSimpleInput root then
         rep := { rep with
@@ -3136,7 +3167,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   -- Plain mutual and direct-simple routes read recursor metadata installed by
   -- the replay above and therefore remain the post-owner half of this single
   -- transition.
-  if let .induct ts cs _ := d then
+  if let .induct ts cs _ := replayD then
     if let t :: _ := ts then
       if generation.mutualModels && ts.length > 1 && !ts.any (·.numNested > 0) &&
           basisRoot?.isNone && invalidBasis.isEmpty then
@@ -3144,7 +3175,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         let ctors := all.map fun n =>
           (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
         let tys := ts.toArray.map (·.type)
-        let mut needsExactSortLift := hasIntrinsicProjectionFields sourceSyntax ts cs
+        let mut needsExactSortLift := hasIntrinsicProjectionFields constructionSyntax ts cs
         unless needsExactSortLift do
           for type in ts do
             if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then
@@ -3152,14 +3183,14 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         unless ← mutualReady needsExactSortLift reserved do
           throwError "plain mutual model prerequisites remained late after support scheduling"
         let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
-          generation.simple generation.basic (out, rep, pending) (some d) exactTransform
+          generation.simple generation.basic (out, rep, pending) (some replayD) exactTransform
         (out, rep, pending) ← pure st3
       if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
           basisRoot?.isNone && invalidBasis.isEmpty then
         let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
         let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
           #[] reserved generation.basic true (out, rep, pending)
-          (some (d, sourceNormalizer)) exactTransform true
+          (some (replayD, constructionNormalizer)) exactTransform true
         if wait?.isSome then
           throwError "simple model prerequisite remained late after support scheduling"
         (out, rep, pending) ← pure st
@@ -3179,7 +3210,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       setEnv ownerEnv
     else
       let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
-          ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners with
+          ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners
+            sourceAliases with
         | .ok result => pure result
         | .error message => throwError
             "owner-free generated declaration rejected for {d.names}: {message}"
@@ -3226,7 +3258,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             "cannot index accepted persistent support for {d.names}: {message}"
       if retainOracle then legacyOut := legacyOut ++ orderedGenerated
       setEnv mainWithSupport
-      if let some ownerDeclaration := toDeclaration mainWithSupport d then
+      if let some ownerDeclaration := toDeclaration mainWithSupport replayD then
         match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
         | .ok env =>
           mainEnv := env
@@ -3260,7 +3292,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       checkIsland? := modeledIsland?
       locator := .source rawOrdinal }
   if context.checkRecursors then
-    if let .induct _ _ rs := d then
+    if let .induct _ _ rs := replayD then
       let (n, b) ← checkRecs rs
       rep := { rep with recChecked := rep.recChecked + n, recMismatch := rep.recMismatch ++ b }
   if context.collectTrace then
@@ -3272,7 +3304,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       rawOrdinal
       sourceNames := d.names.toArray
       sourceIsInductive := d matches .induct ..
-      sourceInstalled := d.names.all mainEnv.constants.contains
+      sourceInstalled := replayD.names.all mainEnv.constants.contains
       generated := rep.generated.extract reportedBefore rep.generated.size
       generatedRecords := out.size }
   return .next {
@@ -3411,6 +3443,22 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep) := do
   let plannedCensus := sourceCensus?.isSome
   let sourceCensus := sourceCensus?.getD (SourceCensus.ofSource x)
+  let sourceAliases ← match sourceCensus.replayAliases with
+    | .ok aliases => pure aliases
+    | .error message => throwError "cannot plan collision-safe source replay: {message}"
+  unless sourceAliases.isEmpty do
+    if plannedCensus then
+      throwError "planned source replay does not retain the records needed for normalized-name aliases"
+    -- An inductive declaration is one atomic kernel operation whose type,
+    -- constructor, recursor, and rule roles are minted together.  Moving a
+    -- subset requires a dual-role certificate that this first tranche does
+    -- not pretend to have.  Reject the complete input before replay instead
+    -- of letting `AsyncConsts.add` panic part-way through the stream.
+    for declaration in x.decls do
+      if declaration matches .induct .. then
+        if let some name := declaration.names.find? sourceAliases.hasExact then
+          throwError "normalized source-name collision moves inductive role {name}; \
+            collision-safe inductive replay is not supported"
   let sourceOrder ← match sourceOrder? with
     | some order => pure order
     | none => match if plannedCensus then sourceCensus.plannedScheduleOrder generation
@@ -3430,7 +3478,15 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- derived from today's complete scheduled Export; only the logical
   -- declaration transition is extracted in this phase.
   let sourceSyntax := sourceCensus.sourceSyntax
-  let sourceNormalizer := sourceSyntax.exactNormalizer
+  let constructionSyntax ← if sourceAliases.isEmpty then pure sourceSyntax else do
+    let aliasRecords := x.decls.filterMap fun declaration =>
+      if declaration.names.any sourceAliases.hasExact then
+        some (sourceAliases.buildRecord declaration)
+      else none
+    match sourceSyntax.prependRecords aliasRecords with
+    | .ok index => pure index
+    | .error message => throwError "cannot index collision-safe source replay: {message}"
+  let constructionNormalizer := constructionSyntax.exactNormalizer
   let sourceSummaries ← match sourceCensus.summariesForOrder sourceOrder with
     | .ok summaries => pure summaries
     | .error error => throwError "cannot rebind frozen source summaries: {error}"
@@ -3442,8 +3498,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let reserved := sourceCensus.reserved
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
-    sourceSyntax, sourceNormalizer, sourceSummaries,
-    sourceGlobalExtras?, sourceFamilyRecords?,
+    sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
+    sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
     rawOrdinals, reserved, futureSupport?, outputSourceOrder?, collectTrace }
   let initialFutureSupport := futureSupport?.map (·.records) |>.getD
     ({} : Std.HashMap Nat EDecl)
@@ -3494,6 +3550,15 @@ def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
     let (decls, report) ← runFilter x checkRecursors generation
     return (decls, report, false)
   let census := SourceCensus.ofSource x
+  let aliases ← match census.replayAliases with
+    | .ok aliases => pure aliases
+    | .error message => throwError "cannot plan collision-safe source replay: {message}"
+  unless aliases.isEmpty do
+    -- The phase-one shadow preinstalls exact future source declarations, so
+    -- it cannot share the collision-safe replay view yet.  Fall back before
+    -- certification mutates any environment; the ordinary path is alias-aware.
+    let (decls, report) ← runFilter x checkRecursors generation
+    return (decls, report, false)
   unless sourceNeedsSupportScheduling x generation census.reserved do
     let (decls, report) ← runFilter x checkRecursors generation
     return (decls, report, false)
