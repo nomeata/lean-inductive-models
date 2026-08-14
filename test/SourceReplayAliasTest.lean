@@ -231,6 +231,14 @@ def main : IO UInt32 := do
     pure <| (toString error).contains "duplicate source declaration name ExactDuplicate"
   state := state.check "genuine exact duplicates are rejected rather than aliased"
     duplicateRejected
+  let atomicDuplicateInput : Export :=
+    { metaLine := .null
+      decls := #[.induct
+        [emptyInductiveType `AtomicDuplicate, emptyInductiveType `AtomicDuplicate] [] []] }
+  state := state.check "same-record exact duplicates are rejected by the census"
+    (match aliasesOf atomicDuplicateInput with
+      | .error message => message.contains "duplicate source declaration name AtomicDuplicate"
+      | .ok _ => false)
 
   -- Occupying salt zero forces the bounded deterministic root search to use
   -- another spelling without changing the chosen class survivor.

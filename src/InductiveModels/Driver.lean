@@ -2613,8 +2613,12 @@ def SourceCensus.Builder.push (builder : SourceCensus.Builder)
   match builder with
   | { syntaxBuilder, summaryBuilder, scheduling, reserved, rawOrdinals, duplicate?,
       nextOrdinal } =>
-    let duplicate? := declaration.names.foldl (init := duplicate?) fun duplicate? name =>
-      duplicate?.orElse fun _ => rawOrdinals[name]?.map fun first => (name, first, nextOrdinal)
+    let (duplicate?, _) := declaration.names.foldl
+      (init := (duplicate?, ({} : Std.HashSet Name))) fun (duplicate?, seen) name =>
+        let duplicate? := duplicate?.orElse fun _ =>
+          if seen.contains name then some (name, nextOrdinal, nextOrdinal)
+          else rawOrdinals[name]?.map fun first => (name, first, nextOrdinal)
+        (duplicate?, seen.insert name)
     { syntaxBuilder := syntaxBuilder.push declaration
       summaryBuilder := summaryBuilder.push declaration
       scheduling := scheduling.push (.ofDeclaration declaration)
