@@ -222,7 +222,7 @@ structure SourceProvenance where private mk ::
 /-- The three logical parser payloads. This is not yet a byte-exact snapshot:
 noncanonical ignored records are intentionally absent, and such a certificate
 always selects the existing full writer. -/
-structure ParseTee where
+structure ParseTee where private mk ::
   metadata : SpoolFile
   arena : SpoolFile
   declarations : SpoolFile
@@ -254,7 +254,7 @@ def ParseTee.finish (tee : ParseTee) : IO RawSpoolSizes := do
 /-- Random-access source decoder over one completed raw tee.  The immutable
 arena is shared by every read; only the declaration handle cursor is mutable.
 No decoded declaration is retained by the reader. -/
-structure PlannedSourceReader where
+structure PlannedSourceReader where private mk ::
   private arena : DeclarationArena
   private declarations : IO.FS.Handle
   private position : IO.Ref UInt64

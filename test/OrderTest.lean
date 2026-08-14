@@ -3,6 +3,18 @@ import InductiveModels.Order
 
 set_option maxRecDepth 8192
 
+/--
+error: Unknown constant `InductiveModels.Spool.ParseTee.mk`
+-/
+#guard_msgs in
+#check InductiveModels.Spool.ParseTee.mk
+
+/--
+error: Unknown constant `InductiveModels.Spool.PlannedSourceReader.mk`
+-/
+#guard_msgs in
+#check InductiveModels.Spool.PlannedSourceReader.mk
+
 /-!
 # Focused tests for record-level model ordering
 
