@@ -1151,7 +1151,7 @@ private def carrierRoundTrip (plan : FamilyAdapterPlan)
     ConstructionM Expr := do
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
-    | .error _ => failConstruction (.missingMemberMap shape.key)
+    | .error _ => failConstruction (.missingMemberMap member.key)
   if ← isDefEq sourceType targetType then
     return eqi.refl' (← ilevel sourceType) sourceType value
   let some memberCertificate := certificateFor? certificates member.key
@@ -3169,6 +3169,8 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
         unless theoremRightArguments.size == publicMinorBinders.size do
           failConstruction (.missingPublicIotaInput rule.key)
         let ownerBoundary ← packedCarrierBoundary plan base.members parameters owner
+        let recursorShape := memberRecursorShape owner
+        let recursorBoundary ← memberRecursorBoundary plan base.members owner
         let constructorBoundary ← packedConstructorBoundary plan parameters owner ownerBoundary
           constructor constructorCertificate
         let publicPackage ← liftGen <| packTelescopeValue publicFields publicFields
@@ -3177,8 +3179,9 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
         for motiveIndex in [:recursorCertificate.motives.size] do
           let .forallE _ expected rest _ := privateTail
             | failConstruction (.shortInstalledRecursorPrefix owner.key owner.implementationRecursor)
-          let motiveMember := plan.members[motiveIndex]?.getD owner
-          let motive ← privateMotiveValue plan base.members parameters motiveMember
+          let motiveBoundary ← exactMotiveBoundary plan base.members recursorBoundary
+            publicMotives[motiveIndex]! expected
+          let motive ← privateMotiveValue plan motiveBoundary parameters recursorShape
             publicMotives[motiveIndex]! expected
           privateMotives := privateMotives.push motive
           privateTail := rest.instantiate1 motive
@@ -3191,11 +3194,11 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               current.publicName == minorCertificate.publicConstructor &&
                 current.implementationName == minorCertificate.implementationConstructor then
             privateMinorValue plan base.members base.telescopes constructors parameters
-              publicMotives privateMotives owner minorIndex sourceConstructor publicMinors[minorIndex]!
-              expected
+              publicMotives privateMotives recursorShape minorIndex sourceConstructor
+              publicMinors[minorIndex]! expected
           else
-            privateSpecialisedMinorValue plan base.members parameters publicMotives privateMotives owner
-              minorCertificate publicMinors[minorIndex]! expected
+            privateSpecialisedMinorValue plan base.members parameters publicMotives privateMotives
+              recursorShape recursorBoundary minorCertificate publicMinors[minorIndex]! expected
           privateMinors := privateMinors.push minor
           privateTail := rest.instantiate1 minor
         let privatePrefix := parameters ++ privateMotives ++ privateMinors
