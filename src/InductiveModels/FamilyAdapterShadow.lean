@@ -44,6 +44,7 @@ inductive ShadowReason where
   | installedContainerRecursorTypeMismatch (occurrence : OccurrenceKey) (name : Name)
   | installedContainerRecursorRulesMismatch (occurrence : OccurrenceKey) (name : Name)
   | invalidContainerRecursorAssociation (occurrence : OccurrenceKey)
+  | unresolvedContainerRecursorMember (sourceRecursor implementationRecursor : Name)
   | unknownRuleConstructor (rule : RuleKey)
   | invalidPlan (error : PlanError)
   deriving Inhabited, BEq, Repr
@@ -120,6 +121,7 @@ private structure ResolvedMember where
   implementationRecursor : Name
   publicRecursor : Name
   representation : MemberRepresentation
+  container? : Option IsoContainerImplementation
   deriving Inhabited
 
 private structure ResolvedConstructor where
@@ -368,6 +370,10 @@ private def implementationIota? (iso : Iso) (member : ResolvedMember)
     (constructor : Name) : Option Name :=
   if let some familyMember := familyMember? iso member.source.name then
     familyMember.privateIotas.find? (fun (_, key, _) => key == constructor) |>.map (·.2.2)
+  else if let some container := member.container? then
+    if container.recursorRuleKeys.any (·.1 == constructor) then
+      some container.implementationRecursor
+    else none
   else
     iso.implementationInterface.iotas.find?
       (fun (ownerIndex, key, _) => ownerIndex == member.index && key == constructor) |>.map (·.2.2)
@@ -410,23 +416,40 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     if publicCarrier.isAnonymous then
       reasons := reasons.push (.missingInterfaceMember key .publicModel)
     let familyMember := familyMember? iso sourceType.name
-    let implementationCarrier := (familyMember.map (·.privateSelf)).orElse
-      (fun _ => interfaceMemberName? implementationInterface.selfNames index) |>.getD .anonymous
-    if implementationCarrier.isAnonymous then
-      reasons := reasons.push (.missingInterfaceMember key .privateModel)
     let publicRecursor := (interfaceMemberName? publicInterface.recs index).getD .anonymous
     if publicRecursor.isAnonymous then
       reasons := reasons.push (.missingInterfaceRecursor key .publicModel)
+    let containerCandidates := sourceRecursor?.map (fun recursor =>
+      iso.containerImplementations.filter (·.sourceRecursor == recursor.name)) |>.getD #[]
+    if containerCandidates.size > 1 then
+      reasons := reasons.push (.unresolvedContainerRecursorMember
+        (sourceRecursor?.map (·.name) |>.getD .anonymous)
+        (containerCandidates[0]?.map (·.implementationRecursor) |>.getD .anonymous))
+    let container? := if containerCandidates.size == 1 then containerCandidates[0]? else none
     let implementationRecursor := (familyMember.map (·.privateRecursor)).orElse
+      (fun _ => container?.map (·.implementationRecursor)) |>.orElse
       (fun _ => interfaceMemberName? implementationInterface.recs index) |>.getD .anonymous
     if implementationRecursor.isAnonymous then
       reasons := reasons.push (.missingInterfaceRecursor key .privateModel)
-    let representation := match familyMember with
-      | some member => if member.changed then .layer else .identity
-      | none => if implementationCarrier == publicCarrier then .identity else .layer
+    let implementationCarrier := (familyMember.map (·.privateSelf)).orElse
+      (fun _ => container?.map (·.implementationCarrier)) |>.orElse
+      (fun _ => interfaceMemberName? implementationInterface.selfNames index) |>.getD .anonymous
+    if implementationCarrier.isAnonymous then
+      reasons := reasons.push (.missingInterfaceMember key .privateModel)
+    let representation := match familyMember, container? with
+      | some member, _ => if member.changed then .layer else .identity
+      | none, some _ => .layer
+      | none, none => if implementationCarrier == publicCarrier then .identity else .layer
     resolvedMembers := resolvedMembers.push
       { index, source := sourceType, key, sourceRecursor?, implementationCarrier,
-        publicCarrier, implementationRecursor, publicRecursor, representation }
+        publicCarrier, implementationRecursor, publicRecursor, representation, container? }
+
+  for container in iso.containerImplementations do
+    unless resolvedMembers.countP (fun member =>
+        member.sourceRecursor?.any (·.name == container.sourceRecursor) &&
+          member.container?.any (· == container)) == 1 do
+      reasons := reasons.push (.unresolvedContainerRecursorMember
+        container.sourceRecursor container.implementationRecursor)
 
   let representedRecursors := resolvedMembers.filterMap (·.sourceRecursor?.map (·.name))
   for recursor in sourceRecursors do
@@ -440,6 +463,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     let familyMember := familyMember? iso owner.source.name
     let implementationName := (familyMember.bind fun member =>
       targetOf? member.privateConstructors constructor.name).orElse
+        (fun _ => owner.container?.bind fun container =>
+          targetOf? container.recursorRuleKeys constructor.name) |>.orElse
         (fun _ => targetOf? implementationInterface.ctors constructor.name) |>.getD .anonymous
     if implementationName.isAnonymous then
       reasons := reasons.push (.missingInterfaceConstructor key .privateModel)
@@ -686,7 +711,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   let env ← getEnv
   let mut coverage : ShadowCoverage := {}
   for member in resolvedMembers do
-    let implementationExpected := rewriteWith implementationMapping member.source.type
+    let implementationExpected := member.container?.map (·.implementationCarrierType) |>.getD
+      (rewriteWith implementationMapping member.source.type)
     let publicExpected := rewriteWith publicMapping member.source.type
     let (next, implementationOk) := addInstalledCoverage env member.implementationCarrier
       implementationExpected
@@ -699,7 +725,9 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     reasons := next
     if implementationOk && publicOk then coverage := { coverage with members := coverage.members.push member.key }
     if let some recursor := member.sourceRecursor? then
-      let implementationRecursorExpected := rewriteWith implementationMapping recursor.type
+      let implementationRecursorExpected := member.container?.map
+        (·.implementationRecursorType) |>.getD
+          (rewriteWith implementationMapping recursor.type)
       let publicRecursorExpected := rewriteWith publicMapping recursor.type
       let (next, implementationRecursorOk) := addInstalledCoverage env
         member.implementationRecursor implementationRecursorExpected

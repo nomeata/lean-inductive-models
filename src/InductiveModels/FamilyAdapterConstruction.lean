@@ -307,6 +307,18 @@ private def validateInstalledEquivalence (plan : FamilyAdapterPlan) (member : Me
       maps.backward maps.forward)]
   return (← expected.filterMapM fun (name, type) => validateMemberMap member.key name type)
 
+private def sameContainerBoundary (left right : ContainerMapPlan) : Bool :=
+  left.parameterArity == right.parameterArity && left.indexArity == right.indexArity &&
+    left.implementationCarrier == right.implementationCarrier && left.maps == right.maps &&
+    left.sourceRecursor == right.sourceRecursor &&
+    left.implementationRecursor == right.implementationRecursor &&
+    left.sourceRecursorType == right.sourceRecursorType &&
+    left.implementationRecursorType == right.implementationRecursorType &&
+    left.recursorRuleKeys == right.recursorRuleKeys &&
+    left.forwardType == right.forwardType && left.backwardType == right.backwardType &&
+    left.backwardForwardType == right.backwardForwardType &&
+    left.forwardBackwardType == right.forwardBackwardType
+
 /-- Resolve installed member equivalences. Identity boundaries receive fresh,
 kernel-checked private aliases; changed simultaneous members reuse the exact
 maps and laws already recorded by `Iso.familyImplementation?`. -/
@@ -329,6 +341,27 @@ def prototypeMemberCertificates (plan : FamilyAdapterPlan) (iso : Iso) (root : N
       let mapIssues ← validateInstalledEquivalence plan member maps
       if mapIssues.isEmpty then certificates := certificates.push certificate
       else issues := issues ++ mapIssues
+    else if !member.sourceRecursor.isAnonymous then
+      let containers := plan.containerMaps.filter (·.sourceRecursor == member.sourceRecursor)
+      if let some first := containers[0]? then
+        if containers.all (sameContainerBoundary first) &&
+            first.implementationRecursor == member.implementationRecursor &&
+            first.implementationCarrier == member.implementationCarrier then
+          let certificate : MemberCertificate := { key := member.key, maps := first.maps }
+          let mapIssues ← validateInstalledEquivalence plan member first.maps
+          if mapIssues.isEmpty then certificates := certificates.push certificate
+          else issues := issues ++ mapIssues
+        else
+          issues := issues.push (.missingMemberMap member.key)
+      else if member.publicCarrier == member.implementationCarrier then
+        let (added, certificate) ← identityMemberCertificate plan root member
+        declarations := declarations ++ added
+        certificates := certificates.push certificate
+      else
+        let occurrence := plan.occurrences.find? (·.key.target == member.key)
+        match occurrence with
+        | some occurrence => issues := issues.push (.missingOccurrenceMap occurrence.key)
+        | none => issues := issues.push (.missingMemberMap member.key)
     else if member.publicCarrier == member.implementationCarrier then
       let (added, certificate) ← identityMemberCertificate plan root member
       declarations := declarations ++ added
@@ -917,18 +950,6 @@ private def applyContainerMapInfer? (plan : FamilyAdapterPlan)
   let targetType ← instantiateMVars (← inferType application)
   if ← hasAssignableMVar targetType then return none
   return some (application, targetType)
-
-private def sameContainerBoundary (left right : ContainerMapPlan) : Bool :=
-  left.parameterArity == right.parameterArity && left.indexArity == right.indexArity &&
-    left.implementationCarrier == right.implementationCarrier && left.maps == right.maps &&
-    left.sourceRecursor == right.sourceRecursor &&
-    left.implementationRecursor == right.implementationRecursor &&
-    left.sourceRecursorType == right.sourceRecursorType &&
-    left.implementationRecursorType == right.implementationRecursorType &&
-    left.recursorRuleKeys == right.recursorRuleKeys &&
-    left.forwardType == right.forwardType && left.backwardType == right.backwardType &&
-    left.backwardForwardType == right.backwardForwardType &&
-    left.forwardBackwardType == right.forwardBackwardType
 
 private def mapCarrierValueInfer (plan : FamilyAdapterPlan)
     (certificates : Array MemberCertificate) (parameters : Array Expr)
@@ -1855,6 +1876,7 @@ private def exactRecursiveCallHead (tag : Name) (value : Expr) : Expr :=
   (openExactLambdas tag value).2.getAppFn
 
 private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RulePlan)
+    (occurrences : Array OccurrenceKey)
     (publicBinderIndex implementationBinderIndex : Nat) :
     Except ConstructionIssue (Option PublicIotaRecursiveCallRole) := do
   let some publicValue := exactRhsArgument?
@@ -1870,12 +1892,29 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
     `_family_adapter_implementation_iota_call implementationValue
   match publicHead.constName?, implementationHead.constName? with
   | some publicRecursor, some implementationRecursor =>
+    let occurrenceContainers := occurrences.filterMap fun occurrence =>
+      plan.containerMaps.find? (·.key == occurrence)
+    let matchingContainers := occurrenceContainers.filter fun container =>
+      container.sourceRecursor == publicRecursor &&
+        container.implementationRecursor == implementationRecursor
+    unless occurrenceContainers.isEmpty ||
+        (matchingContainers.size == occurrenceContainers.size &&
+          occurrences.all fun occurrence => matchingContainers.any (·.key == occurrence)) do
+      throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
     let candidates := plan.members.filter fun member =>
       member.publicRecursor == publicRecursor &&
-        member.implementationRecursor == implementationRecursor
+        member.implementationRecursor == implementationRecursor &&
+        (matchingContainers.isEmpty || matchingContainers.all fun container =>
+          member.sourceRecursor == container.sourceRecursor &&
+            member.implementationCarrier == container.implementationCarrier)
     unless candidates.size <= 1 do
       throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
-    return some ⟨publicRecursor, implementationRecursor, candidates[0]?.map (·.key)⟩
+    let some member := candidates[0]?
+      | throw (.missingPublicIotaRecursiveCall rule.key
+          publicBinderIndex implementationBinderIndex)
+    return some
+      { publicRecursor, implementationRecursor, member? := some member.key,
+        containerOccurrences := matchingContainers.map (·.key) }
   | none, none =>
     unless publicHead.isFVar && implementationHead.isFVar do
       throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
@@ -1942,7 +1981,7 @@ def derivePublicIotaProofSchemas (plan : FamilyAdapterPlan)
         | throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
       unless occurrenceCertificates.all (·.maps == firstOccurrence.maps) do
         throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
-      let recursiveCall? ← publicIotaRecursiveCallRole plan rule
+      let recursiveCall? ← publicIotaRecursiveCallRole plan rule (grouped.map (·.occurrence))
         first.publicBinderIndex binderIndex
       hypotheses := hypotheses.push
         { rule := rule.key, minorIndex := first.minorIndex,
