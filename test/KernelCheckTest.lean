@@ -55,13 +55,35 @@ def noGeneration : Cli.Config :=
 
 def runFilterShadow (x : Export) (generation : Cli.Config)
     (checkRecursors : Bool := false) :
-    IO (Array EDecl × Report × FilterKernelCheckShadow) := do
+    IO (Array EDecl × Report × Option FilterKernelCheckShadow) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<filter-kernel-check-shadow-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
     (runFilterWithKernelCheckShadow x checkRecursors generation)) context { env }
+  return result
+
+def runFilterShadowObserved (x : Export) (generation : Cli.Config)
+    (checkRecursors : Bool := false) :
+    IO ((Array EDecl × Report × Option FilterKernelCheckShadow) × Environment) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<filter-kernel-check-shadow-environment-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+    let result ← runFilterWithKernelCheckShadow x checkRecursors generation
+    return (result, ← getEnv))) context { env }
+  return result
+
+def runFilterOrdinary (x : Export) (generation : Cli.Config)
+    (checkRecursors : Bool := false) : IO (Array EDecl × Report) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<filter-kernel-check-ordinary-oracle-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+    (runFilter x checkRecursors generation)) context { env }
   return result
 
 def runDiscarding (x : Export) (generation : Cli.Config) : IO (Report × CompactPlan) := do
@@ -79,10 +101,19 @@ def readFixture (root file : String) : IO Export := do
     | throw <| IO.userError s!"kernelchecktest: cannot parse {file}"
   return parsed
 
-def shadowAgrees (shadow : FilterKernelCheckShadow) : Bool :=
-  accepted shadow.streamedResult && accepted shadow.batchResult &&
-    accepted shadow.result && !shadow.usedFallback &&
-    shadow.recordsPushed == shadow.finalRecords
+def shadowAgrees : Option FilterKernelCheckShadow → Bool
+  | none => false
+  | some shadow =>
+    accepted shadow.streamedResult && accepted shadow.batchResult &&
+      accepted shadow.result && !shadow.usedFallback &&
+      shadow.recordsPushed == shadow.finalRecords
+
+def mapConstructor (input : Export) (target : Name) (f : ECtor → ECtor) : Export :=
+  { input with decls := input.decls.map fun declaration => match declaration with
+    | .induct types constructors recursors =>
+      .induct types (constructors.map fun constructor =>
+        if constructor.name == target then f constructor else constructor) recursors
+    | other => other }
 
 def runIncremental (records : Array EDecl) : IO (Except String Unit × Nat) := do
   let env ← importModules #[] {}
@@ -285,19 +316,19 @@ def run (root : String) : IO UInt32 := do
     ("composed", "nested_iota.ndjson", {}, true)]
   for (label, file, generation, checkRecursors) in routeMatrix do
     let input ← readFixture root file
-    let (output, report, shadow) ← runFilterShadow input generation checkRecursors
+    let (output, report, shadow?) ← runFilterShadow input generation checkRecursors
     state := state.check s!"filter kernel shadow agrees for {label} generation" <|
-      shadowAgrees shadow && output.size == shadow.finalRecords &&
+      shadowAgrees shadow? && shadow?.any (fun shadow => output.size == shadow.finalRecords) &&
         !report.generated.isEmpty
 
   let declineBase ← readFixture root "nested_iota.ndjson"
   let occupiedTreeModel : EDecl :=
     .ax (Naming.modelName `Tree) [] (.sort (.succ .zero)) false
   let declineInput := { declineBase with decls := declineBase.decls.push occupiedTreeModel }
-  let (declineOutput, declineReport, declineShadow) ← runFilterShadow declineInput {}
+  let (declineOutput, declineReport, declineShadow?) ← runFilterShadow declineInput {}
   state := state.check "generation declines still feed the exact source stream" <|
-    shadowAgrees declineShadow && !declineReport.declined.isEmpty &&
-      declineOutput.size == declineShadow.finalRecords
+    shadowAgrees declineShadow? && !declineReport.declined.isEmpty &&
+      declineShadow?.any (fun shadow => declineOutput.size == shadow.finalRecords)
 
   let privateA : Name := (`_private.FilterKernelShadowA).mkNum 0 |>.str "Collision"
   let privateB : Name := (`_private.FilterKernelShadowB).mkNum 0 |>.str "Collision"
@@ -306,12 +337,57 @@ def run (root : String) : IO UInt32 := do
     .ax privateB [] (.sort (.succ .zero)) false,
     .ax `UsePrivateA [] (.const privateA []) false,
     .ax `UsePrivateB [] (.const privateB []) false]
-  let (privateOutput, privateReport, privateShadow) ←
+  let (privateOutput, privateReport, privateShadow?) ←
     runFilterShadow privateCollision noGeneration
   state := state.check "filter kernel shadow consumes normalized-private aliases exactly" <|
     privateToUserName privateA == privateToUserName privateB &&
       privateOutput == privateCollision.decls && privateReport == ({} : Report) &&
-      shadowAgrees privateShadow
+      shadowAgrees privateShadow?
+
+  -- The exact/build alias boundary matters only when generation emits records
+  -- from a collision-safe construction view. Insert a private-normalized copy
+  -- of a real inductive owner and require both generated families to cross the
+  -- shadow as exact names. The batch comparison must restore the construction
+  -- Meta environment, in which neither disposable carrier remains installed.
+  let aliasShapes ← readFixture root "prim_shapes.ndjson"
+  let publicOwner : Name := `Sv
+  let privateOwner : Name := (`_private.FilterKernelShadowModel).mkNum 0 |>.str "Sv"
+  let some ownerOrdinal := aliasShapes.decls.findIdx? (·.names.contains publicOwner)
+    | throw <| IO.userError "kernelchecktest: prim_shapes has no Sv owner"
+  let privateRoles := aliasShapes.decls[ownerOrdinal]!.names.foldl
+    (init := Naming.AliasMap.empty) fun aliases name =>
+      aliases.insert name (name.replacePrefix publicOwner privateOwner)
+  let privateOwnerRecord := aliasShapes.decls[ownerOrdinal]!.renameAliases privateRoles
+  let collidingShapes := { aliasShapes with decls := (
+    aliasShapes.decls.extract 0 (ownerOrdinal + 1) ++ #[privateOwnerRecord] ++
+      aliasShapes.decls.extract (ownerOrdinal + 1) aliasShapes.decls.size) }
+  let collisionGeneration := legacyGenerationConfig true
+  let ((collidingOutput, collidingReport, collidingShadow?), collidingEnv) ←
+    runFilterShadowObserved collidingShapes collisionGeneration true
+  let (ordinaryCollidingOutput, ordinaryCollidingReport) ←
+    runFilterOrdinary collidingShapes collisionGeneration true
+  let leakedBuildAlias := collidingOutput.any fun declaration =>
+    (declaration.names.toArray ++ (Order.references declaration).toArray).any fun name =>
+      name.components.any fun component =>
+        component.toString.startsWith "_inductive_models_source_alias_"
+  state := state.check "generated normalized-private aliases cross the shadow exactly" <|
+    shadowAgrees collidingShadow? && collidingOutput == ordinaryCollidingOutput &&
+      collidingReport == ordinaryCollidingReport &&
+      collidingReport.generated.any (·.1 == publicOwner) &&
+      collidingReport.generated.any (·.1 == privateOwner) && !leakedBuildAlias &&
+      collidingOutput.any (·.names.contains (Naming.modelName privateOwner)) &&
+      !collidingEnv.constants.contains (Naming.modelName publicOwner) &&
+      !collidingEnv.constants.contains (Naming.modelName privateOwner)
+
+  let lateMalformed := mapConstructor declineBase `PT.node fun constructor =>
+    { constructor with type := .sort .zero }
+  let (ordinaryMalformedOutput, ordinaryMalformedReport) ← runFilterOrdinary lateMalformed {}
+  let (shadowMalformedOutput, shadowMalformedReport, malformedShadow?) ←
+    runFilterShadow lateMalformed {}
+  state := state.check "unreplayable source preserves output/report and has no sealed shadow" <|
+    ordinaryMalformedReport.unreplayable.isSome && malformedShadow?.isNone &&
+      shadowMalformedOutput == ordinaryMalformedOutput &&
+      shadowMalformedReport == ordinaryMalformedReport
 
   -- A source consumer can precede the generated declaration it names.  The
   -- compact planner already marks this future-provider shape unavailable;
@@ -323,8 +399,10 @@ def run (root : String) : IO UInt32 := do
     .ax `CompactFallbackProbe [] (.const (Naming.modelName `Tree) []) false
   let futureInput := { futureBase with decls := #[futureProbe] ++ futureBase.decls }
   let futureGeneration := { noGeneration with nested := true }
-  let (_, _, futureShadow) ← runFilterShadow futureInput futureGeneration
+  let (_, _, futureShadow?) ← runFilterShadow futureInput futureGeneration
   let (_, futureCompact) ← runDiscarding futureInput futureGeneration
+  let some futureShadow := futureShadow?
+    | IO.eprintln "kernelchecktest: future-provider run did not seal"; return 1
   state := state.check "future generated provider preserves the batch diagnostic fallback" <|
     futureShadow.usedFallback && !accepted futureShadow.streamedResult &&
       accepted futureShadow.batchResult && accepted futureShadow.result &&

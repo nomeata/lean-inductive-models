@@ -2116,7 +2116,7 @@ structure FilterSourceStep where
 /-- Value-only comparison between declaration-wise exact kernel replay and the
 historical batch oracle over the final reordered export.  `batchResult` is
 always authoritative: a feed-order miss or differently ordered diagnostic
-sets `usedFallback`, without exposing the shadow diagnostic to a caller. -/
+sets `usedFallback`. `streamedResult` remains observable only for A/B tests. -/
 structure FilterKernelCheckShadow where
   streamedResult : Except String Unit
   batchResult : Except String Unit
@@ -2655,7 +2655,7 @@ private structure FilterContext where
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
   constructionReserved : Std.HashSet Name
-  kernelCheckBase : Environment
+  kernelCheckBase? : Option Environment := none
   futureSupport? : Option FutureSourceSupport := none
   outputSourceOrder? : Option (Array Nat) := none
   collectTrace : Bool := false
@@ -3212,8 +3212,10 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
         | .ok ordered => pure ordered
         | .error error => throwError "kernel-check full oracle cannot order final export: {repr error}"
       let saved ← getEnv
+      let some kernelCheckBase := context.kernelCheckBase?
+        | throwError "kernel-check shadow lost its exact base environment"
       let batchResult ← try
-        setEnv context.kernelCheckBase
+        setEnv kernelCheckBase
         typeCheckExport orderedExport
       finally
         setEnv saved
@@ -3304,7 +3306,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
     sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
-    rawOrdinals, reserved, constructionReserved, kernelCheckBase := fallbackEnv,
+    rawOrdinals, reserved, constructionReserved,
+    kernelCheckBase? := if kernelCheckShadow then some fallbackEnv else none,
     futureSupport?, outputSourceOrder?, collectTrace }
   let initialFutureSupport := futureSupport?.map (·.records) |>.getD
     ({} : Std.HashMap Nat EDecl)
@@ -3347,18 +3350,17 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
   return (decls, report)
 
 /-- Test-facing full-output oracle with an exact declaration-wise kernel
-shadow.  The ordinary filter and CLI do not select this path.  Each transition
-feeds exact generated values and the exact source value; final comparison uses
-the batch checker over the reordered full export and preserves its result on
-any mismatch. -/
+shadow.  The ordinary filter and CLI do not select this path.  Each completed
+transition feeds exact generated values and the exact source value; final
+comparison uses the batch checker over the reordered full export and preserves
+its result on any mismatch. An ordinary unreplayable source result has no final
+stream to seal, so it returns its unchanged output/report with `none`. -/
 def runFilterWithKernelCheckShadow (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) :
-    MetaM (Array EDecl × Report × FilterKernelCheckShadow) := do
+    MetaM (Array EDecl × Report × Option FilterKernelCheckShadow) := do
   let (decls, report, _, _, _, shadow?) ← runFilterCore x checkRecursors generation
     .fullOracle (kernelCheckShadow := true)
-  let some shadow := shadow?
-    | throwError "kernel-check full oracle did not produce a sealed shadow verdict"
-  return (decls, report, shadow)
+  return (decls, report, shadow?)
 
 /-- Internal phase-one A/B path for replacing support-priority execution.
 Only a complete exact [`FutureSourceSupport`] ledger selects it; every
