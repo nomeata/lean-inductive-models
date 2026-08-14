@@ -1285,28 +1285,29 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
     return eqi.refl' (← liftGen <| ilevel type) type expectedPrivate
   let direct? ← match role? with
     | none => pure none
-    | some role => do
-      let some memberKey := role.member? | pure none
-      let some member := plan.members.find? fun member =>
-          member.key == memberKey && member.publicRecursor == role.publicRecursor &&
-            member.implementationRecursor == role.implementationRecursor
-        | failConstruction (.missingPublicIotaRecursiveCall rule
-            publicBinderIndex implementationBinderIndex)
-      let some recursor := recursors.find? fun recursor =>
-          recursor.member == member.key &&
-            recursor.implementationRecursor == role.implementationRecursor
-        | failConstruction (.missingPublicIotaRecursiveCall rule
-            publicBinderIndex implementationBinderIndex)
-      let reducedPrivate ← liftGen <| whnf expectedPrivate
-      let publicMatches := expectedPublic.getAppFn.constName? == some recursor.adapter
-      let privateMatches :=
-        reducedPrivate.getAppFn.constName? == some role.implementationRecursor
-      if publicMatches || privateMatches then
-        unless publicMatches && privateMatches do
-          failConstruction (.missingPublicIotaRecursiveCall rule
-            publicBinderIndex implementationBinderIndex)
-        return some (← recursorAgreementAt member recursor expectedPublic expectedPrivate)
-      return none
+    | some role => match role.member? with
+      | none => pure none
+      | some memberKey => do
+        let some member := plan.members.find? fun member =>
+            member.key == memberKey && member.publicRecursor == role.publicRecursor &&
+              member.implementationRecursor == role.implementationRecursor
+          | failConstruction (.missingPublicIotaRecursiveCall rule
+              publicBinderIndex implementationBinderIndex)
+        let some recursor := recursors.find? fun recursor =>
+            recursor.member == member.key &&
+              recursor.implementationRecursor == role.implementationRecursor
+          | failConstruction (.missingPublicIotaRecursiveCall rule
+              publicBinderIndex implementationBinderIndex)
+        let reducedPrivate ← liftGen <| whnf expectedPrivate
+        let publicMatches := expectedPublic.getAppFn.constName? == some recursor.adapter
+        let privateMatches :=
+          reducedPrivate.getAppFn.constName? == some role.implementationRecursor
+        if publicMatches || privateMatches then
+          unless publicMatches && privateMatches do
+            failConstruction (.missingPublicIotaRecursiveCall rule
+              publicBinderIndex implementationBinderIndex)
+          return some (← recursorAgreementAt member recursor expectedPublic expectedPrivate)
+        return none
   if let some proof := direct? then return proof
   let publicType ← liftGen <| whnf (← inferType expectedPublic)
   let privateType ← liftGen <| whnf (← inferType expectedPrivate)
