@@ -257,8 +257,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       table := table.addRecursor exportRecs[k]! recRuleInfo[k]!.1
       if recRuleInfo[k]!.2 then table := table.addMetadata .ruleK exportRecs[k]!
     return table
-  let occupied := reserved.fold (fun names name => names.push name) #[]
-  let census := publicTable.collisionCensus occupied
+  let census := publicTable.collisionCensusReserved reserved
   if let some name := census.taken[0]? <|> census.duplicateRequirements[0]? then
     declineWith (.nameTaken name)
   for name in publicTable.requiredNames do

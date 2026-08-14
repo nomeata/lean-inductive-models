@@ -2884,7 +2884,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   helpers := helpers.push (Name.str model "funext")
   let exactHelper := fun n =>
     if primaryCarrier.isPrefixOf n then n.replacePrefix primaryCarrier exactPrimaryCarrier else n
-  let census := publicNames.collisionCensus (reserved.toArray ++ helpers.map exactHelper)
+  let occupied := helpers.foldl (fun names helper => names.insert (exactHelper helper)) reserved
+  let census := publicNames.collisionCensusReserved occupied
   if let some name := census.duplicateRequirements[0]? then
     badShape s!"the public naming contract requires {name} more than once"
   if let some name := census.taken[0]? then declineWith (.nameTaken name)

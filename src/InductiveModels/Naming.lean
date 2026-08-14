@@ -239,20 +239,32 @@ structure CollisionCensus where
 def CollisionCensus.isEmpty (census : CollisionCensus) : Bool :=
   census.taken.isEmpty && census.duplicateRequirements.isEmpty
 
-/-- Census exact public-name collisions against `occupied`.
-
-No private-name normalization and no `_model` prefix parsing is performed. -/
-def Table.collisionCensus (table : Table) (occupied : Array Name) : CollisionCensus := Id.run do
+private def Table.collisionCensusWhere (table : Table) (occupied : Name → Bool) :
+    CollisionCensus := Id.run do
   let mut seen : Array Name := #[]
   let mut taken : Array Name := #[]
   let mut duplicateRequirements : Array Name := #[]
   for name in table.requiredNames do
-    if occupied.contains name then
+    if occupied name then
       taken := pushUnique taken name
     if seen.contains name then
       duplicateRequirements := pushUnique duplicateRequirements name
     else
       seen := seen.push name
   return { taken, duplicateRequirements }
+
+/-- Census exact public-name collisions against a small occupied array.
+
+No private-name normalization and no `_model` prefix parsing is performed. -/
+def Table.collisionCensus (table : Table) (occupied : Array Name) : CollisionCensus :=
+  table.collisionCensusWhere occupied.contains
+
+/-- Census exact public-name collisions directly against a reserved-name set.
+
+This is the model-generation path: its cost is proportional to the small
+declaration-local requirement table, not to the file-wide set. -/
+def Table.collisionCensusReserved (table : Table) (reserved : Std.HashSet Name) :
+    CollisionCensus :=
+  table.collisionCensusWhere reserved.contains
 
 end InductiveModels.Naming

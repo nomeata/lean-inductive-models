@@ -348,8 +348,7 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
   -- name is derived separately from `selfNames` below.
   let publicTable := eligible.foldl (fun table k =>
     table.addMetadata .unitlike types[k]!.name) Naming.Table.empty
-  let occupied := reserved.fold (fun names name => names.push name) #[]
-  let census := publicTable.collisionCensus occupied
+  let census := publicTable.collisionCensusReserved reserved
   if let some name := census.taken[0]? <|> census.duplicateRequirements[0]? then
     declineWith (.nameTaken name)
 
@@ -747,8 +746,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
 
   let publicTable := fields.foldl (fun table field =>
     table.addProjection field.1 field.2) Naming.Table.empty
-  let occupied := reserved.fold (fun names name => names.push name) #[]
-  let census := publicTable.collisionCensus occupied
+  let census := publicTable.collisionCensusReserved reserved
   if let some name := census.taken[0]? <|> census.duplicateRequirements[0]? then
     declineWith (.nameTaken name)
 
@@ -981,8 +979,7 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
 
   let publicTable := eligible.foldl (fun table k =>
     table.addMetadata .eta types[k]!.name) Naming.Table.empty
-  let occupied := reserved.fold (fun names name => names.push name) #[]
-  let census := publicTable.collisionCensus occupied
+  let census := publicTable.collisionCensusReserved reserved
   if let some name := census.taken[0]? <|> census.duplicateRequirements[0]? then
     declineWith (.nameTaken name)
 
