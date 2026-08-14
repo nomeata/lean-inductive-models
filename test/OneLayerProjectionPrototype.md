@@ -89,6 +89,19 @@ owner.
   `pack`/`unpack` congruence infrastructure in `InductiveModels.Model`; a recursive
   projection's literal iota proof is the container section law instead of
   bare `funext`.
+
+  The existing mimic bundle is not itself either map. Its `pack` and
+  `unpack` have types `G M⃗ → B` and `B → G M⃗`, where `B` is the
+  specialised block member. They can close the middle of the new laws, but a
+  source-shaped public constructor still requires the distinct `G P⃗ ↔ G M⃗`
+  maps above. In particular, retaining the current public alias `P := M` and
+  merely changing a dependent projection theorem's RHS cannot work: before an
+  earlier projection computes definitionally, the old transported value and
+  the literal source field do not even inhabit the same type.
+  `test/fixtures/inductive-models/nested_one_layer.lean` is the minimal
+  boundary: the nested `children` rule is already literal, while the preceding
+  genuinely dependent `payload` rule necessarily retains the canonical
+  transport on the existing carrier.
 - **Mutual:** define the vector of `P_k = F_k M⃗` after the current private
   mutual block.  Generate `roll_k`/`unroll_k` for every real member and prove
   both laws by the current simultaneous recursors.  Each constructor maps
