@@ -461,6 +461,52 @@ def propertyGlobalExtraRecords (seed : Nat) : Array GlobalExtraRecord :=
       else #[])
     { names, templates }
 
+/-- A retained source-index shape for ownership profiling.  The declarations
+are deliberately irrelevant to the checked family: they enlarge only the
+source tables which `prependRecords` must share with each disposable island
+overlay.  Keeping the size and repetition count here makes the semantic test
+below a useful `perf stat -e instructions` regression fixture as well. -/
+def overlayOwnershipSource (x : Export) (size : Nat := 4096) : Export :=
+  { x with decls := x.decls ++ ((Array.range size).map fun i =>
+      EDecl.ax ((`_check.overlayOwnership).mkNum i) [] (.sort .zero) false) }
+
+/-- Run only the retained-source overlay fixture at a scale where
+`perf stat -e instructions` can distinguish path copying from a whole-table
+copy.  This remains a semantic test: every disposable overlay must produce the
+same exact local report while the shared source index survives. -/
+def runOverlayOwnershipProbe (root : String) (size := 32768)
+    (repetitions := 256) : IO UInt32 := do
+  let path := s!"{root}/test/fixtures/inductive-models/nested_iota_arm.ndjson"
+  let text ← IO.FS.readFile path
+  let .ok raw := InductiveModels.parse text (analyse := false)
+    | throw <| IO.userError s!"cannot parse {path}"
+  let owner := `Tree
+  let some ownerDecl := ownerIndex? raw owner
+    | throw <| IO.userError s!"{path} does not declare {owner}"
+  let some table := correspondenceAt? raw ownerDecl
+    | throw <| IO.userError s!"no correspondence table for {owner}"
+  let models := modelDeclarations raw table `Tree._model._impl.helper
+  let source := SyntaxIndex.ofSourceIncremental (overlayOwnershipSource raw size)
+  let families := source.sourceStatementFamilies owner
+  let .ok first := source.prependRecords models
+    | throw <| IO.userError "valid ownership-probe overlay was rejected"
+  let referenceSource := SyntaxIndex.ofSource raw
+  let .ok reference := referenceSource.prependRecords models
+    | throw <| IO.userError "valid reference overlay was rejected"
+  let expected := checkStatementFamiliesLocalWithIndex raw reference
+    (referenceSource.sourceStatementFamilies owner)
+  let semantic := checkStatementFamiliesLocalWithIndex raw first families == expected
+  let overlaysAccepted := (Array.range repetitions).all fun _ =>
+    match source.prependRecords models with
+    | .error _ => false
+    | .ok _ => true
+  if semantic && overlaysAccepted then
+    IO.println s!"overlay-ownership-probe: {size} source rows, {repetitions} overlays passed"
+    return 0
+  else
+    IO.eprintln "overlay-ownership-probe: report mismatch"
+    return 1
+
 def run (root : String) : IO UInt32 := do
   let path := s!"{root}/test/fixtures/inductive-models/nested_iota_arm.ndjson"
   let text ← IO.FS.readFile path
@@ -596,6 +642,17 @@ def run (root : String) : IO UInt32 := do
       checkStatementFamiliesLocalWithIndex raw overlaidIndex overlaidFamilies ==
         checkStatementFamiliesLocalWithIndex valid (.ofExport valid)
           (statementFamiliesFor valid treeOwners)
+    let retainedIndex := SyntaxIndex.ofSourceIncremental (overlayOwnershipSource raw)
+    let retainedFamilies := retainedIndex.sourceStatementFamilies owner
+    let expectedRetainedReport :=
+      checkStatementFamiliesLocalWithIndex raw overlaidIndex overlaidFamilies
+    state ← state.check "repeated overlays preserve a retained large source index" <|
+      (Array.range 32).all fun _ =>
+        match retainedIndex.prependRecords models with
+        | .error _ => false
+        | .ok overlay =>
+          checkStatementFamiliesLocalWithIndex raw overlay retainedFamilies ==
+            expectedRetainedReport
     let duplicateIsland := models.push models[0]!
     state ← state.check "island overlay rejects duplicate declaration names" <|
       match sourceIndex.prependRecords duplicateIsland with
@@ -1018,4 +1075,7 @@ def run (root : String) : IO UInt32 := do
       return 1
 
 def main (args : List String) : IO UInt32 :=
-  run (args.head?.getD ".")
+  match args with
+  | "--overlay-ownership-probe" :: rest =>
+      runOverlayOwnershipProbe (rest.head?.getD ".")
+  | _ => run (args.head?.getD ".")

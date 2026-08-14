@@ -182,9 +182,9 @@ private def closeForalls (binders : Array OpenBinder) (body : Expr) : Expr :=
   binders.reverse.foldl (fun body binder =>
     .forallE binder.name binder.type (body.abstract #[binder.value]) binder.info) body
 
-private abbrev Constructors := Std.HashMap Name ECtor
+private abbrev Constructors := Lean.PersistentHashMap Name ECtor
 
-private abbrev StructureOwners := Std.HashMap Name (EIndType × List ECtor)
+private abbrev StructureOwners := Lean.PersistentHashMap Name (EIndType × List ECtor)
 
 private def constructorRecords (x : Export) : Constructors := Id.run do
   let mut result : Constructors := {}
@@ -214,7 +214,7 @@ private def iotaPropositionWith? (x : Export) (constructors : Constructors)
   let .induct types _ recursors ← x.decls[ownerDecl]? | none
   let recursor ← recursors.find? (·.name == recursorName)
   let rule ← recursor.rules[ruleIndex]?
-  let constructor ← constructors[rule.ctor]?
+  let constructor ← constructors.find? rule.ctor
   unless constructor.numFields == rule.nfields do none
   let nb := recursor.numParams + recursor.numMotives + recursor.numMinors
   let (recBinders, recResult) :=
@@ -319,7 +319,7 @@ def ruleKProposition? (x : Export) (ownerDecl : Nat) (recursorName : Name) :
   let lhs := eqArgs[1]!
   let major ← lhs.getAppArgs.back?
   let .const ctorName ctorLevels := major.getAppFn | none
-  let constructor ← (constructorRecords x)[ctorName]?
+  let constructor ← (constructorRecords x).find? ctorName
   let mut majorType := constructor.type.instantiateLevelParams constructor.levelParams ctorLevels
   for argument in major.getAppArgs do
     let .forallE _ _ rest _ := majorType | none
@@ -596,14 +596,14 @@ private def declTypes : EDecl → Array DeclType
         { name := recursor.name, levelParams := recursor.levelParams, type := recursor.type,
           kind := .recursor })
 
-private abbrev DeclarationTypes := Std.HashMap Name (Array DeclType)
+private abbrev DeclarationTypes := Lean.PersistentHashMap Name (Array DeclType)
 
 private def declarationTypes (x : Export) : DeclarationTypes := Id.run do
   let mut declarations : DeclarationTypes := {}
   for declaration in x.decls do
     for info in declTypes declaration do
       declarations := declarations.insert info.name
-        ((declarations.getD info.name #[]).push info)
+        ((declarations.findD info.name #[]).push info)
   return declarations
 
 private def checkImplementationDecl (owner : Name) (declaration : DeclType) : Array Violation :=
@@ -622,7 +622,7 @@ private def checkTheoremDecl (owner : Name) (declaration : DeclType) : Array Vio
 which remain the responsibility of the slot's exact statement checker. -/
 private def checkTheoremSlot (declarations : DeclarationTypes) (owner name : Name) :
     Array Violation :=
-  match declarations.getD name #[] with
+  match declarations.findD name #[] with
   | #[declaration] => checkTheoremDecl owner declaration
   | _ => #[]
 
@@ -677,7 +677,7 @@ private def phase1OneLayerCertificate (declarations : DeclarationTypes)
     | return .malformed privateRecursorName
   let some iota := family.correspondence.iotas[0]?
     | return .malformed privateIotaName
-  let unique := fun name => match declarations.getD name #[] with
+  let unique := fun name => match declarations.findD name #[] with
     | #[declaration] => some declaration
     | _ => none
   let some publicCarrier := unique publicCarrierName | return .malformed publicCarrierName
@@ -853,7 +853,7 @@ private def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
           reached := reached.insert edge.2
           progress := true
     unless all.all reached.contains do return .malformed root
-  let unique := fun name => match declarations.getD name #[] with
+  let unique := fun name => match declarations.findD name #[] with
     | #[declaration] => some declaration
     | _ => none
   for name in support do
@@ -959,12 +959,12 @@ private def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
 private def checkPair (table : Correspondence) (declarations : DeclarationTypes)
     (pair : ConstantPair) : Array Violation := Id.run do
   let mut violations : Array Violation := #[]
-  let models := declarations.getD pair.model #[]
+  let models := declarations.findD pair.model #[]
   if models.isEmpty then
     return #[.missingPublic pair.owner pair.model]
   if models.size != 1 then
     return #[.duplicatePublic pair.owner pair.model models.size]
-  let some ownerDecl := (declarations.getD pair.owner #[])[0]?
+  let some ownerDecl := (declarations.findD pair.owner #[])[0]?
     | return #[.declarationType pair.owner pair.model]
   let modelDecl := models[0]!
   violations := violations ++ checkImplementationDecl pair.owner modelDecl
@@ -980,7 +980,7 @@ private def checkPair (table : Correspondence) (declarations : DeclarationTypes)
 
 private def checkIota (x : Export) (constructors : Constructors) (family : Family)
     (declarations : DeclarationTypes) (iota : Naming.Iota) : Array Violation := Id.run do
-  let models := declarations.getD iota.name #[]
+  let models := declarations.findD iota.name #[]
   if models.isEmpty then
     return #[.missingPublic iota.recursor iota.name]
   if models.size != 1 then
@@ -1000,7 +1000,7 @@ private def checkIota (x : Export) (constructors : Constructors) (family : Famil
 
 private def checkUnitlike (x : Export) (family : Family)
     (declarations : DeclarationTypes) (metadata : Naming.Metadata) : Array Violation := Id.run do
-  let models := declarations.getD metadata.name #[]
+  let models := declarations.findD metadata.name #[]
   if models.isEmpty then return #[.missingPublic metadata.owner metadata.name]
   if models.size != 1 then
     return #[.duplicatePublic metadata.owner metadata.name models.size]
@@ -1020,7 +1020,7 @@ private def checkUnitlike (x : Export) (family : Family)
 
 private def checkRuleK (x : Export) (family : Family) (declarations : DeclarationTypes)
     (metadata : Naming.Metadata) : Array Violation := Id.run do
-  let models := declarations.getD metadata.name #[]
+  let models := declarations.findD metadata.name #[]
   if models.isEmpty then return #[.missingPublic metadata.owner metadata.name]
   if models.size != 1 then
     return #[.duplicatePublic metadata.owner metadata.name models.size]
@@ -1049,7 +1049,7 @@ through the intrinsic projection slots for the owner's fields, in constructor
 telescope order; exported projection wrapper declarations are irrelevant. -/
 private def checkEta (x : Export) (normalizer : ExactNormalizationEnv) (family : Family)
     (declarations : DeclarationTypes) (metadata : Naming.Metadata) : Array Violation := Id.run do
-  let models := declarations.getD metadata.name #[]
+  let models := declarations.findD metadata.name #[]
   if models.isEmpty then return #[.missingPublic metadata.owner metadata.name]
   if models.size != 1 then
     return #[.duplicatePublic metadata.owner metadata.name models.size]
@@ -1131,7 +1131,7 @@ private partial def inferExactType? (structures : StructureOwners)
   | .sort level => some (.sort (.succ level))
   | .fvar id => locals.typeOf? id
   | .const name levels => do
-      let declaration ← (declarations.getD name #[])[0]?
+      let declaration ← (declarations.findD name #[])[0]?
       if declaration.levelParams.length != levels.length then none
       return declaration.type.instantiateLevelParams declaration.levelParams levels
   | .app function argument => do
@@ -1160,7 +1160,7 @@ private partial def inferExactType? (structures : StructureOwners)
         (← inferExactType? structures normalizer declarations locals struct)
       let .const structOwner levels := structType.getAppFn | none
       unless structOwner == owner do none
-      let (type, constructors) ← structures[owner]?
+      let (type, constructors) ← structures.find? owner
       let constructorName ← type.ctors.head?
       let constructor ← constructors.find? fun constructor =>
         constructor.name == constructorName && constructor.induct == owner
@@ -1207,12 +1207,12 @@ private def checkProjection (x : Export) (structures : StructureOwners)
     (normalizer : ExactNormalizationEnv) (family : Family)
     (declarations : DeclarationTypes) (oneLayerCertificate : Phase1OneLayerCertificate)
     (projection : Naming.Projection) : Array Violation := Id.run do
-  let projectionModels := declarations.getD projection.name #[]
+  let projectionModels := declarations.findD projection.name #[]
   if projectionModels.isEmpty then
     return #[.missingPublic projection.owner projection.name]
   if projectionModels.size != 1 then
     return #[.duplicatePublic projection.owner projection.name projectionModels.size]
-  let ruleModels := declarations.getD projection.iota #[]
+  let ruleModels := declarations.findD projection.iota #[]
   if ruleModels.isEmpty then return #[.missingPublic projection.owner projection.iota]
   if ruleModels.size != 1 then
     return #[.duplicatePublic projection.owner projection.iota ruleModels.size]
@@ -1370,14 +1370,14 @@ private def projectionSlot? (owner name : Name) : Option Nat := do
     else none
   | _ => none
 
-private abbrev IotaSlots := Std.HashMap Name (Array (Name × Nat))
+private abbrev IotaSlots := Lean.PersistentHashMap Name (Array (Name × Nat))
 
 private def iotaSlots (x : Export) : IotaSlots := Id.run do
   let mut slots : IotaSlots := {}
   for declaration in x.decls do
     for name in declaration.names do
       if let some (parent, index) := iotaSlot? name then
-        slots := slots.insert parent ((slots.getD parent #[]).push (name, index))
+        slots := slots.insert parent ((slots.findD parent #[]).push (name, index))
   return slots
 
 /-- The owner named by a diagnostic, for callers checking one family in a
@@ -1420,7 +1420,7 @@ structure SyntaxIndex where
   private recordOffset : Nat := 0
   private globalExtras : Array Violation := #[]
   private sourceFamilies : Std.HashMap Name (Array Family) := {}
-  private names : Std.HashSet Name := {}
+  private names : Lean.PersistentHashSet Name := {}
 
 /-- Mutable construction state for an immutable [`SyntaxIndex`].  The builder
 is fed in declaration order.  It retains only exact declaration-facing syntax
@@ -1431,9 +1431,9 @@ structure SyntaxIndex.Builder where
   private constructors : Constructors := {}
   private structures : StructureOwners := {}
   private ruleSlots : IotaSlots := {}
-  private definitions : Std.HashMap Name ExactNormalizationDef := {}
+  private definitions : Lean.PersistentHashMap Name ExactNormalizationDef := {}
   private records : Std.HashMap Name (Array Nat) := {}
-  private names : Std.HashSet Name := {}
+  private names : Lean.PersistentHashSet Name := {}
   private owners : Array (Nat × EDecl) := #[]
   private nextOrdinal : Nat := 0
 
@@ -1447,7 +1447,7 @@ def SyntaxIndex.Builder.push (builder : SyntaxIndex.Builder)
   let mut declarations := builder.declarations
   for info in declTypes declaration do
     declarations := declarations.insert info.name
-      ((declarations.getD info.name #[]).push info)
+      ((declarations.findD info.name #[]).push info)
   let mut constructors := builder.constructors
   let mut structures := builder.structures
   let mut owners := builder.owners
@@ -1461,7 +1461,7 @@ def SyntaxIndex.Builder.push (builder : SyntaxIndex.Builder)
   for name in declaration.names do
     if let some (parent, index) := iotaSlot? name then
       ruleSlots := ruleSlots.insert parent
-        ((ruleSlots.getD parent #[]).push (name, index))
+        ((ruleSlots.findD parent #[]).push (name, index))
     records := records.insert name ((records.getD name #[]).push ordinal)
     names := names.insert name
   let mut definitions := builder.definitions
@@ -1602,7 +1602,7 @@ private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
       violations := violations ++ checkRuleK x family index.declarations metadata
   for pair in family.correspondence.recursors do
     let numRules := (family.correspondence.iotas.filter (·.recursor == pair.owner)).size
-    for (name, ruleIndex) in index.ruleSlots.getD pair.model #[] do
+    for (name, ruleIndex) in index.ruleSlots.findD pair.model #[] do
       if ruleIndex >= numRules || name != Naming.iotaName pair.owner ruleIndex then
         violations := violations.push (.extraRule pair.owner name)
   return violations
@@ -1626,11 +1626,11 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
   for declaration in records.reverse do
     for info in (declTypes declaration).reverse do
       declarations := declarations.insert info.name
-        (#[info] ++ declarations.getD info.name #[])
+        (#[info] ++ declarations.findD info.name #[])
     for name in declaration.names.reverse do
       if let some (parent, index) := iotaSlot? name then
         ruleSlots := ruleSlots.insert parent
-          (#[((name, index))] ++ ruleSlots.getD parent #[])
+          (#[((name, index))] ++ ruleSlots.findD parent #[])
   let mut constructors := source.constructors
   let mut structures := source.structures
   for declaration in records do

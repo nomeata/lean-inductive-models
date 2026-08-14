@@ -522,13 +522,13 @@ normalization.  It contains only values of transparent `defn` records from the
 export: opaque declarations, theorems, and any ambient kernel environment are
 invisible. -/
 structure ExactNormalizationEnv where
-  definitions : Std.HashMap Name ExactNormalizationDef
+  definitions : Lean.PersistentHashMap Name ExactNormalizationDef
 
 /-- Build the exact normalizer's environment from export records alone.
 Keeping the first occurrence agrees with the other format prepasses and makes
 malformed duplicate-name input deterministic. -/
 def Export.exactNormalizationEnv (x : Export) : ExactNormalizationEnv := Id.run do
-  let mut definitions : Std.HashMap Name ExactNormalizationDef := {}
+  let mut definitions : Lean.PersistentHashMap Name ExactNormalizationDef := {}
   for declaration in x.decls do
     if let .defn name levelParams _ value .. := declaration then
       unless definitions.contains name do
@@ -550,7 +550,7 @@ private partial def ExactNormalizationEnv.whnfCore (env : ExactNormalizationEnv)
     else match expression.getAppFn with
       | .const name levels =>
         if seen.contains name then expression
-        else match env.definitions[name]? with
+        else match env.definitions.find? name with
           | some definition =>
             if definition.levelParams.length == levels.length then
               let value := definition.value.instantiateLevelParams definition.levelParams levels
@@ -561,7 +561,7 @@ private partial def ExactNormalizationEnv.whnfCore (env : ExactNormalizationEnv)
       | _ => expression
   | .const name levels =>
     if !unfoldDefinitions || seen.contains name then expression
-    else match env.definitions[name]? with
+    else match env.definitions.find? name with
       | some definition =>
         if definition.levelParams.length == levels.length then
           env.whnfCore (definition.value.instantiateLevelParams definition.levelParams levels)
