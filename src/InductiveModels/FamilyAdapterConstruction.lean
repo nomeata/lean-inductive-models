@@ -391,8 +391,7 @@ private def memberRecursorBoundary (plan : FamilyAdapterPlan)
     certificate.maps.forward certificate.maps.backward
   let forwardBackwardType ← liftGen <| memberLawType plan member
     member.implementationCarrier certificate.maps.backward certificate.maps.forward
-  return
-    { key := member.key
+  return { key := member.key
       parameterArity := member.parameterArity
       indexArity := member.indexArity
       publicFamily
@@ -1191,8 +1190,7 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
     | .error _ => failConstruction (.missingMemberMap fallback.key)
   if ← liftGen <| isDefEq sourceType targetType then
     let sourceLevel ← liftGen <| ilevel sourceType
-    return
-      { maps := fallback.maps
+    return { maps := fallback.maps
         mapped := value
         roundTrip := eqi.refl' sourceLevel sourceType value }
   let mut candidates : Array ExactCarrierCandidate := #[]
