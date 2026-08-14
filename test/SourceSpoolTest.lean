@@ -118,8 +118,14 @@ def directInputReplayAccepted (scratch path text : String)
     for ordinal in [:reader.size] do
       let .ok declaration ← reader.read ordinal | return false
       decoded := decoded.push declaration
+    let randomReplay ← if expected.isEmpty then pure true else do
+      let .ok last ← reader.read (expected.size - 1) | return false
+      let .ok first ← reader.read 0 | return false
+      let .ok lastAgain ← reader.read (expected.size - 1) | return false
+      return first == expected[0]! && last == expected.back! && lastAgain == last
     tee.releaseFallback
-    return decoded == expected && !(← (workspace.directory / "input.ndjson").pathExists) &&
+    return decoded == expected && randomReplay &&
+      !(← (workspace.directory / "input.ndjson").pathExists) &&
       (← (workspace.directory / "declarations.ndjson").pathExists)
   let cleaned ← match ← cleanedDirectory.get with
     | some directory => directory.pathExists.map Bool.not
