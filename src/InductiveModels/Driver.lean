@@ -2536,13 +2536,19 @@ structure SourceCensus.Builder where
 /-- Accumulate one raw source declaration into every census axis. -/
 def SourceCensus.Builder.push (builder : SourceCensus.Builder)
     (declaration : EDecl) : SourceCensus.Builder :=
-  { syntaxBuilder := builder.syntaxBuilder.push declaration
-    summaryBuilder := builder.summaryBuilder.push declaration
-    scheduling := builder.scheduling.push (.ofDeclaration declaration)
-    reserved := declaration.names.foldl (·.insert ·) builder.reserved
-    rawOrdinals := declaration.names.foldl
-      (fun ordinals name => ordinals.insert name builder.nextOrdinal) builder.rawOrdinals
-    nextOrdinal := builder.nextOrdinal + 1 }
+  -- Consume the outer record before pushing onto either nested builder.  In
+  -- particular, `SummaryBuilder` erases to its rows array; keeping `builder`
+  -- live here would share that array and copy its complete prefix on every
+  -- declaration.
+  match builder with
+  | { syntaxBuilder, summaryBuilder, scheduling, reserved, rawOrdinals, nextOrdinal } =>
+    { syntaxBuilder := syntaxBuilder.push declaration
+      summaryBuilder := summaryBuilder.push declaration
+      scheduling := scheduling.push (.ofDeclaration declaration)
+      reserved := declaration.names.foldl (·.insert ·) reserved
+      rawOrdinals := declaration.names.foldl
+        (fun ordinals name => ordinals.insert name nextOrdinal) rawOrdinals
+      nextOrdinal := nextOrdinal + 1 }
 
 /-- Freeze all callback products while structurally sharing the one immutable
 syntax index with the summary-family attachment pass. -/
