@@ -2236,6 +2236,7 @@ structure SourceCensus where
   rawOrdinals : Std.HashMap Name Nat
   replayAliases : Except String SourceReplayAliases
   replayRoles : SourceReplayRoles
+  private duplicate? : Option (Name × Nat × Nat)
 
 /-- Single callback state for all raw-source products. -/
 structure SourceCensus.Builder where
@@ -2286,7 +2287,13 @@ def SourceCensus.Builder.freeze (builder : SourceCensus.Builder) : SourceCensus 
     reserved := builder.reserved
     rawOrdinals := builder.rawOrdinals
     replayAliases
-    replayRoles := builder.replayRoles }
+    replayRoles := builder.replayRoles
+    duplicate? := builder.duplicate? }
+
+def SourceCensus.validateUniqueDeclarationNames (census : SourceCensus) : Except String Unit :=
+  match census.duplicate? with
+  | none => .ok ()
+  | some (name, _, _) => .error s!"duplicate declaration {name}"
 
 /-- Build one source census through declaration callbacks.  The last raw
 ordinal for a duplicate name deliberately matches the historical Driver loop;
@@ -2319,19 +2326,21 @@ def sourceReplayInductiveDerivations (roles : SourceReplayRoles)
 
 /-- Declaration-discarding parser result for the internal planned route.  The
 raw certificate is not an eligibility promise: callers must still finish the
-tee and construct a `PlannedSourceReader`, falling back to the ordinary full
-path if canonical validation fails. -/
+tee and construct a `PlannedSourceReader`. Generic raw composition requires a
+canonical stream; the compact-direct CLI needs only a progressive arena and
+falls back to the exact input snapshot when declaration replay is unsafe. -/
 structure PlannedSourceInput where private mk ::
   envelope : ParsedEnvelope
   census : SourceCensus
   certificate : RawCertificate
   private provenance : Spool.SourceProvenance
 
-def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
+private def parsePlannedSourceWithSink (stream : IO.FS.Stream) (sink : RawSink)
+    (provenance : Spool.SourceProvenance)
     (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
     IO (Except String PlannedSourceInput) := do
   let builder ← IO.mkRef ({} : SourceCensus.Builder)
-  let result ← parseHandleDiscardingDeclarations handle tee.sink
+  let result ← parseStreamDiscardingDeclarations stream sink
     { emit := fun declaration => builder.modify (·.push declaration) }
     analyse allowDuplicateNames
   match result with
@@ -2341,7 +2350,27 @@ def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
     unless census.summaries.size == envelope.declarationCount &&
         census.scheduling.size == envelope.declarationCount do
       return .error "planned source census cardinality disagrees with parser"
-    return .ok (.mk envelope census certificate tee.sourceProvenance)
+    return .ok (.mk envelope census certificate provenance)
+
+def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
+    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    IO (Except String PlannedSourceInput) :=
+  parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
+    analyse allowDuplicateNames
+
+/-- Parse the compact-direct CLI input into a frozen census plus one exact raw
+fallback snapshot and declaration spans. Generated output is not involved. -/
+def parsePlannedSourceWithDirectTee (handle : IO.FS.Handle)
+    (tee : Spool.DirectInputTee) (analyse : Bool := true)
+    (allowDuplicateNames : Bool := false) : IO (Except String PlannedSourceInput) :=
+  parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
+    analyse allowDuplicateNames
+
+def parsePlannedSourceStreamWithDirectTee (stream : IO.FS.Stream)
+    (tee : Spool.DirectInputTee) (analyse : Bool := true)
+    (allowDuplicateNames : Bool := false) : IO (Except String PlannedSourceInput) :=
+  parsePlannedSourceWithSink stream tee.sink tee.sourceProvenance
+    analyse allowDuplicateNames
 
 /-- Rebind declaration-local frozen summaries to a logical source order.
 Every summary field except `ordinal` is a function of the declaration itself

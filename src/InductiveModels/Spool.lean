@@ -189,6 +189,52 @@ def ParseTee.finish (tee : ParseTee) : IO RawSpoolSizes := do
     arena := ← tee.arena.finish
     declarations := ← tee.declarations.finish }
 
+/-- Input-only source snapshot for compact-direct CLI parsing. The exact raw
+file makes ordinary fallback possible after consuming stdin or a FIFO; the
+declaration file supplies random-access feed spans. The completed arena is
+transferred in memory by the parser, so this tee deliberately has no second
+arena or metadata spool. -/
+structure DirectInputTee where private mk ::
+  private raw : SpoolFile
+  private declarations : SpoolFile
+  private provenance : SourceProvenance
+
+structure DirectInputSizes where
+  raw : UInt64
+  declarations : UInt64
+  deriving Inhabited, Repr, BEq
+
+def DirectInputTee.create (workspace : Workspace) : IO DirectInputTee := do
+  let marker ← IO.mkRef ()
+  return {
+    raw := ← workspace.createFile "input.ndjson"
+    declarations := ← workspace.createFile "declarations.ndjson"
+    provenance := .mk marker }
+
+def DirectInputTee.sourceProvenance (tee : DirectInputTee) : SourceProvenance :=
+  tee.provenance
+
+def DirectInputTee.sink (tee : DirectInputTee) : RawSink where
+  emit record := do
+    discard <| tee.raw.append record.bytes
+    if record.kind == .declaration then
+      discard <| tee.declarations.append record.bytes
+
+def DirectInputTee.finish (tee : DirectInputTee) : IO DirectInputSizes := do
+  return { raw := ← tee.raw.finish, declarations := ← tee.declarations.finish }
+
+/-- Reparse the exact consumed input snapshot for an ordinary compatibility
+fallback. This is input JSON, never generated logical output. -/
+def DirectInputTee.parseFallback (tee : DirectInputTee) (analyse : Bool := false)
+    (allowDuplicateNames : Bool := true) : IO (Except String Export) :=
+  IO.FS.withFile tee.raw.path .read fun handle =>
+    parseHandle handle analyse allowDuplicateNames
+
+/-- Release the exact fallback snapshot once declaration replay is certified;
+late compact-direct fallback materializes from the transferred arena instead. -/
+def DirectInputTee.releaseFallback (tee : DirectInputTee) : IO Unit := do
+  if ← tee.raw.path.pathExists then IO.FS.removeFile tee.raw.path
+
 /-- Random-access source decoder over one completed raw tee. The immutable
 arena is the exact graph transferred from the declaration-discarding parser;
 only the declaration handle cursor is mutable. No decoded declaration is
@@ -233,6 +279,30 @@ def PlannedSourceReader.create (tee : ParseTee) (certificate : RawCertificate)
       sizes.declarations certificate.declarations tee.provenance
   catch error =>
     return .error s!"cannot open planned source spool: {error}"
+
+/-- Open the CLI's input-only declaration spool against the exact parser arena.
+No arena JSON is reparsed or retained twice. -/
+def PlannedSourceReader.createDirect (tee : DirectInputTee)
+    (certificate : RawCertificate) (sizes : DirectInputSizes)
+    (declarationCount : Nat) (arena : DeclarationArena) :
+    IO (Except String PlannedSourceReader) := do
+  match certificate.validateReplay sizes.declarations declarationCount with
+  | .error error => return .error error
+  | .ok _ => pure ()
+  try
+    let rawMetadata ← tee.raw.path.symlinkMetadata
+    let declarationMetadata ← tee.declarations.path.symlinkMetadata
+    unless rawMetadata.type == .file && declarationMetadata.type == .file do
+      return .error "direct input spool is not backed by physical files"
+    unless rawMetadata.byteSize == sizes.raw &&
+        declarationMetadata.byteSize == sizes.declarations do
+      return .error "direct input spool changed after completion"
+    let declarations ← IO.FS.Handle.mk tee.declarations.path .read
+    let position ← IO.mkRef 0
+    return .ok <| PlannedSourceReader.mk arena declarations position
+      sizes.declarations certificate.declarations tee.provenance
+  catch error =>
+    return .error s!"cannot open direct input spool: {error}"
 
 /-- Number of source declaration records certified for this reader. -/
 def PlannedSourceReader.size (reader : PlannedSourceReader) : Nat := reader.spans.size

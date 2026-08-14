@@ -515,6 +515,33 @@ def run (root : String) : IO UInt32 := do
       directAccepted plannedDirectSuccess.result.2.2 &&
       !plannedDirectSuccess.env.constants.contains `Tree
 
+  -- Pin the default input structural check on a genuinely modeled source,
+  -- including the historical raw-order diagnostic when a model is moved
+  -- behind its owner. This is the CLI's default `--check-input` oracle, not a
+  -- vacuous no-family comparison.
+  let (modeledDecls, _) ← runFilterOrdinary futureBase futureGeneration
+  let modeledInput := { futureBase with decls := modeledDecls }
+  let plannedModeled ← runFilterDirectPlannedObserved
+    s!"{root}/_tmp" modeledInput noGeneration
+  let modeledReport := Check.checkReport modeledInput
+  state := state.check "planned default input check equals the nonempty full-source oracle" <|
+    modeledReport.familiesChecked > 0 &&
+      reportEquals plannedModeled.inputReport modeledReport
+  let some modelOrdinal := modeledInput.decls.findIdx? fun declaration =>
+      declaration.names.contains (Naming.modelName `Tree)
+    | IO.eprintln "kernelchecktest: modeled Tree record is absent"; return 1
+  let modelRecord := modeledInput.decls[modelOrdinal]!
+  let modelAfterOwner := { modeledInput with decls :=
+    (modeledInput.decls.extract 0 modelOrdinal ++
+      modeledInput.decls.extract (modelOrdinal + 1) modeledInput.decls.size).push modelRecord }
+  let plannedModelAfterOwner ← runFilterDirectPlannedObserved
+    s!"{root}/_tmp" modelAfterOwner noGeneration
+  let modelAfterOwnerReport := Check.checkReport modelAfterOwner
+  state := state.check "planned default input check preserves model-after-owner diagnostics" <|
+    modelAfterOwnerReport.violations.any (fun violation =>
+      violation matches .modelNotBefore ..) &&
+      reportEquals plannedModelAfterOwner.inputReport modelAfterOwnerReport
+
   let ((directMalformedReport, directMalformedPlan, directMalformed?),
       directMalformedEnv) ← runFilterDirectObserved lateMalformed {}
   state := state.check "compact direct unreplayable resets Meta before returning none" <|

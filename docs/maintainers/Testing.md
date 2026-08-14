@@ -118,8 +118,11 @@ replay. `mainclitest`
 selects compact discard explicitly with `--no-output --no-type-check-output`;
 generated `--no-output --type-check-output` feeds exact records directly to an
 incremental in-process kernel environment. It pins exit-2 precedence,
-noncanonical and compact-availability fallback equivalence, and that direct
-checking does not open a workspace even when `_tmp` is unusable.
+noncanonical and compact-availability fallback equivalence, cleanup of the
+input-only source snapshot workspace, and ordinary fallback before input is
+consumed when `_tmp` is unusable. The snapshot exists only to preserve exact
+stdin/FIFO input for parser-compatible fallback; generated logical output is
+never serialized through it.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and

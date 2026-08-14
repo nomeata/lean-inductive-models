@@ -84,6 +84,64 @@ def plannedDiscardingSourceRejected (scratch path text : String) : IO Bool := do
     return (← Spool.PlannedSourceReader.create tee certificate sizes
       envelope.declarationCount (some envelope.arena)) matches .error _
 
+/-- Exercise the compact-direct input tee without retaining declaration ASTs.
+The certified case must decode from the parser's transferred arena and may
+then release the exact raw fallback snapshot. -/
+def directInputReplayAccepted (scratch path text : String)
+    (expected : Array EDecl) : IO Bool := do
+  IO.FS.writeFile path text
+  let cleanedDirectory ← IO.mkRef (none : Option System.FilePath)
+  let accepted ← Spool.withWorkspace scratch fun workspace => do
+    cleanedDirectory.set (some workspace.directory)
+    let tee ← Spool.DirectInputTee.create workspace
+    let captured ← IO.FS.withFile path .read fun handle =>
+      parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
+        (analyse := false) (allowDuplicateNames := true)
+    let .ok (envelope, certificate) := captured | return false
+    let sizes ← tee.finish
+    let .ok reader ← Spool.PlannedSourceReader.createDirect tee certificate sizes
+        envelope.declarationCount envelope.arena | return false
+    let mut decoded := #[]
+    for ordinal in [:reader.size] do
+      let .ok declaration ← reader.read ordinal | return false
+      decoded := decoded.push declaration
+    tee.releaseFallback
+    return decoded == expected && !(← (workspace.directory / "input.ndjson").pathExists) &&
+      (← (workspace.directory / "declarations.ndjson").pathExists)
+  let cleaned ← match ← cleanedDirectory.get with
+    | some directory => directory.pathExists.map Bool.not
+    | none => pure false
+  return accepted && cleaned
+
+/-- Arena overwrites are parser-compatible but cannot be decoded from one
+completed arena. They must reject declaration replay and preserve the exact
+consumed input snapshot for the ordinary parser fallback. -/
+def directInputFallbackExact (scratch path text : String) : IO Bool := do
+  IO.FS.writeFile path text
+  let ordinary ← parseHandleAt path
+  let cleanedDirectory ← IO.mkRef (none : Option System.FilePath)
+  let preserved ← Spool.withWorkspace scratch fun workspace => do
+    cleanedDirectory.set (some workspace.directory)
+    let tee ← Spool.DirectInputTee.create workspace
+    let captured ← IO.FS.withFile path .read fun handle =>
+      parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
+        (analyse := false) (allowDuplicateNames := true)
+    let .ok (envelope, certificate) := captured | return false
+    let sizes ← tee.finish
+    let replay ← Spool.PlannedSourceReader.createDirect tee certificate sizes
+      envelope.declarationCount envelope.arena
+    let fallback ← tee.parseFallback (analyse := false) (allowDuplicateNames := true)
+    return (replay matches .error _) && match ordinary, fallback with
+      | .ok expected, .ok actual =>
+        expected.metaLine == actual.metaLine && expected.decls == actual.decls &&
+          expected.projNodes == actual.projNodes
+      | .error expected, .error actual => expected == actual
+      | _, _ => false
+  let cleaned ← match ← cleanedDirectory.get with
+    | some directory => directory.pathExists.map Bool.not
+    | none => pure false
+  return preserved && cleaned
+
 def bothReject (whole streamed : Except String Export) : Bool :=
   match whole, streamed with
   | .error _, .error _ => true
@@ -225,6 +283,9 @@ def main (args : List String) : IO UInt32 := do
   let rawSecondDecl := secondSplit.declaration ++ "\n"
   let rawCanonical := rawMeta ++ lines firstSplit.arena ++ rawFirstDecl ++
     lines secondSplit.arena ++ rawSecondDecl
+  state := state.check
+      "direct input replays declarations from the transferred arena and cleans its workspace" <|
+    ← directInputReplayAccepted scratch rawCanonicalPath rawCanonical #[first, second]
   IO.FS.writeFile rawCanonicalPath rawCanonical
   let captured ← Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
@@ -418,6 +479,9 @@ def main (args : List String) : IO UInt32 := do
   let overwrittenDecl : EDecl := .ax `After [] (.sort (.param `After)) false
   state := state.check "explicit repeated arena IDs overwrite in both readers" <|
     bothHaveDecls (InductiveModels.parse overwrite) (← parseHandleAt overwritePath) #[overwrittenDecl]
+  state := state.check
+      "direct input preserves exact overwrite fallback and cleans its workspace" <|
+    ← directInputFallbackExact scratch overwritePath overwrite
 
   -- Parser compatibility is wider than the raw-hoist contract.  Each axis is
   -- certified independently and any gap, reorder, or overwrite selects the
@@ -476,6 +540,8 @@ def main (args : List String) : IO UInt32 := do
     (← rawFastPathRejected rawBlankPath rawBlank)
   state := state.check "raw certification rejects CRLF records"
     (← rawFastPathRejected rawCrlfPath rawCrlf)
+  state := state.check "direct input replay accepts noncanonical JSON spacing" <|
+    ← directInputReplayAccepted scratch rawWhitespacePath rawWhitespace #[first, second]
   state := state.check "planned source falls back for missing final LF" <|
     ← plannedSourceRejected scratch rawNoLfPath rawNoLf
   state := state.check "planned source falls back for CRLF input" <|

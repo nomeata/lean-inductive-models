@@ -150,14 +150,19 @@ Canonical generation retains compact ordering and structural-check
 certificates while model islands are live. All named and stdout output uses
 the ordinary full-memory AST path, as does universe monomorphization. With
 generated `--no-output`, the
-default output kernel gate instead feeds each exact declaration directly to an
-incremental in-process kernel environment while its compact schedule row is
-live. The checker and construction environments are dropped at the explicit
-seal boundary; no output serialization, parser, writer, spool, or private
-workspace participates. If the chronological feed cannot certify the final
-schedule or rejects it, the ordinary final-order batch checker is rerun from
-the original imported environment so its established diagnostics remain
-authoritative. With both `--no-output` and `--no-type-check-output`, accepted
+default output kernel gate first parses declarations into a value-free source
+census, then feeds each exact declaration directly to an incremental in-process
+kernel environment while its compact schedule row is live. The parser's one
+completed arena is transferred to declaration-wise replay rather than reparsed.
+An input-only project-local snapshot preserves stdin/FIFO bytes for parser-
+compatible fallback and is released once the arena is replay-certified; it is
+not a generated-output representation. The checker and construction
+environments are dropped at the explicit seal boundary. Generated logical
+output never passes through JSON, an output parser, a writer, or a spool. If
+the chronological feed cannot certify the final schedule or rejects it, the
+ordinary final-order batch checker is rerun from the original imported
+environment so its established diagnostics remain authoritative. With both
+`--no-output` and `--no-type-check-output`, accepted
 islands are likewise checked and summarized while live and then discarded: no
 workspace is opened and no cumulative generated declaration array is retained.
 Monomorphization and deliberate legacy/planner

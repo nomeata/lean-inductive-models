@@ -154,28 +154,9 @@ private def reportOutputBackend (output : FilterOutput) : IO Unit := do
       | .discarded .. => "compact-discard"
       | .direct .. => "compact-direct"}"
 
-private def runPipeline (config : InductiveModels.Cli.Config)
-    (compactEnabled : Bool) : IO UInt32 := do
+private def runParsedPipeline (config : InductiveModels.Cli.Config)
+    (compactEnabled : Bool) (parsed : Export) : IO UInt32 := do
   let input := config.input.getD ""
-  let parsed? ← try
-      if input == "-" then
-        let stdin ← IO.getStdin
-        pure (some (← InductiveModels.parseStream stdin
-          (analyse := config.monoLevels) (allowDuplicateNames := true)))
-      else
-        IO.FS.withFile input .read fun handle => do
-          pure (some (← InductiveModels.parseHandle handle
-            (analyse := config.monoLevels) (allowDuplicateNames := true)))
-    catch error =>
-      IO.eprintln s!"{input}: {error}"
-      pure none
-  let some parsedResult := parsed? | return exitToolError
-  let parsed ← match parsedResult with
-    | .error error =>
-        IO.eprintln s!"{input}: parse error: {error}"
-        return exitToolError
-    | .ok parsedExport => pure parsedExport
-
   if let .error message := parsed.validateUniqueDeclarationNames then
     IO.eprintln s!"{input}: invalid export: {message}"
     return exitRejected
@@ -384,13 +365,167 @@ private def runPipeline (config : InductiveModels.Cli.Config)
         return exitToolError
     return outcome
 
+private def runPipeline (config : InductiveModels.Cli.Config)
+    (compactEnabled : Bool) : IO UInt32 := do
+  let input := config.input.getD ""
+  let parsed? ← try
+      if input == "-" then
+        let stdin ← IO.getStdin
+        pure (some (← InductiveModels.parseStream stdin
+          (analyse := config.monoLevels) (allowDuplicateNames := true)))
+      else
+        IO.FS.withFile input .read fun handle => do
+          pure (some (← InductiveModels.parseHandle handle
+            (analyse := config.monoLevels) (allowDuplicateNames := true)))
+    catch error =>
+      IO.eprintln s!"{input}: {error}"
+      pure none
+  let some parsedResult := parsed? | return exitToolError
+  let parsed ← match parsedResult with
+    | .error error =>
+        IO.eprintln s!"{input}: parse error: {error}"
+        return exitToolError
+    | .ok parsedExport => pure parsedExport
+  runParsedPipeline config compactEnabled parsed
+
+/-- Declaration-discarding input path for the sole generated no-output direct
+kernel route. The physical snapshot is input provenance/fallback state only;
+generated logical output stays as live `EDecl` values throughout. -/
+private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO UInt32 := do
+  let input := config.input.getD ""
+  let scratch := (← IO.currentDir) / "_tmp"
+  let consumed ← IO.mkRef false
+  try
+    IO.FS.createDirAll scratch
+    InductiveModels.Spool.withWorkspace scratch fun workspace => do
+      let tee ← InductiveModels.Spool.DirectInputTee.create workspace
+      let parsedResult ← if input == "-" then
+          consumed.set true
+          InductiveModels.parsePlannedSourceStreamWithDirectTee (← IO.getStdin) tee
+            (analyse := false) (allowDuplicateNames := true)
+        else
+          IO.FS.withFile input .read fun handle => do
+            consumed.set true
+            InductiveModels.parsePlannedSourceWithDirectTee handle tee
+              (analyse := false) (allowDuplicateNames := true)
+      let planned ← match parsedResult with
+        | .error message =>
+          IO.eprintln s!"{input}: parse error: {message}"
+          return exitToolError
+        | .ok planned => pure planned
+      if let .error message := planned.census.validateUniqueDeclarationNames then
+        IO.eprintln s!"{input}: invalid export: {message}"
+        return exitRejected
+      let sizes ← tee.finish
+      let readerResult ← InductiveModels.Spool.PlannedSourceReader.createDirect
+        tee planned.certificate sizes planned.envelope.declarationCount planned.envelope.arena
+      let reader ← match readerResult with
+        | .ok reader => pure reader
+        | .error _ =>
+          -- Parser-compatible arena overwrites cannot be reconstructed from a
+          -- completed arena. Reparse the exact consumed input snapshot and use
+          -- the ordinary full-AST pipeline with unchanged diagnostics.
+          let fallback ← tee.parseFallback (analyse := false) (allowDuplicateNames := true)
+          let parsed ← match fallback with
+            | .ok parsed => pure parsed
+            | .error message =>
+              IO.eprintln s!"{input}: parse error: {message}"
+              return exitToolError
+          return ← runParsedPipeline config true parsed
+      -- All later compatibility fallbacks can materialize exact declarations
+      -- from the transferred parser arena, so the full raw snapshot can die.
+      tee.releaseFallback
+
+      initSearchPath (← findSysroot)
+      let env ← importModules #[] {}
+      let context : Core.Context :=
+        { fileName := "<lean-inductive-models>", fileMap := default,
+          maxHeartbeats := 0, maxRecDepth := 8192 }
+      if config.checkInput then
+        match ← InductiveModels.checkPlannedSource planned reader with
+        | .error message =>
+          IO.eprintln s!"{input}: internal error: planned input check failed: {message}"
+          return exitToolError
+        | .ok report =>
+          unless report.violations.isEmpty do
+            reportViolations input "input" report.violations
+            return exitRejected
+          reportCheckSuccess config "input" report
+
+      let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
+      let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
+      let generated : Except String
+          (InductiveModels.Report × InductiveModels.CompactPlan ×
+            Option InductiveModels.CompactKernelCheckVerdict) ← try
+        let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+          (InductiveModels.runFilterDirectCheckingPlannedCensus
+            planned reader false config)) context { env }
+        pure (Except.ok result)
+      catch error => pure (Except.error (toString error))
+      let (generationReport, plan, kernelVerdict?) ← match generated with
+        | Except.error message =>
+          IO.eprintln s!"{input}: internal error: {message}"
+          return exitToolError
+        | Except.ok result => pure result
+      let directAccepted := kernelVerdict?.any fun verdict =>
+        verdict.fallback?.isNone && verdict.result matches .ok ()
+      unless directAccepted do
+        InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
+        InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
+        let fallback ← InductiveModels.materializePlannedSource planned reader
+        let parsed ← match fallback with
+          | .ok parsed => pure parsed
+          | .error message =>
+            IO.eprintln s!"{input}: internal error: cannot materialize direct fallback: {message}"
+            return exitToolError
+        -- The planned route has already emitted the exact input structural
+        -- verdict.  Reuse the ordinary generation/output path without
+        -- checking or reporting that same input a second time.
+        return ← runParsedPipeline { config with checkInput := false } true parsed
+      let some kernelVerdict := kernelVerdict? | return exitToolError
+
+      reportOutputBackend (.direct plan kernelVerdict)
+      reportGeneration config generationReport
+      if let some why := generationReport.unreplayable then
+        IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
+        return exitRejected
+      unless generationReport.stmtErrors.isEmpty do
+        IO.eprintln s!"{input}: internal error: {generationReport.stmtErrors.size} generated \
+          statements differ from their exact exported owner interface; no output written"
+        for error in generationReport.stmtErrors do IO.eprintln s!"  ! {error}"
+        return exitToolError
+      let outcome ← if generationReport.declined.isEmpty then pure exitAccepted else do
+        let fallback ← InductiveModels.materializePlannedSource planned reader
+        let source ← match fallback with
+          | .ok source => pure source
+          | .error message =>
+            IO.eprintln s!"{input}: internal error: cannot classify direct declines: {message}"
+            return exitToolError
+        pure <| if (unsupportedDeclines source generationReport).isEmpty then
+          exitAccepted else exitDeclined
+      if config.checkOutput then
+        unless plan.checkReport.violations.isEmpty do
+          reportViolations input "output" plan.checkReport.violations
+          return exitRejected
+        reportCheckSuccess config "output" plan.checkReport
+      reportTypeCheckSuccess config "output"
+      return outcome
+  catch error =>
+    if ← consumed.get then
+      IO.eprintln s!"{input}: internal error: planned input pipeline failed: {error}"
+      return exitToolError
+    runPipeline config true
+
 def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   -- The legacy override remains a deliberate A/B switch for no-output compact
   -- modes. Every actual output uses the ordinary full-AST path.
   let compactEnabled :=
     (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
       (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1"
-  runPipeline config compactEnabled
+  if compactEnabled && directKernelModeEligible config && !config.typeCheckInput then
+    runPlannedDirectPipeline config
+  else
+    runPipeline config compactEnabled
 
 def workerMain (args : List String) : IO UInt32 := do
   InductiveModels.Output.containToolErrors do

@@ -692,7 +692,7 @@ def main (args : List String) : IO UInt32 := do
       noncanonicalKernelDirect.stdout.isEmpty && noncanonicalKernelLegacy.stdout.isEmpty &&
       noncanonicalKernelDirect.stderr == noncanonicalKernelLegacy.stderr &&
       hasDiagnostic noncanonicalKernelDirect.stderr "output kernel check: accepted"
-  state := state.check "noncanonical direct kernel opens no private workspace" <|
+  state := state.check "noncanonical direct kernel cleans its input workspace" <|
     sameDirectoryEntries noncanonicalKernelBefore noncanonicalKernelAfter
 
   let traceMode ← runInductiveModelsWithEnv binary
@@ -724,7 +724,7 @@ def main (args : List String) : IO UInt32 := do
       hasDiagnostic kernelDiscardMode.stderr "output backend: compact-direct" &&
       hasDiagnostic kernelDiscardMode.stderr "output kernel check: accepted"
   let directSuccessAfter ← System.FilePath.readDir scratch
-  state := state.check "successful direct kernel replay opens no private workspace" <|
+  state := state.check "successful direct kernel replay cleans its input workspace" <|
     sameDirectoryEntries directSuccessBefore directSuccessAfter
   let outputMetadataCorruption := mapRecursor nestedExport `N.rec fun recursor =>
     { recursor with numMinors := recursor.numMinors + 1 }
@@ -760,7 +760,7 @@ def main (args : List String) : IO UInt32 := do
     directCwd.toString #[
       ("TMPDIR", some externalDirectTmp.toString),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "compact direct ignores unusable roots and external TMPDIR" <|
+  state := state.check "compact direct falls back before consuming an unusable input workspace" <|
     directCwdRun.exitCode == 0 && directCwdRun.stdout.isEmpty &&
       hasDiagnostic directCwdRun.stderr "output backend: compact-direct" &&
       (← IO.FS.readFile directCwdScratch) == "not a directory\n" &&
@@ -774,7 +774,7 @@ def main (args : List String) : IO UInt32 := do
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
     (some lateReplayCorruption.render)
   let directFailureEntriesAfter ← System.FilePath.readDir scratch
-  state := state.check "unreplayable compact direct falls back without a workspace" <|
+  state := state.check "unreplayable compact direct cleans its input workspace" <|
     failedDirectKernel.exitCode == 1 && failedDirectKernel.stdout.isEmpty &&
       hasDiagnostic failedDirectKernel.stderr "output backend: legacy" &&
       sameDirectoryEntries directFailureEntriesBefore directFailureEntriesAfter
@@ -821,7 +821,7 @@ def main (args : List String) : IO UInt32 := do
     directFallback.exitCode == directFallbackLegacy.exitCode && directFallback.stdout.isEmpty &&
       directFallbackLegacy.stdout.isEmpty && directFallback.stderr == directFallbackLegacy.stderr &&
       hasDiagnostic directFallback.stderr "output kernel check: accepted"
-  state := state.check "compact-availability direct fallback opens no private workspace" <|
+  state := state.check "compact-availability direct fallback cleans its input workspace" <|
     sameDirectoryEntries directFallbackBefore directFallbackAfter
   let outputPath := s!"{scratch}/main-cli-output.ndjson"
   if ← System.FilePath.pathExists outputPath then IO.FS.removeFile outputPath

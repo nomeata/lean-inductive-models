@@ -1235,6 +1235,10 @@ size before reading declarations by index.
 -/
 structure RawCertificate where
   canonical : Bool := true
+  /-- Arena IDs are strictly progressive, so the completed parser arena is
+  also the exact arena seen by every earlier declaration. Whitespace and
+  metadata spelling do not affect this declaration-replay property. -/
+  replayable : Bool := true
   cursor : RawArenaCursor := {}
   metadataBytes : UInt64 := 0
   arenaBytes : UInt64 := 0
@@ -1279,6 +1283,17 @@ def RawCertificate.validate (certificate : RawCertificate) (sizes : RawSpoolSize
   unless certificate.canonical do throw "raw input is not canonical"
   certificate.validateDeclarationSpans sizes declarationCount
   return certificate.cursor
+
+/-- Validate declaration-only storage against the completed parser arena.
+Unlike canonical raw composition, declaration replay is insensitive to JSON
+spacing but must reject arena holes, reordering, and overwrites. -/
+def RawCertificate.validateReplay (certificate : RawCertificate)
+    (declarationBytes : UInt64) (declarationCount : Nat) : Except String Unit := do
+  unless certificate.replayable do throw "raw input arena is not declaration-replayable"
+  certificate.validateDeclarationSpans
+    { metadata := certificate.metadataBytes, arena := certificate.arenaBytes,
+      declarations := declarationBytes }
+    declarationCount
 
 private structure RawCertState where
   certificate : RawCertificate := {}
@@ -1352,14 +1367,20 @@ private def RawCertState.observeArena (state : RawCertState) (j : Json) : RawCer
   match rawArenaId? j with
   | some (.name, id) =>
       { state with certificate := { state.certificate with
+          replayable := state.certificate.replayable &&
+            id == state.certificate.cursor.nextName
           canonical := state.certificate.canonical && id == state.certificate.cursor.nextName
           cursor.nextName := state.certificate.cursor.nextName + 1 } }
   | some (.level, id) =>
       { state with certificate := { state.certificate with
+          replayable := state.certificate.replayable &&
+            id == state.certificate.cursor.nextLevel
           canonical := state.certificate.canonical && id == state.certificate.cursor.nextLevel
           cursor.nextLevel := state.certificate.cursor.nextLevel + 1 } }
   | some (.expression, id) =>
       { state with certificate := { state.certificate with
+          replayable := state.certificate.replayable &&
+            id == state.certificate.cursor.nextExpr
           -- The ordinary writer erases expression metadata, so a raw source
           -- containing `mdata` is not yet eligible for mixed raw/generated
           -- composition even when its IDs are dense.
@@ -1367,7 +1388,8 @@ private def RawCertState.observeArena (state : RawCertState) (j : Json) : RawCer
             (jField j "mdata").toOption.isNone &&
             id == state.certificate.cursor.nextExpr
           cursor.nextExpr := state.certificate.cursor.nextExpr + 1 } }
-  | _ => { state with certificate.canonical := false }
+  | _ => { state with certificate := { state.certificate with
+      canonical := false, replayable := false } }
 
 private def emitRaw (sink : RawSink) (state : IO.Ref RawCertState)
     (kind : RawRecordKind) (line : String) (terminated : Bool)
