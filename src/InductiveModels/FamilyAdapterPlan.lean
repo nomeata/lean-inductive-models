@@ -292,6 +292,16 @@ structure PublicIotaHypothesisStep where
   maps : EquivalenceCertificate
   deriving Inhabited, BEq, Repr
 
+/-- One literal argument position of the installed recursor application whose
+rule metadata supplies an iota step.  The vector is derived from the exact
+installed constant telescope; no constructor field count is substituted for
+these roles. -/
+inductive InstalledIotaBinderRole where
+  | recursorPrefix (position : Nat)
+  | resultIndex (position : Nat)
+  | major
+  deriving Inhabited, BEq, Repr
+
 /-- Exact inputs to one public-iota proof chain.  The constructor-major
 roundtrip, private iota, dependent telescope roundtrip, grouped IH agreements,
 and minor congruence are composed in this mathematical order.  The arrays are
@@ -303,6 +313,7 @@ structure PublicIotaProofSchema where
   ownerMaps : EquivalenceCertificate
   telescope : TelescopeCertificate
   implementationIota : Name
+  implementationIotaInputs : Array InstalledIotaBinderRole
   minorCompatibility : Name
   hypotheses : Array PublicIotaHypothesisStep
   deriving Inhabited, BEq, Repr

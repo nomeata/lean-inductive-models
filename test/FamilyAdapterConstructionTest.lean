@@ -262,6 +262,12 @@ def compatibilityName (root : Name) (rule : RuleKey) : Name :=
   Name.str (root.append (rule.recursor.append rule.constructor.constructor))
     "minorCompatibility"
 
+def expectedInstalledIotaInputs (member : MemberPlan) : Array InstalledIotaBinderRole :=
+  let prefixSize := member.parameterArity + member.recursorMotiveArity +
+    member.recursorMinorArity
+  (Array.range prefixSize).map InstalledIotaBinderRole.recursorPrefix ++
+    (Array.range member.indexArity).map InstalledIotaBinderRole.resultIndex ++ #[.major]
+
 def iotaSchemasComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) : Bool :=
   match FamilyAdapter.derivePublicIotaProofSchemas plan certificate with
@@ -273,27 +279,29 @@ def iotaSchemasComplete (plan : FamilyAdapterPlan)
       schema.owner == rule.key.recursorOwner && schema.constructor == rule.key.constructor &&
         schema.implementationIota == rule.implementationIota &&
         schema.telescope.constructor == rule.key.constructor &&
-        compatibility.any fun compatibility =>
-          schema.minorCompatibility == compatibility.compatibility &&
-            schema.hypotheses.map (·.binderIndex) == compatibility.transportedHypotheses &&
-            schema.hypotheses.all fun step =>
-              !step.occurrences.isEmpty && step.rule == rule.key &&
-                step.minorIndex == compatibility.minorIndex &&
-                (plan.members.find? (·.key == rule.key.recursorOwner)).any fun member =>
-                  step.motiveIndex < member.recursorMotiveArity &&
-                    step.occurrences.all fun occurrence =>
-                      keyed.any fun hypothesis => hypothesis.occurrence == occurrence &&
-                        hypothesis.publicBinderIndex == step.publicBinderIndex &&
-                        hypothesis.publicMotiveIndex == step.publicMotiveIndex &&
-                        hypothesis.binderIndex == step.binderIndex &&
-                        hypothesis.motiveIndex == step.motiveIndex &&
-                        hypothesis.publicHypothesisPosition ==
-                          step.publicHypothesisPosition &&
-                        hypothesis.implementationHypothesisPosition ==
-                          step.implementationHypothesisPosition &&
-                        step.recursiveCall?.all fun role =>
-                          !role.publicRecursor.isAnonymous &&
-                            !role.implementationRecursor.isAnonymous
+        (plan.members.find? (·.key == rule.key.recursorOwner)).any fun member =>
+          schema.implementationIotaInputs == expectedInstalledIotaInputs member &&
+          compatibility.any fun compatibility =>
+            schema.minorCompatibility == compatibility.compatibility &&
+              schema.hypotheses.map (·.binderIndex) == compatibility.transportedHypotheses &&
+              schema.hypotheses.all fun step =>
+                !step.occurrences.isEmpty && step.rule == rule.key &&
+                  step.minorIndex == compatibility.minorIndex &&
+                  (plan.members.find? (·.key == rule.key.recursorOwner)).any fun member =>
+                    step.motiveIndex < member.recursorMotiveArity &&
+                      step.occurrences.all fun occurrence =>
+                        keyed.any fun hypothesis => hypothesis.occurrence == occurrence &&
+                          hypothesis.publicBinderIndex == step.publicBinderIndex &&
+                          hypothesis.publicMotiveIndex == step.publicMotiveIndex &&
+                          hypothesis.binderIndex == step.binderIndex &&
+                          hypothesis.motiveIndex == step.motiveIndex &&
+                          hypothesis.publicHypothesisPosition ==
+                            step.publicHypothesisPosition &&
+                          hypothesis.implementationHypothesisPosition ==
+                            step.implementationHypothesisPosition &&
+                          step.recursiveCall?.all fun role =>
+                            !role.publicRecursor.isAnonymous &&
+                              !role.implementationRecursor.isAnonymous
 
 def ruleCertificatesComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (environment : Environment) : Bool :=

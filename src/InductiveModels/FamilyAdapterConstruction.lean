@@ -1863,6 +1863,21 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
   | _, _ =>
     throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
 
+private def installedIotaBinderRoles (owner : MemberPlan) (rule : RulePlan) :
+    Except ConstructionIssue (Array InstalledIotaBinderRole) := do
+  let (binders, _) := openExactForalls
+    ((`_family_adapter_installed_iota).append rule.key.recursor)
+    rule.implementationIotaType
+  let prefixSize := owner.parameterArity + owner.recursorMotiveArity +
+    owner.recursorMinorArity
+  unless binders.size == prefixSize + owner.indexArity + 1 do
+    throw (.installedIotaTypeMismatch rule.key rule.implementationIota)
+  let mut roles := (Array.range prefixSize).map
+    InstalledIotaBinderRole.recursorPrefix
+  roles := roles ++ (Array.range owner.indexArity).map
+    InstalledIotaBinderRole.resultIndex
+  return roles.push .major
+
 /-- Resolve the exact, finite inputs of every public-iota proof. Shared source
 occurrences are grouped only when the installed private minor assigns them the
 same literal IH binder, motive slot, and checked map boundary. -/
@@ -1879,6 +1894,7 @@ def derivePublicIotaProofSchemas (plan : FamilyAdapterPlan)
       | throw (.missingPublicIotaInput rule.key)
     let some compatibility := certificate.rules.find? (·.key == rule.key)
       | throw (.missingPublicIotaInput rule.key)
+    let implementationIotaInputs ← installedIotaBinderRoles owner rule
     let keyed := certificate.minorHypotheses.filter (·.rule == rule.key)
     unless keyed.size == rule.occurrences.size &&
         rule.occurrences.all fun occurrence => keyed.any (·.occurrence == occurrence) do
@@ -1925,6 +1941,7 @@ def derivePublicIotaProofSchemas (plan : FamilyAdapterPlan)
       { key := rule.key, owner := owner.key, constructor := rule.key.constructor,
         ownerMaps := memberCertificate.maps, telescope,
         implementationIota := compatibility.implementationIota,
+        implementationIotaInputs,
         minorCompatibility := compatibility.compatibility, hypotheses }
   return schemas
 
@@ -2715,6 +2732,20 @@ private def packedIotaHypothesisAgreement (plan : FamilyAdapterPlan)
           publicPackageType decodedValues expectedValues proofs
         return (privatePackage, decodedPackage, expectedPackage, proof)
 
+private def installedIotaArguments (rule : RulePlan) (schema : PublicIotaProofSchema)
+    (privatePrefix privateIndices : Array Expr) (privateMajor : Expr) :
+    ConstructionM (Array Expr) := do
+  let mut arguments := #[]
+  for role in schema.implementationIotaInputs do
+    let value? := match role with
+      | .recursorPrefix position => privatePrefix[position]?
+      | .resultIndex position => privateIndices[position]?
+      | .major => some privateMajor
+    let some value := value?
+      | failConstruction (.installedIotaTypeMismatch rule.key schema.implementationIota)
+    arguments := arguments.push value
+  return arguments
+
 private def publicIotaDeclaration (plan : FamilyAdapterPlan)
     (base : FamilyAdapterCertificate)
     (constructors : Array PublicConstructorCertificate)
@@ -2974,23 +3005,24 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               failConstruction (.missingPublicIotaInput rule.key)
             unless ← liftGen <| isDefEq (← inferType implementationRight) resultType do
               failConstruction (.missingPublicIotaInput rule.key)
+            let installedArguments ← installedIotaArguments rule schema privatePrefix
+              privateIndices privateMajor
             let some implementationIotaInfo :=
                 (← getEnv).constants.find? schema.implementationIota
               | failConstruction (.missingInstalledIota rule.key schema.implementationIota)
-            let iotaProof := mkAppN
+            let installedApplication := mkAppN
               (.const schema.implementationIota
                 (implementationIotaInfo.levelParams.map Level.param))
-              (privatePrefix ++ privateFields)
-            let some (_, installedLeft, installedRight) ←
-                liftGen <| matchEq? (← inferType iotaProof)
-              | failConstruction (.installedIotaTypeMismatch rule.key
-                  schema.implementationIota)
-            unless ← liftGen <| isDefEq installedLeft implementationLeft do
+              installedArguments
+            unless ← liftGen <| isDefEq installedApplication implementationLeft do
               failConstruction (.installedIotaTypeMismatch rule.key
                 schema.implementationIota)
+            let installedRight ← liftGen <| whnf installedApplication
             unless ← liftGen <| isDefEq installedRight implementationRight do
               failConstruction (.installedIotaTypeMismatch rule.key
                 schema.implementationIota)
+            let iotaProof := eqi.refl' (← liftGen <| ilevel resultType) resultType
+              implementationLeft
             let decodedPackage := mkApp constructorBoundary.decode package
             let decodedFields ← liftGen <|
               unpackTelescopeValue publicMinorFields decodedPackage
