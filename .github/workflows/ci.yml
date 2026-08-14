@@ -111,7 +111,7 @@ jobs:
               build_serially "${compile_only_targets[@]}"
               build_serially \
                 clitest supervisortest generationflagstest checktest ordertest incrementalordertest namingtest \
-                drivernamingtest privatealiastest simplenamingtest rulektest \
+                drivernamingtest privatealiastest sourcereplayaliastest simplenamingtest rulektest \
                 defaultctoriotatest sourcestructuresyntaxtest composedrecursorsyntaxtest \
                 projectiontest indexedfibrediagnostictest mutualonelayerdiagnostictest \
                 structureetatest deepimaxboxtest \
@@ -127,6 +127,7 @@ jobs:
               lake exe namingtest
               lake exe drivernamingtest
               lake exe privatealiastest
+              lake exe sourcereplayaliastest
               lake exe simplenamingtest
               lake exe rulektest
               lake exe defaultctoriotatest "$GITHUB_WORKSPACE"
@@ -145,7 +146,7 @@ jobs:
               lake exe exportsyntaxnormalizationtest
               lake exe basisvalidationtest
               lake exe stagedwritertest "$GITHUB_WORKSPACE"
-              count=27
+              count=28
               ;;
             mono)
               build_serially lean-inductive-models monotest mainclitest
