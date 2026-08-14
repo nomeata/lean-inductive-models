@@ -1283,7 +1283,7 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
       | .ok information => pure information
       | .error _ => failConstruction (.missingPublicIotaInput rule)
     return eqi.refl' (← liftGen <| ilevel type) type expectedPrivate
-  let direct? ← match role? with
+  let direct? : Option Expr ← match role? with
     | none => pure none
     | some role => match role.member? with
       | none => pure none
