@@ -197,6 +197,51 @@ structure RuleCompatibilityCertificate where
   publicIotaType : Expr
   deriving Inhabited, BEq, Repr
 
+/-- A fresh constructor with the exact public constructor type, implemented by
+encoding its complete source telescope, applying the checked private
+constructor, and decoding the owning family member. -/
+structure PublicConstructorCertificate where
+  key : ConstructorKey
+  adapter : Name
+  exactType : Expr
+  implementationConstructor : Name
+  telescope : TelescopeCertificate
+  ownerMaps : EquivalenceCertificate
+  deriving Inhabited, BEq, Repr
+
+/-- A fresh recursor with the exact public recursor type. `motives` and
+`rules` are the literal keyed sequences consumed while wrapping the installed
+private recursor; neither sequence is inferred from a cardinality. -/
+structure PublicRecursorCertificate where
+  member : MemberKey
+  adapter : Name
+  exactType : Expr
+  implementationRecursor : Name
+  motives : Array MemberKey
+  rules : Array RuleKey
+  deriving Inhabited, BEq, Repr
+
+/-- One source-shaped iota theorem for the fresh public constructor/recursor
+pair. The proof may enter the private rule only through the exact installed
+iota and the already checked finite-minor compatibility theorem. -/
+structure PublicIotaCertificate where
+  key : RuleKey
+  adapter : Name
+  exactType : Expr
+  implementationIota : Name
+  constructorAdapter : Name
+  recursorAdapter : Name
+  minorCompatibility : Name
+  deriving Inhabited, BEq, Repr
+
+/-- Atomic disabled-prototype public boundary. It exists only when every exact
+member, constructor and rule has a checked declaration. -/
+structure PublicAdapterCertificate where
+  constructors : Array PublicConstructorCertificate
+  recursors : Array PublicRecursorCertificate
+  iotas : Array PublicIotaCertificate
+  deriving Inhabited, BEq, Repr
+
 /-- One constructor in the public/private family boundary. -/
 structure ConstructorPlan where
   key : ConstructorKey
@@ -269,6 +314,7 @@ structure FamilyAdapterCertificate where
   occurrences : Array OccurrenceCertificate
   minorHypotheses : Array MinorHypothesisCertificate
   rules : Array RuleCompatibilityCertificate
+  publicAdapter? : Option PublicAdapterCertificate := none
   deriving Inhabited, BEq, Repr
 
 /-- Complete finite plan for a single private/public family boundary. -/

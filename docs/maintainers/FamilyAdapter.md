@@ -101,6 +101,18 @@ The proof is structural, with no clause selected by a cardinality.
    Publish the complete family atomically; a partial certificate never enables
    a partial public route.
 
+The disabled public-construction boundary is represented by
+`PublicAdapterCertificate`. A constructor certificate has the exact installed
+public constructor type and records the telescope codec, private constructor,
+and owner equivalence used by its definition. A recursor certificate has the
+exact public recursor type and records the literal member-motive and rule-key
+sequences used to wrap the private recursor. An iota certificate has the exact
+source-shaped statement for the fresh constructor/recursor pair and records
+the exact private iota plus finite-minor compatibility declaration used by its
+proof. The family boundary is atomic: missing one keyed declaration leaves
+`FamilyAdapterCertificate.publicAdapter? = none` and restores the incremental
+environment. These structures do not authorize production selection.
+
 The current `indexFibre` certificate similarly closes an exact finite index
 vector only when the mapped and public vectors are definitionally equal. A
 non-definitional moving fibre returns `indexFibreMismatch`; closing it requires
