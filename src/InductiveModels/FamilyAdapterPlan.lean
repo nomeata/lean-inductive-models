@@ -200,6 +200,20 @@ structure OccurrencePlan where
   implementationType : Expr
   deriving Inhabited, BEq, Repr
 
+/-- Installed container/mimic equivalence assigned to one exact source
+occurrence. Several occurrences in one field may intentionally carry the same
+four declarations; the occurrence key, not an array offset, is authoritative. -/
+structure ContainerMapPlan where
+  key : OccurrenceKey
+  parameterArity : Nat
+  indexArity : Nat
+  maps : EquivalenceCertificate
+  forwardType : Expr
+  backwardType : Expr
+  backwardForwardType : Expr
+  forwardBackwardType : Expr
+  deriving Inhabited, BEq, Repr
+
 /-- One exact public rule and its private proof oracle.  Occurrences are keyed
 to minor hypotheses rather than accepted by a count comparison. -/
 structure RulePlan where
@@ -243,6 +257,7 @@ structure FamilyAdapterPlan where
   constructors : Array ConstructorPlan
   rules : Array RulePlan
   occurrences : Array OccurrencePlan
+  containerMaps : Array ContainerMapPlan := #[]
   support : Array Name := #[]
   deriving Inhabited, BEq, Repr
 
@@ -272,6 +287,8 @@ inductive PlanError where
   | unknownRuleOwner (key : RuleKey)
   | unknownRuleConstructor (key : RuleKey)
   | duplicateOccurrence (key : OccurrenceKey)
+  | duplicateContainerMap (key : OccurrenceKey)
+  | unknownContainerMapOccurrence (key : OccurrenceKey)
   | unknownOccurrenceConstructor (key : OccurrenceKey)
   | unknownOccurrenceTarget (key : OccurrenceKey)
   | occurrenceFieldOutOfBounds (key : OccurrenceKey) (fields : Nat)
@@ -425,6 +442,12 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
         errors := errors.push (.occurrenceTelescopeMultiplicity key count)
     unless plan.rules.any (·.occurrences.contains key) do
       errors := errors.push (.ruleOccurrenceMismatch key)
+
+  if let some key := duplicateKey? (plan.containerMaps.map (·.key)) then
+    errors := errors.push (.duplicateContainerMap key)
+  for container in plan.containerMaps do
+    unless plan.occurrences.any (·.key == container.key) do
+      errors := errors.push (.unknownContainerMapOccurrence container.key)
 
   for constructor in plan.constructors do
     for key in telescopeOccurrences constructor.telescope do

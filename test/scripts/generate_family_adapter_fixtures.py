@@ -138,6 +138,10 @@ class FixtureMatrix:
             "GeneratedChangedNestedPublic", "GeneratedChangedNestedPrivate",
             "generatedChangedNestedRoll", "generatedChangedNestedUnroll",
             "generatedChangedNestedUnrollRoll", "generatedChangedNestedRollUnroll",
+            "generatedChangedNestedContainerForward",
+            "generatedChangedNestedContainerBackward",
+            "generatedChangedNestedContainerBackwardForward",
+            "generatedChangedNestedContainerForwardBackward",
             "GeneratedLayerA", "GeneratedLayerB",
         ]
 
@@ -256,6 +260,21 @@ axiom generatedChangedNestedUnrollRoll (value : GeneratedChangedNestedPublic) :
   generatedChangedNestedUnroll (generatedChangedNestedRoll value) = value
 axiom generatedChangedNestedRollUnroll (value : GeneratedChangedNestedPrivate) :
   generatedChangedNestedRoll (generatedChangedNestedUnroll value) = value
+
+axiom generatedChangedNestedContainerForward :
+  GeneratedList GeneratedChangedNestedPublic ->
+    GeneratedList GeneratedChangedNestedPrivate
+axiom generatedChangedNestedContainerBackward :
+  GeneratedList GeneratedChangedNestedPrivate ->
+    GeneratedList GeneratedChangedNestedPublic
+axiom generatedChangedNestedContainerBackwardForward
+    (value : GeneratedList GeneratedChangedNestedPublic) :
+  generatedChangedNestedContainerBackward
+    (generatedChangedNestedContainerForward value) = value
+axiom generatedChangedNestedContainerForwardBackward
+    (value : GeneratedList GeneratedChangedNestedPrivate) :
+  generatedChangedNestedContainerForward
+    (generatedChangedNestedContainerBackward value) = value
 
 /- One constructor versus two makes this a real partial simultaneous
 one-layer family: the production builder changes A and records B as the

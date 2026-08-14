@@ -229,6 +229,84 @@ private def mapName (certificate : MemberCertificate) (forward : Bool) : Name :=
 private def lawName (certificate : MemberCertificate) (forward : Bool) : Name :=
   if forward then certificate.maps.backwardForward else certificate.maps.forwardBackward
 
+private def containerForOccurrences? (plan : FamilyAdapterPlan)
+    (occurrences : Array OccurrenceKey) : Option ContainerMapPlan := do
+  let firstKey ← occurrences[0]?
+  let first ← plan.containerMaps.find? (·.key == firstKey)
+  for occurrence in occurrences do
+    let current ← plan.containerMaps.find? (·.key == occurrence)
+    unless current.parameterArity == first.parameterArity &&
+        current.indexArity == first.indexArity && current.maps == first.maps &&
+        current.forwardType == first.forwardType && current.backwardType == first.backwardType &&
+        current.backwardForwardType == first.backwardForwardType &&
+        current.forwardBackwardType == first.forwardBackwardType do none
+  return first
+
+private def applyContainerMap (plan : FamilyAdapterPlan) (container : ContainerMapPlan)
+    (forward : Bool) (parameters : Array Expr) (sourceType targetType value : Expr) :
+    ConstructionM Expr := do
+  unless parameters.size == container.parameterArity do
+    failConstruction (.missingContainerMap container.key)
+  let name := if forward then container.maps.forward else container.maps.backward
+  let recordedType := if forward then container.forwardType else container.backwardType
+  let some installed := (← getEnv).constants.find? name |>.map (·.type)
+    | failConstruction (.missingContainerMap container.key)
+  unless installed == recordedType do failConstruction (.missingContainerMap container.key)
+  let mut type ← instantiateForall recordedType parameters
+  let mut indices := #[]
+  for _ in [:container.indexArity] do
+    let .forallE binderName domain body _ := type
+      | failConstruction (.missingContainerMap container.key)
+    let index ← mkFreshExprMVar domain .natural binderName
+    indices := indices.push index
+    type := body.instantiate1 index
+  let .forallE _ domain _ _ := type
+    | failConstruction (.missingContainerMap container.key)
+  unless ← isDefEq domain sourceType do
+    failConstruction (.missingContainerMap container.key)
+  let resolvedIndices ← indices.mapM instantiateMVars
+  let mut unresolved := false
+  for index in resolvedIndices do unresolved := unresolved || (← hasAssignableMVar index)
+  if unresolved then
+    failConstruction (.missingContainerMap container.key)
+  let application := mkAppN (.const name (plan.levelParams.map Level.param))
+    (parameters ++ resolvedIndices ++ #[value])
+  unless ← isDefEq (← inferType application) targetType do
+    failConstruction (.missingContainerMap container.key)
+  return application
+
+private def applyContainerLaw (plan : FamilyAdapterPlan) (container : ContainerMapPlan)
+    (forward : Bool) (parameters : Array Expr) (sourceType value : Expr) :
+    ConstructionM Expr := do
+  unless parameters.size == container.parameterArity do
+    failConstruction (.missingContainerMap container.key)
+  let name := if forward then container.maps.backwardForward
+    else container.maps.forwardBackward
+  let recordedType := if forward then container.backwardForwardType
+    else container.forwardBackwardType
+  let some installed := (← getEnv).constants.find? name |>.map (·.type)
+    | failConstruction (.missingContainerMap container.key)
+  unless installed == recordedType do failConstruction (.missingContainerMap container.key)
+  let mut type ← instantiateForall recordedType parameters
+  let mut indices := #[]
+  for _ in [:container.indexArity] do
+    let .forallE binderName domain body _ := type
+      | failConstruction (.missingContainerMap container.key)
+    let index ← mkFreshExprMVar domain .natural binderName
+    indices := indices.push index
+    type := body.instantiate1 index
+  let .forallE _ domain _ _ := type
+    | failConstruction (.missingContainerMap container.key)
+  unless ← isDefEq domain sourceType do
+    failConstruction (.missingContainerMap container.key)
+  let resolvedIndices ← indices.mapM instantiateMVars
+  let mut unresolved := false
+  for index in resolvedIndices do unresolved := unresolved || (← hasAssignableMVar index)
+  if unresolved then
+    failConstruction (.missingContainerMap container.key)
+  return mkAppN (.const name (plan.levelParams.map Level.param))
+    (parameters ++ resolvedIndices ++ #[value])
+
 private def trimBinderBody? (occurrences : Array OccurrenceKey) :
     Option (Array OccurrenceKey) := do
   let mut result := #[]
@@ -242,7 +320,7 @@ private def trimBinderBody? (occurrences : Array OccurrenceKey) :
   return result
 
 private partial def mapFieldValue (plan : FamilyAdapterPlan)
-    (certificates : Array MemberCertificate) (forward : Bool)
+    (certificates : Array MemberCertificate) (parameters : Array Expr) (forward : Bool)
     (constructor : ConstructorKey) (fieldIndex : Nat)
     (occurrences : Array OccurrenceKey) (sourceType targetType value : Expr) :
     ConstructionM Expr := do
@@ -264,6 +342,8 @@ private partial def mapFieldValue (plan : FamilyAdapterPlan)
     let levels := plan.levelParams.map Level.param
     return mkAppN (.const (mapName certificate forward) levels)
       (sourceType.getAppArgs.push value)
+  if let some container := containerForOccurrences? plan occurrences then
+    return ← applyContainerMap plan container forward parameters sourceType targetType value
   let some trimmed := trimBinderBody? occurrences
     | failConstruction (.missingContainerMap occurrences[0]!)
   let .forallE name sourceDomain sourceBody info := sourceType
@@ -273,7 +353,7 @@ private partial def mapFieldValue (plan : FamilyAdapterPlan)
   unless ← isDefEq sourceDomain targetDomain do
     failConstruction (.missingContainerMap occurrences[0]!)
   withLocalDecl name info sourceDomain fun argument => do
-    let mapped ← mapFieldValue plan certificates forward constructor fieldIndex trimmed
+    let mapped ← mapFieldValue plan certificates parameters forward constructor fieldIndex trimmed
       (sourceBody.instantiate1 argument) (targetBody.instantiate1 argument)
       (mkApp value argument)
     mkLambdaFVars #[argument] mapped
@@ -298,7 +378,8 @@ private def applyFunext (funextName : Name) (arguments : Array Expr)
   return proof
 
 private partial def fieldRoundTrip (plan : FamilyAdapterPlan)
-    (certificates : Array MemberCertificate) (funextName : Name) (forward : Bool)
+    (certificates : Array MemberCertificate) (parameters : Array Expr)
+    (funextName : Name) (forward : Bool)
     (constructor : ConstructorKey) (fieldIndex : Nat)
     (occurrences : Array OccurrenceKey) (sourceType targetType value : Expr) :
     ConstructionM Expr := do
@@ -316,6 +397,8 @@ private partial def fieldRoundTrip (plan : FamilyAdapterPlan)
     let levels := plan.levelParams.map Level.param
     return mkAppN (.const (lawName certificate forward) levels)
       (sourceType.getAppArgs.push value)
+  if let some container := containerForOccurrences? plan occurrences then
+    return ← applyContainerLaw plan container forward parameters sourceType value
   let some trimmed := trimBinderBody? occurrences
     | failConstruction (.missingContainerMap occurrences[0]!)
   let .forallE name domain body info := sourceType
@@ -325,12 +408,13 @@ private partial def fieldRoundTrip (plan : FamilyAdapterPlan)
   unless ← isDefEq domain targetDomain do
     failConstruction (.missingContainerMap occurrences[0]!)
   withLocalDecl name info domain fun argument => do
-    let pointwise ← fieldRoundTrip plan certificates funextName forward constructor fieldIndex
-      trimmed (body.instantiate1 argument) (targetBody.instantiate1 argument)
+    let pointwise ← fieldRoundTrip plan certificates parameters funextName forward constructor
+      fieldIndex trimmed (body.instantiate1 argument) (targetBody.instantiate1 argument)
       (mkApp value argument)
-    let once ← mapFieldValue plan certificates forward constructor fieldIndex occurrences
+    let once ← mapFieldValue plan certificates parameters forward constructor fieldIndex occurrences
       sourceType targetType value
-    let twice ← mapFieldValue plan certificates (!forward) constructor fieldIndex occurrences
+    let twice ← mapFieldValue plan certificates parameters (!forward) constructor fieldIndex
+      occurrences
       targetType sourceType once
     liftGen <| applyFunext funextName #[argument] (mkApp twice argument)
       (mkApp value argument) pointwise
@@ -355,7 +439,8 @@ private def withConstructorTelescopes (plan : FamilyAdapterPlan)
         k owner parameters publicFields publicResult implementationFields implementationResult
 
 private def mapFields (plan : FamilyAdapterPlan) (certificates : Array MemberCertificate)
-    (constructor : ConstructorPlan) (forward : Bool) (sourceFields targetFields values : Array Expr) :
+    (constructor : ConstructorPlan) (parameters : Array Expr) (forward : Bool)
+    (sourceFields targetFields values : Array Expr) :
     ConstructionM (Array Expr) := do
   unless sourceFields.size == constructor.telescope.binders.size &&
       targetFields.size == sourceFields.size && values.size == sourceFields.size do
@@ -366,7 +451,7 @@ private def mapFields (plan : FamilyAdapterPlan) (certificates : Array MemberCer
     let targetType := (← inferType targetFields[fieldIndex]!).replaceFVars
       (targetFields.extract 0 fieldIndex) mapped
     let occurrences := constructor.telescope.binders[fieldIndex]!.occurrences
-    let value ← mapFieldValue plan certificates forward constructor.key fieldIndex
+    let value ← mapFieldValue plan certificates parameters forward constructor.key fieldIndex
       occurrences sourceType targetType values[fieldIndex]!
     mapped := mapped.push value
   return mapped
@@ -440,8 +525,8 @@ private def codecDeclaration (plan : FamilyAdapterPlan)
     let sourcePackage ← liftGen <| packedTelescopeType sourceFields
     withLocalDeclD `package sourcePackage fun package => do
       let sourceValues ← liftGen <| unpackTelescopeValue sourceFields package
-      let mapped ← mapFields plan certificates constructor forward sourceFields targetFields
-        sourceValues
+      let mapped ← mapFields plan certificates constructor parameters forward sourceFields
+        targetFields sourceValues
       mkLambdaFVars (parameters.push package)
         (← liftGen <| packTelescopeValue targetFields mapped)
   let declaration := Declaration.defnDecl
@@ -476,17 +561,18 @@ private def roundTripDeclaration (plan : FamilyAdapterPlan)
     let sourcePackage ← liftGen <| packedTelescopeType sourceFields
     withLocalDeclD `package sourcePackage fun package => do
       let sourceValues ← liftGen <| unpackTelescopeValue sourceFields package
-      let once ← mapFields plan certificates constructor forward sourceFields targetFields
-        sourceValues
-      let twice ← mapFields plan certificates constructor (!forward) targetFields sourceFields once
+      let once ← mapFields plan certificates constructor parameters forward sourceFields
+        targetFields sourceValues
+      let twice ← mapFields plan certificates constructor parameters (!forward) targetFields
+        sourceFields once
       let mut proofs := #[]
       for fieldIndex in [:sourceFields.size] do
         let sourceType ← inferType sourceValues[fieldIndex]!
         let targetType := (← inferType targetFields[fieldIndex]!).replaceFVars
           (targetFields.extract 0 fieldIndex) (once.extract 0 fieldIndex)
-        let proof ← fieldRoundTrip plan certificates funextName forward constructor.key
-          fieldIndex constructor.telescope.binders[fieldIndex]!.occurrences sourceType targetType
-          sourceValues[fieldIndex]!
+        let proof ← fieldRoundTrip plan certificates parameters funextName forward
+          constructor.key fieldIndex constructor.telescope.binders[fieldIndex]!.occurrences
+          sourceType targetType sourceValues[fieldIndex]!
         proofs := proofs.push proof
       let proof ← liftGen <| packageCongruence eqi sourceFields sourcePackage twice
         sourceValues proofs
@@ -525,8 +611,8 @@ private def indexFibreDeclaration (plan : FamilyAdapterPlan)
         let sourcePackage ← liftGen <| packedTelescopeType publicFields
         withLocalDeclD `package sourcePackage fun package => do
           let sourceValues ← liftGen <| unpackTelescopeValue publicFields package
-          let implementationValues ← mapFields plan certificates constructor true publicFields
-            implementationFields sourceValues
+          let implementationValues ← mapFields plan certificates constructor parameters true
+            publicFields implementationFields sourceValues
           let publicResult := publicResult.replaceFVars publicFields sourceValues
           let implementationResult := implementationResult.replaceFVars implementationFields
             implementationValues
@@ -750,14 +836,17 @@ private def buildPlanPrototype (plan : FamilyAdapterPlan) (iso : Iso) (root : Na
     }
   let mut occurrences := #[]
   for occurrence in plan.occurrences do
-    let some member := members.find? (·.key == occurrence.key.target)
-      | return {
-          declarations := declarations
-          certificate := none
-          minorHypotheses := minorHypotheses
-          issues := #[.missingOccurrenceMap occurrence.key]
-        }
-    occurrences := occurrences.push { key := occurrence.key, maps := member.maps }
+    if let some container := plan.containerMaps.find? (·.key == occurrence.key) then
+      occurrences := occurrences.push { key := occurrence.key, maps := container.maps }
+    else
+      let some member := members.find? (·.key == occurrence.key.target)
+        | return {
+            declarations := declarations
+            certificate := none
+            minorHypotheses := minorHypotheses
+            issues := #[.missingOccurrenceMap occurrence.key]
+          }
+      occurrences := occurrences.push { key := occurrence.key, maps := member.maps }
   let certificate : FamilyAdapterCertificate :=
     { members := members,
       telescopes := telescopes,

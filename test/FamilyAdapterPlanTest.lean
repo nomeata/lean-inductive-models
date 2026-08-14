@@ -122,6 +122,19 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
       sourceRecursor := sourceRecursor ownerIndex
       implementationRecursor := numbered "FamilyAdapterPlanTest.implRecursor" ownerIndex
       publicRecursor := numbered "FamilyAdapterPlanTest.publicRecursor" ownerIndex })
+  let containerMaps := occurrences.mapIdx fun index occurrence =>
+    { key := occurrence.key
+      parameterArity
+      indexArity
+      maps :=
+        { forward := numbered "FamilyAdapterPlanTest.containerForward" index
+          backward := numbered "FamilyAdapterPlanTest.containerBackward" index
+          backwardForward := numbered "FamilyAdapterPlanTest.containerBackwardForward" index
+          forwardBackward := numbered "FamilyAdapterPlanTest.containerForwardBackward" index }
+      forwardType := .sort .zero
+      backwardType := .sort .zero
+      backwardForwardType := .sort .zero
+      forwardBackwardType := .sort .zero }
   return { root := memberKey 0
            levelParams := []
            components :=
@@ -130,7 +143,8 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
            members
            constructors
            rules
-           occurrences }
+           occurrences
+           containerMaps }
 
 private def sampledCounts : Array Nat := #[0, 1, 2, 3, 5, 8]
 
@@ -235,7 +249,25 @@ private def checkMalformedPlans : IO Bool := do
   let componentOk ← expectError "SCC member coverage" missingComponents.validate fun
     | .memberComponentMultiplicity _ _ => true
     | _ => false
-  return duplicateOk && parameterOk && indexOk && sequenceOk && ruleCoverageOk && componentOk
+
+  let duplicateContainer :=
+    { plan with containerMaps := plan.containerMaps.push plan.containerMaps[0]! }
+  let duplicateContainerOk ← expectError "duplicate keyed container map"
+    duplicateContainer.validate fun
+    | .duplicateContainerMap _ => true
+    | _ => false
+
+  let firstContainer := plan.containerMaps[0]!
+  let unknownContainerKey :=
+    { firstContainer.key with fieldIndex := firstContainer.key.fieldIndex + 1000 }
+  let unknownContainer :=
+    { plan with containerMaps := #[{ firstContainer with key := unknownContainerKey }] }
+  let unknownContainerOk ← expectError "unknown keyed container-map occurrence"
+    unknownContainer.validate fun
+    | .unknownContainerMapOccurrence key => key == unknownContainerKey
+    | _ => false
+  return duplicateOk && parameterOk && indexOk && sequenceOk && ruleCoverageOk && componentOk &&
+    duplicateContainerOk && unknownContainerOk
 
 def main : IO UInt32 := do
   let samplesOk ← checkDimensionSamples

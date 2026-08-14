@@ -35,6 +35,10 @@ inductive ShadowReason where
   | malformedMinorTelescope (rule : RuleKey)
   | missingMinorHypothesis (constructor : ConstructorKey) (fieldIndex : Nat)
   | minorHypothesisMismatch (rule : RuleKey)
+  | missingContainerMap (occurrence : OccurrenceKey)
+  | ambiguousContainerMap (occurrence : OccurrenceKey)
+  | missingInstalledContainerMap (occurrence : OccurrenceKey) (name : Name)
+  | installedContainerMapTypeMismatch (occurrence : OccurrenceKey) (name : Name)
   | unknownRuleConstructor (rule : RuleKey)
   | invalidPlan (error : PlanError)
   deriving Inhabited, BEq, Repr
@@ -48,6 +52,7 @@ structure ShadowCoverage where
   constructors : Array ConstructorKey := #[]
   rules : Array RuleKey := #[]
   occurrences : Array OccurrenceKey := #[]
+  containerMaps : Array OccurrenceKey := #[]
   deriving Inhabited, BEq, Repr
 
 structure ShadowReport where
@@ -64,7 +69,8 @@ def ShadowReport.summary (report : ShadowReport) : String :=
   s!"{report.root}: members {report.coverage.members.size}, recursors {
     report.coverage.recursors.size}, constructors {
     report.coverage.constructors.size}, rules {report.coverage.rules.size}, occurrences {
-    report.coverage.occurrences.size}, reasons {report.reasons.size}"
+    report.coverage.occurrences.size}, container maps {
+    report.coverage.containerMaps.size}, reasons {report.reasons.size}"
 
 /-- Test-facing, value-only evidence retained after the full source-derived
 plan has validated and been discarded. Production filtering does not collect
@@ -275,6 +281,45 @@ private def addInstalledCoverage (env : Environment) (name : Name) (expected : E
   | some actual =>
     if actual == expected then (reasons, true) else (reasons.push mismatch, false)
 
+private def isContainerOccurrence (key : OccurrenceKey) : Bool :=
+  key.expressionPath.any (· != .binderBody)
+
+private def containerMetadataInstalled (environment : Environment)
+    (occurrence : OccurrenceKey) (container : IsoContainerImplementation) :
+    Array ShadowReason := Id.run do
+  let mut reasons := #[]
+  for (name, expected) in #[(container.forward, container.forwardType),
+      (container.backward, container.backwardType),
+      (container.backwardForward, container.backwardForwardType),
+      (container.forwardBackward, container.forwardBackwardType)] do
+    match installedType? environment name with
+    | none => reasons := reasons.push (.missingInstalledContainerMap occurrence name)
+    | some actual => unless actual == expected do
+        reasons := reasons.push (.installedContainerMapTypeMismatch occurrence name)
+  return reasons
+
+private def containerTarget? (container : IsoContainerImplementation)
+    (parameters : Array Expr) (sourceType : Expr) : MetaM (Option Expr) := do
+  unless parameters.size == container.parameterArity do return none
+  let mut type ← instantiateForall container.forwardType parameters
+  for _ in [:container.indexArity] do
+    let .forallE name domain body _ := type | return none
+    let index ← mkFreshExprMVar domain .natural name
+    type := body.instantiate1 index
+  let .forallE _ domain target _ := type | return none
+  unless ← isDefEq domain sourceType do return none
+  let target ← instantiateMVars target
+  if ← hasAssignableMVar target then return none
+  return some target
+
+private partial def withBinderBody (type : Expr) (depth : Nat)
+    (k : Expr → MetaM α) : MetaM α := do
+  if depth == 0 then return ← k type
+  let .forallE name domain body info := type
+    | return ← k type
+  withLocalDecl name info domain fun value =>
+    withBinderBody (body.instantiate1 value) (depth - 1) k
+
 private def implementationIota? (iso : Iso) (member : ResolvedMember)
     (constructor : Name) : Option Name :=
   if let some familyMember := familyMember? iso member.source.name then
@@ -450,6 +495,59 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
 
   let occurrencesFor := fun key =>
     occurrencePlans.filter (·.key.constructor == key) |>.map (·.key)
+  let environment ← getEnv
+  let mut containerMapPlans := #[]
+  for constructor in constructorPlans do
+    let containerOccurrences := (occurrencesFor constructor.key).filter isContainerOccurrence
+    if containerOccurrences.isEmpty then continue
+    let some owner := resolvedMembers.find? (·.key == constructor.key.owner) | continue
+    let totalBinders := owner.source.numParams + constructor.telescope.binders.size
+    let (addedPlans, addedReasons) ←
+      forallBoundedTelescope constructor.publicType (some totalBinders) fun binders _ => do
+        let parameters := binders.extract 0 owner.source.numParams
+        let fields := binders.extract owner.source.numParams binders.size
+        let mut addedPlans := #[]
+        let mut addedReasons := #[]
+        for occurrence in containerOccurrences do
+          let some field := fields[occurrence.fieldIndex]? | continue
+          let fieldType ← inferType field
+          let candidates ← withBinderBody fieldType occurrence.binderDepth fun body =>
+            iso.containerImplementations.filterMapM fun container => do
+              -- Candidate probes are independent: an unrelated mimic can have
+              -- index domains which mention declarations absent from this
+              -- exact source family.  Such a map is not a match, rather than
+              -- a reason to abort the complete shadow derivation.
+              let target? ← try containerTarget? container parameters body catch _ => pure none
+              return target?.map fun _ => container
+          if candidates.size > 1 then
+            addedReasons := addedReasons.push (.ambiguousContainerMap occurrence)
+            continue
+          if let some container := candidates[0]? then
+            let metadataReasons := containerMetadataInstalled environment occurrence container
+            if metadataReasons.isEmpty then
+              addedPlans := addedPlans.push
+                { key := occurrence
+                  parameterArity := container.parameterArity
+                  indexArity := container.indexArity
+                  maps :=
+                    { forward := container.forward
+                      backward := container.backward
+                      backwardForward := container.backwardForward
+                      forwardBackward := container.forwardBackward }
+                  forwardType := container.forwardType
+                  backwardType := container.backwardType
+                  backwardForwardType := container.backwardForwardType
+                  forwardBackwardType := container.forwardBackwardType }
+            else
+              addedReasons := addedReasons ++ metadataReasons
+          else
+            let some binder := constructor.telescope.binders[occurrence.fieldIndex]? | continue
+            let publicField := rewriteWith publicMapping binder.sourceType
+            unless publicField == binder.implementationType do
+              addedReasons := addedReasons.push (.missingContainerMap occurrence)
+        return (addedPlans, addedReasons)
+    containerMapPlans := containerMapPlans ++ addedPlans
+    reasons := reasons ++ addedReasons
   let mut rulePlans := #[]
   for member in resolvedMembers do
     if let some recursor := member.sourceRecursor? then
@@ -510,7 +608,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   let plan : FamilyAdapterPlan :=
     { root := memberKeyFor firstType.name, levelParams := firstType.levelParams,
       components, members := memberPlans, constructors := constructorPlans,
-      rules := rulePlans, occurrences := occurrencePlans,
+      rules := rulePlans, occurrences := occurrencePlans, containerMaps := containerMapPlans,
       support := iso.familyImplementation?.map (·.support) |>.getD #[] }
   for error in plan.validate do reasons := reasons.push (.invalidPlan error)
 
@@ -593,6 +691,9 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     else
       some occurrence.key
   coverage := { coverage with occurrences := coveredOccurrences }
+  let coveredContainerMaps := containerMapPlans.filterMap fun container =>
+    if coverage.occurrences.contains container.key then some container.key else none
+  coverage := { coverage with containerMaps := coveredContainerMaps }
   return { root := firstType.name, plan? := some plan, coverage, reasons }
 
 end InductiveModels.FamilyAdapter

@@ -2155,6 +2155,24 @@ structure IsoFamilyImplementation where
   members : Array IsoFamilyMember
   deriving Inhabited
 
+/-- One already checked equivalence between a source-shaped nested container
+and the corresponding private mimic member. `parameterArity` and `indexArity`
+describe the exact prefix of all four declarations; neither is an eligibility
+bound. The declaration types are retained so a later shadow can compare the
+installed constants before assigning the maps to source occurrence keys. -/
+structure IsoContainerImplementation where
+  parameterArity : Nat
+  indexArity : Nat
+  forward : Name
+  backward : Name
+  backwardForward : Name
+  forwardBackward : Name
+  forwardType : Expr
+  backwardType : Expr
+  backwardForwardType : Expr
+  forwardBackwardType : Expr
+  deriving Inhabited, BEq, Repr
+
 /-- Everything one nested declaration's model came to. -/
 structure Iso where
   /-- Every generated declaration, in dependency order and already accepted. -/
@@ -2185,6 +2203,10 @@ structure Iso where
   `implementation?` so legacy consumers cannot accidentally interpret a
   partial mutual prefix as a complete certificate. -/
   familyImplementation? : Option IsoFamilyImplementation := none
+  /-- Checked nested-container maps, one per private mimic. They are assigned
+  to exact source occurrence keys by `FamilyAdapterShadow`; array position is
+  not a consumer contract. -/
+  containerImplementations : Array IsoContainerImplementation := #[]
   /-- `(member, theorem)` for the real members on which Lean's kernel enables
   its unit-like equality shortcut. -/
   unitlikes : Array (Nat × Name) := #[]
@@ -3213,8 +3235,25 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
         aliases := aliases.insert (g.ruleKName k) (Naming.ruleKName exportRecs[k]!)
       for j in [0:pl.types[k]!.ctors.size] do
         aliases := aliases.insert (g.iotaName k j) (Naming.iotaName exportRecs[k]! j)
+  let containerImplementations ← (Array.range pl.mimics.size).mapM fun i => do
+    let forward := g.packName i
+    let backward := g.unpackName i
+    let backwardForward := g.retractName i
+    let forwardBackward := g.sectionName i
+    return {
+      parameterArity := np
+      indexArity := g.midx i
+      forward
+      backward
+      backwardForward
+      forwardBackward
+      forwardType := (← constInfo forward).type
+      backwardType := (← constInfo backward).type
+      backwardForwardType := (← constInfo backwardForward).type
+      forwardBackwardType := (← constInfo forwardBackward).type }
   return { decls := out, levelParams := lparams, members := g.members, selfNames
            numAll := r, ctors
-           recs := (Array.range pl.types.size).map g.recName, iotas, ruleKs, spliced, aliases }
+           recs := (Array.range pl.types.size).map g.recName, iotas, ruleKs, spliced, aliases,
+           containerImplementations }
 
 end InductiveModels

@@ -58,6 +58,8 @@ def observationIsKeyed (observation : FamilyAdapter.ShadowObservation) : Bool :=
       !key.recursorOwner.owner.isAnonymous && !key.recursor.isAnonymous &&
         !key.constructor.constructor.isAnonymous) &&
     observation.coverage.occurrences.all (fun key =>
+      !key.constructor.constructor.isAnonymous && !key.target.owner.isAnonymous) &&
+    observation.coverage.containerMaps.all (fun key =>
       !key.constructor.constructor.isAnonymous && !key.target.owner.isAnonymous)
 
 def hasOnlyExplicitGaps (observation : FamilyAdapter.ShadowObservation) : Bool :=
@@ -110,16 +112,19 @@ def main : IO UInt32 := do
   let everyOutcomeExplicit := (shadows ++ familyShadows).all hasOnlyExplicitGaps
   let nestedGapVisible := (shadows ++ familyShadows).any fun shadow => !shadow.complete
   let exactHypothesisSharing := multipleSitesShareExactHypothesis familyShadows
+  let containerMapsVisible := (shadows ++ familyShadows).any
+    (fun shadow => !shadow.coverage.containerMaps.isEmpty)
   let malformedRejected := malformedDependenciesAreExcluded malformed
   if sameResult && outputQuiet && everyAcceptedFamilyRan && keyedReportVisible &&
-      everyOutcomeExplicit && nestedGapVisible && exactHypothesisSharing && malformedRejected then
+      everyOutcomeExplicit && nestedGapVisible && exactHypothesisSharing && containerMapsVisible &&
+      malformedRejected then
     IO.println s!"family adapter shadow: {shadows.size + familyShadows.size} accepted families, \
       exact gaps reported, output unchanged"
     return 0
   IO.eprintln s!"family adapter shadow failure: same={sameResult}, quiet={outputQuiet}, \
     shadows={shadows.size + familyShadows.size}, keyed={keyedReportVisible}, \
     explicit={everyOutcomeExplicit}, gaps={nestedGapVisible}, hypotheses={exactHypothesisSharing}, \
-    malformed={malformedRejected}"
+    containers={containerMapsVisible}, malformed={malformedRejected}"
   for message in plainMessages ++ observedMessages ++ familyPlainMessages ++ familyObservedMessages do
     IO.eprintln message
   for shadow in shadows ++ familyShadows do

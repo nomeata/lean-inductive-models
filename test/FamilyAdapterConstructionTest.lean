@@ -58,6 +58,12 @@ def identityIso (source : EDecl) : Iso :=
       spliced := #[] }
   | _ => default
 
+structure ChangedContainerBoundary where
+  forward : Name
+  backward : Name
+  backwardForward : Name
+  forwardBackward : Name
+
 structure ChangedBoundary where
   publicOwner : Name
   privateOwner : Name
@@ -65,8 +71,9 @@ structure ChangedBoundary where
   backward : Name
   backwardForward : Name
   forwardBackward : Name
+  container? : Option ChangedContainerBoundary := none
 
-def changedIso (source : EDecl) (boundary : ChangedBoundary) : Iso :=
+def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
   let publicIso := identityIso source
   let publicConstructor := Name.str boundary.publicOwner "mk"
   let privateConstructor := Name.str boundary.privateOwner "mk"
@@ -85,9 +92,28 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : Iso :=
       unroll := boundary.backward
       unrollRoll := boundary.backwardForward
       rollUnroll := boundary.forwardBackward }
-  { publicIso with
+  let containerImplementations ← match boundary.container? with
+    | none => pure #[]
+    | some container =>
+      let typeOf := fun name => do
+        let some information := (← getEnv).constants.find? name
+          | throwError "changed container map {name} is not installed"
+        return information.type
+      pure #[{
+        parameterArity := 0
+        indexArity := 0
+        forward := container.forward
+        backward := container.backward
+        backwardForward := container.backwardForward
+        forwardBackward := container.forwardBackward
+        forwardType := (← typeOf container.forward)
+        backwardType := (← typeOf container.backward)
+        backwardForwardType := (← typeOf container.backwardForward)
+        forwardBackwardType := (← typeOf container.forwardBackward) }]
+  return { publicIso with
     familyImplementation? := some
-      { root := boundary.publicOwner, support := #[], members := #[member] } }
+      { root := boundary.publicOwner, support := #[], members := #[member] }
+    containerImplementations }
 
 def changedDirect : ChangedBoundary :=
   { publicOwner := `FamilyAdapterGenerated.GeneratedChangedDirectPublic
@@ -111,10 +137,14 @@ def changedNested : ChangedBoundary :=
     forward := `FamilyAdapterGenerated.generatedChangedNestedRoll
     backward := `FamilyAdapterGenerated.generatedChangedNestedUnroll
     backwardForward := `FamilyAdapterGenerated.generatedChangedNestedUnrollRoll
-    forwardBackward := `FamilyAdapterGenerated.generatedChangedNestedRollUnroll }
-
-def prototypeDeclarationName (root owner : Name) (suffix : String) : Name :=
-  Name.str (root.append owner) suffix
+    forwardBackward := `FamilyAdapterGenerated.generatedChangedNestedRollUnroll
+    container? := some
+      { forward := `FamilyAdapterGenerated.generatedChangedNestedContainerForward
+        backward := `FamilyAdapterGenerated.generatedChangedNestedContainerBackward
+        backwardForward :=
+          `FamilyAdapterGenerated.generatedChangedNestedContainerBackwardForward
+        forwardBackward :=
+          `FamilyAdapterGenerated.generatedChangedNestedContainerForwardBackward } }
 
 def directSamples : Array Name :=
   #[`FamilyAdapterGenerated.GeneratedDirect0,
@@ -187,8 +217,9 @@ structure Result where
   identityNested : Nat := 0
   changed : Nat := 0
   installedFamily : Nat := 0
-  blockedContainers : Nat := 0
+  closedContainers : Nat := 0
   invalidMaps : Nat := 0
+  invalidContainerMaps : Nat := 0
   failures : Array String := #[]
 
 def runSamples : MetaM Result := do
@@ -243,7 +274,7 @@ def runSamples : MetaM Result := do
         result := { result with failures }
   for boundary in #[changedDirect, changedIndexed, changedNested] do
     let source ← indEDecl #[boundary.publicOwner]
-    let iso := changedIso source boundary
+    let iso ← changedIso source boundary
     let report ← FamilyAdapter.deriveShadowPlan source iso
     if report.plan?.isNone then
       let failures := result.failures.push
@@ -258,20 +289,21 @@ def runSamples : MetaM Result := do
       result := { result with failures }
     | .ok built =>
       if boundary.publicOwner == changedNested.publicOwner then
-        let root := (`_family_adapter_construction_test_changed).append boundary.publicOwner
-        let keyedContainerGap := built.issues.any fun
-          | .missingContainerMap occurrence =>
-              occurrence.target.owner == boundary.publicOwner
-          | _ => false
-        let packSource := prototypeDeclarationName root
-          (Name.str boundary.publicOwner "mk") "packSource"
-        let rolledBack := built.declarations.isEmpty &&
-          !(← getEnv).constants.contains packSource
-        if built.certificate.isNone && keyedContainerGap && rolledBack then
-          result := { result with blockedContainers := result.blockedContainers + 1 }
+        let keyedPlan := report.plan?.any fun plan => plan.containerMaps.any fun container =>
+          container.key.target.owner == boundary.publicOwner &&
+            container.maps.forward ==
+              `FamilyAdapterGenerated.generatedChangedNestedContainerForward
+        let keyedCertificate := built.certificate.any fun certificate =>
+          certificate.occurrences.any fun occurrence =>
+            occurrence.key.target.owner == boundary.publicOwner &&
+              occurrence.maps.forward ==
+                `FamilyAdapterGenerated.generatedChangedNestedContainerForward
+        if built.issues.isEmpty && keyedPlan && keyedCertificate then
+          result := { result with changed := result.changed + 1 }
+          result := { result with closedContainers := result.closedContainers + 1 }
         else
           let failures := result.failures.push
-            s!"{boundary.publicOwner}: changed nested map obligation was not explicit: {
+            s!"{boundary.publicOwner}: changed nested map did not close generically: {
               repr built.issues}"
           result := { result with failures }
       else if built.certificate.isSome && built.issues.isEmpty then
@@ -282,7 +314,7 @@ def runSamples : MetaM Result := do
         result := { result with failures }
   let invalidBoundary := { changedDirect with forward := .anonymous }
   let invalidSource ← indEDecl #[invalidBoundary.publicOwner]
-  let invalidIso := changedIso invalidSource invalidBoundary
+  let invalidIso ← changedIso invalidSource invalidBoundary
   let invalidReport ← FamilyAdapter.deriveShadowPlan invalidSource invalidIso
   let invalidBuilt ← (FamilyAdapter.buildFamilyPrototype invalidReport invalidIso
     `_family_adapter_construction_test_invalid_map).run
@@ -300,6 +332,34 @@ def runSamples : MetaM Result := do
     else
       let failures := result.failures.push
         s!"invalid member map was not rejected: {repr built.issues}"
+      result := { result with failures }
+  let invalidContainerSource ← indEDecl #[changedNested.publicOwner]
+  let validContainerIso ← changedIso invalidContainerSource changedNested
+  let validContainer := validContainerIso.containerImplementations[0]!
+  let invalidContainer := { validContainer with forward := validContainer.backward }
+  let invalidContainerIso :=
+    { validContainerIso with containerImplementations := #[invalidContainer] }
+  let invalidContainerReport ←
+    FamilyAdapter.deriveShadowPlan invalidContainerSource invalidContainerIso
+  let invalidContainerBuilt ← (FamilyAdapter.buildFamilyPrototype invalidContainerReport
+    invalidContainerIso `_family_adapter_construction_test_invalid_container_map).run
+  match invalidContainerBuilt with
+  | .error decline =>
+    let failures := result.failures.push s!"invalid container map: {decline.label}"
+    result := { result with failures }
+  | .ok built =>
+    let exactMismatch := invalidContainerReport.reasons.any fun
+      | .installedContainerMapTypeMismatch occurrence name =>
+          occurrence.target.owner == changedNested.publicOwner &&
+            name == validContainer.backward
+      | _ => false
+    if exactMismatch && invalidContainerReport.coverage.containerMaps.isEmpty &&
+        built.certificate.isNone && built.declarations.isEmpty then
+      result := { result with invalidContainerMaps := result.invalidContainerMaps + 1 }
+    else
+      let failures := result.failures.push
+        s!"invalid container metadata was not rejected atomically: shadow={
+          repr invalidContainerReport.reasons}, construction={repr built.issues}"
       result := { result with failures }
   let installedOwners := #[`FamilyAdapterGenerated.GeneratedLayerA,
     `FamilyAdapterGenerated.GeneratedLayerB]
@@ -335,21 +395,21 @@ def runMain : IO UInt32 := do
       options := {}, maxHeartbeats := 0, maxRecDepth := 8192 }
   let (result, state) ← Core.CoreM.toIO (MetaM.run' runSamples) context { env := environment }
   if result.failures.isEmpty && result.complete == completeSamples.size &&
-      result.identityNested == nestedSamples.size && result.changed == 2 &&
-      result.blockedContainers == 1 && result.invalidMaps == 1 &&
+      result.identityNested == nestedSamples.size && result.changed == 3 &&
+      result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
       result.installedFamily == 1 &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
       {result.identityNested} definitional nested plans, {result.changed} changed plans, \
-      one installed family, {result.blockedContainers} genuine container-map obligation, \
-      validated map metadata"
+      one installed family, {result.closedContainers} keyed container map, \
+      validated member/container map metadata"
     return 0
   for failure in result.failures do IO.eprintln failure
   for message in state.messages.toArray do IO.eprintln (← message.toString)
   IO.eprintln s!"family adapter construction: complete={result.complete}, \
     identityNested={result.identityNested}, changed={result.changed}, \
-    installedFamily={result.installedFamily}, blockedContainers={result.blockedContainers}, \
-    invalidMaps={result.invalidMaps}"
+    installedFamily={result.installedFamily}, closedContainers={result.closedContainers}, \
+    invalidMaps={result.invalidMaps}, invalidContainerMaps={result.invalidContainerMaps}"
   return 1
 
 end FamilyAdapterConstructionTest

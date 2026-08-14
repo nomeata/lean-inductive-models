@@ -52,13 +52,14 @@ environment; they are never serialized through JSON.
 
 The prototype closes direct and infinitary occurrences through arbitrary
 finite binder telescopes. A definitionally unchanged nested field is reused
-directly. A genuinely changed nested occurrence such as `List P` versus
-`List M` returns the keyed `missingContainerMap` obligation and no
-certificate: member maps alone cannot manufacture the required
-`List P ↔ List M` equivalence. The existing nested model has mimic
-pack/unpack laws, but `Iso` does not yet expose them by occurrence key. Those
-maps must be added to installed metadata; there is no `List`-specific or
-bounded fallback.
+directly. `Iso.containerImplementations` now exposes every generated mimic's
+pack, unpack, and two inverse laws together with their exact installed types
+and finite parameter/index prefix arities. The shadow unifies those types with
+the whole source field beneath its exact binder path and assigns a unique map
+to each matching `OccurrenceKey`. Construction consumes that key and the
+installed law, so a changed nested field closes without recognizing `List` or
+any other container name. Missing, ambiguous, or changed installed metadata
+remains a keyed incomplete report rather than selecting a fallback route.
 
 ## Proof construction
 
@@ -76,10 +77,11 @@ The proof is structural, with no clause selected by a cardinality.
    `dependentFieldTransport` obligation; the current metadata supplies no
    general action of an arbitrary dependent family across distinct carriers.
 3. At a recursive occurrence, the prototype uses the target member
-   correspondence. At a nested occurrence it will compose the generated
-   `G(P) <-> G(M)` correspondence
-   with the existing mimic `pack`/`unpack` laws. The expression path identifies
-   the occurrence; its syntactic category does not choose a separate route.
+   correspondence. At a nested occurrence it composes the source-derived field
+   telescope with the existing mimic `pack`/`unpack` laws. All recursive keys
+   within that container node must resolve to the same installed equivalence.
+   The expression path identifies the occurrence; its syntactic category does
+   not choose a separate route.
 4. For each exact recursor rule, installed recursor metadata is opened using
    the source-recorded motive and minor arities. Constructor keys select the
    minor and occurrence keys select the literal IH binder, including shared
@@ -126,5 +128,7 @@ tests exercise structural rejection. These are property-style regression
 samples, not a supported-shape list. `FamilyAdapterConstructionTest` also
 checks distinct public/private direct and indexed carriers, one real
 `mutualOneLayerIso` family, definitionally unchanged nesting, and a distinct
-carrier nested obligation. Source-level guards pin Lean's rejection of a later
-field or result index that depends on a recursive constructor value.
+carrier nested field closed by an exact keyed container equivalence. The
+shadow regression also requires maps exposed by real nested-model generation.
+Source-level guards pin Lean's rejection of a later field or result index that
+depends on a recursive constructor value.
