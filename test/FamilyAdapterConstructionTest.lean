@@ -342,23 +342,52 @@ def recursorUsesRecordedMinorAdapters (member : MemberPlan)
     (binderTypes[minorStart + minor.minorIndex]?).any fun binderType =>
       minorResultMajorName? binderType == some minor.adapter
 
-def publicRecursorsComplete (plan : FamilyAdapterPlan)
-    (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
-  let .ok (.ok packedCount) ←
-      (FamilyAdapter.validatePackedCarrierBoundaries plan certificate.members).run
-    | return false
-  unless packedCount == plan.members.size do return false
+inductive PublicPrototypeDiagnostic where
+  | complete
+  | prerequisite (detail : String)
+  | recursorDecline (detail : String)
+  | recursorIssue (issue : ConstructionIssue)
+  | recursorInvalid
+  | iotaDecline (detail : String)
+  | iotaIssue (issue : ConstructionIssue)
+  | iotaInvalid
+  deriving Repr
+
+def PublicPrototypeDiagnostic.isComplete : PublicPrototypeDiagnostic → Bool
+  | .complete => true
+  | _ => false
+
+/-- Test-only value diagnostic. It preserves the exact keyed construction
+issue and whether it arose while building recursors or iotas. -/
+def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) (root : Name) :
+    MetaM PublicPrototypeDiagnostic := do
+  let packedCarrier ←
+    (FamilyAdapter.validatePackedCarrierBoundaries plan certificate.members).run
+  let packedCount ← match packedCarrier with
+    | .error decline => return .prerequisite decline.label
+    | .ok (.error issue) => return .prerequisite (repr issue)
+    | .ok (.ok count) => pure count
+  unless packedCount == plan.members.size do
+    return .prerequisite "incomplete packed carrier validation"
   let constructorsBuilt ← (FamilyAdapter.buildPublicConstructorPrototypes plan certificate.members
     certificate.telescopes (Name.str root "constructors")).run
-  let .ok (.ok (_, constructors)) := constructorsBuilt | return false
-  let .ok (.ok packedConstructorCount) ←
-      (FamilyAdapter.validatePackedConstructorBoundaries plan certificate.members constructors).run
-    | return false
-  unless packedConstructorCount == plan.constructors.size do return false
+  let constructors ← match constructorsBuilt with
+    | .error decline => return .prerequisite decline.label
+    | .ok (.error issue) => return .prerequisite (repr issue)
+    | .ok (.ok (_, constructors)) => pure constructors
+  let packedConstructors ←
+    (FamilyAdapter.validatePackedConstructorBoundaries plan certificate.members constructors).run
+  let packedConstructorCount ← match packedConstructors with
+    | .error decline => return .prerequisite decline.label
+    | .ok (.error issue) => return .prerequisite (repr issue)
+    | .ok (.ok count) => pure count
+  unless packedConstructorCount == plan.constructors.size do
+    return .prerequisite "incomplete packed constructor validation"
   match ← (FamilyAdapter.buildPublicRecursorPrototypes plan certificate.members
       certificate.telescopes constructors root).run with
-  | .error _ => return false
-  | .ok (.error _) => return false
+  | .error decline => return .recursorDecline decline.label
+  | .ok (.error issue) => return .recursorIssue issue
   | .ok (.ok (declarations, recursors)) =>
     let environment ← getEnv
     let valid := declarations.size >= plan.members.size && recursors.size == plan.members.size &&
@@ -376,18 +405,24 @@ def publicRecursorsComplete (plan : FamilyAdapterPlan)
             recursorUsesRecordedMinorAdapters member adapter &&
             adapter.rules == member.sourceRules &&
             (environment.constants.find? adapter.adapter).any (·.type == adapter.exactType)
-    unless valid do return false
+    unless valid do return .recursorInvalid
     match ← (FamilyAdapter.buildPublicIotaPrototypes plan certificate constructors recursors
         (Name.str root "iotas")).run with
-    | .error _ => return false
-    | .ok (.error _) => return false
+    | .error decline => return .iotaDecline decline.label
+    | .ok (.error issue) => return .iotaIssue issue
     | .ok (.ok (iotaDeclarations, iotas)) =>
       let environment ← getEnv
-      return iotaDeclarations.size == plan.rules.size && iotas.size == plan.rules.size &&
+      if iotaDeclarations.size == plan.rules.size && iotas.size == plan.rules.size &&
         plan.rules.all fun rule => (iotas.find? (·.key == rule.key)).any fun iota =>
           iota.schema.key == rule.key && iota.implementationIota == rule.implementationIota &&
             iota.minorCompatibility == iota.schema.minorCompatibility &&
-            (environment.constants.find? iota.adapter).any (·.type == iota.exactType)
+            (environment.constants.find? iota.adapter).any (·.type == iota.exactType) then
+        return .complete
+      return .iotaInvalid
+
+def publicRecursorsComplete (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
+  return (← publicPrototypeDiagnostic plan certificate root).isComplete
 
 def repeatedSpecialisedMinorsComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
@@ -560,13 +595,17 @@ def runSamples : MetaM Result := do
       if constructorsComplete then
         result := { result with
           changedPublicConstructors := result.changedPublicConstructors + 1 }
-      let recursorsComplete ← match report.plan?, built.certificate with
+      let recursorDiagnostic ← match report.plan?, built.certificate with
         | some plan, some certificate => do
-          publicRecursorsComplete plan certificate
+          publicPrototypeDiagnostic plan certificate
             ((`_family_adapter_changed_public_recursor_test).append boundary.publicOwner)
-        | _, _ => pure false
-      if recursorsComplete then
+        | _, _ => pure (.prerequisite "missing changed plan or base certificate")
+      if recursorDiagnostic.isComplete then
         result := { result with changedPublicRecursors := result.changedPublicRecursors + 1 }
+      else
+        let failures := result.failures.push
+          s!"{boundary.publicOwner}: public prototype diagnostic: {repr recursorDiagnostic}"
+        result := { result with failures }
       if boundary.publicOwner == changedNested.publicOwner then
         let keyedPlan := report.plan?.any fun plan => plan.containerMaps.any fun container =>
           container.key.target.owner == boundary.publicOwner &&
