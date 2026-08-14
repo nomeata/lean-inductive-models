@@ -2492,6 +2492,28 @@ def SourceCensus.ofSource (source : Export) : SourceCensus :=
   (source.decls.foldl (fun builder declaration => builder.push declaration)
     ({} : SourceCensus.Builder)).freeze
 
+/-- Rebind declaration-local frozen summaries to a logical source order.
+Every summary field except `ordinal` is a function of the declaration itself
+and the source-wide owner-name table, so a permutation need not traverse its
+expression graph again.  Validate the permutation here so future callers
+cannot silently duplicate or omit one source record. -/
+def SourceCensus.summariesForOrder (census : SourceCensus)
+    (order : Array Nat) : Except String (Array Order.DeclSummary) := do
+  unless order.size == census.summaries.size do
+    throw "source summary order has the wrong number of records"
+  let mut seen := Array.replicate census.summaries.size false
+  let mut summaries : Array Order.DeclSummary := #[]
+  for scheduledOrdinal in [:order.size] do
+    let rawOrdinal := order[scheduledOrdinal]!
+    unless rawOrdinal < census.summaries.size do
+      throw s!"source summary order contains out-of-range record {rawOrdinal}"
+    if seen[rawOrdinal]! then
+      throw s!"source summary order repeats record {rawOrdinal}"
+    seen := seen.set! rawOrdinal true
+    summaries := summaries.push
+      { census.summaries[rawOrdinal]! with ordinal := scheduledOrdinal }
+  return summaries
+
 /-- Rebind source-family certificates to a reordered declaration view without
 interpreting the source index's raw record occurrences as view ordinals. -/
 def SourceCensus.familyCertificateRecords (census : SourceCensus)
@@ -3193,7 +3215,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- declaration transition is extracted in this phase.
   let sourceSyntax := sourceCensus.sourceSyntax
   let sourceNormalizer := sourceSyntax.exactNormalizer
-  let sourceSummaries := Order.summariesIncremental scheduled sourceSyntax
+  let sourceSummaries ← match sourceCensus.summariesForOrder sourceOrder with
+    | .ok summaries => pure summaries
+    | .error error => throwError "cannot rebind frozen source summaries: {error}"
   let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls
   let sourceFamilyRecords := sourceCensus.familyCertificateRecords x scheduled
   let rawOrdinals := sourceCensus.rawOrdinals

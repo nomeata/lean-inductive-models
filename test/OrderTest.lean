@@ -420,6 +420,19 @@ def summariesEqual (left right : Array Order.DeclSummary) : Bool :=
   left.size == right.size && (Array.range left.size).all fun i =>
     summaryEqual left[i]! right[i]!
 
+def frozenSummaryPermutationEqual (source : Export) (order : Array Nat)
+    (prefer : EDecl → Bool := fun _ => false) : Bool :=
+  let census := SourceCensus.ofSource source
+  let summaries := census.summaries.map fun summary =>
+    ({ summary with support := prefer source.decls[summary.ordinal]! } : Order.DeclSummary)
+  let census := { census with summaries }
+  match census.summariesForOrder order with
+  | .error _ => false
+  | .ok summaries =>
+    let scheduled := { source with decls := order.map fun ordinal => source.decls[ordinal]! }
+    summariesEqual summaries
+      (Order.summariesIncremental scheduled census.sourceSyntax prefer)
+
 def orderOutcomesEqual (left right : Except Order.Error (Array Nat)) : Bool :=
   match left, right with
   | .ok left, .ok right => left == right
@@ -485,6 +498,37 @@ def run (root : String) : IO UInt32 := do
     summariesEqual
       (Order.summariesIncremental censusScheduledView scheduledCensus.sourceSyntax)
       (Order.summaries censusScheduledView)
+  let permutationInput := exportOf #[
+    metadataRecord,
+    modelDef (Naming.modelName `PermutationOwner),
+    inductiveRecord [`PermutationOwner],
+    axDecl `PermutationConsumer (.const `PermutationProvider []),
+    axDecl `PermutationProvider,
+    axDecl `PermutationSupport,
+    axDecl `PermutationDuplicate,
+    axDecl `PermutationDuplicate]
+  let preferPermutationSupport := fun declaration : EDecl =>
+    declaration.names.contains `PermutationSupport
+  for multiplier in #[1, 3, 5, 7] do
+    for offset in [:permutationInput.decls.size] do
+      let order := (Array.range permutationInput.decls.size).map fun ordinal =>
+        (ordinal * multiplier + offset) % permutationInput.decls.size
+      state := state.check
+        s!"frozen summaries equal callback recomputation for permutation {multiplier}/{offset}" <|
+        frozenSummaryPermutationEqual permutationInput order preferPermutationSupport
+  let permutationCensus := SourceCensus.ofSource permutationInput
+  state := state.check "frozen summary permutation rejects missing records" <|
+    match permutationCensus.summariesForOrder #[0] with
+    | .error _ => true
+    | .ok _ => false
+  state := state.check "frozen summary permutation rejects repeated records" <|
+    match permutationCensus.summariesForOrder #[0, 0, 1, 2, 3, 4, 5, 6] with
+    | .error _ => true
+    | .ok _ => false
+  state := state.check "frozen summary permutation rejects out-of-range records" <|
+    match permutationCensus.summariesForOrder #[0, 1, 2, 3, 4, 5, 6, 8] with
+    | .error _ => true
+    | .ok _ => false
 
   -- lean4export spells the kernel's one quotient declaration as exactly four
   -- consecutive records.  Replay must validate the bundle before the first
