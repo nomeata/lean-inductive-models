@@ -1420,6 +1420,13 @@ the 10-million-line prefix it takes the parse's peak from 2,381,888 KB to
 **1.3 % fewer instructions**. `Handle.getLine` is not the route: it did not
 finish a 1-million-line prefix in ten minutes.
 -/
+/-- Options shared by the streaming/handle parser entry points. A structure is
+used deliberately: adding or removing an option cannot silently reinterpret a
+positional `Bool` at public call sites. -/
+structure ParseOptions where
+  allowDuplicateNames : Bool := false
+  deriving Inhabited, Repr, BEq
+
 private def parseStreamCore (h : IO.FS.Stream)
     (sink? : Option RawSink) (declarationSink? : Option DeclarationSink)
     (retainDeclarations allowDuplicateNames : Bool) :
@@ -1557,9 +1564,9 @@ private def parseStreamCore (h : IO.FS.Stream)
 certificate is necessary but not sufficient for a later raw-hoist fast path;
 a false certificate unconditionally requires the ordinary writer. -/
 def parseStreamWithSink (h : IO.FS.Stream) (sink : RawSink)
-    (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String (Export × RawCertificate)) := do
-  return (← parseStreamCore h (some sink) none true allowDuplicateNames).map
+  return (← parseStreamCore h (some sink) none true options.allowDuplicateNames).map
     fun (parsed, certificate, _, _) => (parsed, certificate)
 
 /-- Parse and certify the exact stream while delivering each decoded
@@ -1568,35 +1575,35 @@ The callback and raw sink observe the same successful `readLine` transition;
 there is no second JSON or arena pass. -/
 def parseStreamDiscardingDeclarations (h : IO.FS.Stream) (rawSink : RawSink)
     (declarationSink : DeclarationSink)
-    (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String (ParsedEnvelope × RawCertificate)) := do
   return (← parseStreamCore h (some rawSink) (some declarationSink)
-    false allowDuplicateNames).map fun (parsed, certificate, declarationCount, arena) =>
+    false options.allowDuplicateNames).map fun (parsed, certificate, declarationCount, arena) =>
       ({ metaLine := parsed.metaLine, declarationCount, declarationArena := arena,
          retainedDeclarations := parsed.decls.size }, certificate)
 
-def parseStream (h : IO.FS.Stream) (allowDuplicateNames : Bool := false) :
+def parseStream (h : IO.FS.Stream) (options : ParseOptions := {}) :
     IO (Except String Export) := do
-  return (← parseStreamCore h none none true allowDuplicateNames).map (·.1)
+  return (← parseStreamCore h none none true options.allowDuplicateNames).map (·.1)
 
 /-- Handle-specialized wrapper around [`parseStream`]. -/
-def parseHandle (h : IO.FS.Handle) (allowDuplicateNames : Bool := false) :
+def parseHandle (h : IO.FS.Handle) (options : ParseOptions := {}) :
     IO (Except String Export) :=
-  parseStream (IO.FS.Stream.ofHandle h) allowDuplicateNames
+  parseStream (IO.FS.Stream.ofHandle h) options
 
 /-- Handle-specialized raw-source-capture parser. -/
 def parseHandleWithSink (h : IO.FS.Handle) (sink : RawSink)
-    (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String (Export × RawCertificate)) :=
-  parseStreamWithSink (IO.FS.Stream.ofHandle h) sink allowDuplicateNames
+  parseStreamWithSink (IO.FS.Stream.ofHandle h) sink options
 
 /-- Handle-specialized declaration-discarding parser. -/
 def parseHandleDiscardingDeclarations (h : IO.FS.Handle) (rawSink : RawSink)
     (declarationSink : DeclarationSink)
-    (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String (ParsedEnvelope × RawCertificate)) :=
   parseStreamDiscardingDeclarations (IO.FS.Stream.ofHandle h) rawSink declarationSink
-    allowDuplicateNames
+    options
 
 /-- Lowercase hexadecimal encoding used for random spool leaf names. Exposed
 so the secure workspace tests can pin the entropy-preserving representation. -/

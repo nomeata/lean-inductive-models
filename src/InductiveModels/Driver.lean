@@ -2392,12 +2392,12 @@ structure PlannedSourceInput where private mk ::
 
 private def parsePlannedSourceWithSink (stream : IO.FS.Stream) (sink : RawSink)
     (provenance : Spool.SourceProvenance)
-    (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String PlannedSourceInput) := do
   let builder ← IO.mkRef ({} : SourceCensus.Builder)
   let result ← parseStreamDiscardingDeclarations stream sink
     { emit := fun declaration => builder.modify (·.push declaration) }
-    allowDuplicateNames
+    options
   match result with
   | .error error => return .error error
   | .ok (envelope, certificate) =>
@@ -2408,24 +2408,24 @@ private def parsePlannedSourceWithSink (stream : IO.FS.Stream) (sink : RawSink)
     return .ok (.mk envelope census certificate provenance)
 
 def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
-    (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
-    allowDuplicateNames
+    options
 
 /-- Parse the compact-direct CLI input into a frozen census plus one exact raw
 fallback snapshot and declaration spans. Generated output is not involved. -/
 def parsePlannedSourceWithDirectTee (handle : IO.FS.Handle)
-    (tee : Spool.DirectInputTee) (allowDuplicateNames : Bool := false) :
+    (tee : Spool.DirectInputTee) (options : ParseOptions := {}) :
     IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
-    allowDuplicateNames
+    options
 
 def parsePlannedSourceStreamWithDirectTee (stream : IO.FS.Stream)
-    (tee : Spool.DirectInputTee) (allowDuplicateNames : Bool := false) :
+    (tee : Spool.DirectInputTee) (options : ParseOptions := {}) :
     IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink stream tee.sink tee.sourceProvenance
-    allowDuplicateNames
+    options
 
 /-- Rebind declaration-local frozen summaries to a logical source order.
 Every summary field except `ordinal` is a function of the declaration itself

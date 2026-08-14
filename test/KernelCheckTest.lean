@@ -168,7 +168,7 @@ def runSharedPrefixPlannedObserved (scratch : String) (x : Export)
     let tee ← Spool.ParseTee.create workspace
     let planned ← IO.FS.withFile inputFile.path .read fun handle => do
       match ← parsePlannedSourceWithTee handle tee
-          (allowDuplicateNames := true) with
+          (options := { allowDuplicateNames := true }) with
       | .ok input => pure input
       | .error message => throw <| IO.userError message
     let sizes ← tee.finish
@@ -200,7 +200,7 @@ def runFilterDirectPlannedObserved (scratch : String) (x : Export)
     let tee ← Spool.ParseTee.create workspace
     let planned ← IO.FS.withFile inputFile.path .read fun handle => do
       match ← parsePlannedSourceWithTee handle tee
-          (allowDuplicateNames := true) with
+          (options := { allowDuplicateNames := true }) with
       | .ok input => pure input
       | .error message => throw <| IO.userError message
     let sizes ← tee.finish

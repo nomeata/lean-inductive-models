@@ -184,7 +184,7 @@ def runFilterPlannedDiscardedState (scratch : String) (input : Export)
     let tee ← Spool.ParseTee.create workspace
     let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
       parseHandleWithSink handle tee.sink
-        (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let (parsed, certificate) ← match parsedResult with
       | .ok parsed => pure parsed
       | .error error => throw <| IO.userError s!"planned source parse failed: {error}"
@@ -211,7 +211,7 @@ def runFilterPlannedCensusState (scratch : String) (input : Export)
     let tee ← Spool.ParseTee.create workspace
     let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
       parsePlannedSourceWithTee handle tee
-        (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let parsed ← match parsedResult with
       | .ok parsed => pure parsed
       | .error error => throw <| IO.userError s!"planned census parse failed: {error}"
@@ -237,7 +237,7 @@ def preparePlannedCensus (workspace : Spool.Workspace) (input : Export) :
   let tee ← Spool.ParseTee.create workspace
   let parsed ← IO.FS.withFile inputFile.path .read fun handle => do
     match ← parsePlannedSourceWithTee handle tee
-        (allowDuplicateNames := true) with
+        (options := { allowDuplicateNames := true }) with
     | .ok parsed => pure parsed
     | .error error => throw <| IO.userError s!"planned provenance parse failed: {error}"
   let sizes ← tee.finish

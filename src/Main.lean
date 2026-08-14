@@ -279,11 +279,11 @@ private def runPipeline (config : InductiveModels.Cli.Config)
       if input == "-" then
         let stdin ← IO.getStdin
         pure (some (← InductiveModels.parseStream stdin
-          (allowDuplicateNames := true)))
+          (options := { allowDuplicateNames := true })))
       else
         IO.FS.withFile input .read fun handle => do
           pure (some (← InductiveModels.parseHandle handle
-            (allowDuplicateNames := true)))
+            (options := { allowDuplicateNames := true })))
     catch error =>
       IO.eprintln s!"{input}: {error}"
       pure none
@@ -309,12 +309,12 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
       let parsedResult ← if input == "-" then
           consumed.set true
           InductiveModels.parsePlannedSourceStreamWithDirectTee (← IO.getStdin) tee
-            (allowDuplicateNames := true)
+            (options := { allowDuplicateNames := true })
         else
           IO.FS.withFile input .read fun handle => do
             consumed.set true
             InductiveModels.parsePlannedSourceWithDirectTee handle tee
-              (allowDuplicateNames := true)
+              (options := { allowDuplicateNames := true })
       let planned ← match parsedResult with
         | .error message =>
           IO.eprintln s!"{input}: parse error: {message}"
@@ -336,7 +336,7 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
           -- Parser-compatible arena overwrites cannot be reconstructed from a
           -- completed arena. Reparse the exact consumed input snapshot and use
           -- the ordinary full-AST pipeline with unchanged diagnostics.
-          let fallback ← tee.parseFallback (allowDuplicateNames := true)
+          let fallback ← tee.parseFallback (options := { allowDuplicateNames := true })
           let parsed ← match fallback with
             | .ok parsed => pure parsed
             | .error message =>

@@ -54,7 +54,7 @@ def discardingCertificateAt (path : String) (allowDuplicateNames : Bool := false
     InductiveModels.parseHandleDiscardingDeclarations handle
       { emit := fun _ => pure () }
       { emit := fun _ => callbacks.modify (· + 1) }
-      allowDuplicateNames
+      { allowDuplicateNames }
   let count ← callbacks.get
   return result.map fun (envelope, certificate) => (envelope, certificate, count)
 
@@ -77,7 +77,7 @@ def plannedSourceRejected (scratch path text : String) : IO Bool := do
   Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
-      parseHandleWithSink handle tee.sink (allowDuplicateNames := true)
+      parseHandleWithSink handle tee.sink (options := { allowDuplicateNames := true })
     let .ok (output, certificate) := captured | return false
     let sizes ← tee.finish
     return (← Spool.PlannedSourceReader.create tee certificate sizes output.decls.size) matches
@@ -89,7 +89,7 @@ def plannedDiscardingSourceRejected (scratch path text : String) : IO Bool := do
     let tee ← Spool.ParseTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
-        (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let .ok (envelope, certificate) := captured | return false
     let sizes ← tee.finish
     return (← Spool.PlannedSourceReader.create tee certificate sizes
@@ -107,7 +107,7 @@ def directInputReplayAccepted (scratch path text : String)
     let tee ← Spool.DirectInputTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
-        (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let .ok (envelope, certificate) := captured | return false
     if let some expectedRootCount := expectedRootCount? then
       unless envelope.arena.retainedExprRoots == expectedRootCount do return false
@@ -144,12 +144,12 @@ def directInputFallbackExact (scratch path text : String) : IO Bool := do
     let tee ← Spool.DirectInputTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
-        (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let .ok (envelope, certificate) := captured | return false
     let sizes ← tee.finish
     let replay ← Spool.PlannedSourceReader.createDirect tee certificate sizes
       envelope.declarationCount envelope.arena
-    let fallback ← tee.parseFallback (allowDuplicateNames := true)
+    let fallback ← tee.parseFallback (options := { allowDuplicateNames := true })
     return (replay matches .error _) && match ordinary, fallback with
       | .ok expected, .ok actual =>
         expected.metaLine == actual.metaLine && expected.decls == actual.decls
@@ -169,7 +169,7 @@ def directInputFixtureParity (scratch path : String) : IO Bool := do
     let tee ← Spool.DirectInputTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
-        (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let .ok (envelope, certificate) := captured | return false
     let sizes ← tee.finish
     let .ok reader ← Spool.PlannedSourceReader.createDirect tee certificate sizes
@@ -447,7 +447,7 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.writeFile parserCompatibilityPath duplicateInput
   let retainedAllowed ← IO.FS.withFile parserCompatibilityPath .read fun handle =>
     parseHandleWithSink handle { emit := fun _ => pure () }
-      (allowDuplicateNames := true)
+      (options := { allowDuplicateNames := true })
   let discardedAllowed ← discardingCertificateAt parserCompatibilityPath true
   state := state.check "permitted duplicates preserve certificate and callback cardinality" <|
     match retainedAllowed, discardedAllowed with
