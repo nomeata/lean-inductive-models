@@ -38,6 +38,28 @@ def outputExport (input : Export) (declarations : Array EDecl) : Export :=
 def declarationIndex? (x : Export) (name : Name) : Option Nat :=
   x.decls.findIdx? (·.names.contains name)
 
+/-- Test-only source variant: move one complete declaration record before an
+owner while preserving the relative order of every other source record.  This
+does not model production scheduling; it makes the prerequisite-first contract
+of positive generation fixtures explicit. -/
+def withCompletePrerequisiteBefore (x : Export) (prerequisite owner : Name) : IO Export := do
+  let prerequisiteIndices := (Array.range x.decls.size).filter fun index =>
+    x.decls[index]!.names.contains prerequisite
+  let ownerIndices := (Array.range x.decls.size).filter fun index =>
+    x.decls[index]!.names.contains owner
+  unless prerequisiteIndices.size == 1 do
+    throw <| IO.userError s!"expected one complete {prerequisite} record, got {prerequisiteIndices}"
+  unless ownerIndices.size == 1 do
+    throw <| IO.userError s!"expected one complete {owner} record, got {ownerIndices}"
+  let prerequisiteIndex := prerequisiteIndices[0]!
+  let ownerIndex := ownerIndices[0]!
+  if prerequisiteIndex < ownerIndex then return x
+  let prerequisiteRecord := x.decls[prerequisiteIndex]!
+  return { x with decls :=
+    x.decls.extract 0 ownerIndex ++ #[prerequisiteRecord] ++
+      x.decls.extract ownerIndex prerequisiteIndex ++
+      x.decls.extract (prerequisiteIndex + 1) x.decls.size }
+
 def declaration? (x : Export) (name : Name) : Option EDecl :=
   x.decls.find? (·.names.contains name)
 
@@ -328,6 +350,11 @@ def main : IO UInt32 := do
   let primRaw ← readExport "test/fixtures/inductive-models/prim_shapes.ndjson"
   let (primDeclarations, primReport) ← runExport primRaw
   let primGenerated := outputExport primRaw primDeclarations
+  let primLateEqOwners := #[`Tri, `TagS4, `TagS3, `Weave, `Opt, `IdxP, `Le3,
+    `Le3.below, `PM, `Emp, `Conj3, `PU, `Sv, `PE, `MNm, `IdxS]
+  let primSupportRaw ← withCompletePrerequisiteBefore primRaw `Eq `Tri
+  let (primSupportDeclarations, primSupportReport) ← runExport primSupportRaw
+  let primSupportGenerated := outputExport primSupportRaw primSupportDeclarations
   let pfProjection := Naming.projectionName `PF 0
   let pfRule := Naming.projectionIotaName `PF 0
   let pfSlots := #[Naming.modelName `PF, Naming.modelName `PF.mk,
@@ -357,13 +384,18 @@ def main : IO UInt32 := do
       !used.contains `PULiftP && !used.contains `PULiftP.up && !used.contains `PULiftP.rec
   state := state.check "proposition-field projection iota is literal and uncast" <|
     (declarationType? primGenerated pfRule).any fun type => !containsConst ``Eq.rec type
+  state := state.check "raw-order prim owners before Eq decline without partial models" <|
+    primReport.declined == primLateEqOwners.map (·, "prim model name taken (Eq)") &&
+      primLateEqOwners.all fun owner =>
+        !primDeclarations.any (·.names.contains (Naming.modelName owner))
   let propStructureRules :=
     (Array.range 2).map (Naming.projectionIotaName `Conj) ++
       (Array.range 3).map (Naming.projectionIotaName `Conj3)
-  state := state.check "Prop-structure dependent iotas are literal reflexivity" <|
+  state := state.check "prerequisite-first Prop-structure dependent iotas are literal reflexivity" <|
+    primSupportReport.generated.any (·.1 == `Conj3) &&
     propStructureRules.all fun rule =>
-      (declarationType? primGenerated rule).any (!containsConst ``Eq.rec ·) &&
-        (theoremValue? primGenerated rule).any (containsConst ``Eq.refl)
+      (declarationType? primSupportGenerated rule).any (!containsConst ``Eq.rec ·) &&
+        (theoremValue? primSupportGenerated rule).any (containsConst ``Eq.refl)
   state := state.check "variable-sort singleton retains its intrinsic field" <|
     primReport.generated.any (·.1 == `PI) &&
       !primReport.declined.any (·.1 == `PI) &&
@@ -462,9 +494,9 @@ def main : IO UInt32 := do
 
   -- A recursive Type with no base constructor is empty, including when arm C
   -- obtains it as the erasure skeleton of an indexed family.  `NoBase` checks
-  -- both layers: the eight-slot skeleton interface (including its two
-  -- intrinsic projection pairs) must close before the ten-slot indexed model
-  -- is allowed to emit.
+  -- both layers: each exact eight-slot public interface (including its two
+  -- intrinsic projection pairs) must close. First-use foundation records are
+  -- charged to the island that splices them, not to either public slot set.
   let noBaseRaw ← readExport "test/fixtures/inductive-models/prim_carve.ndjson"
   let (noBaseDeclarations, noBaseReport) ← runExport noBaseRaw
   let noBaseGenerated := outputExport noBaseRaw noBaseDeclarations
@@ -472,10 +504,29 @@ def main : IO UInt32 := do
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order no-base fixture: {repr error}"
   let noBaseSkel := `NoBase._model._impl.skel
+  let noBaseSlots := #[Naming.modelName `NoBase, Naming.modelName `NoBase.mk,
+    Naming.modelName `NoBase.rec, Naming.iotaName `NoBase.rec 0,
+    Naming.projectionName `NoBase 0, Naming.projectionIotaName `NoBase 0,
+    Naming.projectionName `NoBase 1, Naming.projectionIotaName `NoBase 1]
+  let noBaseSkelSlots := #[Naming.modelName noBaseSkel,
+    Naming.modelName (Name.str noBaseSkel "c_0"),
+    Naming.modelName (Name.str noBaseSkel "rec"),
+    Naming.iotaName (Name.str noBaseSkel "rec") 0,
+    Naming.projectionName noBaseSkel 0, Naming.projectionIotaName noBaseSkel 0,
+    Naming.projectionName noBaseSkel 1, Naming.projectionIotaName noBaseSkel 1]
+  let noBaseNames := noBaseDeclarations.flatMap (·.names.toArray)
   state := state.check "no-base indexed family and its empty skeleton both model" <|
-    noBaseReport.generated.contains (`NoBase, 10) &&
-      noBaseReport.generated.contains (noBaseSkel, 8) &&
+    noBaseReport.generated.any (·.1 == `NoBase) &&
+      noBaseReport.generated.any (·.1 == noBaseSkel) &&
       !noBaseReport.declined.any fun (owner, _) => owner == `NoBase || owner == noBaseSkel
+  state := state.check "no-base and skeleton expose exactly their required public slots" <|
+    noBaseSlots.all noBaseNames.contains && noBaseSkelSlots.all noBaseNames.contains
+  state := state.check "no-base first-use support is charged to its generating islands" <|
+    noBaseReport.spliced.find? (·.1 == `NoBase) == some (`NoBase,
+      #[`PSigma', `PSigma'.rec, `PSigma'.mk, `PSigma'.fst, `PSigma'.snd,
+        `PSigma'.rec', `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk, noBaseSkel]) &&
+    noBaseReport.spliced.find? (·.1 == noBaseSkel) == some (noBaseSkel,
+      #[`Nat, `Nat.rec, `Nat.zero, `Nat.succ, `PUnit, `PUnit.rec, `PUnit.unit])
   state := state.check "no-base interfaces satisfy the exact public checker" <|
     (Check.check noBaseOrdered).all fun violation =>
       violation.familyOwner != `NoBase && violation.familyOwner != noBaseSkel
