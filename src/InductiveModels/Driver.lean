@@ -2680,6 +2680,7 @@ private structure FilterContext where
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
   futureSupport? : Option FutureSourceSupport := none
+  outputSourceOrder? : Option (Array Nat) := none
   collectTrace : Bool := false
 
 private structure FilterState where
@@ -2696,6 +2697,7 @@ private structure FilterState where
   invalidBasis : Std.HashSet Name := {}
   persistentSupportOrigins : Std.HashMap Name Nat := {}
   futureSupportRemaining : Std.HashMap Nat EDecl := {}
+  emissionByRaw : Std.HashMap Nat (Array EDecl) := {}
   sourceSteps : Array FilterSourceStep := #[]
 
 private inductive FilterFeedResult where
@@ -2733,7 +2735,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut invalidBasis := state.invalidBasis
   let mut persistentSupportOrigins := state.persistentSupportOrigins
   let mut futureSupportRemaining := state.futureSupportRemaining
+  let mut emissionByRaw := state.emissionByRaw
   let mut sourceSteps := state.sourceSteps
+  let emissionStart := legacyOut.size
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
   let mut out : Array EDecl := #[]
@@ -2971,6 +2975,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   else
     mainEnv ← getEnv
   if retainOracle then legacyOut := legacyOut.push d
+  if retainOracle && context.outputSourceOrder?.isSome then
+    emissionByRaw := emissionByRaw.insert rawSourceOrdinal
+      (legacyOut.extract emissionStart legacyOut.size)
   if compactMode then
     let some firstName := d.names.head? | throwError "source declaration has no name"
     let some rawOrdinal := rawOrdinals[firstName]?
@@ -3006,7 +3013,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, commits, stagedRecords,
     scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
-    persistentSupportOrigins, futureSupportRemaining, sourceSteps }
+    persistentSupportOrigins, futureSupportRemaining, emissionByRaw, sourceSteps }
 
 /-- Complete compact ordering and checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
@@ -3019,7 +3026,15 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
   let retainOracle := retention.retainsOracle
   let sourceSyntax := context.sourceSyntax
   let reserved := context.reserved
-  let legacyOut := state.legacyOut
+  let legacyOut ← match context.outputSourceOrder? with
+    | none => pure state.legacyOut
+    | some order => do
+      let mut reordered : Array EDecl := #[]
+      for rawOrdinal in order do
+        let some records := state.emissionByRaw[rawOrdinal]?
+          | throwError "source emission order lost raw record {rawOrdinal}"
+        reordered := reordered ++ records
+      pure reordered
   let compactIslands := state.compactIslands
   let commits := state.commits
   let stagedRecords := state.stagedRecords
@@ -3125,7 +3140,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false)
     (plannedSource? : Option Spool.PlannedSourceReader := none)
     (sourceOrder? : Option (Array Nat) := none)
-    (futureSupport? : Option FutureSourceSupport := none) :
+    (futureSupport? : Option FutureSourceSupport := none)
+    (outputSourceOrder? : Option (Array Nat) := none) :
     MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep) := do
   let sourceCensus := SourceCensus.ofSource x
   let sourceOrder ← match sourceOrder? with
@@ -3153,7 +3169,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, sourceNormalizer, sourceSummaries, sourceGlobalExtras,
-    sourceFamilyRecords, rawOrdinals, reserved, futureSupport?, collectTrace }
+    sourceFamilyRecords, rawOrdinals, reserved, futureSupport?, outputSourceOrder?, collectTrace }
   let initialFutureSupport := futureSupport?.map (·.records) |>.getD
     ({} : Std.HashMap Nat EDecl)
   let mut state : FilterState :=
@@ -3209,14 +3225,14 @@ def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
   let ordinaryOrder ← match Order.summaryRecordOrder census.summaries with
     | .ok order => pure order
     | .error error => throwError "cannot ordinarily order source shadow: {repr error}"
+  let outputOrder ← match census.scheduleOrder x generation with
+    | .ok order => pure order
+    | .error error => throwError "cannot retain support-priority output order: {repr error}"
   setEnv base
   let (decls, report, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
     (sourceOrder? := some ordinaryOrder) (futureSupport? := some shadow)
-  let final := { x with decls }
-  let ordered ← match Order.reorderPrioritizing final (scheduledSupportRecord generation) with
-    | .ok ordered => pure ordered
-    | .error error => throwError "cannot restore support-priority output order: {repr error}"
-  return (ordered.decls, report, true)
+      (outputSourceOrder? := some outputOrder)
+  return (decls, report, true)
 
 /-- Test-facing observer for the declaration-wise transition.  The generated
 output and report are produced by the same core invocation as the snapshots;
