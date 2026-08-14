@@ -29,10 +29,5 @@ inductive List (alpha : Type) : Type where
   | nil : List alpha
   | cons : alpha -> List alpha -> List alpha
 
-def Payload : N -> Type
-  | N.z => N
-  | N.s _ => List N
-
 inductive NestedLayer : Type where
-  | mk (key : N) (payload : Payload key) (children : List NestedLayer) : NestedLayer
-
+  | mk (key : N) (payload : Eq key key) (children : List NestedLayer) : NestedLayer
