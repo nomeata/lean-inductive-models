@@ -1215,13 +1215,15 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
   let some first := candidates[0]? | failConstruction (.missingMemberMap fallback.key)
   unless candidates.all (·.maps == first.maps) do
     failConstruction (.missingMemberMap fallback.key)
-  let expected := eqi.mk' (← liftGen <| ilevel sourceType) sourceType
-    (mkAppN (.const (if forward then first.maps.backward else first.maps.forward)
-      (plan.levelParams.map Level.param))
-      (targetType.getAppArgs.push first.mapped)) value
-  unless ← liftGen <| isDefEq (← inferType first.roundTrip) expected do
-    -- The exact installed law type is authoritative. A candidate whose maps
-    -- type-check but whose round-trip does not is not a usable boundary.
+  let some (lawCarrier, _, lawRight) ←
+      liftGen <| matchEq? (← inferType first.roundTrip)
+    | failConstruction (.missingMemberMap fallback.key)
+  unless ← liftGen <| isDefEq lawCarrier sourceType do
+    failConstruction (.missingMemberMap fallback.key)
+  unless ← liftGen <| isDefEq lawRight value do
+    -- The installed law application is authoritative. In particular, its
+    -- dependent endpoint is never reconstructed from the mapped value's
+    -- apparent application arguments.
     failConstruction (.missingMemberMap fallback.key)
   return first
 
