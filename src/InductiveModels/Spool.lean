@@ -81,21 +81,6 @@ private def copySpanWith (source : IO.FS.Handle) (position : IO.Ref UInt64)
     remaining := remaining - requested.toUInt64
   position.set ((span.end?).getD span.offset)
 
-def copySpan (source destination : IO.FS.Handle) (fileSize : UInt64)
-    (span : ByteSpan) : IO Unit := do
-  source.rewind
-  let position ← IO.mkRef 0
-  copySpanWith source position destination.write fileSize span
-
-/-- Copy a validated spool span to the stream abstraction used by transactional
-output. This performs the same bounded reads and short-read checks as the
-handle-to-handle copier. -/
-def copySpanToStream (source : IO.FS.Handle) (destination : IO.FS.Stream)
-    (fileSize : UInt64) (span : ByteSpan) : IO Unit := do
-  source.rewind
-  let position ← IO.mkRef 0
-  copySpanWith source position destination.write fileSize span
-
 /-- One append-only spool payload. The handle is deliberately private: only a
 successful full write publishes the new position and returned span. -/
 structure SpoolFile where
@@ -141,23 +126,6 @@ structure Workspace where
   directory : System.FilePath
   private ownedFiles : IO.Ref (Array System.FilePath)
 
-private def validateWorkspaceDirectory (root directory : System.FilePath) : IO Unit := do
-  unless root.fileName == some "_tmp" do
-    throw <| IO.userError s!"spool workspace root must be the project _tmp directory: {root}"
-  let rootMetadata ← root.symlinkMetadata
-  unless rootMetadata.type == .dir do
-    throw <| IO.userError s!"spool workspace root is not a physical directory: {root}"
-  let directoryMetadata ← directory.symlinkMetadata
-  unless directoryMetadata.type == .dir do
-    throw <| IO.userError s!"spool workspace is not a physical directory: {directory}"
-  let canonicalRoot ← IO.FS.realPath root
-  let canonicalDirectory ← IO.FS.realPath directory
-  let rootParts := canonicalRoot.components
-  let directoryParts := canonicalDirectory.components
-  unless rootParts.length < directoryParts.length &&
-      directoryParts.take rootParts.length == rootParts do
-    throw <| IO.userError s!"spool workspace {directory} is outside project root {root}"
-
 def Workspace.create (root : System.FilePath) : IO Workspace := do
   unless root.fileName == some "_tmp" do
     throw <| IO.userError s!"spool workspace root must be the project _tmp directory: {root}"
@@ -183,14 +151,6 @@ def Workspace.create (root : System.FilePath) : IO Workspace := do
   let ownedFiles ← IO.mkRef #[]
   return { root, directory, ownedFiles }
 
-/-- Attach a subprocess to an already reserved physical workspace. Its local
-ownership list is used only for safe creation; the coordinating parent has
-pre-registered every fixed leaf and remains responsible for cleanup. -/
-def Workspace.attach (root directory : System.FilePath) : IO Workspace := do
-  validateWorkspaceDirectory root directory
-  let ownedFiles ← IO.mkRef #[]
-  return { root, directory := ← IO.FS.realPath directory, ownedFiles }
-
 private def validLeaf (leaf : String) : Bool :=
   !leaf.isEmpty && leaf != "." && leaf != ".." &&
     !leaf.contains '/' && !leaf.contains '\\'
@@ -201,17 +161,6 @@ def Workspace.createFile (workspace : Workspace) (leaf : String) : IO SpoolFile 
   let file ← SpoolFile.createNew path
   workspace.ownedFiles.modify (fun paths => paths.push path)
   return file
-
-/-- Register one not-yet-created private leaf for exact cleanup. The workspace
-directory is already atomically reserved and owner-only; delaying creation lets
-the transactional output writer install the candidate without replacing an
-open handle (which is required for portability to Windows). -/
-def Workspace.reservePath (workspace : Workspace) (leaf : String) : IO System.FilePath := do
-  unless validLeaf leaf do throw <| IO.userError "spool file must be one non-special path component"
-  let path := workspace.directory / leaf
-  if ← path.pathExists then throw <| IO.userError s!"spool file already exists: {path}"
-  workspace.ownedFiles.modify (fun paths => paths.push path)
-  return path
 
 /-- Opaque identity shared only by one raw tee and readers opened from it.
 Unlike a certificate (which describes shape and offsets), pointer identity
@@ -548,25 +497,6 @@ def withWorkspace (root : System.FilePath) (action : Workspace → IO α) : IO �
   let workspace ← Workspace.create root
   workspace.run action
 
-/-- Establish a workspace under an exact project `_tmp` independently of the
-caller's ambient temporary-directory setting. Environment mutation is confined
-to the atomic directory reservation and restored before `action`; the public
-process is single-threaded at this boundary. Existing non-directory/symlink
-roots remain rejected by `Workspace.create`. -/
-def withRootedWorkspace (root : System.FilePath) (action : Workspace → IO α) : IO α := do
-  if !(← root.pathExists) then IO.FS.createDirAll root
-  let previous ← IO.getEnv "TMPDIR"
-  let workspaceResult ← try
-      Std.Internal.IO.Async.System.setEnvVar "TMPDIR" root.toString
-      pure (Except.ok (← Workspace.create root) : Except IO.Error Workspace)
-    catch error => pure (Except.error error : Except IO.Error Workspace)
-  match previous with
-  | some value => Std.Internal.IO.Async.System.setEnvVar "TMPDIR" value
-  | none => Std.Internal.IO.Async.System.unsetEnvVar "TMPDIR"
-  match workspaceResult with
-  | Except.error error => throw error
-  | Except.ok workspace => workspace.run action
-
 /-- Try to reserve a workspace before calling `action`. Failure to establish
 the optional optimization is represented by `none`; once `action` starts, its
 errors propagate and are never mistaken for a reason to rerun the pipeline. -/
@@ -578,74 +508,6 @@ def withOptionalWorkspace (root : System.FilePath)
   match workspace? with
   | none => action none
   | some workspace => workspace.run fun _ => action (some workspace)
-
-/-- A set of byte ranges whose arena ranges are emitted before declarations.
-`declarationOrder` is a permutation of declaration indices, allowing compact
-topological scheduling without retaining declaration ASTs. -/
-structure Composition where
-  metadata : Option ByteSpan := none
-  arenas : Array ByteSpan := #[]
-  declarations : Array ByteSpan := #[]
-  declarationOrder : Array Nat := #[]
-  deriving Inhabited, Repr, BEq
-
-private def allPhysicalSpans (composition : Composition) : Array ByteSpan :=
-  let spans := composition.metadata.elim #[] (#[·])
-  spans ++ composition.arenas ++ composition.declarations
-
-/-- Validate bounds, exact physical coverage, arena source order, and that the
-compact declaration order is a true permutation. Exact coverage rejects
-unindexed prefix, gap, overlap, duplicate, or trailing bytes. -/
-def Composition.validate (composition : Composition) (fileSize : UInt64) : Except String Unit := do
-  let physical := allPhysicalSpans composition
-  for span in physical do
-    unless span.length != 0 do throw "composition contains an empty span"
-    span.validate fileSize
-
-  let sorted := physical.qsort fun left right => left.offset < right.offset
-  let mut endpoint : UInt64 := 0
-  for span in sorted do
-    unless span.offset == endpoint do
-      throw "composition spans do not partition the spool exactly"
-    let some next := span.end?
-      | throw "composition span endpoint overflows UInt64"
-    endpoint := next
-  unless endpoint == fileSize do
-    throw "composition spans do not reach the spool end"
-
-  let mut arenaEndpoint : UInt64 := 0
-  let mut firstArena := true
-  for span in composition.arenas do
-    unless firstArena || arenaEndpoint ≤ span.offset do
-      throw "composition arena runs are not in source order"
-    arenaEndpoint := (span.end?).getD 0
-    firstArena := false
-
-  unless composition.declarationOrder.size == composition.declarations.size do
-    throw "composition declaration order has the wrong length"
-  let mut seen : Std.HashSet Nat := {}
-  for index in composition.declarationOrder do
-    unless index < composition.declarations.size do
-      throw "composition declaration order contains an out-of-range index"
-    unless !seen.contains index do
-      throw "composition declaration order contains a duplicate index"
-    seen := seen.insert index
-
-/-- Emit metadata, all arenas in source order, then declarations in the compact
-requested order. [`Composition.validate`] must succeed before the first byte is
-written. -/
-def Composition.emit (composition : Composition) (source destination : IO.FS.Handle)
-    (fileSize : UInt64) : IO Unit := do
-  match composition.validate fileSize with
-  | .error error => throw <| IO.userError error
-  | .ok _ => pure ()
-  let position ← IO.mkRef 0
-  if let some metadata := composition.metadata then
-    copySpanWith source position destination.write fileSize metadata
-  for arena in composition.arenas do
-    copySpanWith source position destination.write fileSize arena
-  for index in composition.declarationOrder do
-    copySpanWith source position destination.write fileSize composition.declarations[index]!
 
 /-! ## Mixed source/generated composition
 

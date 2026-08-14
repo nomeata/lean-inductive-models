@@ -169,7 +169,6 @@ def main (args : List String) : IO UInt32 := do
   let rawBlankPath := s!"{scratch}/raw-spool-blank.ndjson"
   let rawCrlfPath := s!"{scratch}/raw-spool-crlf.ndjson"
   let rawKeyOrderPath := s!"{scratch}/raw-spool-key-order.ndjson"
-  let compositionPath := s!"{scratch}/raw-spool-composition.ndjson"
   let mixedCompositionPath := s!"{scratch}/raw-spool-mixed-composition.ndjson"
   let rawRootSentinel := s!"{scratch}/raw-spool-root-sentinel"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
@@ -177,8 +176,7 @@ def main (args : List String) : IO UInt32 := do
     projectionOrderPath, projectionOverwritePath, parserCompatibilityPath,
     rawCanonicalPath, rawNameGapPath, rawLevelGapPath, rawExprGapPath,
     rawNameOrderPath, rawNoLfPath, rawWhitespacePath, rawBlankPath, rawCrlfPath,
-    rawKeyOrderPath,
-    rawRootSentinel, compositionPath, mixedCompositionPath]
+    rawKeyOrderPath, rawRootSentinel, mixedCompositionPath]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -220,18 +218,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "runtime workspace is a secure physical child of project _tmp" <|
     secureWorkspaceBoundary && secureWorkspaceCleaned
 
-  let reservedCandidatePath ← IO.mkRef (none : Option System.FilePath)
-  Spool.withWorkspace scratch fun workspace => do
-    let path ← workspace.reservePath "output-kernel-candidate.ndjson"
-    reservedCandidatePath.set (some path)
-    IO.FS.writeFile path "private candidate\n"
-  let reservedCandidatePath? ← reservedCandidatePath.get
-  let reservedCandidateCleaned ← if let some path := reservedCandidatePath? then
-      path.pathExists.map Bool.not
-    else pure false
-  state := state.check "reserved output-kernel candidate is cleaned with its workspace"
-    reservedCandidateCleaned
-
   let externalTmp : System.FilePath := s!"{root}/staged-writer-external-tmp"
   if ← externalTmp.pathExists then IO.FS.removeDirAll externalTmp
   IO.FS.createDir externalTmp
@@ -240,25 +226,6 @@ def main (args : List String) : IO UInt32 := do
   let externalEntries ← externalTmp.readDir
   state := state.check "external TMPDIR disables optional staging and cleans its reservation" <|
     externalFallback && externalEntries.isEmpty
-
-  let rootedParent : System.FilePath := s!"{root}/staged-writer-rooted-parent"
-  let rootedScratch := rootedParent / "_tmp"
-  let rootedPath ← IO.mkRef (none : Option System.FilePath)
-  let rootedExternal ← withTempDirectoryVariable externalTmp <|
-    Spool.withRootedWorkspace rootedScratch fun workspace => do
-      rootedPath.set (some workspace.directory)
-      let canonicalRoot ← IO.FS.realPath rootedScratch
-      let canonicalDirectory ← IO.FS.realPath workspace.directory
-      return canonicalDirectory.components.take canonicalRoot.components.length ==
-        canonicalRoot.components
-  let rootedPath? ← rootedPath.get
-  let rootedCleaned ← if let some path := rootedPath? then path.pathExists.map Bool.not
-    else pure false
-  state := state.check "rooted workspace creates missing _tmp and ignores external TMPDIR" <|
-    rootedExternal && rootedCleaned && (← rootedScratch.readDir).isEmpty &&
-      (← externalTmp.readDir).isEmpty
-  IO.FS.removeDir rootedScratch
-  IO.FS.removeDir rootedParent
 
   let symlinkTarget : System.FilePath := s!"{root}/staged-writer-symlink-target"
   let symlinkTmp : System.FilePath := s!"{scratch}/staged-writer-symlink-tmp"
@@ -300,23 +267,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "split declaration stream is byte-identical to whole export rendering" <|
     splitRender == Export.render { metaLine := .null, decls := #[first, second] }
 
-  let largeForwardPath := s!"{scratch}/staged-writer-large-forward.bin"
-  removeIfPresent largeForwardPath
-  let largeForward ← Spool.withWorkspace scratch fun workspace => do
-    let file ← workspace.createFile "large-forward.bin"
-    let firstBytes := ByteArray.mk (Array.replicate (4194304 + 17) (0x5a : UInt8))
-    let secondBytes := ByteArray.mk (Array.replicate 31 (0xa5 : UInt8))
-    let firstSpan ← file.append firstBytes
-    let secondSpan ← file.append secondBytes
-    let fileSize ← file.finish
-    let composition : Spool.Composition := {
-      declarations := #[firstSpan, secondSpan], declarationOrder := #[0, 1] }
-    IO.FS.withFile file.path .read fun source =>
-      IO.FS.withFile largeForwardPath .write fun destination =>
-        composition.emit source destination fileSize
-    return (← IO.FS.readBinFile largeForwardPath) == firstBytes ++ secondBytes
-  state := state.check "large forward spans cross the bounded copy buffer exactly" largeForward
-  removeIfPresent largeForwardPath
   state := state.check "fresh island advances every explicit arena counter" <|
     firstSplit.after == { nextName := 4, nextLevel := 2, nextExpr := 1 } &&
       secondSplit.after == { nextName := 7, nextLevel := 3, nextExpr := 2 }
@@ -469,50 +419,10 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "raw spool files are removed after success" <|
     (← stagedPaths.allM fun path => return !(← path.pathExists))
 
-  -- The general spool layer validates one exact payload, hoists every arena
-  -- range, and follows an arbitrary compact declaration permutation.  The
-  -- reverse declaration order also exercises a backward cursor move after the
-  -- forward metadata/arena/second-declaration reads.
-  let workspaceDirectoryRef ← IO.mkRef (none : Option System.FilePath)
-  let compositionResult ← Spool.withWorkspace scratch fun workspace => do
-    workspaceDirectoryRef.set (some workspace.directory)
-    let file ← workspace.createFile "composition.ndjson"
-    let metadataSpan ← file.append rawMeta.toUTF8
-    let mut arenaSpans : Array Spool.ByteSpan := #[]
-    for record in firstSplit.arena ++ secondSplit.arena do
-      arenaSpans := arenaSpans.push (← file.append (record ++ "\n").toUTF8)
-    let firstDeclSpan ← file.append rawFirstDecl.toUTF8
-    let secondDeclSpan ← file.append rawSecondDecl.toUTF8
-    let fileSize ← file.finish
-    let composition : Spool.Composition :=
-      { metadata := some metadataSpan
-        arenas := arenaSpans
-        declarations := #[firstDeclSpan, secondDeclSpan]
-        declarationOrder := #[1, 0] }
-    IO.FS.withFile file.path .read fun source =>
-      IO.FS.withFile compositionPath .write fun destination =>
-        composition.emit source destination fileSize
-    return (composition.validate fileSize, fileSize, composition)
-  let (compositionValidation, compositionSize, composition) := compositionResult
-  let compositionText ← IO.FS.readFile compositionPath
-  let expectedComposition := rawMeta ++ expectedArena ++ rawSecondDecl ++ rawFirstDecl
-  state := state.check "spool composition emits exact arenas and reordered declarations" <|
-    !isExceptError compositionValidation && compositionText == expectedComposition &&
-      match InductiveModels.parse compositionText (analyse := false) with
-      | .ok output => output.decls == #[second, first]
-      | .error _ => false
-  let workspaceRemoved ← match ← workspaceDirectoryRef.get with
-    | some directory => pure !(← directory.pathExists)
-    | none => pure false
-  state := state.check "spool workspace is removed after composition" workspaceRemoved
-  state := state.check "spool composition rejects malformed compact order" <|
-    isExceptError ({ composition with declarationOrder := #[0, 0] }.validate compositionSize)
-  state := state.check "spool composition rejects an EOF mismatch" <|
-    isExceptError (composition.validate (compositionSize + 1))
-
   -- Production staging keeps parser and generated payloads in separate files.
   -- The mixed emitter validates every file/span before streaming the source
   -- arenas, generated arenas, and interleaved compact declaration order.
+  let largeSourceArena := String.ofList (List.replicate (4194304 + 17) 'a') ++ "\n"
   let mixedResult ← Spool.withWorkspace scratch fun workspace => do
     let sourceMetadata ← workspace.createFile "mixed-source-metadata.ndjson"
     let sourceArena ← workspace.createFile "mixed-source-arena.ndjson"
@@ -520,7 +430,7 @@ def main (args : List String) : IO UInt32 := do
     let generatedArena ← workspace.createFile "mixed-generated-arena.ndjson"
     let generatedDeclarations ← workspace.createFile "mixed-generated-declarations.ndjson"
     discard <| sourceMetadata.append "meta\n".toUTF8
-    discard <| sourceArena.append "source-arena\n".toUTF8
+    discard <| sourceArena.append largeSourceArena.toUTF8
     let sourceFirst ← sourceDeclarations.append "source-first\n".toUTF8
     let sourceSecond ← sourceDeclarations.append "source-second\n".toUTF8
     discard <| generatedArena.append "generated-arena\n".toUTF8
@@ -546,10 +456,11 @@ def main (args : List String) : IO UInt32 := do
     let duplicate := { mixed with
       declarations := #[.source sourceFirst, .generated generated, .source sourceFirst] }
     return (mixed.validate, duplicate.validate)
-  state := state.check "mixed staged composition emits four files in compact order" <|
+  state := state.check "mixed staged composition crosses the copy buffer in compact order" <|
     !isExceptError mixedResult.1 &&
       (← IO.FS.readFile mixedCompositionPath) ==
-        "meta\nsource-arena\ngenerated-arena\nsource-second\ngenerated\nsource-first\n"
+        "meta\n" ++ largeSourceArena ++
+          "generated-arena\nsource-second\ngenerated\nsource-first\n"
   state := state.check "mixed staged composition rejects a missing source span" <|
     isExceptError mixedResult.2
 
