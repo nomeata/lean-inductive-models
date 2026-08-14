@@ -2652,10 +2652,9 @@ private def containerRecursorMember (container : ContainerRecursorPlan) :
     | failConstruction (.missingMemberMap { owner := container.key.implementationRecursor })
   let key : MemberKey := { owner := container.key.publicRecursor }
   let sourceType ← liftGen <| inferType container.publicMajorFamily
-  return
-    { key, component := { anchor := key }, role := .mimic,
+  return { key, component := { anchor := key }, role := .mimic,
       parameterArity := container.parameterArity, indexArity := container.indexArity,
-      sourceType,
+      sourceType := sourceType,
       implementationCarrier, publicCarrier, representation := .layer,
       constructors := #[], sourceRules := #[],
       recursorMotiveArity := container.motiveArity,
