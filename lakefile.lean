@@ -68,6 +68,11 @@ lean_exe privatealiastest where
   root := `PrivateAliasTest
   supportInterpreter := true
 
+lean_exe sourcereplayaliastest where
+  srcDir := "test"
+  root := `SourceReplayAliasTest
+  supportInterpreter := true
+
 lean_exe simplenamingtest where
   srcDir := "test"
   root := `SimpleNamingTest

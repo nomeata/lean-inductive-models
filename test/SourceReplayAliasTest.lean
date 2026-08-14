@@ -1,0 +1,132 @@
+import InductiveModels.Driver
+
+open Lean Meta InductiveModels
+
+structure TestState where
+  passed : Nat := 0
+  failed : Array String := #[]
+
+def TestState.check (state : TestState) (label : String) (condition : Bool) : TestState :=
+  if condition then { state with passed := state.passed + 1 }
+  else { state with failed := state.failed.push label }
+
+def privateName (module discriminator leaf : String) : Name :=
+  Name.str (Name.num (Name.str `_private module) discriminator.toNat!) leaf
+
+def noGeneration : InductiveModels.Cli.Config :=
+  { nested := false, mutualModels := false, simple := false, basic := false }
+
+def runExport (input : Export) : IO (Array EDecl × Report) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<source-replay-alias-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run' (runFilter input false noGeneration)) context { env }
+  return result
+
+def kernelChecks (input : Export) : IO Bool := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<source-replay-alias-kernel-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run' (typeCheckExport input)) context { env }
+  return result.isOk
+
+def typeAxiom (name : Name) : EDecl :=
+  .ax name [] (.sort (.succ .zero)) false
+
+def useAxiom (name target : Name) : EDecl :=
+  .ax name [] (.const target []) false
+
+def collisionInput (first second : Name) : Export :=
+  { metaLine := .null
+    decls := #[typeAxiom first, typeAxiom second,
+      useAxiom `UseFirst first, useAxiom `UseSecond second] }
+
+def aliasesOf (input : Export) : Except String SourceReplayAliases :=
+  (SourceCensus.ofSource input).replayAliases
+
+def emptyInductiveType (name : Name) : EIndType :=
+  { name, levelParams := [], type := .sort (.succ .zero), all := [name], ctors := []
+    numParams := 0, numIndices := 0, numNested := 0, isRec := false
+    isReflexive := false, isUnsafe := false }
+
+def main : IO UInt32 := do
+  initSearchPath (← findSysroot)
+  let mut state : TestState := {}
+  let privateA := privateName "SourceAliasA" "0" "X"
+  let privateB := privateName "SourceAliasB" "0" "X"
+
+  let privateInput := collisionInput privateA privateB
+  let .ok privateAliases := aliasesOf privateInput
+    | throw <| IO.userError "cannot plan private/private source aliases"
+  state := state.check "private/private keeps the earliest raw identity"
+    (privateAliases.build? privateA == none && (privateAliases.build? privateB).isSome)
+  let (privateOutput, privateReport) ← runExport privateInput
+  state := state.check "private/private replay preserves exact source records and report"
+    (privateOutput == privateInput.decls && privateReport == {})
+  state := state.check "private/private exact output is kernel-valid"
+    (← kernelChecks { privateInput with decls := privateOutput })
+
+  let publicInput := collisionInput privateA `X
+  let .ok publicAliases := aliasesOf publicInput
+    | throw <| IO.userError "cannot plan private/public source aliases"
+  state := state.check "public identity wins even when it occurs second"
+    ((publicAliases.build? privateA).isSome && publicAliases.build? `X == none)
+  let (publicOutput, publicReport) ← runExport publicInput
+  state := state.check "private/public replay preserves exact source records and report"
+    (publicOutput == publicInput.decls && publicReport == {})
+  state := state.check "private/public exact output is kernel-valid"
+    (← kernelChecks { publicInput with decls := publicOutput })
+
+  let publicFirstInput := collisionInput `X privateA
+  let .ok publicFirstAliases := aliasesOf publicFirstInput
+    | throw <| IO.userError "cannot plan public/private source aliases"
+  state := state.check "public identity also wins when it occurs first"
+    ((publicFirstAliases.build? privateA).isSome && publicFirstAliases.build? `X == none)
+  let (publicFirstOutput, publicFirstReport) ← runExport publicFirstInput
+  state := state.check "public/private replay preserves both later references"
+    (publicFirstOutput == publicFirstInput.decls && publicFirstReport == {} &&
+      (← kernelChecks { publicFirstInput with decls := publicFirstOutput }))
+
+  -- The generated-record boundary is the same exhaustive record transform as
+  -- source replay, including the otherwise easy-to-miss projection type name.
+  let some privateBuild := publicAliases.build? privateA
+    | throw <| IO.userError "private source name has no replay alias"
+  let generated : EDecl := .defn `Generated.helper [] (.const privateA [])
+    (.proj privateA 0 (.const privateA [])) (.regular 0) "safe" [privateA]
+  let replayGenerated := publicAliases.buildRecord generated
+  state := state.check "generated records use the replay source identity"
+    (match replayGenerated with
+      | .defn _ _ (.const typeName _) (.proj projectionName _ (.const valueName _)) _ _ all =>
+        typeName == privateBuild && projectionName == privateBuild &&
+          valueName == privateBuild && all == [privateBuild]
+      | _ => false)
+  state := state.check "every generated-record source alias inverts exactly"
+    (publicAliases.exactRecord replayGenerated == generated)
+
+  let atomicInput : Export :=
+    { metaLine := .null
+      decls := #[.induct [emptyInductiveType privateA, emptyInductiveType privateB] [] []] }
+  let atomicRejected ← try
+    discard <| runExport atomicInput
+    pure false
+  catch error =>
+    pure <| (toString error).contains "collision moves inductive role"
+  state := state.check "one atomic inductive collision fails closed before replay" atomicRejected
+
+  -- Occupying salt zero forces the bounded deterministic root search to use
+  -- another spelling without changing the chosen class survivor.
+  let occupied := Name.str (Name.num `_inductive_models_source_alias 0) "taken"
+  let saltedInput := { privateInput with decls := privateInput.decls.push (typeAxiom occupied) }
+  let .ok saltedAliases := aliasesOf saltedInput
+    | throw <| IO.userError "cannot plan salted source alias"
+  state := state.check "reserved source spelling deterministically advances alias salt"
+    ((saltedAliases.build? privateB).any fun build =>
+      (Name.num `_inductive_models_source_alias 1).isPrefixOf build)
+
+  IO.println s!"source replay aliases: {state.passed} passed, {state.failed.size} failed"
+  for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
+  return if state.failed.isEmpty then 0 else 1
