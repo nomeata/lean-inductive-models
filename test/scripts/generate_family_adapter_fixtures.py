@@ -36,6 +36,12 @@ def grouped_binders(prefix: str, count: int, type_: str) -> str:
     return f" ({names} : {type_})"
 
 
+def unique_counts(values: Sequence[int]) -> tuple[int, ...]:
+    if any(value < 0 for value in values):
+        raise ValueError("fixture counts must be nonnegative")
+    return tuple(dict.fromkeys(values))
+
+
 def emit_direct(arity: int) -> tuple[str, str]:
     name = f"GeneratedDirect{arity}"
     fields = grouped_binders("child", arity, name)
@@ -123,27 +129,32 @@ class FixtureMatrix:
         sections: list[str] = []
         exported = ["GeneratedIndex", "GeneratedKey", "GeneratedPayload", "GeneratedList"]
 
-        for arity in self.arities:
+        arities = unique_counts(self.arities)
+        member_counts = unique_counts(self.member_counts)
+        constructor_counts = unique_counts(self.constructor_counts)
+        index_arities = unique_counts(self.index_arities)
+
+        for arity in arities:
             for emitter in (emit_direct, emit_dependent, emit_infinitary, emit_nested):
                 name, source = emitter(arity)
                 exported.append(name)
                 sections.append(source)
 
-        occurrence_samples = tuple(dict.fromkeys(self.arities))
-        for index_arity in self.index_arities:
+        occurrence_samples = arities
+        for index_arity in index_arities:
             for occurrences in occurrence_samples:
                 name, source = emit_indexed(index_arity, occurrences)
                 exported.append(name)
                 sections.append(source)
 
         constructor_occurrences = max(occurrence_samples, default=0)
-        for constructors in self.constructor_counts:
+        for constructors in constructor_counts:
             name, source = emit_constructor_family(constructors, constructor_occurrences)
             exported.append(name)
             sections.append(source)
 
         mutual_occurrences = max(occurrence_samples, default=0)
-        for members in self.member_counts:
+        for members in member_counts:
             if members == 0:
                 continue
             names, source = emit_mutual(members, mutual_occurrences)

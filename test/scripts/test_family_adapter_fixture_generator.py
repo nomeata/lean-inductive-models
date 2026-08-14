@@ -58,6 +58,15 @@ class FamilyAdapterFixtureGeneratorTest(unittest.TestCase):
         self.assertIn("inductive GeneratedIndexed0x0 : Type where", source)
         self.assertNotIn("GeneratedMutual0", source)
 
+    def test_duplicate_samples_do_not_duplicate_declarations(self) -> None:
+        source = GENERATOR.FixtureMatrix(
+            arities=(3, 3), member_counts=(2, 2),
+            constructor_counts=(3, 3), index_arities=(2, 2)
+        ).render()
+        self.assertEqual(source.count("inductive GeneratedDirect3 :"), 1)
+        self.assertEqual(source.count("inductive GeneratedConstructors3x3 :"), 1)
+        self.assertEqual(source.count("mutual\ninductive GeneratedMutual2x3_0 :"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()
