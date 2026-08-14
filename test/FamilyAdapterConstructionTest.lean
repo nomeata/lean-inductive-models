@@ -357,6 +357,7 @@ def publicRecursorsComplete (plan : FamilyAdapterPlan)
       plan.members.all fun member =>
         (recursors.find? (·.member == member.key)).any fun adapter =>
           adapter.implementationRecursor == member.implementationRecursor &&
+            !adapter.callAgreement.isAnonymous &&
             adapter.motives.size == member.recursorMotiveArity &&
             adapter.motives.all (·.recursor == member.key) &&
             adapter.minors.size == member.recursorMinorArity &&

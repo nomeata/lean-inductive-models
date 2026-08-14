@@ -255,6 +255,10 @@ structure PublicRecursorCertificate where
   adapter : Name
   exactType : Expr
   implementationRecursor : Name
+  /-- Kernel-checked equality between one exact fresh recursor call at the
+  backward image of a private major and the installed private call under the
+  paired finite prefix. -/
+  callAgreement : Name
   motives : Array PublicRecursorMotiveCertificate
   minors : Array PublicMinorConstructorCertificate
   rules : Array RuleKey

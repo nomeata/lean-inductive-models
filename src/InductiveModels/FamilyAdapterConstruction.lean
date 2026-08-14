@@ -814,6 +814,9 @@ private def publicConstructorAdapterName (root : Name) (constructor : Constructo
 private def publicRecursorAdapterName (root : Name) (member : MemberKey) : Name :=
   prototypeName root member.owner `publicRecursor
 
+private def publicRecursorCallAgreementName (root : Name) (member : MemberKey) : Name :=
+  prototypeName root member.owner `publicRecursorCallAgreement
+
 private def publicMinorConstructorAdapterName (root : Name) (member : MemberKey)
     (minorIndex : Nat) : Name :=
   prototypeName root (member.owner.mkNum minorIndex) `publicMinorConstructor
@@ -2513,6 +2516,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
   return (minorDeclarations.push declaration,
     { member := member.key, adapter := name, exactType := publicType,
       implementationRecursor := member.implementationRecursor,
+      callAgreement := publicRecursorCallAgreementName root member.key,
       motives := motiveCertificates, minors := minorCertificates,
       rules := member.sourceRules })
 
