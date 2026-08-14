@@ -98,7 +98,7 @@ def plannedDiscardingSourceRejected (scratch path text : String) : IO Bool := do
 /-- Exercise the checked no-output input tee without retaining declaration ASTs.
 The certified case must decode from the parser's transferred arena and may
 then release the exact raw fallback snapshot. -/
-def directInputReplayAccepted (scratch path text : String)
+def plannedInputReplayAccepted (scratch path text : String)
     (expected : Array EDecl) (expectedRootCount? : Option Nat := none) : IO Bool := do
   IO.FS.writeFile path text
   let cleanedDirectory ← IO.mkRef (none : Option System.FilePath)
@@ -135,7 +135,7 @@ def directInputReplayAccepted (scratch path text : String)
 /-- Arena overwrites are parser-compatible but cannot be decoded from one
 completed arena. They must reject declaration replay and preserve the exact
 consumed input snapshot for the ordinary parser fallback. -/
-def directInputFallbackExact (scratch path text : String) : IO Bool := do
+def plannedInputFallbackExact (scratch path text : String) : IO Bool := do
   IO.FS.writeFile path text
   let ordinary ← parseHandleAt path
   let cleanedDirectory ← IO.mkRef (none : Option System.FilePath)
@@ -163,7 +163,7 @@ def directInputFallbackExact (scratch path text : String) : IO Bool := do
 /-- Compare compact random replay with the ordinary parser on a checked-in
 fixture. Together the selected fixtures exercise every declaration variant
 and inductive recursor-rule RHS roots. -/
-def directInputFixtureParity (scratch path : String) : IO Bool := do
+def plannedInputFixtureParity (scratch path : String) : IO Bool := do
   let .ok ordinary ← parseHandleAt path | return false
   Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.PlannedInputTee.create workspace
@@ -321,8 +321,8 @@ def main (args : List String) : IO UInt32 := do
   let rawCanonical := rawMeta ++ lines firstSplit.arena ++ rawFirstDecl ++
     lines secondSplit.arena ++ rawSecondDecl
   state := state.check
-      "direct input replays declarations from the transferred arena and cleans its workspace" <|
-    ← directInputReplayAccepted scratch rawCanonicalPath rawCanonical #[first, second]
+      "planned input replays declarations from the transferred arena and cleans its workspace" <|
+    ← plannedInputReplayAccepted scratch rawCanonicalPath rawCanonical #[first, second]
   let compactArenaInput := lines #[
     "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"CompactArena\"}}",
     "{\"ie\":0,\"sort\":0}",
@@ -331,10 +331,10 @@ def main (args : List String) : IO UInt32 := do
   let compactArenaDeclaration : EDecl := .ax `CompactArena [] (.sort .zero) false
   state := state.check
       "declaration replay retains only directly referenced expression roots" <|
-    ← directInputReplayAccepted scratch compactArenaPath compactArenaInput
+    ← plannedInputReplayAccepted scratch compactArenaPath compactArenaInput
       #[compactArenaDeclaration] (some 1)
   state := state.check "compact replay preserves every ordinary declaration root kind" <|
-    ← directInputFixtureParity scratch s!"{root}/test/fixtures/inductive-models/w_core.ndjson"
+    ← plannedInputFixtureParity scratch s!"{root}/test/fixtures/inductive-models/w_core.ndjson"
   IO.FS.writeFile rawCanonicalPath rawCanonical
   let captured ← Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
@@ -527,8 +527,8 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "explicit repeated arena IDs overwrite in both readers" <|
     bothHaveDecls (InductiveModels.parse overwrite) (← parseHandleAt overwritePath) #[overwrittenDecl]
   state := state.check
-      "direct input preserves exact overwrite fallback and cleans its workspace" <|
-    ← directInputFallbackExact scratch overwritePath overwrite
+      "planned input preserves exact overwrite fallback and cleans its workspace" <|
+    ← plannedInputFallbackExact scratch overwritePath overwrite
 
   -- Parser compatibility is wider than the raw-hoist contract.  Each axis is
   -- certified independently and any gap, reorder, or overwrite selects the
@@ -587,12 +587,12 @@ def main (args : List String) : IO UInt32 := do
     (← rawFastPathRejected rawBlankPath rawBlank)
   state := state.check "raw certification rejects CRLF records"
     (← rawFastPathRejected rawCrlfPath rawCrlf)
-  state := state.check "direct input replay accepts noncanonical JSON spacing" <|
-    ← directInputReplayAccepted scratch rawWhitespacePath rawWhitespace #[first, second]
+  state := state.check "planned input replay accepts noncanonical JSON spacing" <|
+    ← plannedInputReplayAccepted scratch rawWhitespacePath rawWhitespace #[first, second]
   state := state.check "planned source falls back for missing final LF" <|
     ← plannedSourceRejected scratch rawNoLfPath rawNoLf
-  state := state.check "direct input preserves exact EOF-declaration fallback" <|
-    ← directInputFallbackExact scratch rawNoLfPath rawNoLf
+  state := state.check "planned input preserves exact EOF-declaration fallback" <|
+    ← plannedInputFallbackExact scratch rawNoLfPath rawNoLf
   state := state.check "planned source falls back for CRLF input" <|
     ← plannedSourceRejected scratch rawCrlfPath rawCrlf
   state := state.check "declaration-discarding planned source preserves raw-certificate fallback" <|
@@ -751,7 +751,7 @@ def main (args : List String) : IO UInt32 := do
     bothHaveDecls (InductiveModels.parse legacyOpaque) (← parseHandleAt parserCompatibilityPath)
       #[legacyOpaqueDecl]
   state := state.check "compact random replay preserves opaque declaration roots" <|
-    ← directInputReplayAccepted scratch parserCompatibilityPath legacyOpaque #[legacyOpaqueDecl]
+    ← plannedInputReplayAccepted scratch parserCompatibilityPath legacyOpaque #[legacyOpaqueDecl]
 
   for path in paths do removeIfPresent path
   IO.println s!"source spool: {state.passed} passed, {state.failed.size} failed"

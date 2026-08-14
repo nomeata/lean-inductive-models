@@ -1222,7 +1222,7 @@ def closeModelIsland (template : Export) (main : Environment)
     return .error "generated declaration retained an unregistered source replay alias"
   -- Generation appends every declaration in dependency order. The island is
   -- emitted exactly in that constructive order immediately before `owner`;
-  -- no whole-island or whole-output ordering oracle is part of the route.
+  -- no additional island or stream ordering pass is part of the route.
   let generated := exactRecords
   -- Statement correspondence is an export-syntax check, so it can run while
   -- the owner is still absent from the persistent replay environment. Source
@@ -1916,7 +1916,7 @@ island close. -/
 This regression seam deliberately exposes neither `FilterState` nor a live
 environment, so a test cannot mutate subsequent generation. -/
 structure FilterSourceStep where
-  scheduledOrdinal : Nat
+  sourceOrdinal : Nat
   rawOrdinal : Nat
   sourceNames : Array Name
   sourceIsInductive : Bool
@@ -2192,15 +2192,15 @@ def SourceCensus.summariesForOrder (census : SourceCensus)
     throw "source summary order has the wrong number of records"
   let mut seen := Array.replicate census.summaries.size false
   let mut summaries : Array Order.DeclSummary := #[]
-  for scheduledOrdinal in [:order.size] do
-    let rawOrdinal := order[scheduledOrdinal]!
+  for viewOrdinal in [:order.size] do
+    let rawOrdinal := order[viewOrdinal]!
     unless rawOrdinal < census.summaries.size do
       throw s!"source summary order contains out-of-range record {rawOrdinal}"
     if seen[rawOrdinal]! then
       throw s!"source summary order repeats record {rawOrdinal}"
     seen := seen.set! rawOrdinal true
     summaries := summaries.push
-      { census.summaries[rawOrdinal]! with ordinal := scheduledOrdinal }
+      { census.summaries[rawOrdinal]! with ordinal := viewOrdinal }
   return summaries
 
 /-- Rebind source-family certificates to a reordered declaration view without
@@ -2259,7 +2259,7 @@ private structure FilterState where
   report : Report := {}
   compactIslands : Array CompactIsland := #[]
   compactRecords : Array CompactRecord := #[]
-  scheduledOrdinal : Nat := 0
+  sourceOrdinal : Nat := 0
   islandStatements : Check.StatementReport :=
     { statementsChecked := 0, violations := #[] }
   invalidBasis : Std.HashSet Name := {}
@@ -2273,7 +2273,7 @@ private inductive FilterFeedResult where
   previous state while `feedSource` appends to its accumulated arrays. -/
   | unreplayable (report : Report) (sourceSteps : Array FilterSourceStep)
 
-/-- Consume one declaration from the already dependency-ordered logical source
+/-- Consume one declaration from the raw-order logical source
 stream.  Every mutable field which survives this call is explicit in
 `FilterState`; `out`, `pending`, and the replay fork remain owner-local. -/
 private def FilterState.feedSource (state : FilterState) (context : FilterContext)
@@ -2289,14 +2289,14 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let constructionNormalizer := context.constructionNormalizer
   let sourceAliases := context.sourceAliases
   let sourceSummaries := context.sourceSummaries
-  let scheduledOrdinal := state.scheduledOrdinal
-  let sourceSummary := sourceSummaries[scheduledOrdinal]!
+  let sourceOrdinal := state.sourceOrdinal
+  let sourceSummary := sourceSummaries[sourceOrdinal]!
   let sourceUsesAlias := sourceRecordUsesAliases sourceAliases sourceSummary d
   let replayD := if sourceUsesAlias then sourceAliases.buildRecord d else d
-  let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[scheduledOrdinal]?) with
+  let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[sourceOrdinal]?) with
     | some record => record
     | none => (Check.globalExtraRecordsWithIndex sourceSyntax #[d])[0]!
-  let sourceFamilyRecord := match context.sourceFamilyRecords?.bind (·[scheduledOrdinal]?) with
+  let sourceFamilyRecord := match context.sourceFamilyRecords?.bind (·[sourceOrdinal]?) with
     | some records => records
     | none => sourceSyntax.sourceFamilyCertificatesForRecord x d
   let rawOrdinals := context.rawOrdinals
@@ -2595,13 +2595,13 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   if compactMode then
     let some firstName := d.names.head? | throwError "source declaration has no name"
     let some rawOrdinal := rawOrdinals[firstName]?
-      | throwError "scheduled source declaration {firstName} lost its raw ordinal"
+      | throwError "source declaration {firstName} lost its raw ordinal"
     let modeledIsland? ← if modeledSourceFamilies.isEmpty then pure none else
       match compactIslands.size with
       | 0 => throwError "modeled source family {d.names} has no committed generated island"
       | size + 1 => pure (some size)
     let row : CompactRecord := {
-      summary := sourceSummaries[scheduledOrdinal]!
+      summary := sourceSummaries[sourceOrdinal]!
       globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtra
       families := sourceFamilyRecord ++
         (modeledSourceFamilies.map fun family =>
@@ -2620,7 +2620,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     let some rawOrdinal := rawOrdinals[firstName]?
       | throwError "logical source declaration {firstName} lost its raw ordinal"
     sourceSteps := sourceSteps.push {
-      scheduledOrdinal
+      sourceOrdinal
       rawOrdinal
       sourceNames := d.names.toArray
       sourceIsInductive := d matches .induct ..
@@ -2631,7 +2631,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     adapterShadows := adapterShadows ++ islandAdapterShadows
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, compactRecords,
-    scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
+    sourceOrdinal := sourceOrdinal + 1, islandStatements, invalidBasis,
     persistentSupportOrigins, sourceSteps, adapterShadows }
 
 /-- Complete compact ordering and checking after the logical source stream has
@@ -2748,7 +2748,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         throwError "normalized source-name collision moves quotient role {name}; \
           collision-safe quotient replay is not supported"
   let sourceOrder := Array.range sourceCensus.summaries.size
-  let scheduled := if plannedCensus then x else
+  let sourceView := if plannedCensus then x else
     { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
   -- Source records are consumed in their original stream order. A model
   -- owner whose fixed support occurs later declines at that owner; the normal
@@ -2791,9 +2791,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     | .ok summaries => pure summaries
     | .error error => throwError "cannot rebind frozen source summaries: {error}"
   let sourceGlobalExtras? := if plannedCensus then none else
-    some (Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls)
+    some (Check.globalExtraRecordsWithIndex sourceSyntax sourceView.decls)
   let sourceFamilyRecords? := if plannedCensus then none else
-    some (sourceCensus.familyCertificateRecords x scheduled)
+    some (sourceCensus.familyCertificateRecords x sourceView)
   let rawOrdinals := sourceCensus.rawOrdinals
   let reserved := sourceCensus.reserved
   let constructionReserved := reserved.fold (init := reserved) fun names name =>

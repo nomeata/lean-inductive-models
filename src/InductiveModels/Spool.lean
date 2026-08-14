@@ -314,24 +314,24 @@ def PlannedSourceReader.createFromInputTee (tee : PlannedInputTee)
     let rawMetadata ← tee.raw.path.symlinkMetadata
     let declarationMetadata ← tee.declarations.path.symlinkMetadata
     unless rawMetadata.type == .file && declarationMetadata.type == .file do
-      return .error "direct input spool is not backed by physical files"
+      return .error "planned input spool is not backed by physical files"
     unless rawMetadata.byteSize == sizes.raw &&
         declarationMetadata.byteSize == sizes.declarations do
-      return .error "direct input spool changed after completion"
+      return .error "planned input spool changed after completion"
     let declarations ← IO.FS.Handle.mk tee.declarations.path .read
     let position ← IO.mkRef 0
     let readCalls ← IO.mkRef 0
     return .ok <| PlannedSourceReader.mk arena declarations position readCalls
       sizes.declarations certificate.declarations tee.provenance
   catch error =>
-    return .error s!"cannot open direct input spool: {error}"
+    return .error s!"cannot open planned input spool: {error}"
 
 /-- Number of source declaration records certified for this reader. -/
 def PlannedSourceReader.size (reader : PlannedSourceReader) : Nat := reader.spans.size
 
 /-- Number of declaration-read requests made through this reader. This
-value-only observer lets retention tests distinguish the one Phase-A pass plus
-owner rereads from accidental materialization or a second all-source pass. -/
+value-only observer lets retention tests distinguish the one declaration-wise
+source pass from accidental materialization or a second all-source pass. -/
 def PlannedSourceReader.readCount (reader : PlannedSourceReader) : IO Nat :=
   reader.readCalls.get
 

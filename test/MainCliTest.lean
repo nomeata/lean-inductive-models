@@ -853,7 +853,7 @@ def main (args : List String) : IO UInt32 := do
   -- rather than raw bytes.
   for (label, fixture) in #[
       ("nested multi-model island", nested),
-      ("late scheduled support", s!"{root}/test/fixtures/inductive-models/prim_late_basis.ndjson")] do
+      ("late source support", s!"{root}/test/fixtures/inductive-models/prim_late_basis.ndjson")] do
     let args := #["--no-check-output", "--no-type-check-output", fixture]
     let legacy ← runInductiveModelsLegacy binary args.toList
     let full ← runInductiveModels binary args.toList
@@ -887,7 +887,7 @@ def main (args : List String) : IO UInt32 := do
   let directFallbackBefore ← System.FilePath.readDir scratch
   let directFallback ← runInductiveModels binary directFallbackArgs (some stabilityMiss.render)
   let directFallbackAfter ← System.FilePath.readDir scratch
-  state := state.check "generated-only checking ignores whole-output provider order" <|
+  state := state.check "generated-only checking does not inspect source provider order" <|
     directFallback.exitCode == directFallbackLegacy.exitCode && directFallback.stdout.isEmpty &&
       directFallbackLegacy.stdout.isEmpty && directFallback.stderr == directFallbackLegacy.stderr &&
       hasDiagnostic directFallback.stderr "output kernel check: accepted"

@@ -809,7 +809,7 @@ def run (root : String) : IO UInt32 := do
       feedRun.env.constants.contains `FeedConsumer
   state := state.check "one-record trace preserves output and records logical/raw ordinals" <|
     feedTrace.output.decls == feedRun.output.decls && feedTrace.report == feedRun.report &&
-      feedTrace.steps.map (·.scheduledOrdinal) == #[0, 1] &&
+      feedTrace.steps.map (·.sourceOrdinal) == #[0, 1] &&
       feedTrace.steps.map (·.rawOrdinal) == #[0, 1] &&
       feedTrace.steps.map (·.sourceNames) == #[#[`FeedProvider], #[`FeedConsumer]] &&
       feedTrace.steps.all fun step =>
@@ -1093,7 +1093,7 @@ def run (root : String) : IO UInt32 := do
     latePUnitTrace.output.decls == latePUnitRun.output.decls &&
       latePUnitTrace.report == latePUnitRun.report &&
       latePUnitTrace.steps.size == latePUnitRun.input.decls.size &&
-      latePUnitTrace.steps.map (·.scheduledOrdinal) ==
+      latePUnitTrace.steps.map (·.sourceOrdinal) ==
         Array.range latePUnitRun.input.decls.size &&
       latePUnitTrace.steps.map (·.rawOrdinal) ==
         Array.range latePUnitRun.input.decls.size &&

@@ -537,7 +537,7 @@ private def ownerReference? (targets : Std.HashSet Name) : EDecl → Option (Nam
 
 /-! ## Name-only owner-reference certificates
 
-The compact whole-output checker no longer retains an inductive record's
+The compact structural checker does not retain an inductive record's
 expressions when final model-family discovery runs.  Capture the exact ordered
 reference traversal while that record is live, so intersecting this array with
 one discovered family's names later reproduces [`ownerReference?`] without an
@@ -1848,7 +1848,7 @@ def SyntaxIndex.ofSourceIncremental (x : Export) : SyntaxIndex :=
   (x.decls.foldl (fun builder declaration => builder.push declaration)
     ({} : SyntaxIndex.Builder)).freeze
 
-/-- Build persistent generation-time source tables without the whole-output
+/-- Build persistent generation-time source tables without the final
 unexpected-slot sweep. Every owner template is attached after indexed
 discovery, breaking the former per-owner whole-export reconstruction. -/
 def SyntaxIndex.ofSource (x : Export) : SyntaxIndex :=
@@ -2034,17 +2034,17 @@ def checkReport (x : Export) : Report :=
   { familiesChecked := families.size,
     violations := checkFamiliesWithIndex x index families true }
 
-/-! ## Compact whole-output certificates
+/-! ## Compact output certificates
 
 Once compact ordering succeeds, model records precede their owners. An owner
 reference to a model name reinforces that order rather than forming a cycle,
 so the exact ordered owner-reference trace is retained as well. The remaining
-whole-output check can therefore release declarations and expression graphs.
+compact structural pass can therefore release declarations and expression graphs.
 -/
 
-/-- Name-only whole-output certificate captured while one family's source and
-model declarations are live. `localViolations` excludes order/backreference
-checks and the final whole-stream extra-rule census. -/
+/-- Name-only compact certificate captured while one family's source and model
+declarations are live. `localViolations` excludes order/backreference checks
+and the final stream-level extra-rule census. -/
 structure CompactFamilyCertificate where
   owner : Name
   publicNames : Array Name

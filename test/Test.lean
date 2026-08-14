@@ -845,11 +845,11 @@ def runOne (root : String) (a : TAcc) (r : Row)
     s!"{name}: the export's recursors differ from Lean's own: {rep.recMismatch}"
   -- The compact graph retains no declaration values.  It must nevertheless
   -- select exactly the same final order (or error) as the full export pass.
-  -- Source scheduling hoists `prim_graph_pre`'s exact quotient support before
-  -- the owner which derives `funext`.  Island-local ordering must preserve that
+  -- `prim_graph_pre`'s exact quotient support precedes the owner which derives
+  -- `funext`. Island-local emission must preserve that
   -- boundary: `Quot.lift`, then the derived `funext`, then its source owner.
   -- The compact sequence is consequently already an ordinary-order fixed
-  -- point; the full-export oracle below independently checks the same order.
+  -- point; the retained-export reference below independently checks the same order.
   let compact := Order.summaries { x with decls }
   let compactFixed := Order.summariesAreOrdered compact
   let compactOrder := Order.summaryRecordOrder compact
@@ -858,7 +858,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
     | .ok compact, .ok full => compact == full
     | .error compact, .error full => compact == full
     | _, _ => false
-  a := check a sameOrder s!"{name}: compact ordering differs from the full-export oracle"
+  a := check a sameOrder s!"{name}: compact ordering differs from the retained-export reference"
   if name == "prim_graph_pre" then
     let indexOf := fun target => compact.findIdx? fun summary => summary.introduced.contains target
     let positionIn := fun order target => do
@@ -876,7 +876,7 @@ def runOne (root : String) (a : TAcc) (r : Row)
         | _, _, _, _, _, _ => false
       | .error _ => false
     a := check a (compactFixed && quotientBoundary)
-      "prim_graph_pre: scheduled quotient support does not precede derived funext and its owner"
+      "prim_graph_pre: quotient support does not precede derived funext and its owner"
   -- axis 4: the round trip
   let out := ({ x with decls }).render
   match InductiveModels.parse out with

@@ -305,7 +305,7 @@ def run (root : String) : IO UInt32 := do
     summary 5 #[`Owner] #[`Support] (owner := some `Owner)
       (modelSlots := #[Naming.modelName `Owner]),
     summary 6 #[`Later] #[`Owner]]
-  state := state.check "scheduled source plus ordered island is a final fixed point"
+  state := state.check "source plus constructively ordered island is a final fixed point"
     (Order.summariesAreOrdered composed)
   let misplaced := composed.swap 4 5
   state := state.check "a public slot after its owner is not a fixed point"
