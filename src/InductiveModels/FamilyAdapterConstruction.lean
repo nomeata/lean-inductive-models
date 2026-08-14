@@ -33,6 +33,8 @@ inductive ConstructionIssue where
   | dependentMinorTransport (rule : RuleKey) (binderIndex : Nat)
   | missingInstalledIota (rule : RuleKey) (iota : Name)
   | installedIotaTypeMismatch (rule : RuleKey) (iota : Name)
+  | missingPublicIotaInput (rule : RuleKey)
+  | inconsistentPublicIotaHypothesis (rule : RuleKey) (binderIndex : Nat)
   | recursorResultMismatch (member : MemberKey)
   | malformedRecursorMinor (member : MemberKey) (minorIndex : Nat)
   | dependentRecursorMinorTransport (member : MemberKey) (minorIndex binderIndex : Nat)
@@ -1220,6 +1222,58 @@ def buildRuleCompatibilityPrototypes (plan : FamilyAdapterPlan)
     setEnv saved
     return .error issue
   | .ok (.ok built) => return .ok built
+
+/-- Resolve the exact, finite inputs of every public-iota proof. Shared source
+occurrences are grouped only when the installed private minor assigns them the
+same literal IH binder, motive slot, and checked map boundary. -/
+def derivePublicIotaProofSchemas (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) :
+    Except ConstructionIssue (Array PublicIotaProofSchema) := do
+  let mut schemas := #[]
+  for rule in plan.rules do
+    let some owner := plan.members.find? (·.key == rule.key.recursorOwner)
+      | throw (.missingPublicIotaInput rule.key)
+    let some memberCertificate := certificate.members.find? (·.key == owner.key)
+      | throw (.missingPublicIotaInput rule.key)
+    let some telescope := certificate.telescopes.find? (·.constructor == rule.key.constructor)
+      | throw (.missingPublicIotaInput rule.key)
+    let some compatibility := certificate.rules.find? (·.key == rule.key)
+      | throw (.missingPublicIotaInput rule.key)
+    let keyed := certificate.minorHypotheses.filter (·.rule == rule.key)
+    unless keyed.size == rule.occurrences.size &&
+        rule.occurrences.all fun occurrence => keyed.any (·.occurrence == occurrence) do
+      throw (.missingPublicIotaInput rule.key)
+    let mut hypotheses := #[]
+    for binderIndex in compatibility.transportedHypotheses do
+      let grouped := keyed.filter (·.binderIndex == binderIndex)
+      let some first := grouped[0]?
+        | throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
+      unless first.minorIndex == compatibility.minorIndex && grouped.all fun current =>
+          current.minorIndex == first.minorIndex && current.motiveIndex == first.motiveIndex do
+        throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
+      let mut occurrenceCertificates : Array OccurrenceCertificate := #[]
+      for current in grouped do
+        let some occurrence := certificate.occurrences.find? (·.key == current.occurrence)
+          | throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
+        occurrenceCertificates := occurrenceCertificates.push occurrence
+      let some firstOccurrence := occurrenceCertificates[0]?
+        | throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
+      unless occurrenceCertificates.all (·.maps == firstOccurrence.maps) do
+        throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
+      hypotheses := hypotheses.push
+        { rule := rule.key, minorIndex := first.minorIndex, binderIndex,
+          motiveIndex := first.motiveIndex,
+          occurrences := grouped.map (·.occurrence), maps := firstOccurrence.maps }
+    unless (hypotheses.flatMap (·.occurrences)).size == rule.occurrences.size &&
+        keyed.all fun current => hypotheses.any fun step =>
+          step.binderIndex == current.binderIndex && step.occurrences.contains current.occurrence do
+      throw (.missingPublicIotaInput rule.key)
+    schemas := schemas.push
+      { key := rule.key, owner := owner.key, constructor := rule.key.constructor,
+        ownerMaps := memberCertificate.maps, telescope,
+        implementationIota := compatibility.implementationIota,
+        minorCompatibility := compatibility.compatibility, hypotheses }
+  return schemas
 
 private def minorFieldValues? (constructor : ConstructorPlan)
     (binders : Array Expr) (result : Expr) (adapter? : Option Name := none) :

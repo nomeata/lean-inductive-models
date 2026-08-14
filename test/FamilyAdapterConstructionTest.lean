@@ -254,9 +254,34 @@ def compatibilityName (root : Name) (rule : RuleKey) : Name :=
   Name.str (root.append (rule.recursor.append rule.constructor.constructor))
     "minorCompatibility"
 
+def iotaSchemasComplete (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) : Bool :=
+  match FamilyAdapter.derivePublicIotaProofSchemas plan certificate with
+  | .error _ => false
+  | .ok schemas => schemas.size == plan.rules.size && plan.rules.all fun rule =>
+    (schemas.find? (·.key == rule.key)).any fun schema =>
+      let keyed := certificate.minorHypotheses.filter (·.rule == rule.key)
+      let compatibility := certificate.rules.find? (·.key == rule.key)
+      schema.owner == rule.key.recursorOwner && schema.constructor == rule.key.constructor &&
+        schema.implementationIota == rule.implementationIota &&
+        schema.telescope.constructor == rule.key.constructor &&
+        compatibility.any fun compatibility =>
+          schema.minorCompatibility == compatibility.compatibility &&
+            schema.hypotheses.map (·.binderIndex) == compatibility.transportedHypotheses &&
+            schema.hypotheses.all fun step =>
+              !step.occurrences.isEmpty && step.rule == rule.key &&
+                step.minorIndex == compatibility.minorIndex &&
+                (plan.members.find? (·.key == rule.key.recursorOwner)).any fun member =>
+                  step.motiveIndex < member.recursorMotiveArity &&
+                    step.occurrences.all fun occurrence =>
+                      keyed.any fun hypothesis => hypothesis.occurrence == occurrence &&
+                        hypothesis.binderIndex == step.binderIndex &&
+                        hypothesis.motiveIndex == step.motiveIndex
+
 def ruleCertificatesComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (environment : Environment) : Bool :=
-  certificate.rules.size == plan.rules.size && plan.rules.all fun rule =>
+  iotaSchemasComplete plan certificate && certificate.rules.size == plan.rules.size &&
+    plan.rules.all fun rule =>
     let expectedBinders := uniqueBinderIndices <|
       (certificate.minorHypotheses.filter (·.rule == rule.key)).map (·.binderIndex)
     (certificate.rules.find? (·.key == rule.key)).any fun compatibility =>
