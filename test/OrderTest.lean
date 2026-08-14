@@ -213,7 +213,7 @@ def runFilterStreamedState (input : Export)
   let context : Core.Context :=
     { fileName := "<order-streamed-test>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
-  let emit : StreamOutputEmitter := fun event => liftIO <| collected.modify fun declarations =>
+  let emit : StreamOutputEmitter := fun event => collected.modify fun declarations =>
     match event with
     | .generatedIsland records => declarations ++ records
     | .source record => declarations.push record

@@ -217,19 +217,19 @@ private def runStreamingParsedGeneration (config : InductiveModels.Cli.Config)
         let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
           (InductiveModels.runFilterStreaming parsed false config
             (writeStreamEvent writer stream))) context { env }
-        pure (.ok result)
-      catch error => pure (.error (toString error))
+        pure (Except.ok result)
+      catch error => pure (Except.error (toString error))
       let (report, plan) ← match generated with
         | .ok result => pure result
         | .error message =>
           IO.eprintln s!"{input}: internal error: {message}"
-          return .rollback exitToolError
+          return InductiveModels.Output.TransactionResult.rollback exitToolError
       let writerState ← writer.get
       writerState.finish stream
       unless writerState.declarationsWritten ==
           plan.streamStats.sourceRecords + plan.streamStats.generatedRecords do
         IO.eprintln s!"{input}: internal error: streaming writer/driver counts disagree"
-        return .rollback exitToolError
+        return InductiveModels.Output.TransactionResult.rollback exitToolError
       finishStreamingVerdict config input report plan
   catch error =>
     IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
@@ -252,27 +252,29 @@ private def runStreamingPlannedGeneration (config : InductiveModels.Cli.Config)
         let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
           (InductiveModels.runFilterStreamingPlannedCensus planned reader false config
             (writeStreamEvent writer stream))) context { env }
-        pure (.ok result)
-      catch error => pure (.error (toString error))
+        pure (Except.ok result)
+      catch error => pure (Except.error (toString error))
       let (report, plan) ← match generated with
         | .ok result => pure result
         | .error message =>
           if config.outputTarget == "-" then
             (← writer.get).finish stream
             IO.eprintln s!"{input}: internal error: {message}"
-            return .rollback (.done exitToolError)
+            return InductiveModels.Output.TransactionResult.rollback (.done exitToolError)
           else
-            return .rollback (.fallback message)
+            return InductiveModels.Output.TransactionResult.rollback (.fallback message)
       let writerState ← writer.get
       writerState.finish stream
       unless writerState.declarationsWritten ==
           plan.streamStats.sourceRecords + plan.streamStats.generatedRecords do
         IO.eprintln s!"{input}: internal error: streaming writer/driver counts disagree"
-        return .rollback (.done exitToolError)
+        return InductiveModels.Output.TransactionResult.rollback (.done exitToolError)
       reportPlannedRouteSelected
       match ← finishStreamingVerdict config input report plan with
-      | .commit code => return .commit (.done code)
-      | .rollback code => return .rollback (.done code)
+      | .commit code =>
+        return InductiveModels.Output.TransactionResult.commit (.done code)
+      | .rollback code =>
+        return InductiveModels.Output.TransactionResult.rollback (.done code)
   catch error =>
     IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
     return .done exitToolError
@@ -358,6 +360,9 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
     if (unsupportedDeclines parsed generationReport).isEmpty then exitAccepted
     else exitDeclined
   match filterOutput with
+  | .streamed _ =>
+    IO.eprintln s!"{input}: internal error: streaming result escaped its output transaction"
+    return exitToolError
   | .discarded plan =>
     if config.checkOutput then
       unless plan.checkReport.violations.isEmpty do
