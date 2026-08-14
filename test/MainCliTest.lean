@@ -214,27 +214,21 @@ def main (args : List String) : IO UInt32 := do
     gatedOutput.exitCode == 1 && (← IO.FS.readFile gatedOutputPath) == gatedSentinel
   IO.FS.removeFile gatedOutputPath
 
-  -- A staged run may have committed an earlier owner's model before a later
-  -- source declaration fails kernel replay. The report verdict must reject
-  -- before sealing the island spool or opening the named output transaction.
-  let stagedReplayTarget : System.FilePath := s!"{scratch}/main-cli-staged-replay-output.ndjson"
-  IO.FS.writeFile stagedReplayTarget gatedSentinel
+  -- A later source replay failure must precede the named output transaction.
+  let replayTarget : System.FilePath := s!"{scratch}/main-cli-replay-output.ndjson"
+  IO.FS.writeFile replayTarget gatedSentinel
   let lateReplayCorruption := mapConstructor nestedExport `PT.node fun constructor =>
     { constructor with type := .sort .zero }
-  let stagedReplayRejected ← runInductiveModels binary
+  let replayRejected ← runInductiveModels binary
     ["--no-check", "--no-type-check-output", "-o",
-      stagedReplayTarget.toString, "-"] (some lateReplayCorruption.render)
-  let stagedReplayUntouched :=
-    stagedReplayRejected.exitCode == 1 &&
-      (← IO.FS.readFile stagedReplayTarget) == gatedSentinel &&
-      (stagedReplayRejected.stderr.splitOn
+      replayTarget.toString, "-"] (some lateReplayCorruption.render)
+  let replayUntouched :=
+    replayRejected.exitCode == 1 &&
+      (← IO.FS.readFile replayTarget) == gatedSentinel &&
+      (replayRejected.stderr.splitOn
         "kernel rejected an input declaration during generation:").length > 1
-  unless stagedReplayUntouched do
-    IO.eprintln s!"late staged replay diagnostic: exit={stagedReplayRejected.exitCode}, \
-      stderr={repr stagedReplayRejected.stderr}, target={repr (← IO.FS.readFile stagedReplayTarget)}"
-  state := state.check "late staged replay rejection leaves named output untouched"
-    stagedReplayUntouched
-  IO.FS.removeFile stagedReplayTarget
+  state := state.check "late replay rejection leaves named output untouched" replayUntouched
+  IO.FS.removeFile replayTarget
   IO.FS.removeFile invalidPath
 
   -- Kernel replay uses declaration dependencies internally, without applying
@@ -603,16 +597,12 @@ def main (args : List String) : IO UInt32 := do
   let fallbackRun ← runInductiveModelsAt binaryAbsolute.toString
     ["--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "missing staging root falls back without changing output" <|
+  state := state.check "actual output ignores a missing spool root" <|
     fallbackRun.exitCode == 0 && sameSemanticExport fallbackRun.stdout defaults.stdout &&
       hasDiagnostic fallbackRun.stderr "output backend: legacy"
   IO.FS.removeDir fallbackCwd
-  let leakedSpools ← System.FilePath.readDir scratch
-  state := state.check "successful staged parse removes its workspace" <|
-    !leakedSpools.any (fun entry => entry.fileName.startsWith "lean-inductive-models-spool-")
-
-  -- The default final kernel gate requires a complete AST and therefore uses
-  -- the legacy backend. The explicit opt-out remains the staged-mode boundary.
+  -- Every actual output uses one ordinary full-AST backend, independently of
+  -- whether the final output kernel gate is enabled.
   let observedDefault ← runInductiveModelsWithEnv binary [nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "ordinary default output kernel gate selects legacy output" <|
@@ -655,25 +645,24 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "legacy override excludes compact discard" <|
     discardedOverride.exitCode == discardedPlain.exitCode && discardedOverride.stdout.isEmpty &&
       hasDiagnostic discardedOverride.stderr "output backend: legacy"
-  let stagedNamedPath := s!"{scratch}/main-cli-staged-opt-out.ndjson"
-  removeIfPresent stagedNamedPath
-  let stagedNamed ← runInductiveModelsWithEnv binary
-    ["--no-type-check-output", "-o", stagedNamedPath, nested]
+  let fullNamedPath := s!"{scratch}/main-cli-full-opt-out.ndjson"
+  removeIfPresent fullNamedPath
+  let fullNamed ← runInductiveModelsWithEnv binary
+    ["--no-type-check-output", "-o", fullNamedPath, nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  let stagedNamedText ← if ← System.FilePath.pathExists stagedNamedPath then
-      IO.FS.readFile stagedNamedPath
+  let fullNamedText ← if ← System.FilePath.pathExists fullNamedPath then
+      IO.FS.readFile fullNamedPath
     else pure ""
-  state := state.check "output-kernel opt-out named output selects staged output" <|
-    stagedNamed.exitCode == defaults.exitCode && stagedNamed.stdout.isEmpty &&
-      hasDiagnostic stagedNamed.stderr "output backend: staged" &&
-      sameSemanticExport stagedNamedText defaults.stdout
-  removeIfPresent stagedNamedPath
-  state := state.check "staged named output leaves no transaction sibling" <|
+  state := state.check "output-kernel opt-out named output selects full output" <|
+    fullNamed.exitCode == defaults.exitCode && fullNamed.stdout.isEmpty &&
+      hasDiagnostic fullNamed.stderr "output backend: legacy" &&
+      sameSemanticExport fullNamedText defaults.stdout
+  removeIfPresent fullNamedPath
+  state := state.check "full named output leaves no transaction sibling" <|
     !(← hasOutputSibling scratch)
 
-  -- Parseable but noncanonical raw bytes are not eligible for mixed raw/staged
-  -- composition. Certification falls back before generation without changing
-  -- the accepted semantic output.
+  -- Parseable but noncanonical raw bytes retain the accepted semantic output
+  -- on the ordinary full-AST path.
   let noncanonicalInput := "\n" ++ nestedExport.render
   let noncanonicalDefault ← runInductiveModelsWithEnv binary
     ["--no-check", "--no-type-check-output", "-"]
@@ -787,35 +776,30 @@ def main (args : List String) : IO UInt32 := do
       ("late scheduled support", s!"{root}/test/fixtures/inductive-models/prim_late_basis.ndjson")] do
     let args := #["--no-check-output", "--no-type-check-output", "--no-mono-levels", fixture]
     let legacy ← runInductiveModelsLegacy binary args.toList
-    let staged ← runInductiveModels binary args.toList
-    state := state.check s!"opt-out staged {label} preserves report and exit" <|
-      staged.exitCode == legacy.exitCode && staged.stderr == legacy.stderr
-    state := state.check s!"opt-out staged {label} preserves semantic output and order" <|
-      sameSemanticExport staged.stdout legacy.stdout
+    let full ← runInductiveModels binary args.toList
+    state := state.check s!"opt-out full {label} preserves report and exit" <|
+      full.exitCode == legacy.exitCode && full.stderr == legacy.stderr
+    state := state.check s!"opt-out full {label} preserves semantic output and order" <|
+      sameSemanticExport full.stdout legacy.stdout
   let checkedLegacy ← runInductiveModelsLegacy binary ["--no-type-check-output", nested]
-  let checkedStaged ← runInductiveModels binary ["--no-type-check-output", nested]
-  state := state.check "opt-out staged compact output check preserves report and exit" <|
-    checkedStaged.exitCode == checkedLegacy.exitCode &&
-      checkedStaged.stderr == checkedLegacy.stderr
-  state := state.check "opt-out staged compact output check preserves semantic output and order" <|
-    sameSemanticExport checkedStaged.stdout checkedLegacy.stdout
-  -- The source snapshot can mention a public name which this run will only
-  -- generate later. Its early compact syntax certificate is deliberately
-  -- unavailable; the private staged attempt must rerun the ordinary filter,
-  -- preserving the exact report, exit, and output rather than surfacing an
-  -- internal error or publishing its partial spool.
+  let checkedFull ← runInductiveModels binary ["--no-type-check-output", nested]
+  state := state.check "opt-out full output check preserves report and exit" <|
+    checkedFull.exitCode == checkedLegacy.exitCode && checkedFull.stderr == checkedLegacy.stderr
+  state := state.check "opt-out full output check preserves semantic output and order" <|
+    sameSemanticExport checkedFull.stdout checkedLegacy.stdout
+  -- Actual output stays on the full path even when compact syntax for a future
+  -- generated provider would be unavailable.
   let futureModel := InductiveModels.Naming.modelName `Tree
   let stabilityMiss := { nestedExport with decls :=
     #[InductiveModels.EDecl.ax `CompactFallbackProbe [] (.const futureModel []) false] ++
       nestedExport.decls }
   let fallbackArgs := #["--no-type-check-input", "--no-type-check-output", "-"]
   let fallbackLegacy ← runInductiveModelsLegacy binary fallbackArgs.toList (some stabilityMiss.render)
-  let fallbackStaged ← runInductiveModels binary fallbackArgs.toList (some stabilityMiss.render)
-  state := state.check "compact availability miss falls back with exact report and exit" <|
-    fallbackStaged.exitCode == fallbackLegacy.exitCode &&
-      fallbackStaged.stderr == fallbackLegacy.stderr
-  state := state.check "compact availability fallback preserves exact ordinary output" <|
-    fallbackStaged.stdout == fallbackLegacy.stdout
+  let fallbackFull ← runInductiveModels binary fallbackArgs.toList (some stabilityMiss.render)
+  state := state.check "actual output future provider preserves exact report and exit" <|
+    fallbackFull.exitCode == fallbackLegacy.exitCode && fallbackFull.stderr == fallbackLegacy.stderr
+  state := state.check "actual output future provider preserves exact output" <|
+    fallbackFull.stdout == fallbackLegacy.stdout
   let directFallbackArgs :=
     ["--no-type-check-input", "--type-check-output", "--no-output", "-"]
   let directFallbackLegacy ← runInductiveModelsLegacy binary directFallbackArgs
@@ -829,9 +813,6 @@ def main (args : List String) : IO UInt32 := do
       hasDiagnostic directFallback.stderr "output kernel check: accepted"
   state := state.check "compact-availability direct fallback opens no private workspace" <|
     sameDirectoryEntries directFallbackBefore directFallbackAfter
-  let leakedGeneratedSpools ← System.FilePath.readDir scratch
-  state := state.check "staged generated output removes its workspace" <|
-    !leakedGeneratedSpools.any (fun entry => entry.fileName.startsWith "lean-inductive-models-spool-")
   let outputPath := s!"{scratch}/main-cli-output.ndjson"
   if ← System.FilePath.pathExists outputPath then IO.FS.removeFile outputPath
   let fileRun ← runInductiveModels binary

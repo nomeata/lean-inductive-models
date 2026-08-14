@@ -3,7 +3,6 @@ import InductiveModels.Check
 import InductiveModels.Mono
 import InductiveModels.Order
 import InductiveModels.Output
-import InductiveModels.Spool
 import InductiveModels.Supervisor
 
 /-!
@@ -130,10 +129,6 @@ source declarations and therefore remains on the full-AST path. -/
 def compactModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   InductiveModels.generationEnabled config && !config.monoLevels
 
-/-- Physical staging is needed only when compact generation must emit bytes. -/
-def stagedModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  config.output && !config.typeCheckOutput && compactModeEligible config
-
 /-- No-output compact generation retains the same value-only verdict
 certificates but deliberately has no workspace or physical spool. -/
 def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
@@ -144,19 +139,11 @@ and extra subprocess phases are unnecessary when generated output is discarded. 
 def directKernelModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   !config.output && config.typeCheckOutput && compactModeEligible config
 
-private structure RawStage where
-  workspace : InductiveModels.Spool.Workspace
-  tee : InductiveModels.Spool.ParseTee
-  certificate : InductiveModels.RawCertificate
-  sizes : InductiveModels.RawSpoolSizes
-
 private inductive FilterOutput where
   | full (declarations : Array InductiveModels.EDecl)
   | discarded (plan : InductiveModels.CompactPlan)
   | direct (plan : InductiveModels.CompactPlan)
       (kernelVerdict : InductiveModels.CompactKernelCheckVerdict)
-  | staged (raw : RawStage) (stage : InductiveModels.Spool.IslandStage)
-      (plan : InductiveModels.StagedPlan)
 
 /-- Optional A/B and test diagnostic. This observes the actual filter result;
 it never enables staging or changes eligibility. -/
@@ -165,84 +152,29 @@ private def reportOutputBackend (output : FilterOutput) : IO Unit := do
     IO.eprintln s!"output backend: {match output with
       | .full .. => "legacy"
       | .discarded .. => "compact-discard"
-      | .direct .. => "compact-direct"
-      | .staged .. => "staged"}"
+      | .direct .. => "compact-direct"}"
 
-private def mixedComposition (raw : RawStage) (sealed : InductiveModels.Spool.SealedIsland)
-    (spans : Array InductiveModels.StagedDeclarationSpan) : InductiveModels.Spool.MixedComposition :=
-  { sourceMetadataPath := raw.tee.metadata.path
-    sourceArenaPath := raw.tee.arena.path
-    sourceDeclarationPath := raw.tee.declarations.path
-    sourceSizes := raw.sizes
-    generatedArenaPath := sealed.arenaPath
-    generatedDeclarationPath := sealed.declarationPath
-    generatedArenaSize := sealed.arenaSize
-    generatedDeclarationSize := sealed.declarationSize
-    declarations := spans.map fun span => match span with
-      | .source span => .source { offset := span.offset, length := span.bytes }
-      | .generated span => .generated span }
-
-private def runWithWorkspace (config : InductiveModels.Cli.Config)
-    (workspace? : Option InductiveModels.Spool.Workspace)
+private def runPipeline (config : InductiveModels.Cli.Config)
     (compactEnabled : Bool) : IO UInt32 := do
   let input := config.input.getD ""
-  -- Reserve every spool leaf before consuming the input. Failure to establish
-  -- the optional tee selects the historical parser; an error after parsing has
-  -- begun remains a real IO failure and never reruns a consumed stream.
-  let tee? ← match workspace? with
-    | none => pure none
-    | some workspace => try
-        pure (some (← InductiveModels.Spool.ParseTee.create workspace))
-      catch _ => pure none
   let parsed? ← try
       if input == "-" then
         let stdin ← IO.getStdin
-        let result ← match tee? with
-          | none => do
-            let result ← InductiveModels.parseStream stdin
-              (analyse := config.monoLevels)
-              (allowDuplicateNames := true)
-            pure (result.map fun x => (x, none))
-          | some tee => do
-            let result ← InductiveModels.parseStreamWithSink stdin tee.sink
-              (analyse := config.monoLevels)
-              (allowDuplicateNames := true)
-            pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
-        pure (some result)
+        pure (some (← InductiveModels.parseStream stdin
+          (analyse := config.monoLevels) (allowDuplicateNames := true)))
       else
         IO.FS.withFile input .read fun handle => do
-          let result ← match tee? with
-            | none => do
-              let result ← InductiveModels.parseHandle handle
-                (analyse := config.monoLevels)
-                (allowDuplicateNames := true)
-              pure (result.map fun x => (x, none))
-            | some tee => do
-              let result ← InductiveModels.parseHandleWithSink handle tee.sink
-                (analyse := config.monoLevels)
-                (allowDuplicateNames := true)
-              pure (result.map fun (x, certificate) => (x, some (tee, certificate)))
-          pure (some result)
+          pure (some (← InductiveModels.parseHandle handle
+            (analyse := config.monoLevels) (allowDuplicateNames := true)))
     catch error =>
       IO.eprintln s!"{input}: {error}"
       pure none
   let some parsedResult := parsed? | return exitToolError
-  let (parsed, rawStage?) ← match parsedResult with
+  let parsed ← match parsedResult with
     | .error error =>
         IO.eprintln s!"{input}: parse error: {error}"
         return exitToolError
-    | .ok (parsedExport, stage?) =>
-      if let some (tee, certificate) := stage? then
-        let sizes ← tee.finish
-        if InductiveModels.Spool.rawFastPathEligible certificate sizes
-            parsedExport.decls.size config.monoLevels then
-          let some workspace := workspace?
-            | throw <| IO.userError "certified raw parse lost its spool workspace"
-          pure (parsedExport, some { workspace, tee, certificate, sizes })
-        else
-          pure (parsedExport, none)
-      else
-        pure (parsedExport, none)
+    | .ok parsedExport => pure parsedExport
 
   if let .error message := parsed.validateUniqueDeclarationNames then
     IO.eprintln s!"{input}: invalid export: {message}"
@@ -360,24 +292,6 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
                 (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
                 context { env }
               pure (Except.ok (FilterOutput.full decls, fallbackReport))
-          else if let some raw := rawStage? then
-            let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
-            let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
-            let stage ← InductiveModels.Spool.IslandStage.create raw.workspace
-              (InductiveModels.Writer.Cursor.ofRaw raw.certificate.cursor)
-            let ((report, plan), _) ← Lean.Core.CoreM.toIO
-              (Lean.Meta.MetaM.run'
-                (InductiveModels.runFilterStaged generationInput false config (.ofStage stage)))
-              context { env }
-            match plan.unavailable? with
-            | none => pure (Except.ok (FilterOutput.staged raw stage plan, report))
-            | some _ =>
-              InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
-              InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
-                context { env }
-              pure (Except.ok (FilterOutput.full decls, fallbackReport))
           else
             let ((decls, report), _) ← Lean.Core.CoreM.toIO
               (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
@@ -434,30 +348,6 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
         return exitRejected
       reportCheckSuccess config "output" plan.checkReport
     return outcome
-  | .staged raw stage plan =>
-    if config.checkOutput then
-      unless plan.checkReport.violations.isEmpty do
-        reportViolations input "output" plan.checkReport.violations
-        return exitRejected
-      reportCheckSuccess config "output" plan.checkReport
-    -- Output kernel checking remains on the full-AST path. Seal and validate
-    -- the plan before the output transaction, then validate every physical
-    -- file before its first destination byte.
-    try
-      let sealed ← stage.finish
-      let spans ← match plan.declarationSpans raw.certificate raw.sizes
-          parsed.decls.size sealed with
-        | .ok spans => pure spans
-        | .error message => throw <| IO.userError s!"invalid staged output plan: {message}"
-      let composition := mixedComposition raw sealed spans
-      match composition.validate with
-      | .ok _ => pure ()
-      | .error message => throw <| IO.userError s!"invalid staged composition: {message}"
-      InductiveModels.Output.write config.outputTarget composition.emit
-    catch error =>
-      IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
-      return exitToolError
-    return outcome
   | .full decls =>
     let transformed : Export := { generationInput with decls }
     let finalExport ← if InductiveModels.generationEnabled config || config.monoLevels then
@@ -495,19 +385,12 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
     return outcome
 
 def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
-  -- Canonical eligible generation uses bounded-memory staged output by default.
-  -- The legacy override is retained for deliberate A/B measurements. Statically
-  -- ineligible modes never tee their input, and planner trace mode stays on the
-  -- full-AST path so a failed staging attempt cannot duplicate trace lines.
+  -- The legacy override remains a deliberate A/B switch for no-output compact
+  -- modes. Every actual output uses the ordinary full-AST path.
   let compactEnabled :=
     (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
       (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1"
-  if compactEnabled && stagedModeEligible config then
-    let scratch := (← IO.currentDir) / "_tmp"
-    InductiveModels.Spool.withOptionalWorkspace scratch fun workspace? =>
-      runWithWorkspace config workspace? compactEnabled
-  else
-    runWithWorkspace config none compactEnabled
+  runPipeline config compactEnabled
 
 def workerMain (args : List String) : IO UInt32 := do
   InductiveModels.Output.containToolErrors do
