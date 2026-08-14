@@ -248,7 +248,7 @@ set +e
     env -u LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER \
       LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1 \
     "$BIN_DIR/lean-inductive-models" "$INPUT_FIFO" -o "$OUTPUT" \
-      --no-type-check-output \
+      --no-type-check-generated \
     2>&1 | tee "$LOG_DIR/generate.log" >&2
 ) &
 generator_pid=$!
@@ -296,7 +296,7 @@ grep -Eq ': model of [1-9][0-9]* declarations' "$LOG_DIR/generate.log" ||
     env -u LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER \
     "$BIN_DIR/lean-inductive-models" "$OUTPUT" \
       --no-inductives --check-input --no-check-output \
-      --type-check-input --no-type-check-output --no-output \
+      --type-check-input --no-type-check-generated --no-output \
     2>&1 | tee "$LOG_DIR/check-input.log" >&2
 )
 

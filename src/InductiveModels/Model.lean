@@ -201,7 +201,7 @@ reported.** This is the one place `lean-inductive-models` writes a declaration t
   `test/fixtures/inductive-models/funext_binder.lean` is that development written as a
   fixture. Each goes through [`InductiveModels.addChecked`] like everything else here,
   so construction can use it; the exact emitted island is kernel-checked only
-  when `--type-check-output` is enabled.
+  when `--type-check-generated` is enabled.
 * **Present beats spliced.** If the input declares one, the input's own is
   used and nothing is written. A splice adds; it never substitutes.
 
@@ -2355,7 +2355,7 @@ rather than over the environment's diff. -/
 def addChecked (d : Declaration) : GenM Unit := do
   -- This is the disposable construction view, not the output kernel gate.
   -- Exact emitted records are checked once at the island boundary when
-  -- `typeCheckOutput` is enabled; construction declarations are otherwise
+  -- `typeCheckGenerated` is enabled; construction declarations are otherwise
   -- trusted in exactly the same way as replayed input declarations.
   match (← getEnv).addDeclCore 0 d none false with
   | .ok e =>
@@ -2460,7 +2460,7 @@ is carried as an **export fragment** and spliced.
 **It is spliced through [`InductiveModels.addChecked`] into the disposable
 construction view.** That view is deliberately trusted: the exact records
 serialized from the completed island are the sole generated-output kernel
-boundary, and are checked there iff `--type-check-output` is enabled.
+boundary, and are checked there iff `--type-check-generated` is enabled.
 Compiling the closure in and copying its `ConstantInfo`s would bypass that
 exact emitted-record boundary. -/
 
@@ -2841,7 +2841,7 @@ def mimicGroups (pl : Plan) : Except String (Array (Array Nat)) := Id.run do
 
 Generated declarations are first installed through [`InductiveModels.addChecked`]
 in the disposable construction view. The exact serialized island is checked
-once at its close boundary iff output kernel checking is enabled. -/
+once at its close boundary iff generated kernel checking is enabled. -/
 def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     (exportCtors : Array (Array (Name × Expr))) (exportRecursors : Array ERec) (pl : Plan)
     (reserved : Std.HashSet Name) (buildRoot? : Option Name := none) : GenM Iso := do

@@ -31,17 +31,17 @@ def main : IO UInt32 := do
     config.input == some "in.ndjson" &&
     config.nested && config.mutualModels && config.simple && config.basic &&
     config.checkInput && config.checkOutput &&
-    !config.typeCheckInput && config.typeCheckOutput &&
+    !config.typeCheckInput && config.typeCheckGenerated &&
     config.output && config.outputTarget == "-" && !config.quiet
 
   state ← state.expect "all individual negative forms" [
       "--no-nested", "--no-mutual", "--no-simple", "--no-basic",
       "--no-check-input", "--no-check-output",
-      "--no-type-check-input", "--no-type-check-output",
+      "--no-type-check-input", "--no-type-check-generated",
       "--no-output", "--no-quiet", "in.ndjson"] fun config =>
     !config.nested && !config.mutualModels && !config.simple && !config.basic &&
     !config.checkInput && !config.checkOutput &&
-    !config.typeCheckInput && !config.typeCheckOutput &&
+    !config.typeCheckInput && !config.typeCheckGenerated &&
     !config.output && !config.quiet
 
   state ← state.expect "inductives bundle then individual override"
@@ -57,21 +57,21 @@ def main : IO UInt32 := do
     ["--no-check-input", "--check", "in.ndjson"] fun config =>
       config.checkInput && config.checkOutput
   state ← state.expect "kernel verdict gates are independent"
-    ["--type-check-input", "--type-check-output", "--no-type-check-input", "in.ndjson"]
-    fun config => !config.typeCheckInput && config.typeCheckOutput
+    ["--type-check-input", "--type-check-generated", "--no-type-check-input", "in.ndjson"]
+    fun config => !config.typeCheckInput && config.typeCheckGenerated
   state ← state.expect "output kernel default has an explicit reversible opt-out"
-    ["--no-type-check-output", "--type-check-output", "--no-type-check-output",
-      "in.ndjson"] fun config => !config.typeCheckOutput
+    ["--no-type-check-generated", "--type-check-generated", "--no-type-check-generated",
+      "in.ndjson"] fun config => !config.typeCheckGenerated
   state ← state.expect "structural check bundle does not enable kernel verdicts"
     ["--type-check-input", "--no-check", "--check", "in.ndjson"] fun config =>
       config.checkInput && config.checkOutput && config.typeCheckInput &&
-        config.typeCheckOutput
+        config.typeCheckGenerated
   state ← state.expect "Arena CI keeps generation and every verdict gate enabled" [
       "--inductives", "--check-input", "--check-output", "--type-check-input",
-      "--type-check-output", "--no-output", "in.ndjson"] fun config =>
+      "--type-check-generated", "--no-output", "in.ndjson"] fun config =>
     config.nested && config.mutualModels && config.simple && config.basic &&
       config.checkInput && config.checkOutput &&
-      config.typeCheckInput && config.typeCheckOutput && !config.output
+      config.typeCheckInput && config.typeCheckGenerated && !config.output
   state ← state.expect "positive option restores default-on boolean"
     ["--no-mutual", "--mutual", "in.ndjson"] fun config => config.mutualModels
   state ← state.expect "short output target"

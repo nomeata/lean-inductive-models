@@ -48,7 +48,7 @@ quotient bundle. Routes that derive function extensionality may additionally
 use `Quot.sound`; generated developments may use the standard axioms
 `Classical.choice` and `propext` when required.
 
-With `--type-check-output`, each generated model island is kernel-checked once,
+With `--type-check-generated`, each generated model island is kernel-checked once,
 as it is produced, against the trusted input prefix before its owner. The final
 serialized output is also checked structurally by default; it is not replayed
 as one combined input-and-output kernel stream.
@@ -77,7 +77,7 @@ That makes the correspondence check independent of the kernel verdict.
 it on the final transformed stream. An input with no model slots is not
 rejected merely because an inductive is unsupported or generation is disabled.
 
-`--type-check-input` and `--type-check-output` govern disjoint declaration
+`--type-check-input` and `--type-check-generated` govern disjoint declaration
 classes. The former checks only input declarations. The latter, enabled by
 default, checks each exact generated model island incrementally as it is
 produced; input declarations are trusted dependencies in that environment,
@@ -117,7 +117,7 @@ lean-inductive-models --type-check-input --no-output "$IN"
 | `--check-output` | on | Structurally check final model families. |
 | `--check` | on | Set both structural-check options. |
 | `--type-check-input` | off | Replay the parsed input through Lean's kernel. |
-| `--type-check-output` | on | Kernel-check each generated model island as it is produced. |
+| `--type-check-generated` | on | Kernel-check each generated model island as it is produced. |
 | `--output` | on | Write the transformed export. |
 | `-o PATH` | `-` | Select the output path and enable output. |
 | `--quiet` | off | Suppress successful-pass diagnostics. |
@@ -163,7 +163,7 @@ project-local snapshot preserves stdin/FIFO bytes for parser-compatible
 fallback and is released once that compact arena is replay-certified; it is
 not a generated-output representation. Generated logical declarations are
 checked directly as values, never through JSON, an output parser, a writer, or
-a spool. With both `--no-output` and `--no-type-check-output`, accepted islands
+a spool. With both `--no-output` and `--no-type-check-generated`, accepted islands
 are summarized while live and then discarded without any kernel check: no
 workspace is opened and no cumulative generated declaration array is retained.
 Input kernel checking may retain the parsed source, but generated actual output

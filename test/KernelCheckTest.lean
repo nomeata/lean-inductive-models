@@ -6,7 +6,7 @@ set_option maxRecDepth 8192
 # Kernel-check regression tests
 
 The batch checker is the input-only kernel gate. Generated output is checked
-directly at each accepted model-island boundary when `typeCheckOutput` is set.
+directly at each accepted model-island boundary when `typeCheckGenerated` is set.
 -/
 
 open Lean Meta InductiveModels
@@ -67,7 +67,7 @@ def corruptGeneratedProof : EDecl → EDecl
     .thm name levels type (.const `DefinitelyMissingGeneratedDependency []) all
   | declaration => declaration
 
-def runFilterWithGeneratedCorruption (x : Export) (typeCheckOutput : Bool) :
+def runFilterWithGeneratedCorruption (x : Export) (typeCheckGenerated : Bool) :
     IO (Array EDecl × Report) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -75,7 +75,7 @@ def runFilterWithGeneratedCorruption (x : Export) (typeCheckOutput : Bool) :
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let generation : Cli.Config :=
     { nested := true, mutualModels := false, simple := false, basic := false,
-      typeCheckOutput }
+      typeCheckGenerated }
   return (← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
     (runFilterWithExactBlockTransform x false generation corruptGeneratedProof))
     context { env }).1

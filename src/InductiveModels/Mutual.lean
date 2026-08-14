@@ -194,7 +194,7 @@ off (see the header).
 
 Generated declarations are installed through [`InductiveModels.addChecked`]
 in the disposable construction view. The exact serialized island is checked
-once at its close boundary iff output kernel checking is enabled. -/
+once at its close boundary iff generated kernel checking is enabled. -/
 def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     (memberTys : Array Expr) (exportCtors : Array (Array (Name × Expr)))
     (reserved : Std.HashSet Name) (buildRoot? : Option Name := none)

@@ -40,7 +40,7 @@ is safe to make in a planner:
 
 Permissiveness in the planner costs wasted work. Construction installs
 generated declarations into its disposable Meta environment without a kernel
-check; when `--type-check-output` is enabled, the exact generated island is
+check; when `--type-check-generated` is enabled, the exact generated island is
 checked separately before it is accepted and a rejection is reported as an
 output-kernel failure. With that option disabled, output checking is
 deliberately skipped, so the planner must remain correct independently of its

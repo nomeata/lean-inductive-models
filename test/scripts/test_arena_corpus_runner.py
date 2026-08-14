@@ -42,7 +42,7 @@ import sys
 
 expected = [
     "--inductives", "--check-input", "--check-output",
-    "--type-check-input", "--type-check-output", "--no-output",
+    "--type-check-input", "--type-check-generated", "--no-output",
 ]
 if sys.argv[1:-1] != expected:
     sys.exit(2)

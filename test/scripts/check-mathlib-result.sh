@@ -58,14 +58,14 @@ grep -Fq 'LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1' <<<"$generate_phase" || 
   echo "mathlib CI does not expose the generation backend" >&2
   exit 1
 }
-grep -Fq -- '--no-type-check-output' <<<"$generate_phase" || {
+grep -Fq -- '--no-type-check-generated' <<<"$generate_phase" || {
   echo "mathlib CI generation does not defer its kernel gate" >&2
   exit 1
 }
 
 check_phase="$(sed -n '/run_worker_measured check-input \\/,/tee "\$LOG_DIR\/check-input.log"/p' \
   "$ci_harness")"
-for flag in --type-check-input --no-type-check-output --no-output; do
+for flag in --type-check-input --no-type-check-generated --no-output; do
   grep -Fq -- "$flag" <<<"$check_phase" || {
     echo "mathlib CI serialized kernel gate is missing $flag" >&2
     exit 1

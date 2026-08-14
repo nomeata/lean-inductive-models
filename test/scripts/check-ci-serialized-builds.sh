@@ -32,7 +32,7 @@ expected_direct_builds=(
 
 arena_script="$root/test/scripts/check_arena_corpus.py"
 for arena_flag in \
-    --inductives --check-input --check-output --type-check-input --type-check-output --no-output; do
+    --inductives --check-input --check-output --type-check-input --type-check-generated --no-output; do
   if ! grep -Fq "\"$arena_flag\"" "$arena_script"; then
     echo "Arena corpus checker is missing $arena_flag" >&2
     exit 1
