@@ -2684,6 +2684,7 @@ private structure FilterContext where
   outputSourceOrder? : Option (Array Nat) := none
   collectTrace : Bool := false
   collectAdapterShadows : Bool := false
+  sharedPrefixPhaseB : Bool := false
 
 /-- Cheap summary-first test for whether an exhaustive record rewrite can
 change anything. `all` fields are bookkeeping rather than dependencies, so
@@ -2722,6 +2723,9 @@ private structure SharedPrefixSourcePrepared where
   completedEnv : Environment
   snapshots : Array SharedPrefixOwnerSnapshot
   rows : Array CompactRecord
+  context : FilterContext
+  aliases : SourceReplayAliases
+  metaOnlyNames : Std.HashSet Name
 
 /-- Phase A: replay the collision-free source build image once, checking every
 kernel-relevant record and retaining unchecked unsafe/partial records only for
@@ -2753,6 +2757,16 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
     | .error message => return .error s!"cannot rebind frozen source summaries: {message}"
   let sourceGlobals := Check.globalExtraRecordsWithIndex census.sourceSyntax scheduled.decls
   let sourceFamilies := census.familyCertificateRecords x scheduled
+  let constructionSyntax ← if aliases.isEmpty then pure census.sourceSyntax else do
+    let mut index := census.sourceSyntax
+    for rawOrdinal in [:x.decls.size] do
+      let declaration := x.decls[rawOrdinal]!
+      if sourceRecordUsesAliases aliases census.summaries[rawOrdinal]! declaration then
+        match index.withReplayRecords #[declaration] #[aliases.buildRecord declaration] with
+        | .ok next => index := next
+        | .error message =>
+          return .error s!"cannot index collision-safe source replay: {message}"
+    pure index
   let mut metaOnlyNames : Std.HashSet Name := {}
   let mut metaOnlyRecords := 0
   for rawOrdinal in [:census.scheduling.size] do
@@ -2765,6 +2779,8 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
   let mut snapshots : Array SharedPrefixOwnerSnapshot := #[]
   let mut rows : Array CompactRecord := #[]
   let mut constructionTransitions := 0
+  let sourceConstructionTouches := sourceOrder.map fun rawOrdinal =>
+    census.scheduling[rawOrdinal]!.constructionTouch generation
   for scheduledOrdinal in [:sourceOrder.size] do
     let rawOrdinal := sourceOrder[scheduledOrdinal]!
     let declaration := x.decls[rawOrdinal]!
@@ -2810,6 +2826,11 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
       | .ok next =>
         env := next
         setEnv next
+    if buildDisposition matches .checked .. then
+      let mismatches := KernelCheck.mappedMetadataMismatches env replay
+      unless mismatches.isEmpty do
+        return .error s!"source build-image metadata differs from Lean's kernel for \
+          {declaration.names}: {mismatches.toList.map aliases.exactMessage}"
     if sourceRecordUsesAliases aliases sourceSummaries[scheduledOrdinal]! declaration then
       if let .induct types constructors recursors := replay then
         let mismatches ← checkInductiveMetadata types constructors recursors
@@ -2822,6 +2843,8 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
       | return .error s!"shared-prefix source declaration {firstName} lost its raw ordinal"
     unless certifiedRaw == rawOrdinal do
       return .error s!"shared-prefix source declaration {firstName} changed raw ordinal"
+    unless sourceSummaries[scheduledOrdinal]!.introduced == declaration.names.toArray do
+      return .error s!"shared-prefix source row changed names for {declaration.names}"
     rows := rows.push {
       summary := sourceSummaries[scheduledOrdinal]!
       globalExtra := sourceGlobals[scheduledOrdinal]!
@@ -2834,6 +2857,28 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
     for record in quotientRecords do
       unless installed.contains record do
         return .error s!"source quotient record {record.names} differs from the kernel bundle"
+  let constructionReserved := census.reserved.fold (init := census.reserved) fun names name =>
+    (aliases.buildDerivedNames name).foldl (fun names build => names.insert build) names
+  let context : FilterContext := {
+    source := x
+    checkRecursors := false
+    generation
+    retention := .compactDirect
+    exactTransform := id
+    sourceSyntax := census.sourceSyntax
+    constructionSyntax
+    constructionNormalizer := constructionSyntax.exactNormalizer
+    sourceAliases := aliases
+    sourceSummaries
+    sourceConstructionTouches
+    constructionTransitions
+    sourceGlobalExtras? := some sourceGlobals
+    sourceFamilyRecords? := some sourceFamilies
+    rawOrdinals := census.rawOrdinals
+    reserved := census.reserved
+    constructionReserved
+    kernelCheckBase? := some base
+    sharedPrefixPhaseB := true }
   return .ok {
     observation := {
       sourceRecords := sourceOrder.size
@@ -2842,7 +2887,10 @@ private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
       constructionTransitions }
     completedEnv := env
     snapshots
-    rows }
+    rows
+    context
+    aliases
+    metaOnlyNames }
 
 /-- Test-facing Phase-A observer.  It always restores the invocation base and
 returns only counts/fallback text; the shared environments remain private. -/
@@ -2882,6 +2930,15 @@ private structure FilterState where
   only: retaining this array cannot retain a declaration expression graph. -/
   kernelCheckRows : Array (Array Name) := #[]
   adapterShadows : Array FamilyAdapter.ShadowObservation := #[]
+  /-- Phase-B-only exact support payload witnessed by accepted islands. No
+  non-support generated declaration may enter this array. -/
+  constructionSupportRecords : Array EDecl := #[]
+  /-- Phase-B-only cumulative aliases for the completed output checker and
+  exact witnessed-support replay. They include disposable generated names to
+  keep the checker build image injective, but must never affect construction,
+  readiness, `nameTaken`, or report spelling. -/
+  sharedPrefixAliases? : Option SourceReplayAliases := none
+  sharedPrefixMetaOnlyNames : Std.HashSet Name := {}
 
 private inductive FilterFeedResult where
   | next (state : FilterState)
@@ -2940,6 +2997,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let sourceSyntax := context.sourceSyntax
   let constructionSyntax := context.constructionSyntax
   let constructionNormalizer := context.constructionNormalizer
+  -- Each transition must use the same source-only alias view as the ordinary
+  -- construction path. Phase B keeps a separate cumulative table solely for
+  -- checker mapping and witnessed-support replay into historical snapshots.
   let sourceAliases := context.sourceAliases
   let sourceSummaries := context.sourceSummaries
   let scheduledOrdinal := state.scheduledOrdinal
@@ -2969,6 +3029,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut kernelCheckState? := state.kernelCheckState?
   let mut kernelCheckRows := state.kernelCheckRows
   let mut adapterShadows := state.adapterShadows
+  let mut constructionSupportRecords := state.constructionSupportRecords
+  let mut sharedPrefixAliases? := state.sharedPrefixAliases?
+  let mut sharedPrefixMetaOnlyNames := state.sharedPrefixMetaOnlyNames
   let emissionStart := legacyOut.size
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
@@ -3174,8 +3237,20 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     let islandAliases ← match sourceAliases.registerRecords generated with
       | .ok aliases => pure aliases
       | .error message => throwError
-          "cannot register generated source replay aliases for {d.names}: \
+        "cannot register generated source replay aliases for {d.names}: \
             {sourceAliases.exactMessage message}"
+    if context.sharedPrefixPhaseB then
+      -- The checker/support view is global across islands, unlike the local
+      -- construction view above. Register the complete live island directly
+      -- against that cumulative table so its build image remains injective
+      -- with every prior generated declaration, including disposable ones.
+      -- This table is never exposed to generation, readiness, or nameTaken.
+      sharedPrefixAliases? := some (← match
+          (sharedPrefixAliases?.getD context.sourceAliases).registerRecords generated with
+        | .ok aliases => pure aliases
+        | .error message => throwError
+          "cannot retain cumulative generated replay aliases for {d.names}: \
+            {islandAliases.exactMessage message}")
     rep := { rep with
       generated := rep.generated.extract 0 reportedBefore ++
         (rep.generated.extract reportedBefore rep.generated.size).map fun (name, count) =>
@@ -3241,12 +3316,56 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             checkIsland? := some islandNumber
             locator := .generated islandNumber localOrdinal }
           if let some checker := kernelCheckState? then
-            kernelCheckState? := some (← checker.pushBound orderedGenerated[localOrdinal]!
-              row.summary.introduced)
+            let exact := orderedGenerated[localOrdinal]!
+            if context.sharedPrefixPhaseB then
+              let checkerAliases := sharedPrefixAliases?.getD islandAliases
+              let build := checkerAliases.buildRecord exact
+              unless checkerAliases.exactRecord build == exact do
+                throwError "generated replay round trip changed {exact.names}"
+              unless checkerAliases.exactDerivedRecord exact == exact do
+                throwError "generated declaration {exact.names} contains a fresh build alias"
+              let exactDisposition ← match KernelCheck.replayDisposition exact with
+                | .ok disposition => pure disposition
+                | .error message => throwError message
+              let buildDisposition ← match KernelCheck.replayDisposition build with
+                | .ok disposition => pure disposition
+                | .error message => throwError (checkerAliases.exactMessage message)
+              unless (exactDisposition matches .checked ..) ==
+                    (buildDisposition matches .checked ..) &&
+                  (exactDisposition matches .metaOnly) ==
+                    (buildDisposition matches .metaOnly) &&
+                  (exactDisposition matches .bundled) ==
+                    (buildDisposition matches .bundled) do
+                throwError "generated replay classification changed under aliases for \
+                  {exact.names}"
+              match exactDisposition with
+              | .metaOnly =>
+                -- Preserve the ordinary output checker's unsafe/partial skip
+                -- semantics, but make the extra Meta visibility irrelevant to
+                -- every later checked generated record.
+                for name in exact.names do
+                  sharedPrefixMetaOnlyNames := sharedPrefixMetaOnlyNames.insert name
+              | .checked _ =>
+                if let some dependency := (KernelCheck.inputReferences exact).toArray.find?
+                    sharedPrefixMetaOnlyNames.contains then
+                  throwError "checked generated record {exact.names} depends on unchecked \
+                    construction-only declaration {dependency}"
+              | .bundled =>
+                -- Quot.mk/lift/ind have no independent replay step: the
+                -- leading checked Quot record installs the exact bundle.
+                pure ()
+            kernelCheckState? := some (← if context.sharedPrefixPhaseB then
+              checker.pushMappedBound exact
+                ((sharedPrefixAliases?.getD islandAliases).buildRecord exact)
+                row.summary.introduced
+            else
+              checker.pushBound exact row.summary.introduced)
             kernelCheckRows := kernelCheckRows.push row.summary.introduced
           compactRecords := compactRecords.push row
         compactIslands := compactIslands.push compact
       let persistentRecords := generatedSupportRecords orderedGenerated exactIslandModels
+      if context.sharedPrefixPhaseB then
+        constructionSupportRecords := constructionSupportRecords ++ persistentRecords
       if compactMode then
         let islandNumber := compactIslands.size - 1
         for record in persistentRecords do
@@ -3297,8 +3416,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       checkIsland? := modeledIsland?
       locator := .source rawOrdinal }
     if let some checker := kernelCheckState? then
-      kernelCheckState? := some (← checker.pushBound d row.summary.introduced)
-      kernelCheckRows := kernelCheckRows.push row.summary.introduced
+      unless context.sharedPrefixPhaseB do
+        kernelCheckState? := some (← checker.pushBound d row.summary.introduced)
+        kernelCheckRows := kernelCheckRows.push row.summary.introduced
     compactRecords := compactRecords.push row
   if context.checkRecursors then
     if let .induct _ _ rs := replayD then
@@ -3324,7 +3444,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, compactRecords,
     scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
     persistentSupportOrigins, futureSupportRemaining, emissionByRaw, sourceSteps,
-    kernelCheckState?, kernelCheckRows, adapterShadows }
+    kernelCheckState?, kernelCheckRows, adapterShadows,
+    constructionSupportRecords, sharedPrefixAliases?, sharedPrefixMetaOnlyNames }
 
 /-- Payload-free handoff from logical generation to compact finalization.  It
 contains neither an `Environment`, `Kernel.Environment`, `EDecl`, sink, writer,
@@ -3871,6 +3992,183 @@ def runFilterDirectChecking (x : Export) (checkRecursors : Bool)
   let (_, report, compact, _, _, kernelVerdict?, _) ←
     runFilterCore x checkRecursors generation .compactDirect
   return (report, compact, kernelVerdict?)
+
+/-- Value-only test observation for the complete two-phase shared-prefix
+prototype. `selected` means Phase B consumed the private source snapshots;
+otherwise the returned filter result came from the ordinary direct fallback. -/
+structure SharedPrefixDirectObservation where
+  selected : Bool
+  source : SharedPrefixSourceObservation
+  retainedSupportRecords : Nat := 0
+  ownerSnapshotsConsumed : Nat := 0
+  pendingOwnerSnapshotsAtSeal : Nat := 0
+  fallback? : Option String := none
+  deriving Inhabited, Repr, BEq
+
+private def installSharedPrefixSupport (base : Environment)
+    (records : Array EDecl) (aliases : SourceReplayAliases) :
+    MetaM (Except String Environment) :=
+  -- `records` is exactly the witnessed persistent subset selected at island
+  -- close. Every member already passed the exact/build classification and
+  -- no-leak audits before entering the Phase-B state.
+  checkGeneratedIn base (records.map aliases.buildRecord)
+
+/-- Release the preceding owner's construction environment before rebuilding
+the witnessed support view over the next historical source snapshot. -/
+private def prepareSharedPrefixOwnerState (state : FilterState) (base : Environment)
+    (snapshot : SharedPrefixOwnerSnapshot) (aliases : SourceReplayAliases) :
+    MetaM (FilterState × Environment) := do
+  let state := { state with mainEnv := base }
+  -- `feedSource` also installed the preceding owner in the ambient Meta state.
+  -- Drop that independent root before rebuilding support over the next
+  -- historical snapshot, not merely before the following feed.
+  setEnv base
+  let installed ← match ← installSharedPrefixSupport snapshot.env
+      state.constructionSupportRecords aliases with
+    | .ok env => pure env
+    | .error message => throwError "cannot replay witnessed construction support: {message}"
+  return (state, installed)
+
+/-- Consume the dynamic Phase-B state into one historical owner transition.
+Keeping this call boundary linear lets the RC compiler pass the sole
+`FilterState` reference to `feedSource`; in particular, its staged arrays do
+not acquire a copy-on-write sibling while generation appends to them. -/
+private def feedSharedPrefixOwner (state : FilterState) (context : FilterContext)
+    (installed : Environment) (snapshot : SharedPrefixOwnerSnapshot)
+    (declaration : EDecl) : MetaM (FilterState × Array CompactRecord) := do
+  unless state.compactRecords.isEmpty && state.kernelCheckRows.isEmpty do
+    throwError "shared-prefix owner transition retained rows from an earlier owner"
+  setEnv installed
+  match ← ({ state with
+      mainEnv := installed
+      scheduledOrdinal := snapshot.scheduledOrdinal }).feedSource context declaration with
+  | .unreplayable report _ =>
+    throwError "shared-prefix owner replay became unreplayable: {report.unreplayable}"
+  | .next next =>
+    let chunk := next.compactRecords
+    unless chunk.any fun row => row.locator == .source snapshot.rawOrdinal do
+      throwError "shared-prefix owner transition lost source row {snapshot.rawOrdinal}"
+    -- The historical row array is owned by `chunks`; it is not also carried
+    -- through the next mutating owner transition. The checker itself retains
+    -- its cumulative kernel state, while final name rows are rebuilt below.
+    return ({ next with compactRecords := #[], kernelCheckRows := #[] }, chunk)
+
+private def runSharedPrefixPhaseB (prepared : SharedPrefixSourcePrepared)
+    (failAfterOwners? : Option Nat := none) :
+    MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict × Nat × Nat × Nat) := do
+  let ⟨_, completedEnv, snapshots, sourceRows, context, aliases, metaOnlyNames⟩ := prepared
+  let mut chunks := sourceRows.map fun row => #[row]
+  let some base := context.kernelCheckBase?
+    | throwError "shared-prefix source preparation lost its invocation base"
+  let mut state : FilterState := {
+    mainEnv := base
+    persistentSyntax := context.sourceSyntax
+    kernelCheckState? := some
+      (KernelCheck.State.createCheckedPrefix completedEnv
+        (sourceRows.map (·.summary.introduced)))
+    sharedPrefixAliases? := some aliases
+    sharedPrefixMetaOnlyNames := metaOnlyNames }
+  -- Reverse once, then remove each root before running its transition.  The
+  -- original array is consumed by this function, so at most the unvisited
+  -- shared prefixes plus the current snapshot remain rooted during Phase B.
+  let snapshotCount := snapshots.size
+  let mut pendingSnapshots := snapshots.reverse
+  let mut ownerSnapshotsConsumed := 0
+  for _ in [:snapshotCount] do
+    let some snapshot := pendingSnapshots.back?
+      | throwError "shared-prefix owner snapshot stack ended early"
+    pendingSnapshots := pendingSnapshots.pop
+    ownerSnapshotsConsumed := ownerSnapshotsConsumed + 1
+    let aliases := state.sharedPrefixAliases?.getD aliases
+    let (withoutPriorOwner, installed) ←
+      prepareSharedPrefixOwnerState state base snapshot aliases
+    let declaration := context.source.decls[snapshot.rawOrdinal]!
+    let (next, chunk) ←
+      feedSharedPrefixOwner withoutPriorOwner context installed snapshot declaration
+    chunks := chunks.set! snapshot.scheduledOrdinal chunk
+    state := next
+    if failAfterOwners? == some ownerSnapshotsConsumed then
+      throwError "injected shared-prefix failure after owner {ownerSnapshotsConsumed}"
+  unless pendingSnapshots.isEmpty do
+    throwError "shared-prefix owner snapshot stack retained unconsumed roots"
+  -- The last owner has no following preparation call to clear the ambient
+  -- Meta root. Release it before assembling the value-only compact result.
+  setEnv base
+  let mut compactRecords : Array CompactRecord := #[]
+  for chunk in chunks do compactRecords := compactRecords ++ chunk
+  let kernelCheckRows := compactRecords.map (·.summary.introduced)
+  let retainedSupportRecords := state.constructionSupportRecords.size
+  state := { state with
+    mainEnv := base
+    compactRecords
+    scheduledOrdinal := sourceRows.size
+    kernelCheckRows }
+  let sealed ← try
+    state.sealCompactDirect context
+  finally
+    setEnv base
+  let (report, compact, verdict) ← sealed.finalize
+  return (report, compact, some verdict, retainedSupportRecords,
+    ownerSnapshotsConsumed, pendingSnapshots.size)
+
+/-- Opt-in test-facing two-phase direct path. Phase A owns one checked source
+build image plus structurally shared pre-owner snapshots; Phase B buffers no
+non-support generated record across owner transitions. Any unavailable audit
+or prototype invariant restores the base and returns the authoritative current
+direct implementation instead. `failAfterOwners?` is a regression-only fault
+injection for fallback-state parity. Main never selects this observer. -/
+def runFilterDirectCheckingSharedPrefix (x : Export) (generation : Cli.Config)
+    (failAfterOwners? : Option Nat := none) :
+    MetaM ((Report × CompactPlan × Option CompactKernelCheckVerdict) ×
+      SharedPrefixDirectObservation) := do
+  let base ← getEnv
+  let levelCallsBefore ← LevelAlgebra.levelCalls.get
+  let levelEscapesBefore ← LevelAlgebra.levelEscapes.get
+  let restoreLevelCounters : MetaM Unit := do
+    LevelAlgebra.levelCalls.set levelCallsBefore
+    LevelAlgebra.levelEscapes.set levelEscapesBefore
+  let preparation : Except String SharedPrefixSourcePrepared ← try
+    prepareSharedPrefixSource x generation
+  catch error =>
+    pure (.error (← error.toMessageData.toString))
+  finally
+    setEnv base
+  let .ok prepared := preparation | do
+    let .error message := preparation | unreachable!
+    restoreLevelCounters
+    let result ← runFilterDirectChecking x false generation
+    return (result, {
+      selected := false
+      source := {
+        sourceRecords := x.decls.size
+        ownerSnapshots := 0
+        metaOnlyRecords := 0
+        constructionTransitions := 0
+        fallback? := some message }
+      fallback? := some message })
+  let sourceObservation := prepared.observation
+  let phase : Except String
+      (Report × CompactPlan × Option CompactKernelCheckVerdict × Nat × Nat × Nat) ← try
+    pure (Except.ok (← runSharedPrefixPhaseB prepared failAfterOwners?))
+  catch error =>
+    pure (Except.error (← error.toMessageData.toString))
+  match phase with
+  | Except.ok (report, compact, verdict?, retainedSupportRecords,
+      ownerSnapshotsConsumed, pendingOwnerSnapshotsAtSeal) =>
+    return ((report, compact, verdict?), {
+      selected := true
+      source := sourceObservation
+      retainedSupportRecords
+      ownerSnapshotsConsumed
+      pendingOwnerSnapshotsAtSeal })
+  | Except.error message =>
+    setEnv base
+    restoreLevelCounters
+    let result ← runFilterDirectChecking x false generation
+    return (result, {
+      selected := false
+      source := sourceObservation
+      fallback? := some message })
 
 /-- AST-dropping no-output generation. Accepted generated records are checked
 and summarized at island close, then discarded without opening a workspace or

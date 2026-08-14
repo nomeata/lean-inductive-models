@@ -102,6 +102,7 @@ test/scripts/check-hard-nested-a.sh
 test/scripts/check-hard-nested-c.sh
 test/scripts/check-mathlib-result.sh
 test/scripts/check-lean4export-patch.sh
+test/scripts/check-shared-prefix-ownership.sh
 test/scripts/check-ci-serialized-builds.sh
 ```
 

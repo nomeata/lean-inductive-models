@@ -306,6 +306,9 @@ def replayDisposition (declaration : EDecl) : Except String ReplayDisposition :=
   | .defn _ _ _ _ _ safety _ =>
     unless (safetyOf? safety).isSome do
       throw s!"unknown definition safety {safety}"
+  | .quot _ _ _ kind =>
+    unless (quotKindOf? kind).isSome do
+      throw s!"unknown quotient kind {kind}"
   | _ => pure ()
   if let .quot name .. := declaration then
     if name == `Quot.mk || name == `Quot.lift || name == `Quot.ind then
@@ -344,6 +347,12 @@ private def ordinaryMetadataMismatches (env : Environment) : EDecl → Array Str
     checkInductiveMetadataIn env types constructors recursors
   | _ => #[]
 
+/-- Metadata comparison for a record already installed in a collision-free
+build image. Diagnostics are private to the optimization; any mismatch must
+fall back to the exact final-order batch renderer. -/
+def mappedMetadataMismatches (env : Environment) (record : EDecl) : Array String :=
+  ordinaryMetadataMismatches env record
+
 /-- Incremental exact-value kernel checker.  The latest kernel environment is
 the only payload-bearing state retained between pushes.  Once insertion fails,
 the unusable environment is released, but later pushes are still counted so a
@@ -361,6 +370,28 @@ the invocation's initial empty environment here, never the evolving model
 construction environment: construction-only aliases are not output constants. -/
 def State.create (base : Environment) : State :=
   { checked := some base.toKernelEnv }
+
+/-- Adopt the kernel-relevant source prefix already checked in the same
+construction environment. The environment may also contain unchecked
+Meta-only providers; the caller must have certified their noninterference and
+exact/build metadata while each source record was live. Exact row names seed
+the ordinary ownership certificate, so a mapped generated record cannot evade
+a logical source-name collision merely because the checked prefix uses build
+names. -/
+def State.createCheckedPrefix (sourceEnv : Environment)
+    (boundRows : Array (Array Name)) : State := Id.run do
+  let mut ownership : Std.HashMap Name Nat := {}
+  let mut preflightFailure : Option String := none
+  for ordinal in [:boundRows.size] do
+    for name in boundRows[ordinal]! do
+      if preflightFailure.isNone && ownership.contains name then
+        preflightFailure := some s!"duplicate declaration {name}"
+      ownership := ownership.insert name ordinal
+  return {
+    checked := if preflightFailure.isSome then none else some sourceEnv.toKernelEnv
+    ownership
+    preflightFailure
+    recordsPushed := boundRows.size }
 
 private def recordPreflight : EDecl → Except String Unit
   | .defn _ _ _ _ _ safety _ =>
@@ -425,6 +456,50 @@ def State.pushBound (state : State) (record : EDecl) (expectedNames : Array Name
   unless record.names.toArray == expectedNames do
     throwError "kernel-check row names {record.names} differ from compact row {expectedNames}"
   state.push record
+
+/-- Bind an exact logical record to its compact row while inserting an
+injectively renamed build-image record into the shared checked environment. -/
+def State.pushMappedBound (state : State) (logical build : EDecl)
+    (expectedNames : Array Name) : MetaM State := do
+  unless logical.names.toArray == expectedNames do
+    throwError "kernel-check row names {logical.names} differ from compact row {expectedNames}"
+  let recordsPushed := state.recordsPushed + 1
+  let mut state := state
+  if state.preflightFailure.isNone then
+    if let .error message := recordPreflight logical then
+      state := { state with preflightFailure := some message }
+  for name in logical.names do
+    if state.preflightFailure.isNone && state.ownership.contains name then
+      state := { state with preflightFailure := some s!"duplicate declaration {name}" }
+    state := { state with ownership := state.ownership.insert name state.recordsPushed }
+  if state.preflightFailure.isSome then
+    return { state with checked := none, recordsPushed }
+  let some checked := state.checked
+    | return { state with recordsPushed }
+  match replayDisposition build with
+  | .error message =>
+    return { state with
+      checked := none
+      replayFailure := some message
+      recordsPushed := recordsPushed }
+  | .ok .metaOnly | .ok .bundled => return { state with recordsPushed }
+  | .ok (.checked declaration) =>
+    match checked.addDeclCore 0 declaration none with
+    | .error exception =>
+      let message := s!"{logical.names}: {← (exception.toMessageData {}).toString}"
+      return { state with
+        checked := none
+        replayFailure := some message
+        recordsPushed := recordsPushed }
+    | .ok next =>
+      let replayEnv := Environment.ofKernelEnv next
+      let metadataMismatchesRev := (ordinaryMetadataMismatches replayEnv build).foldl
+        (fun mismatches message => message :: mismatches) state.metadataMismatchesRev
+      return { state with
+        checked := some next
+        replayFailure := none
+        metadataMismatchesRev := metadataMismatchesRev
+        recordsPushed := recordsPushed }
 
 /-- The successfully replayed environment, before metadata verdicts.  The
 batch compatibility wrapper uses this to preserve its historical `setEnv`

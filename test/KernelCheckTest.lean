@@ -8,6 +8,12 @@ error: Unknown identifier `InductiveModels.CompactDirectSealed`
 #guard_msgs in
 #check InductiveModels.CompactDirectSealed
 
+/--
+error: Unknown identifier `InductiveModels.SharedPrefixSourcePrepared`
+-/
+#guard_msgs in
+#check InductiveModels.SharedPrefixSourcePrepared
+
 /-!
 # Incremental kernel-check regression tests
 
@@ -113,6 +119,19 @@ def observeSharedPrefix (x : Export) (generation : Cli.Config) :
     return (result, ← getEnv))) context { env }
   return result
 
+def runSharedPrefixDirectObserved (x : Export) (generation : Cli.Config)
+    (failAfterOwners? : Option Nat := none) :
+    IO (((Report × CompactPlan × Option CompactKernelCheckVerdict) ×
+      SharedPrefixDirectObservation) × Environment) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<shared-prefix-direct-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+    let result ← runFilterDirectCheckingSharedPrefix x generation failAfterOwners?
+    return (result, ← getEnv))) context { env }
+  return result
+
 def runFilterDirectObserved (x : Export) (generation : Cli.Config)
     (checkRecursors : Bool := false) :
     IO ((Report × CompactPlan × Option CompactKernelCheckVerdict) × Environment) := do
@@ -198,6 +217,28 @@ def sameCompactPlan (left right : CompactPlan) : Bool :=
     left.unavailable? == right.unavailable? &&
     left.retainedGeneratedRecords == right.retainedGeneratedRecords
 
+def sameCompactVerdict (left right : Option CompactKernelCheckVerdict) : Bool :=
+  match left, right with
+  | some left, some right =>
+    sameResult left.result right.result && left.recordsPushed == right.recordsPushed &&
+      left.scheduledRecords == right.scheduledRecords &&
+      left.constructionTransitions == right.constructionTransitions &&
+      left.fallback? == right.fallback?
+  | none, none => true
+  | _, _ => false
+
+def sameDirectResult
+    (left right : Report × CompactPlan × Option CompactKernelCheckVerdict) : Bool :=
+  left.1 == right.1 && sameCompactPlan left.2.1 right.2.1 &&
+    sameCompactVerdict left.2.2 right.2.2
+
+def witnessedSupportCount (output : Array EDecl) (report : Report) : Nat :=
+  let spliced := report.spliced.foldl (init := ({} : Std.HashSet Name))
+    fun names entry => entry.2.foldl (fun names name => names.insert name) names
+  output.countP fun record =>
+    record.names.any spliced.contains &&
+      (record.names.any persistentSupportRoot || record.names.all persistentSupportName)
+
 def mapConstructor (input : Export) (target : Name) (f : ECtor → ECtor) : Export :=
   { input with decls := input.decls.map fun declaration => match declaration with
     | .induct types constructors recursors =>
@@ -217,6 +258,26 @@ def runIncremental (records : Array EDecl) : IO (Except String Unit × Nat) := d
   let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }
   return result
 
+def runMappedPrefixCollision (prefixLogical prefixBuild logical build : EDecl) :
+    IO (Except String Unit) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<mapped-prefix-kernel-check-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let action : MetaM (Except String Unit) := do
+    let base ← getEnv
+    let .ok (.checked declaration) := KernelCheck.replayDisposition prefixBuild
+      | throwError "mapped-prefix fixture is not one checked declaration"
+    let sourceEnv ← match base.addDeclCore 0 declaration none true with
+      | .ok env => pure env
+      | .error exception => throwError (exception.toMessageData {})
+    let seeded := KernelCheck.State.createCheckedPrefix sourceEnv
+      #[prefixLogical.names.toArray]
+    let next ← seeded.pushMappedBound logical build logical.names.toArray
+    return next.finish
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }
+  return result
+
 def runBound (rows : Array (EDecl × Array Name)) : IO (Except String Unit) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -232,22 +293,25 @@ def runBound (rows : Array (EDecl × Array Name)) : IO (Except String Unit) := d
   let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }
   return result
 
-def makeUnsafeInductive (name : Name) : IO EDecl := do
+def makeInductiveRecord (name : Name) (isUnsafe : Bool) : IO EDecl := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := "<shared-prefix-unsafe-inductive-fixture>", fileMap := default,
       maxHeartbeats := 0, maxRecDepth := 8192 }
   let declaration : Declaration := .inductDecl [] 0
     [{ name, type := .sort (.succ .zero),
-       ctors := [{ name := Name.str name "mk", type := .const name [] }] }] true
+       ctors := [{ name := Name.str name "mk", type := .const name [] }] }] isUnsafe
   let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
-    match (← getEnv).addDeclCore 0 declaration none false with
+    match (← getEnv).addDeclCore 0 declaration none (!isUnsafe) with
     | .error exception =>
-      throwError "cannot mint unsafe inductive: {← (exception.toMessageData {}).toString}"
+      throwError "cannot mint inductive: {← (exception.toMessageData {}).toString}"
     | .ok next =>
       setEnv next
       indEDecl #[name])) context { env }
   return result
+
+def makeUnsafeInductive (name : Name) : IO EDecl :=
+  makeInductiveRecord name true
 
 def metadataFailureInstalls (x : Export) (name : Name) : IO Bool := do
   let env ← importModules #[] {}
@@ -376,6 +440,16 @@ def run (root : String) : IO UInt32 := do
       errorSatisfies malformedQuotientBatch
         (fun message => message == "unknown quotient kind mystery")
 
+  let mappedPrefixProvider : EDecl :=
+    .ax `MappedProvider [] (.sort (.succ .zero)) false
+  let mappedGeneratedProvider : EDecl :=
+    .ax `MappedGeneratedProvider [] (.sort (.succ .zero)) false
+  let mappedPrefixCollision ← runMappedPrefixCollision
+    provider mappedPrefixProvider provider mappedGeneratedProvider
+  state := state.check "adopted source rows retain exact ownership across build images" <|
+    errorSatisfies mappedPrefixCollision
+      (fun message => message == "duplicate declaration Provider")
+
   let skippedUnsafe : EDecl :=
     .ax `SkippedUnsafe [] (.const `MissingUnsafeType []) true
   let skippedPartial : EDecl :=
@@ -411,6 +485,25 @@ def run (root : String) : IO UInt32 := do
   state := state.check "safe consumers of construction-only providers force fallback" <|
     unsafeConsumerPrefix.fallback?.any (fun message =>
       message.contains "depends on unchecked construction-only declaration")
+  let unsafeProviderInput := exportOf #[skippedUnsafe, skippedPartial, skippedUnsafeDef]
+  let ((sharedUnsafeProviders, sharedUnsafeObservation), _) ←
+    runSharedPrefixDirectObserved unsafeProviderInput noGeneration
+  let (directUnsafeProviders, _) ←
+    runFilterDirectObserved unsafeProviderInput noGeneration
+  let unsafeConsumerInput := exportOf #[skippedUnsafe, skippedPartial, skippedUnsafeDef,
+    unsafeConsumer, partialConsumer, unsafeDefConsumer]
+  let ((sharedUnsafeConsumers, sharedUnsafeConsumerObservation), _) ←
+    runSharedPrefixDirectObserved unsafeConsumerInput noGeneration
+  let (directUnsafeConsumers, _) ←
+    runFilterDirectObserved unsafeConsumerInput noGeneration
+  state := state.check "shared-prefix direct excludes Meta-only providers from checked roots" <|
+    sharedUnsafeObservation.selected &&
+      sharedUnsafeObservation.source.metaOnlyRecords == 3 &&
+      sharedUnsafeObservation.ownerSnapshotsConsumed == 0 &&
+      sharedUnsafeObservation.pendingOwnerSnapshotsAtSeal == 0 &&
+      sameDirectResult sharedUnsafeProviders directUnsafeProviders &&
+      !sharedUnsafeConsumerObservation.selected &&
+      sameDirectResult sharedUnsafeConsumers directUnsafeConsumers
 
   let unsafeInductive ← makeUnsafeInductive `SkippedUnsafeInductive
   let (unsafeInductiveOnly, _) ← observeSharedPrefix
@@ -422,6 +515,26 @@ def run (root : String) : IO UInt32 := do
   state := state.check "unsafe inductive is Meta-only and a safe consumer forces fallback" <|
     unsafeInductiveOnly.fallback?.isNone && unsafeInductiveOnly.metaOnlyRecords == 1 &&
       unsafeInductiveUsed.fallback?.isSome
+  let unsafeInductiveInput := exportOf #[unsafeInductive]
+  let unsafeInductiveGeneration := { noGeneration with simple := true }
+  let ((sharedUnsafeInductive, sharedUnsafeInductiveObservation), _) ←
+    runSharedPrefixDirectObserved unsafeInductiveInput unsafeInductiveGeneration
+  let (directUnsafeInductive, _) ←
+    runFilterDirectObserved unsafeInductiveInput unsafeInductiveGeneration
+  unless sharedUnsafeInductiveObservation.selected &&
+      sharedUnsafeInductiveObservation.source.metaOnlyRecords == 1 &&
+      sharedUnsafeInductiveObservation.source.ownerSnapshots == 1 &&
+      sameDirectResult sharedUnsafeInductive directUnsafeInductive do
+    IO.eprintln s!"shared unsafe report={repr sharedUnsafeInductive.1}, verdict=\
+      {repr sharedUnsafeInductive.2.2}, unavailable={repr sharedUnsafeInductive.2.1.unavailable?}; \
+      baseline report={repr directUnsafeInductive.1}, verdict={repr directUnsafeInductive.2.2}, \
+      unavailable={repr directUnsafeInductive.2.1.unavailable?}; observation=\
+      {repr sharedUnsafeInductiveObservation}"
+  state := state.check "generated records remain independent of a Meta-only inductive owner" <|
+    sharedUnsafeInductiveObservation.selected &&
+      sharedUnsafeInductiveObservation.source.metaOnlyRecords == 1 &&
+      sharedUnsafeInductiveObservation.source.ownerSnapshots == 1 &&
+      sameDirectResult sharedUnsafeInductive directUnsafeInductive
 
   let skippedPublic : Name := `SkippedAlias.Collision
   let skippedPrivate : Name :=
@@ -442,10 +555,14 @@ def run (root : String) : IO UInt32 := do
 
   let quotientSource ← readFixture root "funext_binder.ndjson"
   let (quotientPrefix, _) ← observeSharedPrefix quotientSource noGeneration
+  let ((sharedQuotient, sharedQuotientObservation), _) ←
+    runSharedPrefixDirectObserved quotientSource noGeneration
+  let (directQuotient, _) ← runFilterDirectObserved quotientSource noGeneration
   state := state.check "atomic quotient bundle is checked and never classified Meta-only" <|
     quotientSource.decls.countP (fun declaration => declaration matches .quot ..) == 4 &&
       quotientPrefix.fallback?.isNone && quotientPrefix.metaOnlyRecords == 0 &&
-      quotientPrefix.sourceRecords == quotientSource.decls.size
+      quotientPrefix.sourceRecords == quotientSource.decls.size &&
+      sharedQuotientObservation.selected && sameDirectResult sharedQuotient directQuotient
 
   -- Phase-A failure text is only an availability reason. The ordinary batch
   -- fallback remains authoritative and therefore retains full-export
@@ -498,16 +615,71 @@ def run (root : String) : IO UInt32 := do
     ("indexed", "indexed_fibre_boundary.ndjson",
       { noGeneration with simple := true }, false),
     ("composed", "nested_iota.ndjson", {}, true)]
+  let mut observedSharedSupport := false
   for (label, file, generation, checkRecursors) in routeMatrix do
     let input ← readFixture root file
     let (sourcePrefix, prefixEnv) ← observeSharedPrefix input generation
     let (output, report, shadow?) ← runFilterShadow input generation checkRecursors
+    let ((sharedResult, sharedObservation), sharedEnv) ←
+      runSharedPrefixDirectObserved input generation
+    let (directResult, _) ← runFilterDirectObserved input generation
+    observedSharedSupport := observedSharedSupport ||
+      sharedObservation.retainedSupportRecords > 0
     state := state.check s!"filter kernel shadow agrees for {label} generation" <|
       shadowAgrees shadow? && shadow?.any (fun shadow => output.size == shadow.finalRecords) &&
         !report.generated.isEmpty && sourcePrefix.fallback?.isNone &&
         sourcePrefix.sourceRecords == input.decls.size && sourcePrefix.ownerSnapshots > 0 &&
         input.decls.all fun declaration => declaration.names.all fun name =>
           !prefixEnv.constants.contains name
+    state := state.check s!"shared-prefix direct agrees for {label} generation" <|
+      sharedObservation.selected && sameDirectResult sharedResult directResult &&
+        sharedObservation.retainedSupportRecords == witnessedSupportCount output report &&
+        sharedObservation.ownerSnapshotsConsumed == sharedObservation.source.ownerSnapshots &&
+        sharedObservation.pendingOwnerSnapshotsAtSeal == 0 &&
+        sharedObservation.source.ownerSnapshots > 0 &&
+        input.decls.all fun declaration => declaration.names.all fun name =>
+          !sharedEnv.constants.contains name
+  state := state.check "shared-prefix retains only witnessed cross-owner support" <|
+    observedSharedSupport
+
+  -- A late optimization failure must look like one authoritative direct run,
+  -- including the global level-algebra observables that Main snapshots around
+  -- its own fallback. Inject after one completed owner, then compare from the
+  -- same counter baseline.
+  let counterInput ← readFixture root "mutual_shapes.ndjson"
+  let counterGeneration := { noGeneration with mutualModels := true }
+  let savedLevelCalls ← LevelAlgebra.levelCalls.get
+  let savedLevelEscapes ← LevelAlgebra.levelEscapes.get
+  LevelAlgebra.levelCalls.set 0
+  LevelAlgebra.levelEscapes.set 0
+  let ((sharedCounterResult, sharedCounterObservation), _) ←
+    runSharedPrefixDirectObserved counterInput counterGeneration (some 1)
+  let sharedLevelCalls ← LevelAlgebra.levelCalls.get
+  let sharedLevelEscapes ← LevelAlgebra.levelEscapes.get
+  LevelAlgebra.levelCalls.set 0
+  LevelAlgebra.levelEscapes.set 0
+  let (directCounterResult, _) ←
+    runFilterDirectObserved counterInput counterGeneration
+  let directLevelCalls ← LevelAlgebra.levelCalls.get
+  let directLevelEscapes ← LevelAlgebra.levelEscapes.get
+  LevelAlgebra.levelCalls.set savedLevelCalls
+  LevelAlgebra.levelEscapes.set savedLevelEscapes
+  unless !sharedCounterObservation.selected &&
+      sharedCounterObservation.fallback?.any (fun message =>
+        message.contains "injected shared-prefix failure after owner 1") &&
+      sameDirectResult sharedCounterResult directCounterResult &&
+      sharedLevelCalls == directLevelCalls &&
+      sharedLevelEscapes == directLevelEscapes && directLevelCalls > 0 do
+    IO.eprintln s!"shared counter calls={sharedLevelCalls}, escapes={sharedLevelEscapes}; \
+      direct calls={directLevelCalls}, escapes={directLevelEscapes}; observation=\
+      {repr sharedCounterObservation}"
+  state := state.check "late shared-prefix fallback restores level-algebra counters" <|
+    !sharedCounterObservation.selected &&
+      sharedCounterObservation.fallback?.any (fun message =>
+        message.contains "injected shared-prefix failure after owner 1") &&
+      sameDirectResult sharedCounterResult directCounterResult &&
+      sharedLevelCalls == directLevelCalls &&
+      sharedLevelEscapes == directLevelEscapes && directLevelCalls > 0
 
   let declineBase ← readFixture root "nested_iota.ndjson"
   let occupiedTreeModel : EDecl :=
@@ -515,10 +687,17 @@ def run (root : String) : IO UInt32 := do
   let declineInput := { declineBase with decls := declineBase.decls.push occupiedTreeModel }
   let (declineOutput, declineReport, declineShadow?) ← runFilterShadow declineInput {}
   let (declinePrefix, _) ← observeSharedPrefix declineInput {}
+  let ((sharedDecline, sharedDeclineObservation), _) ←
+    runSharedPrefixDirectObserved declineInput {}
+  let (directDecline, _) ← runFilterDirectObserved declineInput {}
   state := state.check "generation declines still feed the exact source stream" <|
     shadowAgrees declineShadow? && !declineReport.declined.isEmpty &&
       declineShadow?.any (fun shadow => declineOutput.size == shadow.finalRecords) &&
-      declinePrefix.fallback?.isNone && declinePrefix.ownerSnapshots > 0
+      declinePrefix.fallback?.isNone && declinePrefix.ownerSnapshots > 0 &&
+      sharedDeclineObservation.selected && sameDirectResult sharedDecline directDecline &&
+      sharedDeclineObservation.ownerSnapshotsConsumed ==
+        sharedDeclineObservation.source.ownerSnapshots &&
+      sharedDeclineObservation.pendingOwnerSnapshotsAtSeal == 0
 
   let privateA : Name := (`_private.FilterKernelShadowA).mkNum 0 |>.str "Collision"
   let privateB : Name := (`_private.FilterKernelShadowB).mkNum 0 |>.str "Collision"
@@ -536,9 +715,10 @@ def run (root : String) : IO UInt32 := do
 
   -- The exact/build alias boundary matters only when generation emits records
   -- from a collision-safe construction view. Insert a private-normalized copy
-  -- of a real inductive owner and require both generated families to cross the
-  -- shadow as exact names. The batch comparison must restore the construction
-  -- Meta environment, in which neither disposable carrier remains installed.
+  -- of a real inductive owner: the two distinct owner transitions form two
+  -- generated islands whose checker aliases must remain globally injective,
+  -- while each island's construction aliases still start from the same source
+  -- view as the ordinary route. Require both families to cross as exact names.
   let aliasShapes ← readFixture root "prim_shapes.ndjson"
   let publicOwner : Name := `Sv
   let privateOwner : Name := (`_private.FilterKernelShadowModel).mkNum 0 |>.str "Sv"
@@ -555,6 +735,10 @@ def run (root : String) : IO UInt32 := do
   let ((collidingOutput, collidingReport, collidingShadow?), collidingEnv) ←
     runFilterShadowObserved collidingShapes collisionGeneration true
   let (collidingPrefix, _) ← observeSharedPrefix collidingShapes collisionGeneration
+  let ((sharedColliding, sharedCollidingObservation), sharedCollidingEnv) ←
+    runSharedPrefixDirectObserved collidingShapes collisionGeneration
+  let (directColliding, _) ←
+    runFilterDirectObserved collidingShapes collisionGeneration
   let (ordinaryCollidingOutput, ordinaryCollidingReport) ←
     runFilterOrdinary collidingShapes collisionGeneration true
   let leakedBuildAlias := collidingOutput.any fun declaration =>
@@ -568,18 +752,30 @@ def run (root : String) : IO UInt32 := do
       collidingReport.generated.any (·.1 == privateOwner) && !leakedBuildAlias &&
       collidingOutput.any (·.names.contains (Naming.modelName privateOwner)) &&
       collidingPrefix.fallback?.isNone && collidingPrefix.ownerSnapshots > 0 &&
+      sharedCollidingObservation.selected &&
+      sameDirectResult sharedColliding directColliding &&
+      sharedCollidingObservation.ownerSnapshotsConsumed ==
+        sharedCollidingObservation.source.ownerSnapshots &&
+      sharedCollidingObservation.pendingOwnerSnapshotsAtSeal == 0 &&
       !collidingEnv.constants.contains (Naming.modelName publicOwner) &&
-      !collidingEnv.constants.contains (Naming.modelName privateOwner)
+      !collidingEnv.constants.contains (Naming.modelName privateOwner) &&
+      !sharedCollidingEnv.constants.contains (Naming.modelName publicOwner) &&
+      !sharedCollidingEnv.constants.contains (Naming.modelName privateOwner)
 
   let lateMalformed := mapConstructor declineBase `PT.node fun constructor =>
     { constructor with type := .sort .zero }
   let (ordinaryMalformedOutput, ordinaryMalformedReport) ← runFilterOrdinary lateMalformed {}
   let (shadowMalformedOutput, shadowMalformedReport, malformedShadow?) ←
     runFilterShadow lateMalformed {}
+  let ((sharedMalformed, sharedMalformedObservation), _) ←
+    runSharedPrefixDirectObserved lateMalformed {}
+  let (directMalformed, _) ← runFilterDirectObserved lateMalformed {}
   state := state.check "unreplayable source preserves output/report and has no sealed shadow" <|
     ordinaryMalformedReport.unreplayable.isSome && malformedShadow?.isNone &&
       shadowMalformedOutput == ordinaryMalformedOutput &&
-      shadowMalformedReport == ordinaryMalformedReport
+      shadowMalformedReport == ordinaryMalformedReport &&
+      !sharedMalformedObservation.selected &&
+      sameDirectResult sharedMalformed directMalformed
 
   -- A source consumer can precede the generated declaration it names.  The
   -- compact planner already marks this future-provider shape unavailable;
@@ -593,13 +789,26 @@ def run (root : String) : IO UInt32 := do
   let futureGeneration := { noGeneration with nested := true }
   let (_, _, futureShadow?) ← runFilterShadow futureInput futureGeneration
   let (_, futureCompact) ← runDiscarding futureInput futureGeneration
+  let ((sharedFuture, sharedFutureObservation), _) ←
+    runSharedPrefixDirectObserved futureInput futureGeneration
+  let (directFutureBaseline, _) ← runFilterDirectObserved futureInput futureGeneration
   let some futureShadow := futureShadow?
     | IO.eprintln "kernelchecktest: future-provider run did not seal"; return 1
-  state := state.check "future generated provider preserves the batch diagnostic fallback" <|
+  let futureFallbackOk :=
     futureShadow.usedFallback && !accepted futureShadow.streamedResult &&
       accepted futureShadow.batchResult && accepted futureShadow.result &&
       futureShadow.recordsPushed == futureShadow.finalRecords &&
-      futureCompact.unavailable?.isSome
+      futureCompact.unavailable?.isSome && !sharedFutureObservation.selected &&
+      sharedFutureObservation.fallback?.isSome &&
+      sameDirectResult sharedFuture directFutureBaseline &&
+      sharedFutureObservation.pendingOwnerSnapshotsAtSeal == 0
+  unless futureFallbackOk do
+    IO.eprintln s!"shared future verdict={repr sharedFuture.2.2}, \
+      unavailable={repr sharedFuture.2.1.unavailable?}; baseline verdict=\
+      {repr directFutureBaseline.2.2}, unavailable=\
+      {repr directFutureBaseline.2.1.unavailable?}; observation={repr sharedFutureObservation}"
+  state := state.check "future generated provider preserves the batch diagnostic fallback" <|
+    futureFallbackOk
 
   -- Direct compact retention seals before ordering/check finalization. Its
   -- public result is value-only, while the post-call Meta environment has
@@ -630,6 +839,8 @@ def run (root : String) : IO UInt32 := do
   let cutoffInput := { futureBase with decls := futureBase.decls ++ exactTail }
   let ((cutoffReport, cutoffPlan, cutoffVerdict?), cutoffEnv) ←
     runFilterDirectObserved cutoffInput futureGeneration
+  let ((sharedCutoff, sharedCutoffObservation), sharedCutoffEnv) ←
+    runSharedPrefixDirectObserved cutoffInput futureGeneration
   let plannedCutoff ←
     runFilterDirectPlannedObserved s!"{root}/_tmp" cutoffInput futureGeneration
   let (cutoffDiscardReport, cutoffDiscardPlan) ← runDiscarding cutoffInput futureGeneration
@@ -639,6 +850,11 @@ def run (root : String) : IO UInt32 := do
     directAccepted cutoffVerdict? && accepted cutoffBatch &&
       cutoffReport == cutoffOracleReport && cutoffReport == cutoffDiscardReport &&
       sameCompactPlan cutoffPlan cutoffDiscardPlan &&
+      sharedCutoffObservation.selected &&
+      sameDirectResult sharedCutoff (cutoffReport, cutoffPlan, cutoffVerdict?) &&
+      sharedCutoffObservation.ownerSnapshotsConsumed ==
+        sharedCutoffObservation.source.ownerSnapshots &&
+      sharedCutoffObservation.pendingOwnerSnapshotsAtSeal == 0 &&
       cutoffVerdict?.any (fun verdict =>
         verdict.constructionTransitions < cutoffInput.decls.size) &&
       plannedCutoff.retainedDeclarations == 0 &&
@@ -649,8 +865,9 @@ def run (root : String) : IO UInt32 := do
           cutoffVerdict?.any fun baseline =>
             verdict.constructionTransitions == baseline.constructionTransitions) &&
       !cutoffEnv.constants.contains `Tree &&
+      !sharedCutoffEnv.constants.contains `Tree &&
       exactTail.all fun declaration => declaration.names.all fun name =>
-        !cutoffEnv.constants.contains name
+        !cutoffEnv.constants.contains name && !sharedCutoffEnv.constants.contains name
 
   let simpleTailFixture ← readFixture root "prim_shapes.ndjson"
   let some (simpleTailRecord, simpleTailConstructor) :=
@@ -664,6 +881,9 @@ def run (root : String) : IO UInt32 := do
   let cutoffMalformed := { cutoffInput with decls := cutoffInput.decls.push unreplayableTail }
   let ((cutoffMalformedReport, cutoffMalformedPlan, cutoffMalformedVerdict?), _) ←
     runFilterDirectObserved cutoffMalformed futureGeneration
+  let ((sharedCutoffMalformed, sharedCutoffMalformedObservation),
+      sharedCutoffMalformedEnv) ←
+    runSharedPrefixDirectObserved cutoffMalformed futureGeneration
   let (_, cutoffMalformedOracleReport) ←
     runFilterOrdinary cutoffMalformed futureGeneration
   unless cutoffMalformedOracleReport.unreplayable.isSome &&
@@ -680,17 +900,30 @@ def run (root : String) : IO UInt32 := do
       cutoffMalformedPlan.retainedGeneratedRecords == 0 &&
       cutoffMalformedVerdict?.any (fun verdict =>
         verdict.fallback?.isSome && !accepted verdict.result &&
-          verdict.constructionTransitions < cutoffMalformed.decls.size)
+          verdict.constructionTransitions < cutoffMalformed.decls.size) &&
+      !sharedCutoffMalformedObservation.selected &&
+      sameDirectResult sharedCutoffMalformed
+        (cutoffMalformedReport, cutoffMalformedPlan, cutoffMalformedVerdict?) &&
+      cutoffMalformed.decls.all fun declaration => declaration.names.all fun name =>
+        !sharedCutoffMalformedEnv.constants.contains name
 
   let noCandidate := exportOf #[provider, consumer]
   let ((noCandidateReport, noCandidatePlan, noCandidateVerdict?), _) ←
     runFilterDirectObserved noCandidate noGeneration
+  let ((sharedNoCandidate, sharedNoCandidateObservation), _) ←
+    runSharedPrefixDirectObserved noCandidate noGeneration
   let (noCandidateDiscardReport, noCandidateDiscardPlan) ←
     runDiscarding noCandidate noGeneration
   state := state.check "compact direct with no construction candidate releases at transition zero" <|
     directAccepted noCandidateVerdict? && noCandidateReport == noCandidateDiscardReport &&
       sameCompactPlan noCandidatePlan noCandidateDiscardPlan &&
-      noCandidateVerdict?.any (·.constructionTransitions == 0)
+      noCandidateVerdict?.any (·.constructionTransitions == 0) &&
+      sharedNoCandidateObservation.selected &&
+      sharedNoCandidateObservation.source.ownerSnapshots == 0 &&
+      sharedNoCandidateObservation.ownerSnapshotsConsumed == 0 &&
+      sharedNoCandidateObservation.pendingOwnerSnapshotsAtSeal == 0 &&
+      sameDirectResult sharedNoCandidate
+        (noCandidateReport, noCandidatePlan, noCandidateVerdict?)
   state := state.check "planned compact direct releases source AST and preserves input oracle" <|
     plannedDirectSuccess.retainedDeclarations == 0 &&
       reportEquals plannedDirectSuccess.inputReport (Check.checkReport futureBase) &&
@@ -774,6 +1007,8 @@ def run (root : String) : IO UInt32 := do
   let basisGeneration := legacyGenerationConfig true
   let ((basisReport, basisPlan, basisVerdict?), _) ←
     runFilterDirectObserved basisInput basisGeneration
+  let ((sharedBasis, sharedBasisObservation), _) ←
+    runSharedPrefixDirectObserved basisInput basisGeneration
   let (basisDiscardReport, basisDiscardPlan) ← runDiscarding basisInput basisGeneration
   let (basisOutput, basisOracleReport) ← runFilterOrdinary basisInput basisGeneration
   let basisBatch ← runNew { basisInput with decls := basisOutput }
@@ -781,6 +1016,11 @@ def run (root : String) : IO UInt32 := do
     directAccepted basisVerdict? && accepted basisBatch &&
       basisReport == basisOracleReport && basisReport == basisDiscardReport &&
       sameCompactPlan basisPlan basisDiscardPlan && !basisReport.exempt.isEmpty &&
+      sharedBasisObservation.selected &&
+      sameDirectResult sharedBasis (basisReport, basisPlan, basisVerdict?) &&
+      sharedBasisObservation.ownerSnapshotsConsumed ==
+        sharedBasisObservation.source.ownerSnapshots &&
+      sharedBasisObservation.pendingOwnerSnapshotsAtSeal == 0 &&
       basisVerdict?.any (fun verdict =>
         verdict.constructionTransitions > 0 &&
           verdict.constructionTransitions < basisInput.decls.size)
@@ -788,18 +1028,55 @@ def run (root : String) : IO UInt32 := do
     { constructor with numFields := constructor.numFields + 1 }
   let ((malformedBasisReport, malformedBasisPlan, malformedBasisVerdict?), _) ←
     runFilterDirectObserved malformedBasis basisGeneration
+  let ((sharedMalformedBasis, sharedMalformedBasisObservation), _) ←
+    runSharedPrefixDirectObserved malformedBasis basisGeneration
   let (malformedBasisDiscardReport, malformedBasisDiscardPlan) ←
     runDiscarding malformedBasis basisGeneration
   let (_, malformedBasisOracleReport) ← runFilterOrdinary malformedBasis basisGeneration
-  state := state.check "invalid basis decline blocks later generation before exact-only tail" <|
+  let malformedBasisOk :=
     malformedBasisReport == malformedBasisOracleReport &&
       malformedBasisReport == malformedBasisDiscardReport &&
       sameCompactPlan malformedBasisPlan malformedBasisDiscardPlan &&
       malformedBasisReport.declined.any (·.1 == `Eq) &&
       malformedBasisReport.generated.isEmpty &&
+      !sharedMalformedBasisObservation.selected &&
+      sharedMalformedBasisObservation.fallback?.isSome &&
+      sameDirectResult sharedMalformedBasis
+        (malformedBasisReport, malformedBasisPlan, malformedBasisVerdict?) &&
+      sharedMalformedBasisObservation.pendingOwnerSnapshotsAtSeal == 0 &&
       malformedBasisVerdict?.any (fun verdict =>
         verdict.fallback?.isSome && verdict.constructionTransitions > 0 &&
           verdict.constructionTransitions < malformedBasis.decls.size)
+  unless malformedBasisOk do
+    IO.eprintln s!"shared malformed basis report={repr sharedMalformedBasis.1}, \
+      verdict={repr sharedMalformedBasis.2.2}, unavailable=\
+      {repr sharedMalformedBasis.2.1.unavailable?}; baseline report=\
+      {repr malformedBasisReport}, verdict={repr malformedBasisVerdict?}, unavailable=\
+      {repr malformedBasisPlan.unavailable?}; observation=\
+      {repr sharedMalformedBasisObservation}"
+  state := state.check "invalid basis decline blocks later generation before exact-only tail" <|
+    malformedBasisOk
+
+  -- Unlike the metadata-corruption fallback above, these are two genuinely
+  -- kernel-valid inductives. The first merely occupies the primitive Eq role
+  -- with the wrong family, so Phase B must carry `invalidBasis` and suppress
+  -- generation for the later otherwise-eligible owner.
+  let noncanonicalEq ← makeInductiveRecord `Eq false
+  let afterInvalidBasis ← makeInductiveRecord `AfterInvalidBasis false
+  let validInvalidBasisInput := exportOf #[noncanonicalEq, afterInvalidBasis]
+  let validInvalidBasisGeneration := { noGeneration with simple := true }
+  let ((sharedValidInvalidBasis, validInvalidBasisObservation), _) ←
+    runSharedPrefixDirectObserved validInvalidBasisInput validInvalidBasisGeneration
+  let (directValidInvalidBasis, _) ←
+    runFilterDirectObserved validInvalidBasisInput validInvalidBasisGeneration
+  state := state.check "shared-prefix propagates a kernel-valid invalid basis" <|
+    validInvalidBasisObservation.selected &&
+      validInvalidBasisObservation.ownerSnapshotsConsumed ==
+        validInvalidBasisObservation.source.ownerSnapshots &&
+      validInvalidBasisObservation.pendingOwnerSnapshotsAtSeal == 0 &&
+      sameDirectResult sharedValidInvalidBasis directValidInvalidBasis &&
+      sharedValidInvalidBasis.1.declined.any (·.1 == `Eq) &&
+      sharedValidInvalidBasis.1.generated.isEmpty
 
   let ((directAliasReport, directAliasPlan, directAlias?), directAliasEnv) ←
     runFilterDirectObserved collidingShapes collisionGeneration true
