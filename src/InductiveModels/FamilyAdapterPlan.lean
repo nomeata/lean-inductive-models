@@ -273,9 +273,6 @@ structure PublicIotaRecursiveCallRole where
   /-- Direct family member when the exact name pair names one.  Specialised
   mimic calls deliberately remain keyed by their independent name pair. -/
   member? : Option MemberKey
-  /-- Exact container occurrences whose validated recursor association selected
-  this member. Empty for an ordinary direct-family recursive call. -/
-  containerOccurrences : Array OccurrenceKey := #[]
   deriving Inhabited, BEq, Repr
 
 /-- One distinct installed IH binder in the deterministic public-iota proof.

@@ -319,8 +319,7 @@ def iotaSchemasComplete (plan : FamilyAdapterPlan)
                             step.implementationHypothesisPosition &&
                           step.recursiveCall?.all fun role =>
                             !role.publicRecursor.isAnonymous &&
-                              !role.implementationRecursor.isAnonymous &&
-                              role.containerOccurrences.all step.occurrences.contains
+                              !role.implementationRecursor.isAnonymous
 
 def ruleCertificatesComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (environment : Environment) : Bool :=
