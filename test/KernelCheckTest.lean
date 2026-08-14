@@ -102,6 +102,17 @@ def runFilterOrdinary (x : Export) (generation : Cli.Config)
     (runFilter x checkRecursors generation)) context { env }
   return result
 
+def observeSharedPrefix (x : Export) (generation : Cli.Config) :
+    IO (SharedPrefixSourceObservation × Environment) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<shared-prefix-source-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+    let result ← observeSharedPrefixSource x generation
+    return (result, ← getEnv))) context { env }
+  return result
+
 def runFilterDirectObserved (x : Export) (generation : Cli.Config)
     (checkRecursors : Bool := false) :
     IO ((Report × CompactPlan × Option CompactKernelCheckVerdict) × Environment) := do
@@ -219,6 +230,23 @@ def runBound (rows : Array (EDecl × Array Name)) : IO (Except String Unit) := d
       return state.finish
     catch error => return .error (← error.toMessageData.toString)
   let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }
+  return result
+
+def makeUnsafeInductive (name : Name) : IO EDecl := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<shared-prefix-unsafe-inductive-fixture>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let declaration : Declaration := .inductDecl [] 0
+    [{ name, type := .sort (.succ .zero),
+       ctors := [{ name := Name.str name "mk", type := .const name [] }] }] true
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+    match (← getEnv).addDeclCore 0 declaration none false with
+    | .error exception =>
+      throwError "cannot mint unsafe inductive: {← (exception.toMessageData {}).toString}"
+    | .ok next =>
+      setEnv next
+      indEDecl #[name])) context { env }
   return result
 
 def metadataFailureInstalls (x : Export) (name : Name) : IO Bool := do
@@ -353,9 +381,86 @@ def run (root : String) : IO UInt32 := do
   let skippedPartial : EDecl :=
     .defn `SkippedPartial [] (.const `MissingPartialType []) (.const `MissingPartialValue [])
       .opaque "partial" []
-  let skippedDirect ← runIncremental #[skippedUnsafe, skippedPartial]
+  let skippedUnsafeDef : EDecl :=
+    .defn `SkippedUnsafeDef [] (.const `MissingUnsafeDefType [])
+      (.const `MissingUnsafeDefValue []) .opaque "unsafe" []
+  let skippedDirect ← runIncremental #[skippedUnsafe, skippedPartial, skippedUnsafeDef]
   state := state.check "unsafe and partial declarations retain arena skip behavior" <|
-    accepted skippedDirect.1 && skippedDirect.2 == 2
+    accepted skippedDirect.1 && skippedDirect.2 == 3
+
+  -- Shared-prefix Phase A may retain skipped declarations for construction
+  -- visibility, but only while exact kernel roots prove that no checked record
+  -- can observe those extra constants.
+  let (unsafeProvidersOnly, unsafeProvidersEnv) ← observeSharedPrefix
+    (exportOf #[skippedUnsafe, skippedPartial, skippedUnsafeDef]) noGeneration
+  state := state.check "shared source prefix retains isolated unsafe and partial providers" <|
+    unsafeProvidersOnly.fallback?.isNone && unsafeProvidersOnly.metaOnlyRecords == 3 &&
+      unsafeProvidersOnly.ownerSnapshots == 0 &&
+      !unsafeProvidersEnv.constants.contains `SkippedUnsafe &&
+      !unsafeProvidersEnv.constants.contains `SkippedPartial &&
+      !unsafeProvidersEnv.constants.contains `SkippedUnsafeDef
+  let unsafeConsumer : EDecl :=
+    .ax `SafeUnsafeConsumer [] (.const `SkippedUnsafe []) false
+  let partialConsumer : EDecl :=
+    .ax `SafePartialConsumer [] (.const `SkippedPartial []) false
+  let unsafeDefConsumer : EDecl :=
+    .ax `SafeUnsafeDefConsumer [] (.const `SkippedUnsafeDef []) false
+  let (unsafeConsumerPrefix, _) ← observeSharedPrefix
+    (exportOf #[skippedUnsafe, skippedPartial, skippedUnsafeDef,
+      unsafeConsumer, partialConsumer, unsafeDefConsumer]) noGeneration
+  state := state.check "safe consumers of construction-only providers force fallback" <|
+    unsafeConsumerPrefix.fallback?.any (fun message =>
+      message.contains "depends on unchecked construction-only declaration")
+
+  let unsafeInductive ← makeUnsafeInductive `SkippedUnsafeInductive
+  let (unsafeInductiveOnly, _) ← observeSharedPrefix
+    (exportOf #[unsafeInductive]) noGeneration
+  let unsafeInductiveConsumer : EDecl :=
+    .ax `SafeUnsafeInductiveConsumer [] (.const `SkippedUnsafeInductive []) false
+  let (unsafeInductiveUsed, _) ← observeSharedPrefix
+    (exportOf #[unsafeInductive, unsafeInductiveConsumer]) noGeneration
+  state := state.check "unsafe inductive is Meta-only and a safe consumer forces fallback" <|
+    unsafeInductiveOnly.fallback?.isNone && unsafeInductiveOnly.metaOnlyRecords == 1 &&
+      unsafeInductiveUsed.fallback?.isSome
+
+  let skippedPublic : Name := `SkippedAlias.Collision
+  let skippedPrivate : Name :=
+    (`_private.SharedPrefixSkippedAlias).mkNum 0 |>.str "SkippedAlias" |>.str "Collision"
+  let aliasSkippedProviders := exportOf #[
+    .ax skippedPublic [] (.sort (.succ .zero)) false,
+    .ax skippedPrivate [] (.sort (.succ .zero)) true]
+  let (aliasSkippedOnly, _) ← observeSharedPrefix aliasSkippedProviders noGeneration
+  let aliasSkippedConsumer : EDecl :=
+    .ax `SafeSkippedAliasConsumer [] (.const skippedPrivate []) false
+  let (aliasSkippedUsed, _) ← observeSharedPrefix
+    { aliasSkippedProviders with decls := aliasSkippedProviders.decls.push aliasSkippedConsumer }
+    noGeneration
+  state := state.check "alpha-aliased skipped dependency is audited in exact names" <|
+    privateToUserName skippedPrivate == skippedPublic &&
+      aliasSkippedOnly.fallback?.isNone && aliasSkippedOnly.metaOnlyRecords == 1 &&
+      aliasSkippedUsed.fallback?.any (fun message => message.contains skippedPrivate.toString)
+
+  let quotientSource ← readFixture root "funext_binder.ndjson"
+  let (quotientPrefix, _) ← observeSharedPrefix quotientSource noGeneration
+  state := state.check "atomic quotient bundle is checked and never classified Meta-only" <|
+    quotientSource.decls.countP (fun declaration => declaration matches .quot ..) == 4 &&
+      quotientPrefix.fallback?.isNone && quotientPrefix.metaOnlyRecords == 0 &&
+      quotientPrefix.sourceRecords == quotientSource.decls.size
+
+  -- Phase-A failure text is only an availability reason. The ordinary batch
+  -- fallback remains authoritative and therefore retains full-export
+  -- preflight precedence over an earlier replay failure.
+  let sharedPrecedenceInput := exportOf #[missing, malformedDuplicate]
+  let (sharedPrecedence, _) ← observeSharedPrefix sharedPrecedenceInput noGeneration
+  let sharedPrecedenceBatch ← runNew sharedPrecedenceInput
+  state := state.check "shared-prefix unavailability defers exact failure precedence to batch" <|
+    sharedPrecedence.fallback?.isSome &&
+      errorSatisfies sharedPrecedenceBatch
+        (fun message => message == "unknown definition safety mystery")
+  let (sharedUnknownSafety, _) ← observeSharedPrefix
+    (exportOf #[unknownSafety]) noGeneration
+  state := state.check "shared-prefix classification rejects unknown safety explicitly" <|
+    sharedUnknownSafety.fallback? == some "unknown definition safety mystery"
 
   let emptyInductive : EDecl := .induct [] [] []
   let emptyDirect ← runIncremental #[emptyInductive]
@@ -395,19 +500,25 @@ def run (root : String) : IO UInt32 := do
     ("composed", "nested_iota.ndjson", {}, true)]
   for (label, file, generation, checkRecursors) in routeMatrix do
     let input ← readFixture root file
+    let (sourcePrefix, prefixEnv) ← observeSharedPrefix input generation
     let (output, report, shadow?) ← runFilterShadow input generation checkRecursors
     state := state.check s!"filter kernel shadow agrees for {label} generation" <|
       shadowAgrees shadow? && shadow?.any (fun shadow => output.size == shadow.finalRecords) &&
-        !report.generated.isEmpty
+        !report.generated.isEmpty && sourcePrefix.fallback?.isNone &&
+        sourcePrefix.sourceRecords == input.decls.size && sourcePrefix.ownerSnapshots > 0 &&
+        input.decls.all fun declaration => declaration.names.all fun name =>
+          !prefixEnv.constants.contains name
 
   let declineBase ← readFixture root "nested_iota.ndjson"
   let occupiedTreeModel : EDecl :=
     .ax (Naming.modelName `Tree) [] (.sort (.succ .zero)) false
   let declineInput := { declineBase with decls := declineBase.decls.push occupiedTreeModel }
   let (declineOutput, declineReport, declineShadow?) ← runFilterShadow declineInput {}
+  let (declinePrefix, _) ← observeSharedPrefix declineInput {}
   state := state.check "generation declines still feed the exact source stream" <|
     shadowAgrees declineShadow? && !declineReport.declined.isEmpty &&
-      declineShadow?.any (fun shadow => declineOutput.size == shadow.finalRecords)
+      declineShadow?.any (fun shadow => declineOutput.size == shadow.finalRecords) &&
+      declinePrefix.fallback?.isNone && declinePrefix.ownerSnapshots > 0
 
   let privateA : Name := (`_private.FilterKernelShadowA).mkNum 0 |>.str "Collision"
   let privateB : Name := (`_private.FilterKernelShadowB).mkNum 0 |>.str "Collision"
@@ -443,6 +554,7 @@ def run (root : String) : IO UInt32 := do
   let collisionGeneration := legacyGenerationConfig true
   let ((collidingOutput, collidingReport, collidingShadow?), collidingEnv) ←
     runFilterShadowObserved collidingShapes collisionGeneration true
+  let (collidingPrefix, _) ← observeSharedPrefix collidingShapes collisionGeneration
   let (ordinaryCollidingOutput, ordinaryCollidingReport) ←
     runFilterOrdinary collidingShapes collisionGeneration true
   let leakedBuildAlias := collidingOutput.any fun declaration =>
@@ -455,6 +567,7 @@ def run (root : String) : IO UInt32 := do
       collidingReport.generated.any (·.1 == publicOwner) &&
       collidingReport.generated.any (·.1 == privateOwner) && !leakedBuildAlias &&
       collidingOutput.any (·.names.contains (Naming.modelName privateOwner)) &&
+      collidingPrefix.fallback?.isNone && collidingPrefix.ownerSnapshots > 0 &&
       !collidingEnv.constants.contains (Naming.modelName publicOwner) &&
       !collidingEnv.constants.contains (Naming.modelName privateOwner)
 

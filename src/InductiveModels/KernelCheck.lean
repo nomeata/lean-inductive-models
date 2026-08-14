@@ -187,8 +187,24 @@ def replaySkipped : EDecl → Bool
     !types.isEmpty && types.all (·.isUnsafe) && constructors.all (·.isUnsafe) &&
       recursors.all (·.isUnsafe)
 
-/-- Constants used by the actual declaration submitted to the kernel. -/
-private def inputReferences (declaration : EDecl) : Std.HashSet Name := Id.run do
+/-- Records retained unchecked only for construction/Meta visibility. Quotient
+bundle members are excluded: although they have no independent replay step,
+the kernel checks and installs them atomically with the leading `Quot` record. -/
+def metaOnlySkipped : EDecl → Bool
+  | .ax _ _ _ isUnsafe => isUnsafe
+  | .defn _ _ _ _ _ safety _ =>
+    safety == "unsafe" || safety == "partial"
+  | .opaq _ _ _ _ isUnsafe _ => isUnsafe
+  | .induct types constructors recursors =>
+    !types.isEmpty && types.all (·.isUnsafe) && constructors.all (·.isUnsafe) &&
+      recursors.all (·.isUnsafe)
+  | _ => false
+
+/-- Exact constants used by the declaration submitted to the kernel. Skipped
+unsafe/partial records deliberately have no kernel dependency roots.  This is
+public so a shared construction/checking environment can prove that its
+unchecked Meta-only constants are an irrelevant extension. -/
+def inputReferences (declaration : EDecl) : Std.HashSet Name := Id.run do
   if replaySkipped declaration then return {}
   let mut roots : Array Expr := #[]
   match declaration with
@@ -273,6 +289,31 @@ def replayDeclaration (declaration : EDecl) : Except String (Option Declaration)
       return ({ name := type.name, type := type.type, ctors } : InductiveType)
     return some <| .inductDecl first.levelParams first.numParams inductiveTypes false
 
+/-- Audited replay classification shared by the exact checker and a combined
+construction/checking source prefix. `bundled` is restricted to the three
+quotient records installed atomically by the leading `Quot` declaration;
+`metaOnly` is restricted to unsafe/partial records intentionally retained
+unchecked for elaboration visibility. Unknown safety never enters either
+case: it is an error. -/
+inductive ReplayDisposition where
+  | checked (declaration : Declaration)
+  | metaOnly
+  | bundled
+
+def replayDisposition (declaration : EDecl) : Except String ReplayDisposition := do
+  if metaOnlySkipped declaration then return .metaOnly
+  match declaration with
+  | .defn _ _ _ _ _ safety _ =>
+    unless (safetyOf? safety).isSome do
+      throw s!"unknown definition safety {safety}"
+  | _ => pure ()
+  if let .quot name .. := declaration then
+    if name == `Quot.mk || name == `Quot.lift || name == `Quot.ind then
+      return .bundled
+  let some replay ← replayDeclaration declaration
+    | throw "kernel replay classification unexpectedly omitted a declaration"
+  return .checked replay
+
 private def ordinaryMetadataMismatches (env : Environment) : EDecl → Array String
   | .ax name levelParams type false =>
     match env.constants.find? name with
@@ -348,13 +389,13 @@ def State.push (state : State) (record : EDecl) : MetaM State := do
     return { state with recordsPushed }
   let some checked := state.checked
     | return { state with recordsPushed }
-  match replayDeclaration record with
+  match replayDisposition record with
   | .error message =>
     state := { state with checked := none }
     state := { state with replayFailure := some message }
     return { state with recordsPushed }
-  | .ok none => return { state with recordsPushed }
-  | .ok (some declaration) =>
+  | .ok .metaOnly | .ok .bundled => return { state with recordsPushed }
+  | .ok (.checked declaration) =>
     match checked.addDeclCore 0 declaration none with
     | .error exception =>
       let message := s!"{record.names}: {← (exception.toMessageData {}).toString}"

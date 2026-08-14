@@ -2119,6 +2119,9 @@ structure SourceScheduleFact where
   construction basis.  Unlike `root?`, this ranges over every member of a
   mutual block. -/
   basisOwner : Bool := false
+  /-- The exact output kernel checker deliberately omits this record.  The
+  construction environment may still retain it for Meta visibility. -/
+  kernelSkipped : Bool := false
   broadSupport : Bool := false
   structuralSupport : Bool := false
   deriving Inhabited, Repr, BEq
@@ -2134,6 +2137,7 @@ def SourceScheduleFact.ofDeclaration (declaration : EDecl) : SourceScheduleFact 
           types.any fun type => inductiveBasis.contains type.name)
     | _ => (none, false, false, false, false)
   { root?, nestedOwner, mutualOwner, simpleOwner, basisOwner
+    kernelSkipped := KernelCheck.metaOnlySkipped declaration
     broadSupport := broadScheduledSupportRecord declaration
     structuralSupport := structuralScheduledSupportRecord declaration }
 
@@ -2695,6 +2699,168 @@ private def sourceRecordUsesAliases (aliases : SourceReplayAliases)
     | _ => false
   summary.introduced.any aliases.hasExact ||
     summary.referenced.any aliases.hasExact || bookkeepingUsesAlias
+
+/-- Value-only observation of Phase A in the shared-prefix direct design.
+`fallback?` makes the optimization unavailable without changing the ordinary
+filter result.  The private preparation object below owns the actual shared
+source environment and owner snapshots; this public seam cannot retain them. -/
+structure SharedPrefixSourceObservation where
+  sourceRecords : Nat
+  ownerSnapshots : Nat
+  metaOnlyRecords : Nat
+  constructionTransitions : Nat
+  fallback? : Option String := none
+  deriving Inhabited, Repr, BEq
+
+private structure SharedPrefixOwnerSnapshot where
+  scheduledOrdinal : Nat
+  rawOrdinal : Nat
+  env : Environment
+
+private structure SharedPrefixSourcePrepared where
+  observation : SharedPrefixSourceObservation
+  completedEnv : Environment
+  snapshots : Array SharedPrefixOwnerSnapshot
+  rows : Array CompactRecord
+
+/-- Phase A: replay the collision-free source build image once, checking every
+kernel-relevant record and retaining unchecked unsafe/partial records only for
+Meta visibility.  Exact dependency roots certify that the latter are an
+irrelevant extension.  Owner snapshots share the one persistent source prefix
+and contain no generated declaration payload. -/
+private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
+    MetaM (Except String SharedPrefixSourcePrepared) := do
+  let census := SourceCensus.ofSource x
+  let plannedAliases ← match census.replayAliases with
+    | .ok aliases => pure aliases
+    | .error message => return .error s!"cannot plan collision-safe source replay: {message}"
+  let aliases ← match sourceReplayInductiveDerivations census.replayRoles plannedAliases with
+    | .ok aliases => pure aliases
+    | .error message => return .error s!"cannot derive collision-safe inductive replay: {message}"
+  unless aliases.isEmpty do
+    for name in census.replayRoles.quotients do
+      if aliases.hasExact name then
+        return .error s!"normalized source-name collision moves quotient role {name}"
+  let sourceOrder ← match census.scheduleOrder x generation with
+    | .ok order => pure order
+    | .error error => return .error s!"cannot schedule shared support: {repr error}"
+  let scheduled := { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
+  match validateScheduledSupport scheduled generation with
+  | .error message => return .error s!"invalid shared-support schedule: {message}"
+  | .ok () => pure ()
+  let sourceSummaries ← match census.summariesForOrder sourceOrder with
+    | .ok summaries => pure summaries
+    | .error message => return .error s!"cannot rebind frozen source summaries: {message}"
+  let sourceGlobals := Check.globalExtraRecordsWithIndex census.sourceSyntax scheduled.decls
+  let sourceFamilies := census.familyCertificateRecords x scheduled
+  let mut metaOnlyNames : Std.HashSet Name := {}
+  let mut metaOnlyRecords := 0
+  for rawOrdinal in [:census.scheduling.size] do
+    if census.scheduling[rawOrdinal]!.kernelSkipped then
+      metaOnlyRecords := metaOnlyRecords + 1
+      for name in census.summaries[rawOrdinal]!.introduced do
+        metaOnlyNames := metaOnlyNames.insert name
+  let base ← getEnv
+  let mut env := base
+  let mut snapshots : Array SharedPrefixOwnerSnapshot := #[]
+  let mut rows : Array CompactRecord := #[]
+  let mut constructionTransitions := 0
+  for scheduledOrdinal in [:sourceOrder.size] do
+    let rawOrdinal := sourceOrder[scheduledOrdinal]!
+    let declaration := x.decls[rawOrdinal]!
+    let fact := census.scheduling[rawOrdinal]!
+    if fact.constructionTouch generation then
+      constructionTransitions := scheduledOrdinal + 1
+      snapshots := snapshots.push { scheduledOrdinal, rawOrdinal, env }
+    let logicalDisposition ← match KernelCheck.replayDisposition declaration with
+      | .error message => return .error message
+      | .ok disposition => pure disposition
+    unless (logicalDisposition matches .metaOnly) == fact.kernelSkipped do
+      return .error s!"source replay classification disagrees for {declaration.names}"
+    if !fact.kernelSkipped then
+      if let some dependency := (KernelCheck.inputReferences declaration).toArray.find?
+          metaOnlyNames.contains then
+        return .error s!"checked source record {declaration.names} depends on \
+          unchecked construction-only declaration {dependency}"
+    let replay := aliases.buildRecord declaration
+    unless aliases.exactRecord replay == declaration do
+      return .error s!"source replay round trip changed {declaration.names}"
+    unless aliases.exactDerivedRecord declaration == declaration do
+      return .error s!"source declaration {declaration.names} contains a fresh build alias"
+    let buildDisposition ← match KernelCheck.replayDisposition replay with
+      | .error message => return .error (aliases.exactMessage message)
+      | .ok disposition => pure disposition
+    unless (logicalDisposition matches .checked ..) == (buildDisposition matches .checked ..) &&
+        (logicalDisposition matches .metaOnly) == (buildDisposition matches .metaOnly) &&
+        (logicalDisposition matches .bundled) == (buildDisposition matches .bundled) do
+      return .error s!"source replay classification changed under aliases for {declaration.names}"
+    setEnv env
+    let kernelDeclaration? ← match buildDisposition with
+      | .checked kernelDeclaration => pure (some (kernelDeclaration, true))
+      | .metaOnly => match toDeclaration env replay with
+        | some kernelDeclaration => pure (some (kernelDeclaration, false))
+        | none => return .error s!"construction-only source record {declaration.names} \
+            could not be reconstructed for Meta visibility"
+      | .bundled => pure none
+    if let some (kernelDeclaration, doCheck) := kernelDeclaration? then
+      match env.addDeclCore 0 kernelDeclaration none doCheck with
+      | .error exception =>
+        return .error s!"{declaration.names}: {aliases.exactMessage
+          (← (exception.toMessageData {}).toString)}"
+      | .ok next =>
+        env := next
+        setEnv next
+    if sourceRecordUsesAliases aliases sourceSummaries[scheduledOrdinal]! declaration then
+      if let .induct types constructors recursors := replay then
+        let mismatches ← checkInductiveMetadata types constructors recursors
+        unless mismatches.isEmpty do
+          return .error s!"collision-safe inductive replay metadata differs for \
+            {declaration.names}: {mismatches.toList.map aliases.exactMessage}"
+    let some firstName := declaration.names.head?
+      | return .error "shared-prefix source declaration has no name"
+    let some certifiedRaw := census.rawOrdinals[firstName]?
+      | return .error s!"shared-prefix source declaration {firstName} lost its raw ordinal"
+    unless certifiedRaw == rawOrdinal do
+      return .error s!"shared-prefix source declaration {firstName} changed raw ordinal"
+    rows := rows.push {
+      summary := sourceSummaries[scheduledOrdinal]!
+      globalExtra := sourceGlobals[scheduledOrdinal]!
+      families := sourceFamilies[scheduledOrdinal]!
+      locator := .source rawOrdinal }
+  let quotientRecords := x.decls.filter fun declaration => declaration matches .quot ..
+  unless quotientRecords.isEmpty do
+    let some installed := installedQuotRecords? env
+      | return .error "source quotient bundle was not installed by its leading record"
+    for record in quotientRecords do
+      unless installed.contains record do
+        return .error s!"source quotient record {record.names} differs from the kernel bundle"
+  return .ok {
+    observation := {
+      sourceRecords := sourceOrder.size
+      ownerSnapshots := snapshots.size
+      metaOnlyRecords
+      constructionTransitions }
+    completedEnv := env
+    snapshots
+    rows }
+
+/-- Test-facing Phase-A observer.  It always restores the invocation base and
+returns only counts/fallback text; the shared environments remain private. -/
+def observeSharedPrefixSource (x : Export) (generation : Cli.Config) :
+    MetaM SharedPrefixSourceObservation := do
+  let base ← getEnv
+  let prepared ← try
+    prepareSharedPrefixSource x generation
+  finally
+    setEnv base
+  match prepared with
+  | .ok prepared => return prepared.observation
+  | .error message => return {
+      sourceRecords := x.decls.size
+      ownerSnapshots := 0
+      metaOnlyRecords := 0
+      constructionTransitions := 0
+      fallback? := some message }
 
 private structure FilterState where
   mainEnv : Environment
