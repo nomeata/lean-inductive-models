@@ -3022,7 +3022,9 @@ private structure FilterState where
 
 private inductive FilterFeedResult where
   | next (state : FilterState)
-  | unreplayable (report : Report)
+  /-- Preserve the completed trace without making the caller retain the whole
+  previous state while `feedSource` appends to its accumulated arrays. -/
+  | unreplayable (report : Report) (sourceSteps : Array FilterSourceStep)
 
 /-- Consume one declaration from the already dependency-ordered logical source
 stream.  Every mutable field which survives this call is explicit in
@@ -3205,6 +3207,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         let msg ← (ex.toMessageData {}).toString
         return .unreplayable
           { rep with unreplayable := some s!"{d.names}: {sourceAliases.exactMessage msg}" }
+          sourceSteps
     if sourceUsesAlias then
       let replayEnv ← getEnv
       for name in replayD.names do
@@ -3350,6 +3353,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           return .unreplayable
             { rep with unreplayable := some s!"{d.names}: \
               {islandAliases.exactMessage message}" }
+            sourceSteps
   else
     mainEnv ← getEnv
   if retainOracle then legacyOut := legacyOut.push d
@@ -3612,10 +3616,16 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
             unless declaration == oracle do
               throwError "planned source record {rawOrdinal} differs from the validated parse"
           pure declaration
-    match ← state.feedSource context declaration with
+    -- A `return` from a `for` loop preserves its mutable loop state. Move the
+    -- real state out first so that `feedSource` owns its accumulated arrays;
+    -- the placeholder is observed only by the loop machinery on an early
+    -- return and is never part of the public result.
+    let current := state
+    state := { mainEnv, persistentSyntax := sourceSyntax }
+    match ← current.feedSource context declaration with
     | .next next => state := next
-    | .unreplayable report =>
-      return (x.decls, report, {}, {}, state.sourceSteps)
+    | .unreplayable report sourceSteps =>
+      return (x.decls, report, {}, {}, sourceSteps)
   let (decls, report, compact, plan) ← state.finalize context
   return (decls, report, compact, plan, state.sourceSteps)
 

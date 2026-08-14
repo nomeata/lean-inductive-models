@@ -1208,6 +1208,8 @@ def run (root : String) : IO UInt32 := do
   let lateMalformed := mapConstructor nestedRun.input `PT.node fun constructor =>
     { constructor with type := .sort .zero }
   let malformedLegacy ← runFilterState lateMalformed {}
+  let validTrace ← runFilterTraceState nestedRun.input {}
+  let malformedTrace ← runFilterTraceState lateMalformed {}
   let malformedShadow ← runFilterStagedState s!"{root}/_tmp" lateMalformed {}
   let malformedDropped ← runFilterDroppedState s!"{root}/_tmp" lateMalformed {}
   let malformedDiscarded ← runFilterDiscardedState lateMalformed {}
@@ -1221,6 +1223,10 @@ def run (root : String) : IO UInt32 := do
       malformedDiscarded.plan.declarations.isEmpty &&
       malformedDiscarded.plan.retainedGeneratedRecords == 0 &&
       !malformedShadow.planValid && !malformedDropped.planValid
+  state := state.check "late unreplayable preserves the completed trace prefix" <|
+    malformedTrace.report == malformedLegacy.report &&
+      !malformedTrace.steps.isEmpty && malformedTrace.steps.size < validTrace.steps.size &&
+      malformedTrace.steps == validTrace.steps.extract 0 malformedTrace.steps.size
 
   -- The small alias fixture exercises both a model-local arm-C skeleton and
   -- fixed shared graph support. Every generated declaration that survives in
