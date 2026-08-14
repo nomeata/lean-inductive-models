@@ -2517,13 +2517,13 @@ private def wCoreGenerationOrder (declarations : Array EDecl) : Except String (A
   for name in wCoreModelReadinessNames do
     unless declarations.any (fun declaration => declaration.names.contains name) do
       throw s!"the W core fragment has no model-readiness declaration {name}"
-  let prefix := declarations.extract 0 accIndex
+  let rawPrefix := declarations.extract 0 accIndex
   let tail := declarations.extract accIndex declarations.size
   let isReadiness := fun declaration =>
     declaration.names.any wCoreModelReadinessNames.contains
   let readiness := tail.filter isReadiness
   let remainder := tail.filter fun declaration => !isReadiness declaration
-  return prefix ++ readiness ++ remainder
+  return rawPrefix ++ readiness ++ remainder
 
 /-- The prefix every fragment name gets, bar the shared ones below. The
 fragment's names are Lean core's, so splicing its `List` into an input that
