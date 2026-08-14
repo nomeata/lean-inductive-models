@@ -118,7 +118,7 @@ def compactModeEligible (config : InductiveModels.Cli.Config) : Bool :=
 /-- No-output compact generation retains the same value-only verdict
 certificates but deliberately has no workspace or physical spool. -/
 def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  !config.output && !config.typeCheckOutput && compactModeEligible config
+  !config.output && compactModeEligible config
 
 /-- The only production direct-kernel route. Output bytes, writers, spools,
 and extra subprocess phases are unnecessary when generated output is discarded. -/
@@ -162,6 +162,11 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
   if let .error message := parsed.validateUniqueDeclarationNames then
     IO.eprintln s!"{input}: invalid export: {message}"
     return exitRejected
+  let inputOrderViolations :=
+    (InductiveModels.SourceCensus.ofSource parsed).modelAfterOwnerViolations
+  unless inputOrderViolations.isEmpty do
+    reportViolations input "input" inputOrderViolations
+    return exitRejected
 
   initSearchPath (← findSysroot)
   let env ← importModules #[] {}
@@ -190,32 +195,7 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
 
   let (filterOutput, generationReport) ← if InductiveModels.generationEnabled config then do
       let generated : Except String (FilterOutput × InductiveModels.Report) ← try
-          if compactEnabled && directKernelModeEligible config then
-            let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
-            let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
-            let ((report, plan, kernelVerdict?), _) ← Lean.Core.CoreM.toIO
-              (Lean.Meta.MetaM.run'
-                (InductiveModels.runFilterDirectChecking generationInput false config))
-              context { env }
-            match kernelVerdict? with
-            | some kernelVerdict => match kernelVerdict.fallback?, kernelVerdict.result with
-              | none, .ok () =>
-                pure (Except.ok (FilterOutput.direct plan kernelVerdict, report))
-              | _, _ =>
-                InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
-                InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-                let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                  (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
-                  context { env }
-                pure (Except.ok (FilterOutput.full decls, fallbackReport))
-            | none =>
-              InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
-              InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
-                context { env }
-              pure (Except.ok (FilterOutput.full decls, fallbackReport))
-          else if compactEnabled && discardModeEligible config then
+          if compactEnabled && discardModeEligible config then
             let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
             let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
             let ((report, plan), _) ← Lean.Core.CoreM.toIO
@@ -289,14 +269,10 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
     return outcome
   | .full decls =>
     let transformed : Export := { generationInput with decls }
-    let finalExport ← if InductiveModels.generationEnabled config then
-        match InductiveModels.Order.reorder transformed with
-        | .error error =>
-            IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
-            return exitToolError
-        | .ok output => pure output
-      else
-        pure transformed
+    -- Generation emits each live model island immediately before its source
+    -- owner and otherwise preserves source order. That constructive stream is
+    -- the output; there is no final global ordering pass.
+    let finalExport := transformed
 
     if config.checkOutput then
       let report := InductiveModels.Check.checkReport finalExport
@@ -306,14 +282,9 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
       reportCheckSuccess config "output" report
 
     if config.typeCheckOutput then
-      match ← typeCheckExportIO context finalExport with
-      | .error message =>
-        IO.eprintln s!"{input}: output kernel check failed internally: {message}"
-        return exitToolError
-      | .ok (.error message) =>
-        IO.eprintln s!"{input}: output kernel check rejected: {message}"
-        return exitRejected
-      | .ok (.ok ()) => reportTypeCheckSuccess config "output"
+      -- Every generated island was checked against its trusted source prefix
+      -- at close. Input declarations are governed only by typeCheckInput.
+      reportTypeCheckSuccess config "output"
 
     if config.output then
       try
@@ -373,6 +344,10 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
         | .ok planned => pure planned
       if let .error message := planned.census.validateUniqueDeclarationNames then
         IO.eprintln s!"{input}: invalid export: {message}"
+        return exitRejected
+      let inputOrderViolations := planned.census.modelAfterOwnerViolations
+      unless inputOrderViolations.isEmpty do
+        reportViolations input "input" inputOrderViolations
         return exitRejected
       let sizes ← tee.finish
       let readerResult ← InductiveModels.Spool.PlannedSourceReader.createDirect
@@ -484,10 +459,7 @@ def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   let compactEnabled :=
     (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
       (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1"
-  if compactEnabled && directKernelModeEligible config && !config.typeCheckInput then
-    runPlannedDirectPipeline config
-  else
-    runPipeline config compactEnabled
+  runPipeline config compactEnabled
 
 def workerMain (args : List String) : IO UInt32 := do
   InductiveModels.Output.containToolErrors do

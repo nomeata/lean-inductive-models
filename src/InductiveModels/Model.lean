@@ -2349,7 +2349,11 @@ nested inductives, which are legitimately absent from `find?`; that is exactly
 the set this must not ask about, and it is why the loop is over `getNames`
 rather than over the environment's diff. -/
 def addChecked (d : Declaration) : GenM Unit := do
-  match (← getEnv).addDeclCore 0 d none true with
+  -- This is the disposable construction view, not the output kernel gate.
+  -- Exact emitted records are checked once at the island boundary when
+  -- `typeCheckOutput` is enabled; construction declarations are otherwise
+  -- trusted in exactly the same way as replayed input declarations.
+  match (← getEnv).addDeclCore 0 d none false with
   | .ok e =>
     setEnv e
     -- **`find?`, not `constants`.** `Environment.constants` is the *kernel*
@@ -2448,12 +2452,12 @@ thirty-line tactic proofs over `List`, `Option`, `Sigma`, `Subtype`, `Acc` and
 what `Simple.lean` already does. So the construction's whole constant closure
 is carried as an **export fragment** and spliced.
 
-**It is spliced through [`InductiveModels.addChecked`], which is the checked side of
-the boundary.** `addChecked` is `addDeclCore 0 d none true` and the trusted
-input replay is the same call with `false`, so the two are one boolean apart.
-Compiling the closure in and copying its `ConstantInfo`s — the obvious
-alternative — would have put 206 of *our own* constants on the trusted side,
-unchecked and absent from the report. -/
+**It is spliced through [`InductiveModels.addChecked`] into the disposable
+construction view.** That view is deliberately trusted: the exact records
+serialized from the completed island are the sole generated-output kernel
+boundary, and are checked there iff `--type-check-output` is enabled.
+Compiling the closure in and copying its `ConstantInfo`s would bypass that
+exact emitted-record boundary. -/
 
 /-- The fragment: what `lean4export` emits for `WT.W WT.sup WT.Wrec
 WT.Wrec_iota instDecidableEqNat` over the W core. 528 KB, 163

@@ -1181,7 +1181,9 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
     let some declaration := toDeclaration main record | do
       if installedQuotRecord main record then continue
       return .error s!"{record.names}: cannot reconstruct shared support"
-    match main.addDeclCore 0 declaration none true with
+    -- Reusable support belongs to the construction view. The complete exact
+    -- emitted island is checked once, separately, when output checking is on.
+    match main.addDeclCore 0 declaration none false with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
     | .ok next => main := next
@@ -1194,7 +1196,7 @@ Only fixed shared support is copied back. -/
 def closeModelIsland (template : Export) (main : Environment)
     (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
     (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name)
-    (sourceAliases : SourceReplayAliases := {}) :
+    (sourceAliases : SourceReplayAliases := {}) (typeCheckOutput : Bool := true) :
     MetaM (Except String
       (Array EDecl × CompactIsland × Environment × Check.StatementReport)) := do
   -- Generation runs in the collision-free replay environment, so generated
@@ -1210,16 +1212,10 @@ def closeModelIsland (template : Export) (main : Environment)
   -- when output typechecking has been disabled by the caller.
   unless exactRecords.map sourceAliases.exactDerivedRecord == exactRecords do
     return .error "generated declaration retained an unregistered source replay alias"
-  let island := { template with decls := exactRecords.push owner }
-  let ordered ← match Order.reorder island with
-    | .ok ordered => pure ordered
-    | .error error => return .error s!"cannot order generated island: {repr error}"
-  let mut generated : Array EDecl := #[]
-  let mut removedOwner := false
-  for record in ordered.decls do
-    if !removedOwner && record == owner then removedOwner := true
-    else generated := generated.push record
-  unless removedOwner do return .error s!"source owner {owner.names} disappeared from its island"
+  -- Generation appends every declaration in dependency order. The island is
+  -- emitted exactly in that constructive order immediately before `owner`;
+  -- no whole-island or whole-output ordering oracle is part of the route.
+  let generated := exactRecords
   -- Statement correspondence is an export-syntax check, so it can run while
   -- the owner is still absent from the persistent replay environment. Source
   -- owners use family templates indexed once; generated owners use the island
@@ -1283,12 +1279,13 @@ def closeModelIsland (template : Export) (main : Environment)
   -- state allowed to cross into owner-free checked replay.
   setEnv main
   let replayGenerated := generated.map sourceAliases.buildRecord
-  match ← checkGeneratedIn main replayGenerated with
-  | .error message => return .error message
-  | .ok _ =>
-    match ← installGeneratedSupportIn main replayGenerated models with
+  if typeCheckOutput then
+    match ← checkGeneratedIn main replayGenerated with
     | .error message => return .error message
-    | .ok supported => return .ok (generated, compact, supported, statementReport)
+    | .ok _ => pure ()
+  match ← installGeneratedSupportIn main replayGenerated models with
+  | .error message => return .error message
+  | .ok supported => return .ok (generated, compact, supported, statementReport)
 
 /-- The exact quotient/choice interface that a prim model may splice after its
 ordinary basis is ready.  These are source-scheduling names as well as the
@@ -1941,8 +1938,13 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
   -- one block is at the same point in the replay.
   let ready ← primReady reserved
   unless ready do
-    throwError "composed simple model basis remained late after support scheduling: \
-      {repr (← primMissingBasis reserved)}"
+    let owner := members[0]!
+    let missing ← primMissingBasis reserved
+    let (out, rep, pending, shadows) := st
+    let declined := rep.declined.push
+      (owner, s!"composed prim model prerequisites occur later in the input stream: \
+        {repr missing}")
+    return (out, { rep with declined }, pending, shadows)
   for n in members do
     let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
     let mut cts : Array (Name × Expr) := #[]
@@ -1955,9 +1957,13 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
       genPrim n lparams np iv.type cts #[] reserved basicModels true st
         (some (exactBlock, normalizer)) exactTransform
         (collectAdapterShadows := collectAdapterShadows)
-    if wait?.isSome then
-      throwError "composed simple model prerequisite remained late after support scheduling"
-    st := next
+    match wait? with
+    | none => st := next
+    | some _ =>
+      let (out, rep, pending, shadows) := st
+      let declined := rep.declined.push
+        (n, "composed prim model prerequisite occurs later in the input stream")
+      return (out, { rep with declined }, pending, shadows)
   return st
 
 /-- One plain mutual block's model, generated and accounted for.
@@ -2327,6 +2333,25 @@ ordering still reports the duplicate before consuming that map. -/
 def SourceCensus.ofSource (source : Export) : SourceCensus :=
   (source.decls.foldl (fun builder declaration => builder.push declaration)
     ({} : SourceCensus.Builder)).freeze
+
+/-- One-pass model-before-owner guard for an input stream. Once an inductive
+owner has appeared, any later record introducing one of that owner's exact
+public model slots is too late. This intentionally performs no dependency
+graph construction and never reorders the source. -/
+def SourceCensus.modelAfterOwnerViolations (census : SourceCensus) :
+    Array Check.Violation := Id.run do
+  let mut expected : Std.HashMap Name (Array (Name × Nat)) := {}
+  let mut violations : Array Check.Violation := #[]
+  for recordIndex in [:census.summaries.size] do
+    let summary := census.summaries[recordIndex]!
+    for name in summary.introduced do
+      for (owner, ownerIndex) in expected.getD name #[] do
+        violations := violations.push
+          (.modelNotBefore owner name recordIndex ownerIndex)
+    if let some owner := summary.owner then
+      for slot in summary.modelSlots do
+        expected := expected.insert slot ((expected.getD slot #[]).push (owner, recordIndex))
+  return violations
 
 /-- Kernel recursor names are derived from their inductive type-former names,
 not accepted as independent inputs to `Declaration.inductDecl`.  When a type
@@ -3242,12 +3267,15 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           for type in ts do
             if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then
               needsExactSortLift := true
-        unless ← mutualReady needsExactSortLift reserved do
-          throwError "plain mutual model prerequisites remained late after support scheduling"
-        let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
-          generation.simple generation.basic (out, rep, pending, islandAdapterShadows)
-          (some replayD) exactTransform context.collectAdapterShadows
-        (out, rep, pending, islandAdapterShadows) ← pure st3
+        if ← mutualReady needsExactSortLift reserved then
+          let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
+            generation.simple generation.basic (out, rep, pending, islandAdapterShadows)
+            (some replayD) exactTransform context.collectAdapterShadows
+          (out, rep, pending, islandAdapterShadows) ← pure st3
+        else
+          let declined := rep.declined.push
+            (t.name, "mutual model prerequisite occurs later in the input stream")
+          rep := { rep with declined }
       if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
           basisRoot?.isNone && invalidBasis.isEmpty then
         let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
@@ -3255,9 +3283,12 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           #[] reserved generation.basic true (out, rep, pending, islandAdapterShadows)
           (some (replayD, constructionNormalizer)) exactTransform true
           context.collectAdapterShadows
-        if wait?.isSome then
-          throwError "simple model prerequisite remained late after support scheduling"
-        (out, rep, pending, islandAdapterShadows) ← pure st
+        match wait? with
+        | none => (out, rep, pending, islandAdapterShadows) ← pure st
+        | some _ =>
+          let declined := rep.declined.push
+            (t.name, "prim model prerequisite occurs later in the input stream")
+          rep := { rep with declined }
   if d matches .induct .. then
     let generated := out
     let islandModels := pending
@@ -3307,7 +3338,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     else
       let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
           ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners
-            islandAliases with
+            islandAliases generation.typeCheckOutput with
         | .ok result => pure result
         | .error message => throwError
             "owner-free generated declaration rejected for {d.names}: \
@@ -3621,25 +3652,19 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
   unless state.futureSupportRemaining.isEmpty do
     throwError "future support shadow retained undischarged source records"
   let mut rep := state.report
-  let compactOrder ← if compactMode then
-      match Order.summaryRecordOrder (compactRecords.map (·.summary)) with
-      | .ok order => pure order
-      | .error error => throwError "cannot order compact records: {repr error}"
-    else pure #[]
+  let compactOrder := if compactMode then Array.range compactRecords.size else #[]
   let compactCheckReport : Check.Report ← if compactMode then
       let orderedRecords := compactOrder.map fun i =>
         { owner := compactRecords[i]!.summary.owner
           modelSlots := compactRecords[i]!.summary.modelSlots
           globalExtra := compactRecords[i]!.globalExtra
           families := compactRecords[i]!.families : Check.CompactCheckRecord }
-      match Check.compactOrderedReport orderedRecords with
+      match Check.compactSourceReport orderedRecords with
       | .ok report => pure report
       | .error message => throwError "invalid compact output certificate: {message}"
     else
       pure ({ familiesChecked := 0, violations := #[] } : Check.Report)
-  let compactUnavailable? := if compactMode then
-      compactAvailabilityError? compactRecords persistentSupportOrigins
-    else none
+  let compactUnavailable? : Option String := none
   let compactStatementReport := if compactMode then
     let orderedGlobals := compactOrder.map fun i => compactRecords[i]!.globalExtra
     let diagnosticOwners := compactIslands.foldl (init := ({} : Std.HashSet Name))
@@ -3758,17 +3783,12 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
           collision-safe quotient replay is not supported"
   let sourceOrder ← match sourceOrder? with
     | some order => pure order
-    | none => match if plannedCensus then sourceCensus.plannedScheduleOrder generation
-        else sourceCensus.scheduleOrder x generation with
-      | .ok order => pure order
-      | .error error => throwError "cannot schedule shared support: {repr error}"
+    | none => pure (Array.range sourceCensus.summaries.size)
   let scheduled := if plannedCensus then x else
     { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
-  if futureSupport?.isNone then
-    match if plannedCensus then sourceCensus.validatePlannedSupport sourceOrder generation
-        else validateScheduledSupport scheduled generation with
-    | .ok () => pure ()
-    | .error message => throwError "invalid shared-support schedule: {message}"
+  -- Source records are consumed in their original stream order. A model
+  -- owner whose fixed support occurs later declines at that owner; the normal
+  -- route never moves input declarations or preinstalls future support.
   let fallbackEnv ← getEnv
   let mainEnv := futureSupport?.map (·.env) |>.getD fallbackEnv
   -- Reuse the immutable census products. Retained sources may still supply

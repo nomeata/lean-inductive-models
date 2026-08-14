@@ -171,9 +171,8 @@ def main (args : List String) : IO UInt32 := do
       hasDiagnostic arenaStdin.stderr "input kernel check: accepted" &&
       hasDiagnostic arenaStdin.stderr "output kernel check: accepted"
 
-  -- Pure kernel-check mode does not impose this tool's model-before-owner
-  -- ordering policy. This export is kernel-valid even though its model-shaped
-  -- axiom depends on the source owner and would make that policy cyclic.
+  -- Input stream order is checked online without constructing a dependency
+  -- graph: once an owner has appeared, a later public model slot is too late.
   let modelCycleName := InductiveModels.Naming.modelName `Tree
   let modelCycle : InductiveModels.EDecl :=
     .ax modelCycleName [] (.const `Tree []) false
@@ -181,8 +180,9 @@ def main (args : List String) : IO UInt32 := do
   let arenaModelCycle ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
     "--no-output", "-"] modelCycleText
-  state := state.check "pure kernel mode does not impose model ordering" <|
-    arenaModelCycle.exitCode == 0 && arenaModelCycle.stdout.isEmpty
+  state := state.check "online input guard rejects a model after its owner" <|
+    arenaModelCycle.exitCode == 1 && arenaModelCycle.stdout.isEmpty &&
+      arenaModelCycle.stderr.contains "is not before Tree at record"
 
   let badName := `ArenaBad
   let badDeclaration : InductiveModels.EDecl :=
