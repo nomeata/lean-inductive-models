@@ -179,6 +179,15 @@ structure CompactRecord where
   locator : CompactLocator
   deriving Inhabited, Repr
 
+/-- Value-only accounting for one declaration-wise output stream.  The
+largest callback payload is one generated island; source declarations are
+delivered separately and no prior payload remains owned by the driver. -/
+structure StreamOutputStats where
+  generatedRecords : Nat := 0
+  sourceRecords : Nat := 0
+  maxIslandRecords : Nat := 0
+  deriving Inhabited, Repr, BEq
+
 /-- Value-only shadow of a compact generation pass, with no physical payloads
 or generated declaration expressions. -/
 structure CompactPlan where
@@ -187,6 +196,23 @@ structure CompactPlan where
   /-- A regression counter for the payload-retention contract. Compact discard
   never appends generated declarations to a cumulative output array. -/
   retainedGeneratedRecords : Nat := 0
+  streamStats : StreamOutputStats := {}
+  /-- Source owners whose already-present model family has no final compact
+  structural violation. Planned routes use this value-only set to classify
+  declines without materializing the source export. -/
+  coveredInputOwners : Array Name := #[]
+
+/-- Exact logical output events.  A nonempty generated island is delivered as
+one atomic event after its optional kernel gate and compact capture; its source
+record is the immediately following event. -/
+inductive StreamOutputEvent where
+  | generatedIsland (records : Array EDecl)
+  | source (record : EDecl)
+
+/-- Declaration-wise output callback.  It is deliberately value-level: no
+writer, JSON representation, environment, or physical sink enters generation
+or generated-island checking. -/
+abbrev StreamOutputEmitter := StreamOutputEvent → MetaM Unit
 
 /-- The unique minor-premise position belonging to `constructorName` in a
 mutual recursor telescope.  Each exported recursor record carries only its
@@ -1896,14 +1922,21 @@ no-output mode retains only value-level certificates. -/
 private inductive RetentionMode where
   | fullOutput
   | compactDiscard
+  | streamOutput
 
 private def RetentionMode.isCompact : RetentionMode → Bool
   | .fullOutput => false
   | .compactDiscard => true
+  | .streamOutput => true
 
 private def RetentionMode.retainsOutput : RetentionMode → Bool
   | .fullOutput => true
   | .compactDiscard => false
+  | .streamOutput => false
+
+private def RetentionMode.streamsOutput : RetentionMode → Bool
+  | .streamOutput => true
+  | _ => false
 
 /-- Deterministic collision-free aliases from the complete source-name census.
 
@@ -2179,6 +2212,7 @@ private structure FilterContext where
   constructionReserved : Std.HashSet Name
   collectTrace : Bool := false
   collectAdapterShadows : Bool := false
+  outputEmitter? : Option StreamOutputEmitter := none
 
 /-- Cheap summary-first test for whether an exhaustive record rewrite can
 change anything. `all` fields are bookkeeping rather than dependencies, so
@@ -2208,6 +2242,8 @@ private structure FilterState where
   invalidBasis : Std.HashSet Name := {}
   sourceSteps : Array FilterSourceStep := #[]
   adapterShadows : Array FamilyAdapter.ShadowObservation := #[]
+  streamStats : StreamOutputStats := {}
+  inputFamilyCandidates : Array Name := #[]
 
 private inductive FilterFeedResult where
   | next (state : FilterState)
@@ -2225,6 +2261,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let retention := context.retention
   let compactMode := retention.isCompact
   let retainOutput := retention.retainsOutput
+  let streamOutput := retention.streamsOutput
   let exactTransform := context.exactTransform
   let sourceSyntax := context.sourceSyntax
   let constructionSyntax := context.constructionSyntax
@@ -2253,6 +2290,11 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut invalidBasis := state.invalidBasis
   let mut sourceSteps := state.sourceSteps
   let mut adapterShadows := state.adapterShadows
+  let mut streamStats := state.streamStats
+  let mut inputFamilyCandidates := state.inputFamilyCandidates
+  for family in sourceFamilyRecord do
+    unless inputFamilyCandidates.contains family.owner do
+      inputFamilyCandidates := inputFamilyCandidates.push family.owner
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
   let mut out : Array EDecl := #[]
@@ -2260,6 +2302,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut islandAdapterShadows : Array FamilyAdapter.ShadowObservation := #[]
   let mut modeledSourceFamilies : Array Check.CompactFamilyCertificate := #[]
   let mut modeledSourceGlobalExtra? : Option Check.GlobalExtraRecord := none
+  let mut streamIsland? : Option (Array EDecl) := none
   let basisRoot? := match replayD with
     | .induct types _ _ => types.findSome? fun type =>
         if inductiveBasis.contains type.name then some type.name else none
@@ -2504,6 +2547,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             locator := .generated islandNumber localOrdinal }
           compactRecords := compactRecords.push row
         compactIslands := compactIslands.push compact
+      if streamOutput && rep.outputKernelRejected.isNone then
+        streamIsland? := some orderedGenerated
       let persistentRecords := generatedSupportRecords orderedGenerated exactIslandModels
       persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
         | .ok index => pure index
@@ -2555,10 +2600,21 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       generatedRecords := out.size }
   if context.collectAdapterShadows then
     adapterShadows := adapterShadows ++ islandAdapterShadows
+  if streamOutput && rep.outputKernelRejected.isNone then
+    let some emit := context.outputEmitter?
+      | throwError "streaming output mode has no declaration emitter"
+    if let some island := streamIsland? then
+      emit (.generatedIsland island)
+      streamStats := {
+        streamStats with
+        generatedRecords := streamStats.generatedRecords + island.size
+        maxIslandRecords := max streamStats.maxIslandRecords island.size }
+    emit (.source d)
+    streamStats := { streamStats with sourceRecords := streamStats.sourceRecords + 1 }
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, compactRecords,
     sourceOrdinal := sourceOrdinal + 1, islandStatements, invalidBasis,
-    sourceSteps, adapterShadows }
+    sourceSteps, adapterShadows, streamStats, inputFamilyCandidates }
 
 /-- Complete compact structural checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
@@ -2625,7 +2681,13 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
     declarations
     checkReport := compactCheckReport
     retainedGeneratedRecords := legacyOut.foldl (fun count declaration =>
-      if declaration.names.any fun name => !reserved.contains name then count + 1 else count) 0 }
+      if declaration.names.any fun name => !reserved.contains name then count + 1 else count) 0
+    streamStats := state.streamStats
+    coveredInputOwners :=
+      let invalidOwners := compactCheckReport.violations.foldl
+        (fun owners violation => owners.insert violation.familyOwner)
+        ({} : Std.HashSet Name)
+      state.inputFamilyCandidates.filter fun owner => !invalidOwners.contains owner }
   return (legacyOut, rep, compactPlan)
 
 /-- Shared generation loop. Compact mode summarizes every accepted island at
@@ -2635,7 +2697,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false)
     (plannedSource? : Option Spool.PlannedSourceReader := none)
     (sourceCensus? : Option SourceCensus := none)
-    (collectAdapterShadows : Bool := false) :
+    (collectAdapterShadows : Bool := false)
+    (outputEmitter? : Option StreamOutputEmitter := none) :
     MetaM (Array EDecl × Report × CompactPlan × Array FilterSourceStep ×
       Array FamilyAdapter.ShadowObservation) := do
   let plannedCensus := sourceCensus?.isSome
@@ -2703,7 +2766,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
     sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
-    rawOrdinals, reserved, constructionReserved, collectTrace, collectAdapterShadows }
+    rawOrdinals, reserved, constructionReserved, collectTrace, collectAdapterShadows,
+    outputEmitter? }
   let mut state : FilterState :=
     { mainEnv := mainEnv, persistentSyntax := sourceSyntax }
   for rawOrdinal in sourceOrder do
@@ -2778,6 +2842,17 @@ def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.C
     runFilterCore x checkRecursors generation .compactDiscard
   return (report, compact)
 
+/-- Declaration-wise generated output. The callback sees a generated island
+only after compact structural capture and its optional kernel gate, then sees
+the corresponding exact source declaration. No output declaration is retained
+after its callback returns. -/
+def runFilterStreaming (x : Export) (checkRecursors : Bool)
+    (generation : Cli.Config) (emit : StreamOutputEmitter) :
+    MetaM (Report × CompactPlan) := do
+  let (_, report, compact, _, _) ← runFilterCore x checkRecursors generation
+    .streamOutput (outputEmitter? := some emit)
+  return (report, compact)
+
 /-- Phase-three declaration-span driver.  The complete parsed export remains
 the validation/census oracle in this tranche; each separately decoded source
 record is nevertheless the value consumed by `feedSource`, and compact mode
@@ -2849,6 +2924,20 @@ def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
   let (_, report, compact, _, _) ← runFilterCore input.envelope.template
     checkRecursors generation .compactDiscard (plannedSource? := some reader)
     (sourceCensus? := some input.census)
+  return (report, compact)
+
+/-- Declaration-wise planned-source output. The reader owns the frozen input
+arena and decodes one raw source record at a time; the callback owns only the
+current generated island or source record. -/
+def runFilterStreamingPlannedCensus (input : PlannedSourceInput)
+    (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
+    (generation : Cli.Config) (emit : StreamOutputEmitter) :
+    MetaM (Report × CompactPlan) := do
+  if let .error message ← validatePlannedSource input reader then
+    throwError message
+  let (_, report, compact, _, _) ← runFilterCore input.envelope.template
+    checkRecursors generation .streamOutput (plannedSource? := some reader)
+    (sourceCensus? := some input.census) (outputEmitter? := some emit)
   return (report, compact)
 
 end InductiveModels

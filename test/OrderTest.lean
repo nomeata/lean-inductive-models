@@ -162,6 +162,9 @@ structure DiscardedFilterRun where
   report : Report
   plan : CompactPlan
 
+structure StreamedFilterRun extends DiscardedFilterRun where
+  output : Export
+
 structure PlannedCensusFilterRun extends DiscardedFilterRun where
   input : PlannedSourceInput
 
@@ -201,6 +204,23 @@ def runFilterDiscardedState (input : Export)
     (Lean.Meta.MetaM.run'
       (runFilterDiscarding input checkRecursors generation)) context { env }
   return { report, plan }
+
+def runFilterStreamedState (input : Export)
+    (generation : InductiveModels.Cli.Config) (checkRecursors : Bool := false) :
+    IO StreamedFilterRun := do
+  let collected ← IO.mkRef (#[] : Array EDecl)
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<order-streamed-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let emit : StreamOutputEmitter := fun event => liftIO <| collected.modify fun declarations =>
+    match event with
+    | .generatedIsland records => declarations ++ records
+    | .source record => declarations.push record
+  let ((report, plan), _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run'
+      (runFilterStreaming input checkRecursors generation emit)) context { env }
+  return { report, plan, output := { input with decls := ← collected.get } }
 
 def runFilterPlannedDiscardedState (scratch : String) (input : Export)
     (generation : InductiveModels.Cli.Config)
@@ -708,11 +728,20 @@ def run (root : String) : IO UInt32 := do
       neutral.env.constants.contains `NeutralOwner &&
       neutral.env.constants.contains `NeutralDependent
   let neutralDiscarded ← runFilterDiscardedState neutralInput noGeneration true
+  let neutralStreamed ← runFilterStreamedState neutralInput noGeneration true
   state := state.check "empty generation preserves the compact value plan" <|
       neutralDiscarded.report == neutral.report &&
       neutralDiscarded.plan.declarations.size == neutralInput.decls.size &&
       neutralDiscarded.plan.retainedGeneratedRecords == 0 &&
       neutral.env.constants.contains `NeutralOwner && neutral.env.constants.contains `NeutralDependent
+  state := state.check "streaming neutral output retains no declaration payload" <|
+    neutralStreamed.output.decls == neutral.output.decls &&
+      neutralStreamed.report == neutral.report &&
+      neutralStreamed.plan.checkReport == neutralDiscarded.plan.checkReport &&
+      neutralStreamed.plan.retainedGeneratedRecords == 0 &&
+      neutralStreamed.plan.streamStats.sourceRecords == neutralInput.decls.size &&
+      neutralStreamed.plan.streamStats.generatedRecords == 0 &&
+      neutralStreamed.plan.streamStats.maxIslandRecords == 0
 
   -- The declaration-wise filter consumes source records in raw order. Use an
   -- already-valid dependency stream so both retained and planned paths can
@@ -1008,6 +1037,8 @@ def run (root : String) : IO UInt32 := do
       finalEnvironmentIsIsolated latePUnitRun
   let latePUnitTrace ← runFilterTraceState latePUnitInput
     { noGeneration with simple := true }
+  let latePUnitStreamed ← runFilterStreamedState latePUnitInput
+    { noGeneration with simple := true }
   let pfpSteps := latePUnitTrace.steps.filter fun step =>
     step.generated.any (·.1 == `PFP)
   let pfpIslandImmediatelyBeforeOwner := match
@@ -1037,6 +1068,15 @@ def run (root : String) : IO UInt32 := do
       pfpSteps[0]!.generatedRecords > 0 &&
       latePUnitTrace.steps.filter (·.generatedRecords > 0) == pfpSteps &&
       pfpIslandImmediatelyBeforeOwner
+  state := state.check "stream callback collection equals constructive full output" <|
+    latePUnitStreamed.output.decls == latePUnitRun.output.decls &&
+      latePUnitStreamed.report == latePUnitRun.report &&
+      latePUnitStreamed.plan.retainedGeneratedRecords == 0 &&
+      latePUnitStreamed.plan.streamStats.sourceRecords == latePUnitInput.decls.size &&
+      latePUnitStreamed.plan.streamStats.generatedRecords ==
+        latePUnitRun.output.decls.size - latePUnitInput.decls.size &&
+      latePUnitStreamed.plan.streamStats.maxIslandRecords ==
+        latePUnitStreamed.report.maxLiveIslandRecords
 
   IO.println s!"record order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
