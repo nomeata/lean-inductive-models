@@ -32,6 +32,7 @@ unsafe def syntheticWorker : List String → IO UInt32
       while true do IO.sleep 1000
       return 3
   | ["signal", "SEGV"] => crashWithSegv
+  | ["panic"] => pure <| panic! "synthetic supervised panic"
   | _ => return 3
 
 def runSynthetic (executable : String) (args : Array String)
@@ -97,6 +98,11 @@ def runTests (executable : String) : IO UInt32 := do
       impossible.stderr.contains "stderr-4\n" &&
       impossible.stderr.contains "worker terminated with native status 4" &&
       impossible.stderr.contains "reporting internal tool error 3"
+  let panicResult ← runSynthetic executable #["panic"]
+  state := state.check "runtime panic cannot become a successful worker result" <|
+    panicResult.exitCode == 3 && panicResult.stdout.isEmpty &&
+      panicResult.stderr.contains "synthetic supervised panic" &&
+      panicResult.stderr.contains "reporting internal tool error 3"
   let stdinText := "supervised stdin\nsecond line\n"
   let stdinResult ← runSynthetic executable #["stdin"] (some stdinText)
   state := state.check "stdin is inherited without rewriting" <|
