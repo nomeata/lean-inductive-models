@@ -149,13 +149,15 @@ owner and rejects dependency cycles or ambiguous ownership.
 Canonical generation retains compact ordering and structural-check
 certificates while model islands are live. All named and stdout output uses
 the ordinary full-memory AST path, as does universe monomorphization. With
-generated `--no-output`, the
-default output kernel gate first parses declarations into a value-free source
-census, then feeds each exact declaration directly to an incremental in-process
-kernel environment while its compact schedule row is live. The parser's one
-completed arena is transferred to declaration-wise replay rather than reparsed.
-An input-only project-local snapshot preserves stdin/FIFO bytes for parser-
-compatible fallback and is released once the arena is replay-certified; it is
+generated `--no-output`, the default output kernel gate first builds a compact
+source census, then feeds each exact declaration directly to an incremental
+in-process kernel environment while its compact schedule row is live. The
+parser transfers one declaration replay arena instead of reparsing; at parse
+completion its dense expression-ID table is replaced by the exact expression
+roots referenced by declarations, while the expression DAGs and name/level
+tables needed for arbitrary-order replay remain available. An input-only
+project-local snapshot preserves stdin/FIFO bytes for parser-compatible
+fallback and is released once that compact arena is replay-certified; it is
 not a generated-output representation. The checker and construction
 environments are dropped at the explicit seal boundary. Generated logical
 output never passes through JSON, an output parser, a writer, or a spool. If
