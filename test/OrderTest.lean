@@ -845,6 +845,7 @@ def run (root : String) : IO UInt32 := do
   -- environment, even though all remain in the serialized output.
   let composedRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/nested_iota.ndjson" {}
+  let composedStreamed ← runFilterStreamedState composedRun.input {}
   let nestedImpl := Name.num `Tree._model._impl 0
   let composedCensus := isolationCensus composedRun
   state := state.check
@@ -854,6 +855,11 @@ def run (root : String) : IO UInt32 := do
       (emittedNames composedRun).contains nestedImpl &&
       !composedRun.env.constants.contains nestedImpl &&
       finalEnvironmentIsIsolated composedRun
+  state := state.check "composed stream places every recursive model before its generated owner" <|
+    composedStreamed.output.decls == composedRun.output.decls &&
+      familiesBeforeOwners composedStreamed.output &&
+      composedStreamed.plan.checkReport.violations.isEmpty &&
+      (Check.check composedStreamed.output).isEmpty
 
   let simpleRawRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/prim_shapes.ndjson"
