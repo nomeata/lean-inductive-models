@@ -4290,7 +4290,8 @@ def runFilterDirectCheckingPlannedCensus (input : PlannedSourceInput)
 Phase A reads each scheduled source declaration once from the completed arena,
 and Phase B rereads only captured owner ordinals. The retained template has no
 declarations; unavailability reruns the existing authoritative planned direct
-path rather than materializing an `Export`. Main does not select this seam. -/
+path rather than materializing an `Export`. Main selects this seam only for
+eligible generated `--no-output --type-check-output` invocations. -/
 def runFilterDirectCheckingSharedPrefixPlannedCensus (input : PlannedSourceInput)
     (reader : Spool.PlannedSourceReader) (generation : Cli.Config)
     (failAfterOwners? : Option Nat := none) :

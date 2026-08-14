@@ -26,6 +26,7 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
 def defaultInductiveModelsEnv : Array (String × Option String) :=
   #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", none),
     ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", none),
+    ("LEAN_INDUCTIVE_MODELS_TEST_SHARED_PREFIX_FAIL_AFTER_OWNERS", none),
     ("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", none),
     (InductiveModels.Supervisor.workerMarker, none)]
 
@@ -722,10 +723,29 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "no-output kernel checking selects compact direct" <|
     kernelDiscardMode.exitCode == 0 && kernelDiscardMode.stdout.isEmpty &&
       hasDiagnostic kernelDiscardMode.stderr "output backend: compact-direct" &&
+      hasDiagnostic kernelDiscardMode.stderr "direct kernel route: shared-prefix" &&
       hasDiagnostic kernelDiscardMode.stderr "output kernel check: accepted"
   let directSuccessAfter ← System.FilePath.readDir scratch
   state := state.check "successful direct kernel replay cleans its input workspace" <|
     sameDirectoryEntries directSuccessBefore directSuccessAfter
+  let directPlainArgs := ["--no-output", "--no-check", "--type-check-output", nested]
+  let directPlain ← runInductiveModels binary directPlainArgs
+  let directPlainLegacy ← runInductiveModelsLegacy binary directPlainArgs
+  state := state.check "selected shared-prefix route preserves exact ordinary diagnostics" <|
+    directPlain.exitCode == directPlainLegacy.exitCode && directPlain.stdout.isEmpty &&
+      directPlainLegacy.stdout.isEmpty && directPlain.stderr == directPlainLegacy.stderr
+  let injectedDirectBefore ← System.FilePath.readDir scratch
+  let injectedDirect ← runInductiveModelsWithEnv binary directPlainArgs #[(
+    "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1"),
+    ("LEAN_INDUCTIVE_MODELS_TEST_SHARED_PREFIX_FAIL_AFTER_OWNERS", some "1")]
+  let injectedDirectAfter ← System.FilePath.readDir scratch
+  state := state.check "injected shared-prefix failure stays on planned compact direct" <|
+    injectedDirect.exitCode == directPlain.exitCode && injectedDirect.stdout.isEmpty &&
+      hasDiagnostic injectedDirect.stderr "direct kernel route: planned-fallback" &&
+      hasDiagnostic injectedDirect.stderr "output backend: compact-direct" &&
+      hasDiagnostic injectedDirect.stderr "output kernel check: accepted"
+  state := state.check "injected planned fallback cleans its input workspace" <|
+    sameDirectoryEntries injectedDirectBefore injectedDirectAfter
   let outputMetadataCorruption := mapRecursor nestedExport `N.rec fun recursor =>
     { recursor with numMinors := recursor.numMinors + 1 }
   let metadataFallbackArgs :=
@@ -850,6 +870,14 @@ def main (args : List String) : IO UInt32 := do
       hasDiagnostic directFallback.stderr "output kernel check: accepted"
   state := state.check "compact-availability direct fallback cleans its input workspace" <|
     sameDirectoryEntries directFallbackBefore directFallbackAfter
+  let tracedDirectFallback ← runInductiveModelsWithEnv binary directFallbackArgs
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+    (some stabilityMiss.render)
+  state := state.check "unavailable shared prefix reports its planned fallback route" <|
+    tracedDirectFallback.exitCode == directFallback.exitCode &&
+      tracedDirectFallback.stdout.isEmpty &&
+      hasDiagnostic tracedDirectFallback.stderr "direct kernel route: planned-fallback" &&
+      hasDiagnostic tracedDirectFallback.stderr "output backend: legacy"
   let outputPath := s!"{scratch}/main-cli-output.ndjson"
   if ← System.FilePath.pathExists outputPath then IO.FS.removeFile outputPath
   let fileRun ← runInductiveModels binary

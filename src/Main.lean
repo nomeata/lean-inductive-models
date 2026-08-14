@@ -154,6 +154,22 @@ private def reportOutputBackend (output : FilterOutput) : IO Unit := do
       | .discarded .. => "compact-discard"
       | .direct .. => "compact-direct"}"
 
+/-- Trace-only refinement of the compatible `compact-direct` backend label.
+An internal planned fallback still stays in-process and value-level; this line
+exists only so tests and memory runs can prove which checker supplied it. -/
+private def reportDirectKernelRoute (selectedSharedPrefix : Bool) : IO Unit := do
+  if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
+    IO.eprintln s!"direct kernel route: \
+      {if selectedSharedPrefix then "shared-prefix" else "planned-fallback"}"
+
+/-- Regression-only late-failure seam, gated behind backend tracing so it can
+never affect an ordinary invocation or ordinary stderr. -/
+private def sharedPrefixFailureInjection? : IO (Option Nat) := do
+  unless (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" do
+    return none
+  return (← IO.getEnv "LEAN_INDUCTIVE_MODELS_TEST_SHARED_PREFIX_FAIL_AFTER_OWNERS").bind
+    String.toNat?
+
 private def runParsedPipeline (config : InductiveModels.Cli.Config)
     (compactEnabled : Bool) (parsed : Export) : IO UInt32 := do
   let input := config.input.getD ""
@@ -455,18 +471,22 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
       let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
       let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
       let generated : Except String
-          (InductiveModels.Report × InductiveModels.CompactPlan ×
-            Option InductiveModels.CompactKernelCheckVerdict) ← try
+          ((InductiveModels.Report × InductiveModels.CompactPlan ×
+            Option InductiveModels.CompactKernelCheckVerdict) ×
+            InductiveModels.SharedPrefixDirectObservation) ← try
+        let failAfterOwners? ← sharedPrefixFailureInjection?
         let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
-          (InductiveModels.runFilterDirectCheckingPlannedCensus
-            planned reader false config)) context { env }
+          (InductiveModels.runFilterDirectCheckingSharedPrefixPlannedCensus
+            planned reader config failAfterOwners?)) context { env }
         pure (Except.ok result)
       catch error => pure (Except.error (toString error))
-      let (generationReport, plan, kernelVerdict?) ← match generated with
+      let ((generationReport, plan, kernelVerdict?), sharedPrefixObservation) ←
+          match generated with
         | Except.error message =>
           IO.eprintln s!"{input}: internal error: {message}"
           return exitToolError
         | Except.ok result => pure result
+      reportDirectKernelRoute sharedPrefixObservation.selected
       let directAccepted := kernelVerdict?.any fun verdict =>
         verdict.fallback?.isNone && verdict.result matches .ok ()
       unless directAccepted do
