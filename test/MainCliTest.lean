@@ -676,7 +676,7 @@ def main (args : List String) : IO UInt32 := do
   let noncanonicalDiscard ← runInductiveModelsWithEnv binary
     ["--no-output", "--no-type-check-output", "-"]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")] (some noncanonicalInput)
-  state := state.check "noncanonical no-output input needs no raw staging certificate" <|
+  state := state.check "noncanonical no-output input needs no raw source certificate" <|
     noncanonicalDiscard.exitCode == defaults.exitCode && noncanonicalDiscard.stdout.isEmpty &&
       hasDiagnostic noncanonicalDiscard.stderr "output backend: compact-discard"
   let noncanonicalKernelArgs :=

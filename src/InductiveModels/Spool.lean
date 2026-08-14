@@ -2,16 +2,6 @@ import InductiveModels.Format
 
 namespace InductiveModels.Spool
 
-/-- Main-side eligibility guard. Stream certification is necessary, but a mode
-which rewrites the whole export (currently universe monomorphization) always
-selects the existing full writer. -/
-def rawFastPathEligible (certificate : RawCertificate) (sizes : RawSpoolSizes)
-    (declarationCount : Nat) (monoLevels : Bool) : Bool :=
-  if monoLevels then false
-  else match certificate.validate sizes declarationCount with
-    | .ok _ => true
-    | .error _ => false
-
 /-- Largest spool offset admitted by the source spool format. Keeping the historical
 signed-64 bound makes validation independent of host integer and filesystem
 limits even though the pure-Lean copier advances with bounded reads. -/

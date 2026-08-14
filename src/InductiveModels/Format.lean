@@ -1448,7 +1448,7 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
         let terminated := lineIndex + 1 < lines.size
         -- `splitOn` leaves one empty sentinel after a final LF.  Other empty
         -- lines remain accepted by the historical parser but disqualify raw
-        -- canonical staging and are handed to the sink exactly.
+        -- canonical source capture and are handed to the sink exactly.
         if line.isEmpty then
           if terminated then
             if let some sink := sink? then
@@ -1540,7 +1540,7 @@ def parseHandle (h : IO.FS.Handle) (analyse : Bool := true)
     (allowDuplicateNames : Bool := false) : IO (Except String Export) :=
   parseStream (IO.FS.Stream.ofHandle h) analyse allowDuplicateNames
 
-/-- Handle-specialized raw-staging parser. -/
+/-- Handle-specialized raw-source-capture parser. -/
 def parseHandleWithSink (h : IO.FS.Handle) (sink : RawSink)
     (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
     IO (Except String (Export × RawCertificate)) :=

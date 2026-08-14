@@ -303,12 +303,6 @@ def main (args : List String) : IO UInt32 := do
       let malformedCertificate := { certificate with declarations := malformedSpans }
       isExceptError (malformedCertificate.validate spoolSizes 2)
     | .error _ => false
-  state := state.check "monomorphization forces the ordinary writer" <|
-    match capturedParse with
-    | .ok (_, certificate) =>
-      Spool.rawFastPathEligible certificate spoolSizes 2 false &&
-        !Spool.rawFastPathEligible certificate spoolSizes 2 true
-    | .error _ => false
   state := state.check "ordinary and captured streaming parses are identical" <|
     match capturedParse, (← parseHandleAt rawCanonicalPath) with
     | .ok (capturedExport, _), .ok ordinary =>
