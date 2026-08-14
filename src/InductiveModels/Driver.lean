@@ -2690,8 +2690,9 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
       state.inputFamilyCandidates.filter fun owner => !invalidOwners.contains owner }
   return (legacyOut, rep, compactPlan)
 
-/-- Shared generation loop. Compact mode summarizes every accepted island at
-its close boundary; full mode retains declarations for actual output. -/
+/-- Shared generation loop. Compact modes summarize every accepted island at
+its close boundary; streaming emits and releases it, while the compatibility
+full mode retains declarations. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (retention : RetentionMode)
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false)

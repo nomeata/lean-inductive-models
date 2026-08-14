@@ -150,16 +150,18 @@ def plannedGenerationModeEligible (config : InductiveModels.Cli.Config) : Bool :
 private inductive FilterOutput where
   | full (declarations : Array InductiveModels.EDecl)
   | discarded (plan : InductiveModels.CompactPlan)
-  | streamed (plan : InductiveModels.CompactPlan)
+
+private inductive OutputBackend where
+  | full | compactDiscard | declarationStream
 
 /-- Optional A/B and test diagnostic. This observes the actual filter result;
 it never changes output retention or route eligibility. -/
-private def reportOutputBackend (output : FilterOutput) (outputKernelChecks : Nat) : IO Unit := do
+private def reportOutputBackend (backend : OutputBackend) (outputKernelChecks : Nat) : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
-    IO.eprintln s!"output backend: {match output with
-      | .full .. => "legacy"
-      | .discarded .. => "compact-discard"
-      | .streamed .. => "declaration-stream"}"
+    IO.eprintln s!"output backend: {match backend with
+      | .full => "legacy"
+      | .compactDiscard => "compact-discard"
+      | .declarationStream => "declaration-stream"}"
     IO.eprintln s!"generated kernel checks: {outputKernelChecks}"
 
 private def reportPlannedRouteSelected : IO Unit := do
@@ -181,7 +183,7 @@ private def finishStreamingVerdict (config : InductiveModels.Cli.Config)
     (input : String) (report : InductiveModels.Report)
     (plan : InductiveModels.CompactPlan) :
     IO (InductiveModels.Output.TransactionResult UInt32) := do
-  reportOutputBackend (.streamed plan) report.outputKernelChecks
+  reportOutputBackend .declarationStream report.outputKernelChecks
   reportGeneration config report
   if let some why := report.unreplayable then
     IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -226,7 +228,7 @@ private def runStreamingParsedGeneration (config : InductiveModels.Cli.Config)
           return InductiveModels.Output.TransactionResult.rollback exitToolError
       let writerState ← writer.get
       writerState.finish stream
-      unless writerState.declarationsWritten ==
+      unless report.unreplayable.isSome || writerState.declarationsWritten ==
           plan.streamStats.sourceRecords + plan.streamStats.generatedRecords do
         IO.eprintln s!"{input}: internal error: streaming writer/driver counts disagree"
         return InductiveModels.Output.TransactionResult.rollback exitToolError
@@ -265,7 +267,7 @@ private def runStreamingPlannedGeneration (config : InductiveModels.Cli.Config)
             return InductiveModels.Output.TransactionResult.rollback (.fallback message)
       let writerState ← writer.get
       writerState.finish stream
-      unless writerState.declarationsWritten ==
+      unless report.unreplayable.isSome || writerState.declarationsWritten ==
           plan.streamStats.sourceRecords + plan.streamStats.generatedRecords do
         IO.eprintln s!"{input}: internal error: streaming writer/driver counts disagree"
         return InductiveModels.Output.TransactionResult.rollback (.done exitToolError)
@@ -342,7 +344,9 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
     else
       pure (FilterOutput.full generationInput.decls, ({} : InductiveModels.Report))
 
-  reportOutputBackend filterOutput generationReport.outputKernelChecks
+  reportOutputBackend (match filterOutput with
+    | .full .. => .full
+    | .discarded .. => .compactDiscard) generationReport.outputKernelChecks
   reportGeneration config generationReport
   if let some why := generationReport.unreplayable then
     IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -360,9 +364,6 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
     if (unsupportedDeclines parsed generationReport).isEmpty then exitAccepted
     else exitDeclined
   match filterOutput with
-  | .streamed _ =>
-    IO.eprintln s!"{input}: internal error: streaming result escaped its output transaction"
-    return exitToolError
   | .discarded plan =>
     if config.checkOutput then
       unless plan.checkReport.violations.isEmpty do
@@ -536,7 +537,7 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
           return ← runParsedPipeline { config with checkInput := false } true parsed
         | Except.ok result => pure result
       reportPlannedRouteSelected
-      reportOutputBackend (.discarded plan) generationReport.outputKernelChecks
+      reportOutputBackend .compactDiscard generationReport.outputKernelChecks
       reportGeneration config generationReport
       if let some why := generationReport.unreplayable then
         IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"

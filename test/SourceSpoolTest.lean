@@ -222,12 +222,13 @@ def main (args : List String) : IO UInt32 := do
   let rawKeyOrderPath := s!"{scratch}/raw-spool-key-order.ndjson"
   let rawRootSentinel := s!"{scratch}/raw-spool-root-sentinel"
   let compactArenaPath := s!"{scratch}/source-spool-compact-arena.ndjson"
+  let declarationStreamPath := s!"{scratch}/declaration-stream-output.ndjson"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
     nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath,
     parserCompatibilityPath,
     rawCanonicalPath, rawNameGapPath, rawLevelGapPath, rawExprGapPath,
     rawNameOrderPath, rawNoLfPath, rawWhitespacePath, rawBlankPath, rawCrlfPath,
-    rawKeyOrderPath, rawRootSentinel, compactArenaPath]
+    rawKeyOrderPath, rawRootSentinel, compactArenaPath, declarationStreamPath]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -311,6 +312,23 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "one island still hash-conses shared structure" <|
     sharedSecondSplit.arena.size == 1 &&
       sharedSecondSplit.after == { nextName := 5, nextLevel := 2, nextExpr := 1 }
+
+  let streamStats ← IO.FS.withFile declarationStreamPath .write fun handle => do
+    let stream := IO.FS.Stream.ofHandle handle
+    let writer ← DeclarationStreamWriter.start .null stream
+    let writer ← writer.writeDeclaration stream first
+    let writer ← writer.writeDeclaration stream second
+    writer.finish stream
+    stream.flush
+    return writer
+  let streamedText ← IO.FS.readFile declarationStreamPath
+  state := state.check "fresh per-declaration interning remains parse-equivalent" <|
+    match InductiveModels.parse streamedText with
+    | .ok output => output.decls == #[first, second]
+    | .error _ => false
+  state := state.check "declaration stream retains only monotone cursor and bounded counters" <|
+    streamStats.declarationsWritten == 2 && streamStats.maxRecordLines == 6 &&
+      streamStats.cursor == secondSplit.after && streamedText != splitRender
 
   -- Parse-time source capture sees exact bytes while the input descriptor is still
   -- open.  The source arena remains interleaved here; the three spools split
