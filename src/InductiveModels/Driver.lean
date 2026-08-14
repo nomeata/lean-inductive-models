@@ -3695,7 +3695,10 @@ def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
 generated and source records are consumed only while their compact rows are
 live; the returned report, plan, and optional deferred verdict contain no
 declaration, environment, writer, sink, or spool payload. An unreplayable
-source terminates like the ordinary filter and returns `none`. -/
+source encountered while construction is live terminates like the ordinary
+filter and returns `none`. A rejection in the exact-only tail returns a
+deferred fallback so the ordinary replay can recover its generation report and
+diagnostic without keeping construction state alive speculatively. -/
 def runFilterDirectChecking (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) :
     MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict) := do
@@ -3773,8 +3776,9 @@ def materializePlannedSource (input : PlannedSourceInput)
   return .ok { input.envelope.template with decls := declarations }
 
 /-- Declaration-discarding compact-direct checker. Exact source values are
-decoded into the construction and kernel environments only while their feed
-transition is live; no generated logical output is serialized. -/
+decoded into the kernel environment only while their feed transition is live;
+the construction environment receives only the prefix through its last
+possible consumer. No generated logical output is serialized. -/
 def runFilterDirectCheckingPlannedCensus (input : PlannedSourceInput)
     (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
     (generation : Cli.Config) :
