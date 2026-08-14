@@ -126,6 +126,9 @@ structure Report where
   load at all. The filter then becomes the identity, which is what a filter
   should be when it can do nothing. -/
   unreplayable : Option String := none
+  /-- First exact generated-island kernel rejection. Input declarations are
+  trusted dependencies and are never submitted through this gate. -/
+  outputKernelRejected : Option String := none
   deriving Inhabited, Repr, BEq
 
 /-- Whether one reported decline still represents unsupported generation after
@@ -1196,7 +1199,7 @@ Only fixed shared support is copied back. -/
 def closeModelIsland (template : Export) (main : Environment)
     (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
     (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name)
-    (sourceAliases : SourceReplayAliases := {}) (typeCheckOutput : Bool := true) :
+    (sourceAliases : SourceReplayAliases := {}) :
     MetaM (Except String
       (Array EDecl × CompactIsland × Environment × Check.StatementReport)) := do
   -- Generation runs in the collision-free replay environment, so generated
@@ -1279,10 +1282,6 @@ def closeModelIsland (template : Export) (main : Environment)
   -- state allowed to cross into owner-free checked replay.
   setEnv main
   let replayGenerated := generated.map sourceAliases.buildRecord
-  if typeCheckOutput then
-    match ← checkGeneratedIn main replayGenerated with
-    | .error message => return .error message
-    | .ok _ => pure ()
   match ← installGeneratedSupportIn main replayGenerated models with
   | .error message => return .error message
   | .ok supported => return .ok (generated, compact, supported, statementReport)
@@ -1471,9 +1470,9 @@ def serialiseIso (source : EDecl) (is : Iso)
   let mut rawRecords : Array EDecl := #[]
   for declaration in is.decls do
     rawRecords := rawRecords ++ (← toEDecls declaration)
-  rawRecords := rawRecords.map fun record => match record with
-    | .induct .. => exactTransform record
-    | _ => record
+  -- Test-facing transforms observe the same complete emitted-record boundary
+  -- as the optional generated kernel gate, not just inductive blocks.
+  rawRecords := rawRecords.map exactTransform
   let mut exactBlocks : ExactGeneratedBlocks := {}
   for record in rawRecords do
     if let .induct types _ _ := record then
@@ -3338,7 +3337,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     else
       let (orderedGenerated, compact, mainWithSupport, statementReport) ← match
           ← closeModelIsland x mainBefore generated islandModels d persistentSyntax islandOwners
-            islandAliases generation.typeCheckOutput with
+            islandAliases with
         | .ok result => pure result
         | .error message => throwError
             "owner-free generated declaration rejected for {d.names}: \
@@ -3353,6 +3352,11 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         throwError "accepted island cardinality mismatch for {d.names}: \
           records={orderedGenerated.size}, summaries={compact.summaries.size}, \
           extras={compact.globalExtras.size}, families={compact.families.size}"
+      if generation.typeCheckOutput && rep.outputKernelRejected.isNone then
+        match ← checkGeneratedIn mainBefore (orderedGenerated.map islandAliases.buildRecord) with
+        | .ok _ => pure ()
+        | .error message =>
+          rep := { rep with outputKernelRejected := some (islandAliases.exactMessage message) }
       unless compactMode do
         if let some checker := kernelCheckState? then
           let mut checker := checker
@@ -3648,7 +3652,6 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
   let compactIslands := state.compactIslands
   let compactRecords := state.compactRecords
   let islandStatements := state.islandStatements
-  let persistentSupportOrigins := state.persistentSupportOrigins
   unless state.futureSupportRemaining.isEmpty do
     throwError "future support shadow retained undischarged source records"
   let mut rep := state.report

@@ -12,11 +12,13 @@ module owns only the IO boundary and the pipeline between the already separate
 passes:
 
 1. parse the input export;
-2. optionally submit the complete input stream to Lean's kernel;
+2. optionally kernel-check the input declarations;
 3. structurally check model families already in the input;
-4. generate the selected inductive models;
-5. structurally check and optionally kernel-check generated declarations;
-6. emit them immediately before their source owner, unless output was disabled.
+4. reject an input model that appears after its owner;
+5. stream source declarations, generating each selected model immediately
+    before its owner and optionally kernel-checking that generated island;
+6. structurally check the constructively ordered output;
+7. emit it, unless output was disabled.
 
 The export is the only stream written to stdout.  Reports and errors go to
 stderr, and `--quiet` suppresses successful pass reports without hiding fatal
@@ -120,16 +122,9 @@ certificates but deliberately has no workspace or physical spool. -/
 def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   !config.output && compactModeEligible config
 
-/-- The only production direct-kernel route. Output bytes, writers, spools,
-and extra subprocess phases are unnecessary when generated output is discarded. -/
-def directKernelModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  !config.output && config.typeCheckOutput && compactModeEligible config
-
 private inductive FilterOutput where
   | full (declarations : Array InductiveModels.EDecl)
   | discarded (plan : InductiveModels.CompactPlan)
-  | direct (plan : InductiveModels.CompactPlan)
-      (kernelVerdict : InductiveModels.CompactKernelCheckVerdict)
 
 /-- Optional A/B and test diagnostic. This observes the actual filter result;
 it never changes output retention or route eligibility. -/
@@ -137,24 +132,7 @@ private def reportOutputBackend (output : FilterOutput) : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
     IO.eprintln s!"output backend: {match output with
       | .full .. => "legacy"
-      | .discarded .. => "compact-discard"
-      | .direct .. => "compact-direct"}"
-
-/-- Trace-only refinement of the compatible `compact-direct` backend label.
-An internal planned fallback still stays in-process and value-level; this line
-exists only so tests and memory runs can prove which checker supplied it. -/
-private def reportDirectKernelRoute (selectedSharedPrefix : Bool) : IO Unit := do
-  if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
-    IO.eprintln s!"direct kernel route: \
-      {if selectedSharedPrefix then "shared-prefix" else "planned-fallback"}"
-
-/-- Regression-only late-failure seam, gated behind backend tracing so it can
-never affect an ordinary invocation or ordinary stderr. -/
-private def sharedPrefixFailureInjection? : IO (Option Nat) := do
-  unless (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" do
-    return none
-  return (← IO.getEnv "LEAN_INDUCTIVE_MODELS_TEST_SHARED_PREFIX_FAIL_AFTER_OWNERS").bind
-    String.toNat?
+      | .discarded .. => "compact-discard"}"
 
 private def runParsedPipeline (config : InductiveModels.Cli.Config)
     (compactEnabled : Bool) (parsed : Export) : IO UInt32 := do
@@ -244,28 +222,18 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
     if (unsupportedDeclines parsed generationReport).isEmpty then exitAccepted
     else exitDeclined
   match filterOutput with
-  | .direct plan kernelVerdict =>
-    if config.checkOutput then
-      unless plan.checkReport.violations.isEmpty do
-        reportViolations input "output" plan.checkReport.violations
-        return exitRejected
-      reportCheckSuccess config "output" plan.checkReport
-    -- Eligibility guarantees this flag, but keep the output-success diagnostic
-    -- at the historical precedence point: after generation/statement/structural
-    -- verdicts and immediately before the final accepted/declined exit.
-    if config.typeCheckOutput then
-      match kernelVerdict.result with
-      | .ok () => reportTypeCheckSuccess config "output"
-      | .error _ =>
-        IO.eprintln s!"{input}: internal error: compact direct rejection escaped fallback"
-        return exitToolError
-    return outcome
   | .discarded plan =>
     if config.checkOutput then
       unless plan.checkReport.violations.isEmpty do
         reportViolations input "output" plan.checkReport.violations
         return exitRejected
       reportCheckSuccess config "output" plan.checkReport
+    if config.typeCheckOutput then
+      match generationReport.outputKernelRejected with
+      | some message =>
+        IO.eprintln s!"{input}: output kernel check rejected: {message}"
+        return exitRejected
+      | none => reportTypeCheckSuccess config "output"
     return outcome
   | .full decls =>
     let transformed : Export := { generationInput with decls }
@@ -282,9 +250,14 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
       reportCheckSuccess config "output" report
 
     if config.typeCheckOutput then
-      -- Every generated island was checked against its trusted source prefix
-      -- at close. Input declarations are governed only by typeCheckInput.
-      reportTypeCheckSuccess config "output"
+      match generationReport.outputKernelRejected with
+      | some message =>
+        IO.eprintln s!"{input}: output kernel check rejected: {message}"
+        return exitRejected
+      | none =>
+        -- Every generated island was checked against its trusted source
+        -- prefix at close. Input is governed only by typeCheckInput.
+        reportTypeCheckSuccess config "output"
 
     if config.output then
       try
@@ -320,7 +293,7 @@ private def runPipeline (config : InductiveModels.Cli.Config)
 /-- Declaration-discarding input path for the sole generated no-output direct
 kernel route. The physical snapshot is input provenance/fallback state only;
 generated logical output stays as live `EDecl` values throughout. -/
-private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO UInt32 := do
+private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO UInt32 := do
   let input := config.input.getD ""
   let scratch := (← IO.currentDir) / "_tmp"
   let consumed ← IO.mkRef false
@@ -388,40 +361,26 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
       let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
       let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
       let generated : Except String
-          ((InductiveModels.Report × InductiveModels.CompactPlan ×
-            Option InductiveModels.CompactKernelCheckVerdict) ×
-            InductiveModels.SharedPrefixDirectObservation) ← try
-        let failAfterOwners? ← sharedPrefixFailureInjection?
+          (InductiveModels.Report × InductiveModels.CompactPlan) ← try
         let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
-          (InductiveModels.runFilterDirectCheckingSharedPrefixPlannedCensus
-            planned reader config failAfterOwners?)) context { env }
+          (InductiveModels.runFilterDiscardingPlannedCensus
+            planned reader false config)) context { env }
         pure (Except.ok result)
       catch error => pure (Except.error (toString error))
-      let ((generationReport, plan, kernelVerdict?), sharedPrefixObservation) ←
-          match generated with
+      let (generationReport, plan) ← match generated with
         | Except.error message =>
-          IO.eprintln s!"{input}: internal error: {message}"
-          return exitToolError
+          InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
+          InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
+          let fallback ← InductiveModels.materializePlannedSource planned reader
+          let parsed ← match fallback with
+            | .ok parsed => pure parsed
+            | .error fallbackMessage =>
+              IO.eprintln s!"{input}: internal error: planned generation failed ({message}); \
+                cannot materialize fallback: {fallbackMessage}"
+              return exitToolError
+          return ← runParsedPipeline { config with checkInput := false } true parsed
         | Except.ok result => pure result
-      reportDirectKernelRoute sharedPrefixObservation.selected
-      let directAccepted := kernelVerdict?.any fun verdict =>
-        verdict.fallback?.isNone && verdict.result matches .ok ()
-      unless directAccepted do
-        InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
-        InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-        let fallback ← InductiveModels.materializePlannedSource planned reader
-        let parsed ← match fallback with
-          | .ok parsed => pure parsed
-          | .error message =>
-            IO.eprintln s!"{input}: internal error: cannot materialize direct fallback: {message}"
-            return exitToolError
-        -- The planned route has already emitted the exact input structural
-        -- verdict.  Reuse the ordinary generation/output path without
-        -- checking or reporting that same input a second time.
-        return ← runParsedPipeline { config with checkInput := false } true parsed
-      let some kernelVerdict := kernelVerdict? | return exitToolError
-
-      reportOutputBackend (.direct plan kernelVerdict)
+      reportOutputBackend (.discarded plan)
       reportGeneration config generationReport
       if let some why := generationReport.unreplayable then
         IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -445,7 +404,12 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
           reportViolations input "output" plan.checkReport.violations
           return exitRejected
         reportCheckSuccess config "output" plan.checkReport
-      reportTypeCheckSuccess config "output"
+      if config.typeCheckOutput then
+        match generationReport.outputKernelRejected with
+        | some message =>
+          IO.eprintln s!"{input}: output kernel check rejected: {message}"
+          return exitRejected
+        | none => reportTypeCheckSuccess config "output"
       return outcome
   catch error =>
     if ← consumed.get then
@@ -459,7 +423,10 @@ def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   let compactEnabled :=
     (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
       (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1"
-  runPipeline config compactEnabled
+  if compactEnabled && discardModeEligible config && !config.typeCheckInput then
+    runPlannedDiscardPipeline config
+  else
+    runPipeline config compactEnabled
 
 def workerMain (args : List String) : IO UInt32 := do
   InductiveModels.Output.containToolErrors do

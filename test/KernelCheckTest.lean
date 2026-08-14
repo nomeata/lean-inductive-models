@@ -238,6 +238,21 @@ def readFixture (root file : String) : IO Export := do
     | throw <| IO.userError s!"kernelchecktest: cannot parse {file}"
   return parsed
 
+def corruptGeneratedProof : EDecl → EDecl
+  | .thm name levels type _ all =>
+    .thm name levels type (.const `DefinitelyMissingGeneratedDependency []) all
+  | declaration => declaration
+
+def runFilterWithGeneratedCorruption (x : Export) (generation : Cli.Config) :
+    IO (Array EDecl × Report) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<generated-kernel-flag-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  return (← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+    (runFilterWithExactBlockTransform x false generation corruptGeneratedProof))
+    context { env }).1
+
 def shadowAgrees : Option FilterKernelCheckShadow → Bool
   | none => false
   | some shadow =>
@@ -413,6 +428,16 @@ def run (root : String) : IO UInt32 := do
   let fixtureText ← IO.FS.readFile fixturePath
   let .ok fixture := InductiveModels.parse fixtureText
     | IO.eprintln "kernelchecktest: fixture parse failed"; return 1
+  let generatedCheckOff ← runFilterWithGeneratedCorruption fixture
+    { nested := true, mutualModels := false, simple := false, basic := false,
+      typeCheckOutput := false }
+  let generatedCheckOn ← runFilterWithGeneratedCorruption fixture
+    { nested := true, mutualModels := false, simple := false, basic := false,
+      typeCheckOutput := true }
+  state := state.check "generated kernel flag gates only exact emitted island records" <|
+    !generatedCheckOff.1.isEmpty && generatedCheckOff.2.outputKernelRejected.isNone &&
+      generatedCheckOn.2.outputKernelRejected.any
+        (fun message => message.contains "DefinitelyMissingGeneratedDependency")
   let some malformedMetadata := corruptFirstRecursor fixture
     | IO.eprintln "kernelchecktest: fixture has no recursor"; return 1
   let metadataNew ← runNew malformedMetadata

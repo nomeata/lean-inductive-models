@@ -77,14 +77,12 @@ That makes the correspondence check independent of the kernel verdict.
 it on the final transformed stream. An input with no model slots is not
 rejected merely because an inductive is unsupported or generation is disabled.
 
-`--type-check-input` and `--type-check-output` are separate whole-stream kernel
-gates. They replay declaration values and compare serialized inductive
-metadata with what Lean regenerates. Output replay is on by default; use
-`--no-type-check-output` only when the caller deliberately accepts that the
-complete final stream will not receive this additional verdict. This opt-out
-does not skip the kernel checks applied to each generated model island before
-it is accepted. Whole-input checking is controlled separately by
-`--type-check-input`.
+`--type-check-input` and `--type-check-output` govern disjoint declaration
+classes. The former checks only input declarations. The latter, enabled by
+default, checks each exact generated model island incrementally as it is
+produced; input declarations are trusted dependencies in that environment,
+not checked a second time. With either flag off, that declaration class is not
+kernel-checked.
 
 ## Usage
 
