@@ -1937,13 +1937,19 @@ it adds are moved into the bounded buffer immediately; the returned state keeps
 only the standard global interning maps, not the declaration or line array. -/
 def writeDeclaration (state : DeclarationStreamWriter) (h : IO.FS.Stream)
     (declaration : EDecl) : IO DeclarationStreamWriter := do
-  let completed := state.writer.decl declaration
-  let lines := completed.out
-  let state := { state with writer := { completed with out := #[] } }
+  -- Consume the outer state before extending the writer. Keeping `state`
+  -- alive across `Writer.decl` would retain a sibling reference to its maps
+  -- and could force every declaration insertion down a copy-on-write path.
+  let { writer, buffer, bufferedBytes, declarationsWritten, maxRecordLines } := state
+  let { out := lines, names, levels, exprs, nextName, nextLevel, nextExpr } :=
+    writer.decl declaration
+  let state : DeclarationStreamWriter := {
+    writer := { out := #[], names, levels, exprs, nextName, nextLevel, nextExpr }
+    buffer, bufferedBytes, declarationsWritten, maxRecordLines }
   let nextState ← state.emitLines h lines
   let nextState := { nextState with
-    declarationsWritten := state.declarationsWritten + 1 }
-  return { nextState with maxRecordLines := max state.maxRecordLines lines.size }
+    declarationsWritten := declarationsWritten + 1 }
+  return { nextState with maxRecordLines := max maxRecordLines lines.size }
 
 def cursor (state : DeclarationStreamWriter) : Writer.Cursor := state.writer.cursor
 
