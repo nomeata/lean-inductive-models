@@ -3460,10 +3460,16 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     -- not pretend to have.  Reject the complete input before replay instead
     -- of letting `AsyncConsts.add` panic part-way through the stream.
     for declaration in x.decls do
-      if declaration matches .induct .. then
+      match declaration with
+      | .induct .. =>
         if let some name := declaration.names.find? sourceAliases.hasExact then
           throwError "normalized source-name collision moves inductive role {name}; \
             collision-safe inductive replay is not supported"
+      | .quot name .. =>
+        if sourceAliases.hasExact name then
+          throwError "normalized source-name collision moves quotient role {name}; \
+            collision-safe quotient replay is not supported"
+      | _ => pure ()
   let sourceOrder ← match sourceOrder? with
     | some order => pure order
     | none => match if plannedCensus then sourceCensus.plannedScheduleOrder generation
