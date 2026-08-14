@@ -1,4 +1,6 @@
 import InductiveModels.Format
+import Std.Internal.Async.System
+import Std.Sync.Mutex
 
 namespace InductiveModels.Spool
 
@@ -115,6 +117,23 @@ structure Workspace where
   directory : System.FilePath
   private ownedFiles : IO.Ref (Array System.FilePath)
 
+initialize tempRootMutex : Std.Mutex Unit ← Std.Mutex.new ()
+
+/-- Reserve a runtime temporary directory below `root` without inheriting an
+unrelated ambient `TMPDIR`. Environment mutation is process-global, so keep the
+bracket synchronous and restore the exact previous value before the caller can
+perform any workspace work. -/
+private def createTempDirIn (root : System.FilePath) : IO System.FilePath := do
+  tempRootMutex.atomically fun _ => do
+    let previous ← IO.getEnv "TMPDIR"
+    try
+      Std.Internal.IO.Async.System.setEnvVar "TMPDIR" root.toString
+      IO.FS.createTempDir
+    finally
+      match previous with
+      | some value => Std.Internal.IO.Async.System.setEnvVar "TMPDIR" value
+      | none => Std.Internal.IO.Async.System.unsetEnvVar "TMPDIR"
+
 def Workspace.create (root : System.FilePath) : IO Workspace := do
   unless root.fileName == some "_tmp" do
     throw <| IO.userError s!"spool workspace root must be the project _tmp directory: {root}"
@@ -124,19 +143,19 @@ def Workspace.create (root : System.FilePath) : IO Workspace := do
   let canonicalRoot ← IO.FS.realPath root
   -- Lean's runtime reserves this directory atomically with owner-only access.
   -- It does not expose descriptor-relative parent attestation, so unlike the
-  -- former Linux shim this does not inspect the parent's UID or mode. Instead
-  -- the runtime temporary directory must canonically remain inside the
-  -- caller's project `_tmp`; CI and documented invocations set `TMPDIR`
-  -- accordingly. Input source replay refuses to proceed when it does not. The
-  -- exact empty directory is removed on a containment failure.
-  let directory ← IO.FS.createTempDir
+  -- former Linux shim this does not inspect the parent's UID or mode. Bracket
+  -- the runtime's process-global temporary root for the reservation only;
+  -- ordinary callers may keep an unrelated TMPDIR without silently disabling
+  -- declaration-wise source replay. The exact empty directory is removed on a
+  -- containment failure.
+  let directory ← createTempDirIn root
   let canonicalDirectory ← IO.FS.realPath directory
   let rootParts := canonicalRoot.components
   let directoryParts := canonicalDirectory.components
   unless rootParts.length < directoryParts.length &&
       directoryParts.take rootParts.length == rootParts do
     try IO.FS.removeDir directory catch _ => pure ()
-    throw <| IO.userError s!"secure temporary directory {directory} is outside project root {root}; set TMPDIR below {root}"
+    throw <| IO.userError s!"secure temporary directory {directory} is outside project root {root}"
   let ownedFiles ← IO.mkRef #[]
   return { root, directory, ownedFiles }
 

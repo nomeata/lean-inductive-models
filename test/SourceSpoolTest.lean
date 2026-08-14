@@ -1,4 +1,5 @@
 import InductiveModels.Spool
+import Std.Internal.Async.System
 
 open Lean InductiveModels
 
@@ -17,6 +18,16 @@ def lines (records : Array String) : String :=
 
 def removeIfPresent (path : String) : IO Unit := do
   if ← System.FilePath.pathExists path then IO.FS.removeFile path
+
+def withAmbientTmp (path : System.FilePath) (action : IO α) : IO α := do
+  let previous ← IO.getEnv "TMPDIR"
+  try
+    Std.Internal.IO.Async.System.setEnvVar "TMPDIR" path.toString
+    action
+  finally
+    match previous with
+    | some value => Std.Internal.IO.Async.System.setEnvVar "TMPDIR" value
+    | none => Std.Internal.IO.Async.System.unsetEnvVar "TMPDIR"
 
 def parseHandleAt (path : String) : IO (Except String Export) :=
   IO.FS.withFile path .read fun handle => InductiveModels.parseHandle handle
@@ -223,20 +234,27 @@ def main (args : List String) : IO UInt32 := do
 
   let mut state : TestState := {}
   let secureWorkspacePath ← IO.mkRef (none : Option System.FilePath)
-  let secureWorkspaceBoundary ← Spool.withWorkspace scratch fun workspace => do
-    secureWorkspacePath.set (some workspace.directory)
-    let canonicalRoot ← IO.FS.realPath scratch
-    let canonicalDirectory ← IO.FS.realPath workspace.directory
-    let rootParts := canonicalRoot.components
-    let directoryParts := canonicalDirectory.components
-    let metadata ← workspace.directory.symlinkMetadata
-    return metadata.type == .dir && rootParts.length < directoryParts.length &&
-      directoryParts.take rootParts.length == rootParts
+  let ambientTmp : System.FilePath := s!"{root}/source-spool-ambient-tmp"
+  IO.FS.createDirAll ambientTmp
+  let secureWorkspaceBoundary ← withAmbientTmp ambientTmp do
+    let inside ← Spool.withWorkspace scratch fun workspace => do
+      secureWorkspacePath.set (some workspace.directory)
+      let canonicalRoot ← IO.FS.realPath scratch
+      let canonicalDirectory ← IO.FS.realPath workspace.directory
+      let rootParts := canonicalRoot.components
+      let directoryParts := canonicalDirectory.components
+      let metadata ← workspace.directory.symlinkMetadata
+      return metadata.type == .dir && rootParts.length < directoryParts.length &&
+        directoryParts.take rootParts.length == rootParts &&
+        (← IO.getEnv "TMPDIR") == some ambientTmp.toString
+    return inside && (← IO.getEnv "TMPDIR") == some ambientTmp.toString &&
+      (← ambientTmp.readDir).isEmpty
+  IO.FS.removeDir ambientTmp
   let secureWorkspacePath? ← secureWorkspacePath.get
   let secureWorkspaceCleaned ← if let some path := secureWorkspacePath? then
       path.pathExists.map Bool.not
     else pure false
-  state := state.check "runtime workspace is a secure physical child of project _tmp" <|
+  state := state.check "runtime workspace is rooted independently and restores ambient TMPDIR" <|
     secureWorkspaceBoundary && secureWorkspaceCleaned
 
   let suffixProbe := rawSpoolSuffixOfBytes <| ByteArray.mk #[

@@ -749,6 +749,33 @@ def main (args : List String) : IO UInt32 := do
     IO.eprintln s!"metadata fallback direct stderr: {repr metadataFallbackDirect.stderr}"
   state := state.check "direct metadata rejection preserves ordinary generation diagnostic"
     metadataFallbackParity
+  let rootedDirectCwd : System.FilePath := s!"{scratch}/main-cli-rooted-direct-cwd"
+  let rootedDirectTmp : System.FilePath := s!"{scratch}/main-cli-rooted-external-tmp"
+  let rootedDirectScratch := rootedDirectCwd / "_tmp"
+  IO.FS.createDir rootedDirectCwd
+  IO.FS.createDir rootedDirectScratch
+  IO.FS.createDir rootedDirectTmp
+  let rootedSentinel := rootedDirectScratch / "keep"
+  let externalSentinel := rootedDirectTmp / "keep"
+  IO.FS.writeFile rootedSentinel "rooted\n"
+  IO.FS.writeFile externalSentinel "external\n"
+  let rootedDirectRun ← runInductiveModelsAt binaryAbsolute.toString
+    ["--no-output", "--type-check-output", "--no-check", nestedAbsolute.toString]
+    rootedDirectCwd.toString #[
+      ("TMPDIR", some rootedDirectTmp.toString),
+      ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "compact direct roots input workspace independently of ambient TMPDIR" <|
+    rootedDirectRun.exitCode == 0 && rootedDirectRun.stdout.isEmpty &&
+      hasDiagnostic rootedDirectRun.stderr "output backend: compact-direct" &&
+      hasDiagnostic rootedDirectRun.stderr "output kernel check: accepted" &&
+      (← IO.FS.readFile rootedSentinel) == "rooted\n" &&
+      (← IO.FS.readFile externalSentinel) == "external\n" &&
+      (← rootedDirectScratch.readDir).size == 1 && (← rootedDirectTmp.readDir).size == 1
+  IO.FS.removeFile rootedSentinel
+  IO.FS.removeFile externalSentinel
+  IO.FS.removeDir rootedDirectScratch
+  IO.FS.removeDir rootedDirectCwd
+  IO.FS.removeDir rootedDirectTmp
   let directCwd : System.FilePath := s!"{scratch}/main-cli-direct-cwd"
   let externalDirectTmp : System.FilePath := s!"{scratch}/main-cli-external-direct-tmp"
   IO.FS.createDir directCwd
