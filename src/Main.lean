@@ -122,6 +122,12 @@ certificates but deliberately has no workspace or physical spool. -/
 def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
   !config.output && compactModeEligible config
 
+/-- The planned source reader pays for an input snapshot only when generated
+declarations are checked as they are produced. Unchecked no-output generation
+uses the ordinary in-memory compact-discard path and opens no workspace. -/
+def plannedDiscardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
+  discardModeEligible config && config.typeCheckOutput
+
 private inductive FilterOutput where
   | full (declarations : Array InductiveModels.EDecl)
   | discarded (plan : InductiveModels.CompactPlan)
@@ -295,7 +301,7 @@ private def runPipeline (config : InductiveModels.Cli.Config)
     | .ok parsedExport => pure parsedExport
   runParsedPipeline config compactEnabled parsed
 
-/-- Declaration-discarding input path for generated no-output runs. The
+/-- Declaration-discarding input path for kernel-checked generated no-output runs. The
 physical snapshot is input provenance/fallback state only; generated logical
 output stays as live `EDecl` values throughout. -/
 private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO UInt32 := do
@@ -429,7 +435,7 @@ def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   let compactEnabled :=
     (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
       (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1"
-  if compactEnabled && discardModeEligible config && !config.typeCheckInput then
+  if compactEnabled && plannedDiscardModeEligible config && !config.typeCheckInput then
     runPlannedDiscardPipeline config
   else
     runPipeline config compactEnabled

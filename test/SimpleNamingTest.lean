@@ -88,7 +88,10 @@ def FixtureResult.noLegacySlots (result : FixtureResult) (owner : Name) : Bool :
 def FixtureResult.declinedWithoutModel (result : FixtureResult) (owner : Name)
     (reason : String) : Bool :=
   result.report.declined.contains (owner, reason) &&
-    !result.hasDescendant (modelName owner)
+    (result.input.decls.find? (·.names.contains owner)).any fun sourceBlock =>
+      let modelRoots := sourceBlock.names.toArray.map modelName
+      result.output.all fun declaration => declaration.names.all fun name =>
+        modelRoots.all fun root => !root.isPrefixOf name
 
 def FixtureResult.hasInterface (result : FixtureResult) (owner recursor : Name)
     (constructors : Array Name) (numRules : Nat) : Bool :=

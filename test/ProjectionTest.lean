@@ -35,6 +35,16 @@ def runExport (x : Export) : IO (Array EDecl × Report) := do
 def outputExport (input : Export) (declarations : Array EDecl) : Export :=
   { input with decls := declarations }
 
+/-- No declaration-local public model root, iota, projection, or private
+implementation descendant of the complete source block survived a declined
+owner transition. -/
+def noModeledBlockDescendants (input : Export) (declarations : Array EDecl)
+    (owner : Name) : Bool :=
+  (input.decls.find? (·.names.contains owner)).any fun sourceBlock =>
+    let modelRoots := sourceBlock.names.toArray.map Naming.modelName
+    declarations.all fun declaration => declaration.names.all fun name =>
+      modelRoots.all fun root => !root.isPrefixOf name
+
 def declarationIndex? (x : Export) (name : Name) : Option Nat :=
   x.decls.findIdx? (·.names.contains name)
 
@@ -387,7 +397,7 @@ def main : IO UInt32 := do
   state := state.check "raw-order prim owners before Eq decline without partial models" <|
     primReport.declined == primLateEqOwners.map (·, "prim model name taken (Eq)") &&
       primLateEqOwners.all fun owner =>
-        !primDeclarations.any (·.names.contains (Naming.modelName owner))
+        noModeledBlockDescendants primRaw primDeclarations owner
   let propStructureRules :=
     (Array.range 2).map (Naming.projectionIotaName `Conj) ++
       (Array.range 3).map (Naming.projectionIotaName `Conj3)
@@ -514,14 +524,17 @@ def main : IO UInt32 := do
     Naming.iotaName (Name.str noBaseSkel "rec") 0,
     Naming.projectionName noBaseSkel 0, Naming.projectionIotaName noBaseSkel 0,
     Naming.projectionName noBaseSkel 1, Naming.projectionIotaName noBaseSkel 1]
-  let noBaseNames := noBaseDeclarations.flatMap (·.names.toArray)
   state := state.check "no-base indexed family and its empty skeleton both model" <|
     noBaseReport.generated.any (·.1 == `NoBase) &&
       noBaseReport.generated.any (·.1 == noBaseSkel) &&
       !noBaseReport.declined.any fun (owner, _) => owner == `NoBase || owner == noBaseSkel
   state := state.check "no-base and skeleton expose exactly their required public slots" <|
-    noBaseSlots.all noBaseNames.contains && noBaseSkelSlots.all noBaseNames.contains
+    noBaseSlots.all (fun slot => (noBaseDeclarations.filter (·.names.contains slot)).size == 1) &&
+      noBaseSkelSlots.all fun slot =>
+        (noBaseDeclarations.filter (·.names.contains slot)).size == 1
   state := state.check "no-base first-use support is charged to its generating islands" <|
+    (noBaseReport.spliced.filter (·.1 == `NoBase)).size == 1 &&
+    (noBaseReport.spliced.filter (·.1 == noBaseSkel)).size == 1 &&
     noBaseReport.spliced.find? (·.1 == `NoBase) == some (`NoBase,
       #[`PSigma', `PSigma'.rec, `PSigma'.mk, `PSigma'.fst, `PSigma'.snd,
         `PSigma'.rec', `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk, noBaseSkel]) &&
@@ -555,7 +568,7 @@ def main : IO UInt32 := do
   state := state.check "raw-order dependent-pivot owners before Eq decline without partial models" <|
     fmidRawReport.declined == fmidLateEqOwners.map (·, "prim model name taken (Eq)") &&
       fmidLateEqOwners.all fun owner =>
-        !fmidRawDeclarations.any (·.names.contains (Naming.modelName owner))
+        noModeledBlockDescendants fmidRaw fmidRawDeclarations owner
   state := state.check "one-pivot arm-F owners retain their exact interfaces" <|
     #[(`Fmid, 4), (`FChain, 4)].all fmidReport.generated.contains &&
       !fmidReport.declined.any fun (owner, _) => fmidOwners.contains owner &&
@@ -610,7 +623,7 @@ def main : IO UInt32 := do
       (declarationIndex? zipRaw `Eq).any fun eqIndex => natIndex < eqIndex
   state := state.check "raw-order arm-F owner before Eq declines without a partial model" <|
     zipRawReport.declined == #[(`FTwo, "prim model name taken (Eq)")] &&
-      !zipRawDeclarations.any (·.names.contains (Naming.modelName `FTwo))
+      noModeledBlockDescendants zipRaw zipRawDeclarations `FTwo
   state := state.check "arm-F shared support persists once ahead of every owner" <|
     zipSupport.all fun support =>
       (zipDeclarations.filter (·.names.contains support)).size == 1 &&
@@ -653,7 +666,7 @@ def main : IO UInt32 := do
       (declarationIndex? pfpRaw `PUnit).any (owner < ·)
   state := state.check "raw-order proposition field declines before PUnit without a partial model" <|
     pfpRawReport.declined == #[(`PFP, "prim model name taken (PUnit)")] &&
-      !pfpRawDeclarations.any (·.names.contains (Naming.modelName `PFP))
+      noModeledBlockDescendants pfpRaw pfpRawDeclarations `PFP
   state := state.check "prerequisite-first proposition field uses the input PUnit" <|
     pfpReport.generated.any (·.1 == `PFP) && !pfpReport.declined.any (·.1 == `PFP) &&
       pfpSlots.all pfpNames.contains && !pfpReport.spliced.any fun (_, names) =>
@@ -684,7 +697,7 @@ def main : IO UInt32 := do
   state := state.check "raw-order recursive owners before Eq decline without partial models" <|
     wRawReport.declined == wLateEqOwners.map (·, "prim model name taken (Eq)") &&
       wLateEqOwners.all fun owner =>
-        !wRawDeclarations.any (·.names.contains (Naming.modelName owner))
+        noModeledBlockDescendants wRawOriginal wRawDeclarations owner
   state := state.check "dependent recursive singleton carries the complete one-layer certificate" <|
     wtyCertificate.all wNames.contains
   let wtyShape := wRaw.decls.findSome? fun declaration => match declaration with
@@ -1019,7 +1032,7 @@ def main : IO UInt32 := do
   state := state.check "raw-order mutual owner declines before PUnit without a partial model" <|
     mutualRawReport.declined ==
       #[(`MLeft, "mutual model prerequisite occurs later in the input stream")] &&
-      !mutualRawDecls.any (·.names.contains (Naming.modelName `MLeft))
+      noModeledBlockDescendants mutualRawOriginal mutualRawDecls `MLeft
   unless mutualReport.generated.any (·.1 == `MLeft) do
     IO.eprintln s!"mutual projection generation declined: {mutualReport.declined}"
     for error in mutualReport.stmtErrors do

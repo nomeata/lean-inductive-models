@@ -646,6 +646,24 @@ def main (args : List String) : IO UInt32 := do
       hasDiagnostic discarded.stderr "output backend: compact-discard" &&
       !(← System.FilePath.pathExists (discardCwd / "_tmp"))
   IO.FS.removeDir discardCwd
+  let discardSentinelCwd := s!"{scratch}/main-cli-compact-discard-sentinel"
+  let discardSentinelRoot := discardSentinelCwd / "_tmp"
+  let discardSentinel := discardSentinelRoot / "input-only-sentinel"
+  IO.FS.createDirAll discardSentinelRoot
+  IO.FS.writeFile discardSentinel "untouched"
+  let discardedWithSentinel ← runInductiveModelsAt binaryAbsolute.toString
+    ["--no-output", "--no-type-check-output", nestedAbsolute.toString] discardSentinelCwd
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  let sentinelExists ← System.FilePath.pathExists discardSentinel
+  let sentinelContents ← if sentinelExists then IO.FS.readFile discardSentinel else pure ""
+  state := state.check "unchecked compact discard leaves a preexisting scratch sentinel untouched" <|
+    discardedWithSentinel.exitCode == defaults.exitCode &&
+      discardedWithSentinel.stdout.isEmpty &&
+      hasDiagnostic discardedWithSentinel.stderr "output backend: compact-discard" &&
+      sentinelContents == "untouched"
+  IO.FS.removeFile discardSentinel
+  IO.FS.removeDir discardSentinelRoot
+  IO.FS.removeDir discardSentinelCwd
   let discardedPlain ← runInductiveModels binary
     ["--no-output", "--no-type-check-output", nested]
   let discardedLegacy ← runInductiveModelsLegacy binary
