@@ -10,7 +10,7 @@ right-hand side.
 -/
 prelude
 
---#export Eq N List NestedLayer
+--#export Eq N List Payload NestedLayer
 
 unsafe axiom lcErased : Type
 unsafe axiom lcAny : Type
@@ -29,5 +29,8 @@ inductive List (alpha : Type) : Type where
   | nil : List alpha
   | cons : alpha -> List alpha -> List alpha
 
+inductive Payload : N -> Type where
+  | at (key : N) : Payload key
+
 inductive NestedLayer : Type where
-  | mk (key : N) (payload : Eq key key) (children : List NestedLayer) : NestedLayer
+  | mk (key : N) (payload : Payload key) (children : List NestedLayer) : NestedLayer
