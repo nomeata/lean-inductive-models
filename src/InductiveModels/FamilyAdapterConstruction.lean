@@ -129,6 +129,20 @@ inductive PublicRecursorResultBoundary where
   | agreementMotive
   deriving Inhabited, BEq, Repr
 
+inductive PublicIotaProofBoundary where
+  | hypothesisAgreement (publicBinder implementationBinder : Nat)
+  | expectedHypothesisPackage
+  | privateHypothesisPackage
+  | decodedHypothesisPackage
+  | installedRuleRhs
+  | privateMinorResult
+  | decodedHypothesis (publicBinder implementationBinder : Nat)
+  | minorCompatibilityType
+  | minorCompatibilityLeft
+  | coreTransport
+  | finalProof
+  deriving Inhabited, BEq, Repr
+
 inductive ConstructionIssue where
   | incompleteShadow (reason : ShadowReason)
   | invalidPlan (error : PlanError)
@@ -149,6 +163,7 @@ inductive ConstructionIssue where
   | missingPublicIotaInput (rule : RuleKey)
   | inconsistentPublicIotaHypothesis (rule : RuleKey) (binderIndex : Nat)
   | missingPublicIotaRecursiveCall (rule : RuleKey) (publicBinder implementationBinder : Nat)
+  | publicIotaProofMismatch (rule : RuleKey) (boundary : PublicIotaProofBoundary)
   | recursorResultMismatch (member : MemberKey)
   | publicRecursorResultMismatch (member : MemberKey)
       (boundary : PublicRecursorResultBoundary)
@@ -2719,7 +2734,8 @@ private def packedIotaHypothesisAgreement (plan : FamilyAdapterPlan)
           let type ← liftGen <| inferType actual
           let expectedEquality := eqi.mk' (← liftGen <| ilevel type) type actual expected
           unless ← liftGen <| isDefEq (← inferType proof) expectedEquality do
-            failConstruction (.missingPublicIotaInput rule.key)
+            failConstruction (.publicIotaProofMismatch rule.key
+              (.hypothesisAgreement step.publicBinderIndex step.binderIndex))
           decodedValues := decodedValues.push actual
           expectedValues := expectedValues.push expected
           proofs := proofs.push proof
@@ -2955,11 +2971,14 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
             let actualPrivateIH := mkApp privateIH package
             let decodedPrivateIH := mkAppN decodeIH #[package, actualPrivateIH]
             unless ← liftGen <| isDefEq expectedPublic expected do
-              failConstruction (.missingPublicIotaInput rule.key)
+              failConstruction (.publicIotaProofMismatch rule.key
+                .expectedHypothesisPackage)
             unless ← liftGen <| isDefEq actualPrivate actualPrivateIH do
-              failConstruction (.missingPublicIotaInput rule.key)
+              failConstruction (.publicIotaProofMismatch rule.key
+                .privateHypothesisPackage)
             unless ← liftGen <| isDefEq decodedActual decodedPrivateIH do
-              failConstruction (.missingPublicIotaInput rule.key)
+              failConstruction (.publicIotaProofMismatch rule.key
+                .decodedHypothesisPackage)
             let proof ← liftGen <| mkAppM ``Eq.symm #[packageProof]
             liftGen <| mkLambdaFVars #[package] proof
           let minor ← withLocalDeclD `package constructorBoundary.publicFieldsType fun package => do
@@ -3002,9 +3021,9 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
             let implementationRight := mkAppN privateMinor privateArguments
             let resultType ← liftGen <| inferType implementationLeft
             unless ← liftGen <| isDefEq actualImplementationRight implementationRight do
-              failConstruction (.missingPublicIotaInput rule.key)
+              failConstruction (.publicIotaProofMismatch rule.key .installedRuleRhs)
             unless ← liftGen <| isDefEq (← inferType implementationRight) resultType do
-              failConstruction (.missingPublicIotaInput rule.key)
+              failConstruction (.publicIotaProofMismatch rule.key .privateMinorResult)
             let installedArguments ← installedIotaArguments rule schema privatePrefix
               privateIndices privateMajor
             let some implementationIotaInfo :=
@@ -3036,7 +3055,8 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               let some expectedPublic := replacementValues[step.publicHypothesisPosition]?
                 | failConstruction (.missingPublicIotaInput rule.key)
               unless ← liftGen <| isDefEq expectedPrivate expectedPublic do
-                failConstruction (.missingPublicIotaInput rule.key)
+                failConstruction (.publicIotaProofMismatch rule.key
+                  (.decodedHypothesis step.publicBinderIndex step.binderIndex))
               let expectedType ← liftGen <| inferType expectedPrivate
               let proof := eqi.refl' (← liftGen <| ilevel expectedType)
                 expectedType expectedPrivate
@@ -3047,9 +3067,11 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               (privatePrefix ++ privateArguments ++ extra)
             let some (_, compatibilityLeft, compatibilityRight) ←
                 liftGen <| matchEq? (← inferType compatibilityProof)
-              | failConstruction (.missingPublicIotaInput rule.key)
+              | failConstruction (.publicIotaProofMismatch rule.key
+                  .minorCompatibilityType)
             unless ← liftGen <| isDefEq compatibilityLeft implementationRight do
-              failConstruction (.missingPublicIotaInput rule.key)
+              failConstruction (.publicIotaProofMismatch rule.key
+                .minorCompatibilityLeft)
             let chained ← liftGen <| transOf eqi (← ilevel resultType) resultType
               implementationLeft implementationRight
               compatibilityRight
@@ -3062,7 +3084,7 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
             let desired := eqi.mk' (← liftGen <| ilevel resultType) resultType
               implementationLeft transported
             unless ← liftGen <| isDefEq (← inferType chained) desired do
-              failConstruction (.missingPublicIotaInput rule.key)
+              failConstruction (.publicIotaProofMismatch rule.key .coreTransport)
             liftGen <| mkLambdaFVars #[package] chained
           let proof ← liftGen <| mkAppOptM ``packedRecursorCompatibility <|
             #[ownerBoundary.implementationType, ownerBoundary.publicType,
@@ -3077,7 +3099,7 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               constructorBoundary.constructorAgreement, coreIota].map some
           let applied := mkApp proof publicPackage
           unless ← liftGen <| isDefEq (← inferType applied) proposition do
-            failConstruction (.missingPublicIotaInput rule.key)
+            failConstruction (.publicIotaProofMismatch rule.key .finalProof)
           liftGen <| mkLambdaFVars (publicPrefix ++ publicFields) applied
   let declaration := Declaration.thmDecl
     { name, levelParams := privateRecursorInfo.levelParams, type := exactType, value }
