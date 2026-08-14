@@ -196,20 +196,35 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "kernel-invalid path input is rejected with exit 1" <|
     invalidInput.exitCode == 1 &&
       (invalidInput.stderr.splitOn "input kernel check rejected:").length > 1
-  let invalidOutput ← runInductiveModelsStdin binary [
+  let invalidNeither ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input",
-    "--no-output", "-"] invalidText
-  state := state.check "default output kernel gate rejects invalid stdin with exit 1" <|
-    invalidOutput.exitCode == 1 &&
-      (invalidOutput.stderr.splitOn "output kernel check rejected:").length > 1
+    "--no-type-check-output", "--no-output", "-"] invalidText
+  state := state.check "kernel-invalid source is trusted when both class gates are off" <|
+    invalidNeither.exitCode == 0 && invalidNeither.stdout.isEmpty &&
+      !invalidNeither.stderr.contains "kernel check"
+  let invalidOutputOnly ← runInductiveModelsStdin binary [
+    "--no-inductives", "--no-check", "--no-type-check-input",
+    "--type-check-output", "--no-output", "-"] invalidText
+  state := state.check "output kernel gate does not recheck input declarations" <|
+    invalidOutputOnly.exitCode == 0 && invalidOutputOnly.stdout.isEmpty &&
+      !invalidOutputOnly.stderr.contains "input kernel check" &&
+      hasDiagnostic invalidOutputOnly.stderr "output kernel check: accepted"
+  let invalidBoth ← runInductiveModelsStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input",
+    "--type-check-output", "--no-output", "-"] invalidText
+  state := state.check "input rejection precedes an enabled generated-output gate" <|
+    invalidBoth.exitCode == 1 &&
+      invalidBoth.stderr.contains "input kernel check rejected:" &&
+      !invalidBoth.stderr.contains "output kernel check"
   let gatedOutputPath : System.FilePath := s!"{scratch}/main-cli-gated-output.ndjson"
   let gatedSentinel := "output gate sentinel\n"
   IO.FS.writeFile gatedOutputPath gatedSentinel
   let gatedOutput ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input",
     "--type-check-output", "-o", gatedOutputPath.toString, "-"] invalidText
-  state := state.check "output kernel rejection occurs before named output is touched" <|
-    gatedOutput.exitCode == 1 && (← IO.FS.readFile gatedOutputPath) == gatedSentinel
+  state := state.check "generated-output gate trusts and publishes unchanged input" <|
+    gatedOutput.exitCode == 0 && (← IO.FS.readFile gatedOutputPath) == invalidText &&
+      hasDiagnostic gatedOutput.stderr "output kernel check: accepted"
   IO.FS.removeFile gatedOutputPath
 
   -- A later source replay failure must precede the named output transaction.
