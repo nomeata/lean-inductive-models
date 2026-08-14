@@ -186,21 +186,11 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
   let (filterOutput, generationReport) ← if InductiveModels.generationEnabled config then do
       let generated : Except String (FilterOutput × InductiveModels.Report) ← try
           if compactEnabled && discardModeEligible config then
-            let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
-            let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
             let ((report, plan), _) ← Lean.Core.CoreM.toIO
               (Lean.Meta.MetaM.run'
                 (InductiveModels.runFilterDiscarding generationInput false config))
               context { env }
-            match plan.unavailable? with
-            | none => pure (Except.ok (FilterOutput.discarded plan, report))
-            | some _ =>
-              InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
-              InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
-                context { env }
-              pure (Except.ok (FilterOutput.full decls, fallbackReport))
+            pure (Except.ok (FilterOutput.discarded plan, report))
           else
             let ((decls, report), _) ← Lean.Core.CoreM.toIO
               (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))

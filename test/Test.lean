@@ -505,10 +505,9 @@ def expectedPrim : List Row :=
   -- instantiation; and it is **last in the list rather than in the middle**,
   -- because those two are declared *after* it here — `Acc` arrives through
   -- `WellFounded.fix` and `Nonempty` only through `Classical.propDecidable`.
-  -- This is the late-primitive class rather than a name that
-  -- is lost, and [`InductiveModels.lateSpliceNames`] is what holds the model back
-  -- until the input has caught up. Without that it is a decline, and this row
-  -- is where the difference shows.
+  -- This is the late-primitive class rather than a lost name:
+  -- [`InductiveModels.lateSpliceNames`] reserves it against generated splicing,
+  -- so a model owner encountered before it declines in the raw-order stream.
   --
   -- `Subtype`, `Sigma`, `And`, `Iff`, `WellFounded`, and `PProd` expose
   -- intrinsic projection roles. Their larger

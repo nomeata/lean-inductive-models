@@ -2052,16 +2052,9 @@ structure CompactFamilyCertificate where
   diagnostics after the source declarations themselves have been released. -/
   publicOwners : Array (Name × Name)
   ownerReferences : Array (Name × Name)
-  captureIsland? : Option Nat := none
   localViolations : Array Violation
   recursors : Array (Name × Name × Nat)
   deriving Inhabited, Repr, BEq
-
-/-- Mark a family whose syntax was checked with the declarations available in
-one generated island. `none` denotes the complete parsed source snapshot. -/
-def CompactFamilyCertificate.inIsland
-    (certificate : CompactFamilyCertificate) (island : Nat) : CompactFamilyCertificate :=
-  { certificate with captureIsland? := some island }
 
 private def notExtraRule : Violation → Bool
   | .extraRule .. => false

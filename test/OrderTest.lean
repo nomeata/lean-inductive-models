@@ -437,28 +437,9 @@ def summariesEqual (left right : Array Order.DeclSummary) : Bool :=
   left.size == right.size && (Array.range left.size).all fun i =>
     summaryEqual left[i]! right[i]!
 
-def frozenSummaryPermutationEqual (source : Export) (order : Array Nat)
-    (prefer : EDecl → Bool := fun _ => false) : Bool :=
-  let census := SourceCensus.ofSource source
-  let summaries := census.summaries.map fun summary =>
-    ({ summary with support := prefer source.decls[summary.ordinal]! } : Order.DeclSummary)
-  let census := { census with summaries }
-  match census.summariesForOrder order with
-  | .error _ => false
-  | .ok summaries =>
-    let scheduled := { source with decls := order.map fun ordinal => source.decls[ordinal]! }
-    summariesEqual summaries
-      (Order.summariesIncremental scheduled census.sourceSyntax prefer)
-
 def orderOutcomesEqual (left right : Except Order.Error (Array Nat)) : Bool :=
   match left, right with
   | .ok left, .ok right => left == right
-  | .error left, .error right => toString (repr left) == toString (repr right)
-  | _, _ => false
-
-def scheduleOutcomesEqual (left right : Except Order.Error Export) : Bool :=
-  match left, right with
-  | .ok left, .ok right => left.render == right.render
   | .error left, .error right => toString (repr left) == toString (repr right)
   | _, _ => false
 
@@ -490,7 +471,7 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental source summaries equal whole-export summaries" <|
     summariesEqual census.summaries (Order.summaries censusInput)
   state := state.check "incremental certificate rows equal whole-export rows" <|
-    census.familyCertificateRecords censusInput censusInput ==
+    census.familyCertificateRecords censusInput ==
       Check.compactFamilyCertificateRecordsWithIndex censusInput referenceIndex
         (Check.discoverWithIndex censusInput referenceIndex)
   state := state.check "incremental raw-name callback keeps historical last occurrence" <|
@@ -506,64 +487,6 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental cycle diagnostics equal full record ordering" <|
     orderOutcomesEqual (Order.summaryRecordOrder cycleCensus.summaries)
       (Order.recordOrder censusCycle)
-  let censusScheduled := exportOf #[
-    axDecl `CensusConsumer (.const `CensusProvider []), axDecl `CensusProvider]
-  let .ok censusScheduledView := Order.reorder censusScheduled
-    | throw <| IO.userError "census scheduled-view fixture did not reorder"
-  let scheduledCensus := SourceCensus.ofSource censusScheduled
-  state := state.check "scheduled callback summaries retain view ordinals" <|
-    summariesEqual
-      (Order.summariesIncremental censusScheduledView scheduledCensus.sourceSyntax)
-      (Order.summaries censusScheduledView)
-  let permutationInput := exportOf #[
-    metadataRecord,
-    modelDef (Naming.modelName `PermutationOwner),
-    inductiveRecord [`PermutationOwner],
-    axDecl `PermutationConsumer (.const `PermutationProvider []),
-    axDecl `PermutationProvider,
-    axDecl `PermutationSupport,
-    axDecl `PermutationDuplicate,
-    axDecl `PermutationDuplicate]
-  let preferPermutationSupport := fun declaration : EDecl =>
-    declaration.names.contains `PermutationSupport
-  for multiplier in #[1, 3, 5, 7] do
-    for offset in [:permutationInput.decls.size] do
-      let order := (Array.range permutationInput.decls.size).map fun ordinal =>
-        (ordinal * multiplier + offset) % permutationInput.decls.size
-      state := state.check
-        s!"frozen summaries equal callback recomputation for permutation {multiplier}/{offset}" <|
-        frozenSummaryPermutationEqual permutationInput order preferPermutationSupport
-  let permutationCensus := SourceCensus.ofSource permutationInput
-  state := state.check "permutation oracle exercises nonempty model edges" <|
-    match permutationCensus.summaries.find? (·.owner == some `PermutationOwner),
-        permutationCensus.summaries.find? (·.introduced.contains
-          (Naming.modelName `PermutationOwner)) with
-    | some owner, some model =>
-      !owner.modelSlots.isEmpty && model.modelBefore.contains `PermutationOwner
-    | _, _ => false
-  state := state.check "frozen summary permutation rejects missing records" <|
-    match permutationCensus.summariesForOrder #[0] with
-    | .error _ => true
-    | .ok _ => false
-  state := state.check "frozen summary permutation rejects repeated records" <|
-    match permutationCensus.summariesForOrder #[0, 0, 1, 2, 3, 4, 5, 6] with
-    | .error _ => true
-    | .ok _ => false
-  state := state.check "frozen summary permutation rejects out-of-range records" <|
-    match permutationCensus.summariesForOrder #[0, 1, 2, 3, 4, 5, 6, 8] with
-    | .error _ => true
-    | .ok _ => false
-  let cyclePermutation := #[1, 0]
-  state := state.check "permuted frozen cycle retains exact callback diagnostic" <|
-    match cycleCensus.summariesForOrder cyclePermutation with
-    | .error _ => false
-    | .ok frozen =>
-      let scheduledCycle := { censusCycle with decls := cyclePermutation.map fun ordinal =>
-        censusCycle.decls[ordinal]! }
-      let callback := Order.summariesIncremental scheduledCycle cycleCensus.sourceSyntax
-      orderOutcomesEqual (Order.summaryRecordOrder frozen)
-        (Order.summaryRecordOrder callback)
-
   -- lean4export spells the kernel's one quotient declaration as exactly four
   -- consecutive records.  Replay must validate the bundle before the first
   -- record installs all four constants, or malformed first records and
@@ -815,11 +738,10 @@ def run (root : String) : IO UInt32 := do
       feedTrace.steps.all fun step =>
         !step.sourceIsInductive && step.sourceInstalled &&
           step.generated.isEmpty && step.generatedRecords == 0
-  state := state.check "planned source spans drive the same frozen dependency order" <|
+  state := state.check "planned source spans drive the same frozen raw order" <|
     feedPlanned.report == feedDiscarded.report &&
       feedPlanned.plan.declarations == feedDiscarded.plan.declarations &&
       feedPlanned.plan.checkReport == feedDiscarded.plan.checkReport &&
-      feedPlanned.plan.unavailable? == feedDiscarded.plan.unavailable? &&
       feedPlanned.plan.retainedGeneratedRecords ==
         feedDiscarded.plan.retainedGeneratedRecords &&
       feedPlanned.plan.declarations == #[.source 0, .source 1] &&
@@ -830,7 +752,6 @@ def run (root : String) : IO UInt32 := do
       feedCensus.report == feedDiscarded.report &&
       feedCensus.plan.declarations == feedDiscarded.plan.declarations &&
       feedCensus.plan.checkReport == feedDiscarded.plan.checkReport &&
-      feedCensus.plan.unavailable? == feedDiscarded.plan.unavailable? &&
       feedCensus.plan.retainedGeneratedRecords == feedDiscarded.plan.retainedGeneratedRecords
   let alteredFeedInput := exportOf #[
     axDecl `FeedConsumer (.sort .zero),
@@ -961,7 +882,7 @@ def run (root : String) : IO UInt32 := do
     let plannedCensus ←
       runFilterPlannedCensusState s!"{root}/_tmp" input generation checkRecursors
     state := state.check s!"compact-discard {label} equals full output" <|
-      discarded.report == legacy.report && discarded.plan.unavailable?.isNone &&
+      discarded.report == legacy.report &&
         discarded.plan.checkReport == Check.checkReport legacy.output &&
         discarded.plan.declarations.size == legacy.output.decls.size &&
         discarded.plan.retainedGeneratedRecords == 0
@@ -971,7 +892,6 @@ def run (root : String) : IO UInt32 := do
         plannedCensus.report == discarded.report &&
         plannedCensus.plan.checkReport == discarded.plan.checkReport &&
         plannedCensus.plan.declarations == discarded.plan.declarations &&
-        plannedCensus.plan.unavailable? == discarded.plan.unavailable? &&
         plannedCensus.plan.retainedGeneratedRecords == discarded.plan.retainedGeneratedRecords
 
   let existingDiscarded ← runFilterDiscardedState nestedRun.output
@@ -983,7 +903,8 @@ def run (root : String) : IO UInt32 := do
       existingPlanned.report == existingDiscarded.report &&
       existingPlanned.plan.checkReport == existingDiscarded.plan.checkReport &&
       existingPlanned.plan.declarations == existingDiscarded.plan.declarations &&
-      existingPlanned.plan.unavailable? == existingDiscarded.plan.unavailable?
+      existingPlanned.plan.retainedGeneratedRecords ==
+        existingDiscarded.plan.retainedGeneratedRecords
 
   -- A malformed later inductive preserves the completed trace prefix and
   -- returns an empty compact plan.
@@ -1089,6 +1010,20 @@ def run (root : String) : IO UInt32 := do
     { noGeneration with simple := true }
   let pfpSteps := latePUnitTrace.steps.filter fun step =>
     step.generated.any (·.1 == `PFP)
+  let pfpIslandImmediatelyBeforeOwner := match
+      declarationIndex? latePUnitRun.input `PFP,
+      declarationIndex? latePUnitTrace.output `PFP with
+    | some sourceOwner, some outputOwner =>
+      let generatedRecords := pfpSteps[0]!.generatedRecords
+      outputOwner == sourceOwner + generatedRecords &&
+        latePUnitTrace.output.decls.extract 0 sourceOwner ==
+          latePUnitRun.input.decls.extract 0 sourceOwner &&
+        latePUnitTrace.output.decls.extract (outputOwner + 1)
+            latePUnitTrace.output.decls.size ==
+          latePUnitRun.input.decls.extract (sourceOwner + 1)
+            latePUnitRun.input.decls.size &&
+        before latePUnitTrace.output (Naming.modelName `PFP) `PFP
+    | _, _ => false
   state := state.check "one raw-order transition emits the island immediately before its owner" <|
     latePUnitTrace.output.decls == latePUnitRun.output.decls &&
       latePUnitTrace.report == latePUnitRun.report &&
@@ -1100,7 +1035,8 @@ def run (root : String) : IO UInt32 := do
       pfpSteps.size == 1 && pfpSteps[0]!.sourceNames.contains `PFP &&
       pfpSteps[0]!.sourceIsInductive && pfpSteps[0]!.sourceInstalled &&
       pfpSteps[0]!.generatedRecords > 0 &&
-      latePUnitTrace.steps.filter (·.generatedRecords > 0) == pfpSteps
+      latePUnitTrace.steps.filter (·.generatedRecords > 0) == pfpSteps &&
+      pfpIslandImmediatelyBeforeOwner
 
   IO.println s!"record order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

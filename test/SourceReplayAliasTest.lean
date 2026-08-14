@@ -290,7 +290,6 @@ def main : IO UInt32 := do
   state := state.check "compact discard preserves the colliding-inductive exact oracle"
     (collidingDiscardReport == collidingReport &&
       collidingCompact.retainedGeneratedRecords == 0 &&
-      collidingCompact.unavailable?.isNone &&
       collidingCompact.checkReport == Check.checkReport collidingExport)
 
   let privateCarrier := Naming.modelName privateOwner

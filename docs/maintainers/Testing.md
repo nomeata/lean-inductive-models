@@ -116,7 +116,7 @@ same generation fixtures and exercises planned declaration-wise source
 replay. `mainclitest` selects compact discard explicitly with `--no-output`;
 `--type-check-output` checks each exact generated island directly in process,
 while `--no-type-check-output` invokes no generated checker. It pins exit-2 precedence,
-noncanonical and compact-availability fallback equivalence, cleanup of the
+noncanonical parser fallback equivalence, cleanup of the
 input-only source snapshot workspace, and ordinary fallback before input is
 consumed when `_tmp` is unusable. The snapshot exists only to preserve exact
 stdin/FIFO input for parser-compatible fallback; generated logical output is

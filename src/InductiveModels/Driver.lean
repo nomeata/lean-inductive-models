@@ -170,54 +170,20 @@ inductive CompactLocator where
   | generated (island declaration : Nat)
   deriving Inhabited, Repr, BEq
 
-/-- Atomic value-free scheduling row. `summary` and `globalExtra` are captured
+/-- Atomic value-free output row. `summary` and `globalExtra` are captured
 together with their logical locator and must always be permuted as one value. -/
 structure CompactRecord where
   summary : Order.DeclSummary
   globalExtra : Check.GlobalExtraRecord
   families : Array Check.CompactFamilyCertificate := #[]
-  /-- Syntax availability at certificate capture. Source payload can be
-  recaptured with its current generated island while retaining its logical
-  locator and scheduling origin. -/
-  checkIsland? : Option Nat := none
   locator : CompactLocator
   deriving Inhabited, Repr
-
-private def compactAvailabilityError? (records : Array CompactRecord)
-    (persistentSupportOrigins : Std.HashMap Name Nat) : Option String := Id.run do
-  let mut generatedProviders : Std.HashMap Name Nat := {}
-  for record in records do
-    if let .island island := record.summary.origin then
-      for name in record.summary.introduced do
-        generatedProviders := generatedProviders.insert name island
-  let availableAt := fun (origin : Option Nat) (name : Name) =>
-    match generatedProviders[name]? with
-    | none => true
-    | some provider => match origin with
-      | none => false
-      | some consumer => provider == consumer ||
-          (provider < consumer && persistentSupportOrigins[name]? == some provider)
-  for record in records do
-    let origin := record.checkIsland?.orElse fun _ => match record.summary.origin with
-      | .source => none
-      | .island island => some island
-    if let some name := record.summary.referenced.toArray.find?
-        (fun name => !availableAt origin name) then
-      return some s!"compact syntax for {record.summary.introduced} references generated \
-        provider {name} unavailable at its capture point"
-    for family in record.families do
-      if let some name := family.publicNames.find?
-          (fun name => !availableAt family.captureIsland? name) then
-        return some s!"compact family {family.owner} depends on generated public slot {name} \
-          unavailable at its capture point"
-  return none
 
 /-- Value-only shadow of a compact generation pass, with no physical payloads
 or generated declaration expressions. -/
 structure CompactPlan where
   declarations : Array CompactLocator := #[]
   checkReport : Check.Report := { familiesChecked := 0, violations := #[] }
-  unavailable? : Option String := none
   /-- A regression counter for the payload-retention contract. Compact discard
   never appends generated declarations to a cumulative output array. -/
   retainedGeneratedRecords : Nat := 0
@@ -1292,8 +1258,8 @@ def closeModelIsland (template : Export) (main : Environment)
   | .ok supported => return .ok (generated, compact, supported, statementReport)
 
 /-- The exact quotient/choice interface that a prim model may splice after its
-ordinary basis is ready.  These are source-scheduling names as well as the
-readiness class used at the construction site below. -/
+ordinary basis is ready. Input-reserved names in this class must already have
+appeared in the raw source stream at the construction site below. -/
 def lateSpliceNames : List Name :=
   [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
    `Nonempty, `Nonempty.intro, `Nonempty.rec, `Classical.choice]
@@ -1533,8 +1499,8 @@ def PrimReadiness.ready (readiness : PrimReadiness)
   | .wLogical => primWLogicalReady reserved
 
 /-- Classify a support-name collision by its exact atomic prerequisite set.
-Callers use this to distinguish a violated scheduling/closure invariant from a
-genuine model-shape decline. -/
+Callers use this to distinguish a later source prerequisite from a genuine
+model-shape decline. -/
 def Decline.lateReadiness? : Decline → Option PrimReadiness
   | .nameTaken n =>
     if lateSpliceNames.contains n then some .late
@@ -2181,40 +2147,17 @@ def parsePlannedSourceStreamWithInputTee (stream : IO.FS.Stream)
   parsePlannedSourceWithSink stream tee.sink tee.sourceProvenance
     options
 
-/-- Rebind declaration-local frozen summaries to a logical source order.
-Every summary field except `ordinal` is a function of the declaration itself
-and the source-wide owner-name table, so a permutation need not traverse its
-expression graph again.  Validate the permutation here so future callers
-cannot silently duplicate or omit one source record. -/
-def SourceCensus.summariesForOrder (census : SourceCensus)
-    (order : Array Nat) : Except String (Array Order.DeclSummary) := do
-  unless order.size == census.summaries.size do
-    throw "source summary order has the wrong number of records"
-  let mut seen := Array.replicate census.summaries.size false
-  let mut summaries : Array Order.DeclSummary := #[]
-  for viewOrdinal in [:order.size] do
-    let rawOrdinal := order[viewOrdinal]!
-    unless rawOrdinal < census.summaries.size do
-      throw s!"source summary order contains out-of-range record {rawOrdinal}"
-    if seen[rawOrdinal]! then
-      throw s!"source summary order repeats record {rawOrdinal}"
-    seen := seen.set! rawOrdinal true
-    summaries := summaries.push
-      { census.summaries[rawOrdinal]! with ordinal := viewOrdinal }
-  return summaries
-
-/-- Rebind source-family certificates to a reordered declaration view without
-interpreting the source index's raw record occurrences as view ordinals. -/
+/-- Build source-family certificate rows in raw declaration order. -/
 def SourceCensus.familyCertificateRecords (census : SourceCensus)
-    (source view : Export) : Array (Array Check.CompactFamilyCertificate) := Id.run do
+    (source : Export) : Array (Array Check.CompactFamilyCertificate) := Id.run do
   let mut byOwner : Std.HashMap Name (Array Check.CompactFamilyCertificate) := {}
   for family in Check.discoverWithIndex source census.sourceSyntax do
     let certificate := Check.compactFamilyCertificateWithIndex source census.sourceSyntax family
     byOwner := byOwner.insert family.owner
       ((byOwner.getD family.owner #[]).push certificate)
-  let mut rows := Array.replicate view.decls.size #[]
-  for i in [0:view.decls.size] do
-    if let .induct (type :: _) _ _ := view.decls[i]! then
+  let mut rows := Array.replicate source.decls.size #[]
+  for i in [0:source.decls.size] do
+    if let .induct (type :: _) _ _ := source.decls[i]! then
       rows := rows.set! i (byOwner.getD type.name #[])
   return rows
 
@@ -2263,7 +2206,6 @@ private structure FilterState where
   islandStatements : Check.StatementReport :=
     { statementsChecked := 0, violations := #[] }
   invalidBasis : Std.HashSet Name := {}
-  persistentSupportOrigins : Std.HashMap Name Nat := {}
   sourceSteps : Array FilterSourceStep := #[]
   adapterShadows : Array FamilyAdapter.ShadowObservation := #[]
 
@@ -2309,7 +2251,6 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut compactRecords := state.compactRecords
   let mut islandStatements := state.islandStatements
   let mut invalidBasis := state.invalidBasis
-  let mut persistentSupportOrigins := state.persistentSupportOrigins
   let mut sourceSteps := state.sourceSteps
   let mut adapterShadows := state.adapterShadows
   -- Construction state is island-local. Nothing generated for an earlier
@@ -2561,17 +2502,11 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           let row : CompactRecord := {
             summary := tagged[localOrdinal]!
             globalExtra := compact.globalExtras[localOrdinal]!
-            families := compact.families[localOrdinal]!.map (·.inIsland islandNumber)
-            checkIsland? := some islandNumber
+            families := compact.families[localOrdinal]!
             locator := .generated islandNumber localOrdinal }
           compactRecords := compactRecords.push row
         compactIslands := compactIslands.push compact
       let persistentRecords := generatedSupportRecords orderedGenerated exactIslandModels
-      if compactMode then
-        let islandNumber := compactIslands.size - 1
-        for record in persistentRecords do
-          for name in record.names do
-            persistentSupportOrigins := persistentSupportOrigins.insert name islandNumber
       persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
         | .ok index => pure index
         | .error message => throwError
@@ -2596,17 +2531,10 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     let some firstName := d.names.head? | throwError "source declaration has no name"
     let some rawOrdinal := rawOrdinals[firstName]?
       | throwError "source declaration {firstName} lost its raw ordinal"
-    let modeledIsland? ← if modeledSourceFamilies.isEmpty then pure none else
-      match compactIslands.size with
-      | 0 => throwError "modeled source family {d.names} has no committed generated island"
-      | size + 1 => pure (some size)
     let row : CompactRecord := {
       summary := sourceSummaries[sourceOrdinal]!
       globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtra
-      families := sourceFamilyRecord ++
-        (modeledSourceFamilies.map fun family =>
-          modeledIsland?.elim family family.inIsland)
-      checkIsland? := modeledIsland?
+      families := sourceFamilyRecord ++ modeledSourceFamilies
       locator := .source rawOrdinal }
     compactRecords := compactRecords.push row
   if context.checkRecursors then
@@ -2632,7 +2560,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, compactRecords,
     sourceOrdinal := sourceOrdinal + 1, islandStatements, invalidBasis,
-    persistentSupportOrigins, sourceSteps, adapterShadows }
+    sourceSteps, adapterShadows }
 
 /-- Complete compact ordering and checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
@@ -2661,7 +2589,6 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
       | .error message => throwError "invalid compact output certificate: {message}"
     else
       pure ({ familiesChecked := 0, violations := #[] } : Check.Report)
-  let compactUnavailable? : Option String := none
   let compactStatementReport := if compactMode then
     let orderedGlobals := compactOrder.map fun i => compactRecords[i]!.globalExtra
     let diagnosticOwners := compactIslands.foldl (init := ({} : Std.HashSet Name))
@@ -2688,25 +2615,6 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
           islands={repr islandStatements}, aggregate={repr finalLocal}"
       let fullReport :=
         Check.checkStatementFamiliesWithIndex finalExport finalIndex finalFamilies
-      if compactMode then
-        let fullOrder ← match Order.recordOrder finalExport with
-          | .ok order => pure order
-          | .error error => throwError "full output cannot order compact records: {repr error}"
-        let compactNames := compactOrder.map fun i => compactRecords[i]!.summary.introduced
-        let fullNames := fullOrder.map fun i => finalExport.decls[i]!.names.toArray
-        unless compactNames == fullNames do
-          throwError "compact order disagrees with full export: \
-            compact={repr compactNames}, full={repr fullNames}"
-        unless compactStatementReport == fullReport do
-          throwError "compact statements disagree with full export: \
-            compact={repr compactStatementReport}, full={repr fullReport}"
-        let orderedExport := { finalExport with
-          decls := fullOrder.map fun index => finalExport.decls[index]! }
-        let fullCheckReport := Check.checkReport orderedExport
-        if compactUnavailable?.isNone then
-          unless compactCheckReport == fullCheckReport do
-            throwError "compact output check disagrees with full export: \
-              compact={repr compactCheckReport}, full={repr fullCheckReport}"
       pure fullReport
     else pure compactStatementReport
   rep := { rep with stmtChecked := statementReport.statementsChecked }
@@ -2718,7 +2626,6 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
   let compactPlan : CompactPlan := {
     declarations
     checkReport := compactCheckReport
-    unavailable? := compactUnavailable?
     retainedGeneratedRecords := legacyOut.foldl (fun count declaration =>
       if declaration.names.any fun name => !reserved.contains name then count + 1 else count) 0 }
   return (legacyOut, rep, compactPlan)
@@ -2748,8 +2655,6 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         throwError "normalized source-name collision moves quotient role {name}; \
           collision-safe quotient replay is not supported"
   let sourceOrder := Array.range sourceCensus.summaries.size
-  let sourceView := if plannedCensus then x else
-    { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
   -- Source records are consumed in their original stream order. A model
   -- owner whose fixed support occurs later declines at that owner; the normal
   -- route never moves input declarations or preinstalls later prerequisites.
@@ -2787,13 +2692,11 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       | .ok index => pure index
       | .error message => throwError "cannot index collision-safe source replay: {message}"
   let constructionNormalizer := constructionSyntax.exactNormalizer
-  let sourceSummaries ← match sourceCensus.summariesForOrder sourceOrder with
-    | .ok summaries => pure summaries
-    | .error error => throwError "cannot rebind frozen source summaries: {error}"
+  let sourceSummaries := sourceCensus.summaries
   let sourceGlobalExtras? := if plannedCensus then none else
-    some (Check.globalExtraRecordsWithIndex sourceSyntax sourceView.decls)
+    some (Check.globalExtraRecordsWithIndex sourceSyntax x.decls)
   let sourceFamilyRecords? := if plannedCensus then none else
-    some (sourceCensus.familyCertificateRecords x sourceView)
+    some (sourceCensus.familyCertificateRecords x)
   let rawOrdinals := sourceCensus.rawOrdinals
   let reserved := sourceCensus.reserved
   let constructionReserved := reserved.fold (init := reserved) fun names name =>
@@ -2938,7 +2841,8 @@ def materializePlannedSource (input : PlannedSourceInput)
 /-- Planned no-output route: the parser has released its complete source
 declaration array, and stream-order replay decodes exactly one certified raw
 record for each `FilterState.feedSource` transition. Main selects this path
-when generated output is discarded and input kernel checking is disabled. -/
+when generated output is discarded, generated-island kernel checking is
+enabled, and input kernel checking is disabled. -/
 def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
     (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Report × CompactPlan) := do

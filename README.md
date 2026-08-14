@@ -145,13 +145,12 @@ oracle. Each accepted model island is appended immediately before its source
 owner, while all other source declarations retain input order. Input
 validation rejects a model declaration that occurs after its owner.
 
-Canonical generation retains compact ordering and structural-check
-certificates while model islands are live. All named and stdout output uses
-the ordinary full-memory AST path. With
-generated `--no-output`, the parser first builds a compact source census; each
-exact source declaration is trusted-installed for construction, and each
-generated island is checked directly in process while its compact certificate
-is live. The
+Canonical generation retains compact structural certificates while model
+islands are live. All named and stdout output uses the ordinary full-memory AST
+path. On the eligible `--no-output --type-check-output` route with input kernel
+checking disabled, the parser first builds a compact source census; each exact
+source declaration is trusted-installed for construction, and each generated
+island is checked directly in process while its compact certificate is live. The
 parser transfers one declaration replay arena instead of reparsing; at parse
 completion its dense expression-ID table is replaced by the exact expression
 roots referenced by declarations, while the expression DAGs and name/level
