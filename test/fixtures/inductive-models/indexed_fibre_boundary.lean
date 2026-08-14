@@ -83,10 +83,21 @@ inductive ParametricRecursiveLayer (alpha : Type u) (beta : alpha -> Type v) :
       (child : ParametricRecursiveLayer alpha beta FibreIx.here) (tail : alpha) :
       ParametricRecursiveLayer alpha beta FibreIx.here
 
-/-- More than one direct recursive child remains outside the first tranche. -/
+/-- Two direct fixed-fibre children form the next bounded certificate tranche. -/
 inductive TwoRecursiveResults : FibreIx -> Type where
   | mk (left right : TwoRecursiveResults FibreIx.here) :
       TwoRecursiveResults FibreIx.here
+
+/-- Two fixed recursive children beside the same dependent ordinary prefix as
+`IndexedRecursiveLayer`.  This makes the two-child certificate observable:
+the payload rule must retain the source-authored transport but acquire no
+additional projection transport. -/
+inductive TwoRecursiveDependentResults : FibreIx -> Type where
+  | mk (key : FibreKey)
+      (payload : Eq.rec (motive := fun _ _ => Type)
+        (FibrePayload key) (Eq.refl (FibrePayload key)))
+      (left right : TwoRecursiveDependentResults FibreIx.here) (tail : FibreKey) :
+      TwoRecursiveDependentResults FibreIx.here
 
 /-- Recursion below a function former remains outside the direct-field
 tranche even though the constructor result index is fixed. -/
@@ -109,5 +120,6 @@ inductive TransparentRecursiveResult : FibreIx -> Type where
 --#export Eq FibreIx FibreKey FibrePayload RecursiveWitness TransparentOwnerAlias
 --#export IndexedUnit HiddenIndexedResult HiddenIndexed erasedResultIndex
 --#export FixedRecursiveResult IndexedRecursiveLayer ParametricRecursiveLayer
---#export TwoRecursiveResults InfinitaryRecursiveResult FieldIndexedRecursiveResult
+--#export TwoRecursiveResults TwoRecursiveDependentResults
+--#export InfinitaryRecursiveResult FieldIndexedRecursiveResult
 --#export TransparentRecursiveResult

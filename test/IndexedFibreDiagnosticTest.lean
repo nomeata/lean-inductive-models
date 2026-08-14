@@ -175,6 +175,29 @@ def recursiveLaterDependencyType? (constructor : ECtor) : Option Expr := do
   let binders := binders.set! laterIndex { later with type := witness }
   return closeForalls binders result
 
+def twoRecursiveIndexDependencyType? (constructor : ECtor) : Option Expr := do
+  let (binders, result) := openForalls `_test.twoRecursiveIndexDependency constructor.type
+  let keyIndex := constructor.numParams
+  let rightIndex := constructor.numParams + 3
+  let key ← binders[keyIndex]?
+  let right ← binders[rightIndex]?
+  let index := mkAppN (.const `erasedResultIndex [.succ .zero]) #[key.type, key.value]
+  let recursiveType := mkApp (.const `TwoRecursiveDependentResults []) index
+  let binders := binders.set! rightIndex { right with type := recursiveType }
+  return closeForalls binders result
+
+def twoRecursiveLaterDependencyType? (constructor : ECtor)
+    (recursiveOffset : Nat) : Option Expr := do
+  let (binders, result) := openForalls `_test.twoRecursiveLaterDependency constructor.type
+  let recursiveIndex := constructor.numParams + 2 + recursiveOffset
+  let laterIndex := constructor.numParams + 4
+  let recursive ← binders[recursiveIndex]?
+  let later ← binders[laterIndex]?
+  let witness := mkAppN (.const `RecursiveWitness [.zero])
+    #[recursive.type, recursive.value]
+  let binders := binders.set! laterIndex { later with type := witness }
+  return closeForalls binders result
+
 def declarationValue? (x : Export) (name : Name) : Option Expr :=
   x.decls.findSome? fun declaration => match declaration with
     | .defn got _ _ value .. | .thm got _ _ value .. | .opaq got _ _ value .. =>
@@ -583,8 +606,128 @@ def run (root : String) : IO UInt32 := do
       boundaryReport.generated.any (·.1 == `ParametricRecursiveLayer) &&
       (Check.check boundaryGenerated).all (·.familyOwner != `ParametricRecursiveLayer)
 
-  for owner in [`TwoRecursiveResults, `InfinitaryRecursiveResult,
-      `FieldIndexedRecursiveResult, `TransparentRecursiveResult] do
+  let some twoRecursiveFamily := Check.discover boundaryGenerated |>.find?
+      (·.owner == `TwoRecursiveResults)
+    | throw <| IO.userError "generated boundary has no TwoRecursiveResults family"
+  let some (twoRecursiveType, twoRecursiveConstructor, _) :=
+      sourceShape? boundaryGenerated `TwoRecursiveResults
+    | throw <| IO.userError "generated boundary has no TwoRecursiveResults source shape"
+  let some twoRecursiveTypePair := twoRecursiveFamily.correspondence.typeFormers.find?
+      (·.owner == `TwoRecursiveResults)
+    | throw <| IO.userError "TwoRecursiveResults has no modeled carrier"
+  let some (twoRecursiveParams, _) := declarationType? boundaryGenerated
+      twoRecursiveTypePair.model
+    | throw <| IO.userError "TwoRecursiveResults modeled carrier is absent"
+  let (twoRecursiveFaces, _) ← Core.CoreM.toIO
+    (MetaM.run' (projectionExpectations boundaryGenerated twoRecursiveFamily
+      twoRecursiveType twoRecursiveConstructor twoRecursiveParams))
+    projectionContext { env := projectionEnv }
+  let twoRecursiveExpected := fun name =>
+    twoRecursiveFaces.find? (·.1 == name) |>.map (·.2)
+  let twoRecursiveActual := fun name =>
+    declarationType? boundaryGenerated name |>.map (·.2)
+  let twoRecursiveRoot := `TwoRecursiveResults._model._impl
+  let twoRecursiveCertificate := #[Name.str twoRecursiveRoot "self",
+    Name.str twoRecursiveRoot "ctor_0", Name.str twoRecursiveRoot "rec",
+    Name.str twoRecursiveRoot "rec_iota_0", Name.str twoRecursiveRoot "roll",
+    Name.str twoRecursiveRoot "unroll", Name.str twoRecursiveRoot "unroll_roll",
+    Name.str twoRecursiveRoot "roll_unroll"]
+  state := state.check "two-child indexed family carries the complete certificate" <|
+    twoRecursiveCertificate.all boundaryNames.contains
+  for fieldIndex in [0:2] do
+    let rule := Naming.projectionIotaName `TwoRecursiveResults fieldIndex
+    state := state.check s!"two-child indexed recursive field {fieldIndex} is literal" <|
+      twoRecursiveActual rule == twoRecursiveExpected rule
+  let twoRecursiveWithoutLaw := Check.check <|
+    withoutDeclaration boundaryGenerated (Name.str twoRecursiveRoot "roll_unroll")
+  state := state.check "two-child indexed partial certificate fails closed" <|
+    twoRecursiveWithoutLaw.any (hasTypeViolation `TwoRecursiveResults
+      (Name.str twoRecursiveRoot "roll_unroll"))
+  state := state.check "two-child indexed family generates and checks" <|
+    boundaryReport.generated.any (·.1 == `TwoRecursiveResults) &&
+      !boundaryReport.declined.any (·.1 == `TwoRecursiveResults) &&
+      (Check.check boundaryGenerated).all (·.familyOwner != `TwoRecursiveResults)
+
+  let some twoDependentFamily := Check.discover boundaryGenerated |>.find?
+      (·.owner == `TwoRecursiveDependentResults)
+    | throw <| IO.userError "generated boundary has no TwoRecursiveDependentResults family"
+  let some (twoDependentType, twoDependentConstructor, _) :=
+      sourceShape? boundaryGenerated `TwoRecursiveDependentResults
+    | throw <| IO.userError
+        "generated boundary has no TwoRecursiveDependentResults source shape"
+  let some twoDependentTypePair := twoDependentFamily.correspondence.typeFormers.find?
+      (·.owner == `TwoRecursiveDependentResults)
+    | throw <| IO.userError "TwoRecursiveDependentResults has no modeled carrier"
+  let some (twoDependentParams, _) := declarationType? boundaryGenerated
+      twoDependentTypePair.model
+    | throw <| IO.userError "TwoRecursiveDependentResults modeled carrier is absent"
+  let (twoDependentFaces, _) ← Core.CoreM.toIO
+    (MetaM.run' (projectionExpectations boundaryGenerated twoDependentFamily
+      twoDependentType twoDependentConstructor twoDependentParams))
+    projectionContext { env := projectionEnv }
+  let twoDependentExpected := fun name =>
+    twoDependentFaces.find? (·.1 == name) |>.map (·.2)
+  let twoDependentActual := fun name =>
+    declarationType? boundaryGenerated name |>.map (·.2)
+  let twoDependentRoot := `TwoRecursiveDependentResults._model._impl
+  let twoDependentCertificate := #[Name.str twoDependentRoot "self",
+    Name.str twoDependentRoot "ctor_0", Name.str twoDependentRoot "rec",
+    Name.str twoDependentRoot "rec_iota_0", Name.str twoDependentRoot "roll",
+    Name.str twoDependentRoot "unroll", Name.str twoDependentRoot "unroll_roll",
+    Name.str twoDependentRoot "roll_unroll"]
+  let twoDependentPayloadRule :=
+    Naming.projectionIotaName `TwoRecursiveDependentResults 1
+  state := state.check "dependent two-child indexed family carries the complete certificate" <|
+    twoDependentCertificate.all boundaryNames.contains
+  for fieldIndex in [0:5] do
+    let rule := Naming.projectionIotaName `TwoRecursiveDependentResults fieldIndex
+    state := state.check s!"dependent two-child indexed field {fieldIndex} is literal" <|
+      twoDependentActual rule == twoDependentExpected rule
+  state := state.check "source-authored transport survives dependent two-child faces" <|
+    containsConst ``Eq.rec twoDependentConstructor.type &&
+      #[Naming.modelName `TwoRecursiveDependentResults.mk,
+        Naming.modelName `TwoRecursiveDependentResults.rec,
+        Naming.iotaName `TwoRecursiveDependentResults.rec 0,
+        Name.str twoDependentRoot "ctor_0", Name.str twoDependentRoot "rec",
+        Name.str twoDependentRoot "rec_iota_0"].all fun name =>
+        (declarationType? boundaryGenerated name).any fun (_, type) =>
+          containsConst ``Eq.rec type
+  let twoDependentCurrentPayloadRule := twoDependentActual twoDependentPayloadRule
+  let twoDependentTransported := if twoDependentCurrentPayloadRule !=
+      twoDependentExpected twoDependentPayloadRule then boundaryGenerated else
+    twoDependentCurrentPayloadRule.bind transportOuterEqualityRhs?
+      |>.map (replaceDeclarationType boundaryGenerated twoDependentPayloadRule ·)
+      |>.getD boundaryGenerated
+  state := state.check "checker rejects old dependent two-child projection transport" <|
+    (Check.check twoDependentTransported).any
+      (hasTypeViolation `TwoRecursiveDependentResults twoDependentPayloadRule)
+  let twoDependentMovingIndex := twoRecursiveIndexDependencyType? twoDependentConstructor
+    |>.map (replaceConstructorType boundaryGenerated `TwoRecursiveDependentResults.mk ·)
+    |>.getD boundaryGenerated
+  state := state.check "two-child recursive index depending on a field fails closed" <|
+    (Check.check twoDependentMovingIndex).any
+      (hasTypeViolation `TwoRecursiveDependentResults (Name.str twoDependentRoot "self"))
+  for recursiveOffset in [0:2] do
+    let laterDependent := twoRecursiveLaterDependencyType? twoDependentConstructor
+        recursiveOffset
+      |>.map (replaceConstructorType boundaryGenerated `TwoRecursiveDependentResults.mk ·)
+      |>.getD boundaryGenerated
+    state := state.check s!"later field depending on recursive child {recursiveOffset} fails closed" <|
+      (Check.check laterDependent).any
+        (hasTypeViolation `TwoRecursiveDependentResults (Name.str twoDependentRoot "self"))
+  let twoDependentWithoutLaw := Check.check <|
+    withoutDeclaration boundaryGenerated (Name.str twoDependentRoot "roll_unroll")
+  state := state.check "dependent two-child partial certificate fails closed" <|
+    twoDependentWithoutLaw.any (hasTypeViolation `TwoRecursiveDependentResults
+      (Name.str twoDependentRoot "roll_unroll"))
+  state := state.check "dependent two-child indexed family generates and checks" <|
+    boundaryReport.generated.any (·.1 == `TwoRecursiveDependentResults) &&
+      !boundaryReport.declined.any (·.1 == `TwoRecursiveDependentResults) &&
+      (Check.check boundaryGenerated).all
+        (·.familyOwner != `TwoRecursiveDependentResults)
+
+  for owner in [`InfinitaryRecursiveResult, `FieldIndexedRecursiveResult,
+      `TransparentRecursiveResult] do
     let ownerRoot := Name.str (Naming.modelName owner) "_impl"
     let ownerCertificate := #[Name.str ownerRoot "self", Name.str ownerRoot "ctor_0",
       Name.str ownerRoot "rec", Name.str ownerRoot "rec_iota_0",
