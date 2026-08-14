@@ -2491,7 +2491,8 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
   liftGen <| addChecked declaration
   let agreementName := publicRecursorCallAgreementName root member.key
   liftGen <| ensurePrototypeFresh agreementName
-  let agreementValue ← forallBoundedTelescope publicType (some prefixSize)
+  let (agreementValue, agreementType) ←
+      forallBoundedTelescope publicType (some prefixSize)
       fun publicPrefix _ => do
     let parameters := publicPrefix.extract 0 member.parameterArity
     let publicMotives := publicPrefix.extract member.parameterArity
@@ -2572,10 +2573,13 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
       let expected := eqi.mk' (← liftGen <| ilevel resultType) resultType
         privateCall publicCall
       let actual ← liftGen <| inferType proof
-      unless ← liftGen <| isDefEq actual expected do
+      unless ← liftGen <| withTransparency .all <| isDefEq actual expected do
         failConstruction (.publicRecursorAgreementMismatch member.key actual expected)
-      liftGen <| mkLambdaFVars (publicPrefix ++ privateTailArguments) proof
-  let agreementType ← liftGen <| inferType agreementValue
+      let value ← liftGen <| mkLambdaFVars
+        (publicPrefix ++ privateTailArguments) proof
+      let type ← liftGen <| mkForallFVars
+        (publicPrefix ++ privateTailArguments) expected
+      return (value, type)
   let agreementDeclaration := Declaration.thmDecl
     { name := agreementName, levelParams := publicRecursorInfo.levelParams,
       type := agreementType, value := agreementValue }
