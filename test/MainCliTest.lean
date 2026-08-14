@@ -24,7 +24,7 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
     { state with failed := state.failed.push label }
 
 def defaultInductiveModelsEnv : Array (String × Option String) :=
-  #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", none), ("LEAN_INDUCTIVE_MODELS_RAW_SPOOL", none),
+  #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", none),
     ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", none),
     ("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", none),
     (InductiveModels.Supervisor.workerMarker, none)]
