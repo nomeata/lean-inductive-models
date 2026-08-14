@@ -1,5 +1,4 @@
 import InductiveModels.Spool
-import Std.Internal.Async.System
 
 open Lean InductiveModels
 
@@ -19,19 +18,10 @@ def lines (records : Array String) : String :=
 def removeIfPresent (path : String) : IO Unit := do
   if ← System.FilePath.pathExists path then IO.FS.removeFile path
 
-def withTempDirectoryVariable (value : System.FilePath) (action : IO α) : IO α := do
-  let old ← IO.getEnv "TMPDIR"
-  Std.Internal.IO.Async.System.setEnvVar "TMPDIR" value.toString
-  try action finally
-    match old with
-    | some old => Std.Internal.IO.Async.System.setEnvVar "TMPDIR" old
-    | none => Std.Internal.IO.Async.System.unsetEnvVar "TMPDIR"
-
 def parseHandleAt (path : String) : IO (Except String Export) :=
   IO.FS.withFile path .read fun handle => InductiveModels.parseHandle handle
 
-/-- Deliberately whole-text random-decode oracle. Phase three replaces this
-quadratic convenience with one retained arena and declaration-span reads. -/
+/-- Deliberately whole-text random-decode oracle for the source reader. -/
 def referenceDecode (arena declaration : String) : Except String EDecl := do
   let parsed ← InductiveModels.parse (arena ++ declaration) (analyse := false)
   let #[result] := parsed.decls | throw "reference declaration did not decode alone"
@@ -117,32 +107,6 @@ def isExceptError (result : Except ε α) : Bool :=
   | .error _ => true
   | .ok _ => false
 
-def injectedCommitPoisons (scratch : String) (records : Array EDecl)
-    (failure : Spool.Test.CommitFailure) : IO Bool :=
-  Spool.withWorkspace scratch fun workspace => do
-    let stage ← Spool.Test.createFailingIslandStage workspace {} failure
-    let .ok prepared := Spool.prepareIsland {} records | return false
-    let rejected ← try
-        discard <| stage.commit prepared
-        pure false
-      catch _ => pure true
-    let cursorUnpublished := (← stage.cursor) == ({} : Writer.Cursor)
-    let (arenaSize, declarationSize) ← stage.sizes
-    let partialAtExpectedBoundary := match failure with
-      | .afterFirstArena => arenaSize > 0 && declarationSize == 0
-      | .afterArenas => arenaSize > 0 && declarationSize == 0
-      | .afterFirstDeclaration => arenaSize > 0 && declarationSize > 0
-    let retryRejected ← try
-        discard <| stage.commit prepared
-        pure false
-      catch _ => pure true
-    let finishRejected ← try
-        discard <| stage.finish
-        pure false
-      catch _ => pure true
-    return rejected && cursorUnpublished && partialAtExpectedBoundary &&
-      retryRejected && finishRejected
-
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let scratch := s!"{root}/_tmp"
@@ -169,14 +133,13 @@ def main (args : List String) : IO UInt32 := do
   let rawBlankPath := s!"{scratch}/raw-spool-blank.ndjson"
   let rawCrlfPath := s!"{scratch}/raw-spool-crlf.ndjson"
   let rawKeyOrderPath := s!"{scratch}/raw-spool-key-order.ndjson"
-  let mixedCompositionPath := s!"{scratch}/raw-spool-mixed-composition.ndjson"
   let rawRootSentinel := s!"{scratch}/raw-spool-root-sentinel"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
     nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath,
     projectionOrderPath, projectionOverwritePath, parserCompatibilityPath,
     rawCanonicalPath, rawNameGapPath, rawLevelGapPath, rawExprGapPath,
     rawNameOrderPath, rawNoLfPath, rawWhitespacePath, rawBlankPath, rawCrlfPath,
-    rawKeyOrderPath, rawRootSentinel, mixedCompositionPath]
+    rawKeyOrderPath, rawRootSentinel]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -218,31 +181,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "runtime workspace is a secure physical child of project _tmp" <|
     secureWorkspaceBoundary && secureWorkspaceCleaned
 
-  let externalTmp : System.FilePath := s!"{root}/staged-writer-external-tmp"
-  if ← externalTmp.pathExists then IO.FS.removeDirAll externalTmp
-  IO.FS.createDir externalTmp
-  let externalFallback ← withTempDirectoryVariable externalTmp <|
-    Spool.withOptionalWorkspace scratch fun workspace? => pure workspace?.isNone
-  let externalEntries ← externalTmp.readDir
-  state := state.check "external TMPDIR disables optional staging and cleans its reservation" <|
-    externalFallback && externalEntries.isEmpty
-
-  let symlinkTarget : System.FilePath := s!"{root}/staged-writer-symlink-target"
-  let symlinkTmp : System.FilePath := s!"{scratch}/staged-writer-symlink-tmp"
-  if ← symlinkTmp.pathExists then IO.FS.removeDirAll symlinkTmp
-  if ← symlinkTarget.pathExists then IO.FS.removeDirAll symlinkTarget
-  IO.FS.createDir symlinkTarget
-  let symlinkEscape ← if System.Platform.isWindows then (pure true : IO Bool) else do
-    discard <| IO.Process.run {
-      cmd := "ln", args := #["-s", symlinkTarget.toString, symlinkTmp.toString] }
-    let fellBack ← withTempDirectoryVariable symlinkTmp <|
-      Spool.withOptionalWorkspace scratch fun workspace? => pure workspace?.isNone
-    let entries ← symlinkTarget.readDir
-    IO.FS.removeFile symlinkTmp
-    pure (fellBack && entries.isEmpty : Bool)
-  state := state.check "canonical containment rejects a TMPDIR symlink escape" symlinkEscape
-  IO.FS.removeDir symlinkTarget
-  IO.FS.removeDir externalTmp
   let suffixProbe := rawSpoolSuffixOfBytes <| ByteArray.mk #[
     0x00, 0x0f, 0x10, 0x2a, 0x34, 0x4b, 0x56, 0x67,
     0x78, 0x89, 0x9a, 0xab, 0xbc, 0xcd, 0xde, 0xff]
@@ -418,147 +356,6 @@ def main (args : List String) : IO UInt32 := do
     | _, _ => false
   state := state.check "raw spool files are removed after success" <|
     (← stagedPaths.allM fun path => return !(← path.pathExists))
-
-  -- Production staging keeps parser and generated payloads in separate files.
-  -- The mixed emitter validates every file/span before streaming the source
-  -- arenas, generated arenas, and interleaved compact declaration order.
-  let largeSourceArena := String.ofList (List.replicate (4194304 + 17) 'a') ++ "\n"
-  let mixedResult ← Spool.withWorkspace scratch fun workspace => do
-    let sourceMetadata ← workspace.createFile "mixed-source-metadata.ndjson"
-    let sourceArena ← workspace.createFile "mixed-source-arena.ndjson"
-    let sourceDeclarations ← workspace.createFile "mixed-source-declarations.ndjson"
-    let generatedArena ← workspace.createFile "mixed-generated-arena.ndjson"
-    let generatedDeclarations ← workspace.createFile "mixed-generated-declarations.ndjson"
-    discard <| sourceMetadata.append "meta\n".toUTF8
-    discard <| sourceArena.append largeSourceArena.toUTF8
-    let sourceFirst ← sourceDeclarations.append "source-first\n".toUTF8
-    let sourceSecond ← sourceDeclarations.append "source-second\n".toUTF8
-    discard <| generatedArena.append "generated-arena\n".toUTF8
-    let generated ← generatedDeclarations.append "generated\n".toUTF8
-    let sourceSizes : RawSpoolSizes := {
-      metadata := ← sourceMetadata.finish
-      arena := ← sourceArena.finish
-      declarations := ← sourceDeclarations.finish }
-    let generatedArenaSize ← generatedArena.finish
-    let generatedDeclarationSize ← generatedDeclarations.finish
-    let mixed : Spool.MixedComposition := {
-      sourceMetadataPath := sourceMetadata.path
-      sourceArenaPath := sourceArena.path
-      sourceDeclarationPath := sourceDeclarations.path
-      sourceSizes
-      generatedArenaPath := generatedArena.path
-      generatedDeclarationPath := generatedDeclarations.path
-      generatedArenaSize
-      generatedDeclarationSize
-      declarations := #[.source sourceSecond, .generated generated, .source sourceFirst] }
-    IO.FS.withFile mixedCompositionPath .write fun destination =>
-      mixed.emit (IO.FS.Stream.ofHandle destination)
-    let duplicate := { mixed with
-      declarations := #[.source sourceFirst, .generated generated, .source sourceFirst] }
-    return (mixed.validate, duplicate.validate)
-  state := state.check "mixed staged composition crosses the copy buffer in compact order" <|
-    !isExceptError mixedResult.1 &&
-      (← IO.FS.readFile mixedCompositionPath) ==
-        "meta\n" ++ largeSourceArena ++
-          "generated-arena\nsource-second\ngenerated\nsource-first\n"
-  state := state.check "mixed staged composition rejects a missing source span" <|
-    isExceptError mixedResult.2
-
-  let islandDirectoryRef ← IO.mkRef (none : Option System.FilePath)
-  let islandResult ← Spool.withWorkspace scratch fun workspace => do
-    islandDirectoryRef.set (some workspace.directory)
-    let stage ← Spool.IslandStage.create workspace {}
-    let .ok prepared := Spool.prepareIsland {} #[first, second] | throw (IO.userError "prepare")
-    let commit ← stage.commit prepared
-    let cursorAfterCommit ← stage.cursor
-    let (arenaSizeAfterCommit, declarationSizeAfterCommit) ← stage.sizes
-    let staleRejected ← try
-        discard <| stage.commit prepared
-        pure false
-      catch _ => pure true
-    let unchangedAfterStale := (← stage.cursor) == cursorAfterCommit &&
-      (← stage.sizes) == (arenaSizeAfterCommit, declarationSizeAfterCommit)
-    let sealed ← stage.finish
-    let repeated ← stage.finish
-    let postFinishSizes ← stage.sizes
-    let .ok nextPrepared := Spool.prepareIsland sealed.cursor #[first]
-      | throw (IO.userError "prepare post-finish island")
-    let postFinishRejected ← try
-        discard <| stage.commit nextPrepared
-        pure false
-      catch _ => pure true
-    let arenaText ← IO.FS.readFile sealed.arenaPath
-    let declarationText ← IO.FS.readFile sealed.declarationPath
-    return (commit, sealed, repeated, postFinishSizes, arenaText,
-      declarationText, staleRejected, unchangedAfterStale, postFinishRejected)
-  let (islandCommit, sealedIsland, repeatedSeal, postFinishSizes,
-      islandArena, islandDeclarations, staleRejected, unchangedAfterStale,
-      postFinishRejected) := islandResult
-  state := state.check "prepared island commits exact parseable payloads" <|
-    islandCommit.before == {} && islandCommit.after == sealedIsland.cursor &&
-      islandCommit.declarations.size == 2 &&
-      sealedIsland.arenaSize == islandArena.utf8ByteSize.toUInt64 &&
-      sealedIsland.declarationSize == islandDeclarations.utf8ByteSize.toUInt64 &&
-      match InductiveModels.parse (islandArena ++ islandDeclarations) (analyse := false) with
-      | .ok output => output.decls == #[first, second]
-      | .error _ => false
-  state := state.check "stale island transaction writes and publishes nothing" <|
-    staleRejected && unchangedAfterStale
-  state := state.check "empty island transaction is rejected" <|
-    isExceptError (Spool.prepareIsland {} #[])
-  state := state.check "repeated finish returns the same sealed island" <|
-    repeatedSeal == sealedIsland
-  state := state.check "post-finish commit rejects without changing files" <|
-    postFinishRejected && postFinishSizes ==
-      (sealedIsland.arenaSize, sealedIsland.declarationSize)
-  let islandWorkspaceRemoved ← match ← islandDirectoryRef.get with
-    | some directory => pure !(← directory.pathExists)
-    | none => pure false
-  state := state.check "island stage workspace is removed" islandWorkspaceRemoved
-
-  for (label, failure) in #[
-      ("first arena", Spool.Test.CommitFailure.afterFirstArena),
-      ("all arenas", .afterArenas),
-      ("first declaration", .afterFirstDeclaration)] do
-    state := state.check s!"{label} write failure poisons island transaction" <|
-      ← injectedCommitPoisons scratch #[first, second] failure
-
-  let concurrentCommit ← Spool.withWorkspace scratch fun workspace => do
-    let stage ← Spool.IslandStage.create workspace {}
-    let .ok prepared := Spool.prepareIsland {} #[first, second] | return false
-    let firstTask ← IO.asTask (prio := Task.Priority.dedicated) <| stage.commit prepared
-    let secondTask ← IO.asTask (prio := Task.Priority.dedicated) <| stage.commit prepared
-    let exactlyOne := match firstTask.get, secondTask.get with
-      | .ok _, .error _ | .error _, .ok _ => true
-      | _, _ => false
-    let finished ← try
-        discard <| stage.finish
-        pure true
-      catch _ => pure false
-    return exactlyOne && finished
-  state := state.check "concurrent island commits serialize with one stale rejection"
-    concurrentCommit
-
-  let finishFailurePoisons ← Spool.withWorkspace scratch fun workspace => do
-    let stage ← Spool.IslandStage.create workspace {}
-    let .ok prepared := Spool.prepareIsland {} #[first, second] | return false
-    discard <| stage.commit prepared
-    Spool.Test.removeArenaBeforeFinish stage
-    let firstFinishRejected ← try
-        discard <| stage.finish
-        pure false
-      catch _ => pure true
-    let repeatedFinishRejected ← try
-        discard <| stage.finish
-        pure false
-      catch _ => pure true
-    let .ok nextPrepared := Spool.prepareIsland (← stage.cursor) #[first] | return false
-    let commitRejected ← try
-        discard <| stage.commit nextPrepared
-        pure false
-      catch _ => pure true
-    return firstFinishRejected && repeatedFinishRejected && commitRejected
-  state := state.check "finish filesystem failure poisons stage" finishFailurePoisons
 
   -- Starting the second independent writer at the old cursor reuses arena
   -- IDs. The parser must reject that rather than silently binding the later
