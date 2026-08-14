@@ -336,6 +336,21 @@ def SourceReplayAliases.buildDerivedName (aliases : SourceReplayAliases) (exact 
   | some entry => exact.replacePrefix entry.exact entry.build
   | none => exact
 
+/-- Every construction spelling induced by an explicit source-role prefix.
+Reserved-name guards need all of them, not merely the longest match: an exact
+source declaration can itself be moved while also lying below a moved owner. -/
+def SourceReplayAliases.buildDerivedNames (aliases : SourceReplayAliases) (exact : Name) :
+    Array Name :=
+  aliases.entries.filterMap fun entry =>
+    if entry.exact.isPrefixOf exact then some (exact.replacePrefix entry.exact entry.build)
+    else none
+
+/-- Remove construction-only source identities from a diagnostic string. -/
+def SourceReplayAliases.exactMessage (aliases : SourceReplayAliases) (message : String) : String :=
+  (aliases.entries.qsort fun left right =>
+    left.build.components.length > right.build.components.length).foldl (fun message entry =>
+    message.replace entry.build.toString entry.exact.toString) message
+
 /-- Replace one source role while deriving the atomic kernel replay plan. -/
 def SourceReplayAliases.replace (aliases : SourceReplayAliases) (exact build : Name) :
     Except String SourceReplayAliases :=

@@ -2652,19 +2652,23 @@ def SourceCensus.ofSource (source : Export) : SourceCensus :=
 not accepted as independent inputs to `Declaration.inductDecl`.  When a type
 is moved for replay, register each exported recursor at the name the kernel
 will actually mint. -/
-private def sourceReplayInductiveDerivations (source : Export)
+def sourceReplayInductiveDerivations (source : Export)
     (initial : SourceReplayAliases) : Except String SourceReplayAliases := do
   let mut aliases := initial
   for declaration in source.decls do
     if let .induct types _ recursors := declaration then
       for recursor in recursors do
         let owner? := types.foldl (init := none) fun best type =>
-          if type.name.isPrefixOf recursor.name && aliases.hasExact type.name &&
+          if type.name.isPrefixOf recursor.name &&
               best.all (fun prior =>
                 prior.name.components.length < type.name.components.length) then
             some type
           else best
         if let some owner := owner? then
+          if !aliases.hasExact owner.name then
+            if aliases.hasExact recursor.name then
+              throw s!"moved recursor {recursor.name} belongs to unmoved owner {owner.name}"
+            continue
           let some buildOwner := aliases.build? owner.name
             | throw "moved inductive owner lost its replay alias"
           let buildRecursor := recursor.name.replacePrefix owner.name buildOwner
@@ -3194,17 +3198,18 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       | .error ex =>
         let msg ← (ex.toMessageData {}).toString
         return .unreplayable
-          { rep with unreplayable := some s!"{d.names}: {msg}" }
-    let replayEnv ← getEnv
-    for name in replayD.names do
-      unless (replayEnv.find? name).isSome do
-        throwError "source replay lost Meta visibility for {name} while installing {d.names}"
+          { rep with unreplayable := some s!"{d.names}: {sourceAliases.exactMessage msg}" }
     if sourceUsesAlias then
+      let replayEnv ← getEnv
+      for name in replayD.names do
+        unless (replayEnv.find? name).isSome do
+          throwError "source replay lost Meta visibility for {sourceAliases.exactName name} \
+            while installing {d.names}"
       if let .induct types constructors recursors := replayD then
         let mismatches ← checkInductiveMetadata types constructors recursors
         unless mismatches.isEmpty do
           throwError "collision-safe inductive replay metadata differs for {d.names}: \
-            {mismatches.toList}"
+            {mismatches.toList.map sourceAliases.exactMessage}"
   if let some root := basisRoot? then
     match ← (validateBasisOwner root replayD).run with
     | .ok () =>
@@ -3250,17 +3255,18 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     let islandAliases ← match sourceAliases.registerRecords generated with
       | .ok aliases => pure aliases
       | .error message => throwError
-          "cannot register generated source replay aliases for {d.names}: {message}"
+          "cannot register generated source replay aliases for {d.names}: \
+            {sourceAliases.exactMessage message}"
     rep := { rep with
       generated := rep.generated.extract 0 reportedBefore ++
         (rep.generated.extract reportedBefore rep.generated.size).map fun (name, count) =>
           (islandAliases.exactName name, count)
       declined := rep.declined.extract 0 declinedBefore ++
         (rep.declined.extract declinedBefore rep.declined.size).map fun (name, reason) =>
-          (islandAliases.exactName name, reason)
+          (islandAliases.exactName name, islandAliases.exactMessage reason)
       exempt := rep.exempt.extract 0 exemptBefore ++
         (rep.exempt.extract exemptBefore rep.exempt.size).map fun (name, reason) =>
-          (islandAliases.exactName name, reason)
+          (islandAliases.exactName name, islandAliases.exactMessage reason)
       spliced := rep.spliced.extract 0 splicedBefore ++
         (rep.spliced.extract splicedBefore rep.spliced.size).map fun (name, names) =>
           (islandAliases.exactName name, names.map islandAliases.exactName) }
@@ -3283,7 +3289,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             islandAliases with
         | .ok result => pure result
         | .error message => throwError
-            "owner-free generated declaration rejected for {d.names}: {message}"
+            "owner-free generated declaration rejected for {d.names}: \
+              {islandAliases.exactMessage message}"
       islandStatements :=
         { statementsChecked := islandStatements.statementsChecked +
             statementReport.statementsChecked
@@ -3335,7 +3342,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         | .error exception =>
           let message ← (exception.toMessageData {}).toString
           return .unreplayable
-            { rep with unreplayable := some s!"{d.names}: {message}" }
+            { rep with unreplayable := some s!"{d.names}: \
+              {islandAliases.exactMessage message}" }
   else
     mainEnv ← getEnv
   if retainOracle then legacyOut := legacyOut.push d
@@ -3571,9 +3579,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     some (sourceCensus.familyCertificateRecords x scheduled)
   let rawOrdinals := sourceCensus.rawOrdinals
   let reserved := sourceCensus.reserved
-  let constructionReserved := reserved.fold
-    (fun names name => names.insert (sourceAliases.buildDerivedName name))
-    reserved
+  let constructionReserved := reserved.fold (init := reserved) fun names name =>
+    (sourceAliases.buildDerivedNames name).foldl (fun names build => names.insert build) names
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,

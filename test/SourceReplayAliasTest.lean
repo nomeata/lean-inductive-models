@@ -40,6 +40,16 @@ def runShadow (input : Export) (generation : InductiveModels.Cli.Config) :
     (runFilterWithFutureSourceSupportShadow input false generation)) context { env }
   return result
 
+def runDiscarding (input : Export) (generation : InductiveModels.Cli.Config)
+    (checkRecursors : Bool := false) : IO (Report × CompactPlan) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<source-replay-alias-discard-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+    (runFilterDiscarding input checkRecursors generation)) context { env }
+  return result
+
 def replayNamesVisible (input : Export) (names : Array Name) : IO (Array Bool) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -78,6 +88,11 @@ def emptyInductiveType (name : Name) : EIndType :=
   { name, levelParams := [], type := .sort (.succ .zero), all := [name], ctors := []
     numParams := 0, numIndices := 0, numNested := 0, isRec := false
     isReflexive := false, isUnsafe := false }
+
+def emptyRecursor (name : Name) (all : List Name) : ERec :=
+  { name, levelParams := [], type := .sort (.succ .zero), all
+    numParams := 0, numIndices := 0, numMotives := all.length, numMinors := 0
+    rules := [], k := false, isUnsafe := false }
 
 def declarationConstantNames : EDecl → Array Name
   | .ax name _ type _ => #[name] ++ type.getUsedConstants
@@ -262,6 +277,38 @@ def main : IO UInt32 := do
       collidingReport.stmtErrors.isEmpty && collidingKernelValid &&
       collidingOutput.any (·.names.contains (Naming.modelName privateOwner)) &&
       leakedSourceAliases.isEmpty)
+  let (collidingDiscardReport, collidingCompact) ← runDiscarding collidingShapes
+    (legacyGenerationConfig true) true
+  state := state.check "compact discard preserves the colliding-inductive exact oracle"
+    (collidingDiscardReport == collidingReport &&
+      collidingCompact.retainedGeneratedRecords == 0 &&
+      collidingCompact.unavailable?.isNone &&
+      collidingCompact.checkReport == Check.checkReport collidingExport)
+
+  let privateCarrier := Naming.modelName privateOwner
+  let some reservedPrivateModel := collidingOutput.flatMap (·.names.toArray) |>.find? fun name =>
+    privateOwner.isPrefixOf name && name != privateCarrier && name != privateOwner
+    | throw <| IO.userError "private Sv model has no deeper generated slot"
+  let reservedPublicModel := reservedPrivateModel.replacePrefix privateOwner publicOwner
+  let reservedShapes := { collidingShapes with decls := (
+    collidingShapes.decls.extract 0 (ownerOrdinal + 1) ++
+      #[typeAxiom reservedPublicModel, typeAxiom reservedPrivateModel] ++
+      collidingShapes.decls.extract (ownerOrdinal + 1) collidingShapes.decls.size) }
+  let (reservedOutput, reservedReport) ← runExportWith reservedShapes
+    (legacyGenerationConfig true) true
+  let reservedLeaks := reservedOutput.flatMap declarationConstantNames |>.filter fun name =>
+    name.components.any fun component =>
+      component.toString.startsWith "_inductive_models_source_alias_"
+  state := state.check "exact reserved private carrier blocks its build descendant"
+    (!reservedReport.generated.any (fun (name, _) =>
+        name == publicOwner || name == privateOwner) &&
+      reservedReport.declined.any (fun (name, reason) =>
+        name == privateOwner && reason.contains "model name taken") &&
+      (reservedOutput.filter (·.names.contains reservedPrivateModel)).size == 1 &&
+      (reservedOutput.filter (·.names.contains reservedPublicModel)).size == 1 &&
+      reservedLeaks.isEmpty &&
+      !reservedReport.declined.any fun (_, reason) =>
+        reason.contains "_inductive_models_source_alias_")
 
   let atomicInput : Export :=
     { metaLine := .null
@@ -276,6 +323,78 @@ def main : IO UInt32 := do
   state := state.check "one atomic inductive collision replays both identities exactly"
     (atomicOutput == atomicInput.decls && atomicReport == {} &&
       (← replayNamesVisible atomicInput #[privateA, atomicBuild]) == #[true, true])
+
+  -- A constructor is an explicit inductDecl input, unlike a recursor. It may
+  -- move independently while its owner and kernel-derived recursor stay exact.
+  let publicCtor := `SharedCtor
+  let privateCtor : Name := (`_private.SourceAliasCtor).mkNum 0 |>.str "SharedCtor"
+  let ctorAliases := Naming.AliasMap.empty.insert `AliasWrappedBox.mk privateCtor
+  let ctorOwner := box.renameAliases ctorAliases
+  let ctorInput : Export :=
+    { metaLine := .null
+      decls := #[typeAxiom privateA, wrapperDecl, typeAxiom publicCtor, ctorOwner] }
+  let (ctorOutput, ctorReport) ← runExportWith ctorInput noGeneration true
+  let ctorKernelValid ← match Order.reorder { ctorInput with decls := ctorOutput } with
+    | .error _ => pure false
+    | .ok ordered => kernelChecks ordered
+  state := state.check "constructor-only normalized collision preserves its exact owner"
+    (ctorOutput == ctorInput.decls && ctorReport.recMismatch.isEmpty && ctorKernelValid &&
+      ctorOutput.any (·.names.contains privateCtor) &&
+      !(ctorOutput.flatMap declarationConstantNames).any fun name =>
+        name.components.any fun component =>
+          component.toString.startsWith "_inductive_models_source_alias_")
+
+  let mutualText ← IO.FS.readFile "test/fixtures/inductive-models/prim_late_basis.ndjson"
+  let .ok mutualSource := InductiveModels.parse mutualText
+    | throw <| IO.userError "cannot parse mutual alias fixture"
+  let some mutualOrdinal := mutualSource.decls.findIdx? (fun declaration =>
+    match declaration with
+    | .induct types _ _ => types.length > 1 && !types.any (·.numNested > 0)
+    | _ => false)
+    | throw <| IO.userError "mutual alias fixture has no mutual block"
+  let mutualBlock := mutualSource.decls[mutualOrdinal]!
+  let privateMutualRoot : Name := (`_private.SourceAliasMutual).mkNum 0
+  let mutualAliases := mutualBlock.names.foldl (init := Naming.AliasMap.empty)
+    fun aliases name => aliases.insert name (privateMutualRoot ++ name)
+  let privateMutualBlock := mutualBlock.renameAliases mutualAliases
+  let mutualInput := { mutualSource with decls := (
+    mutualSource.decls.extract 0 (mutualOrdinal + 1) ++ #[privateMutualBlock] ++
+      mutualSource.decls.extract (mutualOrdinal + 1) mutualSource.decls.size) }
+  let (mutualOutput, mutualReport) ← runExportWith mutualInput noGeneration true
+  let mutualKernelValid ← match Order.reorder { mutualInput with decls := mutualOutput } with
+    | .error _ => pure false
+    | .ok ordered => kernelChecks ordered
+  let some publicMutualOwner := mutualBlock.names.head?
+    | throw <| IO.userError "mutual block has no owner"
+  let privateMutualOwner := privateMutualRoot ++ publicMutualOwner
+  state := state.check "mutual normalized collision replays every recursor role exactly"
+    (mutualOutput == mutualInput.decls && mutualReport.recMismatch.isEmpty &&
+      mutualKernelValid && mutualOutput.any (·.names.contains privateMutualOwner))
+
+  -- Longest owner selection is over every member, not only moved members.
+  -- Otherwise moving `A` would incorrectly capture the unmoved `A.B.rec`.
+  let overlapShort := privateName "SourceAliasOverlap" "0" "OverlapRoot"
+  let overlapLong := Name.str overlapShort "B"
+  let overlapShortRec := Name.str overlapShort "rec"
+  let overlapLongRec := Name.str overlapLong "rec"
+  let overlapAll := [overlapShort, overlapLong]
+  let overlapBlock : EDecl := .induct
+    [{ (emptyInductiveType overlapShort) with all := overlapAll },
+     { (emptyInductiveType overlapLong) with all := overlapAll }]
+    [] [emptyRecursor overlapShortRec overlapAll, emptyRecursor overlapLongRec overlapAll]
+  let overlapInput : Export :=
+    { metaLine := .null, decls := #[typeAxiom `OverlapRoot, overlapBlock] }
+  let .ok overlapPlanned := aliasesOf overlapInput
+    | throw <| IO.userError "cannot plan overlapping owner aliases"
+  let .ok overlapAliases := sourceReplayInductiveDerivations overlapInput overlapPlanned
+    | throw <| IO.userError "cannot derive overlapping owner recursor aliases"
+  let some overlapShortBuild := overlapAliases.build? overlapShort
+    | throw <| IO.userError "short overlapping owner did not move"
+  state := state.check "overlapping recursor belongs to the longest exact owner"
+    (overlapAliases.build? overlapShortRec ==
+        some (overlapShortRec.replacePrefix overlapShort overlapShortBuild) &&
+      overlapAliases.build? overlapLong == none &&
+      overlapAliases.build? overlapLongRec == none)
 
   let duplicateInput : Export :=
     { metaLine := .null, decls := #[typeAxiom `ExactDuplicate, typeAxiom `ExactDuplicate] }
