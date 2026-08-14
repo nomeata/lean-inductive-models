@@ -32,6 +32,20 @@ structure MemberKey where
   owner : Name
   deriving Inhabited, BEq, Repr
 
+/-- Stable identity of one strongly connected component.  The anchor is a
+source member identity chosen by the plan builder, not an array offset. -/
+structure ComponentKey where
+  anchor : MemberKey
+  deriving Inhabited, BEq, Repr
+
+/-- One component of the recursive dependency graph.  Both its membership and
+its outgoing condensation edges are arbitrary finite keyed collections. -/
+structure ComponentPlan where
+  key : ComponentKey
+  members : Array MemberKey
+  dependencies : Array ComponentKey := #[]
+  deriving Inhabited, BEq, Repr
+
 /-- Stable identity of one constructor.  Including the owner prevents equal
 last components in different mutual members from aliasing. -/
 structure ConstructorKey where
@@ -96,6 +110,7 @@ kept explicitly; mutual members need not be classified as indexed or
 unindexed as a block. -/
 structure MemberPlan where
   key : MemberKey
+  component : ComponentKey
   role : MemberRole
   parameterArity : Nat
   indexArity : Nat
@@ -182,6 +197,7 @@ structure RulePlan where
 structure FamilyAdapterPlan where
   root : MemberKey
   levelParams : List Name
+  components : Array ComponentPlan
   members : Array MemberPlan
   constructors : Array ConstructorPlan
   rules : Array RulePlan
@@ -195,6 +211,13 @@ inductive PlanError where
   | emptyFamily
   | duplicateMember (key : MemberKey)
   | missingRoot (key : MemberKey)
+  | duplicateComponent (key : ComponentKey)
+  | emptyComponent (key : ComponentKey)
+  | componentAnchorMismatch (key : ComponentKey)
+  | unknownComponentMember (component : ComponentKey) (member : MemberKey)
+  | unknownComponentDependency (component dependency : ComponentKey)
+  | memberComponentMultiplicity (member : MemberKey) (count : Nat)
+  | memberComponentMismatch (member : MemberKey) (expected actual : ComponentKey)
   | duplicateConstructor (key : ConstructorKey)
   | unknownConstructorOwner (key : ConstructorKey)
   | memberConstructorMismatch (member : MemberKey) (constructor : ConstructorKey)
@@ -205,23 +228,30 @@ inductive PlanError where
   | unknownOccurrenceConstructor (key : OccurrenceKey)
   | unknownOccurrenceTarget (key : OccurrenceKey)
   | occurrenceFieldOutOfBounds (key : OccurrenceKey) (fields : Nat)
+  | occurrenceTelescopeMultiplicity (key : OccurrenceKey) (count : Nat)
   | telescopeConstructorMismatch (expected actual : ConstructorKey)
   | telescopeFieldOrder (constructor : ConstructorKey) (expected actual : Nat)
   | telescopeOccurrenceMismatch (key : OccurrenceKey)
   | ruleOccurrenceMismatch (key : OccurrenceKey)
   deriving Inhabited, BEq, Repr
 
-private def duplicateKey? [BEq α] (values : Array α) : Option α := Id.run do
+private def duplicateKey? [BEq α] [Inhabited α] (values : Array α) : Option α := Id.run do
   for i in [:values.size] do
     for j in [i + 1:values.size] do
       if values[i]! == values[j]! then return some values[i]!
   return none
+
+private def countKey [BEq α] (values : Array α) (key : α) : Nat :=
+  values.foldl (fun count value => if value == key then count + 1 else count) 0
 
 private def memberExists (plan : FamilyAdapterPlan) (key : MemberKey) : Bool :=
   plan.members.any (·.key == key)
 
 private def constructorExists (plan : FamilyAdapterPlan) (key : ConstructorKey) : Bool :=
   plan.constructors.any (·.key == key)
+
+private def componentExists (plan : FamilyAdapterPlan) (key : ComponentKey) : Bool :=
+  plan.components.any (·.key == key)
 
 private def telescopeFor? (plan : FamilyAdapterPlan)
     (key : ConstructorKey) : Option TelescopePlan :=
@@ -240,6 +270,29 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
     errors := errors.push (.duplicateMember key)
   unless memberExists plan plan.root do errors := errors.push (.missingRoot plan.root)
 
+  if let some key := duplicateKey? (plan.components.map (·.key)) then
+    errors := errors.push (.duplicateComponent key)
+  for component in plan.components do
+    if component.members.isEmpty then errors := errors.push (.emptyComponent component.key)
+    unless component.members.contains component.key.anchor do
+      errors := errors.push (.componentAnchorMismatch component.key)
+    if let some member := duplicateKey? component.members then
+      errors := errors.push (.memberComponentMultiplicity member 2)
+    for member in component.members do
+      unless memberExists plan member do
+        errors := errors.push (.unknownComponentMember component.key member)
+    for dependency in component.dependencies do
+      unless componentExists plan dependency do
+        errors := errors.push (.unknownComponentDependency component.key dependency)
+  for member in plan.members do
+    let containers := plan.components.filter (·.members.contains member.key)
+    unless containers.size == 1 do
+      errors := errors.push (.memberComponentMultiplicity member.key containers.size)
+    if let some component := containers[0]? then
+      unless member.component == component.key do
+        errors := errors.push
+          (.memberComponentMismatch member.key component.key member.component)
+
   if let some key := duplicateKey? (plan.constructors.map (·.key)) then
     errors := errors.push (.duplicateConstructor key)
   for constructor in plan.constructors do
@@ -251,13 +304,21 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
     unless constructor.certificate.constructor == constructor.key do
       errors := errors.push
         (.telescopeConstructorMismatch constructor.key constructor.certificate.constructor)
+    if let some owner := plan.members.find? (·.key == constructor.key.owner) then
+      unless owner.constructors.contains constructor.key do
+        errors := errors.push (.memberConstructorMismatch owner.key constructor.key)
     for fieldOffset in [:constructor.telescope.binders.size] do
       let field := constructor.telescope.binders[fieldOffset]!
       unless field.fieldIndex == fieldOffset do
         errors := errors.push
           (.telescopeFieldOrder constructor.key fieldOffset field.fieldIndex)
+      for key in field.occurrences do
+        unless key.constructor == constructor.key && key.fieldIndex == field.fieldIndex do
+          errors := errors.push (.telescopeOccurrenceMismatch key)
 
   for member in plan.members do
+    if let some constructor := duplicateKey? member.constructors then
+      errors := errors.push (.memberConstructorMismatch member.key constructor)
     for constructor in member.constructors do
       unless constructor.owner == member.key && constructorExists plan constructor do
         errors := errors.push (.memberConstructorMismatch member.key constructor)
@@ -269,6 +330,9 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
       errors := errors.push (.unknownRuleOwner rule.key)
     unless constructorExists plan rule.key.constructor do
       errors := errors.push (.unknownRuleConstructor rule.key)
+    for key in rule.occurrences do
+      unless key.constructor == rule.key.constructor do
+        errors := errors.push (.ruleOccurrenceMismatch key)
 
   if let some key := duplicateKey? (plan.occurrences.map (·.key)) then
     errors := errors.push (.duplicateOccurrence key)
@@ -281,8 +345,11 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
     if let some telescope := telescopeFor? plan key.constructor then
       if key.fieldIndex >= telescope.binders.size then
         errors := errors.push (.occurrenceFieldOutOfBounds key telescope.binders.size)
-      unless (telescopeOccurrences telescope).contains key do
-        errors := errors.push (.telescopeOccurrenceMismatch key)
+      let count := countKey (telescopeOccurrences telescope) key
+      -- Exact key coverage, not an occurrence-count cap: every distinct source
+      -- occurrence occupies one and only one slot in its literal telescope.
+      unless count == 1 do
+        errors := errors.push (.occurrenceTelescopeMultiplicity key count)
     unless plan.rules.any (·.occurrences.contains key) do
       errors := errors.push (.ruleOccurrenceMismatch key)
 

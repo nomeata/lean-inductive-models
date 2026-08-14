@@ -47,7 +47,7 @@ def emit_dependent(arity: int) -> tuple[str, str]:
     fields = grouped_binders("child", arity, name)
     return name, (
         f"inductive {name} : Type where\n"
-        f"  | mk (key : GeneratedKey) (payload : GeneratedPayload key)"
+        f"  | mk (which : GeneratedKey) (payload : GeneratedPayload which)"
         f"{fields} : {name}\n"
     )
 
@@ -170,7 +170,7 @@ inductive GeneratedKey : Type where
   | key
 
 inductive GeneratedPayload : GeneratedKey -> Type where
-  | at (key : GeneratedKey) : GeneratedPayload key
+  | at (which : GeneratedKey) : GeneratedPayload which
 
 inductive GeneratedList (alpha : Type) : Type where
   | nil : GeneratedList alpha

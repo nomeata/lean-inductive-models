@@ -177,6 +177,11 @@ lean_exe basisvalidationtest where
   root := `BasisValidationTest
   supportInterpreter := true
 
+lean_exe familyadapterplantest where
+  srcDir := "test"
+  root := `FamilyAdapterPlanTest
+  supportInterpreter := true
+
 lean_lib OneLayerProjectionPrototype where
   srcDir := "test"
   roots := #[`OneLayerProjectionPrototype]

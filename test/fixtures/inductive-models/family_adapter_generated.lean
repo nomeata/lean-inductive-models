@@ -18,7 +18,7 @@ inductive GeneratedKey : Type where
   | key
 
 inductive GeneratedPayload : GeneratedKey -> Type where
-  | at (key : GeneratedKey) : GeneratedPayload key
+  | at (which : GeneratedKey) : GeneratedPayload which
 
 inductive GeneratedList (alpha : Type) : Type where
   | nil : GeneratedList alpha
@@ -28,7 +28,7 @@ inductive GeneratedDirect0 : Type where
   | mk : GeneratedDirect0
 
 inductive GeneratedDependent0 : Type where
-  | mk (key : GeneratedKey) (payload : GeneratedPayload key) : GeneratedDependent0
+  | mk (which : GeneratedKey) (payload : GeneratedPayload which) : GeneratedDependent0
 
 inductive GeneratedInfinitary0 : Type where
   | mk : GeneratedInfinitary0
@@ -40,7 +40,7 @@ inductive GeneratedDirect1 : Type where
   | mk (child0 : GeneratedDirect1) : GeneratedDirect1
 
 inductive GeneratedDependent1 : Type where
-  | mk (key : GeneratedKey) (payload : GeneratedPayload key) (child0 : GeneratedDependent1) : GeneratedDependent1
+  | mk (which : GeneratedKey) (payload : GeneratedPayload which) (child0 : GeneratedDependent1) : GeneratedDependent1
 
 inductive GeneratedInfinitary1 : Type where
   | mk (children0 : GeneratedKey -> GeneratedInfinitary1) : GeneratedInfinitary1
@@ -52,7 +52,7 @@ inductive GeneratedDirect2 : Type where
   | mk (child0 child1 : GeneratedDirect2) : GeneratedDirect2
 
 inductive GeneratedDependent2 : Type where
-  | mk (key : GeneratedKey) (payload : GeneratedPayload key) (child0 child1 : GeneratedDependent2) : GeneratedDependent2
+  | mk (which : GeneratedKey) (payload : GeneratedPayload which) (child0 child1 : GeneratedDependent2) : GeneratedDependent2
 
 inductive GeneratedInfinitary2 : Type where
   | mk (children0 : GeneratedKey -> GeneratedInfinitary2) (children1 : GeneratedKey -> GeneratedInfinitary2) : GeneratedInfinitary2
@@ -64,7 +64,7 @@ inductive GeneratedDirect3 : Type where
   | mk (child0 child1 child2 : GeneratedDirect3) : GeneratedDirect3
 
 inductive GeneratedDependent3 : Type where
-  | mk (key : GeneratedKey) (payload : GeneratedPayload key) (child0 child1 child2 : GeneratedDependent3) : GeneratedDependent3
+  | mk (which : GeneratedKey) (payload : GeneratedPayload which) (child0 child1 child2 : GeneratedDependent3) : GeneratedDependent3
 
 inductive GeneratedInfinitary3 : Type where
   | mk (children0 : GeneratedKey -> GeneratedInfinitary3) (children1 : GeneratedKey -> GeneratedInfinitary3) (children2 : GeneratedKey -> GeneratedInfinitary3) : GeneratedInfinitary3
@@ -76,7 +76,7 @@ inductive GeneratedDirect5 : Type where
   | mk (child0 child1 child2 child3 child4 : GeneratedDirect5) : GeneratedDirect5
 
 inductive GeneratedDependent5 : Type where
-  | mk (key : GeneratedKey) (payload : GeneratedPayload key) (child0 child1 child2 child3 child4 : GeneratedDependent5) : GeneratedDependent5
+  | mk (which : GeneratedKey) (payload : GeneratedPayload which) (child0 child1 child2 child3 child4 : GeneratedDependent5) : GeneratedDependent5
 
 inductive GeneratedInfinitary5 : Type where
   | mk (children0 : GeneratedKey -> GeneratedInfinitary5) (children1 : GeneratedKey -> GeneratedInfinitary5) (children2 : GeneratedKey -> GeneratedInfinitary5) (children3 : GeneratedKey -> GeneratedInfinitary5) (children4 : GeneratedKey -> GeneratedInfinitary5) : GeneratedInfinitary5
@@ -88,7 +88,7 @@ inductive GeneratedDirect8 : Type where
   | mk (child0 child1 child2 child3 child4 child5 child6 child7 : GeneratedDirect8) : GeneratedDirect8
 
 inductive GeneratedDependent8 : Type where
-  | mk (key : GeneratedKey) (payload : GeneratedPayload key) (child0 child1 child2 child3 child4 child5 child6 child7 : GeneratedDependent8) : GeneratedDependent8
+  | mk (which : GeneratedKey) (payload : GeneratedPayload which) (child0 child1 child2 child3 child4 child5 child6 child7 : GeneratedDependent8) : GeneratedDependent8
 
 inductive GeneratedInfinitary8 : Type where
   | mk (children0 : GeneratedKey -> GeneratedInfinitary8) (children1 : GeneratedKey -> GeneratedInfinitary8) (children2 : GeneratedKey -> GeneratedInfinitary8) (children3 : GeneratedKey -> GeneratedInfinitary8) (children4 : GeneratedKey -> GeneratedInfinitary8) (children5 : GeneratedKey -> GeneratedInfinitary8) (children6 : GeneratedKey -> GeneratedInfinitary8) (children7 : GeneratedKey -> GeneratedInfinitary8) : GeneratedInfinitary8
