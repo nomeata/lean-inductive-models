@@ -124,6 +124,12 @@ theorem packedRecursorForwardAgreement
 
 /-- A keyed construction obligation.  These are semantic failures of an exact
 certificate, never eligibility predicates or cardinality limits. -/
+inductive PublicRecursorResultBoundary where
+  | transportedResult
+  | agreementMotive
+  | agreementType
+  deriving Inhabited, BEq, Repr
+
 inductive ConstructionIssue where
   | incompleteShadow (reason : ShadowReason)
   | invalidPlan (error : PlanError)
@@ -145,6 +151,8 @@ inductive ConstructionIssue where
   | inconsistentPublicIotaHypothesis (rule : RuleKey) (binderIndex : Nat)
   | missingPublicIotaRecursiveCall (rule : RuleKey) (publicBinder implementationBinder : Nat)
   | recursorResultMismatch (member : MemberKey)
+  | publicRecursorResultMismatch (member : MemberKey)
+      (boundary : PublicRecursorResultBoundary)
   | malformedRecursorMinor (member : MemberKey) (minorIndex : Nat)
   | dependentRecursorMinorTransport (member : MemberKey) (minorIndex binderIndex : Nat)
   | missingMemberMap (member : MemberKey)
@@ -2474,7 +2482,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
         resultLevel majorLevel publicMajorType roundTripMajor publicMajor roundTrip privateCall
         fun value => pure (mkAppN publicMotive (indices.push value))
       unless ← isDefEq (← inferType transported) publicResult do
-        failConstruction (.recursorResultMismatch member.key)
+        failConstruction (.publicRecursorResultMismatch member.key .transportedResult)
       mkLambdaFVars (publicPrefix ++ publicTail) transported
   let declaration := Declaration.defnDecl
     { name, levelParams := publicRecursorInfo.levelParams, type := publicType, value,
@@ -2542,7 +2550,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
       let publicMotiveType ← liftGen <| whnf (← inferType publicMotive)
       let motiveArity := numForalls publicMotiveType
       unless motiveArity > 0 && publicCarrierArguments.size >= motiveArity - 1 do
-        failConstruction (.recursorResultMismatch member.key)
+        failConstruction (.publicRecursorResultMismatch member.key .agreementMotive)
       let publicIndices := publicCarrierArguments.extract
         (publicCarrierArguments.size - (motiveArity - 1)) publicCarrierArguments.size
       let motive ← withLocalDeclD `value boundary.publicType fun value =>
@@ -2563,7 +2571,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
       let expected := eqi.mk' (← liftGen <| ilevel resultType) resultType
         privateCall publicCall
       unless ← liftGen <| isDefEq (← inferType proof) expected do
-        failConstruction (.recursorResultMismatch member.key)
+        failConstruction (.publicRecursorResultMismatch member.key .agreementType)
       liftGen <| mkLambdaFVars (publicPrefix ++ privateTailArguments) proof
   let agreementType ← liftGen <| inferType agreementValue
   let agreementDeclaration := Declaration.thmDecl
