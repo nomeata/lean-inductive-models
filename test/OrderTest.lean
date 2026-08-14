@@ -130,40 +130,12 @@ structure FilterRun where
 structure TracedFilterRun extends FilterRun where
   steps : Array FilterSourceStep
 
-structure StagedFilterRun extends FilterRun where
-  plan : StagedPlan
-  planValid : Bool
-  planError? : Option String
-  malformedPlansRejected : Bool
-
-structure DroppedFilterRun where
-  report : Report
-  plan : StagedPlan
-  planValid : Bool
-  planError? : Option String
-
 structure DiscardedFilterRun where
   report : Report
   plan : CompactPlan
 
 structure PlannedCensusFilterRun extends DiscardedFilterRun where
   input : PlannedSourceInput
-
-def cursorAfter (records : Array EDecl) : Writer.Cursor :=
-  let writer := records.foldl (fun writer record => (writer.splitDecl record).1) (Writer.fromCursor {})
-  writer.cursor
-
-def syntheticCertificate (cursor : Writer.Cursor) (count : Nat) : RawCertificate :=
-  let rawCursor : RawArenaCursor :=
-    { nextName := cursor.nextName, nextLevel := cursor.nextLevel,
-      nextExpr := cursor.nextExpr }
-  { cursor := rawCursor
-    declarationBytes := count.toUInt64
-    declarations := (Array.range count).map fun ordinal =>
-      { offset := ordinal.toUInt64, bytes := 1 } }
-
-def syntheticRawSizes (count : Nat) : RawSpoolSizes :=
-  { metadata := 0, arena := 0, declarations := count.toUInt64 }
 
 def runFilterState (input : Export) (generation : InductiveModels.Cli.Config)
     (checkRecursors : Bool := false) : IO FilterRun := do
@@ -189,69 +161,6 @@ def runFilterTraceState (input : Export) (generation : InductiveModels.Cli.Confi
   unless report.stmtErrors.isEmpty do
     throw <| IO.userError s!"traced generated statements differ: {report.stmtErrors}"
   return { input, output := { input with decls }, report, env := finalState.env, steps }
-
-def runFilterStagedState (scratch : String) (input : Export)
-    (generation : InductiveModels.Cli.Config) (checkRecursors : Bool := false) : IO StagedFilterRun :=
-  Spool.withWorkspace scratch fun workspace => do
-    let stage ← Spool.IslandStage.create workspace (cursorAfter input.decls)
-    let env ← importModules #[] {}
-    let context : Core.Context :=
-      { fileName := "<order-staged-test>", fileMap := default,
-        maxHeartbeats := 0, maxRecDepth := 8192 }
-    let ((decls, report, plan), finalState) ← Lean.Core.CoreM.toIO
-      (Lean.Meta.MetaM.run'
-        (runFilterWithIslandSink input checkRecursors generation (.ofStage stage))) context { env }
-    let sealed ← stage.finish
-    unless sealed.cursor == (← stage.cursor) do
-      throw <| IO.userError "sealed staged cursor changed after finish"
-    let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
-    let sourceSizes := syntheticRawSizes input.decls.size
-    let (planValid, planError?) :=
-      match plan.declarationSpans certificate sourceSizes input.decls.size sealed with
-      | .ok spans => (spans.size == plan.declarations.size, none)
-      | .error error => (false, some error)
-    let duplicateDeclarations := if plan.declarations.size < 2 then plan.declarations.push (.source 0)
-      else plan.declarations.set! 1 plan.declarations[0]!
-    let duplicateRejected := if plan.declarations.isEmpty then true else
-      match { plan with declarations := duplicateDeclarations }.declarationSpans certificate sourceSizes
-          input.decls.size sealed with
-      | .ok _ => false
-      | .error _ => true
-    let badCursor : Writer.Cursor :=
-      { sealed.cursor with nextExpr := sealed.cursor.nextExpr + 1 }
-    let cursorRejected :=
-      match plan.declarationSpans certificate sourceSizes input.decls.size
-          { sealed with cursor := badCursor } with
-      | .ok _ => false
-      | .error _ => true
-    let sourceCountRejected :=
-      match plan.declarationSpans certificate sourceSizes (input.decls.size + 1) sealed with
-      | .ok _ => false
-      | .error _ => true
-    return {
-      input, output := { input with decls }, report, env := finalState.env,
-      plan, planValid, planError?,
-      malformedPlansRejected := duplicateRejected && cursorRejected && sourceCountRejected }
-
-def runFilterDroppedState (scratch : String) (input : Export)
-    (generation : InductiveModels.Cli.Config) (checkRecursors : Bool := false) : IO DroppedFilterRun :=
-  Spool.withWorkspace scratch fun workspace => do
-    let stage ← Spool.IslandStage.create workspace (cursorAfter input.decls)
-    let env ← importModules #[] {}
-    let context : Core.Context :=
-      { fileName := "<order-dropped-test>", fileMap := default,
-        maxHeartbeats := 0, maxRecDepth := 8192 }
-    let ((report, plan), _) ← Lean.Core.CoreM.toIO
-      (Lean.Meta.MetaM.run'
-        (runFilterStaged input checkRecursors generation (.ofStage stage))) context { env }
-    let sealed ← stage.finish
-    let certificate := syntheticCertificate (cursorAfter input.decls) input.decls.size
-    let (planValid, planError?) :=
-      match plan.declarationSpans certificate
-          (syntheticRawSizes input.decls.size) input.decls.size sealed with
-      | .ok spans => (spans.size == plan.declarations.size, none)
-      | .error error => (false, some error)
-    return { report, plan, planValid, planError? }
 
 def runFilterDiscardedState (input : Export)
     (generation : InductiveModels.Cli.Config) (checkRecursors : Bool := false) :
@@ -969,21 +878,12 @@ def run (root : String) : IO UInt32 := do
       neutral.report.maxLivePendingModels == 0 && neutral.report.maxLiveIslandRecords == 0 &&
       neutral.env.constants.contains `NeutralOwner &&
       neutral.env.constants.contains `NeutralDependent
-  let neutralShadow ← runFilterStagedState s!"{root}/_tmp" neutralInput noGeneration true
-  let neutralDropped ← runFilterDroppedState s!"{root}/_tmp" neutralInput noGeneration true
   let neutralDiscarded ← runFilterDiscardedState neutralInput noGeneration true
-  state := state.check "empty generation skips physical islands in every filter path" <|
-    neutralShadow.output.decls == neutralInput.decls && neutralShadow.report == neutral.report &&
-      neutralDropped.report == neutral.report && neutralShadow.plan.islands.isEmpty &&
-      neutralDropped.plan.islands.isEmpty && neutralShadow.planValid && neutralDropped.planValid &&
-      neutralShadow.plan.declarations.size == neutralInput.decls.size &&
-      neutralDropped.plan.declarations == neutralShadow.plan.declarations &&
+  state := state.check "empty generation preserves the compact value plan" <|
       neutralDiscarded.report == neutral.report &&
-      neutralDiscarded.plan.declarations == neutralShadow.plan.declarations &&
-      neutralDiscarded.plan.checkReport == neutralShadow.plan.checkReport &&
+      neutralDiscarded.plan.declarations.size == neutralInput.decls.size &&
       neutralDiscarded.plan.retainedGeneratedRecords == 0 &&
-      neutralShadow.env.constants.contains `NeutralOwner &&
-      neutralShadow.env.constants.contains `NeutralDependent
+      neutral.env.constants.contains `NeutralOwner && neutral.env.constants.contains `NeutralDependent
 
   -- The declaration-wise filter seam consumes the logical dependency stream,
   -- not raw file order.  Pin that existing contract before extracting the
@@ -1088,12 +988,9 @@ def run (root : String) : IO UInt32 := do
     .ax `CompactFallbackProbe [] (.const (Naming.modelName `Tree) []) false
   let futureModelInput := { nestedRun.input with
     decls := #[futureModelProbe] ++ nestedRun.input.decls }
-  let futureModelDropped ← runFilterDroppedState s!"{root}/_tmp" futureModelInput
-    { noGeneration with nested := true }
   let futureModelDiscarded ← runFilterDiscardedState futureModelInput
     { noGeneration with nested := true }
-  state := state.check "later generated provider marks compact staging unavailable" <|
-    futureModelDropped.plan.unavailable?.isSome &&
+  state := state.check "later generated provider marks compact checking unavailable" <|
       futureModelDiscarded.plan.unavailable?.isSome &&
       futureModelDiscarded.plan.retainedGeneratedRecords == 0
 
@@ -1146,10 +1043,9 @@ def run (root : String) : IO UInt32 := do
           family.correspondence.iotas.any (fun rule =>
             rule.recursor == `IdxP.rec && rule.name == Naming.iotaName `IdxP.rec 1))
 
-  -- Run the legacy full-output oracle, the shadow sink, and the AST-dropping
-  -- sink across each generation route. Recursor checking is enabled on the
-  -- composed case so its report fields are part of the exact comparison too.
-  let stagedMatrix : Array (String × String × InductiveModels.Cli.Config × Bool) := #[
+  -- Compare the full oracle, compact discard, and planned source reader across
+  -- each generation route.
+  let compactMatrix : Array (String × String × InductiveModels.Cli.Config × Bool) := #[
     ("nested", "nested_iota.ndjson", { noGeneration with nested := true }, false),
     ("mutual", "mutual_shapes.ndjson", { noGeneration with mutualModels := true }, false),
     ("simple", "prim_shapes.ndjson", { noGeneration with simple := true }, false),
@@ -1157,30 +1053,20 @@ def run (root : String) : IO UInt32 := do
       { noGeneration with simple := true }, false),
     ("composed", "nested_iota.ndjson", {}, true),
     ("late support", "prim_late_basis.ndjson", {}, false)]
-  for (label, fixture, generation, checkRecursors) in stagedMatrix do
+  for (label, fixture, generation, checkRecursors) in compactMatrix do
     let fixturePath := s!"{root}/test/fixtures/inductive-models/{fixture}"
     let text ← IO.FS.readFile fixturePath
     let .ok input := InductiveModels.parse text (analyse := false) | do
-      state := state.check s!"staged {label} fixture parses" false
+      state := state.check s!"compact {label} fixture parses" false
       continue
     let legacy ← runFilterState input generation checkRecursors
-    let shadow ← runFilterStagedState s!"{root}/_tmp" input generation checkRecursors
-    let dropped ← runFilterDroppedState s!"{root}/_tmp" input generation checkRecursors
     let discarded ← runFilterDiscardedState input generation checkRecursors
     let plannedCensus ←
       runFilterPlannedCensusState s!"{root}/_tmp" input generation checkRecursors
-    state := state.check s!"staged {label} shadow equals legacy" <|
-      shadow.output.decls == legacy.output.decls && shadow.report == legacy.report &&
-        shadow.plan.checkReport == Check.checkReport shadow.output && shadow.planValid
-    state := state.check s!"staged {label} drop equals shadow" <|
-      dropped.report == shadow.report && dropped.planValid &&
-        dropped.plan.checkReport == shadow.plan.checkReport &&
-        dropped.plan.declarations == shadow.plan.declarations &&
-        dropped.plan.islands == shadow.plan.islands
-    state := state.check s!"compact-discard {label} equals staged shadow without payloads" <|
-      discarded.report == shadow.report && discarded.plan.unavailable?.isNone &&
-        discarded.plan.checkReport == shadow.plan.checkReport &&
-        discarded.plan.declarations == shadow.plan.declarations &&
+    state := state.check s!"compact-discard {label} equals full oracle" <|
+      discarded.report == legacy.report && discarded.plan.unavailable?.isNone &&
+        discarded.plan.checkReport == Check.checkReport legacy.output &&
+        discarded.plan.declarations.size == legacy.output.decls.size &&
         discarded.plan.retainedGeneratedRecords == 0
     state := state.check s!"planned-census {label} equals full compact oracle" <|
       plannedCensus.input.envelope.retainedDeclarations == 0 &&
@@ -1202,27 +1088,19 @@ def run (root : String) : IO UInt32 := do
       existingPlanned.plan.declarations == existingDiscarded.plan.declarations &&
       existingPlanned.plan.unavailable? == existingDiscarded.plan.unavailable?
 
-  -- A malformed later inductive rejects after earlier owners may already have
-  -- committed physical islands. The report/output verdict must still agree;
-  -- the deliberately empty returned plan is noncomposable with that tail.
+  -- A malformed later inductive preserves the completed trace prefix and
+  -- returns an empty compact plan.
   let lateMalformed := mapConstructor nestedRun.input `PT.node fun constructor =>
     { constructor with type := .sort .zero }
   let malformedLegacy ← runFilterState lateMalformed {}
   let validTrace ← runFilterTraceState nestedRun.input {}
   let malformedTrace ← runFilterTraceState lateMalformed {}
-  let malformedShadow ← runFilterStagedState s!"{root}/_tmp" lateMalformed {}
-  let malformedDropped ← runFilterDroppedState s!"{root}/_tmp" lateMalformed {}
   let malformedDiscarded ← runFilterDiscardedState lateMalformed {}
-  state := state.check "late unreplayable staged verdict equals legacy" <|
+  state := state.check "late unreplayable compact verdict equals legacy" <|
     malformedLegacy.report.unreplayable.isSome &&
-      malformedShadow.output.decls == malformedLegacy.output.decls &&
-      malformedShadow.report == malformedLegacy.report &&
-      malformedDropped.report == malformedLegacy.report &&
       malformedDiscarded.report == malformedLegacy.report &&
-      malformedShadow.plan.declarations.isEmpty && malformedDropped.plan.declarations.isEmpty &&
       malformedDiscarded.plan.declarations.isEmpty &&
-      malformedDiscarded.plan.retainedGeneratedRecords == 0 &&
-      !malformedShadow.planValid && !malformedDropped.planValid
+      malformedDiscarded.plan.retainedGeneratedRecords == 0
   state := state.check "late unreplayable preserves the completed trace prefix" <|
     malformedTrace.report == malformedLegacy.report &&
       !malformedTrace.steps.isEmpty && malformedTrace.steps.size < validTrace.steps.size &&
@@ -1235,33 +1113,11 @@ def run (root : String) : IO UInt32 := do
   -- are absent even though they remain in the emitted export.
   let aliasRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/transparent_owner_aliases.ndjson" {}
-  let aliasStaged ← runFilterStagedState s!"{root}/_tmp" aliasRun.input {}
-  let aliasDropped ← runFilterDroppedState s!"{root}/_tmp" aliasRun.input {}
   let aliasDiscarded ← runFilterDiscardedState aliasRun.input {}
-  let stagedGeneratedRecords := aliasStaged.plan.declarations.foldl (init := 0) fun count locator =>
-    match locator with
-    | .generated .. => count + 1
-    | .source _ => count
-  let stagedCommittedRecords := aliasStaged.plan.islands.foldl (init := 0) fun count island =>
-    count + island.declarations.size
-  state := state.check "staged island sink preserves exact output and report" <|
-    aliasStaged.output.decls == aliasRun.output.decls &&
-      aliasStaged.report == aliasRun.report &&
-      aliasStaged.plan.checkReport == Check.checkReport aliasStaged.output &&
-      aliasStaged.plan.declarations.size == aliasStaged.output.decls.size &&
-      aliasStaged.planValid && aliasStaged.malformedPlansRejected &&
-      stagedCommittedRecords == stagedGeneratedRecords &&
-      aliasStaged.plan.islands.all fun island => !island.declarations.isEmpty
-  state := state.check "AST-dropping staged path preserves report and compact schedule" <|
-    aliasDropped.report == aliasRun.report &&
-      aliasDropped.plan.checkReport == aliasStaged.plan.checkReport &&
-      aliasDropped.planValid &&
-      aliasDropped.plan.declarations == aliasStaged.plan.declarations &&
-      aliasDropped.plan.islands == aliasStaged.plan.islands
   state := state.check "compact-discard retains no cumulative alias records" <|
     aliasDiscarded.report == aliasRun.report &&
-      aliasDiscarded.plan.declarations == aliasStaged.plan.declarations &&
-      aliasDiscarded.plan.checkReport == aliasStaged.plan.checkReport &&
+      aliasDiscarded.plan.declarations.size == aliasRun.output.decls.size &&
+      aliasDiscarded.plan.checkReport == Check.checkReport aliasRun.output &&
       aliasDiscarded.plan.retainedGeneratedRecords == 0
   let inputNames := aliasRun.input.decls.flatMap fun declaration => declaration.names.toArray
   let generatedNames := aliasRun.output.decls.flatMap fun declaration =>
@@ -1293,10 +1149,6 @@ def run (root : String) : IO UInt32 := do
   -- per-owner implementation forest remain confined to this island.
   let wRun ← generatedFixtureState s!"{root}/test/fixtures/inductive-models/prim_w.ndjson"
     { noGeneration with simple := true }
-  let wStaged ← runFilterStagedState s!"{root}/_tmp" wRun.input
-    { noGeneration with simple := true }
-  let wDropped ← runFilterDroppedState s!"{root}/_tmp" wRun.input
-    { noGeneration with simple := true }
   let wDiscarded ← runFilterDiscardedState wRun.input
     { noGeneration with simple := true }
   let wCensus := isolationCensus wRun
@@ -1307,23 +1159,10 @@ def run (root : String) : IO UInt32 := do
       wRun.env.constants.contains wCoreSelf &&
       !wRun.env.constants.contains (Naming.modelName `Tree) &&
       finalEnvironmentIsIsolated wRun
-  let wParity := #[
-    ("staged output", wStaged.output.decls == wRun.output.decls),
-    ("staged report", wStaged.report == wRun.report),
-    ("compact check", wStaged.plan.checkReport == Check.checkReport wRun.output),
-    ("staged plan", wStaged.planValid),
-    ("dropped report", wDropped.report == wRun.report),
-    ("dropped plan", wDropped.planValid),
-    ("dropped declarations", wDropped.plan.declarations == wStaged.plan.declarations),
-    ("dropped islands", wDropped.plan.islands == wStaged.plan.islands)]
-  unless wParity.all (·.2) do
-    IO.eprintln s!"one-layer W parity: {repr wParity}; staged={repr wStaged.planError?}; dropped={repr wDropped.planError?}"
-  state := state.check "one-layer W output is identical across legacy and staged drivers" <|
-    wParity.all (·.2)
   state := state.check "one-layer W compact discard retains only its value plan" <|
     wDiscarded.report == wRun.report &&
-      wDiscarded.plan.declarations == wStaged.plan.declarations &&
-      wDiscarded.plan.checkReport == wStaged.plan.checkReport &&
+      wDiscarded.plan.declarations.size == wRun.output.decls.size &&
+      wDiscarded.plan.checkReport == Check.checkReport wRun.output &&
       wDiscarded.plan.retainedGeneratedRecords == 0
 
   -- Scheduling moves the input's exact PUnit bundle before the owner that
