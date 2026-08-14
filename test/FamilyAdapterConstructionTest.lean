@@ -278,7 +278,15 @@ def iotaSchemasComplete (plan : FamilyAdapterPlan)
                         hypothesis.publicBinderIndex == step.publicBinderIndex &&
                         hypothesis.publicMotiveIndex == step.publicMotiveIndex &&
                         hypothesis.binderIndex == step.binderIndex &&
-                        hypothesis.motiveIndex == step.motiveIndex
+                        hypothesis.motiveIndex == step.motiveIndex &&
+                        hypothesis.publicHypothesisPosition ==
+                          step.publicHypothesisPosition &&
+                        hypothesis.implementationHypothesisPosition ==
+                          step.implementationHypothesisPosition &&
+                        step.recursiveCall?.all fun role =>
+                          role.recursorOwner == rule.key.recursorOwner &&
+                            !role.publicRecursor.isAnonymous &&
+                            !role.implementationRecursor.isAnonymous
 
 def ruleCertificatesComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (environment : Environment) : Bool :=

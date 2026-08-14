@@ -142,6 +142,7 @@ inductive ConstructionIssue where
   | installedIotaTypeMismatch (rule : RuleKey) (iota : Name)
   | missingPublicIotaInput (rule : RuleKey)
   | inconsistentPublicIotaHypothesis (rule : RuleKey) (binderIndex : Nat)
+  | missingPublicIotaRecursiveCall (rule : RuleKey) (publicBinder implementationBinder : Nat)
   | recursorResultMismatch (member : MemberKey)
   | malformedRecursorMinor (member : MemberKey) (minorIndex : Nat)
   | dependentRecursorMinorTransport (member : MemberKey) (minorIndex binderIndex : Nat)
@@ -1493,7 +1494,7 @@ private def constructorFor? (plan : FamilyAdapterPlan) (key : ConstructorKey) :
 
 private def minorHypothesisBinder? (member : MemberPlan) (recursorType : Expr)
     (constructorName : Name) (fieldCount : Nat) (occurrence : OccurrenceKey) :
-    Option (Nat × Nat × Nat) := do
+    Option (Nat × Nat × Nat × Nat) := do
   let (recursorBinders, _) := openExactForalls
     ((`_family_adapter_exact_hypothesis_rec).append member.key.owner) recursorType
   let prefixSize := member.parameterArity + member.recursorMotiveArity +
@@ -1532,7 +1533,7 @@ private def minorHypothesisBinder? (member : MemberPlan) (recursorType : Expr)
   let actual := hypotheses.findIdx? (fun (index, _, _) => index == binderIndex)
     |>.getD hypotheses.size
   unless actual == occurrence.hypothesisIndex do none
-  return (minorIndex, binderIndex, motiveIndex)
+  return (minorIndex, binderIndex, motiveIndex, actual)
 
 /-- Associate every source occurrence with the literal induction-hypothesis
 binder of its installed private minor.  Constructor and recursor names are
@@ -1626,11 +1627,8 @@ def deriveInstalledMinorHypotheses (plan : FamilyAdapterPlan) : MetaM
         let (binderIndex, motiveIndex, _) := candidates[0]!
         let actual := hypotheses.findIdx? (fun (index, _, _) => index == binderIndex)
           |>.getD hypotheses.size
-        if actual != occurrence.hypothesisIndex then
-          issues := issues.push (.installedHypothesisMismatch rule.key occurrence
-            occurrence.hypothesisIndex actual)
-          continue
-        let some (publicMinorIndex, publicBinderIndex, publicMotiveIndex) :=
+        let some (publicMinorIndex, publicBinderIndex, publicMotiveIndex,
+            publicHypothesisPosition) :=
             minorHypothesisBinder? member publicRecursorType constructor.publicName fieldCount
               occurrence | do
           issues := issues.push (.missingInstalledHypothesis rule.key occurrence)
@@ -1642,7 +1640,8 @@ def deriveInstalledMinorHypotheses (plan : FamilyAdapterPlan) : MetaM
         certificates := certificates.push
           { rule := rule.key, occurrence, minorIndex,
             hypothesisIndex := actual, publicBinderIndex, publicMotiveIndex,
-            binderIndex, motiveIndex }
+            binderIndex, motiveIndex, publicHypothesisPosition,
+            implementationHypothesisPosition := actual }
   return (certificates, issues)
 
 private def uniqueBinderIndices (certificates : Array MinorHypothesisCertificate) : Array Nat :=
@@ -1824,6 +1823,46 @@ def buildRuleCompatibilityPrototypes (plan : FamilyAdapterPlan)
     return .error issue
   | .ok (.ok built) => return .ok built
 
+private partial def openExactLambdas (tag : Name) (expression : Expr) : Array Expr × Expr :=
+  let rec loop (expression : Expr) (binders : Array Expr) :=
+    match expression with
+    | .lam _ _ body _ =>
+      let value := mkFVar (FVarId.mk (tag.mkNum binders.size))
+      loop (body.instantiate1 value) (binders.push value)
+    | body => (binders, body)
+  loop expression #[]
+
+private def exactRhsArgument? (tag : Name) (rhs : Expr) (binderIndex : Nat) : Option Expr :=
+  let (_, body) := openExactLambdas tag rhs
+  body.getAppArgs[binderIndex]?
+
+private def exactRecursiveCallHead (tag : Name) (value : Expr) : Expr :=
+  (openExactLambdas tag value).2.getAppFn
+
+private def publicIotaRecursiveCallRole (rule : RulePlan)
+    (publicBinderIndex implementationBinderIndex : Nat) :
+    Except ConstructionIssue (Option PublicIotaRecursiveCallRole) := do
+  let some publicValue := exactRhsArgument?
+      ((`_family_adapter_public_iota_rhs).append rule.key.recursor)
+      rule.publicRhs publicBinderIndex
+    | throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+  let some implementationValue := exactRhsArgument?
+      ((`_family_adapter_implementation_iota_rhs).append rule.key.recursor)
+      rule.implementationRhs implementationBinderIndex
+    | throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+  let publicHead := exactRecursiveCallHead `_family_adapter_public_iota_call publicValue
+  let implementationHead := exactRecursiveCallHead
+    `_family_adapter_implementation_iota_call implementationValue
+  match publicHead.constName?, implementationHead.constName? with
+  | some publicRecursor, some implementationRecursor =>
+    return some ⟨rule.key.recursorOwner, publicRecursor, implementationRecursor⟩
+  | none, none =>
+    unless publicHead.isFVar && implementationHead.isFVar do
+      throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+    return none
+  | _, _ =>
+    throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+
 /-- Resolve the exact, finite inputs of every public-iota proof. Shared source
 occurrences are grouped only when the installed private minor assigns them the
 same literal IH binder, motive slot, and checked map boundary. -/
@@ -1853,7 +1892,10 @@ def derivePublicIotaProofSchemas (plan : FamilyAdapterPlan)
           current.minorIndex == first.minorIndex &&
             current.publicBinderIndex == first.publicBinderIndex &&
             current.publicMotiveIndex == first.publicMotiveIndex &&
-            current.motiveIndex == first.motiveIndex do
+            current.motiveIndex == first.motiveIndex &&
+            current.publicHypothesisPosition == first.publicHypothesisPosition &&
+            current.implementationHypothesisPosition ==
+              first.implementationHypothesisPosition do
         throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
       let mut occurrenceCertificates : Array OccurrenceCertificate := #[]
       for current in grouped do
@@ -1864,11 +1906,15 @@ def derivePublicIotaProofSchemas (plan : FamilyAdapterPlan)
         | throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
       unless occurrenceCertificates.all (·.maps == firstOccurrence.maps) do
         throw (.inconsistentPublicIotaHypothesis rule.key binderIndex)
+      let recursiveCall? ← publicIotaRecursiveCallRole rule first.publicBinderIndex binderIndex
       hypotheses := hypotheses.push
         { rule := rule.key, minorIndex := first.minorIndex,
           publicBinderIndex := first.publicBinderIndex,
           publicMotiveIndex := first.publicMotiveIndex, binderIndex,
           motiveIndex := first.motiveIndex,
+          publicHypothesisPosition := first.publicHypothesisPosition,
+          implementationHypothesisPosition := first.implementationHypothesisPosition,
+          recursiveCall?,
           occurrences := grouped.map (·.occurrence), maps := firstOccurrence.maps }
     unless (hypotheses.flatMap (·.occurrences)).size == rule.occurrences.size &&
         keyed.all fun current => hypotheses.any fun step =>

@@ -188,6 +188,10 @@ structure MinorHypothesisCertificate where
   from the exact private minor type; it is not inferred from the source member
   order because specialised mimic motives need not have a source member key. -/
   motiveIndex : Nat
+  /-- Position in the public minor's filtered dependent IH package. -/
+  publicHypothesisPosition : Nat
+  /-- Position in the implementation minor's filtered dependent IH package. -/
+  implementationHypothesisPosition : Nat
   deriving Inhabited, BEq, Repr
 
 /-- Kernel-checked congruence of one exact installed recursor minor across its
@@ -256,6 +260,15 @@ structure PublicRecursorCertificate where
   rules : Array RuleKey
   deriving Inhabited, BEq, Repr
 
+/-- Exact paired recursor call at one installed IH slot.  The enclosing rule
+supplies the owner while both literal recursor names are retained independently;
+neither side is inferred from an array position or a spelling classifier. -/
+structure PublicIotaRecursiveCallRole where
+  recursorOwner : MemberKey
+  publicRecursor : Name
+  implementationRecursor : Name
+  deriving Inhabited, BEq, Repr
+
 /-- One distinct installed IH binder in the deterministic public-iota proof.
 Several source occurrences may share the binder, but its motive slot and map
 boundary are literal installed metadata. -/
@@ -266,6 +279,9 @@ structure PublicIotaHypothesisStep where
   publicMotiveIndex : Nat
   binderIndex : Nat
   motiveIndex : Nat
+  publicHypothesisPosition : Nat
+  implementationHypothesisPosition : Nat
+  recursiveCall? : Option PublicIotaRecursiveCallRole
   occurrences : Array OccurrenceKey
   maps : EquivalenceCertificate
   deriving Inhabited, BEq, Repr
