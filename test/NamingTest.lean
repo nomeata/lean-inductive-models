@@ -80,7 +80,7 @@ private def modelRoleProbe : Array String := Id.run do
     { name := outer, levelParams := [], type := .sort (.succ .zero),
       all := [outer], ctors := [], numParams := 0, numIndices := 0,
       numNested := 0, isRec := false, isReflexive := false, isUnsafe := false }
-  let export : Export := { metaLine := .null, decls := #[
+  let source : Export := { metaLine := .null, decls := #[
     definition (modelName typeName),
     definition (modelName constructorName),
     definition (modelName recursorName),
@@ -91,7 +91,7 @@ private def modelRoleProbe : Array String := Id.run do
     .thm (unitlikeName outer) [] (.sort .zero) (.sort .zero) [unitlikeName outer],
     .induct [type] [constructor] [recursor],
     .induct [outerType] [] [] ] }
-  let roles := ModelRoles.table export
+  let roles := ModelRoles.table source
   let mut errors : Array String := #[]
   let expect := fun (errors : Array String) (name owner : Name) (role : ModelRoles.Role) =>
     match roles[name]? with
