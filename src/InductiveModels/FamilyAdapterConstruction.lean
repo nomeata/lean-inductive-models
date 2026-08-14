@@ -2513,10 +2513,100 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
     { name, levelParams := publicRecursorInfo.levelParams, type := publicType, value,
       hints := .abbrev, safety := .safe }
   liftGen <| addChecked declaration
-  return (minorDeclarations.push declaration,
+  let agreementName := publicRecursorCallAgreementName root member.key
+  liftGen <| ensurePrototypeFresh agreementName
+  let agreementValue ← forallBoundedTelescope publicType (some prefixSize)
+      fun publicPrefix _ => do
+    let parameters := publicPrefix.extract 0 member.parameterArity
+    let publicMotives := publicPrefix.extract member.parameterArity
+      (member.parameterArity + member.recursorMotiveArity)
+    let publicMinors := publicPrefix.extract
+      (member.parameterArity + member.recursorMotiveArity) prefixSize
+    let mut privateTail ← instantiateForall privateType parameters
+    let mut privateMotives := #[]
+    for motiveIndex in [:motiveCertificates.size] do
+      let .forallE _ expected rest _ := privateTail
+        | failConstruction (.shortInstalledRecursorPrefix member.key
+            member.implementationRecursor)
+      let motiveMember := plan.members[motiveIndex]?.getD member
+      let motive ← privateMotiveValue plan memberCertificates parameters
+        motiveMember publicMotives[motiveIndex]! expected
+      privateMotives := privateMotives.push motive
+      privateTail := rest.instantiate1 motive
+    let mut privateMinors := #[]
+    for minorIndex in [:minorCertificates.size] do
+      let .forallE _ expected rest _ := privateTail
+        | failConstruction (.shortInstalledRecursorPrefix member.key
+            member.implementationRecursor)
+      let certificate := minorCertificates[minorIndex]!
+      let minor ← if let some constructor := plan.constructors.find? fun constructor =>
+          constructor.publicName == certificate.publicConstructor &&
+            constructor.implementationName == certificate.implementationConstructor then
+        privateMinorValue plan memberCertificates telescopeCertificates
+          constructorCertificates parameters publicMotives privateMotives member minorIndex
+          constructor publicMinors[minorIndex]! expected
+      else
+        privateSpecialisedMinorValue plan memberCertificates parameters publicMotives
+          privateMotives member certificate publicMinors[minorIndex]! expected
+      privateMinors := privateMinors.push minor
+      privateTail := rest.instantiate1 minor
+    let privatePrefix := parameters ++ privateMotives ++ privateMinors
+    forallBoundedTelescope privateTail (some (numForalls privateTail))
+        fun privateTailArguments _ => do
+      let some privateMajor := privateTailArguments.back?
+        | failConstruction (.shortInstalledRecursorPrefix member.key
+            member.implementationRecursor)
+      let privateIndices := privateTailArguments.pop
+      let privateMajorType ← liftGen <| inferType privateMajor
+      let (publicMajor, publicMajorType, _) ← mapCarrierValueInfer plan
+        memberCertificates parameters member false privateMajorType privateMajor
+      let boundary ← fixedCarrierBoundary plan memberCertificates parameters member
+        publicMajorType privateMajorType
+      let privateCall := mkAppN
+        (.const member.implementationRecursor
+          (privateRecursorInfo.levelParams.map Level.param))
+        (privatePrefix ++ privateIndices ++ #[privateMajor])
+      let publicCall := mkAppN (.const name
+        (publicRecursorInfo.levelParams.map Level.param))
+        (publicPrefix ++ privateIndices ++ #[publicMajor])
+      let ownerIndex := (plan.members.findIdx? (·.key == member.key)).getD 0
+      let publicMotive := publicMotives[ownerIndex]!
+      let publicCarrierArguments := publicMajorType.getAppArgs
+      let publicMotiveType ← liftGen <| whnf (← inferType publicMotive)
+      let motiveArity := numForalls publicMotiveType
+      unless motiveArity > 0 && publicCarrierArguments.size >= motiveArity - 1 do
+        failConstruction (.recursorResultMismatch member.key)
+      let publicIndices := publicCarrierArguments.extract
+        (publicCarrierArguments.size - (motiveArity - 1)) publicCarrierArguments.size
+      let motive ← withLocalDeclD `value boundary.publicType fun value =>
+        liftGen <| mkLambdaFVars #[value]
+          (mkAppN publicMotive (publicIndices.push value))
+      let core ← withLocalDeclD `value boundary.implementationType fun value =>
+        liftGen <| mkLambdaFVars #[value]
+          (mkAppN (.const member.implementationRecursor
+            (privateRecursorInfo.levelParams.map Level.param))
+            (privatePrefix ++ privateIndices ++ #[value]))
+      let agreement ← liftGen <| mkAppOptM ``packedRecursorAgreement <|
+        #[boundary.implementationType, boundary.publicType, motive,
+          boundary.forward, boundary.backward, boundary.backwardForward,
+          boundary.forwardBackward, core].map some
+      let publicToPrivate := mkApp agreement privateMajor
+      let proof ← liftGen <| mkAppM ``Eq.symm #[publicToPrivate]
+      let resultType ← liftGen <| inferType privateCall
+      let expected := eqi.mk' (← liftGen <| ilevel resultType) resultType
+        privateCall publicCall
+      unless ← liftGen <| isDefEq (← inferType proof) expected do
+        failConstruction (.recursorResultMismatch member.key)
+      liftGen <| mkLambdaFVars (publicPrefix ++ privateTailArguments) proof
+  let agreementType ← liftGen <| inferType agreementValue
+  let agreementDeclaration := Declaration.thmDecl
+    { name := agreementName, levelParams := publicRecursorInfo.levelParams,
+      type := agreementType, value := agreementValue }
+  liftGen <| addChecked agreementDeclaration
+  return (minorDeclarations ++ #[declaration, agreementDeclaration],
     { member := member.key, adapter := name, exactType := publicType,
       implementationRecursor := member.implementationRecursor,
-      callAgreement := publicRecursorCallAgreementName root member.key,
+      callAgreement := agreementName,
       motives := motiveCertificates, minors := minorCertificates,
       rules := member.sourceRules })
 
