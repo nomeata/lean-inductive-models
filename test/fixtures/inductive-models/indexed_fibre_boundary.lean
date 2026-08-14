@@ -13,7 +13,7 @@ prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false
 
-universe u
+universe u v
 
 inductive Eq : {alpha : Sort u} -> alpha -> alpha -> Prop where
   | refl (a : alpha) : Eq a a
@@ -31,6 +31,13 @@ inductive FibreKey : Type where
 
 inductive FibrePayload : FibreKey -> Type where
   | at (key : FibreKey) : FibrePayload key
+
+axiom RecursiveWitness {alpha : Type u} (_ : alpha) : Type u
+
+/-- Transparent application former used to keep a recursive occurrence
+syntactically non-bare while remaining kernel-positive. -/
+def TransparentOwnerAlias (owner : FibreIx -> Type u) (index : FibreIx) : Type u :=
+  owner index
 
 /-- Zero-field indexed `Type`: its malformed certificate must be diagnosed at
 the family boundary even though there is no intrinsic projection loop. -/
@@ -66,8 +73,15 @@ inductive IndexedRecursiveLayer : FibreIx -> Type where
   | mk (key : FibreKey)
       (payload : Eq.rec (motive := fun _ _ => Type)
         (FibrePayload key) (Eq.refl (FibrePayload key)))
-      (child : IndexedRecursiveLayer FibreIx.here) :
+      (child : IndexedRecursiveLayer FibreIx.here) (tail : FibreKey) :
       IndexedRecursiveLayer FibreIx.here
+
+/-- The same boundary with parameters and distinct source universes. -/
+inductive ParametricRecursiveLayer (alpha : Type u) (beta : alpha -> Type v) :
+    FibreIx -> Type (max u v) where
+  | mk (key : alpha) (payload : beta key)
+      (child : ParametricRecursiveLayer alpha beta FibreIx.here) (tail : alpha) :
+      ParametricRecursiveLayer alpha beta FibreIx.here
 
 /-- More than one direct recursive child remains outside the first tranche. -/
 inductive TwoRecursiveResults : FibreIx -> Type where
@@ -86,6 +100,14 @@ inductive FieldIndexedRecursiveResult : FibreIx -> Type where
   | mk (index : FibreIx) (child : FieldIndexedRecursiveResult index) :
       FieldIndexedRecursiveResult FibreIx.here
 
---#export Eq FibreIx FibreKey FibrePayload IndexedUnit HiddenIndexedResult HiddenIndexed
---#export erasedResultIndex FixedRecursiveResult IndexedRecursiveLayer
+/-- A transparent former around the owner is not a bare recursive field in
+the serialized contract and therefore remains legacy. -/
+inductive TransparentRecursiveResult : FibreIx -> Type where
+  | mk (child : TransparentOwnerAlias TransparentRecursiveResult FibreIx.here) :
+      TransparentRecursiveResult FibreIx.here
+
+--#export Eq FibreIx FibreKey FibrePayload RecursiveWitness TransparentOwnerAlias
+--#export IndexedUnit HiddenIndexedResult HiddenIndexed erasedResultIndex
+--#export FixedRecursiveResult IndexedRecursiveLayer ParametricRecursiveLayer
 --#export TwoRecursiveResults InfinitaryRecursiveResult FieldIndexedRecursiveResult
+--#export TransparentRecursiveResult

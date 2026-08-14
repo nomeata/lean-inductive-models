@@ -39,6 +39,23 @@ inductive MovedRecursiveResult : Ix -> Type where
 
 end IndexedFibreRejectedBoundary
 
+namespace IndexedFibreLaterDependencyBoundary
+
+inductive Ix where
+  | here
+
+axiom Witness {alpha : Type u} (_ : alpha) : Type u
+
+/--
+error: (kernel) arg #2 of 'IndexedFibreLaterDependencyBoundary.LaterDependency.mk' contains a non valid occurrence of the datatypes being declared
+-/
+#guard_msgs in
+inductive LaterDependency : Ix -> Type where
+  | mk (child : LaterDependency Ix.here) (evidence : Witness child) :
+      LaterDependency Ix.here
+
+end IndexedFibreLaterDependencyBoundary
+
 structure TestState where
   passed : Nat := 0
   failed : Array String := #[]
@@ -139,6 +156,24 @@ def replaceRuleFieldCount (x : Export) (owner : Name) (nfields : Nat) : Export :
           { recursor with rules := recursor.rules.map fun rule => { rule with nfields } }
         else recursor
     | _ => declaration }
+
+def replaceConstructorType (x : Export) (name : Name) (type : Expr) : Export :=
+  { x with decls := x.decls.map fun declaration => match declaration with
+    | .induct types constructors recursors =>
+      .induct types (constructors.map fun constructor =>
+        if constructor.name == name then { constructor with type } else constructor) recursors
+    | _ => declaration }
+
+def recursiveLaterDependencyType? (constructor : ECtor) : Option Expr := do
+  let (binders, result) := openForalls `_test.recursiveLaterDependency constructor.type
+  let recursiveIndex := constructor.numParams + 2
+  let laterIndex := constructor.numParams + 3
+  let recursive ← binders[recursiveIndex]?
+  let later ← binders[laterIndex]?
+  let witness := mkAppN (.const `RecursiveWitness [.zero])
+    #[recursive.type, recursive.value]
+  let binders := binders.set! laterIndex { later with type := witness }
+  return closeForalls binders result
 
 def declarationValue? (x : Export) (name : Name) : Option Expr :=
   x.decls.findSome? fun declaration => match declaration with
@@ -458,6 +493,8 @@ def run (root : String) : IO UInt32 := do
     Name.str recursiveLayerRoot "roll_unroll"]
   let recursiveLayerKeyRule := Naming.projectionIotaName `IndexedRecursiveLayer 0
   let recursiveLayerPayloadRule := Naming.projectionIotaName `IndexedRecursiveLayer 1
+  let recursiveLayerChildRule := Naming.projectionIotaName `IndexedRecursiveLayer 2
+  let recursiveLayerTailRule := Naming.projectionIotaName `IndexedRecursiveLayer 3
   state := state.check "dependent recursive indexed family carries a complete certificate" <|
     recursiveLayerCertificate.all boundaryNames.contains
   state := state.check "dependent recursive indexed ordinary rule has the literal field RHS" <|
@@ -465,6 +502,12 @@ def run (root : String) : IO UInt32 := do
   state := state.check "dependent recursive indexed payload rule has the literal field RHS" <|
     recursiveLayerActual recursiveLayerPayloadRule ==
       recursiveLayerExpected recursiveLayerPayloadRule
+  state := state.check "recursive child projection iota has the exact literal statement" <|
+    recursiveLayerActual recursiveLayerChildRule ==
+      recursiveLayerExpected recursiveLayerChildRule
+  state := state.check "independent field after the recursive child remains literal" <|
+    recursiveLayerActual recursiveLayerTailRule ==
+      recursiveLayerExpected recursiveLayerTailRule
   let recursiveLayerAuthoredFaces := #[Naming.modelName `IndexedRecursiveLayer.mk,
     Naming.modelName `IndexedRecursiveLayer.rec,
     Naming.iotaName `IndexedRecursiveLayer.rec 0,
@@ -485,6 +528,13 @@ def run (root : String) : IO UInt32 := do
   state := state.check "malformed recursive indexed source shape fails closed" <|
     recursiveLayerMalformedRecursor.any (hasTypeViolation `IndexedRecursiveLayer
       (Name.str recursiveLayerRoot "self"))
+  let recursiveLayerLaterDependent := recursiveLaterDependencyType?
+      recursiveLayerConstructor
+    |>.map (replaceConstructorType boundaryGenerated `IndexedRecursiveLayer.mk ·)
+    |>.getD boundaryGenerated
+  state := state.check "later field depending on the recursive child fails closed" <|
+    (Check.check recursiveLayerLaterDependent).any
+      (hasTypeViolation `IndexedRecursiveLayer (Name.str recursiveLayerRoot "self"))
   let recursiveLayerCurrentPayloadRule := recursiveLayerActual recursiveLayerPayloadRule
   let recursiveLayerTransported := if recursiveLayerCurrentPayloadRule !=
       recursiveLayerExpected recursiveLayerPayloadRule then boundaryGenerated else
@@ -499,8 +549,42 @@ def run (root : String) : IO UInt32 := do
       !boundaryReport.declined.any (·.1 == `IndexedRecursiveLayer) &&
       (Check.check boundaryGenerated).all (·.familyOwner != `IndexedRecursiveLayer)
 
+  let some parametricFamily := Check.discover boundaryGenerated |>.find?
+      (·.owner == `ParametricRecursiveLayer)
+    | throw <| IO.userError "generated boundary has no ParametricRecursiveLayer family"
+  let some (parametricType, parametricConstructor, _) :=
+      sourceShape? boundaryGenerated `ParametricRecursiveLayer
+    | throw <| IO.userError "generated boundary has no ParametricRecursiveLayer source shape"
+  let some parametricTypePair := parametricFamily.correspondence.typeFormers.find?
+      (·.owner == `ParametricRecursiveLayer)
+    | throw <| IO.userError "ParametricRecursiveLayer has no modeled carrier"
+  let some (parametricParams, _) := declarationType? boundaryGenerated parametricTypePair.model
+    | throw <| IO.userError "ParametricRecursiveLayer modeled carrier is absent"
+  let (parametricFaces, _) ← Core.CoreM.toIO
+    (MetaM.run' (projectionExpectations boundaryGenerated parametricFamily
+      parametricType parametricConstructor parametricParams))
+    projectionContext { env := projectionEnv }
+  let parametricExpected := fun name => parametricFaces.find? (·.1 == name) |>.map (·.2)
+  let parametricActual := fun name => declarationType? boundaryGenerated name |>.map (·.2)
+  let parametricRoot := `ParametricRecursiveLayer._model._impl
+  let parametricCertificate := #[Name.str parametricRoot "self",
+    Name.str parametricRoot "ctor_0", Name.str parametricRoot "rec",
+    Name.str parametricRoot "rec_iota_0", Name.str parametricRoot "roll",
+    Name.str parametricRoot "unroll", Name.str parametricRoot "unroll_roll",
+    Name.str parametricRoot "roll_unroll"]
+  state := state.check "parameterized recursive indexed family carries a complete certificate" <|
+    parametricCertificate.all boundaryNames.contains
+  for fieldIndex in [0:4] do
+    let rule := Naming.projectionIotaName `ParametricRecursiveLayer fieldIndex
+    state := state.check s!"parameterized recursive indexed field {fieldIndex} is literal" <|
+      parametricActual rule == parametricExpected rule
+  state := state.check "parameterized recursive indexed universes generate and check" <|
+    parametricType.levelParams == [`u, `v] &&
+      boundaryReport.generated.any (·.1 == `ParametricRecursiveLayer) &&
+      (Check.check boundaryGenerated).all (·.familyOwner != `ParametricRecursiveLayer)
+
   for owner in [`TwoRecursiveResults, `InfinitaryRecursiveResult,
-      `FieldIndexedRecursiveResult] do
+      `FieldIndexedRecursiveResult, `TransparentRecursiveResult] do
     let ownerRoot := Name.str (Naming.modelName owner) "_impl"
     let ownerCertificate := #[Name.str ownerRoot "self", Name.str ownerRoot "ctor_0",
       Name.str ownerRoot "rec", Name.str ownerRoot "rec_iota_0",
