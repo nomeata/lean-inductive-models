@@ -42,26 +42,6 @@ paths are installed transactionally by [`InductiveModels.Output.write`]. -/
 def writeExport (target : String) (x : Export) : IO Unit :=
   InductiveModels.Output.write target x.writeTo
 
-private def freshSignalPointVariable : String :=
-  "LEAN_INDUCTIVE_MODELS_TEST_FRESH_SIGNAL_POINT"
-
-private def freshCheckerFailureVariable : String :=
-  "LEAN_INDUCTIVE_MODELS_TEST_FRESH_CHECKER_FAILURE"
-
-/-- Write one parent-registered private candidate directly. Atomic replacement
-is unnecessary because the path is never published; direct exclusive creation
-ensures a signal can leave at most this one exact workspace-owned leaf. -/
-private def writePrivateCandidate (target : String)
-    (emit : IO.FS.Stream → IO Unit) : IO Unit := do
-  unless target != "-" do throw <| IO.userError "private candidate requires a named path"
-  let path : System.FilePath := target
-  let handle ← IO.FS.Handle.mk path .writeNew
-  let stream := IO.FS.Stream.ofHandle handle
-  if (← IO.getEnv freshSignalPointVariable) == some "during-write" then IO.sleep 1000
-  emit stream
-  stream.flush
-  if (← IO.getEnv freshSignalPointVariable) == some "post-write" then IO.sleep 1000
-
 def reportGeneration (config : InductiveModels.Cli.Config) (rep : InductiveModels.Report) : IO Unit := do
   if config.quiet then return
   let input := config.input.getD "<input>"
@@ -204,7 +184,7 @@ private def mixedComposition (raw : RawStage) (sealed : InductiveModels.Spool.Se
 
 private def runWithWorkspace (config : InductiveModels.Cli.Config)
     (workspace? : Option InductiveModels.Spool.Workspace)
-    (compactEnabled : Bool) (privateCandidate : Bool := false) : IO UInt32 := do
+    (compactEnabled : Bool) : IO UInt32 := do
   let input := config.input.getD ""
   -- Reserve every spool leaf before consuming the input. Failure to establish
   -- the optional tee selects the historical parser; an error after parsing has
@@ -473,10 +453,7 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
       match composition.validate with
       | .ok _ => pure ()
       | .error message => throw <| IO.userError s!"invalid staged composition: {message}"
-      if privateCandidate then
-        writePrivateCandidate config.outputTarget composition.emit
-      else
-        InductiveModels.Output.write config.outputTarget composition.emit
+      InductiveModels.Output.write config.outputTarget composition.emit
     catch error =>
       IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
       return exitToolError
@@ -511,33 +488,26 @@ private def runWithWorkspace (config : InductiveModels.Cli.Config)
 
     if config.output then
       try
-        if privateCandidate then
-          writePrivateCandidate config.outputTarget finalExport.writeTo
-        else
-          writeExport config.outputTarget finalExport
+        writeExport config.outputTarget finalExport
       catch error =>
         IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
         return exitToolError
     return outcome
 
-def run (config : InductiveModels.Cli.Config) (privateCandidate : Bool := false)
-    (fixedWorkspace? : Option InductiveModels.Spool.Workspace := none) : IO UInt32 := do
+def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   -- Canonical eligible generation uses bounded-memory staged output by default.
   -- The legacy override is retained for deliberate A/B measurements. Statically
   -- ineligible modes never tee their input, and planner trace mode stays on the
-  -- full-AST path so a private failed staging attempt cannot duplicate trace lines.
+  -- full-AST path so a failed staging attempt cannot duplicate trace lines.
   let compactEnabled :=
     (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
       (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1"
   if compactEnabled && stagedModeEligible config then
-    match fixedWorkspace? with
-    | some workspace => runWithWorkspace config (some workspace) compactEnabled privateCandidate
-    | none =>
-      let scratch := (← IO.currentDir) / "_tmp"
-      InductiveModels.Spool.withOptionalWorkspace scratch fun workspace? =>
-        runWithWorkspace config workspace? compactEnabled privateCandidate
+    let scratch := (← IO.currentDir) / "_tmp"
+    InductiveModels.Spool.withOptionalWorkspace scratch fun workspace? =>
+      runWithWorkspace config workspace? compactEnabled
   else
-    runWithWorkspace config none compactEnabled privateCandidate
+    runWithWorkspace config none compactEnabled
 
 def workerMain (args : List String) : IO UInt32 := do
   InductiveModels.Output.containToolErrors do
@@ -548,239 +518,5 @@ def workerMain (args : List String) : IO UInt32 := do
         return exitToolError
     | .ok config => run config
 
-private def freshPhaseVariable : String :=
-  "LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_PHASE"
-
-private def freshDirectoryVariable : String :=
-  "LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_DIRECTORY"
-
-private def freshTokenVariable : String :=
-  "LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_TOKEN"
-
-private def freshCandidateLeaf : String := "output-kernel-candidate.ndjson"
-
-/-- Private subprocess statuses outside the public 0..3 contract. A direct
-phase invocation therefore cannot be mistaken for accepted/declined output;
-only the coordinating parent translates these after the complementary phase. -/
-private def exitProducedAccepted : UInt32 := 4
-private def exitProducedDeclined : UInt32 := 5
-private def exitKernelAccepted : UInt32 := 4
-
-private inductive FreshPhase where
-  | produce | check
-
-private def FreshPhase.parse? : String → Option FreshPhase
-  | "produce" => some .produce
-  | "check" => some .check
-  | _ => none
-
-/-- Validate the subprocess path boundary without trusting it as a deletion or
-publication target. The randomized owner-only directory must be a physical
-child of this process's project `_tmp`, and its basename must match the path
-component supplied by the coordinator. Environment values are not an
-authentication secret; out-of-contract phase success statuses enforce the
-public gate boundary. -/
-private def freshCandidatePath : IO (Except String System.FilePath) := do
-  let some directoryText ← IO.getEnv freshDirectoryVariable
-    | return .error "fresh output-kernel phase has no private directory"
-  let some token ← IO.getEnv freshTokenVariable
-    | return .error "fresh output-kernel phase has no directory basename"
-  let directory : System.FilePath := directoryText
-  unless directory.fileName == some token do
-    return .error "fresh output-kernel basename does not name its private directory"
-  try
-    let scratch := (← IO.currentDir) / "_tmp"
-    let rootMetadata ← scratch.symlinkMetadata
-    unless rootMetadata.type == .dir do
-      return .error "fresh output-kernel project _tmp is not a physical directory"
-    let directoryMetadata ← directory.symlinkMetadata
-    unless directoryMetadata.type == .dir do
-      return .error "fresh output-kernel path is not a physical directory"
-    let canonicalRoot ← IO.FS.realPath scratch
-    let canonicalDirectory ← IO.FS.realPath directory
-    let rootParts := canonicalRoot.components
-    let directoryParts := canonicalDirectory.components
-    unless rootParts.length < directoryParts.length &&
-        directoryParts.take rootParts.length == rootParts &&
-        canonicalDirectory.fileName == some token do
-      return .error "fresh output-kernel directory escapes the project _tmp"
-    return .ok (canonicalDirectory / freshCandidateLeaf)
-  catch error =>
-    return .error s!"cannot validate fresh output-kernel path: {error}"
-
-private def parseConfig (args : List String) : IO (Except Unit InductiveModels.Cli.Config) := do
-  match InductiveModels.Cli.parseArgs args with
-  | .ok config => return .ok config
-  | .error error =>
-    IO.eprintln error
-    IO.eprintln InductiveModels.Cli.usage
-    return .error ()
-
-/-- The producer preserves the public invocation's generation, structural
-checks, diagnostics, and exit 0/1/2/3. Only publication and the final kernel
-gate are redirected to the private candidate. It prefers compact staging and
-retains the ordinary full-oracle fallback when raw or compact certification is
-unavailable; either producer process terminates before kernel replay starts. -/
-private def freshProducerMain (args : List String) : IO UInt32 := do
-  let candidateResult ← freshCandidatePath
-  let candidate ← match candidateResult with
-    | .ok candidate => pure candidate
-    | .error message =>
-      IO.eprintln s!"lean-inductive-models: invalid fresh output-kernel producer path: \
-        {message}"
-      return exitToolError
-  let .ok config ← parseConfig args
-    | return exitToolError
-  unless InductiveModels.generationEnabled config && !config.output &&
-      config.typeCheckOutput && !config.monoLevels do
-    IO.eprintln "lean-inductive-models: fresh output-kernel producer received an ineligible invocation"
-    return exitToolError
-  if ← candidate.pathExists then
-    IO.eprintln "lean-inductive-models: fresh output-kernel candidate was not exclusively reserved"
-    return exitToolError
-  let producerConfig := { config with typeCheckOutput := false }
-  let producerConfig := { producerConfig with
-    output := true, outputTarget := candidate.toString }
-  let some directory := candidate.parent
-    | IO.eprintln "lean-inductive-models: fresh output-kernel candidate has no parent"
-      return exitToolError
-  let workspace ← InductiveModels.Spool.Workspace.attach ((← IO.currentDir) / "_tmp") directory
-  let status ← run producerConfig true (some workspace)
-  if status == exitAccepted then return exitProducedAccepted
-  if status == exitDeclined then return exitProducedDeclined
-  return status
-
-/-- Parse and kernel-replay only the private candidate. This worker has no
-generation route and starts only after the producer process has terminated, so
-their heaps cannot overlap. -/
-private def freshCheckerMain (args : List String) : IO UInt32 := do
-  let candidateResult ← freshCandidatePath
-  let candidate ← match candidateResult with
-    | .ok candidate => pure candidate
-    | .error message =>
-      IO.eprintln s!"lean-inductive-models: invalid fresh output-kernel checker path: \
-        {message}"
-      return exitToolError
-  let .ok config ← parseConfig args
-    | return exitToolError
-  unless InductiveModels.generationEnabled config && !config.output &&
-      config.typeCheckOutput && !config.monoLevels do
-    IO.eprintln "lean-inductive-models: fresh output-kernel checker received an ineligible invocation"
-    return exitToolError
-  let input := config.input.getD "<input>"
-  if (← IO.getEnv freshCheckerFailureVariable) == some "1" then
-    IO.eprintln s!"{input}: injected fresh output-kernel checker failure"
-    return exitToolError
-  let candidateMetadata ← try candidate.symlinkMetadata catch error =>
-    IO.eprintln s!"{input}: output kernel replay candidate is unavailable: {error}"
-    return exitToolError
-  unless candidateMetadata.type == .file do
-    IO.eprintln s!"{input}: output kernel replay candidate is not a physical file"
-    return exitToolError
-  let parsedResult : Except String Export ← try
-      IO.FS.withFile candidate .read fun handle => do
-        let result ← InductiveModels.parseHandle handle
-          (analyse := false) (allowDuplicateNames := true)
-        return result.mapError toString
-    catch error => pure (.error (toString error))
-  let .ok parsed := parsedResult
-    | IO.eprintln s!"{input}: output kernel replay could not parse its private candidate"
-      return exitToolError
-  if let .error message := parsed.validateUniqueDeclarationNames then
-    IO.eprintln s!"{input}: output kernel replay candidate is invalid: {message}"
-    return exitToolError
-  initSearchPath (← findSysroot)
-  let context : Core.Context :=
-    { fileName := "<lean-inductive-models-output-kernel-worker>", fileMap := default,
-      maxHeartbeats := 0, maxRecDepth := 8192 }
-  match ← typeCheckExportIO context parsed with
-  | .error message =>
-    IO.eprintln s!"{input}: output kernel check failed internally: {message}"
-    return exitToolError
-  | .ok (.error message) =>
-    IO.eprintln s!"{input}: output kernel check rejected: {message}"
-    return exitRejected
-  | .ok (.ok ()) =>
-    reportTypeCheckSuccess config "output"
-    return exitKernelAccepted
-
-private def clearedFreshEnvironment : Array (String × Option String) := #[
-  (freshPhaseVariable, none), (freshDirectoryVariable, none), (freshTokenVariable, none)]
-
-private def freshPhaseEnvironment (phase : FreshPhase)
-    (directory : System.FilePath) (token : String) : Array (String × Option String) := #[
-  (freshPhaseVariable, some (match phase with | .produce => "produce" | .check => "check")),
-  (freshDirectoryVariable, some directory.toString),
-  (freshTokenVariable, some token)]
-
-private def freshOwnedLeaves : Array String := #[
-  freshCandidateLeaf,
-  "metadata.ndjson", "arena.ndjson", "declarations.ndjson",
-  "generated-arena.ndjson", "generated-declarations.ndjson"]
-
-private def freshKernelEligible (config : InductiveModels.Cli.Config) : IO Bool := do
-  return InductiveModels.generationEnabled config && !config.output &&
-    config.typeCheckOutput && !config.monoLevels &&
-    (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
-    (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1"
-
-/-- Coordinate two nonoverlapping workers. A successful kernel checker returns
-the producer's accepted/declined status; rejection or tool failure overrides
-it exactly as the historical in-process final gate did. -/
-private def runFreshKernelPipeline (args : List String) : IO UInt32 := do
-  let scratch := (← IO.currentDir) / "_tmp"
-  try
-    InductiveModels.Spool.withRootedWorkspace scratch fun workspace => do
-      let mut candidatePath? : Option System.FilePath := none
-      for leaf in freshOwnedLeaves do
-        let path ← workspace.reservePath leaf
-        if leaf == freshCandidateLeaf then candidatePath? := some path
-      let some candidate := candidatePath?
-        | throw <| IO.userError "fresh output-kernel candidate leaf was not registered"
-      let canonicalDirectory ← IO.FS.realPath workspace.directory
-      let some token := canonicalDirectory.fileName
-        | throw <| IO.userError "fresh output-kernel workspace has no basename"
-      let producer ← InductiveModels.Supervisor.runWorkerRaw args
-        (freshPhaseEnvironment .produce canonicalDirectory token)
-      let producerOutcome ← if producer == exitProducedAccepted then pure exitAccepted
-        else if producer == exitProducedDeclined then pure exitDeclined
-        else if producer ≤ exitToolError then return producer
-        else
-          IO.eprintln s!"lean-inductive-models: producer terminated with native status {producer}; \
-            reporting internal tool error 3"
-          return exitToolError
-      unless ← candidate.pathExists do
-        IO.eprintln "lean-inductive-models: fresh producer returned without a kernel candidate"
-        return exitToolError
-      let metadata ← candidate.symlinkMetadata
-      unless metadata.type == .file do
-        IO.eprintln "lean-inductive-models: fresh producer did not install a physical kernel candidate"
-        return exitToolError
-      let checker ← InductiveModels.Supervisor.runWorkerRaw args
-        (freshPhaseEnvironment .check canonicalDirectory token)
-      if checker == exitKernelAccepted then return producerOutcome
-      if checker ≤ exitToolError then return checker
-      IO.eprintln s!"lean-inductive-models: output kernel worker terminated with native status \
-        {checker}; reporting internal tool error 3"
-      return exitToolError
-  catch error =>
-    IO.eprintln s!"lean-inductive-models: cannot run fresh output kernel worker: {error}"
-    return exitToolError
-
-private def supervisedMain (args : List String) : IO UInt32 := do
-  if (← IO.getEnv InductiveModels.Supervisor.workerMarker) == some "1" then
-    match ← IO.getEnv freshPhaseVariable with
-    | none => workerMain args
-    | some phase => match FreshPhase.parse? phase with
-      | some .produce => freshProducerMain args
-      | some .check => freshCheckerMain args
-      | none =>
-        IO.eprintln "lean-inductive-models: invalid internal output-kernel phase"
-        return exitToolError
-  else
-    match InductiveModels.Cli.parseArgs args with
-    | .ok _ => InductiveModels.Supervisor.runWorkerWithEnv args clearedFreshEnvironment
-    | .error _ => InductiveModels.Supervisor.runWorkerWithEnv args clearedFreshEnvironment
-
 def main (args : List String) : IO UInt32 :=
-  InductiveModels.Output.containToolErrors (supervisedMain args)
+  InductiveModels.Output.containToolErrors (InductiveModels.Supervisor.supervise workerMain args)

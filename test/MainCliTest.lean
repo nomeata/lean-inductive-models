@@ -750,47 +750,25 @@ def main (args : List String) : IO UInt32 := do
       metadataFallbackDirect.stdout.isEmpty && metadataFallbackLegacy.stdout.isEmpty &&
       metadataFallbackDirect.stderr == metadataFallbackLegacy.stderr &&
       metadataFallbackDirect.stderr.contains "recursor numMinors differs"
-  let freshCwd : System.FilePath := s!"{scratch}/main-cli-fresh-cwd"
-  let externalFreshTmp : System.FilePath := s!"{scratch}/main-cli-external-fresh-tmp"
-  IO.FS.createDir freshCwd
-  IO.FS.createDir externalFreshTmp
-  let freshCwdScratch := freshCwd / "_tmp"
-  IO.FS.writeFile freshCwdScratch "not a directory\n"
-  let freshCwdRun ← runInductiveModelsAt binaryAbsolute.toString
+  let directCwd : System.FilePath := s!"{scratch}/main-cli-direct-cwd"
+  let externalDirectTmp : System.FilePath := s!"{scratch}/main-cli-external-direct-tmp"
+  IO.FS.createDir directCwd
+  IO.FS.createDir externalDirectTmp
+  let directCwdScratch := directCwd / "_tmp"
+  IO.FS.writeFile directCwdScratch "not a directory\n"
+  let directCwdRun ← runInductiveModelsAt binaryAbsolute.toString
     ["--no-output", "--type-check-output", "--no-check", nestedAbsolute.toString]
-    freshCwd.toString #[
-      ("TMPDIR", some externalFreshTmp.toString),
+    directCwd.toString #[
+      ("TMPDIR", some externalDirectTmp.toString),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "compact direct ignores unusable roots and external TMPDIR" <|
-    freshCwdRun.exitCode == 0 && freshCwdRun.stdout.isEmpty &&
-      hasDiagnostic freshCwdRun.stderr "output backend: compact-direct" &&
-      (← IO.FS.readFile freshCwdScratch) == "not a directory\n" &&
-      (← externalFreshTmp.readDir).isEmpty
-  IO.FS.removeFile freshCwdScratch
-  IO.FS.removeDir freshCwd
-  IO.FS.removeDir externalFreshTmp
-
-  for point in ["during-write", "post-write"] do
-    let before ← System.FilePath.readDir scratch
-    let directHook ← runInductiveModelsWithEnv binary
-      ["--no-output", "--type-check-output", "--no-check", nested] #[
-        ("LEAN_INDUCTIVE_MODELS_TEST_FRESH_SIGNAL_POINT", some point),
-        ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-    let after ← System.FilePath.readDir scratch
-    state := state.check s!"obsolete fresh write hook {point} is inert on compact direct" <|
-      directHook.exitCode == 0 && directHook.stdout.isEmpty &&
-        hasDiagnostic directHook.stderr "output backend: compact-direct" &&
-        sameDirectoryEntries before after
-
-  let checkerFailureBefore ← System.FilePath.readDir scratch
-  let checkerFailure ← runInductiveModelsWithEnv binary
-    ["--no-output", "--type-check-output", "--no-check", nested] #[
-      ("LEAN_INDUCTIVE_MODELS_TEST_FRESH_CHECKER_FAILURE", some "1")]
-  let checkerFailureAfter ← System.FilePath.readDir scratch
-  state := state.check "obsolete fresh checker failure hook is inert on compact direct" <|
-    checkerFailure.exitCode == 0 && checkerFailure.stdout.isEmpty &&
-      !checkerFailure.stderr.contains "injected fresh output-kernel checker failure" &&
-      sameDirectoryEntries checkerFailureBefore checkerFailureAfter
+    directCwdRun.exitCode == 0 && directCwdRun.stdout.isEmpty &&
+      hasDiagnostic directCwdRun.stderr "output backend: compact-direct" &&
+      (← IO.FS.readFile directCwdScratch) == "not a directory\n" &&
+      (← externalDirectTmp.readDir).isEmpty
+  IO.FS.removeFile directCwdScratch
+  IO.FS.removeDir directCwd
+  IO.FS.removeDir externalDirectTmp
   let directFailureEntriesBefore ← System.FilePath.readDir scratch
   let failedDirectKernel ← runInductiveModelsWithEnv binary
     ["--no-output", "--no-check", "--type-check-output", "-"]
@@ -801,29 +779,6 @@ def main (args : List String) : IO UInt32 := do
     failedDirectKernel.exitCode == 1 && failedDirectKernel.stdout.isEmpty &&
       hasDiagnostic failedDirectKernel.stderr "output backend: legacy" &&
       sameDirectoryEntries directFailureEntriesBefore directFailureEntriesAfter
-  let spoofedPhase ← runInductiveModelsWithEnv binary
-    ["--no-inductives", "--no-check", "--no-type-check-output", "--no-output", nested] #[
-      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_PHASE", some "produce"),
-      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_DIRECTORY", some "/"),
-      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_TOKEN", some "forged")]
-  state := state.check "public supervisor strips a forged fresh-worker phase" <|
-    spoofedPhase.exitCode == 0 && spoofedPhase.stdout.isEmpty
-  let forgedDirectory : System.FilePath := s!"{scratch}/main-cli-forged-checker"
-  IO.FS.createDir forgedDirectory
-  let forgedCandidate := forgedDirectory / "output-kernel-candidate.ndjson"
-  IO.FS.writeFile forgedCandidate nestedText
-  let forgedDirectPhase ← runInductiveModelsWithEnv binary
-    ["--no-output", "--type-check-output", "--no-check", nested] #[
-      (InductiveModels.Supervisor.workerMarker, some "1"),
-      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_PHASE", some "check"),
-      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_DIRECTORY", some forgedDirectory.toString),
-      ("LEAN_INDUCTIVE_MODELS_INTERNAL_OUTPUT_KERNEL_TOKEN", some "main-cli-forged-checker")]
-  state := state.check "direct forged phase cannot return a public accepted status" <|
-    forgedDirectPhase.exitCode == 4 && forgedDirectPhase.stdout.isEmpty &&
-      hasDiagnostic forgedDirectPhase.stderr "output kernel check: accepted"
-  IO.FS.removeFile forgedCandidate
-  IO.FS.removeDir forgedDirectory
-
   -- Generated arena IDs may differ from the legacy global writer, so compare
   -- parsed exports, exact declaration order, diagnostics, and exit status
   -- rather than raw bytes.
