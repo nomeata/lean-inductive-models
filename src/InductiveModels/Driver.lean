@@ -3222,6 +3222,14 @@ is put through the existing stable support-priority order so this phase changes
 neither bytes nor report ordering. -/
 def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Array EDecl × Report × Bool) := do
+  -- The shadow ledger and output reconstruction are intentionally keyed by a
+  -- declaration's first introduced name.  Nameless records are valid on the
+  -- historical path, so they make this phase-one optimization unavailable
+  -- rather than becoming a new input restriction after another record selects
+  -- future support.
+  if x.decls.any (·.names.isEmpty) then
+    let (decls, report) ← runFilter x checkRecursors generation
+    return (decls, report, false)
   let census := SourceCensus.ofSource x
   unless sourceNeedsSupportScheduling x generation census.reserved do
     let (decls, report) ← runFilter x checkRecursors generation

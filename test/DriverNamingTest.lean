@@ -278,6 +278,18 @@ def main : IO UInt32 := do
       lateEqShadow.report == lateEq.report &&
       Check.checkReport { lateEqSource with decls := lateEqShadow.output } ==
         Check.checkReport { lateEqSource with decls := lateEq.output }
+  let lateEqWithNameless := { lateEqInput with
+    decls := lateEqInput.decls.push (.induct [] [] []) }
+  let lateEqNamelessScheduled ← runExport "late Eq plus nameless source scheduler"
+    lateEqWithNameless false
+    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
+  let lateEqNamelessShadow ← runExportShadow "late Eq plus nameless source fallback"
+    lateEqWithNameless false
+    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
+  state := state.check "nameless source makes an otherwise selected shadow unavailable" <|
+    !lateEqNamelessShadow.selected &&
+      lateEqNamelessShadow.output == lateEqNamelessScheduled.output &&
+      lateEqNamelessShadow.report == lateEqNamelessScheduled.report
   let duplicateAfterShadow := { lateEqInput with
     decls := lateEqInput.decls.push (.ax `Pre [] (.sort .zero) false) }
   state := state.check "shadow setup restores the caller environment before ordering failure"
@@ -298,7 +310,6 @@ def main : IO UInt32 := do
   state := state.check "noncanonical future Eq is never shadowed" <|
     !malformedEqShadow.selected && malformedEqShadow.output == malformedEqScheduled.output &&
       malformedEqShadow.report == malformedEqScheduled.report
-
   let mathlibEarlyNames : Array Name := #[`LE, `LT, `List, `Array, `Nat.le, `Fin,
     `HPow, `Pow, `NatPow, `PProd, `OfNat, `BitVec, `UInt8, `ByteArray,
     `UInt32, `Or, `And, `Char]
@@ -325,6 +336,29 @@ def main : IO UInt32 := do
   let quotientText ← IO.FS.readFile "test/fixtures/inductive-models/prim_graph_pre.ndjson"
   let .ok quotientSource := InductiveModels.parse quotientText (analyse := false)
     | throw <| IO.userError "cannot parse the quotient support fixture"
+  let psigmaNames : Array Name := #[`PSigma', `PSigma'.mk, `PSigma'.rec,
+    `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk, `PSigma'.snd_mk,
+    `PSigma'.rec', `PSigma'.rec'_mk]
+  let psigmaSupport := partialInput.decls.filter fun declaration =>
+    declaration.names.any psigmaNames.contains
+  let completePSigmaInput := { lateEqInput with
+    decls := lateEqInput.decls ++ psigmaSupport }
+  let partialPSigma := { completePSigmaInput with
+    decls := completePSigmaInput.decls.filter fun declaration =>
+      !(declaration.names.contains `PSigma'.snd_mk) }
+  let partialPSigmaScheduled ← runExport "partial future PSigma scheduler"
+    partialPSigma false
+    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
+  let partialPSigmaShadow ← runExportShadow "partial future PSigma fallback"
+    partialPSigma false
+    { noGeneration with nested := true, mutualModels := true, simple := true, basic := true }
+  state := state.check "partial future PSigma bundle is never shadowed" <|
+    psigmaNames.all (fun name => psigmaSupport.any (·.names.contains name)) &&
+      partialPSigma.decls.size + 1 == completePSigmaInput.decls.size &&
+      partialPSigma.decls.any (·.names.contains `PSigma') &&
+      !partialPSigmaShadow.selected &&
+      partialPSigmaShadow.output == partialPSigmaScheduled.output &&
+      partialPSigmaShadow.report == partialPSigmaScheduled.report
   let quotientSupport := quotientSource.decls.filter fun declaration =>
     declaration.names.any fun name => name == `Quot || (`Quot).isPrefixOf name
   let quotientSupportNames := quotientSupport.flatMap (·.names.toArray)
@@ -369,6 +403,17 @@ def main : IO UInt32 := do
     !malformedSoundShadow.selected &&
       malformedSoundShadow.output == malformedSoundScheduled.output &&
       malformedSoundShadow.report == malformedSoundScheduled.report
+  let splitQuotSupport := quotientSupport.extract 0 1 ++
+    #[EDecl.ax `BetweenQuot [] (.sort .zero) false] ++
+    quotientSupport.extract 1 quotientSupport.size
+  let splitQuotInput := { graphSource with decls := graphSource.decls ++ splitQuotSupport }
+  let splitQuotScheduled ← runExport "non-atomic future Quot scheduler"
+    splitQuotInput false { noGeneration with simple := true, basic := true }
+  let splitQuotShadow ← runExportShadow "non-atomic future Quot fallback"
+    splitQuotInput false { noGeneration with simple := true, basic := true }
+  state := state.check "non-atomic future Quot bundle is never shadowed" <|
+    !splitQuotShadow.selected && splitQuotShadow.output == splitQuotScheduled.output &&
+      splitQuotShadow.report == splitQuotScheduled.report
 
   let composed ← runFixture "test/fixtures/inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true, mutualModels := true, simple := true }
