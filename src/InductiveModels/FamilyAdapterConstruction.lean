@@ -1323,7 +1323,8 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
   let direct? : Option Expr ← match role? with
     | none => pure none
     | some role => do
-      let pair? := match role.member?, role.container? with
+      let pair? : Option (MemberPlan × PublicRecursorCertificate) :=
+        match role.member?, role.container? with
         | some memberKey, none => do
           let member ← plan.members.find? fun member =>
             member.key == memberKey && member.publicRecursor == role.publicRecursor &&
@@ -2650,10 +2651,11 @@ private def containerRecursorMember (container : ContainerRecursorPlan) :
   let some implementationCarrier := implementationCarrier
     | failConstruction (.missingMemberMap { owner := container.key.implementationRecursor })
   let key : MemberKey := { owner := container.key.publicRecursor }
+  let sourceType ← liftGen <| inferType container.publicMajorFamily
   return
     { key, component := { anchor := key }, role := .mimic,
       parameterArity := container.parameterArity, indexArity := container.indexArity,
-      sourceType := ← liftGen <| inferType container.publicMajorFamily,
+      sourceType,
       implementationCarrier, publicCarrier, representation := .layer,
       constructors := #[], sourceRules := #[],
       recursorMotiveArity := container.motiveArity,
