@@ -2080,6 +2080,10 @@ structure CompactKernelCheckVerdict where
   result : Except String Unit
   recordsPushed : Nat
   scheduledRecords : Nat
+  /-- Number of source transitions for which the direct route retained its
+  cumulative construction environment.  The remaining source tail was
+  checked and certified exactly without replaying it into Meta state. -/
+  constructionTransitions : Nat
   fallback? : Option String := none
   deriving Repr
 
@@ -2111,20 +2115,25 @@ structure SourceScheduleFact where
   nestedOwner : Bool := false
   mutualOwner : Bool := false
   simpleOwner : Bool := false
+  /-- This record owns any primitive inductive used to validate the simple
+  construction basis.  Unlike `root?`, this ranges over every member of a
+  mutual block. -/
+  basisOwner : Bool := false
   broadSupport : Bool := false
   structuralSupport : Bool := false
   deriving Inhabited, Repr, BEq
 
 def SourceScheduleFact.ofDeclaration (declaration : EDecl) : SourceScheduleFact :=
-  let (root?, nestedOwner, mutualOwner, simpleOwner) := match declaration with
+  let (root?, nestedOwner, mutualOwner, simpleOwner, basisOwner) := match declaration with
     | .induct types _ _ => match types with
-      | [] => (none, false, false, false)
+      | [] => (none, false, false, false, false)
       | first :: _ =>
         (some first.name, types.any (·.numNested > 0),
           types.length > 1 && !types.any (·.numNested > 0),
-          types.length == 1 && first.numNested == 0)
-    | _ => (none, false, false, false)
-  { root?, nestedOwner, mutualOwner, simpleOwner
+          types.length == 1 && first.numNested == 0,
+          types.any fun type => inductiveBasis.contains type.name)
+    | _ => (none, false, false, false, false)
+  { root?, nestedOwner, mutualOwner, simpleOwner, basisOwner
     broadSupport := broadScheduledSupportRecord declaration
     structuralSupport := structuralScheduledSupportRecord declaration }
 
@@ -2143,6 +2152,20 @@ def SourceScheduleFact.modelOwner (fact : SourceScheduleFact)
       ((generation.nested && fact.nestedOwner) ||
        (generation.mutualModels && fact.mutualOwner) ||
        (fact.simpleOwner && generation.modelsSimpleInput root))
+
+/-- Whether this record can read or mutate cumulative construction state.
+
+This is deliberately more conservative than [`SourceScheduleFact.modelOwner`]:
+an occupied public carrier still reaches generation and reports `nameTaken`,
+and every primitive-basis owner is validated even when it is exempt or
+invalid. Recursive and composed generation remains inside the transition of
+one of the three enabled owner shapes. -/
+def SourceScheduleFact.constructionTouch (fact : SourceScheduleFact)
+    (generation : Cli.Config) : Bool :=
+  fact.basisOwner ||
+    (generation.nested && fact.nestedOwner) ||
+    (generation.mutualModels && fact.mutualOwner) ||
+    (fact.simpleOwner && fact.root?.any generation.modelsSimpleInput)
 
 /-- Deterministic collision-free aliases from the complete source-name census.
 
@@ -2642,6 +2665,11 @@ private structure FilterContext where
   constructionNormalizer : ExactNormalizationEnv
   sourceAliases : SourceReplayAliases
   sourceSummaries : Array Order.DeclSummary
+  /-- Construction-touch bits in scheduled source order.  These are frozen
+  census facts, not retained declarations. -/
+  sourceConstructionTouches : Array Bool
+  /-- Exclusive scheduled-source cutoff for cumulative construction replay. -/
+  constructionTransitions : Nat
   sourceGlobalExtras? : Option (Array Check.GlobalExtraRecord)
   sourceFamilyRecords? : Option (Array (Array Check.CompactFamilyCertificate))
   rawOrdinals : Std.HashMap Name Nat
@@ -2694,6 +2722,43 @@ private inductive FilterFeedResult where
   /-- Preserve the completed trace without making the caller retain the whole
   previous state while `feedSource` appends to its accumulated arrays. -/
   | unreplayable (report : Report) (sourceSteps : Array FilterSourceStep)
+
+/-- Consume a source record after the final possible construction transition.
+The cumulative construction environment has already been replaced by the
+exact invocation base.  Frozen syntax products supply the same compact row;
+the live exact declaration is bound directly to that row and immediately
+released after the incremental kernel push. -/
+private def FilterState.feedSourceExactTail (state : FilterState)
+    (context : FilterContext) (d : EDecl) : MetaM FilterState := do
+  unless context.retention.checksKernelDirect do
+    throwError "exact-only source tail selected outside direct retention"
+  let scheduledOrdinal := state.scheduledOrdinal
+  if context.sourceConstructionTouches[scheduledOrdinal]! then
+    throwError "construction-touching source record reached the exact-only tail"
+  let sourceSummary := context.sourceSummaries[scheduledOrdinal]!
+  let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[scheduledOrdinal]?) with
+    | some record => record
+    | none => (Check.globalExtraRecordsWithIndex context.sourceSyntax #[d])[0]!
+  let sourceFamilyRecord := match context.sourceFamilyRecords?.bind (·[scheduledOrdinal]?) with
+    | some records => records
+    | none => context.sourceSyntax.sourceFamilyCertificatesForRecord context.source d
+  let some firstName := d.names.head? | throwError "source declaration has no name"
+  let some rawOrdinal := context.rawOrdinals[firstName]?
+    | throwError "scheduled source declaration {firstName} lost its raw ordinal"
+  let row : CompactRecord := {
+    summary := sourceSummary
+    globalExtra := sourceGlobalExtra
+    families := sourceFamilyRecord
+    checkIsland? := none
+    locator := .source rawOrdinal }
+  let some checker := state.kernelCheckState?
+    | throwError "compact direct exact tail lost its exact kernel checker"
+  let checker ← checker.pushBound d row.summary.introduced
+  return { state with
+    compactRecords := state.compactRecords.push row
+    scheduledOrdinal := scheduledOrdinal + 1
+    kernelCheckState? := some checker
+    kernelCheckRows := state.kernelCheckRows.push row.summary.introduced }
 
 /-- Consume one declaration from the already dependency-ordered logical source
 stream.  Every mutable field which survives this call is explicit in
@@ -3106,6 +3171,7 @@ private structure CompactDirectSealed where
   islandStatements : Check.StatementReport
   persistentSupportOrigins : Std.HashMap Name Nat
   kernelVerdict : KernelCheck.Verdict
+  constructionTransitions : Nat
 
 /-- Consume the complete direct state at the last expression-bearing boundary.
 Every exact record was already submitted through `pushBound`.  This function
@@ -3151,7 +3217,8 @@ private def FilterState.sealCompactDirect (state : FilterState) (context : Filte
     compactRecords := state.compactRecords
     islandStatements := state.islandStatements
     persistentSupportOrigins := state.persistentSupportOrigins
-    kernelVerdict }
+    kernelVerdict
+    constructionTransitions := context.constructionTransitions }
 
 /-- Finish ordering and structural checks from the value-only direct handoff. -/
 private def CompactDirectSealed.finalize (sealed : CompactDirectSealed) :
@@ -3210,6 +3277,7 @@ private def CompactDirectSealed.finalize (sealed : CompactDirectSealed) :
     result := deferredResult
     recordsPushed := sealed.kernelVerdict.recordsPushed
     scheduledRecords := declarations.size
+    constructionTransitions := sealed.constructionTransitions
     fallback? := kernelFallback? }
   return (rep, compactPlan, kernelVerdict)
 
@@ -3431,12 +3499,24 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     some (sourceCensus.familyCertificateRecords x scheduled)
   let rawOrdinals := sourceCensus.rawOrdinals
   let reserved := sourceCensus.reserved
+  let sourceConstructionTouches := sourceOrder.map fun rawOrdinal =>
+    sourceCensus.scheduling[rawOrdinal]!.constructionTouch generation
+  let constructionCutoffEnabled :=
+    retention.checksKernelDirect && !checkRecursors && !collectTrace &&
+      !collectAdapterShadows && futureSupport?.isNone
+  let constructionTransitions := if constructionCutoffEnabled then Id.run do
+      let mut cutoff := 0
+      for ordinal in [:sourceConstructionTouches.size] do
+        if sourceConstructionTouches[ordinal]! then cutoff := ordinal + 1
+      return cutoff
+    else sourceOrder.size
   let constructionReserved := reserved.fold (init := reserved) fun names name =>
     (sourceAliases.buildDerivedNames name).foldl (fun names build => names.insert build) names
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
-    sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
+    sourceSummaries, sourceConstructionTouches, constructionTransitions,
+    sourceGlobalExtras?, sourceFamilyRecords?,
     rawOrdinals, reserved, constructionReserved,
     kernelCheckBase? := if kernelCheckShadow || retention.checksKernelDirect then
       some fallbackEnv else none,
@@ -3449,6 +3529,9 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       futureSupportRemaining := initialFutureSupport
       kernelCheckState? := if kernelCheckShadow || retention.checksKernelDirect then
         some (KernelCheck.State.create fallbackEnv) else none }
+  if retention.checksKernelDirect && constructionTransitions == 0 then
+    state := { state with mainEnv := fallbackEnv }
+    setEnv fallbackEnv
   for rawOrdinal in sourceOrder do
     let declaration ← match plannedSource? with
       | none => match x.decls[rawOrdinal]? with
@@ -3468,8 +3551,19 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     -- return and is never part of the public result.
     let current := state
     state := { mainEnv, persistentSyntax := sourceSyntax }
-    match ← current.feedSource context declaration with
-    | .next next => state := next
+    let feedResult ← if retention.checksKernelDirect &&
+        current.scheduledOrdinal >= constructionTransitions then
+      pure (.next (← current.feedSourceExactTail context declaration))
+    else
+      current.feedSource context declaration
+    match feedResult with
+    | .next next =>
+      if retention.checksKernelDirect &&
+          next.scheduledOrdinal == constructionTransitions then
+        state := { next with mainEnv := fallbackEnv }
+        setEnv fallbackEnv
+      else
+        state := next
     | .unreplayable report sourceSteps =>
       if retention.checksKernelDirect then
         let some base := context.kernelCheckBase?

@@ -506,6 +506,78 @@ def run (root : String) : IO UInt32 := do
         verdict.scheduledRecords == directSuccessPlan.declarations.size) &&
       !directSuccessEnv.constants.contains `Tree &&
       !directSuccessEnv.constants.contains (Naming.modelName `Tree)
+
+  -- Once the last possible construction owner has completed, independent
+  -- source declarations are certified and kernel-checked without rebuilding
+  -- the cumulative Meta prefix.  This is a semantic last-use boundary, not a
+  -- declaration-shape shortcut: compare the complete output oracle as well as
+  -- compact discard and the incremental kernel verdict.
+  let exactTail : Array EDecl := (Array.range 4).map fun ordinal =>
+    .ax ((`ConstructionCutoffTail).mkNum ordinal) [] (.sort (.succ .zero)) false
+  let cutoffInput := { futureBase with decls := futureBase.decls ++ exactTail }
+  let ((cutoffReport, cutoffPlan, cutoffVerdict?), cutoffEnv) ←
+    runFilterDirectObserved cutoffInput futureGeneration
+  let plannedCutoff ←
+    runFilterDirectPlannedObserved s!"{root}/_tmp" cutoffInput futureGeneration
+  let (cutoffDiscardReport, cutoffDiscardPlan) ← runDiscarding cutoffInput futureGeneration
+  let (cutoffOutput, cutoffOracleReport) ← runFilterOrdinary cutoffInput futureGeneration
+  let cutoffBatch ← runNew { cutoffInput with decls := cutoffOutput }
+  state := state.check "compact direct drops construction state before an exact-only tail" <|
+    directAccepted cutoffVerdict? && accepted cutoffBatch &&
+      cutoffReport == cutoffOracleReport && cutoffReport == cutoffDiscardReport &&
+      sameCompactPlan cutoffPlan cutoffDiscardPlan &&
+      cutoffVerdict?.any (fun verdict =>
+        verdict.constructionTransitions < cutoffInput.decls.size) &&
+      plannedCutoff.retainedDeclarations == 0 &&
+      plannedCutoff.result.1 == cutoffReport &&
+      sameCompactPlan plannedCutoff.result.2.1 cutoffPlan &&
+      plannedCutoff.result.2.2.any (fun verdict =>
+        directAccepted (some verdict) &&
+          cutoffVerdict?.any fun baseline =>
+            verdict.constructionTransitions == baseline.constructionTransitions) &&
+      !cutoffEnv.constants.contains `Tree &&
+      exactTail.all fun declaration => declaration.names.all fun name =>
+        !cutoffEnv.constants.contains name
+
+  let simpleTailFixture ← readFixture root "prim_shapes.ndjson"
+  let some (simpleTailRecord, simpleTailConstructor) :=
+      simpleTailFixture.decls.findSome? fun declaration => match declaration with
+        | .induct [type] (constructor :: _) _ =>
+          if type.numNested == 0 then some (declaration, constructor.name) else none
+        | _ => none
+    | IO.eprintln "kernelchecktest: prim_shapes has no simple tail owner"; return 1
+  let unreplayableTail := (mapConstructor (exportOf #[simpleTailRecord])
+    simpleTailConstructor fun constructor => { constructor with type := .sort .zero }).decls[0]!
+  let cutoffMalformed := { cutoffInput with decls := cutoffInput.decls.push unreplayableTail }
+  let ((cutoffMalformedReport, cutoffMalformedPlan, cutoffMalformedVerdict?), _) ←
+    runFilterDirectObserved cutoffMalformed futureGeneration
+  let (_, cutoffMalformedOracleReport) ←
+    runFilterOrdinary cutoffMalformed futureGeneration
+  unless cutoffMalformedOracleReport.unreplayable.isSome &&
+      cutoffMalformedReport.unreplayable.isNone &&
+      cutoffMalformedPlan.retainedGeneratedRecords == 0 &&
+      cutoffMalformedVerdict?.any (fun verdict =>
+        verdict.fallback?.isSome && !accepted verdict.result &&
+          verdict.constructionTransitions < cutoffMalformed.decls.size) do
+    IO.eprintln s!"cutoff malformed direct={repr cutoffMalformedReport}, \
+      oracle={repr cutoffMalformedOracleReport}, verdict={repr cutoffMalformedVerdict?}"
+  state := state.check "exact-only tail rejection requests the ordinary replay fallback" <|
+    cutoffMalformedOracleReport.unreplayable.isSome &&
+      cutoffMalformedReport.unreplayable.isNone &&
+      cutoffMalformedPlan.retainedGeneratedRecords == 0 &&
+      cutoffMalformedVerdict?.any (fun verdict =>
+        verdict.fallback?.isSome && !accepted verdict.result &&
+          verdict.constructionTransitions < cutoffMalformed.decls.size)
+
+  let noCandidate := exportOf #[provider, consumer]
+  let ((noCandidateReport, noCandidatePlan, noCandidateVerdict?), _) ←
+    runFilterDirectObserved noCandidate noGeneration
+  let (noCandidateDiscardReport, noCandidateDiscardPlan) ←
+    runDiscarding noCandidate noGeneration
+  state := state.check "compact direct with no construction candidate releases at transition zero" <|
+    directAccepted noCandidateVerdict? && noCandidateReport == noCandidateDiscardReport &&
+      sameCompactPlan noCandidatePlan noCandidateDiscardPlan &&
+      noCandidateVerdict?.any (·.constructionTransitions == 0)
   state := state.check "planned compact direct releases source AST and preserves input oracle" <|
     plannedDirectSuccess.retainedDeclarations == 0 &&
       reportEquals plannedDirectSuccess.inputReport (Check.checkReport futureBase) &&
@@ -572,7 +644,49 @@ def run (root : String) : IO UInt32 := do
     directAccepted directDecline? && !directDeclineReport.declined.isEmpty &&
       directDeclineReport == discardDeclineReport &&
       sameCompactPlan directDeclinePlan discardDeclinePlan &&
-      directDeclinePlan.retainedGeneratedRecords == 0
+      directDeclinePlan.retainedGeneratedRecords == 0 &&
+      directDecline?.any (fun verdict =>
+        -- The occupied carrier makes `modelOwner` false, but the owner still
+        -- reaches generation and reports `nameTaken`; it must precede cutoff.
+        verdict.constructionTransitions > 0 &&
+          verdict.constructionTransitions < declineInput.decls.size)
+
+  -- Primitive-basis owners always touch construction state: canonical owners
+  -- report an exemption, while malformed metadata records a decline and marks
+  -- the basis invalid for every later candidate.  Both cases retain the same
+  -- report and compact plan as the ordinary construction path, including a
+  -- value-only tail after the final candidate.
+  let basisInputBase ← readFixture root "prim_late_basis.ndjson"
+  let basisInput := { basisInputBase with decls := basisInputBase.decls ++ exactTail }
+  let basisGeneration := legacyGenerationConfig true
+  let ((basisReport, basisPlan, basisVerdict?), _) ←
+    runFilterDirectObserved basisInput basisGeneration
+  let (basisDiscardReport, basisDiscardPlan) ← runDiscarding basisInput basisGeneration
+  let (basisOutput, basisOracleReport) ← runFilterOrdinary basisInput basisGeneration
+  let basisBatch ← runNew { basisInput with decls := basisOutput }
+  state := state.check "basis exemptions precede the direct construction cutoff" <|
+    directAccepted basisVerdict? && accepted basisBatch &&
+      basisReport == basisOracleReport && basisReport == basisDiscardReport &&
+      sameCompactPlan basisPlan basisDiscardPlan && !basisReport.exempt.isEmpty &&
+      basisVerdict?.any (fun verdict =>
+        verdict.constructionTransitions > 0 &&
+          verdict.constructionTransitions < basisInput.decls.size)
+  let malformedBasis := mapConstructor basisInput `Eq.refl fun constructor =>
+    { constructor with numFields := constructor.numFields + 1 }
+  let ((malformedBasisReport, malformedBasisPlan, malformedBasisVerdict?), _) ←
+    runFilterDirectObserved malformedBasis basisGeneration
+  let (malformedBasisDiscardReport, malformedBasisDiscardPlan) ←
+    runDiscarding malformedBasis basisGeneration
+  let (_, malformedBasisOracleReport) ← runFilterOrdinary malformedBasis basisGeneration
+  state := state.check "invalid basis decline blocks later generation before exact-only tail" <|
+    malformedBasisReport == malformedBasisOracleReport &&
+      malformedBasisReport == malformedBasisDiscardReport &&
+      sameCompactPlan malformedBasisPlan malformedBasisDiscardPlan &&
+      malformedBasisReport.declined.any (·.1 == `Eq) &&
+      malformedBasisReport.generated.isEmpty &&
+      malformedBasisVerdict?.any (fun verdict =>
+        verdict.fallback?.isSome && verdict.constructionTransitions > 0 &&
+          verdict.constructionTransitions < malformedBasis.decls.size)
 
   let ((directAliasReport, directAliasPlan, directAlias?), directAliasEnv) ←
     runFilterDirectObserved collidingShapes collisionGeneration true
