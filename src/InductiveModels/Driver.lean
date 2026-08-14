@@ -612,9 +612,10 @@ private def eligibleProjectionFieldsM (type : EIndType) (constructor : ECtor) : 
     return result
 
 private def phase1OneLayerProjectionCertificate (type : EIndType)
-    (constructorName : Name) (is : Iso) : GenM Bool := do
+    (constructor : ECtor) (recursor : ERec) (is : Iso) : GenM Bool := do
   unless oneLayerProjectionFamily #[type] type ||
-      indexedFibreOneLayerProjectionFamily #[type] type do return false
+      indexedFibreOneLayerProjectionFamily #[type] type constructor recursor do return false
+  let constructorName := constructor.name
   let some implementation := is.implementation? | return false
   let some publicModel := is.selfNames[0]? | return false
   let impl := Name.str publicModel "_impl"
@@ -809,7 +810,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     let override? := is.projectionOverrides.find? fun entry =>
       entry.1 == type.name && entry.2.1 == fieldIndex
     let singletonOneLayer ←
-      phase1OneLayerProjectionCertificate type constructorName is
+      phase1OneLayerProjectionCertificate type constructor recursor is
     let mutualOneLayer ←
       mutualOneLayerProjectionCertificate types constructors recursors type constructorName is
     let phase1OneLayer := singletonOneLayer || mutualOneLayer
@@ -2173,6 +2174,12 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
   let sourceRecursor? := sourceBlock?.bind fun (block, _) => match block with
     | .induct _ _ recursors => recursors.find? (·.name == Name.str tname "rec")
     | _ => none
+  let sourceType? := sourceBlock?.bind fun (block, _) => match block with
+    | .induct types _ _ => types.find? (·.name == tname)
+    | _ => none
+  let sourceConstructor? := sourceBlock?.bind fun (block, _) => match block with
+    | .induct _ constructors _ => constructors.find? (·.induct == tname)
+    | _ => none
   let attachStructureModels := fun (is : Iso) => match sourceBlock? with
     | some (block, normalizer) =>
       addSourceStructureModels block projections normalizer reserved is
@@ -2181,7 +2188,11 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
       phase1DirectTypeOneLayerEligible tname np ty ctors sourceRecursor?
     else pure false
   let selectIndexedFibre ← if selectPublicOneLayer && !selectOneLayer then
-      phase1IndexedFibreOneLayerEligible tname np ty ctors sourceRecursor?
+      match sourceType?, sourceConstructor?, sourceRecursor? with
+      | some sourceType, some sourceConstructor, some sourceRecursor =>
+        phase1IndexedFibreOneLayerEligible tname np ty ctors sourceType
+          sourceConstructor sourceRecursor
+      | _, _, _ => pure false
     else pure false
   let exactTaken ← exactPrimNameTaken? tname ctors projections
   let initial ← match exactTaken with

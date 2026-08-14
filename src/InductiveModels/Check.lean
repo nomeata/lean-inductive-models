@@ -643,7 +643,8 @@ private public-facing type, both directions of the equivalence, and both laws
 must be uniquely present and exact.  A partial prefix is malformed rather
 than a request to reinterpret the family as legacy output. -/
 private def phase1OneLayerCertificate (declarations : DeclarationTypes)
-    (ownerType : EIndType) (family : Family) :
+    (ownerType : EIndType) (constructors : Array ECtor) (recursors : Array ERec)
+    (family : Family) :
     Phase1OneLayerCertificate := Id.run do
   let publicCarrierName := Naming.modelName ownerType.name
   let impl := Name.str publicCarrierName "_impl"
@@ -659,8 +660,16 @@ private def phase1OneLayerCertificate (declarations : DeclarationTypes)
     privateRecursorName, privateIotaName, rollName, unrollName,
     unrollRollName, rollUnrollName]
   unless certificateNames.any declarations.contains do return .absent
+  let some sourceConstructor := constructors.find? fun constructor =>
+      constructor.induct == ownerType.name && ownerType.ctors.contains constructor.name
+    | return .malformed privateConstructorName
+  let some sourceRecursor := recursors.find? fun recursor =>
+      recursor.all.contains ownerType.name &&
+        recursor.rules.any (·.ctor == sourceConstructor.name)
+    | return .malformed privateRecursorName
   unless oneLayerProjectionFamily #[ownerType] ownerType ||
-      indexedFibreOneLayerProjectionFamily #[ownerType] ownerType do
+      indexedFibreOneLayerProjectionFamily #[ownerType] ownerType sourceConstructor
+        sourceRecursor do
     return .malformed privateCarrierName
   let some constructorPair := family.correspondence.constructors[0]?
     | return .malformed privateConstructorName
@@ -1521,7 +1530,8 @@ private def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
   let mutualCertificate := phase1MutualOneLayerCertificate index.declarations
     ownerTypes ownerConstructors ownerRecursors index.normalizer family
   let certificates := ownerTypes.map fun ownerType =>
-    let singleton := phase1OneLayerCertificate index.declarations ownerType family
+    let singleton := phase1OneLayerCertificate index.declarations ownerType
+      ownerConstructors ownerRecursors family
     (ownerType.name, if singleton matches .absent then mutualCertificate else singleton)
   for (owner, certificate) in certificates do
     if let .malformed slot := certificate then

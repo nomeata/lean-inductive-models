@@ -90,15 +90,93 @@ def indexedFibreOneLayerTypeShape (numParams numIndices : Nat)
   let .sort level := type | return false
   return level.normalize.isNeverZero
 
-/-- The first indexed fibre adapter: one nonrecursive, one-constructor member
-at one index in a genuine `Type`.  The generated private/public certificate,
-not this shape predicate alone, authorizes literal dependent projection rules. -/
+private structure IndexedFibreShapeBinder where
+  type : Expr
+  value : Expr
+  deriving Inhabited
+
+private partial def openIndexedFibreShapeForalls (tag : Name) (expression : Expr) :
+    Array IndexedFibreShapeBinder × Expr :=
+  let rec loop (expression : Expr) (binders : Array IndexedFibreShapeBinder) :=
+    match expression with
+    | .forallE _ type body _ =>
+      let value := mkFVar (FVarId.mk (tag.mkNum binders.size))
+      loop (body.instantiate1 value) (binders.push { type, value })
+    | body => (binders, body)
+  loop expression #[]
+
+/-- Exact serialized boundary for the first recursive indexed fibre tranche.
+
+The sole recursive occurrence must itself be one constructor field, rather
+than occur below another former.  Its index is fixed with respect to all
+constructor fields, its binder is absent from the constructor result and all
+later field types, and the exported recursor has the one-owner/one-rule layout
+which the existing Arm-C public interface implements. -/
+def recursiveIndexedFibreOneLayerShape (type : EIndType) (constructor : ECtor)
+    (recursor : ERec) : Bool := Id.run do
+  unless type.isRec && constructor.induct == type.name &&
+      constructor.name == type.ctors.head?.getD .anonymous &&
+      constructor.numParams == type.numParams && !constructor.isUnsafe &&
+      recursor.name == Name.str type.name "rec" && recursor.all == [type.name] &&
+      recursor.numParams == type.numParams && recursor.numIndices == type.numIndices &&
+      recursor.numMotives == 1 && recursor.numMinors == 1 && !recursor.k &&
+      !recursor.isUnsafe do return false
+  let [rule] := recursor.rules | return false
+  unless rule.ctor == constructor.name && rule.nfields == constructor.numFields do
+    return false
+  let (binders, result) := openIndexedFibreShapeForalls
+    ((`_projection.indexedFibre).append type.name) constructor.type
+  unless binders.size == constructor.numParams + constructor.numFields do return false
+  let fields := binders.extract constructor.numParams binders.size
+  let .const resultOwner _ := result.getAppFn | return false
+  unless resultOwner == type.name &&
+      result.getAppArgs.size == type.numParams + type.numIndices do return false
+  let mut recursiveIndex? : Option Nat := none
+  for fieldIndex in [:fields.size] do
+    let fieldType := fields[fieldIndex]!.type
+    if fieldType.getUsedConstants.contains type.name then
+      let .const fieldOwner _ := fieldType.getAppFn | return false
+      unless fieldOwner == type.name &&
+          fieldType.getAppArgs.size == type.numParams + type.numIndices do return false
+      unless recursiveIndex?.isNone do return false
+      let recursiveIndices := fieldType.getAppArgs.extract type.numParams
+        (type.numParams + type.numIndices)
+      for index in recursiveIndices do
+        for field in fields do
+          if index.containsFVar field.value.fvarId! then return false
+      recursiveIndex? := some fieldIndex
+  let some recursiveIndex := recursiveIndex? | return false
+  let recursiveId := fields[recursiveIndex]!.value.fvarId!
+  if result.containsFVar recursiveId then return false
+  for later in [recursiveIndex + 1:fields.size] do
+    if fields[later]!.type.containsFVar recursiveId then return false
+  return true
+
+/-- The indexed fibre adapter's complete source-syntax boundary.  The original
+nonrecursive family and the first fixed-index recursive family share this
+predicate in generation and checking; the complete eight-declaration
+certificate, not shape alone, authorizes literal dependent projection rules. -/
 def indexedFibreOneLayerProjectionFamily (types : Array EIndType)
-    (type : EIndType) : Bool :=
-  types.size == 1 && type.all == [type.name] && type.ctors.length == 1 &&
-    type.numIndices == 1 && type.numNested == 0 && !type.isRec &&
-    !type.isUnsafe && indexedFibreOneLayerTypeShape
-      type.numParams type.numIndices type.type
+    (type : EIndType) (constructor : ECtor) (recursor : ERec) : Bool := Id.run do
+  unless types.size == 1 && type.all == [type.name] &&
+      type.ctors == [constructor.name] && type.numIndices == 1 &&
+      type.numNested == 0 && !type.isUnsafe && constructor.induct == type.name &&
+      constructor.numParams == type.numParams && !constructor.isUnsafe &&
+      recursor.all == [type.name] && recursor.name == Name.str type.name "rec" &&
+      recursor.numParams == type.numParams && recursor.numIndices == type.numIndices &&
+      recursor.numMotives == 1 && recursor.numMinors == 1 && !recursor.k &&
+      !recursor.isUnsafe && indexedFibreOneLayerTypeShape
+        type.numParams type.numIndices type.type do return false
+  let [rule] := recursor.rules | return false
+  unless rule.ctor == constructor.name && rule.nfields == constructor.numFields do
+    return false
+  let (binders, result) := openIndexedFibreShapeForalls
+    ((`_projection.indexedFibreCommon).append type.name) constructor.type
+  unless binders.size == constructor.numParams + constructor.numFields do return false
+  let .const resultOwner _ := result.getAppFn | return false
+  unless resultOwner == type.name &&
+      result.getAppArgs.size == type.numParams + type.numIndices do return false
+  return !type.isRec || recursiveIndexedFibreOneLayerShape type constructor recursor
 
 /-- One opened constructor field, together with the corresponding modeled
 projection and (for an earlier field) its constructor iota proof.

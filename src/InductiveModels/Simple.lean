@@ -3451,18 +3451,23 @@ def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
     type.ctors.length == 1 && type.numIndices == 0 && type.numNested == 0 && type.isRec &&
     !type.isUnsafe
 
-/-- Capability boundary for the first indexed fibre adapter.  Recursive
-indexed families deliberately remain on the legacy implementation: in
-particular no result index is ever reconstructed after moving a recursive
-field. -/
+/-- Installed-capability half of the indexed fibre adapter boundary.  Exact
+source eligibility is replayable through
+[`InductiveModels.indexedFibreOneLayerProjectionFamily`]; this check additionally
+pins the installed declaration to the bare Arm-C erasure route. -/
 def phase1IndexedFibreOneLayerEligible (tname : Name) (np : Nat)
     (memberTy : Expr) (exportCtors : Array (Name × Expr))
-    (sourceRecursor? : Option ERec) : MetaM Bool := do
+    (sourceType : EIndType) (sourceConstructor : ECtor)
+    (sourceRecursor : ERec) : MetaM Bool := do
   let some (.inductInfo type) := (← getEnv).constants.find? tname | return false
+  let erasureBare ← match ← (erasureBareFailure? tname np type.numIndices exportCtors).run with
+    | .ok reason => pure reason.isNone
+    | .error _ => pure false
   return indexedFibreOneLayerTypeShape np type.numIndices memberTy &&
-    sourceRecursor?.isSome && exportCtors.size == 1 &&
+    indexedFibreOneLayerProjectionFamily #[sourceType] sourceType sourceConstructor
+      sourceRecursor && erasureBare && exportCtors.size == 1 &&
     type.all == [tname] && type.ctors.length == 1 && type.numIndices == 1 &&
-    type.numNested == 0 && !type.isRec && !type.isUnsafe
+    type.numNested == 0 && type.isRec == sourceType.isRec && !type.isUnsafe
 
 set_option maxRecDepth 2048 in
 /-- The model of one simple inductive from the primitives, or the shape that
