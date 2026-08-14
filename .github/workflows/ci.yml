@@ -110,7 +110,7 @@ jobs:
               test/scripts/check-mathlib-result.sh
               build_serially "${compile_only_targets[@]}"
               build_serially \
-                clitest supervisortest generationflagstest checktest ordertest incrementalordertest namingtest \
+                clitest supervisortest generationflagstest checktest kernelchecktest ordertest incrementalordertest namingtest \
                 drivernamingtest privatealiastest sourcereplayaliastest simplenamingtest rulektest \
                 defaultctoriotatest sourcestructuresyntaxtest composedrecursorsyntaxtest \
                 projectiontest indexedfibrediagnostictest mutualonelayerdiagnostictest \
@@ -122,6 +122,7 @@ jobs:
               lake exe supervisortest --run-tests "$GITHUB_WORKSPACE/.lake/build/bin/supervisortest"
               lake exe generationflagstest
               lake exe checktest "$GITHUB_WORKSPACE"
+              lake exe kernelchecktest "$GITHUB_WORKSPACE"
               lake exe ordertest "$GITHUB_WORKSPACE"
               lake exe incrementalordertest "$GITHUB_WORKSPACE"
               lake exe namingtest
@@ -146,7 +147,7 @@ jobs:
               lake exe exportsyntaxnormalizationtest
               lake exe basisvalidationtest
               lake exe stagedwritertest "$GITHUB_WORKSPACE"
-              count=28
+              count=29
               ;;
             mono)
               build_serially lean-inductive-models monotest mainclitest

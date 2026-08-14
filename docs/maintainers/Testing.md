@@ -36,7 +36,7 @@ The executable correctness targets are:
 
 ```bash
 correctness_targets=(
-  test monotest clitest supervisortest generationflagstest checktest ordertest
+  test monotest clitest supervisortest generationflagstest checktest kernelchecktest ordertest
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
   composedrecursorsyntaxtest mainclitest projectiontest indexedfibrediagnostictest
@@ -64,6 +64,7 @@ lake exe clitest
 lake exe supervisortest --run-tests "$PWD/.lake/build/bin/supervisortest"
 lake exe generationflagstest
 lake exe checktest "$PWD"
+lake exe kernelchecktest "$PWD"
 lake exe ordertest "$PWD"
 lake exe incrementalordertest "$PWD"
 lake exe namingtest
