@@ -168,14 +168,24 @@ private def reportPlannedRouteSelected : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
     IO.eprintln "input route: planned-census"
 
-private def writeStreamEvent (writer : IO.Ref InductiveModels.DeclarationStreamWriter)
+private abbrev StreamWriterRef := IO.Ref (Option InductiveModels.DeclarationStreamWriter)
+
+private def readStreamWriter (writer : StreamWriterRef) : IO InductiveModels.DeclarationStreamWriter := do
+  let some current ← writer.get
+    | throw <| IO.userError "declaration stream writer is already in use"
+  return current
+
+private def writeStreamEvent (writer : StreamWriterRef)
     (stream : IO.FS.Stream) : InductiveModels.StreamOutputEmitter := fun event => do
   let declarations := match event with
     | .generatedIsland records => records
     | .source record => #[record]
   for declaration in declarations do
-    let current ← writer.get
-    writer.set (← current.writeDeclaration stream declaration)
+    -- Atomically remove the writer from the ref before extending its persistent
+    -- maps. A plain `get` would leave an RC sibling in the ref and force COW.
+    let some current ← writer.modifyGet fun current => (current, none)
+      | throw <| IO.userError "declaration stream writer is already in use"
+    writer.set (some (← current.writeDeclaration stream declaration))
 
 /-- Apply every post-generation verdict before deciding whether a named
 streaming sibling may become visible. -/
@@ -214,7 +224,8 @@ private def runStreamingParsedGeneration (config : InductiveModels.Cli.Config)
   let input := config.input.getD ""
   try
     InductiveModels.Output.transaction config.outputTarget fun stream => do
-      let writer ← IO.mkRef (← InductiveModels.DeclarationStreamWriter.start parsed.metaLine stream)
+      let writer ← IO.mkRef (some (←
+        InductiveModels.DeclarationStreamWriter.start parsed.metaLine stream))
       let generated : Except String (InductiveModels.Report × InductiveModels.CompactPlan) ← try
         let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
           (InductiveModels.runFilterStreaming parsed false config
@@ -226,7 +237,7 @@ private def runStreamingParsedGeneration (config : InductiveModels.Cli.Config)
         | .error message =>
           IO.eprintln s!"{input}: internal error: {message}"
           return InductiveModels.Output.TransactionResult.rollback exitToolError
-      let writerState ← writer.get
+      let writerState ← readStreamWriter writer
       writerState.finish stream
       unless report.unreplayable.isSome || writerState.declarationsWritten ==
           plan.streamStats.sourceRecords + plan.streamStats.generatedRecords do
@@ -248,8 +259,8 @@ private def runStreamingPlannedGeneration (config : InductiveModels.Cli.Config)
   let input := config.input.getD ""
   try
     InductiveModels.Output.transaction config.outputTarget fun stream => do
-      let writer ← IO.mkRef (← InductiveModels.DeclarationStreamWriter.start
-        planned.envelope.template.metaLine stream)
+      let writer ← IO.mkRef (some (← InductiveModels.DeclarationStreamWriter.start
+        planned.envelope.template.metaLine stream))
       let generated : Except String (InductiveModels.Report × InductiveModels.CompactPlan) ← try
         let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
           (InductiveModels.runFilterStreamingPlannedCensus planned reader false config
@@ -260,12 +271,12 @@ private def runStreamingPlannedGeneration (config : InductiveModels.Cli.Config)
         | .ok result => pure result
         | .error message =>
           if config.outputTarget == "-" then
-            (← writer.get).finish stream
+            (← readStreamWriter writer).finish stream
             IO.eprintln s!"{input}: internal error: {message}"
             return InductiveModels.Output.TransactionResult.rollback (.done exitToolError)
           else
             return InductiveModels.Output.TransactionResult.rollback (.fallback message)
-      let writerState ← writer.get
+      let writerState ← readStreamWriter writer
       writerState.finish stream
       unless report.unreplayable.isSome || writerState.declarationsWritten ==
           plan.streamStats.sourceRecords + plan.streamStats.generatedRecords do
