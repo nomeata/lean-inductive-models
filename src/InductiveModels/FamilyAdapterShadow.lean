@@ -309,19 +309,23 @@ private def recursorMajorMatches (recursor : RecursorVal) (recursorType : Expr)
   return ← isDefEq domain expected
 
 private def recursorMajorFamily? (recursor : RecursorVal) (recursorType : Expr)
-    (parameterArity indexArity : Nat) : MetaM (Option Expr) := do
+    (parameterArity indexArity : Nat) : MetaM (Option (Expr × Nat)) := do
   unless recursor.numParams == parameterArity && recursor.numIndices == indexArity do
     return none
   let majorPosition :=
     recursor.numParams + recursor.numMotives + recursor.numMinors + recursor.numIndices
-  forallBoundedTelescope recursorType (some (majorPosition + 1)) fun binders _ => do
+  forallBoundedTelescope recursorType (some (majorPosition + 1)) fun binders result => do
     let some major := binders[majorPosition]? | return none
     let parameters := binders.extract 0 parameterArity
     let indexStart := recursor.numParams + recursor.numMotives + recursor.numMinors
     let indices := binders.extract indexStart (indexStart + indexArity)
     let family ← mkLambdaFVars (parameters ++ indices) (← inferType major)
     if family.hasFVar then return none
-    return some family
+    let motives := binders.extract recursor.numParams
+      (recursor.numParams + recursor.numMotives)
+    let some resultMotiveIndex := motives.findIdx? (· == result.getAppFn)
+      | return none
+    return some (family, resultMotiveIndex)
 
 private def containerMetadataInstalled (environment : Environment)
     (parameters : Array Expr) (sourceType implementationType : Expr)
@@ -650,11 +654,17 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       container.parameterArity container.indexArity
     let implementationMajor? ← recursorMajorFamily? implementationInfo
       container.implementationRecursorType container.parameterArity container.indexArity
-    let some publicMajorFamily := publicMajor? | do
+    let some (publicMajorFamily, publicResultMotive) := publicMajor? | do
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
       continue
-    let some implementationMajorFamily := implementationMajor? | do
+    let some (implementationMajorFamily, implementationResultMotive) := implementationMajor? | do
+      for current in grouped do
+        reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
+      continue
+    unless publicInfo.numMotives == implementationInfo.numMotives &&
+        publicInfo.numMinors == implementationInfo.numMinors &&
+        publicResultMotive == implementationResultMotive do
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
       continue
@@ -663,6 +673,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       { recursor := key, publicConstructor, implementationConstructor }
     containerRecursorPlans := containerRecursorPlans.push
       { key, parameterArity := container.parameterArity, indexArity := container.indexArity,
+        motiveArity := publicInfo.numMotives, minorArity := publicInfo.numMinors,
+        resultMotiveIndex := publicResultMotive,
         publicType := container.sourceRecursorType,
         implementationType := container.implementationRecursorType,
         publicMajorFamily, implementationMajorFamily, rules,

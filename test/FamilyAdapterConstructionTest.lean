@@ -319,7 +319,10 @@ def iotaSchemasComplete (plan : FamilyAdapterPlan)
                             step.implementationHypothesisPosition &&
                           step.recursiveCall?.all fun role =>
                             !role.publicRecursor.isAnonymous &&
-                              !role.implementationRecursor.isAnonymous
+                              !role.implementationRecursor.isAnonymous &&
+                              role.containerOccurrences.all step.occurrences.contains &&
+                              role.container?.all fun key =>
+                                plan.containerRecursors.any (·.key == key)
 
 def ruleCertificatesComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (environment : Environment) : Bool :=
@@ -433,8 +436,22 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
             adapter.rules == member.sourceRules &&
             (environment.constants.find? adapter.adapter).any (·.type == adapter.exactType)
     unless valid do return .recursorInvalid
+    let containerBuilt ← (FamilyAdapter.buildContainerRecursorPrototypes plan
+      certificate.members certificate.telescopes constructors
+      (Name.str root "containerRecursors")).run
+    let containerRecursors ← match containerBuilt with
+      | .error decline => return .recursorDecline decline.label
+      | .ok (.error issue) => return .recursorIssue issue
+      | .ok (.ok (_, built)) => pure built
+    unless containerRecursors.size == plan.containerRecursors.size &&
+        plan.containerRecursors.all fun container =>
+          (containerRecursors.find? (·.plan.key == container.key)).any fun built =>
+            built.certificate.rules == container.rules &&
+              built.certificate.occurrences == container.occurrences &&
+              environment.constants.contains built.certificate.callAgreement do
+      return .recursorInvalid
     match ← (FamilyAdapter.buildPublicIotaPrototypes plan certificate constructors recursors
-        (Name.str root "iotas")).run with
+        containerRecursors (Name.str root "iotas")).run with
     | .error decline => return .iotaDecline decline.label
     | .ok (.error issue) => return .iotaIssue issue
     | .ok (.ok (iotaDeclarations, iotas)) =>

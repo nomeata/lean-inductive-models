@@ -301,6 +301,8 @@ structure PublicIotaRecursiveCallRole where
   /-- Direct family member when the exact name pair names one.  Specialised
   mimic calls deliberately remain keyed by their independent name pair. -/
   member? : Option MemberKey
+  container? : Option ContainerRecursorKey := none
+  containerOccurrences : Array OccurrenceKey := #[]
   deriving Inhabited, BEq, Repr
 
 /-- One distinct installed IH binder in the deterministic public-iota proof.
@@ -417,6 +419,9 @@ structure ContainerRecursorPlan where
   key : ContainerRecursorKey
   parameterArity : Nat
   indexArity : Nat
+  motiveArity : Nat
+  minorArity : Nat
+  resultMotiveIndex : Nat
   publicType : Expr
   implementationType : Expr
   publicMajorFamily : Expr

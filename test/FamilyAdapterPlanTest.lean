@@ -155,6 +155,9 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
     { key
       parameterArity := container.parameterArity
       indexArity := container.indexArity
+      motiveArity := 0
+      minorArity := 0
+      resultMotiveIndex := 0
       publicType := container.sourceRecursorType
       implementationType := container.implementationRecursorType
       publicMajorFamily := .sort .zero
