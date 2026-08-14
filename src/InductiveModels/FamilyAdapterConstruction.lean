@@ -1311,6 +1311,7 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
     (recursors : Array PublicRecursorCertificate) (rule : RuleKey)
     (role? : Option PublicIotaRecursiveCallRole)
+    (publicBinderIndex implementationBinderIndex : Nat)
     (publicRecursorPrefix : Array Expr)
     (expectedPublic expectedPrivate : Expr) : ConstructionM Expr := do
   if ← liftGen <| isDefEq expectedPrivate expectedPublic then
@@ -1328,7 +1329,7 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
       failConstruction (.missingPublicIotaInput rule)
     withLocalDecl publicName publicInfo publicDomain fun argument => do
       let pointwise ← recursorHypothesisAgreement plan memberCertificates recursors rule
-        role? publicRecursorPrefix
+        role? publicBinderIndex implementationBinderIndex publicRecursorPrefix
         (mkApp expectedPublic argument) (mkApp expectedPrivate argument)
       let functionProof ← liftGen <| mkLambdaFVars #[argument] pointwise
       liftGen <| mkAppM ``funext #[functionProof]
@@ -1337,20 +1338,25 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
   | _, _ =>
     let some role := role? | failConstruction (.missingPublicIotaInput rule)
     let some memberKey := role.member?
-      | failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
+      | failConstruction (.missingPublicIotaRecursiveCall rule
+          publicBinderIndex implementationBinderIndex)
     let some member := plan.members.find? fun member =>
         member.key == memberKey && member.publicRecursor == role.publicRecursor &&
           member.implementationRecursor == role.implementationRecursor
-      | failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
+      | failConstruction (.missingPublicIotaRecursiveCall rule
+          publicBinderIndex implementationBinderIndex)
     let some recursor := recursors.find? fun recursor =>
         recursor.member == member.key &&
           recursor.implementationRecursor == role.implementationRecursor
-      | failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
+      | failConstruction (.missingPublicIotaRecursiveCall rule
+          publicBinderIndex implementationBinderIndex)
     unless expectedPublic.getAppFn.constName? == some recursor.adapter do
-      failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
+      failConstruction (.missingPublicIotaRecursiveCall rule
+        publicBinderIndex implementationBinderIndex)
     let reducedPrivate ← liftGen <| whnf expectedPrivate
     unless reducedPrivate.getAppFn.constName? == some role.implementationRecursor do
-      failConstruction (.missingPublicIotaRecursiveCall rule 0 0)
+      failConstruction (.missingPublicIotaRecursiveCall rule
+        publicBinderIndex implementationBinderIndex)
     recursorAgreementAt plan memberCertificates member recursor publicRecursorPrefix
       expectedPublic expectedPrivate
 
@@ -2562,6 +2568,83 @@ private def exactMinorArguments (rule : RuleKey) (binders fields hypotheses fiel
     arguments := arguments.push value
   return arguments
 
+/-- Read the exact installed RHS application of one literal private minor.
+The probe is placed at its keyed prefix position; no constructor spelling or
+minor count is used to recover the arguments. -/
+private def installedMinorArguments (rule : RulePlan) (owner : MemberPlan)
+    (compatibility : RuleCompatibilityCertificate) (privatePrefix : Array Expr)
+    (privateMinor privateMinorType : Expr) (privateFields : Array Expr) :
+    ConstructionM (Array Expr) := do
+  withLocalDeclD `minorProbe privateMinorType fun probe => do
+    let probeIndex := owner.parameterArity + owner.recursorMotiveArity +
+      compatibility.minorIndex
+    let probePrefix := privatePrefix.set! probeIndex probe
+    let probed ← liftGen <| whnf (mkAppN rule.implementationRhs
+      (probePrefix ++ privateFields))
+    unless probed.getAppFn == probe do
+      failConstruction (.missingPublicIotaInput rule.key)
+    return probed.getAppArgs.map (·.replaceFVars #[probe] #[privateMinor])
+
+/-- Assemble the two complete dependent IH packages at one private constructor
+package and prove them equal.  Component recursor equalities are consumed only
+while constructing the single packed equality; later proof steps never project
+that equality back into dependent fields. -/
+private def packedIotaHypothesisAgreement (plan : FamilyAdapterPlan)
+    (base : FamilyAdapterCertificate) (recursors : Array PublicRecursorCertificate)
+    (rule : RulePlan) (owner : MemberPlan) (constructor : ConstructorPlan)
+    (schema : PublicIotaProofSchema) (publicPrefix publicFields decodedFields : Array Expr)
+    (theoremRightArguments privateMotives privatePrefix : Array Expr)
+    (privateMinor privateMinorType : Expr) (privateFields privateArguments : Array Expr) :
+    ConstructionM (Expr × Expr × Expr) := do
+  forallBoundedTelescope privateMinorType (some (numForalls privateMinorType))
+      fun privateBinders privateResult => do
+    let some privateMinorFields := minorFieldValues? constructor privateBinders privateResult
+        (some constructor.implementationName)
+      | failConstruction (.missingPublicIotaInput rule.key)
+    let privateHypotheses ← liftGen <|
+      motiveHypothesisValues privateMotives privateMinorFields privateBinders
+    unless privateHypotheses.size == schema.hypotheses.size &&
+        privateArguments.size == privateBinders.size &&
+        (Array.range privateHypotheses.size).all fun position =>
+          schema.hypotheses.any fun step =>
+            step.implementationHypothesisPosition == position &&
+              privateBinders[step.binderIndex]? == privateHypotheses[position]? do
+      failConstruction (.missingPublicIotaInput rule.key)
+    withReboundTelescope privateMinorFields privateFields privateHypotheses 0 #[]
+        fun reboundHypotheses => do
+      let eqi ← match EqInfo.check (← getEnv) with
+        | .ok information => pure information
+        | .error _ => failConstruction (.missingPublicIotaInput rule.key)
+      let mut actualValues := #[]
+      let mut expectedValues := #[]
+      let mut proofs := #[]
+      for position in [:reboundHypotheses.size] do
+        let some step := schema.hypotheses.find?
+            (·.implementationHypothesisPosition == position)
+          | failConstruction (.missingPublicIotaInput rule.key)
+        let some actual := privateArguments[step.binderIndex]?
+          | failConstruction (.missingPublicIotaInput rule.key)
+        let some rawPublic := theoremRightArguments[step.publicBinderIndex]?
+          | failConstruction (.missingPublicIotaInput rule.key)
+        let expected := rawPublic.replaceFVars publicFields decodedFields
+        let proof ← recursorHypothesisAgreement plan base.members recursors rule.key
+          step.recursiveCall? step.publicBinderIndex step.binderIndex publicPrefix expected actual
+        let type ← liftGen <| inferType actual
+        let expectedEquality := eqi.mk' (← liftGen <| ilevel type) type actual expected
+        unless ← liftGen <| isDefEq (← inferType proof) expectedEquality do
+          failConstruction (.missingPublicIotaInput rule.key)
+        actualValues := actualValues.push actual
+        expectedValues := expectedValues.push expected
+        proofs := proofs.push proof
+      let packageType ← liftGen <| packedTelescopeType reboundHypotheses
+      let actualPackage ← liftGen <|
+        packTelescopeValue reboundHypotheses actualValues
+      let expectedPackage ← liftGen <|
+        packTelescopeValue reboundHypotheses expectedValues
+      let proof ← liftGen <| packageCongruence eqi reboundHypotheses packageType
+        actualValues expectedValues proofs
+      return (actualPackage, expectedPackage, proof)
+
 private def publicIotaDeclaration (plan : FamilyAdapterPlan)
     (base : FamilyAdapterCertificate)
     (constructors : Array PublicConstructorCertificate)
@@ -2697,20 +2780,41 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
           let publicIH ← withLocalDeclD `package constructorBoundary.publicFieldsType
               fun package => do
             let fields ← liftGen <| unpackTelescopeValue publicMinorFields package
-            let values := schema.hypotheses.map fun step =>
+            let values := (Array.range publicMinorHypotheses.size).map fun position =>
+              let step := (schema.hypotheses.find?
+                (·.publicHypothesisPosition == position)).get!
               theoremRightArguments[step.publicBinderIndex]!.replaceFVars publicFields fields
             withReboundTelescope publicMinorFields fields publicMinorHypotheses 0 #[] fun hypotheses => do
               let packed ← liftGen <| packTelescopeValue hypotheses values
               liftGen <| mkLambdaFVars #[package] packed
+          let privateMinor := privateMinors[compatibility.minorIndex]!
+          let privateMinorType ← liftGen <| inferType privateMinor
+          let packageData (package : Expr) : ConstructionM (Expr × Expr × Expr) := do
+            let privateFields ← liftGen <|
+              unpackTelescopeValue implementationFields package
+            let privateArguments ← installedMinorArguments rule owner compatibility
+              privatePrefix privateMinor privateMinorType privateFields
+            let decodedPackage := mkApp constructorBoundary.decode package
+            let decodedFields ← liftGen <|
+              unpackTelescopeValue publicMinorFields decodedPackage
+            packedIotaHypothesisAgreement plan base recursors rule owner constructor schema
+              publicPrefix publicFields decodedFields theoremRightArguments privateMotives
+              privatePrefix privateMinor privateMinorType privateFields privateArguments
           let privateIH ← withLocalDeclD `package constructorBoundary.implementationFieldsType
-              fun package =>
-            liftGen <| mkLambdaFVars #[package]
-              (mkApp publicIH (mkApp constructorBoundary.decode package))
+              fun package => do
+            let (actualPackage, _, _) ← packageData package
+            liftGen <| mkLambdaFVars #[package] actualPackage
           let ihAgreement ← withLocalDeclD `package constructorBoundary.implementationFieldsType
               fun package => do
-            let value := mkApp publicIH (mkApp constructorBoundary.decode package)
-            let type ← liftGen <| inferType value
-            liftGen <| mkLambdaFVars #[package] (eqi.refl' (← ilevel type) type value)
+            let (actualPackage, expectedPackage, packageProof) ← packageData package
+            let expected := mkApp publicIH (mkApp constructorBoundary.decode package)
+            let actual := mkApp privateIH package
+            unless ← liftGen <| isDefEq expectedPackage expected do
+              failConstruction (.missingPublicIotaInput rule.key)
+            unless ← liftGen <| isDefEq actualPackage actual do
+              failConstruction (.missingPublicIotaInput rule.key)
+            let proof ← liftGen <| mkAppM ``Eq.symm #[packageProof]
+            liftGen <| mkLambdaFVars #[package] proof
           let minor ← withLocalDeclD `package constructorBoundary.publicFieldsType fun package => do
             let fields ← liftGen <| unpackTelescopeValue publicMinorFields package
             let hypothesisType := mkApp hypothesisFamily package
@@ -2744,17 +2848,8 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
               (.const owner.implementationRecursor
                 (privateRecursorInfo.levelParams.map Level.param))
               (privatePrefix ++ privateIndices ++ #[privateMajor])
-            let privateMinor := privateMinors[compatibility.minorIndex]!
-            let privateMinorType ← liftGen <| inferType privateMinor
-            let privateArguments ← withLocalDeclD `minorProbe privateMinorType fun probe => do
-              let probeIndex := owner.parameterArity + owner.recursorMotiveArity +
-                compatibility.minorIndex
-              let probePrefix := privatePrefix.set! probeIndex probe
-              let probed ← liftGen <|
-                whnf (mkAppN rule.implementationRhs (probePrefix ++ privateFields))
-              unless probed.getAppFn == probe do
-                failConstruction (.missingPublicIotaInput rule.key)
-              return probed.getAppArgs.map (·.replaceFVars #[probe] #[privateMinor])
+            let privateArguments ← installedMinorArguments rule owner compatibility
+              privatePrefix privateMinor privateMinorType privateFields
             let actualImplementationRight ← liftGen <|
               whnf (mkAppN rule.implementationRhs (privatePrefix ++ privateFields))
             let implementationRight := mkAppN privateMinor privateArguments
@@ -2768,70 +2863,19 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
             let decodedPackage := mkApp constructorBoundary.decode package
             let decodedFields ← liftGen <|
               unpackTelescopeValue publicMinorFields decodedPackage
-            let rawPublicValues := schema.hypotheses.map fun step =>
-              theoremRightArguments[step.publicBinderIndex]!.replaceFVars publicFields decodedFields
             let replacementValues ← withReboundTelescope publicMinorFields decodedFields
                 publicMinorHypotheses 0 #[] fun hypotheses =>
               liftGen <| unpackTelescopeValue hypotheses (mkApp privateIH package)
             let mut extra := #[]
-            for stepIndex in [:schema.hypotheses.size] do
-              let step := schema.hypotheses[stepIndex]!
+            for step in schema.hypotheses do
               let expectedPrivate := privateArguments[step.binderIndex]!
-              let expectedPublic := replacementValues[stepIndex]!
-              let expectedType := eqi.mk' (← liftGen <| ilevel (← inferType expectedPrivate))
-                (← liftGen <| inferType expectedPrivate) expectedPrivate expectedPublic
-              let direct ← liftGen <| (recursorHypothesisAgreement plan base.members recursors
-                rule.key step.recursiveCall? publicPrefix rawPublicValues[stepIndex]!
-                  expectedPrivate).run
-              let proof ← match direct with
-                | .ok candidate => do
-                  if ← liftGen <| isDefEq (← inferType candidate) expectedType then
-                    pure candidate
-                  else
-                    failConstruction (.missingPublicIotaInput rule.key)
-                | .error _ => do
-                  let hypothesisTerms := fun (currentPackage : Expr) => do
-                    let currentPrivateFields ← liftGen <|
-                      unpackTelescopeValue implementationFields currentPackage
-                    let currentPrivate := expectedPrivate.replaceFVars privateFields
-                      currentPrivateFields
-                    let currentDecoded := mkApp constructorBoundary.decode currentPackage
-                    let currentPublicFields ← liftGen <|
-                      unpackTelescopeValue publicMinorFields currentDecoded
-                    let currentReplacements ← withReboundTelescope publicMinorFields
-                        currentPublicFields publicMinorHypotheses 0 #[] fun hypotheses =>
-                      liftGen <| unpackTelescopeValue hypotheses (mkApp privateIH currentPackage)
-                    return (currentPrivate, currentReplacements[stepIndex]!)
-                  let encodedPackage := mkApp constructorBoundary.encode decodedPackage
-                  let (basePrivate, basePublic) ← hypothesisTerms encodedPackage
-                  let rawPublic := rawPublicValues[stepIndex]!
-                  let some forwardRecursor := recursors.find? fun recursor =>
-                      rawPublic.getAppFn.constName? == some recursor.adapter
-                    | failConstruction (.missingPublicIotaInput rule.key)
-                  let some forwardMember := plan.members.find? (·.key == forwardRecursor.member)
-                    | failConstruction (.missingPublicIotaInput rule.key)
-                  let baseProof ← recursorForwardAgreementAt plan base.members forwardMember
-                    forwardRecursor rawPublic basePrivate basePublic
-                  let packageProof := mkApp constructorBoundary.encodeDecode package
-                  let packageLevel ← liftGen <|
-                    ilevel constructorBoundary.implementationFieldsType
-                  let motive ← withLocalDeclD `current
-                      constructorBoundary.implementationFieldsType fun current => do
-                    withLocalDeclD `path
-                        (eqi.mk' packageLevel constructorBoundary.implementationFieldsType
-                          encodedPackage current) fun path => do
-                      let (left, right) ← hypothesisTerms current
-                      let resultType ← liftGen <| inferType left
-                      unless ← liftGen <| isDefEq (← inferType right) resultType do
-                        failConstruction (.missingPublicIotaInput rule.key)
-                      liftGen <| mkLambdaFVars #[current, path]
-                        (eqi.mk' (← ilevel resultType) resultType left right)
-                  let candidate := eqi.recAt .zero packageLevel
-                    constructorBoundary.implementationFieldsType encodedPackage motive baseProof
-                    package packageProof
-                  unless ← liftGen <| isDefEq (← inferType candidate) expectedType do
-                    failConstruction (.missingPublicIotaInput rule.key)
-                  pure candidate
+              let some expectedPublic := replacementValues[step.publicHypothesisPosition]?
+                | failConstruction (.missingPublicIotaInput rule.key)
+              unless ← liftGen <| isDefEq expectedPrivate expectedPublic do
+                failConstruction (.missingPublicIotaInput rule.key)
+              let expectedType ← liftGen <| inferType expectedPrivate
+              let proof := eqi.refl' (← liftGen <| ilevel expectedType)
+                expectedType expectedPrivate
               extra := extra.push expectedPublic |>.push proof
             let compatibilityProof := mkAppN
               (.const schema.minorCompatibility
