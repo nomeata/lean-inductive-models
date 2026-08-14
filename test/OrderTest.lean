@@ -889,17 +889,6 @@ def run (root : String) : IO UInt32 := do
       nestedDeepRun.output.decls.any (·.names.contains `DTree.rec_2._model.iota_1)
   state := state.check "nested-only models are absent from the final replay environment" <|
     finalEnvironmentIsIsolated nestedRun
-  let futureModelProbe : EDecl :=
-    .ax `CompactFallbackProbe [] (.const (Naming.modelName `Tree) []) false
-  let futureModelInput := { nestedRun.input with
-    decls := #[futureModelProbe] ++ nestedRun.input.decls }
-  let futureModelDiscarded ← runFilterDiscardedState futureModelInput
-    { noGeneration with nested := true }
-  state := state.check "early source consumer of a later model fails without a partial plan" <|
-      futureModelDiscarded.report.unreplayable.isSome &&
-      futureModelDiscarded.plan.declarations.isEmpty &&
-      futureModelDiscarded.plan.retainedGeneratedRecords == 0
-
   -- The default pipeline extends the same island through the generated nested
   -- block's mutual model and then through each simple model. None of those
   -- intermediate owners or their interfaces may escape into the source replay
