@@ -367,6 +367,49 @@ def main : IO UInt32 := do
     (quotientSupportNames == #[`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound])
   state := state.check "late-Quot support is disjoint from the graph source"
     (quotientSupportNames.all fun name => !graphNames.contains name)
+
+  -- Nested-only scheduling hoists the exact structural basis but deliberately
+  -- does not hoist Quot/Quot.sound or Nat.  HTree's binder needs funext; the
+  -- late source quotient therefore blocks its historical splice and must not
+  -- become available merely because Eq selects the shadow comparison path.
+  let infinitaryText ← IO.FS.readFile "test/fixtures/inductive-models/infinitary.ndjson"
+  let .ok infinitarySource := InductiveModels.parse infinitaryText (analyse := false)
+    | throw <| IO.userError "cannot parse the infinitary fixture"
+  let nestedLateSupport := postponeRecords infinitarySource fun declaration =>
+    declaration.names.contains `Eq
+  let nestedLateSupport := { nestedLateSupport with
+    decls := nestedLateSupport.decls ++ quotientSupport }
+  let nestedOnly : InductiveModels.Cli.Config := { noGeneration with nested := true }
+  let nestedLateScheduled ← runExport "nested binder with late Eq and Quot scheduler"
+    nestedLateSupport false nestedOnly
+  let nestedLateShadow ← runExportShadow "nested binder with late Eq and Quot shadow"
+    nestedLateSupport false nestedOnly
+  state := state.check "nested-only shadow never grants late quotient support" <|
+    nestedLateShadow.selected && nestedLateShadow.output == nestedLateScheduled.output &&
+      nestedLateShadow.report == nestedLateScheduled.report &&
+      nestedLateScheduled.declined `HTree && !nestedLateScheduled.generated `HTree
+
+  let natText ← IO.FS.readFile
+    "test/fixtures/inductive-models/filtered/nat_char_equations.ndjson"
+  let .ok natSource := InductiveModels.parse natText (analyse := false)
+    | throw <| IO.userError "cannot parse the filtered Nat fixture"
+  let some natRecord := natSource.decls.find? (·.names.contains `Nat)
+    | throw <| IO.userError "filtered Nat fixture has no Nat owner"
+  let malformedNat := match natRecord with
+    | .induct types constructors (recursor :: recursors) =>
+      EDecl.induct types constructors ({ recursor with isUnsafe := !recursor.isUnsafe } :: recursors)
+    | _ => natRecord
+  let nestedWithMalformedNat := { nestedLateSupport with
+    decls := nestedLateSupport.decls.push malformedNat }
+  let malformedNatScheduled ← runExport "nested-only malformed late Nat scheduler"
+    nestedWithMalformedNat false nestedOnly
+  let malformedNatShadow ← runExportShadow "nested-only malformed late Nat shadow"
+    nestedWithMalformedNat false nestedOnly
+  state := state.check "nested-only shadow excludes Nat from certification" <|
+    nestedLateShadow.selected && malformedNatShadow.selected &&
+      malformedNatShadow.output == malformedNatScheduled.output &&
+      malformedNatShadow.report == malformedNatScheduled.report
+
   let lateQuotInput := { graphSource with decls := graphSource.decls ++ quotientSupport }
   state := state.check "late-Quot fixture really puts support after the recursive owner"
     (declarationBefore lateQuotInput `Ac `Quot)
