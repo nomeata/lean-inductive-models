@@ -1893,6 +1893,68 @@ def splitDecl (w : Writer) (d : EDecl) : Writer × DeclSplit :=
 
 end Writer
 
+/-- Bounded serializer state for output whose declarations become available
+one at a time.  Only the next arena IDs and a bounded physical write buffer
+survive a declaration boundary. Name, level and expression interning tables
+are freshly allocated for each declaration, so no earlier `EDecl` graph can
+remain reachable through the writer. -/
+structure DeclarationStreamWriter where
+  cursor : Writer.Cursor := {}
+  buffer : String := ""
+  bufferedBytes : Nat := 0
+  declarationsWritten : Nat := 0
+  maxRecordLines : Nat := 0
+  deriving Inhabited
+
+namespace DeclarationStreamWriter
+
+private def writeChunk : Nat := 4 * 1024 * 1024
+
+private def emitLines (state : DeclarationStreamWriter) (h : IO.FS.Stream)
+    (lines : Array String) : IO DeclarationStreamWriter := do
+  -- Consume the buffer from the input state before extending it, preserving
+  -- unique string ownership across the callback boundary.
+  let { cursor, buffer, bufferedBytes, declarationsWritten, maxRecordLines } := state
+  let mut buffer := buffer
+  let mut bufferedBytes := bufferedBytes
+  for line in lines do
+    buffer := buffer ++ line ++ "\n"
+    bufferedBytes := bufferedBytes + line.utf8ByteSize + 1
+  if bufferedBytes >= writeChunk then
+    h.putStr buffer
+    buffer := ""
+    bufferedBytes := 0
+  return { cursor, buffer, bufferedBytes, declarationsWritten, maxRecordLines }
+
+/-- Begin a declaration stream and emit its optional metadata record. -/
+def start (metaLine : Json) (h : IO.FS.Stream) : IO DeclarationStreamWriter := do
+  let state : DeclarationStreamWriter := {}
+  if metaLine.isNull then return state
+  state.emitLines h #[metaLine.compress]
+
+/-- Serialize one exact declaration at fresh local interning tables and
+monotonically increasing global arena IDs. The returned state contains no
+interned `Name`, `Level`, `Expr`, or declaration value. -/
+def writeDeclaration (state : DeclarationStreamWriter) (h : IO.FS.Stream)
+    (declaration : EDecl) : IO DeclarationStreamWriter := do
+  let before := state.cursor
+  let (_, split) := (Writer.fromCursor before).splitDecl declaration
+  if let .error message := split.validateStart before then
+    throw <| IO.userError message
+  let lines := split.arena.push split.declaration
+  let nextState ← state.emitLines h lines
+  let nextState := { nextState with cursor := split.after }
+  let nextState := { nextState with
+    declarationsWritten := state.declarationsWritten + 1 }
+  return { nextState with maxRecordLines := max state.maxRecordLines lines.size }
+
+/-- Flush the final bounded buffer. The enclosing output transaction owns the
+stream flush and commit decision. -/
+def finish (state : DeclarationStreamWriter) (h : IO.FS.Stream) : IO Unit :=
+  unless state.buffer.isEmpty do h.putStr state.buffer
+
+end DeclarationStreamWriter
+
 /-- **Serialise a whole export, one record at a time.**
 
 `emit` is handed the lines of each record — the interned names, levels and
