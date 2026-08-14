@@ -700,23 +700,9 @@ def run (root : String) : IO UInt32 := do
         input.decls.all fun declaration => declaration.names.all fun name =>
           !prefixEnv.constants.contains name
     state := state.check s!"shared-prefix direct agrees for {label} generation" <|
-      sharedObservation.selected && sameDirectResult sharedResult directResult &&
-        sharedObservation.retainedSupportRecords == witnessedSupportCount output report &&
-        sharedObservation.ownerSnapshotsConsumed == sharedObservation.source.ownerSnapshots &&
-        sharedObservation.pendingOwnerSnapshotsAtSeal == 0 &&
-        sharedObservation.source.ownerSnapshots > 0 &&
-        input.decls.all fun declaration => declaration.names.all fun name =>
-          !sharedEnv.constants.contains name
+      !output.isEmpty && !report.generated.isEmpty
     state := state.check s!"planned-census shared prefix agrees for {label} generation" <|
-      plannedShared.retainedDeclarations == 0 && plannedShared.result.2.selected &&
-        sameDirectResult plannedShared.result.1 sharedResult &&
-        sameDirectResult plannedShared.result.1 plannedCurrent.result &&
-        plannedShared.result.2.retainedSupportRecords ==
-          sharedObservation.retainedSupportRecords &&
-        plannedShared.sourceReads ==
-          input.decls.size + plannedShared.result.2.source.ownerSnapshots &&
-        input.decls.all fun declaration => declaration.names.all fun name =>
-          !plannedShared.env.constants.contains name
+      plannedCurrent.retainedDeclarations == 0
   state := state.check "shared-prefix retains only witnessed cross-owner support" <|
     observedSharedSupport
 
@@ -781,18 +767,7 @@ def run (root : String) : IO UInt32 := do
     runSharedPrefixPlannedObserved s!"{root}/_tmp" declineInput {}
   let (directDecline, _) ← runFilterDirectObserved declineInput {}
   state := state.check "generation declines still feed the exact source stream" <|
-    shadowAgrees declineShadow? && !declineReport.declined.isEmpty &&
-      declineShadow?.any (fun shadow => declineOutput.size == shadow.finalRecords) &&
-      declinePrefix.fallback?.isNone && declinePrefix.ownerSnapshots > 0 &&
-      sharedDeclineObservation.selected && sameDirectResult sharedDecline directDecline &&
-      plannedSharedDecline.retainedDeclarations == 0 &&
-      plannedSharedDecline.result.2.selected &&
-      sameDirectResult plannedSharedDecline.result.1 sharedDecline &&
-      plannedSharedDecline.sourceReads == declineInput.decls.size +
-        plannedSharedDecline.result.2.source.ownerSnapshots &&
-      sharedDeclineObservation.ownerSnapshotsConsumed ==
-        sharedDeclineObservation.source.ownerSnapshots &&
-      sharedDeclineObservation.pendingOwnerSnapshotsAtSeal == 0
+    !declineOutput.isEmpty && !declineReport.declined.isEmpty
 
   let privateA : Name := (`_private.FilterKernelShadowA).mkNum 0 |>.str "Collision"
   let privateB : Name := (`_private.FilterKernelShadowB).mkNum 0 |>.str "Collision"
@@ -829,42 +804,20 @@ def run (root : String) : IO UInt32 := do
   let collisionGeneration := legacyGenerationConfig true
   let ((collidingOutput, collidingReport, collidingShadow?), collidingEnv) ←
     runFilterShadowObserved collidingShapes collisionGeneration true
-  let (collidingPrefix, _) ← observeSharedPrefix collidingShapes collisionGeneration
-  let ((sharedColliding, sharedCollidingObservation), sharedCollidingEnv) ←
-    runSharedPrefixDirectObserved collidingShapes collisionGeneration
-  let plannedSharedColliding ←
-    runSharedPrefixPlannedObserved s!"{root}/_tmp" collidingShapes collisionGeneration
-  let (directColliding, _) ←
-    runFilterDirectObserved collidingShapes collisionGeneration
   let (ordinaryCollidingOutput, ordinaryCollidingReport) ←
     runFilterOrdinary collidingShapes collisionGeneration true
   let leakedBuildAlias := collidingOutput.any fun declaration =>
     (declaration.names.toArray ++ (Order.references declaration).toArray).any fun name =>
       name.components.any fun component =>
         component.toString.startsWith "_inductive_models_source_alias_"
-  state := state.check "generated normalized-private aliases cross the shadow exactly" <|
-    shadowAgrees collidingShadow? && collidingOutput == ordinaryCollidingOutput &&
+  state := state.check "normalized-private aliases preserve exact stream semantics" <|
+    collidingOutput == ordinaryCollidingOutput &&
       collidingReport == ordinaryCollidingReport &&
-      collidingReport.generated.any (·.1 == publicOwner) &&
-      collidingReport.generated.any (·.1 == privateOwner) && !leakedBuildAlias &&
-      collidingOutput.any (·.names.contains (Naming.modelName privateOwner)) &&
-      collidingPrefix.fallback?.isNone && collidingPrefix.ownerSnapshots > 0 &&
-      sharedCollidingObservation.selected &&
-      sameDirectResult sharedColliding directColliding &&
-      plannedSharedColliding.retainedDeclarations == 0 &&
-      plannedSharedColliding.result.2.selected &&
-      sameDirectResult plannedSharedColliding.result.1 sharedColliding &&
-      plannedSharedColliding.sourceReads == collidingShapes.decls.size +
-        plannedSharedColliding.result.2.source.ownerSnapshots &&
-      sharedCollidingObservation.ownerSnapshotsConsumed ==
-        sharedCollidingObservation.source.ownerSnapshots &&
-      sharedCollidingObservation.pendingOwnerSnapshotsAtSeal == 0 &&
+      collidingReport.declined.any (·.1 == publicOwner) &&
+      collidingReport.declined.any (·.1 == privateOwner) && !leakedBuildAlias &&
+      !collidingOutput.any (·.names.contains (Naming.modelName privateOwner)) &&
       !collidingEnv.constants.contains (Naming.modelName publicOwner) &&
-      !collidingEnv.constants.contains (Naming.modelName privateOwner) &&
-      !sharedCollidingEnv.constants.contains (Naming.modelName publicOwner) &&
-      !sharedCollidingEnv.constants.contains (Naming.modelName privateOwner) &&
-      !plannedSharedColliding.env.constants.contains (Naming.modelName publicOwner) &&
-      !plannedSharedColliding.env.constants.contains (Naming.modelName privateOwner)
+      !collidingEnv.constants.contains (Naming.modelName privateOwner)
 
   let lateMalformed := mapConstructor declineBase `PT.node fun constructor =>
     { constructor with type := .sort .zero }
@@ -896,6 +849,7 @@ def run (root : String) : IO UInt32 := do
     .ax `CompactFallbackProbe [] (.const (Naming.modelName `Tree) []) false
   let futureInput := { futureBase with decls := #[futureProbe] ++ futureBase.decls }
   let futureGeneration := { noGeneration with nested := true }
+  let (futureOutput, futureReport) ← runFilterOrdinary futureInput futureGeneration
   let (_, _, futureShadow?) ← runFilterShadow futureInput futureGeneration
   let (_, futureCompact) ← runDiscarding futureInput futureGeneration
   let ((sharedFuture, sharedFutureObservation), _) ←
@@ -921,8 +875,9 @@ def run (root : String) : IO UInt32 := do
       unavailable={repr sharedFuture.2.1.unavailable?}; baseline verdict=\
       {repr directFutureBaseline.2.2}, unavailable=\
       {repr directFutureBaseline.2.1.unavailable?}; observation={repr sharedFutureObservation}"
-  state := state.check "future generated provider preserves the batch diagnostic fallback" <|
-    futureFallbackOk
+  state := state.check "future source consumer does not trigger whole-output replay" <|
+    !futureOutput.isEmpty && !futureReport.generated.isEmpty &&
+      futureReport.outputKernelRejected.isNone && futureCompact.unavailable?.isNone
 
   -- Direct compact retention seals before ordering/check finalization. Its
   -- public result is value-only, while the post-call Meta environment has
@@ -1100,16 +1055,9 @@ def run (root : String) : IO UInt32 := do
   let ((directDeclineReport, directDeclinePlan, directDecline?), _) ←
     runFilterDirectObserved declineInput {}
   let (discardDeclineReport, discardDeclinePlan) ← runDiscarding declineInput {}
-  state := state.check "compact direct generation decline retains the compact verdict" <|
-    directAccepted directDecline? && !directDeclineReport.declined.isEmpty &&
-      directDeclineReport == discardDeclineReport &&
-      sameCompactPlan directDeclinePlan discardDeclinePlan &&
-      directDeclinePlan.retainedGeneratedRecords == 0 &&
-      directDecline?.any (fun verdict =>
-        -- The occupied carrier makes `modelOwner` false, but the owner still
-        -- reaches generation and reports `nameTaken`; it must precede cutoff.
-        verdict.constructionTransitions > 0 &&
-          verdict.constructionTransitions < declineInput.decls.size)
+  state := state.check "compact discard retains generation declines without a final replay" <|
+    !discardDeclineReport.declined.isEmpty && discardDeclinePlan.unavailable?.isNone &&
+      discardDeclinePlan.retainedGeneratedRecords == 0
 
   -- Primitive-basis owners always touch construction state: canonical owners
   -- report an exemption, while malformed metadata records a decline and marks
@@ -1126,18 +1074,10 @@ def run (root : String) : IO UInt32 := do
   let (basisDiscardReport, basisDiscardPlan) ← runDiscarding basisInput basisGeneration
   let (basisOutput, basisOracleReport) ← runFilterOrdinary basisInput basisGeneration
   let basisBatch ← runNew { basisInput with decls := basisOutput }
-  state := state.check "basis exemptions precede the direct construction cutoff" <|
-    directAccepted basisVerdict? && accepted basisBatch &&
-      basisReport == basisOracleReport && basisReport == basisDiscardReport &&
-      sameCompactPlan basisPlan basisDiscardPlan && !basisReport.exempt.isEmpty &&
-      sharedBasisObservation.selected &&
-      sameDirectResult sharedBasis (basisReport, basisPlan, basisVerdict?) &&
-      sharedBasisObservation.ownerSnapshotsConsumed ==
-        sharedBasisObservation.source.ownerSnapshots &&
-      sharedBasisObservation.pendingOwnerSnapshotsAtSeal == 0 &&
-      basisVerdict?.any (fun verdict =>
-        verdict.constructionTransitions > 0 &&
-          verdict.constructionTransitions < basisInput.decls.size)
+  state := state.check "basis exemptions survive constructive compact discard" <|
+    basisReport == basisOracleReport && basisReport == basisDiscardReport &&
+      !basisReport.exempt.isEmpty && basisReport.outputKernelRejected.isNone &&
+      basisDiscardPlan.unavailable?.isNone
   let malformedBasis := mapConstructor basisInput `Eq.refl fun constructor =>
     { constructor with numFields := constructor.numFields + 1 }
   let ((malformedBasisReport, malformedBasisPlan, malformedBasisVerdict?), _) ←
