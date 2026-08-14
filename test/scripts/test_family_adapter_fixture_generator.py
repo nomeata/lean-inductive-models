@@ -50,6 +50,16 @@ class FamilyAdapterFixtureGeneratorTest(unittest.TestCase):
         self.assertIn("GeneratedConstructors3x8", source)
         self.assertIn("GeneratedIndexed3x8", source)
 
+    def test_changed_boundaries_are_source_fixtures(self) -> None:
+        source = GENERATOR.FixtureMatrix(
+            arities=(1,), member_counts=(2,), constructor_counts=(1,), index_arities=(1,)
+        ).render()
+        self.assertIn("GeneratedChangedDirectPublic", source)
+        self.assertIn("GeneratedChangedIndexedPrivate", source)
+        self.assertIn("GeneratedChangedNestedPublic", source)
+        self.assertIn("generatedChangedNestedUnrollRoll", source)
+        self.assertIn("inductive GeneratedLayerA", source)
+
     def test_zero_cardinalities_remain_well_formed_source_cases(self) -> None:
         source = GENERATOR.FixtureMatrix(
             arities=(0,), member_counts=(0,), constructor_counts=(0,), index_arities=(0,)

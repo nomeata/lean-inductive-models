@@ -1,4 +1,4 @@
-import InductiveModels.FamilyAdapterPlan
+import InductiveModels.FamilyAdapterShadow
 import InductiveModels.Simple
 
 /-!
@@ -17,6 +17,10 @@ namespace InductiveModels.FamilyAdapter
 /-- A keyed construction obligation.  These are semantic failures of an exact
 certificate, never eligibility predicates or cardinality limits. -/
 inductive ConstructionIssue where
+  | incompleteShadow (reason : ShadowReason)
+  | invalidPlan (error : PlanError)
+  | missingInstalledMemberMap (member : MemberKey) (map : Name)
+  | installedMemberMapTypeMismatch (member : MemberKey) (map : Name)
   | missingInstalledRecursor (member : MemberKey) (recursor : Name)
   | shortInstalledRecursorPrefix (member : MemberKey) (recursor : Name)
   | missingInstalledMinor (rule : RuleKey)
@@ -26,6 +30,7 @@ inductive ConstructionIssue where
   | ambiguousInstalledHypothesis (rule : RuleKey) (occurrence : OccurrenceKey)
   | installedHypothesisMismatch (rule : RuleKey) (occurrence : OccurrenceKey)
       (expected actual : Nat)
+  | missingMemberMap (member : MemberKey)
   | missingOccurrenceMap (occurrence : OccurrenceKey)
   | missingContainerMap (occurrence : OccurrenceKey)
   | dependentFieldTransport (constructor : ConstructorKey) (fieldIndex : Nat)
@@ -116,6 +121,51 @@ private def identityMemberCertificate (plan : FamilyAdapterPlan) (root : Name)
   return (#[forwardDeclaration, backwardDeclaration, backwardForwardDeclaration,
     forwardBackwardDeclaration], certificate)
 
+private def memberMapType (plan : FamilyAdapterPlan) (member : MemberPlan)
+    (source target : Name) : GenM Expr := do
+  let levels := plan.levelParams.map Level.param
+  let arity := member.parameterArity + member.indexArity
+  let carrierType ← generatedType source
+  forallBoundedTelescope carrierType (some arity) fun arguments _ =>
+    withLocalDeclD `value (mkAppN (.const source levels) arguments) fun value =>
+      mkForallFVars (arguments.push value) (mkAppN (.const target levels) arguments)
+
+private def memberLawType (plan : FamilyAdapterPlan) (member : MemberPlan)
+    (carrier first second : Name) : GenM Expr := do
+  let levels := plan.levelParams.map Level.param
+  let arity := member.parameterArity + member.indexArity
+  let carrierType ← generatedType carrier
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok information => pure information
+    | .error message => badShape s!"family-adapter prototype needs Eq ({message})"
+  forallBoundedTelescope carrierType (some arity) fun arguments _ =>
+    withLocalDeclD `value (mkAppN (.const carrier levels) arguments) fun value => do
+      let lhs := mkAppN (.const second levels)
+        (arguments.push (mkAppN (.const first levels) (arguments.push value)))
+      let alpha := mkAppN (.const carrier levels) arguments
+      mkForallFVars (arguments.push value)
+        (eqi.mk' (← ilevel alpha) alpha lhs value)
+
+private def validateMemberMap (member : MemberKey) (name : Name) (expected : Expr) :
+    GenM (Option ConstructionIssue) := do
+  let some actual := (← getEnv).constants.find? name |>.map (·.type)
+    | return some (.missingInstalledMemberMap member name)
+  return if actual == expected then none
+    else some (.installedMemberMapTypeMismatch member name)
+
+private def validateInstalledEquivalence (plan : FamilyAdapterPlan) (member : MemberPlan)
+    (maps : EquivalenceCertificate) : GenM (Array ConstructionIssue) := do
+  let expected := #[
+    (maps.forward, ← memberMapType plan member member.publicCarrier
+      member.implementationCarrier),
+    (maps.backward, ← memberMapType plan member member.implementationCarrier
+      member.publicCarrier),
+    (maps.backwardForward, ← memberLawType plan member member.publicCarrier
+      maps.forward maps.backward),
+    (maps.forwardBackward, ← memberLawType plan member member.implementationCarrier
+      maps.backward maps.forward)]
+  return (← expected.filterMapM fun (name, type) => validateMemberMap member.key name type)
+
 /-- Resolve installed member equivalences. Identity boundaries receive fresh,
 kernel-checked private aliases; changed simultaneous members reuse the exact
 maps and laws already recorded by `Iso.familyImplementation?`. -/
@@ -135,7 +185,9 @@ def prototypeMemberCertificates (plan : FamilyAdapterPlan) (iso : Iso) (root : N
       let certificate : MemberCertificate :=
         { key := member.key
           maps }
-      certificates := certificates.push certificate
+      let mapIssues ← validateInstalledEquivalence plan member maps
+      if mapIssues.isEmpty then certificates := certificates.push certificate
+      else issues := issues ++ mapIssues
     else if member.publicCarrier == member.implementationCarrier then
       let (added, certificate) ← identityMemberCertificate plan root member
       declarations := declarations ++ added
@@ -144,13 +196,7 @@ def prototypeMemberCertificates (plan : FamilyAdapterPlan) (iso : Iso) (root : N
       let occurrence := plan.occurrences.find? (·.key.target == member.key)
       match occurrence with
       | some occurrence => issues := issues.push (.missingOccurrenceMap occurrence.key)
-      | none =>
-        let synthetic : OccurrenceKey :=
-          { constructor := { owner := member.key, constructor := .anonymous }
-            fieldIndex := 0
-            hypothesisIndex := 0
-            target := member.key }
-        issues := issues.push (.missingOccurrenceMap synthetic)
+      | none => issues := issues.push (.missingMemberMap member.key)
   return (declarations, certificates, issues)
 
 /-- Exact-sort dependent package for an arbitrary finite field telescope. -/
@@ -200,11 +246,9 @@ private partial def mapFieldValue (plan : FamilyAdapterPlan)
     (constructor : ConstructorKey) (fieldIndex : Nat)
     (occurrences : Array OccurrenceKey) (sourceType targetType value : Expr) :
     ConstructionM Expr := do
+  if ← isDefEq sourceType targetType then return value
   if occurrences.isEmpty then
-    unless ← isDefEq sourceType targetType do
-      failConstruction (.dependentFieldTransport
-        constructor fieldIndex)
-    return value
+    failConstruction (.dependentFieldTransport constructor fieldIndex)
   let direct := occurrences.find? (·.expressionPath.isEmpty)
   if let some occurrence := direct then
     unless occurrences.size == 1 do failConstruction (.missingContainerMap occurrence)
@@ -261,8 +305,10 @@ private partial def fieldRoundTrip (plan : FamilyAdapterPlan)
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
     | .error _ => failConstruction (.missingOccurrenceMap occurrences[0]!)
-  if occurrences.isEmpty then
+  if ← isDefEq sourceType targetType then
     return eqi.refl' (← ilevel sourceType) sourceType value
+  if occurrences.isEmpty then
+    failConstruction (.dependentFieldTransport constructor fieldIndex)
   if let some occurrence := occurrences.find? (·.expressionPath.isEmpty) then
     unless occurrences.size == 1 do failConstruction (.missingContainerMap occurrence)
     let some certificate := certificateFor? certificates occurrence.target
@@ -669,8 +715,11 @@ def deriveInstalledMinorHypotheses (plan : FamilyAdapterPlan) : MetaM
 has been kernel checked in the current incremental environment.  A single
 unresolved semantic obligation leaves `certificate? = none`; callers must not
 publish any partial boundary. -/
-def buildFamilyPrototype (plan : FamilyAdapterPlan) (iso : Iso) (root : Name) :
+private def buildPlanPrototype (plan : FamilyAdapterPlan) (iso : Iso) (root : Name) :
     GenM PrototypeBuild := do
+  let planIssues := plan.validate
+  unless planIssues.isEmpty do
+    return { issues := planIssues.map .invalidPlan }
   let mut declarations ← ensureExactSortLift {}
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
@@ -719,5 +768,25 @@ def buildFamilyPrototype (plan : FamilyAdapterPlan) (iso : Iso) (root : Name) :
     certificate := some certificate
     minorHypotheses := minorHypotheses
   }
+
+/-- Construct only from a complete exact-source shadow. This binds prototype
+certification to all installed carrier/constructor/recursor/iota comparisons;
+a caller cannot accidentally turn a partially covered plan into a certificate. -/
+def buildFamilyPrototype (report : ShadowReport) (iso : Iso) (root : Name) :
+    GenM PrototypeBuild := do
+  unless report.complete do
+    return { issues := report.reasons.map .incompleteShadow }
+  let some plan := report.plan?
+    | return { issues := #[.incompleteShadow .sourceNotInductive] }
+  let saved ← getEnv
+  match ← ExceptT.lift (buildPlanPrototype plan iso root).run with
+  | .error decline =>
+    setEnv saved
+    declineWith decline
+  | .ok built =>
+    if built.certificate.isNone then
+      setEnv saved
+      return { built with declarations := #[] }
+    return built
 
 end InductiveModels.FamilyAdapter

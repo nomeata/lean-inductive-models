@@ -44,17 +44,21 @@ The plan contains no fabricated proof names. `FamilyAdapterConstruction` is a
 disabled prototype seam that now builds `FamilyAdapterCertificate`: private
 member maps, dependent-telescope packers, `encode`/`decode`, both round trips,
 one packed result-index equality, and exact installed minor/IH associations.
-Every declaration is accepted by the kernel before its name enters the
-certificate. Certificates stay as `Name` and `Expr` values in the incremental
-Lean environment; they are never serialized through JSON.
+Construction starts only from a complete exact-source shadow. Every reused
+member map and inverse law has its exact installed type checked, and every new
+declaration is accepted by the kernel before its name enters the certificate.
+Certificates stay as `Name` and `Expr` values in the incremental Lean
+environment; they are never serialized through JSON.
 
 The prototype closes direct and infinitary occurrences through arbitrary
-finite binder telescopes. A nested occurrence such as `List T` deliberately
-returns the keyed `missingContainerMap` obligation and no certificate: member
-maps alone cannot manufacture the required `List P ↔ List M` equivalence.
-The existing nested model has mimic pack/unpack laws, but `Iso` does not yet
-expose them by occurrence key. Those maps must be added to installed metadata;
-there is no `List`-specific or bounded fallback.
+finite binder telescopes. A definitionally unchanged nested field is reused
+directly. A genuinely changed nested occurrence such as `List P` versus
+`List M` returns the keyed `missingContainerMap` obligation and no
+certificate: member maps alone cannot manufacture the required
+`List P ↔ List M` equivalence. The existing nested model has mimic
+pack/unpack laws, but `Iso` does not yet expose them by occurrence key. Those
+maps must be added to installed metadata; there is no `List`-specific or
+bounded fallback.
 
 ## Proof construction
 
@@ -66,9 +70,11 @@ The proof is structural, with no clause selected by a cardinality.
 2. For each constructor, induct over its literal binder telescope. The
    prototype packages the whole dependent telescope, including result indices,
    and generates
-   `encode`, `decode`, `decodeEncode`, and `encodeDecode`. Later binder types
-   are transported by the accumulated package equality rather than rebuilt by
-   an arity-specific template.
+   `encode`, `decode`, `decodeEncode`, and `encodeDecode`. It substitutes every
+   already-mapped value into later binder types. If the resulting types are
+   not definitionally equal, construction returns the keyed
+   `dependentFieldTransport` obligation; the current metadata supplies no
+   general action of an arbitrary dependent family across distinct carriers.
 3. At a recursive occurrence, the prototype uses the target member
    correspondence. At a nested occurrence it will compose the generated
    `G(P) <-> G(M)` correspondence
@@ -86,6 +92,14 @@ The proof is structural, with no clause selected by a cardinality.
    occurrence, round-trip, and iota declarations have been kernel checked.
    Publish the complete family atomically; a partial certificate never enables
    a partial public route.
+
+The current `indexFibre` certificate similarly closes an exact finite index
+vector only when the mapped and public vectors are definitionally equal. A
+non-definitional moving fibre returns `indexFibreMismatch`; closing it requires
+an installed, keyed equality relating the two index vectors. Lean rejects the
+stronger source shapes where a constructor result index, or a later field
+type, depends directly on a recursive constructor value. Those are kernel
+boundaries, not adapter eligibility guards.
 
 ## Constraints versus implementation caps
 
@@ -109,4 +123,8 @@ and index arities. Its defaults include 0, 1, 2, 3, 5, and 8 only to cross old
 implementation boundaries. `FamilyAdapterPlanTest` independently varies every
 plan dimension and includes a larger non-default point, while malformed-key
 tests exercise structural rejection. These are property-style regression
-samples, not a supported-shape list.
+samples, not a supported-shape list. `FamilyAdapterConstructionTest` also
+checks distinct public/private direct and indexed carriers, one real
+`mutualOneLayerIso` family, definitionally unchanged nesting, and a distinct
+carrier nested obligation. Source-level guards pin Lean's rejection of a later
+field or result index that depends on a recursive constructor value.
