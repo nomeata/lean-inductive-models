@@ -12,6 +12,12 @@ kernel-checked private `Iso`. It records source names as member, constructor,
 rule, and SCC keys. Array positions preserve declaration and telescope order,
 but are never identities and never decide eligibility.
 
+Each member also retains the exact rule-key sequence read from its source
+`ERec`. In a mutual family that sequence includes sibling constructors. Plan
+validation compares the installed `RulePlan` sequence against this snapshot;
+the later semantic checker must in turn compare the snapshot with the source
+metadata in the environment.
+
 Every recursive occurrence is keyed by its constructor, literal field offset,
 expression path, binder depth, minor-hypothesis offset, and target member. A
 field may contain any finite number of occurrences; a component may contain

@@ -32,8 +32,9 @@ structure MemberKey where
   owner : Name
   deriving Inhabited, BEq, Repr
 
-/-- Stable identity of one strongly connected component.  The anchor is a
-source member identity chosen by the plan builder, not an array offset. -/
+/-- Stable identity of one strongly connected component.  The anchor is an
+arbitrary source or mimic family member chosen by the plan builder, not an
+array offset. -/
 structure ComponentKey where
   anchor : MemberKey
   deriving Inhabited, BEq, Repr
@@ -119,7 +120,8 @@ structure MemberPlan where
   publicCarrier : Name
   representation : MemberRepresentation
   constructors : Array ConstructorKey
-  rules : Array RuleKey
+  /-- Exact rule-key sequence read from this member's source `ERec`. -/
+  sourceRules : Array RuleKey
   sourceRecursor : Name
   implementationRecursor : Name
   publicRecursor : Name
@@ -228,6 +230,7 @@ inductive PlanError where
       (expected source implementation : Nat)
   | duplicateRule (key : RuleKey)
   | memberRuleMismatch (member : MemberKey) (rule : RuleKey)
+  | memberRuleSequenceMismatch (member : MemberKey)
   | unknownRuleOwner (key : RuleKey)
   | unknownRuleConstructor (key : RuleKey)
   | duplicateOccurrence (key : OccurrenceKey)
@@ -296,6 +299,8 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
         errors := errors.push (.unknownComponentDependency component.key dependency)
   for member in plan.members do
     let containers := plan.components.filter (·.members.contains member.key)
+    -- Partition coverage for one member identity, not a bound on component or
+    -- family cardinality.
     unless containers.size == 1 do
       errors := errors.push (.memberComponentMultiplicity member.key containers.size)
     if let some component := containers[0]? then
@@ -340,12 +345,15 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
     for constructor in member.constructors do
       unless constructor.owner == member.key && constructorExists plan constructor do
         errors := errors.push (.memberConstructorMismatch member.key constructor)
-    if let some rule := duplicateKey? member.rules then
+    if let some rule := duplicateKey? member.sourceRules then
       errors := errors.push (.memberRuleMismatch member.key rule)
-    for rule in member.rules do
+    for rule in member.sourceRules do
       unless rule.recursorOwner == member.key && rule.recursor == member.sourceRecursor &&
           ruleExists plan rule do
         errors := errors.push (.memberRuleMismatch member.key rule)
+    let installedRules := (plan.rules.filter (·.key.recursorOwner == member.key)).map (·.key)
+    unless installedRules == member.sourceRules do
+      errors := errors.push (.memberRuleSequenceMismatch member.key)
 
   if let some key := duplicateKey? (plan.rules.map (·.key)) then
     errors := errors.push (.duplicateRule key)
@@ -355,7 +363,7 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
     unless constructorExists plan rule.key.constructor do
       errors := errors.push (.unknownRuleConstructor rule.key)
     if let some owner := plan.members.find? (·.key == rule.key.recursorOwner) then
-      unless owner.rules.contains rule.key do
+      unless owner.sourceRules.contains rule.key do
         errors := errors.push (.memberRuleMismatch owner.key rule.key)
     for key in rule.occurrences do
       unless key.constructor == rule.key.constructor do

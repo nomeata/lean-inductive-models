@@ -24,10 +24,11 @@ private def equivalence (index : Nat) : EquivalenceCertificate :=
 private def sourceRecursor (ownerIndex : Nat) : Name :=
   numbered "FamilyAdapterPlanTest.sourceRecursor" ownerIndex
 
-private def ruleKey (constructorsPerMember ownerIndex constructorIndex : Nat) : RuleKey :=
-  { recursorOwner := memberKey ownerIndex
-    recursor := sourceRecursor ownerIndex
-    constructor := constructorKey constructorsPerMember ownerIndex constructorIndex }
+private def ruleKey (constructorsPerMember recursorOwner constructorOwner constructorIndex : Nat) :
+    RuleKey :=
+  { recursorOwner := memberKey recursorOwner
+    recursor := sourceRecursor recursorOwner
+    constructor := constructorKey constructorsPerMember constructorOwner constructorIndex }
 
 private def sorts (count : Nat) : Array Expr :=
   Array.replicate count (.sort .zero)
@@ -45,7 +46,6 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
     for constructorIndex in [:constructorsPerMember] do
       let ordinal := ownerIndex * constructorsPerMember + constructorIndex
       let key := constructorKey constructorsPerMember ownerIndex constructorIndex
-      let mut constructorOccurrences : Array OccurrenceKey := #[]
       let mut binders : Array TelescopeBinderPlan := #[]
       for fieldIndex in [:fieldCount] do
         let mut fieldOccurrences : Array OccurrenceKey := #[]
@@ -60,7 +60,6 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
               hypothesisIndex := fieldIndex * occurrencesPerField + occurrenceIndex
               target := memberKey targetIndex }
           fieldOccurrences := fieldOccurrences.push occurrenceKey
-          constructorOccurrences := constructorOccurrences.push occurrenceKey
           occurrences := occurrences.push
             { key := occurrenceKey
               sourceType := .sort .zero
@@ -101,13 +100,24 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
           publicType := .sort .zero
           telescope
           certificate }
-      rules := rules.push
-        { key := ruleKey constructorsPerMember ownerIndex constructorIndex
-          ruleIndex := ordinal
-          exactRhs := .sort .zero
-          implementationIota := numbered "FamilyAdapterPlanTest.implIota" ordinal
-          publicIota := numbered "FamilyAdapterPlanTest.publicIota" ordinal
-          occurrences := constructorOccurrences }
+
+  -- A mutual source recursor has one rule for every constructor in the whole
+  -- family, not merely the constructors owned by its motive's member.
+  for recursorOwner in [:memberCount] do
+    for constructorOwner in [:memberCount] do
+      for constructorIndex in [:constructorsPerMember] do
+        let constructorOrdinal :=
+          constructorOwner * constructorsPerMember + constructorIndex
+        let key := constructorKey constructorsPerMember constructorOwner constructorIndex
+        let ruleOrdinal :=
+          recursorOwner * memberCount * constructorsPerMember + constructorOrdinal
+        rules := rules.push
+          { key := ruleKey constructorsPerMember recursorOwner constructorOwner constructorIndex
+            ruleIndex := constructorOrdinal
+            exactRhs := .sort .zero
+            implementationIota := numbered "FamilyAdapterPlanTest.implIota" ruleOrdinal
+            publicIota := numbered "FamilyAdapterPlanTest.publicIota" ruleOrdinal
+            occurrences := (occurrences.filter (·.key.constructor == key)).map (·.key) }
 
   let members := (Array.range memberCount).map (fun ownerIndex =>
     { key := memberKey ownerIndex
@@ -121,8 +131,9 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
       representation := .layer
       constructors := (Array.range constructorsPerMember).map
         (constructorKey constructorsPerMember ownerIndex)
-      rules := (Array.range constructorsPerMember).map
-        (ruleKey constructorsPerMember ownerIndex)
+      sourceRules := (Array.range memberCount).flatMap fun constructorOwner =>
+        (Array.range constructorsPerMember).map
+          (ruleKey constructorsPerMember ownerIndex constructorOwner)
       sourceRecursor := sourceRecursor ownerIndex
       implementationRecursor := numbered "FamilyAdapterPlanTest.implRecursor" ownerIndex
       publicRecursor := numbered "FamilyAdapterPlanTest.publicRecursor" ownerIndex
@@ -138,6 +149,24 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
            occurrences }
 
 private def sampledCounts : Array Nat := #[0, 1, 2, 3, 5, 8]
+
+/-- Split an otherwise valid source family into a source component and a
+mimic-only component.  A mimic SCC need not contain a source member. -/
+private def withMimicComponent (plan : FamilyAdapterPlan) : FamilyAdapterPlan :=
+  let sourceComponent : ComponentKey := { anchor := plan.members[0]!.key }
+  let mimicComponent : ComponentKey := { anchor := plan.members[1]!.key }
+  let members := plan.members.mapIdx fun index member =>
+    if index == 0 then
+      { member with component := sourceComponent, role := .source }
+    else
+      { member with component := mimicComponent, role := .mimic }
+  { plan with
+    components :=
+      #[{ key := sourceComponent, members := #[plan.members[0]!.key] },
+        { key := mimicComponent
+          members := (plan.members.extract 1 plan.members.size).map (·.key)
+          dependencies := #[sourceComponent] }]
+    members }
 
 private def reportErrors (label : String) (errors : Array PlanError) : IO Bool := do
   if errors.isEmpty then
@@ -165,16 +194,64 @@ private def checkDimensionSamples : IO Bool := do
       (makePlan count 2 2 3 4 3).validate) && ok
   return ok
 
-private def checkMalformedPlan : IO Bool := do
+private def expectError (label : String) (errors : Array PlanError)
+    (predicate : PlanError → Bool) : IO Bool := do
+  if errors.any predicate then return true
+  IO.eprintln s!"{label}: expected error absent from {repr errors}"
+  return false
+
+private def checkMalformedPlans : IO Bool := do
   let plan := makePlan 3 2 1 2 3 2
   let duplicate := { plan with members := plan.members.push plan.members[0]! }
-  if duplicate.validate.any fun error =>
-      match error with
-      | .duplicateMember _ => true
-      | _ => false then
-    return true
-  IO.eprintln "duplicate source identities were not rejected"
-  return false
+  let duplicateOk ← expectError "duplicate source identities" duplicate.validate fun
+    | .duplicateMember _ => true
+    | _ => false
+
+  let parameterMismatch :=
+    { plan with constructors := plan.constructors.mapIdx fun index
+        (constructorPlan : ConstructorPlan) =>
+        if index == 0 then
+          let telescope := { constructorPlan.telescope with parameters := #[] }
+          { constructorPlan with telescope }
+        else constructorPlan }
+  let parameterOk ← expectError "constructor parameter arity" parameterMismatch.validate fun
+    | .constructorParameterArityMismatch _ _ _ => true
+    | _ => false
+
+  let indexMismatch :=
+    { plan with constructors := plan.constructors.mapIdx fun index
+        (constructorPlan : ConstructorPlan) =>
+        if index == 0 then
+          let telescope :=
+            { constructorPlan.telescope with sourceResultIndices := #[] }
+          { constructorPlan with telescope }
+        else constructorPlan }
+  let indexOk ← expectError "constructor index arity" indexMismatch.validate fun
+    | .constructorIndexArityMismatch _ _ _ _ => true
+    | _ => false
+
+  let ruleSequenceMismatch :=
+    { plan with rules := plan.rules.mapIdx fun index (rulePlan : RulePlan) =>
+        if index == 0 then
+          let occurrences := rulePlan.occurrences.extract 1 rulePlan.occurrences.size
+          { rulePlan with occurrences }
+        else rulePlan }
+  let sequenceOk ← expectError "exact rule occurrence sequence"
+    ruleSequenceMismatch.validate fun
+    | .ruleOccurrenceSequenceMismatch _ => true
+    | _ => false
+
+  let missingRule := { plan with rules := plan.rules.extract 1 plan.rules.size }
+  let ruleCoverageOk ← expectError "exact source recursor rule coverage"
+    missingRule.validate fun
+    | .memberRuleMismatch _ _ => true
+    | _ => false
+
+  let missingComponents := { plan with components := #[] }
+  let componentOk ← expectError "SCC member coverage" missingComponents.validate fun
+    | .memberComponentMultiplicity _ _ => true
+    | _ => false
+  return duplicateOk && parameterOk && indexOk && sequenceOk && ruleCoverageOk && componentOk
 
 def main : IO UInt32 := do
   let samplesOk ← checkDimensionSamples
@@ -182,5 +259,7 @@ def main : IO UInt32 := do
   -- sample itself as an implementation limit.
   let wideOk ← reportErrors "wide arbitrary finite plan"
     (makePlan 7 9 6 4 5 11).validate
-  let malformedOk ← checkMalformedPlan
-  return if samplesOk && wideOk && malformedOk then 0 else 1
+  let mimicOk ← reportErrors "mimic-only multi-component plan"
+    (withMimicComponent (makePlan 5 3 2 3 4 5)).validate
+  let malformedOk ← checkMalformedPlans
+  return if samplesOk && wideOk && mimicOk && malformedOk then 0 else 1
