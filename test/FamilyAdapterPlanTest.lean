@@ -166,7 +166,11 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
           implementationConstructor) =>
         { recursor := key, publicConstructor, implementationConstructor }
       occurrences := #[container.key]
-      maps := container.maps }
+      maps := container.maps
+      forwardType := container.forwardType
+      backwardType := container.backwardType
+      backwardForwardType := container.backwardForwardType
+      forwardBackwardType := container.forwardBackwardType }
   return { root := memberKey 0
            levelParams := []
            components :=

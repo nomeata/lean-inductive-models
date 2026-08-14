@@ -429,6 +429,10 @@ structure ContainerRecursorPlan where
   rules : Array ContainerRecursorRuleKey
   occurrences : Array OccurrenceKey
   maps : EquivalenceCertificate
+  forwardType : Expr
+  backwardType : Expr
+  backwardForwardType : Expr
+  forwardBackwardType : Expr
   deriving Inhabited, BEq, Repr
 
 /-- One exact public rule and its private proof oracle.  Occurrences are keyed
@@ -690,7 +694,11 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
       unless maps.size == 1 && maps.all fun map =>
           map.sourceRecursor == recursor.key.publicRecursor &&
             map.implementationRecursor == recursor.key.implementationRecursor &&
-            map.maps == recursor.maps do
+            map.maps == recursor.maps &&
+            map.forwardType == recursor.forwardType &&
+            map.backwardType == recursor.backwardType &&
+            map.backwardForwardType == recursor.backwardForwardType &&
+            map.forwardBackwardType == recursor.forwardBackwardType do
         errors := errors.push (.containerRecursorMapMismatch recursor.key occurrence)
     for map in plan.containerMaps.filter fun map =>
         map.sourceRecursor == recursor.key.publicRecursor &&

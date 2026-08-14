@@ -678,7 +678,11 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         publicType := container.sourceRecursorType,
         implementationType := container.implementationRecursorType,
         publicMajorFamily, implementationMajorFamily, rules,
-        occurrences := grouped.map (·.key), maps := container.maps }
+        occurrences := grouped.map (·.key), maps := container.maps,
+        forwardType := container.forwardType,
+        backwardType := container.backwardType,
+        backwardForwardType := container.backwardForwardType,
+        forwardBackwardType := container.forwardBackwardType }
   let mut rulePlans := #[]
   for member in resolvedMembers do
     if let some recursor := member.sourceRecursor? then
