@@ -2841,17 +2841,29 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   -- Replay the source record between its pre-owner and post-owner generation
   -- phases.  An unreplayable source record terminates the complete machine and
   -- discards every private island, matching the historical loop return.
-  let some firstSourceName := d.names.head?
-    | throwError "source declaration has no name"
-  let some rawSourceOrdinal := rawOrdinals[firstSourceName]?
-    | throwError "logical source declaration {firstSourceName} lost its raw ordinal"
-  match futureSupportRemaining[rawSourceOrdinal]? with
-  | some expected =>
-    unless d == expected do
-      throwError "future support source record {rawSourceOrdinal} changed before discharge"
-    futureSupportRemaining := futureSupportRemaining.erase rawSourceOrdinal
-    replayedOwnerEnv? := some (← getEnv)
-  | none =>
+  -- Raw ordinals are an obligation only for the shadow emission ledger.  The
+  -- ordinary full path historically accepts declaration records with no
+  -- introduced names (notably an empty `.induct` record), and must not become
+  -- stricter merely because the internal shadow mode shares this transition.
+  let rawSourceOrdinal? ← if context.outputSourceOrder?.isSome then do
+    let some firstSourceName := d.names.head?
+      | throwError "shadow source declaration has no name"
+    let some rawSourceOrdinal := rawOrdinals[firstSourceName]?
+      | throwError "logical source declaration {firstSourceName} lost its raw ordinal"
+    pure (some rawSourceOrdinal)
+  else
+    pure none
+  let shadowedSource ← match rawSourceOrdinal? with
+  | some rawSourceOrdinal => match futureSupportRemaining[rawSourceOrdinal]? with
+    | some expected =>
+      unless d == expected do
+        throwError "future support source record {rawSourceOrdinal} changed before discharge"
+      futureSupportRemaining := futureSupportRemaining.erase rawSourceOrdinal
+      replayedOwnerEnv? := some (← getEnv)
+      pure true
+    | none => pure false
+  | none => pure false
+  unless shadowedSource do
     if let some dcl := toDeclaration (← getEnv) d then
       match (← getEnv).addDeclCore 0 dcl none false with
       | .ok e =>
@@ -2976,6 +2988,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     mainEnv ← getEnv
   if retainOracle then legacyOut := legacyOut.push d
   if retainOracle && context.outputSourceOrder?.isSome then
+    let some rawSourceOrdinal := rawSourceOrdinal?
+      | throwError "shadow source declaration has no raw ordinal"
     emissionByRaw := emissionByRaw.insert rawSourceOrdinal
       (legacyOut.extract emissionStart legacyOut.size)
   if compactMode then
@@ -3213,13 +3227,17 @@ def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
     let (decls, report) ← runFilter x checkRecursors generation
     return (decls, report, false)
   let base ← getEnv
-  let shadowResult ← FutureSourceSupport.create base x generation
-  let .ok shadow := shadowResult | do
+  let shadowResult ← try
+    FutureSourceSupport.create base x generation
+  finally
+    -- Certification temporarily installs the exact future source bundle in
+    -- Meta state.  No ordering or fallback failure may expose that private
+    -- environment to the caller.
     setEnv base
+  let .ok shadow := shadowResult | do
     let (decls, report) ← runFilter x checkRecursors generation
     return (decls, report, false)
   unless !shadow.records.isEmpty do
-    setEnv base
     let (decls, report) ← runFilter x checkRecursors generation
     return (decls, report, false)
   let ordinaryOrder ← match Order.summaryRecordOrder census.summaries with
@@ -3228,7 +3246,6 @@ def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
   let outputOrder ← match census.scheduleOrder x generation with
     | .ok order => pure order
     | .error error => throwError "cannot retain support-priority output order: {repr error}"
-  setEnv base
   let (decls, report, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
     (sourceOrder? := some ordinaryOrder) (futureSupport? := some shadow)
       (outputSourceOrder? := some outputOrder)

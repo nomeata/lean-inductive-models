@@ -56,6 +56,25 @@ def runExportShadow (label : String) (input : Export) (checkRecursors : Bool)
     throw <| IO.userError s!"{label}: generated statements differ: {report.stmtErrors}"
   return { output, report, selected }
 
+def shadowFailureRestoresEnvironment (input : Export)
+    (generation : InductiveModels.Cli.Config) : IO Bool := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<driver-shadow-transaction-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (restored, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
+    let before ← getEnv
+    let supportNames : Array Name := #[`Eq, `Nat, `PUnit, `PSigma', `Quot, `Quot.sound]
+    let beforePresence := supportNames.map before.constants.contains
+    let failed ← try
+      discard <| runFilterWithFutureSourceSupportShadow input false generation
+      pure false
+    catch _ =>
+      pure true
+    let after ← getEnv
+    pure (failed && supportNames.map after.constants.contains == beforePresence))) context { env }
+  return restored
+
 def postponeRecords (input : Export) (postpone : EDecl → Bool) : Export :=
   { input with
     decls := input.decls.filter (fun declaration => !postpone declaration) ++
@@ -107,6 +126,15 @@ def generatedOwnersExact (result : FixtureResult) : Bool :=
 def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let mut state : TestState := {}
+
+  -- The ordinary parser/filter contract permits a declaration record with no
+  -- introduced names.  Internal shadow bookkeeping must remain lazy so merely
+  -- sharing the transition cannot reject this historical pass-through shape.
+  let emptyRecord := EDecl.induct [] [] []
+  let emptyInput : Export := { metaLine := .null, decls := #[emptyRecord] }
+  let emptyResult ← runExport "empty inductive declaration record" emptyInput false noGeneration
+  state := state.check "ordinary filtering retains a nameless inductive record"
+    (emptyResult.output == #[emptyRecord] && emptyResult.report == {})
 
   -- These are the three aggregate failure shapes caused by unconditional
   -- support prioritization: two already-filtered composed exports, and the
@@ -250,6 +278,11 @@ def main : IO UInt32 := do
       lateEqShadow.report == lateEq.report &&
       Check.checkReport { lateEqSource with decls := lateEqShadow.output } ==
         Check.checkReport { lateEqSource with decls := lateEq.output }
+  let duplicateAfterShadow := { lateEqInput with
+    decls := lateEqInput.decls.push (.ax `Pre [] (.sort .zero) false) }
+  state := state.check "shadow setup restores the caller environment before ordering failure"
+    (← shadowFailureRestoresEnvironment duplicateAfterShadow
+      { noGeneration with nested := true, mutualModels := true, simple := true, basic := true })
   let malformedEq := { lateEqInput with decls := lateEqInput.decls.map fun declaration =>
     match declaration with
     | .induct (type :: types) constructors (recursor :: recursors) =>
