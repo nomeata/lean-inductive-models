@@ -647,7 +647,7 @@ def main (args : List String) : IO UInt32 := do
       !(← System.FilePath.pathExists (discardCwd / "_tmp"))
   IO.FS.removeDir discardCwd
   let discardSentinelCwd := s!"{scratch}/main-cli-compact-discard-sentinel"
-  let discardSentinelRoot := discardSentinelCwd / "_tmp"
+  let discardSentinelRoot := (discardSentinelCwd : System.FilePath) / "_tmp"
   let discardSentinel := discardSentinelRoot / "input-only-sentinel"
   IO.FS.createDirAll discardSentinelRoot
   IO.FS.writeFile discardSentinel "untouched"
