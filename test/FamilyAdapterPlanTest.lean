@@ -15,12 +15,6 @@ private def constructorKey (constructorsPerMember ownerIndex constructorIndex : 
     constructor := numbered "FamilyAdapterPlanTest.constructor"
       (ownerIndex * constructorsPerMember + constructorIndex) }
 
-private def equivalence (index : Nat) : EquivalenceCertificate :=
-  { forward := numbered "FamilyAdapterPlanTest.forward" index
-    backward := numbered "FamilyAdapterPlanTest.backward" index
-    backwardForward := numbered "FamilyAdapterPlanTest.backwardForward" index
-    forwardBackward := numbered "FamilyAdapterPlanTest.forwardBackward" index }
-
 private def sourceRecursor (ownerIndex : Nat) : Name :=
   numbered "FamilyAdapterPlanTest.sourceRecursor" ownerIndex
 
@@ -39,7 +33,7 @@ member count and arbitrary nonnegative values for every other dimension. -/
 private def makePlan (memberCount constructorsPerMember parameterArity indexArity
     fieldCount occurrencesPerField : Nat) : FamilyAdapterPlan := Id.run do
   let mut constructors : Array ConstructorPlan := #[]
-  let mut occurrences : Array OccurrenceCertificate := #[]
+  let mut occurrences : Array OccurrencePlan := #[]
   let mut rules : Array RulePlan := #[]
 
   for ownerIndex in [:memberCount] do
@@ -63,10 +57,7 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
           occurrences := occurrences.push
             { key := occurrenceKey
               sourceType := .sort .zero
-              implementationType := .sort .zero
-              maps := equivalence
-                (ordinal * fieldCount * occurrencesPerField +
-                  fieldIndex * occurrencesPerField + occurrenceIndex) }
+              implementationType := .sort .zero }
         binders := binders.push
           { fieldIndex
             info := .default
@@ -82,14 +73,6 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
           implementationResultIndices := sorts indexArity
           sourcePackedType := .sort .zero
           implementationPackedType := .sort .zero }
-      let certificate : TelescopeCertificate :=
-        { constructor := key
-          packSource := numbered "FamilyAdapterPlanTest.packSource" ordinal
-          packImplementation := numbered "FamilyAdapterPlanTest.packImplementation" ordinal
-          encode := numbered "FamilyAdapterPlanTest.encode" ordinal
-          decode := numbered "FamilyAdapterPlanTest.decode" ordinal
-          decodeEncode := numbered "FamilyAdapterPlanTest.decodeEncode" ordinal
-          encodeDecode := numbered "FamilyAdapterPlanTest.encodeDecode" ordinal }
       constructors := constructors.push
         { key
           sourceName := numbered "FamilyAdapterPlanTest.sourceConstructor" ordinal
@@ -98,8 +81,7 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
           sourceType := .sort .zero
           implementationType := .sort .zero
           publicType := .sort .zero
-          telescope
-          certificate }
+          telescope }
 
   -- A mutual source recursor has one rule for every constructor in the whole
   -- family, not merely the constructors owned by its motive's member.
@@ -136,8 +118,7 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
           (ruleKey constructorsPerMember ownerIndex constructorOwner)
       sourceRecursor := sourceRecursor ownerIndex
       implementationRecursor := numbered "FamilyAdapterPlanTest.implRecursor" ownerIndex
-      publicRecursor := numbered "FamilyAdapterPlanTest.publicRecursor" ownerIndex
-      equivalence := equivalence ownerIndex })
+      publicRecursor := numbered "FamilyAdapterPlanTest.publicRecursor" ownerIndex })
   return { root := memberKey 0
            levelParams := []
            components :=

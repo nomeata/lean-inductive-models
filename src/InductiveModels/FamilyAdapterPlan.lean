@@ -3,10 +3,10 @@ import InductiveModels.Model
 /-!
 # Generic private/public family-adapter plans
 
-This module is deliberately inert.  It describes the source-derived plan and
-the declaration-backed certificate for a future adapter around an already
-kernel-checked private [`InductiveModels.Iso`], but no generator or checker
-imports it yet.
+This module describes the source-derived plan and declaration-backed
+certificate for a future adapter around an already kernel-checked private
+[`InductiveModels.Iso`]. `FamilyAdapterShadow` derives and validates plans, but
+no production route selects or emits from them yet.
 
 The keys below carry source identities instead of array positions.  Arrays are
 used only as finite ordered collections; none of the structures imposes a
@@ -125,7 +125,6 @@ structure MemberPlan where
   sourceRecursor : Name
   implementationRecursor : Name
   publicRecursor : Name
-  equivalence : EquivalenceCertificate
   deriving Inhabited, BEq, Repr
 
 /-- One exact constructor binder in the public/private telescope walk. -/
@@ -172,17 +171,13 @@ structure ConstructorPlan where
   implementationType : Expr
   publicType : Expr
   telescope : TelescopePlan
-  certificate : TelescopeCertificate
   deriving Inhabited, BEq, Repr
 
-/-- Maps for one recursive occurrence.  For a direct family edge these are the
-target member's maps.  For a nested edge they may be the generated
-`G(P) <-> G(M)` maps, composed later with the existing mimic pack/unpack laws. -/
-structure OccurrenceCertificate where
+/-- Source and implementation views of one recursive occurrence. -/
+structure OccurrencePlan where
   key : OccurrenceKey
   sourceType : Expr
   implementationType : Expr
-  maps : EquivalenceCertificate
   deriving Inhabited, BEq, Repr
 
 /-- One exact public rule and its private proof oracle.  Occurrences are keyed
@@ -196,6 +191,28 @@ structure RulePlan where
   occurrences : Array OccurrenceKey := #[]
   deriving Inhabited, BEq, Repr
 
+/-- Declaration-backed maps for a member correspondence. -/
+structure MemberCertificate where
+  key : MemberKey
+  maps : EquivalenceCertificate
+  deriving Inhabited, BEq, Repr
+
+/-- Maps for one recursive occurrence.  For a direct family edge these are the
+target member's maps.  For a nested edge they may be the generated
+`G(P) <-> G(M)` maps, composed later with the existing mimic pack/unpack laws. -/
+structure OccurrenceCertificate where
+  key : OccurrenceKey
+  maps : EquivalenceCertificate
+  deriving Inhabited, BEq, Repr
+
+/-- Proof evidence emitted only after a complete source-derived plan exists.
+The shadow seam derives [`FamilyAdapterPlan`] without fabricating these names. -/
+structure FamilyAdapterCertificate where
+  members : Array MemberCertificate
+  telescopes : Array TelescopeCertificate
+  occurrences : Array OccurrenceCertificate
+  deriving Inhabited, BEq, Repr
+
 /-- Complete finite plan for a single private/public family boundary. -/
 structure FamilyAdapterPlan where
   root : MemberKey
@@ -204,12 +221,12 @@ structure FamilyAdapterPlan where
   members : Array MemberPlan
   constructors : Array ConstructorPlan
   rules : Array RulePlan
-  occurrences : Array OccurrenceCertificate
+  occurrences : Array OccurrencePlan
   support : Array Name := #[]
   deriving Inhabited, BEq, Repr
 
-/-- Structural errors in an inert plan.  Semantic validation remains the
-future generator/checker's job against exact source and installed metadata. -/
+/-- Structural errors in a source-derived plan. Semantic checks against exact
+source and installed metadata belong to the shadow or future generator. -/
 inductive PlanError where
   | emptyFamily
   | duplicateMember (key : MemberKey)
@@ -316,9 +333,6 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
     unless constructor.telescope.constructor == constructor.key do
       errors := errors.push
         (.telescopeConstructorMismatch constructor.key constructor.telescope.constructor)
-    unless constructor.certificate.constructor == constructor.key do
-      errors := errors.push
-        (.telescopeConstructorMismatch constructor.key constructor.certificate.constructor)
     if let some owner := plan.members.find? (·.key == constructor.key.owner) then
       unless owner.constructors.contains constructor.key do
         errors := errors.push (.memberConstructorMismatch owner.key constructor.key)

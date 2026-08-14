@@ -1,22 +1,25 @@
 # Generic family-adapter design
 
-`InductiveModels.FamilyAdapterPlan` is currently an inert schema. No driver,
-checker, or exporter imports it. Its purpose is to give the future one-layer
-adapter one source-derived representation instead of a collection of
-unary/binary, singleton, indexed, nested, and mutual routes.
+`InductiveModels.FamilyAdapterPlan` is the source-derived representation for a
+future one-layer adapter. It replaces unary/binary, singleton, indexed, nested,
+and mutual shape cases with keyed finite arrays. `FamilyAdapterShadow` now
+derives this plan from every successfully generated exact source block and its
+existing kernel-checked private `Iso`. `Driver.serialiseIso` does not use the
+result for route selection, rejection, serialized output, logs, or normal
+reports. `runFilterWithFamilyAdapterShadow` is the test-only value observer;
+ordinary filtering retains no observations.
 
 ## Input and identity
 
-The builder consumes the exact source declaration together with the existing
-kernel-checked private `Iso`. It records source names as member, constructor,
-rule, and SCC keys. Array positions preserve declaration and telescope order,
-but are never identities and never decide eligibility.
+The shadow builder consumes an exact source `EDecl`, the private/public names
+recorded by `Iso` (including family-member metadata), and installed declaration
+types. Source names identify members, constructors, rules, occurrences, and
+SCCs. Array positions preserve declaration and telescope order; they do not
+decide eligibility.
 
-Each member also retains the exact rule-key sequence read from its source
-`ERec`. In a mutual family that sequence includes sibling constructors. Plan
-validation compares the installed `RulePlan` sequence against this snapshot;
-the later semantic checker must in turn compare the snapshot with the source
-metadata in the environment.
+Each member retains the exact rule-key sequence read from its source `ERec`.
+In a mutual family that sequence includes sibling constructors. The validator
+requires exact agreement between that sequence and the keyed rule array.
 
 Every recursive occurrence is keyed by its constructor, literal field offset,
 expression path, binder depth, minor-hypothesis offset, and target member. A
@@ -24,12 +27,12 @@ field may contain any finite number of occurrences; a component may contain
 any finite number of source or mimic members. Parameter and result-index
 telescopes are arrays retained separately for each member and constructor.
 
-Certificates stay as `Name` and `Expr` values in the incremental Lean
-environment. They are not serialized through JSON. Before installation, the
-semantic checker must infer the recorded declaration types in that same
-environment and compare them with the exact types derived from the plan.
+The plan contains no fabricated proof names. A separate
+`FamilyAdapterCertificate` will hold declaration-backed maps and telescope
+proofs after construction. Certificates stay as `Name` and `Expr` values in
+the incremental Lean environment; they are never serialized through JSON.
 
-## Proof construction
+## Planned proof construction
 
 The proof is structural, with no clause selected by a cardinality.
 
@@ -49,7 +52,7 @@ The proof is structural, with no clause selected by a cardinality.
    hypotheses in telescope order. Each fold step abstracts the current
    occurrence and applies `Eq.rec`; the induction is on the finite occurrence
    array, not on a unary/binary case split.
-5. Accept the adapter only after all member, constructor, telescope,
+5. Enable the adapter only after all member, constructor, telescope,
    occurrence, round-trip, and iota declarations have been kernel checked.
    Publish the complete family atomically; a partial certificate never enables
    a partial public route.
@@ -65,9 +68,8 @@ occurrences the telescope may contain.
 
 Counts such as one or two recursive fields, one result index, one constructor,
 one changed mutual member, or a bounded SCC size are implementation caps. None
-belongs in plan validation or route selection. If construction for any finite
-dimension is not implemented, the generic adapter remains disabled rather
-than falling through to another bounded corpus classifier.
+appears in plan validation, shadow coverage, or route selection. Until proof
+construction handles the general finite plan, this adapter remains disabled.
 
 ## Regression generation
 

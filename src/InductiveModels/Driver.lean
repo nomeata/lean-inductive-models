@@ -4,6 +4,7 @@ import InductiveModels.Naming
 import InductiveModels.Projection
 import InductiveModels.Check
 import InductiveModels.KernelCheck
+import InductiveModels.FamilyAdapterShadow
 import InductiveModels.Spool
 
 /-!
@@ -1081,7 +1082,8 @@ def addStructureModels (types : Array EIndType) (constructors : Array ECtor)
   let is ← addStructureEtaTheorems types constructors recursors reserved is
   addUnitlikeTheorems types constructors recursors reserved is
 
-private abbrev ModelIslandState := Array EDecl × Report × Array PendingModel
+private abbrev ModelIslandState :=
+  Array EDecl × Report × Array PendingModel × Array FamilyAdapter.ShadowObservation
 
 /-- Read one inductive block back out of the environment, including the
 recursors the **kernel** generated for it. -/
@@ -1543,18 +1545,21 @@ def ExactGeneratedBlocks.require (blocks : ExactGeneratedBlocks) (member : Name)
     | throwError "exact generated block snapshot has no member {member}"
   return block
 
-/-- Serialization result. `exactBlocks` is consumed inside the current island;
-it is never copied into pending/report state. -/
+/-- Serialization result. `exactBlocks` and the compact generic-adapter shadow
+are consumed inside the current island; neither is copied into output/report state. -/
 structure SerialisedIso where
   records : Array EDecl
   exactBlocks : ExactGeneratedBlocks
   model : Iso
+  adapterShadow : FamilyAdapter.ShadowObservation
 
 /-- Read a generated model back from the construction environment, register
 every name Lean minted for its inductive blocks, and serialize through exact
 alias lookups. The returned `Iso` carries the completed alias and splice
 witnesses used for reporting and shared-support persistence. -/
-def serialiseIso (is : Iso) (exactTransform : EDecl → EDecl := id) : MetaM SerialisedIso := do
+def serialiseIso (source : EDecl) (is : Iso)
+    (exactTransform : EDecl → EDecl := id) : MetaM SerialisedIso := do
+  let adapterShadow ← FamilyAdapter.deriveShadowPlan source is
   let mut rawRecords : Array EDecl := #[]
   for declaration in is.decls do
     rawRecords := rawRecords ++ (← toEDecls declaration)
@@ -1577,7 +1582,11 @@ def serialiseIso (is : Iso) (exactTransform : EDecl → EDecl := id) : MetaM Ser
   -- map therefore remains available while the exact output identities of
   -- spliced support are recorded for persistence and reporting.
   let model := { is with aliases := aliases, spliced := spliced }
-  return { records := renamed, exactBlocks := exactBlocks, model := model }
+  return {
+    records := renamed
+    exactBlocks := exactBlocks
+    model := model
+    adapterShadow := FamilyAdapter.ShadowReport.observe adapterShadow }
 
 /-- The exact exported metadata of one inductive record must be what Lean's
 kernel regenerated from that record's type-former and constructor inputs.
@@ -1831,9 +1840,10 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (canWait : Bool)
     (st : ModelIslandState) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none)
     (exactTransform : EDecl → EDecl := id)
-    (selectPublicOneLayer : Bool := false) :
+    (selectPublicOneLayer : Bool := false)
+    (collectAdapterShadows : Bool := false) :
     MetaM (ModelIslandState × Option PrimReadiness) := do
-  let (out, rep, pending) := st
+  let (out, rep, pending, adapterShadows) := st
   let saved ← getEnv
   -- **The retry under an alias root**, and it is a retry rather than a
   -- decision taken up front on purpose: aliasing changes nothing about the
@@ -1916,18 +1926,21 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     if canWait then
       if let some readiness := dec.lateReadiness? then
         unless ← readiness.ready reserved do
-          return ((out, rep, pending), some readiness)
+          return ((out, rep, pending, adapterShadows), some readiness)
     -- **Exempt is not declined.** A basis primitive is what the construction
     -- is written in, so its absence from the models is the thing that makes
     -- the construction well-founded rather than a shape it cannot reach; it
     -- gets its own row and is out of the decline count.
     if dec matches .basisExempt then
       return ((out, { rep with exempt := rep.exempt.push (tname, dec.labelAs "prim") },
-        pending), none)
+        pending, adapterShadows), none)
     return ((out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") },
-      pending), none)
+      pending, adapterShadows), none)
   | .ok is =>
-    let serialised ← serialiseIso is exactTransform
+    let source ← match sourceBlock? with
+      | some (block, _) => pure block
+      | none => indEDecl #[tname]
+    let serialised ← serialiseIso source is exactTransform
     let records := serialised.records
     let is := serialised.model
     let mut out := out
@@ -1935,7 +1948,10 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
-    let mut st2 := (out, rep, pending.push { spliced := is.spliced })
+    let adapterShadows := if collectAdapterShadows then
+        adapterShadows.push serialised.adapterShadow
+      else adapterShadows
+    let mut st2 := (out, rep, pending.push { spliced := is.spliced }, adapterShadows)
     if basicModels then
       for n in is.spliced do
         if inductiveBasis.contains n then continue
@@ -1954,7 +1970,8 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
         let normalizer := ({ metaLine := .null, decls := #[exactBlock] } : Export).exactNormalizationEnv
         st2 :=
           (← genPrim n iv.levelParams iv.numParams iv.type cts #[] reserved
-            basicModels false st2 (some (exactBlock, normalizer)) exactTransform).1
+            basicModels false st2 (some (exactBlock, normalizer)) exactTransform
+            (collectAdapterShadows := collectAdapterShadows)).1
     -- **A model may not leave an inductive it introduced unmodelled.** Arm C
     -- splices the index erasure of the family it is
     -- carving, so its output contains an inductive that was in nobody's
@@ -1991,7 +2008,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
             emitting would leave an unmodelled inductive in front of a consumer \
             (the splice-closure rule) — {inner.getD "and the descent recorded no reason"}"
           return ((st.1, { st.2.1 with declined := st.2.1.declined.push (tname, why) },
-            st.2.2), none)
+            st.2.2.1, st.2.2.2), none)
     return (st2, none)
 
 /-- **The composition's third step**: the implementation inductives a mutual
@@ -2008,7 +2025,8 @@ would retain precisely the ownerful state this pass is designed to discard. -/
 def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     (reserved : Std.HashSet Name) (basicModels : Bool)
     (blocks : ExactGeneratedBlocks) (st : ModelIslandState)
-    (exactTransform : EDecl → EDecl := id) : MetaM ModelIslandState := do
+    (exactTransform : EDecl → EDecl := id)
+    (collectAdapterShadows : Bool := false) : MetaM ModelIslandState := do
   let mut st := st
   -- Asked once, of the environment as it stands at the block: every member of
   -- one block is at the same point in the replay.
@@ -2027,6 +2045,7 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     let (next, wait?) ←
       genPrim n lparams np iv.type cts #[] reserved basicModels true st
         (some (exactBlock, normalizer)) exactTransform
+        (collectAdapterShadows := collectAdapterShadows)
     if wait?.isSome then
       throwError "composed simple model prerequisite remained late after support scheduling"
     st := next
@@ -2042,8 +2061,9 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (simpleModels basicModels : Bool)
     (st : ModelIslandState) (sourceBlock? : Option EDecl := none)
-    (exactTransform : EDecl → EDecl := id) : MetaM ModelIslandState := do
-  let (out, rep, pending) := st
+    (exactTransform : EDecl → EDecl := id)
+    (collectAdapterShadows : Bool := false) : MetaM ModelIslandState := do
+  let (out, rep, pending, adapterShadows) := st
   let saved ← getEnv
   let generate := fun (buildRoot? : Option Name) => do
     let selected ← match sourceBlock? with
@@ -2067,9 +2087,12 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
   | .error dec =>
     setEnv saved
     return (out, { rep with declined := rep.declined.push (all[0]!, dec.labelAs "mutual") },
-      pending)
+      pending, adapterShadows)
   | .ok is =>
-    let serialised ← serialiseIso is exactTransform
+    let source ← match sourceBlock? with
+      | some block => pure block
+      | none => indEDecl all
+    let serialised ← serialiseIso source is exactTransform
     let records := serialised.records
     let is := serialised.model
     let mut out := out
@@ -2077,10 +2100,13 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
-    let st := (out, rep, pending.push { spliced := is.spliced })
+    let adapterShadows := if collectAdapterShadows then
+        adapterShadows.push serialised.adapterShadow
+      else adapterShadows
+    let st := (out, rep, pending.push { spliced := is.spliced }, adapterShadows)
     if simpleModels then
       primCompose is.members is.levelParams np reserved basicModels serialised.exactBlocks st
-        exactTransform
+        exactTransform collectAdapterShadows
     else
       return st
 
@@ -2678,6 +2704,7 @@ private structure FilterContext where
   futureSupport? : Option FutureSourceSupport := none
   outputSourceOrder? : Option (Array Nat) := none
   collectTrace : Bool := false
+  collectAdapterShadows : Bool := false
 
 /-- Cheap summary-first test for whether an exhaustive record rewrite can
 change anything. `all` fields are bookkeeping rather than dependencies, so
@@ -2714,6 +2741,7 @@ private structure FilterState where
   /-- Exact name rows captured atomically with direct compact pushes.  Names
   only: retaining this array cannot retain a declaration expression graph. -/
   kernelCheckRows : Array (Array Name) := #[]
+  adapterShadows : Array FamilyAdapter.ShadowObservation := #[]
 
 private inductive FilterFeedResult where
   | next (state : FilterState)
@@ -2765,11 +2793,13 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut sourceSteps := state.sourceSteps
   let mut kernelCheckState? := state.kernelCheckState?
   let mut kernelCheckRows := state.kernelCheckRows
+  let mut adapterShadows := state.adapterShadows
   let emissionStart := legacyOut.size
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
   let mut out : Array EDecl := #[]
   let mut pending : Array PendingModel := #[]
+  let mut islandAdapterShadows : Array FamilyAdapter.ShadowObservation := #[]
   let mut modeledSourceFamilies : Array Check.CompactFamilyCertificate := #[]
   let mut modeledSourceGlobalExtra? : Option Check.GlobalExtraRecord := none
   let basisRoot? := match replayD with
@@ -2825,7 +2855,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             setEnv saved
             rep := { rep with declined := rep.declined.push (t.name, dec.label) }
           | .ok is =>
-            let serialised ← serialiseIso is exactTransform
+            let serialised ← serialiseIso replayD is exactTransform
+            if context.collectAdapterShadows then
+              islandAdapterShadows := islandAdapterShadows.push serialised.adapterShadow
             let records := serialised.records
             let is := serialised.model
             out := out ++ records
@@ -2857,7 +2889,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
                 rep := { rep with
                   declined := rep.declined.push (is.members[0]!, dec.labelAs "mutual") }
               | .ok is2 =>
-                let serialised2 ← serialiseIso is2 exactTransform
+                let serialised2 ← serialiseIso exactBlock is2 exactTransform
+                if context.collectAdapterShadows then
+                  islandAdapterShadows := islandAdapterShadows.push serialised2.adapterShadow
                 let records := serialised2.records
                 let is2 := serialised2.model
                 out := out ++ records
@@ -2867,8 +2901,9 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
                 if generation.simple then
                   let st3 ← primCompose is2.members is2.levelParams
                     t.numParams reserved generation.basic serialised2.exactBlocks
-                      (out, rep, pending) exactTransform
-                  (out, rep, pending) ← pure st3
+                      (out, rep, pending, islandAdapterShadows) exactTransform
+                      context.collectAdapterShadows
+                  (out, rep, pending, islandAdapterShadows) ← pure st3
   -- Replay the source record between its pre-owner and post-owner generation
   -- phases.  An unreplayable source record terminates the complete machine and
   -- discards every private island, matching the historical loop return.
@@ -2944,17 +2979,19 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         unless ← mutualReady needsExactSortLift reserved do
           throwError "plain mutual model prerequisites remained late after support scheduling"
         let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
-          generation.simple generation.basic (out, rep, pending) (some replayD) exactTransform
-        (out, rep, pending) ← pure st3
+          generation.simple generation.basic (out, rep, pending, islandAdapterShadows)
+          (some replayD) exactTransform context.collectAdapterShadows
+        (out, rep, pending, islandAdapterShadows) ← pure st3
       if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
           basisRoot?.isNone && invalidBasis.isEmpty then
         let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
         let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
-          #[] reserved generation.basic true (out, rep, pending)
+          #[] reserved generation.basic true (out, rep, pending, islandAdapterShadows)
           (some (replayD, constructionNormalizer)) exactTransform true
+          context.collectAdapterShadows
         if wait?.isSome then
           throwError "simple model prerequisite remained late after support scheduling"
-        (out, rep, pending) ← pure st
+        (out, rep, pending, islandAdapterShadows) ← pure st
   if d matches .induct .. then
     let generated := out
     let islandModels := pending
@@ -3112,11 +3149,13 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       sourceInstalled := replayD.names.all mainEnv.constants.contains
       generated := rep.generated.extract reportedBefore rep.generated.size
       generatedRecords := out.size }
+  if context.collectAdapterShadows then
+    adapterShadows := adapterShadows ++ islandAdapterShadows
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, commits, stagedRecords,
     scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
     persistentSupportOrigins, futureSupportRemaining, emissionByRaw, sourceSteps,
-    kernelCheckState?, kernelCheckRows }
+    kernelCheckState?, kernelCheckRows, adapterShadows }
 
 /-- Payload-free handoff from logical generation to compact finalization.  It
 contains neither an `Environment`, `Kernel.Environment`, `EDecl`, sink, writer,
@@ -3392,9 +3431,11 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     (futureSupport? : Option FutureSourceSupport := none)
     (outputSourceOrder? : Option (Array Nat) := none)
     (sourceCensus? : Option SourceCensus := none)
-    (kernelCheckShadow : Bool := false) :
+    (kernelCheckShadow : Bool := false)
+    (collectAdapterShadows : Bool := false) :
     MetaM (Array EDecl × Report × CompactPlan × StagedPlan × Array FilterSourceStep ×
-      Option FilterKernelCheckShadow × Option CompactKernelCheckVerdict) := do
+      Option FilterKernelCheckShadow × Option CompactKernelCheckVerdict ×
+      Array FamilyAdapter.ShadowObservation) := do
   let plannedCensus := sourceCensus?.isSome
   let sourceCensus := sourceCensus?.getD (SourceCensus.ofSource x)
   let plannedAliases ← match sourceCensus.replayAliases with
@@ -3463,7 +3504,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     rawOrdinals, reserved, constructionReserved,
     kernelCheckBase? := if kernelCheckShadow || retention.checksKernelDirect then
       some fallbackEnv else none,
-    futureSupport?, outputSourceOrder?, collectTrace }
+    futureSupport?, outputSourceOrder?, collectTrace, collectAdapterShadows }
   let initialFutureSupport := futureSupport?.map (·.records) |>.getD
     ({} : Std.HashMap Nat EDecl)
   let mut state : FilterState :=
@@ -3498,8 +3539,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         let some base := context.kernelCheckBase?
           | throwError "unreplayable compact direct state lost its exact base environment"
         setEnv base
-        return (#[], report, {}, {}, sourceSteps, none, none)
-      return (x.decls, report, {}, {}, sourceSteps, none, none)
+        return (#[], report, {}, {}, sourceSteps, none, none, #[])
+      return (x.decls, report, {}, {}, sourceSteps, none, none, #[])
   if retention.checksKernelDirect then
     let sourceSteps := state.sourceSteps
     let some base := context.kernelCheckBase?
@@ -3511,15 +3552,27 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       -- caller's Meta state either.
       setEnv base
     let (report, compact, kernelVerdict) ← sealed.finalize
-    return (#[], report, compact, {}, sourceSteps, none, some kernelVerdict)
+    return (#[], report, compact, {}, sourceSteps, none, some kernelVerdict, #[])
   let (decls, report, compact, plan, kernelCheckShadow?) ← state.finalize context
-  return (decls, report, compact, plan, state.sourceSteps, kernelCheckShadow?, none)
+  return (decls, report, compact, plan, state.sourceSteps, kernelCheckShadow?, none,
+    state.adapterShadows)
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
+  let (decls, report, _, _, _, _, _, _) ←
+    runFilterCore x checkRecursors generation .fullOracle
   return (decls, report)
+
+/-- Test-facing observer for generic family-adapter shadow validation. The
+ordinary filter still derives and validates every plan, but retains none of
+these compact observations and emits no trace or log output. -/
+def runFilterWithFamilyAdapterShadow (x : Export) (checkRecursors : Bool)
+    (generation : Cli.Config) :
+    MetaM (Array EDecl × Report × Array FamilyAdapter.ShadowObservation) := do
+  let (decls, report, _, _, _, _, _, shadows) ← runFilterCore x checkRecursors generation
+    .fullOracle (collectAdapterShadows := true)
+  return (decls, report, shadows)
 
 /-- Test-facing full-output oracle with an exact declaration-wise kernel
 shadow.  The ordinary filter and CLI do not select this path.  Each completed
@@ -3530,7 +3583,7 @@ stream to seal, so it returns its unchanged output/report with `none`. -/
 def runFilterWithKernelCheckShadow (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) :
     MetaM (Array EDecl × Report × Option FilterKernelCheckShadow) := do
-  let (decls, report, _, _, _, shadow?, _) ← runFilterCore x checkRecursors generation
+  let (decls, report, _, _, _, shadow?, _, _) ← runFilterCore x checkRecursors generation
     .fullOracle (kernelCheckShadow := true)
   return (decls, report, shadow?)
 
@@ -3583,7 +3636,8 @@ def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
   let outputOrder ← match census.scheduleOrder x generation with
     | .ok order => pure order
     | .error error => throwError "cannot retain support-priority output order: {repr error}"
-  let (decls, report, _, _, _, _, _) ← runFilterCore x checkRecursors generation .fullOracle
+  let (decls, report, _, _, _, _, _, _) ←
+    runFilterCore x checkRecursors generation .fullOracle
     (sourceOrder? := some ordinaryOrder) (futureSupport? := some shadow)
       (outputSourceOrder? := some outputOrder)
   return (decls, report, true)
@@ -3593,7 +3647,7 @@ output and report are produced by the same core invocation as the snapshots;
 ordinary production callers collect no snapshots. -/
 def runFilterWithSourceTrace (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Array EDecl × Report × Array FilterSourceStep) := do
-  let (decls, report, _, _, steps, _, _) ←
+  let (decls, report, _, _, steps, _, _, _) ←
     runFilterCore x checkRecursors generation .fullOracle (collectTrace := true)
   return (decls, report, steps)
 
@@ -3603,7 +3657,7 @@ composed consumer sees them; ordinary production callers use [`runFilter`]. -/
 def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) (transform : EDecl → EDecl) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _, _, _, _) ←
+  let (decls, report, _, _, _, _, _, _) ←
     runFilterCore x checkRecursors generation .fullOracle transform
   return (decls, report)
 
@@ -3612,7 +3666,7 @@ the full output remains live for comparison with final Order/Check. The
 returned plan has already discarded the compact checking summaries. -/
 def runFilterWithIslandSink (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Array EDecl × Report × StagedPlan) := do
-  let (decls, report, _, plan, _, _, _) ←
+  let (decls, report, _, plan, _, _, _, _) ←
     runFilterCore x checkRecursors generation (.shadowSpool sink)
   return (decls, report, plan)
 
@@ -3624,7 +3678,7 @@ source terminates like the ordinary filter and returns `none`. -/
 def runFilterDirectChecking (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) :
     MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict) := do
-  let (_, report, compact, _, _, _, kernelVerdict?) ←
+  let (_, report, compact, _, _, _, kernelVerdict?, _) ←
     runFilterCore x checkRecursors generation .compactDirect
   return (report, compact, kernelVerdict?)
 
@@ -3633,7 +3687,7 @@ and summarized at island close, then discarded without opening a workspace or
 retaining any physical span. -/
 def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Report × CompactPlan) := do
-  let (_, report, compact, _, _, _, _) ←
+  let (_, report, compact, _, _, _, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard
   return (report, compact)
 
@@ -3643,7 +3697,7 @@ record is nevertheless the value consumed by `feedSource`, and compact mode
 does not retain it after that transition. -/
 def runFilterDiscardingPlanned (x : Export) (reader : Spool.PlannedSourceReader)
     (checkRecursors : Bool) (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
-  let (_, report, compact, _, _, _, _) ←
+  let (_, report, compact, _, _, _, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard (plannedSource? := some reader)
   return (report, compact)
 
@@ -3663,7 +3717,7 @@ def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
       input.envelope.declarationCount == input.census.scheduling.size &&
       input.envelope.declarationCount == reader.size do
     throwError "planned source parser/census/reader cardinalities disagree"
-  let (_, report, compact, _, _, _, _) ← runFilterCore input.envelope.template
+  let (_, report, compact, _, _, _, _, _) ← runFilterCore input.envelope.template
     checkRecursors generation .compactDiscard (plannedSource? := some reader)
     (sourceCensus? := some input.census)
   return (report, compact)
@@ -3673,7 +3727,7 @@ island close and never appended to a cumulative declaration array. The result
 contains only ordered declaration locators and spool spans. -/
 def runFilterStaged (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (sink : IslandSink) : MetaM (Report × StagedPlan) := do
-  let (_, report, _, plan, _, _, _) ←
+  let (_, report, _, plan, _, _, _, _) ←
     runFilterCore x checkRecursors generation (.compactSpool sink)
   return (report, plan)
 

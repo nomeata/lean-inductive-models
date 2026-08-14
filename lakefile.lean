@@ -182,6 +182,11 @@ lean_exe familyadapterplantest where
   root := `FamilyAdapterPlanTest
   supportInterpreter := true
 
+lean_exe familyadaptershadowtest where
+  srcDir := "test"
+  root := `FamilyAdapterShadowTest
+  supportInterpreter := true
+
 lean_lib OneLayerProjectionPrototype where
   srcDir := "test"
   roots := #[`OneLayerProjectionPrototype]
