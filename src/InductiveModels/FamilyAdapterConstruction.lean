@@ -1196,7 +1196,7 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
       { maps := fallback.maps
         mapped := value
         roundTrip := eqi.refl' sourceLevel sourceType value }
-    pure result
+    return result
   let mut candidates : Array ExactCarrierCandidate := #[]
   for member in plan.members do
     if let some certificate := certificateFor? certificates member.key then
