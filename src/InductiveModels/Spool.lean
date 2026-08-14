@@ -213,6 +213,12 @@ def Workspace.reservePath (workspace : Workspace) (leaf : String) : IO System.Fi
   workspace.ownedFiles.modify (fun paths => paths.push path)
   return path
 
+/-- Opaque identity shared only by one raw tee and readers opened from it.
+Unlike a certificate (which describes shape and offsets), pointer identity
+cannot accidentally equate distinct same-sized source byte streams. -/
+structure SourceProvenance where private mk ::
+  private marker : IO.Ref Unit
+
 /-- The three logical parser payloads. This is not yet a byte-exact snapshot:
 noncanonical ignored records are intentionally absent, and such a certificate
 always selects the existing full writer. -/
@@ -220,12 +226,17 @@ structure ParseTee where
   metadata : SpoolFile
   arena : SpoolFile
   declarations : SpoolFile
+  private provenance : SourceProvenance
 
 def ParseTee.create (workspace : Workspace) : IO ParseTee := do
+  let marker ← IO.mkRef ()
   return {
     metadata := ← workspace.createFile "metadata.ndjson"
     arena := ← workspace.createFile "arena.ndjson"
-    declarations := ← workspace.createFile "declarations.ndjson" }
+    declarations := ← workspace.createFile "declarations.ndjson"
+    provenance := .mk marker }
+
+def ParseTee.sourceProvenance (tee : ParseTee) : SourceProvenance := tee.provenance
 
 def ParseTee.sink (tee : ParseTee) : RawSink where
   emit record := match record.kind with
@@ -249,6 +260,7 @@ structure PlannedSourceReader where
   private position : IO.Ref UInt64
   private declarationSize : UInt64
   private spans : Array RawSpan
+  private provenance : SourceProvenance
 
 /-- Validate and open a complete tee for declaration-wise reads.  The caller
 must have finished all three tee files. Canonical progressive arena IDs are a
@@ -274,12 +286,19 @@ def PlannedSourceReader.create (tee : ParseTee) (certificate : RawCertificate)
     let declarations ← IO.FS.Handle.mk tee.declarations.path .read
     let position ← IO.mkRef 0
     return .ok <| PlannedSourceReader.mk arena declarations position
-      sizes.declarations certificate.declarations
+      sizes.declarations certificate.declarations tee.provenance
   catch error =>
     return .error s!"cannot open planned source spool: {error}"
 
 /-- Number of source declaration records certified for this reader. -/
 def PlannedSourceReader.size (reader : PlannedSourceReader) : Nat := reader.spans.size
+
+/-- Bind a reader to the exact tee observed by a parser/census pass. Shape,
+size, and arena-cursor certificates cannot distinguish adversarial or merely
+coincidental same-sized inputs; this opaque identity can. -/
+def PlannedSourceReader.matchesSource (reader : PlannedSourceReader)
+    (source : SourceProvenance) : IO Bool :=
+  reader.provenance.marker.ptrEq source.marker
 
 /-- Decode one declaration ordinal. Reads are valid in arbitrary order; a
 backward request rewinds the handle, while each result becomes unreachable as

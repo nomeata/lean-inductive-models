@@ -2565,16 +2565,17 @@ def SourceCensus.ofSource (source : Export) : SourceCensus :=
 raw certificate is not an eligibility promise: callers must still finish the
 tee and construct a `PlannedSourceReader`, falling back to the ordinary full
 path if canonical validation fails. -/
-structure PlannedSourceInput where
+structure PlannedSourceInput where private mk ::
   envelope : ParsedEnvelope
   census : SourceCensus
   certificate : RawCertificate
+  private provenance : Spool.SourceProvenance
 
-def parsePlannedSourceWithSink (handle : IO.FS.Handle) (rawSink : RawSink)
+def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
     (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
     IO (Except String PlannedSourceInput) := do
   let builder ← IO.mkRef ({} : SourceCensus.Builder)
-  let result ← parseHandleDiscardingDeclarations handle rawSink
+  let result ← parseHandleDiscardingDeclarations handle tee.sink
     { emit := fun declaration => builder.modify (·.push declaration) }
     analyse allowDuplicateNames
   match result with
@@ -2584,7 +2585,7 @@ def parsePlannedSourceWithSink (handle : IO.FS.Handle) (rawSink : RawSink)
     unless census.summaries.size == envelope.declarationCount &&
         census.scheduling.size == envelope.declarationCount do
       return .error "planned source census cardinality disagrees with parser"
-    return .ok { envelope, census, certificate }
+    return .ok (.mk envelope census certificate tee.sourceProvenance)
 
 /-- Rebind declaration-local frozen summaries to a logical source order.
 Every summary field except `ordinal` is a function of the declaration itself
@@ -3509,6 +3510,8 @@ property oracle. -/
 def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
     (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
+  unless ← reader.matchesSource input.provenance do
+    throwError "planned source census and reader have different raw provenance"
   unless input.envelope.retainedDeclarations == 0 do
     throwError "planned source parser retained complete declaration values"
   unless input.envelope.declarationCount == input.census.summaries.size &&

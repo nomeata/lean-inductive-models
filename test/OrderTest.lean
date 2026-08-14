@@ -289,7 +289,7 @@ def runFilterPlannedCensusState (scratch : String) (input : Export)
     discard <| inputFile.finish
     let tee ← Spool.ParseTee.create workspace
     let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
-      parsePlannedSourceWithSink handle tee.sink
+      parsePlannedSourceWithTee handle tee
         (analyse := false) (allowDuplicateNames := true)
     let parsed ← match parsedResult with
       | .ok parsed => pure parsed
@@ -307,6 +307,43 @@ def runFilterPlannedCensusState (scratch : String) (input : Export)
       (Lean.Meta.MetaM.run'
         (runFilterDiscardingPlannedCensus parsed reader checkRecursors generation)) context { env }
     return { report, plan, input := parsed }
+
+def preparePlannedCensus (workspace : Spool.Workspace) (input : Export) :
+    IO (PlannedSourceInput × Spool.PlannedSourceReader) := do
+  let inputFile ← workspace.createFile "planned-provenance-input.ndjson"
+  discard <| inputFile.append input.render.toUTF8
+  discard <| inputFile.finish
+  let tee ← Spool.ParseTee.create workspace
+  let parsed ← IO.FS.withFile inputFile.path .read fun handle => do
+    match ← parsePlannedSourceWithTee handle tee
+        (analyse := false) (allowDuplicateNames := true) with
+    | .ok parsed => pure parsed
+    | .error error => throw <| IO.userError s!"planned provenance parse failed: {error}"
+  let sizes ← tee.finish
+  let reader ← match ← Spool.PlannedSourceReader.create tee parsed.certificate sizes
+      parsed.envelope.declarationCount with
+    | .ok reader => pure reader
+    | .error error => throw <| IO.userError s!"planned provenance reader failed: {error}"
+  return (parsed, reader)
+
+def swappedPlannedReaderRejected (scratch : String) (left right : Export) : IO Bool :=
+  Spool.withWorkspace scratch fun leftWorkspace => do
+    let (leftInput, _) ← preparePlannedCensus leftWorkspace left
+    Spool.withWorkspace scratch fun rightWorkspace => do
+      let (_, rightReader) ← preparePlannedCensus rightWorkspace right
+      let env ← importModules #[] {}
+      let context : Core.Context :=
+        { fileName := "<planned-provenance-test>", fileMap := default,
+          maxHeartbeats := 0, maxRecDepth := 8192 }
+      try
+        let _ ← Lean.Core.CoreM.toIO
+          (Lean.Meta.MetaM.run'
+            (runFilterDiscardingPlannedCensus leftInput rightReader false
+              { nested := false, mutualModels := false, simple := false, basic := false }))
+          context { env }
+        return false
+      catch error =>
+        return (toString error).contains "different raw provenance"
 
 def generatedFixtureState (path : String) (generation : InductiveModels.Cli.Config) :
     IO FilterRun := do
@@ -978,6 +1015,11 @@ def run (root : String) : IO UInt32 := do
       feedCensus.plan.checkReport == feedDiscarded.plan.checkReport &&
       feedCensus.plan.unavailable? == feedDiscarded.plan.unavailable? &&
       feedCensus.plan.retainedGeneratedRecords == feedDiscarded.plan.retainedGeneratedRecords
+  let alteredFeedInput := exportOf #[
+    axDecl `FeedConsumer (.sort .zero),
+    axDecl `FeedProvider]
+  state := state.check "planned census rejects a same-count same-name reader from another source" <|
+    ← swappedPlannedReaderRejected s!"{root}/_tmp" feedInput alteredFeedInput
 
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,
