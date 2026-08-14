@@ -334,6 +334,10 @@ def publicRecursorsComplete (plan : FamilyAdapterPlan)
   let constructorsBuilt ← (FamilyAdapter.buildPublicConstructorPrototypes plan certificate.members
     certificate.telescopes (Name.str root "constructors")).run
   let .ok (.ok (_, constructors)) := constructorsBuilt | return false
+  let .ok (.ok packedConstructorCount) ←
+      (FamilyAdapter.validatePackedConstructorBoundaries plan certificate.members constructors).run
+    | return false
+  unless packedConstructorCount == plan.constructors.size do return false
   match ← (FamilyAdapter.buildPublicRecursorPrototypes plan certificate.members
       certificate.telescopes constructors root).run with
   | .error _ => return false

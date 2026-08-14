@@ -1006,6 +1006,135 @@ private def packedCarrierBoundary (plan : FamilyAdapterPlan)
         return PackedCarrierBoundary.mk publicType implementationType forward backward
           backwardForward forwardBackward
 
+private def packCarrierTotal (parameters : Array Expr) (member : MemberPlan)
+    (isPublic : Bool) (indices : Array Expr) (value : Expr) :
+    ConstructionM Expr := do
+  unless indices.size == member.indexArity do
+    failConstruction (.recursorResultMismatch member.key)
+  withIndexTelescopes member parameters fun publicIndices implementationIndices => do
+    let fields := (if isPublic then publicIndices else implementationIndices).push value
+    liftGen <| packTelescopeValue fields (indices.push value)
+
+private def unpackCarrierTotal (plan : FamilyAdapterPlan) (parameters : Array Expr)
+    (member : MemberPlan) (isPublic : Bool) (total : Expr) :
+    ConstructionM (Array Expr × Expr) := do
+  withIndexTelescopes member parameters fun publicIndices implementationIndices => do
+    let fields := if isPublic then publicIndices else implementationIndices
+    let carrierName := if isPublic then member.publicCarrier else member.implementationCarrier
+    let carrier := mkAppN (.const carrierName (plan.levelParams.map Level.param))
+      (parameters ++ fields)
+    withLocalDeclD `value carrier fun value => do
+      let values ← liftGen <| unpackTelescopeValue (fields.push value) total
+      return (values.pop, values.back!)
+
+private structure PackedConstructorBoundary where
+  publicFieldsType : Expr
+  implementationFieldsType : Expr
+  encode : Expr
+  decode : Expr
+  decodeEncode : Expr
+  encodeDecode : Expr
+  publicCtor : Expr
+  implementationCtor : Expr
+  forwardCtor : Expr
+  constructorAgreement : Expr
+
+private def packedConstructorBoundary (plan : FamilyAdapterPlan)
+    (parameters : Array Expr) (owner : MemberPlan) (ownerBoundary : PackedCarrierBoundary)
+    (constructor : ConstructorPlan) (constructorCertificate : PublicConstructorCertificate) :
+    ConstructionM PackedConstructorBoundary := do
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok information => pure information
+    | .error _ => failConstruction (.indexFibreMismatch constructor.key)
+  let publicConstructorType ← liftGen <| generatedType constructorCertificate.adapter
+  let implementationConstructorType ← liftGen <| generatedType constructor.implementationName
+  let publicFieldsTail ← instantiateForall publicConstructorType parameters
+  forallBoundedTelescope publicFieldsTail (some constructor.telescope.binders.size)
+      fun publicFields publicResult => do
+    let implementationFieldsTail ← instantiateForall implementationConstructorType parameters
+    forallBoundedTelescope implementationFieldsTail (some constructor.telescope.binders.size)
+        fun implementationFields implementationResult => do
+      let publicFieldsType ← liftGen <| packedTelescopeType publicFields
+      let implementationFieldsType ← liftGen <| packedTelescopeType implementationFields
+      let levels := plan.levelParams.map Level.param
+      let encode := mkAppN (.const constructorCertificate.telescope.encode levels) parameters
+      let decode := mkAppN (.const constructorCertificate.telescope.decode levels) parameters
+      let decodeEncode := mkAppN
+        (.const constructorCertificate.telescope.decodeEncode levels) parameters
+      let encodeDecode := mkAppN
+        (.const constructorCertificate.telescope.encodeDecode levels) parameters
+      let makeConstructor := fun (isPublic : Bool) => do
+        let packageType := if isPublic then publicFieldsType else implementationFieldsType
+        let fields := if isPublic then publicFields else implementationFields
+        let result := if isPublic then publicResult else implementationResult
+        let name := if isPublic then constructorCertificate.adapter
+          else constructor.implementationName
+        withLocalDeclD `package packageType fun package => do
+          let values ← liftGen <| unpackTelescopeValue fields package
+          let major := mkAppN (.const name levels) (parameters ++ values)
+          let majorType := result.replaceFVars fields values
+          unless ← liftGen <| isDefEq (← inferType major) majorType do
+            failConstruction (.dependentFieldTransport constructor.key values.size)
+          let total ← packCarrierTotal parameters owner isPublic
+            (resultIndices owner majorType) major
+          liftGen <| mkLambdaFVars #[package] total
+      let publicCtor ← makeConstructor true
+      let implementationCtor ← makeConstructor false
+      let forwardCtor ← withLocalDeclD `package publicFieldsType fun package => do
+        let right := mkApp implementationCtor (mkApp encode package)
+        let proof := mkApp ownerBoundary.forwardBackward right
+        let target ← liftGen <| inferType proof
+        let expected := eqi.mk'
+          (← liftGen <| ilevel ownerBoundary.implementationType)
+          ownerBoundary.implementationType
+          (mkApp ownerBoundary.forward (mkApp publicCtor package)) right
+        unless ← liftGen <| isDefEq target expected do
+          failConstruction (.indexFibreMismatch constructor.key)
+        liftGen <| mkLambdaFVars #[package] proof
+      let constructorAgreement ← withLocalDeclD `package implementationFieldsType
+          fun package => do
+        let equality := mkApp encodeDecode package
+        let function ← liftGen <| withLocalDeclD `next implementationFieldsType fun next =>
+          mkLambdaFVars #[next] (mkApp ownerBoundary.backward (mkApp implementationCtor next))
+        let proof ← liftGen <| mkAppM ``congrArg #[function, equality]
+        let expectedLeft := mkApp publicCtor (mkApp decode package)
+        let expectedRight := mkApp ownerBoundary.backward (mkApp implementationCtor package)
+        unless ← liftGen <| isDefEq (← inferType proof)
+            (eqi.mk' (← ilevel ownerBoundary.publicType) ownerBoundary.publicType
+              expectedLeft expectedRight) do
+          failConstruction (.indexFibreMismatch constructor.key)
+        liftGen <| mkLambdaFVars #[package] proof
+      return PackedConstructorBoundary.mk publicFieldsType implementationFieldsType encode decode
+        decodeEncode encodeDecode publicCtor implementationCtor forwardCtor constructorAgreement
+
+/-- Regression seam for the packed constructor inputs consumed by the exact
+public-iota proof. -/
+def validatePackedConstructorBoundaries (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate)
+    (constructorCertificates : Array PublicConstructorCertificate) :
+    GenM (Except ConstructionIssue Nat) := do
+  let action : ConstructionM Nat := do
+    let mut count := 0
+    for constructor in plan.constructors do
+      let some owner := plan.members.find? (·.key == constructor.key.owner)
+        | failConstruction (.missingMemberMap constructor.key.owner)
+      let some certificate := constructorCertificates.find? (·.key == constructor.key)
+        | failConstruction (.dependentFieldTransport constructor.key 0)
+      let _ ← forallBoundedTelescope owner.sourceType (some owner.parameterArity)
+          fun parameters _ => do
+        let ownerBoundary ← packedCarrierBoundary plan memberCertificates parameters owner
+        let boundary ← packedConstructorBoundary plan parameters owner ownerBoundary
+          constructor certificate
+        for expression in #[boundary.publicFieldsType, boundary.implementationFieldsType,
+            boundary.encode, boundary.decode, boundary.decodeEncode, boundary.encodeDecode,
+            boundary.publicCtor, boundary.implementationCtor, boundary.forwardCtor,
+            boundary.constructorAgreement] do
+          liftGen <| check expression
+        return ()
+      count := count + 1
+    return count
+  action.run
+
 /-- Exercise totalised member boundaries in the disabled prototype. This is a
 source/interpreted regression seam for arbitrary finite index telescopes. -/
 def validatePackedCarrierBoundaries (plan : FamilyAdapterPlan)
