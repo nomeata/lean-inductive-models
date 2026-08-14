@@ -33,8 +33,8 @@ of another, and this driver is the only thing that composes them.
 ## Why output is re-interned
 
 Declaration records refer into one file-wide name, level, and expression arena.
-After generation and ordering, [`InductiveModels.Export.writeTo`] therefore serializes
-the parsed snapshot as one self-contained arena. The writer streams record
+[`InductiveModels.Export.writeTo`] therefore serializes the constructively
+ordered result as one self-contained arena. The writer streams record
 lines rather than retaining the rendered file as one string.
 
 ## The free oracle
@@ -1122,8 +1122,8 @@ arbitrary source-prefix environment.
 
 Generation may use a separate analysis environment containing the owner.  A
 successful public model must nevertheless install here, where the owner is
-absent.  This makes owner independence a kernel-checked invariant instead of a
-hope later imposed by record ordering.  The returned environment is a fork;
+absent. This makes owner independence a kernel-checked invariant at the same
+prefix where the island is constructively emitted. The returned environment is a fork;
 the caller may discard it after streaming the records. -/
 def checkGeneratedIn (base : Environment) (records : Array EDecl) :
     MetaM (Except String Environment) := do
@@ -1196,10 +1196,10 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
     | .ok next => main := next
   return .ok main
 
-/-- Finalize one atomic generated forest.  The source owner participates in
-record ordering but is removed before checked replay, so the kernel sees every
-exact serialized model declaration in the owner-free persistent environment.
-Only fixed shared support is copied back. -/
+/-- Finalize one atomic generated forest. Generated records stay in generator
+append order, and only fixed shared support is copied back into the persistent
+construction environment. The caller may separately submit the exact returned
+island to the generated-output kernel gate. -/
 def closeModelIsland (template : Export) (main : Environment)
     (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
     (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name)
@@ -1208,8 +1208,9 @@ def closeModelIsland (template : Export) (main : Environment)
       (Array EDecl × CompactIsland × Environment × Check.StatementReport)) := do
   -- Generation runs in the collision-free replay environment, so generated
   -- expressions can mention replay aliases.  Restore the exact source names
-  -- before every syntax/output operation.  Checked replay below converts the
-  -- ordered result back in the opposite direction.
+  -- before every syntax/output operation. The optional caller-side kernel
+  -- gate converts the returned exact records back to their collision-safe
+  -- build image.
   let exactRecords := records.map sourceAliases.exactRecord
   unless exactRecords.map sourceAliases.buildRecord == records do
     return .error "generated source-alias round trip changed a declaration"
@@ -1281,9 +1282,9 @@ def closeModelIsland (template : Export) (main : Environment)
       let combinedViolations := generatedReport.violations ++ sourceReport.violations
       ({ statementsChecked := checkedCount, violations := combinedViolations } :
         Check.StatementReport)
-  -- Drop the construction fork before reconstructing any declaration.  The
-  -- exact serialized records and compact splice witnesses above are the only
-  -- state allowed to cross into owner-free checked replay.
+  -- Drop the owner-local construction fork before reconstructing persistent
+  -- support. The exact serialized records and compact splice witnesses above
+  -- are the only state allowed to cross this boundary.
   setEnv main
   let replayGenerated := generated.map sourceAliases.buildRecord
   match ← installGeneratedSupportIn main replayGenerated models with
@@ -4229,9 +4230,9 @@ def runFilterDirectCheckingSharedPrefix (x : Export) (generation : Cli.Config)
       source := sourceObservation
       fallback? := some message })
 
-/-- AST-dropping no-output generation. Accepted generated records are checked
-and summarized at island close, then discarded without opening a workspace or
-retaining any physical span. -/
+/-- AST-dropping no-output generation. Accepted generated records are
+summarized at island close, optionally kernel-checked according to the output
+gate, then discarded without opening a workspace or retaining a physical span. -/
 def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Report × CompactPlan) := do
   let (_, report, compact, _, _, _, _) ←

@@ -95,7 +95,7 @@ inductive Decline where
   and what is wrong with it. -/
   | notLeans (n : Name) (why : String)
   | nameTaken (n : Name)
-  /-- **The kernel accepted the declaration and the environment then lost it.**
+  /-- **The construction environment installed the declaration and then lost it.**
   Distinct from [`InductiveModels.Decline.nameTaken`], which is the input already
   holding the name, because the two want opposite responses. This one is
   Lean's `AsyncConsts.add` refusing a *normalized* duplicate — an export
@@ -2325,15 +2325,16 @@ def ruleKDecl (eqi : EqInfo) (recLevelParams : List Name) (numPre : Nat)
 def hintsFor (v : Expr) : GenM ReducibilityHints := do
   return .regular (getMaxHeight (← getEnv) v + 1)
 
-/-- Add a generated declaration, **with checking**. A proof this module builds
-and the kernel rejects is a decline, never an emission.
+/-- Trusted-install a generated declaration in the disposable construction
+environment. Exact serialized records cross the optional kernel boundary only
+once, when their completed island closes.
 
-**And a declaration the kernel accepts but the environment then loses is a
-decline too.** `Environment.addDeclCore` type-checks first and afterwards
+**A declaration the construction environment accepts but then loses is a
+decline.** `Environment.addDeclCore` installs the declaration and afterwards
 registers each name in the *async* constant map, which keys on
 `privateToUserName` — the name with its private prefix stripped.
 `AsyncConsts.add` `panic!`s on a duplicate normalized name and returns the map
-**unchanged**, so the constant is in the kernel and invisible to
+**unchanged**, so the constant is in the trusted construction map and invisible to
 `Environment.find?`. That is not survivable here: `MetaM`'s `inferType` goes
 through `find?`, so the very next declaration that names the lost one dies with
 `Unknown constant` — an exit 3, the tool's own failure, with nothing emitted.
@@ -2366,7 +2367,8 @@ def addChecked (d : Declaration) : GenM Unit := do
       if ((← getEnv).find? n).isNone then
         declineWith (.nameLost n)
   | .error ex =>
-    badShape s!"{d.getTopLevelNames} rejected by the kernel: {← (ex.toMessageData {}).toString}"
+    badShape s!"{d.getTopLevelNames} could not be installed for construction: \
+      {← (ex.toMessageData {}).toString}"
 
 /-- **The `Eq` the round trips are written at.** The input's own if it declares
 one; Lean's, spliced in, if it does not.

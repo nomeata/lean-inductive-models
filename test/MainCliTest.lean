@@ -196,6 +196,7 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "planned output-check-off bypasses the generated kernel gate" <|
     plannedUncheckedOutput.exitCode == 0 && plannedUncheckedOutput.stdout.isEmpty &&
       plannedUncheckedOutput.stderr.contains "model of" &&
+      hasDiagnostic plannedUncheckedOutput.stderr "input route: planned-census" &&
       hasDiagnostic plannedUncheckedOutput.stderr "output backend: compact-discard" &&
       hasDiagnostic plannedUncheckedOutput.stderr "generated kernel checks: 0"
 

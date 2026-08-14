@@ -135,6 +135,10 @@ private def reportOutputBackend (output : FilterOutput) (outputKernelChecks : Na
       | .discarded .. => "compact-discard"}"
     IO.eprintln s!"generated kernel checks: {outputKernelChecks}"
 
+private def reportPlannedRouteSelected : IO Unit := do
+  if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
+    IO.eprintln "input route: planned-census"
+
 private def runParsedPipeline (config : InductiveModels.Cli.Config)
     (compactEnabled : Bool) (parsed : Export) : IO UInt32 := do
   let input := config.input.getD ""
@@ -291,9 +295,9 @@ private def runPipeline (config : InductiveModels.Cli.Config)
     | .ok parsedExport => pure parsedExport
   runParsedPipeline config compactEnabled parsed
 
-/-- Declaration-discarding input path for the sole generated no-output direct
-kernel route. The physical snapshot is input provenance/fallback state only;
-generated logical output stays as live `EDecl` values throughout. -/
+/-- Declaration-discarding input path for generated no-output runs. The
+physical snapshot is input provenance/fallback state only; generated logical
+output stays as live `EDecl` values throughout. -/
 private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO UInt32 := do
   let input := config.input.getD ""
   let scratch := (← IO.currentDir) / "_tmp"
@@ -381,6 +385,7 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
               return exitToolError
           return ← runParsedPipeline { config with checkInput := false } true parsed
         | Except.ok result => pure result
+      reportPlannedRouteSelected
       reportOutputBackend (.discarded plan) generationReport.outputKernelChecks
       reportGeneration config generationReport
       if let some why := generationReport.unreplayable then
