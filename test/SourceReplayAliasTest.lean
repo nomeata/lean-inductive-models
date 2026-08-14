@@ -74,6 +74,20 @@ def collisionInput (first second : Name) : Export :=
 def aliasesOf (input : Export) : Except String SourceReplayAliases :=
   (SourceCensus.ofSource input).replayAliases
 
+/-- Test-only prerequisite-first source variant; production never reorders
+input declarations. -/
+def withCompletePrerequisiteBefore (input : Export) (prerequisite owner : Name) : IO Export := do
+  let some prerequisiteIndex := input.decls.findIdx? (·.names.contains prerequisite)
+    | throw <| IO.userError s!"source has no {prerequisite} prerequisite"
+  let some ownerIndex := input.decls.findIdx? (·.names.contains owner)
+    | throw <| IO.userError s!"source has no {owner} owner"
+  if prerequisiteIndex < ownerIndex then return input
+  let prerequisiteRecord := input.decls[prerequisiteIndex]!
+  return { input with decls :=
+    input.decls.extract 0 ownerIndex ++ #[prerequisiteRecord] ++
+      input.decls.extract ownerIndex prerequisiteIndex ++
+      input.decls.extract (prerequisiteIndex + 1) input.decls.size }
+
 def emptyInductiveType (name : Name) : EIndType :=
   { name, levelParams := [], type := .sort (.succ .zero), all := [name], ctors := []
     numParams := 0, numIndices := 0, numNested := 0, isRec := false
@@ -257,10 +271,11 @@ def main : IO UInt32 := do
   -- blocks whose complete role families normalize alike both model, while the
   -- construction-only source alias namespace remains absent from output.
   let shapesText ← IO.FS.readFile "test/fixtures/inductive-models/prim_shapes.ndjson"
-  let .ok shapes := InductiveModels.parse shapesText
+  let .ok shapesRaw := InductiveModels.parse shapesText
     | throw <| IO.userError "cannot parse prim_shapes for atomic alias regression"
   let publicOwner : Name := `Sv
   let privateOwner : Name := (`_private.M).mkNum 0 |>.str "Sv"
+  let shapes ← withCompletePrerequisiteBefore shapesRaw `Eq publicOwner
   let some ownerOrdinal := shapes.decls.findIdx? (·.names.contains publicOwner)
     | throw <| IO.userError "prim_shapes has no Sv owner"
   let privateRoles := shapes.decls[ownerOrdinal]!.names.foldl
