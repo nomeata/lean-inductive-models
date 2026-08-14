@@ -294,7 +294,7 @@ def main : IO UInt32 := do
 
   let privateCarrier := Naming.modelName privateOwner
   let some reservedPrivateModel := collidingOutput.flatMap (·.names.toArray) |>.find? fun name =>
-    privateOwner.isPrefixOf name && name != privateCarrier && name != privateOwner
+    privateCarrier.isPrefixOf name && name != privateCarrier
     | throw <| IO.userError "private Sv model has no deeper generated slot"
   let reservedPublicModel := reservedPrivateModel.replacePrefix privateOwner publicOwner
   let reservedShapes := { collidingShapes with decls := (
