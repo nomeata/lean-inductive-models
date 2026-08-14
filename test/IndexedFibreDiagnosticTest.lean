@@ -131,6 +131,15 @@ def withoutDeclaration (x : Export) (name : Name) : Export :=
 def insertCollision (x : Export) (name : Name) : Export :=
   { x with decls := x.decls.push (.ax name [] (.sort (.succ .zero)) false) }
 
+def replaceRuleFieldCount (x : Export) (owner : Name) (nfields : Nat) : Export :=
+  { x with decls := x.decls.map fun declaration => match declaration with
+    | .induct types constructors recursors =>
+      .induct types constructors <| recursors.map fun recursor =>
+        if recursor.all.contains owner then
+          { recursor with rules := recursor.rules.map fun rule => { rule with nfields } }
+        else recursor
+    | _ => declaration }
+
 def declarationValue? (x : Export) (name : Name) : Option Expr :=
   x.decls.findSome? fun declaration => match declaration with
     | .defn got _ _ value .. | .thm got _ _ value .. | .opaq got _ _ value .. =>
@@ -407,9 +416,9 @@ def run (root : String) : IO UInt32 := do
     Name.str recursivePrivateRoot "rec_iota_0", Name.str recursivePrivateRoot "roll",
     Name.str recursivePrivateRoot "unroll", Name.str recursivePrivateRoot "unroll_roll",
     Name.str recursivePrivateRoot "roll_unroll"]
-  state := state.check "recursive indexed control remains on the legacy route" <|
-    recursiveCertificate.all fun name => !boundaryNames.contains name
-  state := state.check "recursive indexed legacy control generates and checks" <|
+  state := state.check "minimal recursive indexed control carries the complete certificate" <|
+    recursiveCertificate.all boundaryNames.contains
+  state := state.check "minimal recursive indexed control generates and checks" <|
     boundaryReport.generated.any (·.1 == `FixedRecursiveResult) &&
       !boundaryReport.declined.any (·.1 == `FixedRecursiveResult) &&
       boundaryReport.unreplayable.isNone && boundaryReport.stmtErrors.isEmpty &&
@@ -420,6 +429,88 @@ def run (root : String) : IO UInt32 := do
         Naming.projectionName `FixedRecursiveResult 0,
         Naming.projectionIotaName `FixedRecursiveResult 0].all boundaryNames.contains &&
       (Check.check boundaryGenerated).all (·.familyOwner != `FixedRecursiveResult)
+
+  let some recursiveLayerFamily := Check.discover boundaryGenerated |>.find?
+      (·.owner == `IndexedRecursiveLayer)
+    | throw <| IO.userError "generated boundary has no IndexedRecursiveLayer family"
+  let some (recursiveLayerType, recursiveLayerConstructor, _) :=
+      sourceShape? boundaryGenerated `IndexedRecursiveLayer
+    | throw <| IO.userError "generated boundary has no IndexedRecursiveLayer source shape"
+  let some recursiveLayerTypePair := recursiveLayerFamily.correspondence.typeFormers.find?
+      (·.owner == `IndexedRecursiveLayer)
+    | throw <| IO.userError "IndexedRecursiveLayer has no modeled carrier"
+  let some (recursiveLayerParams, _) := declarationType? boundaryGenerated
+      recursiveLayerTypePair.model
+    | throw <| IO.userError "IndexedRecursiveLayer modeled carrier is absent"
+  let (recursiveLayerFaces, _) ← Core.CoreM.toIO
+    (MetaM.run' (projectionExpectations boundaryGenerated recursiveLayerFamily
+      recursiveLayerType recursiveLayerConstructor recursiveLayerParams))
+    projectionContext { env := projectionEnv }
+  let recursiveLayerExpected := fun name =>
+    recursiveLayerFaces.find? (·.1 == name) |>.map (·.2)
+  let recursiveLayerActual := fun name =>
+    declarationType? boundaryGenerated name |>.map (·.2)
+  let recursiveLayerRoot := `IndexedRecursiveLayer._model._impl
+  let recursiveLayerCertificate := #[Name.str recursiveLayerRoot "self",
+    Name.str recursiveLayerRoot "ctor_0", Name.str recursiveLayerRoot "rec",
+    Name.str recursiveLayerRoot "rec_iota_0", Name.str recursiveLayerRoot "roll",
+    Name.str recursiveLayerRoot "unroll", Name.str recursiveLayerRoot "unroll_roll",
+    Name.str recursiveLayerRoot "roll_unroll"]
+  let recursiveLayerKeyRule := Naming.projectionIotaName `IndexedRecursiveLayer 0
+  let recursiveLayerPayloadRule := Naming.projectionIotaName `IndexedRecursiveLayer 1
+  state := state.check "dependent recursive indexed family carries a complete certificate" <|
+    recursiveLayerCertificate.all boundaryNames.contains
+  state := state.check "dependent recursive indexed ordinary rule has the literal field RHS" <|
+    recursiveLayerActual recursiveLayerKeyRule == recursiveLayerExpected recursiveLayerKeyRule
+  state := state.check "dependent recursive indexed payload rule has the literal field RHS" <|
+    recursiveLayerActual recursiveLayerPayloadRule ==
+      recursiveLayerExpected recursiveLayerPayloadRule
+  let recursiveLayerAuthoredFaces := #[Naming.modelName `IndexedRecursiveLayer.mk,
+    Naming.modelName `IndexedRecursiveLayer.rec,
+    Naming.iotaName `IndexedRecursiveLayer.rec 0,
+    Name.str recursiveLayerRoot "ctor_0", Name.str recursiveLayerRoot "rec",
+    Name.str recursiveLayerRoot "rec_iota_0"]
+  state := state.check "source-authored Eq.rec survives recursive indexed faces" <|
+    containsConst ``Eq.rec recursiveLayerConstructor.type &&
+      recursiveLayerAuthoredFaces.all fun name =>
+        (declarationType? boundaryGenerated name).any fun (_, type) =>
+          containsConst ``Eq.rec type
+  let recursiveLayerWithoutLaw := Check.check <|
+    withoutDeclaration boundaryGenerated (Name.str recursiveLayerRoot "roll_unroll")
+  state := state.check "partial recursive indexed certificate fails closed" <|
+    recursiveLayerWithoutLaw.any (hasTypeViolation `IndexedRecursiveLayer
+      (Name.str recursiveLayerRoot "roll_unroll"))
+  let recursiveLayerMalformedRecursor := Check.check <|
+    replaceRuleFieldCount boundaryGenerated `IndexedRecursiveLayer 0
+  state := state.check "malformed recursive indexed source shape fails closed" <|
+    recursiveLayerMalformedRecursor.any (hasTypeViolation `IndexedRecursiveLayer
+      (Name.str recursiveLayerRoot "self"))
+  let recursiveLayerCurrentPayloadRule := recursiveLayerActual recursiveLayerPayloadRule
+  let recursiveLayerTransported := if recursiveLayerCurrentPayloadRule !=
+      recursiveLayerExpected recursiveLayerPayloadRule then boundaryGenerated else
+    recursiveLayerCurrentPayloadRule.bind transportOuterEqualityRhs?
+      |>.map (replaceDeclarationType boundaryGenerated recursiveLayerPayloadRule ·)
+      |>.getD boundaryGenerated
+  state := state.check "checker rejects the old recursive indexed payload transport" <|
+    (Check.check recursiveLayerTransported).any
+      (hasTypeViolation `IndexedRecursiveLayer recursiveLayerPayloadRule)
+  state := state.check "dependent recursive indexed family generates and checks" <|
+    boundaryReport.generated.any (·.1 == `IndexedRecursiveLayer) &&
+      !boundaryReport.declined.any (·.1 == `IndexedRecursiveLayer) &&
+      (Check.check boundaryGenerated).all (·.familyOwner != `IndexedRecursiveLayer)
+
+  for owner in [`TwoRecursiveResults, `InfinitaryRecursiveResult,
+      `FieldIndexedRecursiveResult] do
+    let ownerRoot := Name.str (Naming.modelName owner) "_impl"
+    let ownerCertificate := #[Name.str ownerRoot "self", Name.str ownerRoot "ctor_0",
+      Name.str ownerRoot "rec", Name.str ownerRoot "rec_iota_0",
+      Name.str ownerRoot "roll", Name.str ownerRoot "unroll",
+      Name.str ownerRoot "unroll_roll", Name.str ownerRoot "roll_unroll"]
+    state := state.check s!"{owner} remains on the legacy route" <|
+      ownerCertificate.all fun name => !boundaryNames.contains name
+    state := state.check s!"{owner} legacy model generates and checks" <|
+      boundaryReport.generated.any (·.1 == owner) &&
+        (Check.check boundaryGenerated).all (·.familyOwner != owner)
 
   -- Keep the owner exact but give its constructor a raw private spelling.
   -- The first primitive attempt then fails `nameLost` before it reaches the

@@ -26,6 +26,12 @@ inductive FibreIx : Type where
   | here
   | elsewhere
 
+inductive FibreKey : Type where
+  | key
+
+inductive FibrePayload : FibreKey -> Type where
+  | at (key : FibreKey) : FibrePayload key
+
 /-- Zero-field indexed `Type`: its malformed certificate must be diagnosed at
 the family boundary even though there is no intrinsic projection loop. -/
 inductive IndexedUnit : FibreIx -> Type where
@@ -53,4 +59,33 @@ inductive FixedRecursiveResult : FibreIx -> Type where
   | mk (child : FixedRecursiveResult FibreIx.here) :
       FixedRecursiveResult FibreIx.here
 
---#export Eq FibreIx IndexedUnit HiddenIndexedResult HiddenIndexed erasedResultIndex FixedRecursiveResult
+/-- Positive recursive fibre boundary.  The dependent ordinary field exposes
+whether the adapter makes an earlier projection reduce definitionally; the
+single recursive child has a fixed, source-visible result index. -/
+inductive IndexedRecursiveLayer : FibreIx -> Type where
+  | mk (key : FibreKey)
+      (payload : Eq.rec (motive := fun _ _ => Type)
+        (FibrePayload key) (Eq.refl (FibrePayload key)))
+      (child : IndexedRecursiveLayer FibreIx.here) :
+      IndexedRecursiveLayer FibreIx.here
+
+/-- More than one direct recursive child remains outside the first tranche. -/
+inductive TwoRecursiveResults : FibreIx -> Type where
+  | mk (left right : TwoRecursiveResults FibreIx.here) :
+      TwoRecursiveResults FibreIx.here
+
+/-- Recursion below a function former remains outside the direct-field
+tranche even though the constructor result index is fixed. -/
+inductive InfinitaryRecursiveResult : FibreIx -> Type where
+  | mk (children : FibreIx -> InfinitaryRecursiveResult FibreIx.here) :
+      InfinitaryRecursiveResult FibreIx.here
+
+/-- A recursive occurrence indexed by an ordinary constructor field is
+source-visible but not fixed, and remains outside the first tranche. -/
+inductive FieldIndexedRecursiveResult : FibreIx -> Type where
+  | mk (index : FibreIx) (child : FieldIndexedRecursiveResult index) :
+      FieldIndexedRecursiveResult FibreIx.here
+
+--#export Eq FibreIx FibreKey FibrePayload IndexedUnit HiddenIndexedResult HiddenIndexed
+--#export erasedResultIndex FixedRecursiveResult IndexedRecursiveLayer
+--#export TwoRecursiveResults InfinitaryRecursiveResult FieldIndexedRecursiveResult
