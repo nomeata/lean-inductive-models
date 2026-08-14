@@ -1399,6 +1399,13 @@ private def emitRaw (sink : RawSink) (state : IO.Ref RawCertState)
         (kind != .declaration || terminated) } }
     if kind == .arena then json?.elim current current.observeArena else current
 
+/-- Options shared by the streaming/handle parser entry points. A structure is
+used deliberately: adding or removing an option cannot silently reinterpret a
+positional `Bool` at public call sites. -/
+structure ParseOptions where
+  allowDuplicateNames : Bool := false
+  deriving Inhabited, Repr, BEq
+
 /-- **The same parse, off a handle, a chunk at a time.**
 
 [`parse`] takes the file as one `String`, and on a large export that costs more
@@ -1420,13 +1427,6 @@ the 10-million-line prefix it takes the parse's peak from 2,381,888 KB to
 **1.3 % fewer instructions**. `Handle.getLine` is not the route: it did not
 finish a 1-million-line prefix in ten minutes.
 -/
-/-- Options shared by the streaming/handle parser entry points. A structure is
-used deliberately: adding or removing an option cannot silently reinterpret a
-positional `Bool` at public call sites. -/
-structure ParseOptions where
-  allowDuplicateNames : Bool := false
-  deriving Inhabited, Repr, BEq
-
 private def parseStreamCore (h : IO.FS.Stream)
     (sink? : Option RawSink) (declarationSink? : Option DeclarationSink)
     (retainDeclarations allowDuplicateNames : Bool) :
