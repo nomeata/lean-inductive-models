@@ -2497,6 +2497,34 @@ that comparison is the only thing standing between a fragment change and a
 silently stale tool. -/
 def wCoreText : String := include_str "../../test/fixtures/inductive-models/w_core.ndjson"
 
+/-- Fixed public support which a generated model of the fragment's `Acc` may
+use. The source fixture deliberately keeps some of these records after `Acc`
+to exercise raw-input decline semantics; the embedded fragment is itself a
+producer, so it must place the complete support before the generated owner. -/
+private def wCoreModelReadinessNames : Array Name := #[
+  `Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
+  `Nonempty, `Nonempty.intro, `Nonempty.rec, `Classical.choice,
+  `Iff, `Iff.intro, `Iff.rec, `propext]
+
+/-- Producer-local order for the embedded fragment. Preserve the entire raw
+prefix and the relative order of every record; only readiness records that the
+fixture intentionally placed after `Acc` move to the boundary immediately
+before its complete inductive record. This is not a general output reorder. -/
+private def wCoreGenerationOrder (declarations : Array EDecl) : Except String (Array EDecl) := do
+  let some accIndex := declarations.findIdx? (fun declaration =>
+      declaration.names.contains `Acc)
+    | throw "the W core fragment has no Acc declaration"
+  for name in wCoreModelReadinessNames do
+    unless declarations.any (fun declaration => declaration.names.contains name) do
+      throw s!"the W core fragment has no model-readiness declaration {name}"
+  let prefix := declarations.extract 0 accIndex
+  let tail := declarations.extract accIndex declarations.size
+  let isReadiness := fun declaration =>
+    declaration.names.any wCoreModelReadinessNames.contains
+  let readiness := tail.filter isReadiness
+  let remainder := tail.filter fun declaration => !isReadiness declaration
+  return prefix ++ readiness ++ remainder
+
 /-- The prefix every fragment name gets, bar the shared ones below. The
 fragment's names are Lean core's, so splicing its `List` into an input that
 already declares one is a kernel rejection; prefixing makes the core
@@ -2654,8 +2682,11 @@ def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
     match InductiveModels.parse wCoreText with
     | .ok ex => pure ex
     | .error msg => badShape s!"the W core fragment does not parse ({msg})"
+  let declarations ← match wCoreGenerationOrder ex.decls with
+    | .ok declarations => pure declarations
+    | .error msg => badShape msg
   let mut out : Array Declaration := #[]
-  for d0 in ex.decls do
+  for d0 in declarations do
     let d := EDecl.mapNames wCoreName wCoreExpr d0
     let ns := d.names
     let env ← getEnv
