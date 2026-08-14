@@ -222,6 +222,10 @@ inductive PlanError where
   | duplicateConstructor (key : ConstructorKey)
   | unknownConstructorOwner (key : ConstructorKey)
   | memberConstructorMismatch (member : MemberKey) (constructor : ConstructorKey)
+  | constructorParameterArityMismatch (constructor : ConstructorKey)
+      (expected actual : Nat)
+  | constructorIndexArityMismatch (constructor : ConstructorKey)
+      (expected source implementation : Nat)
   | duplicateRule (key : RuleKey)
   | memberRuleMismatch (member : MemberKey) (rule : RuleKey)
   | unknownRuleOwner (key : RuleKey)
@@ -235,6 +239,7 @@ inductive PlanError where
   | telescopeFieldOrder (constructor : ConstructorKey) (expected actual : Nat)
   | telescopeOccurrenceMismatch (key : OccurrenceKey)
   | ruleOccurrenceMismatch (key : OccurrenceKey)
+  | ruleOccurrenceSequenceMismatch (rule : RuleKey)
   deriving Inhabited, BEq, Repr
 
 private def duplicateKey? [BEq α] [Inhabited α] (values : Array α) : Option α := Id.run do
@@ -312,6 +317,14 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
     if let some owner := plan.members.find? (·.key == constructor.key.owner) then
       unless owner.constructors.contains constructor.key do
         errors := errors.push (.memberConstructorMismatch owner.key constructor.key)
+      unless constructor.telescope.parameters.size == owner.parameterArity do
+        errors := errors.push (.constructorParameterArityMismatch constructor.key
+          owner.parameterArity constructor.telescope.parameters.size)
+      unless constructor.telescope.sourceResultIndices.size == owner.indexArity &&
+          constructor.telescope.implementationResultIndices.size == owner.indexArity do
+        errors := errors.push (.constructorIndexArityMismatch constructor.key owner.indexArity
+          constructor.telescope.sourceResultIndices.size
+          constructor.telescope.implementationResultIndices.size)
     for fieldOffset in [:constructor.telescope.binders.size] do
       let field := constructor.telescope.binders[fieldOffset]!
       unless field.fieldIndex == fieldOffset do
@@ -347,6 +360,9 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
     for key in rule.occurrences do
       unless key.constructor == rule.key.constructor do
         errors := errors.push (.ruleOccurrenceMismatch key)
+    if let some telescope := telescopeFor? plan rule.key.constructor then
+      unless rule.occurrences == telescopeOccurrences telescope do
+        errors := errors.push (.ruleOccurrenceSequenceMismatch rule.key)
 
   if let some key := duplicateKey? (plan.occurrences.map (·.key)) then
     errors := errors.push (.duplicateOccurrence key)
