@@ -1306,8 +1306,8 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
           unless publicMatches && privateMatches do
             failConstruction (.missingPublicIotaRecursiveCall rule
               publicBinderIndex implementationBinderIndex)
-          return some (← recursorAgreementAt member recursor expectedPublic expectedPrivate)
-        return none
+          pure (some (← recursorAgreementAt member recursor expectedPublic expectedPrivate))
+        else pure none
   if let some proof := direct? then return proof
   let publicType ← liftGen <| whnf (← inferType expectedPublic)
   let privateType ← liftGen <| whnf (← inferType expectedPrivate)
