@@ -220,7 +220,7 @@ def main (args : List String) : IO UInt32 := do
   let invalidOutputOnly ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input",
     "--type-check-generated", "--no-output", "-"] invalidText
-  state := state.check "output kernel gate does not recheck input declarations" <|
+  state := state.check "generated kernel gate does not recheck input declarations" <|
     invalidOutputOnly.exitCode == 0 && invalidOutputOnly.stdout.isEmpty &&
       !invalidOutputOnly.stderr.contains "input kernel check" &&
       hasDiagnostic invalidOutputOnly.stderr "generated kernel check: accepted"

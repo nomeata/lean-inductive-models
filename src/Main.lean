@@ -139,7 +139,7 @@ def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
 declarations are checked as they are produced. Unchecked no-output generation
 uses the ordinary in-memory compact-discard path and opens no workspace. -/
 def plannedDiscardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  discardModeEligible config && config.typeCheckOutput
+  discardModeEligible config && config.typeCheckGenerated
 
 /-- Planned input avoids retaining a full source export for actual streaming
 output, and for checked no-output compact generation. -/
@@ -156,13 +156,13 @@ private inductive OutputBackend where
 
 /-- Optional A/B and test diagnostic. This observes the actual filter result;
 it never changes output retention or route eligibility. -/
-private def reportOutputBackend (backend : OutputBackend) (outputKernelChecks : Nat) : IO Unit := do
+private def reportOutputBackend (backend : OutputBackend) (generatedKernelChecks : Nat) : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
     IO.eprintln s!"output backend: {match backend with
       | .full => "legacy"
       | .compactDiscard => "compact-discard"
       | .declarationStream => "declaration-stream"}"
-    IO.eprintln s!"generated kernel checks: {outputKernelChecks}"
+    IO.eprintln s!"generated kernel checks: {generatedKernelChecks}"
 
 private def reportPlannedRouteSelected : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
@@ -183,7 +183,7 @@ private def finishStreamingVerdict (config : InductiveModels.Cli.Config)
     (input : String) (report : InductiveModels.Report)
     (plan : InductiveModels.CompactPlan) :
     IO (InductiveModels.Output.TransactionResult UInt32) := do
-  reportOutputBackend .declarationStream report.outputKernelChecks
+  reportOutputBackend .declarationStream report.generatedKernelChecks
   reportGeneration config report
   if let some why := report.unreplayable then
     IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -198,12 +198,12 @@ private def finishStreamingVerdict (config : InductiveModels.Cli.Config)
       reportViolations input "output" plan.checkReport.violations
       return .rollback exitRejected
     reportCheckSuccess config "output" plan.checkReport
-  if config.typeCheckOutput then
-    match report.outputKernelRejected with
+  if config.typeCheckGenerated then
+    match report.generatedKernelRejected with
     | some message =>
-      IO.eprintln s!"{input}: output kernel check rejected: {message}"
+      IO.eprintln s!"{input}: generated kernel check rejected: {message}"
       return .rollback exitRejected
-    | none => reportTypeCheckSuccess config "output"
+    | none => reportTypeCheckSuccess config "generated"
   let outcome := if (unsupportedDeclinesFromOwners plan.coveredInputOwners report).isEmpty then
       exitAccepted
     else exitDeclined
@@ -346,7 +346,7 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
 
   reportOutputBackend (match filterOutput with
     | .full .. => .full
-    | .discarded .. => .compactDiscard) generationReport.outputKernelChecks
+    | .discarded .. => .compactDiscard) generationReport.generatedKernelChecks
   reportGeneration config generationReport
   if let some why := generationReport.unreplayable then
     IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -370,12 +370,12 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
         reportViolations input "output" plan.checkReport.violations
         return exitRejected
       reportCheckSuccess config "output" plan.checkReport
-    if config.typeCheckOutput then
-      match generationReport.outputKernelRejected with
+    if config.typeCheckGenerated then
+      match generationReport.generatedKernelRejected with
       | some message =>
-        IO.eprintln s!"{input}: output kernel check rejected: {message}"
+        IO.eprintln s!"{input}: generated kernel check rejected: {message}"
         return exitRejected
-      | none => reportTypeCheckSuccess config "output"
+      | none => reportTypeCheckSuccess config "generated"
     return outcome
   | .full decls =>
     let transformed : Export := { generationInput with decls }
@@ -391,15 +391,15 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
         return exitRejected
       reportCheckSuccess config "output" report
 
-    if config.typeCheckOutput then
-      match generationReport.outputKernelRejected with
+    if config.typeCheckGenerated then
+      match generationReport.generatedKernelRejected with
       | some message =>
-        IO.eprintln s!"{input}: output kernel check rejected: {message}"
+        IO.eprintln s!"{input}: generated kernel check rejected: {message}"
         return exitRejected
       | none =>
         -- Every generated island was checked against its trusted source
         -- prefix at close. Input is governed only by typeCheckInput.
-        reportTypeCheckSuccess config "output"
+        reportTypeCheckSuccess config "generated"
 
     if config.output then
       try
@@ -537,7 +537,7 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
           return ← runParsedPipeline { config with checkInput := false } true parsed
         | Except.ok result => pure result
       reportPlannedRouteSelected
-      reportOutputBackend .compactDiscard generationReport.outputKernelChecks
+      reportOutputBackend .compactDiscard generationReport.generatedKernelChecks
       reportGeneration config generationReport
       if let some why := generationReport.unreplayable then
         IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -561,12 +561,12 @@ private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO
           reportViolations input "output" plan.checkReport.violations
           return exitRejected
         reportCheckSuccess config "output" plan.checkReport
-      if config.typeCheckOutput then
-        match generationReport.outputKernelRejected with
+      if config.typeCheckGenerated then
+        match generationReport.generatedKernelRejected with
         | some message =>
-          IO.eprintln s!"{input}: output kernel check rejected: {message}"
+          IO.eprintln s!"{input}: generated kernel check rejected: {message}"
           return exitRejected
-        | none => reportTypeCheckSuccess config "output"
+        | none => reportTypeCheckSuccess config "generated"
       return outcome
   catch error =>
     if ← consumed.get then

@@ -120,10 +120,10 @@ def run (root : String) : IO UInt32 := do
   let generatedCheckOff ← runFilterWithGeneratedCorruption fixture false
   let generatedCheckOn ← runFilterWithGeneratedCorruption fixture true
   state := state.check "generated kernel flag gates only exact emitted island records" <|
-    !generatedCheckOff.1.isEmpty && generatedCheckOff.2.outputKernelChecks == 0 &&
-      generatedCheckOff.2.outputKernelRejected.isNone &&
-      generatedCheckOn.2.outputKernelChecks > 0 &&
-      generatedCheckOn.2.outputKernelRejected.any
+    !generatedCheckOff.1.isEmpty && generatedCheckOff.2.generatedKernelChecks == 0 &&
+      generatedCheckOff.2.generatedKernelRejected.isNone &&
+      generatedCheckOn.2.generatedKernelChecks > 0 &&
+      generatedCheckOn.2.generatedKernelRejected.any
         (fun message => message.contains "DefinitelyMissingGeneratedDependency")
 
   let some malformedMetadata := corruptFirstRecursor fixture

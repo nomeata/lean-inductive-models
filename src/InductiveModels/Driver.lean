@@ -13,7 +13,7 @@ import InductiveModels.Spool
 `.ndjson` in, `.ndjson` out. Generation replays source declarations into its
 analysis environment without checking their values; the independent
 `--type-check-input` gate checks only input declarations, while
-`--type-check-output` checks each exact generated island once in an owner-free
+`--type-check-generated` checks each exact generated island once in an owner-free
 environment as it is produced. Turning either gate off skips kernel checking
 for that declaration class.
 
@@ -33,9 +33,9 @@ of another, and this driver is the only thing that composes them.
 ## Why output is re-interned
 
 Declaration records refer to numeric name, level, and expression arena IDs.
-Actual generated output re-interns each callback declaration at fresh local
-tables while monotonically advancing the file-wide IDs; neither those tables
-nor an earlier declaration survives the callback. The no-generation path keeps
+Actual generated output feeds each callback declaration into one persistent
+standard writer, reusing its global interning maps while releasing the `EDecl`
+after the callback. The no-generation path keeps
 [`InductiveModels.Export.writeTo`] for byte-stable whole-export writing.
 
 ## The free oracle
@@ -130,10 +130,10 @@ structure Report where
   unreplayable : Option String := none
   /-- First exact generated-island kernel rejection. Input declarations are
   trusted dependencies and are never submitted through this gate. -/
-  outputKernelRejected : Option String := none
+  generatedKernelRejected : Option String := none
   /-- Number of generated-island kernel invocations. This value-level counter
   pins that disabling output checking bypasses the gate entirely. -/
-  outputKernelChecks : Nat := 0
+  generatedKernelChecks : Nat := 0
   deriving Inhabited, Repr, BEq
 
 /-- Whether one reported decline still represents unsupported generation after
@@ -1192,7 +1192,7 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
 /-- Finalize one atomic generated forest. Generated records stay in generator
 append order, and only fixed shared support is copied back into the persistent
 construction environment. The caller may separately submit the exact returned
-island to the generated-output kernel gate. -/
+island to the generated-generated kernel gate. -/
 def closeModelIsland (template : Export) (main : Environment)
     (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
     (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name)
@@ -1388,7 +1388,7 @@ def checkInductiveMetadata (types : List EIndType) (constructors : List ECtor)
   return KernelCheck.checkInductiveMetadataIn (← getEnv) types constructors recursors
 
 /-- Optional generation-time recursor audit retained for the library driver.
-The generated-island output gate additionally checks types and constructors. -/
+The generated-island kernel gate additionally checks types and constructors. -/
 def checkRecs (recursors : List ERec) : MetaM (Nat × Array Name) := do
   let env ← getEnv
   let mut bad : Array Name := #[]
@@ -2533,12 +2533,12 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         throwError "accepted island cardinality mismatch for {d.names}: \
           records={orderedGenerated.size}, summaries={compact.summaries.size}, \
           extras={compact.globalExtras.size}, families={compact.families.size}"
-      if generation.typeCheckOutput && rep.outputKernelRejected.isNone then
-        rep := { rep with outputKernelChecks := rep.outputKernelChecks + 1 }
+      if generation.typeCheckGenerated && rep.generatedKernelRejected.isNone then
+        rep := { rep with generatedKernelChecks := rep.generatedKernelChecks + 1 }
         match ← checkGeneratedIn mainBefore (orderedGenerated.map islandAliases.buildRecord) with
         | .ok _ => pure ()
         | .error message =>
-          rep := { rep with outputKernelRejected := some (islandAliases.exactMessage message) }
+          rep := { rep with generatedKernelRejected := some (islandAliases.exactMessage message) }
       modeledSourceFamilies := compact.sourceFamilies
       modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
       if compactMode then
@@ -2551,7 +2551,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             locator := .generated islandNumber localOrdinal }
           compactRecords := compactRecords.push row
         compactIslands := compactIslands.push compact
-      if streamOutput && rep.outputKernelRejected.isNone then
+      if streamOutput && rep.generatedKernelRejected.isNone then
         streamIsland? := some orderedGenerated
       let persistentRecords := generatedSupportRecords orderedGenerated exactIslandModels
       persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
@@ -2604,7 +2604,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       generatedRecords := out.size }
   if context.collectAdapterShadows then
     adapterShadows := adapterShadows ++ islandAdapterShadows
-  if streamOutput && rep.outputKernelRejected.isNone then
+  if streamOutput && rep.generatedKernelRejected.isNone then
     let some emit := context.outputEmitter?
       | throwError "streaming output mode has no declaration emitter"
     if let some island := streamIsland? then

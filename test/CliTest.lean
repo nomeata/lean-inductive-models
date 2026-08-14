@@ -59,9 +59,13 @@ def main : IO UInt32 := do
   state ← state.expect "kernel verdict gates are independent"
     ["--type-check-input", "--type-check-generated", "--no-type-check-input", "in.ndjson"]
     fun config => !config.typeCheckInput && config.typeCheckGenerated
-  state ← state.expect "output kernel default has an explicit reversible opt-out"
+  state ← state.expect "generated kernel default has an explicit reversible opt-out"
     ["--no-type-check-generated", "--type-check-generated", "--no-type-check-generated",
       "in.ndjson"] fun config => !config.typeCheckGenerated
+  state ← state.reject "removed output-check flag has no compatibility alias"
+    ["--type-check-output", "in.ndjson"]
+  state ← state.reject "removed output-check opt-out has no compatibility alias"
+    ["--no-type-check-output", "in.ndjson"]
   state ← state.expect "structural check bundle does not enable kernel verdicts"
     ["--type-check-input", "--no-check", "--check", "in.ndjson"] fun config =>
       config.checkInput && config.checkOutput && config.typeCheckInput &&

@@ -571,8 +571,8 @@ This is deliberately *not* a [`Decline`]. A decline says that the generator
 positively recognized a valid shape it has chosen not to support. Once a route
 has committed to constructing declarations, malformed intermediate syntax or
 missing metadata is a tool failure and must reach the CLI's exit-3 containment
-boundary. Optional exact generated-output kernel rejection is recorded by the
-Driver as `Report.outputKernelRejected` and reaches the CLI's rejection exit;
+boundary. Optional exact generated kernel rejection is recorded by the
+Driver as `Report.generatedKernelRejected` and reaches the CLI's rejection exit;
 it is not raised through this trusted construction helper. -/
 def badShape (msg : String) : GenM α :=
   ExceptT.lift (show MetaM α from Lean.throwError msg)
@@ -2353,7 +2353,7 @@ nested inductives, which are legitimately absent from `find?`; that is exactly
 the set this must not ask about, and it is why the loop is over `getNames`
 rather than over the environment's diff. -/
 def addChecked (d : Declaration) : GenM Unit := do
-  -- This is the disposable construction view, not the output kernel gate.
+  -- This is the disposable construction view, not the generated kernel gate.
   -- Exact emitted records are checked once at the island boundary when
   -- `typeCheckGenerated` is enabled; construction declarations are otherwise
   -- trusted in exactly the same way as replayed input declarations.
@@ -2459,7 +2459,7 @@ is carried as an **export fragment** and spliced.
 
 **It is spliced through [`InductiveModels.addChecked`] into the disposable
 construction view.** That view is deliberately trusted: the exact records
-serialized from the completed island are the sole generated-output kernel
+serialized from the completed island are the sole generated kernel
 boundary, and are checked there iff `--type-check-generated` is enabled.
 Compiling the closure in and copying its `ConstantInfo`s would bypass that
 exact emitted-record boundary. -/
