@@ -359,7 +359,18 @@ def publicRecursorsComplete (plan : FamilyAdapterPlan)
             recursorUsesRecordedMinorAdapters member adapter &&
             adapter.rules == member.sourceRules &&
             (environment.constants.find? adapter.adapter).any (·.type == adapter.exactType)
-    return valid
+    unless valid do return false
+    match ← (FamilyAdapter.buildPublicIotaPrototypes plan certificate constructors recursors
+        (Name.str root "iotas")).run with
+    | .error _ => return false
+    | .ok (.error _) => return false
+    | .ok (.ok (iotaDeclarations, iotas)) =>
+      let environment ← getEnv
+      return iotaDeclarations.size == plan.rules.size && iotas.size == plan.rules.size &&
+        plan.rules.all fun rule => (iotas.find? (·.key == rule.key)).any fun iota =>
+          iota.schema.key == rule.key && iota.implementationIota == rule.implementationIota &&
+            iota.minorCompatibility == iota.schema.minorCompatibility &&
+            (environment.constants.find? iota.adapter).any (·.type == iota.exactType)
 
 def repeatedSpecialisedMinorsComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
@@ -749,7 +760,8 @@ def runSamples : MetaM Result := do
 
 def runMain : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let environment ← importModules #[`Init, `family_adapter_generated] {}
+  let environment ← importModules
+    #[`InductiveModels.FamilyAdapterConstruction, `family_adapter_generated] {}
   let context : Core.Context :=
     { fileName := "<family-adapter-construction-test>", fileMap := default,
       options := {}, maxHeartbeats := 0, maxRecDepth := 8192 }
