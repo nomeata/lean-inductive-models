@@ -151,7 +151,8 @@ def changedNested : ChangedBoundary :=
           `FamilyAdapterGenerated.generatedChangedNestedContainerForwardBackward } }
 
 def directSamples : Array Name :=
-  #[`FamilyAdapterGenerated.GeneratedDirect0,
+  #[`FamilyAdapterGenerated.GeneratedUniverse,
+    `FamilyAdapterGenerated.GeneratedDirect0,
     `FamilyAdapterGenerated.GeneratedDirect1,
     `FamilyAdapterGenerated.GeneratedDirect2,
     `FamilyAdapterGenerated.GeneratedDirect3,
@@ -243,6 +244,11 @@ def compatibilityUsesTransport (environment : Environment)
     | some (.thmInfo information) => containsConstant ``Eq.rec information.value
     | _ => false
 
+def compatibilityHasLevels (environment : Environment)
+    (certificate : RuleCompatibilityCertificate) : Bool :=
+  (environment.constants.find? certificate.compatibility).any fun information =>
+    !information.levelParams.isEmpty
+
 def compatibilityName (root : Name) (rule : RuleKey) : Name :=
   Name.str (root.append (rule.recursor.append rule.constructor.constructor))
     "minorCompatibility"
@@ -274,6 +280,7 @@ structure Result where
   wrongTargetMaps : Nat := 0
   sharedHypothesis : Nat := 0
   directNestedRule : Nat := 0
+  universeLevels : Nat := 0
   failures : Array String := #[]
 
 def runSamples : MetaM Result := do
@@ -305,6 +312,9 @@ def runSamples : MetaM Result := do
             certificate.minorHypotheses.size == expectedHypotheses && declarationsInstalled &&
             ruleCertificatesComplete plan certificate environment then
           result := { result with complete := result.complete + 1 }
+          if owner == `FamilyAdapterGenerated.GeneratedUniverse &&
+              certificate.rules.all (compatibilityHasLevels environment) then
+            result := { result with universeLevels := result.universeLevels + 1 }
         else
           let failures := result.failures.push s!"{owner}: incomplete kernel certificate"
           result := { result with failures }
@@ -563,6 +573,7 @@ def runMain : IO UInt32 := do
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
       result.invalidIotas == 1 && result.lateInvalidIotas == 1 && result.wrongTargetMaps == 1 &&
       result.sharedHypothesis == 1 && result.directNestedRule == 1 &&
+      result.universeLevels == 1 &&
       result.installedFamily == 1 &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
@@ -579,7 +590,7 @@ def runMain : IO UInt32 := do
     lateInvalidIotas={result.lateInvalidIotas}, \
     invalidContainerMaps={result.invalidContainerMaps}, \
     wrongTargetMaps={result.wrongTargetMaps}, sharedHypothesis={result.sharedHypothesis}, \
-    directNestedRule={result.directNestedRule}"
+    directNestedRule={result.directNestedRule}, universeLevels={result.universeLevels}"
   return 1
 
 end FamilyAdapterConstructionTest
