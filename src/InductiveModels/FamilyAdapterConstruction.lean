@@ -2107,42 +2107,27 @@ private def privateMinorValue (plan : FamilyAdapterPlan)
       let base := mkAppN publicMinor arguments
       let some telescope := telescopeCertificates.find? (·.constructor == constructor.key)
         | failConstruction (.malformedRecursorMinor member.key minorIndex)
+      unless telescope == constructorAdapter.telescope do
+        failConstruction (.malformedRecursorMinor member.key minorIndex)
       let privatePackageType ← liftGen <| packedTelescopeType privateFields
       let privatePackage ← liftGen <| packTelescopeValue privateFields privateFields
-      let levels := plan.levelParams.map Level.param
-      let decoded := mkAppN (.const telescope.decode levels) (parameters.push privatePackage)
-      let encodedDecoded := mkAppN (.const telescope.encode levels) (parameters.push decoded)
-      let roundTrip := mkAppN (.const telescope.encodeDecode levels)
-        (parameters.push privatePackage)
       let some owner := plan.members.find? (·.key == constructor.key.owner)
         | failConstruction (.malformedRecursorMinor member.key minorIndex)
       let some ownerIndex := plan.members.findIdx? (·.key == owner.key)
         | failConstruction (.malformedRecursorMinor member.key minorIndex)
       let ownerMotive := publicMotives[ownerIndex]!
-      let eqi ← match EqInfo.check (← getEnv) with
-        | .ok information => pure information
-        | .error _ => failConstruction (.malformedRecursorMinor member.key minorIndex)
-      let baseType ← inferType base
-      let resultLevel ← ilevel baseType
-      let packageLevel ← ilevel privatePackageType
-      let transported ← liftGen <| transportAlong eqi resultLevel packageLevel
-        privatePackageType encodedDecoded privatePackage roundTrip base fun package => do
-          let values ← unpackTelescopeValue privateFields package
-          let privateMajor := mkAppN
-            (.const constructor.implementationName (plan.levelParams.map Level.param))
-            (parameters ++ values)
-          let privateMajorType ← inferType privateMajor
-          let mapped ← (mapCarrierValueInfer plan memberCertificates parameters owner false
-            privateMajorType privateMajor).run
-          let (publicMajor, publicMajorType, _) ← match mapped with
-            | .ok mapped => pure mapped
-            | .error issue => badShape s!"family-adapter recursor minor map failed: {repr issue}"
-          let indices := resultIndices owner publicMajorType
-          return mkAppN ownerMotive (indices.push publicMajor)
+      let ownerBoundary ← packedCarrierBoundary plan memberCertificates parameters owner
+      let constructorBoundary ← packedConstructorBoundary plan parameters owner ownerBoundary
+        constructor constructorAdapter
+      let motive ← withLocalDeclD `total ownerBoundary.publicType fun total => do
+        let (indices, major) ← unpackCarrierTotal plan parameters owner true total
+        liftGen <| mkLambdaFVars #[total] (mkAppN ownerMotive (indices.push major))
+      let constructorProof := mkApp constructorBoundary.constructorAgreement privatePackage
+      let congruence ← liftGen <| mkAppM ``congrArg #[motive, constructorProof]
+      let transported ← liftGen <| mkAppM ``Eq.mp #[congruence, base]
       unless ← isDefEq (← inferType transported) privateResult do
         failConstruction (.dependentRecursorMinorTransport member.key minorIndex
           privateBinders.size)
-      let _ := constructorAdapter
       mkLambdaFVars privateBinders transported
 
 /-- A nested recursor can bind minors for specialised mimic constructors that
