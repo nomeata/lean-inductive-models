@@ -308,6 +308,21 @@ private def recursorMajorMatches (recursor : RecursorVal) (recursorType : Expr)
   let .forallE _ domain _ _ := type | return false
   return ← isDefEq domain expected
 
+private def recursorMajorFamily? (recursor : RecursorVal) (recursorType : Expr)
+    (parameterArity indexArity : Nat) : MetaM (Option Expr) := do
+  unless recursor.numParams == parameterArity && recursor.numIndices == indexArity do
+    return none
+  let majorPosition :=
+    recursor.numParams + recursor.numMotives + recursor.numMinors + recursor.numIndices
+  forallBoundedTelescope recursorType (some (majorPosition + 1)) fun binders _ => do
+    let some major := binders[majorPosition]? | return none
+    let parameters := binders.extract 0 parameterArity
+    let indexStart := recursor.numParams + recursor.numMotives + recursor.numMinors
+    let indices := binders.extract indexStart (indexStart + indexArity)
+    let family ← mkLambdaFVars (parameters ++ indices) (← inferType major)
+    if family.hasFVar then return none
+    return some family
+
 private def containerMetadataInstalled (environment : Environment)
     (parameters : Array Expr) (sourceType implementationType : Expr)
     (occurrence : OccurrenceKey) (container : IsoContainerImplementation) :
@@ -602,6 +617,56 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     #[(container.sourceRecursor, container.implementationRecursor)] ++
       container.recursorRuleKeys
   let implementationRuleMapping := implementationMapping ++ containerRecursorMapping
+  let mut containerRecursorPlans : Array ContainerRecursorPlan := #[]
+  for container in containerMapPlans do
+    let key : ContainerRecursorKey :=
+      { publicRecursor := container.sourceRecursor
+        implementationRecursor := container.implementationRecursor }
+    if containerRecursorPlans.any (·.key == key) then continue
+    let grouped := containerMapPlans.filter fun current =>
+      current.sourceRecursor == key.publicRecursor &&
+        current.implementationRecursor == key.implementationRecursor
+    let sameMetadata := grouped.all fun current =>
+      current.parameterArity == container.parameterArity &&
+        current.indexArity == container.indexArity &&
+        current.sourceRecursorType == container.sourceRecursorType &&
+        current.implementationRecursorType == container.implementationRecursorType &&
+        current.recursorRuleKeys == container.recursorRuleKeys &&
+        current.maps == container.maps
+    unless sameMetadata do
+      for current in grouped do reasons := reasons.push (.ambiguousContainerMap current.key)
+      continue
+    let some (.recInfo publicInfo) := environment.constants.find? key.publicRecursor | do
+      for current in grouped do
+        reasons := reasons.push (.missingInstalledContainerRecursor current.key key.publicRecursor)
+      continue
+    let some (.recInfo implementationInfo) :=
+        environment.constants.find? key.implementationRecursor | do
+      for current in grouped do
+        reasons := reasons.push
+          (.missingInstalledContainerRecursor current.key key.implementationRecursor)
+      continue
+    let publicMajor? ← recursorMajorFamily? publicInfo container.sourceRecursorType
+      container.parameterArity container.indexArity
+    let implementationMajor? ← recursorMajorFamily? implementationInfo
+      container.implementationRecursorType container.parameterArity container.indexArity
+    let some publicMajorFamily := publicMajor? | do
+      for current in grouped do
+        reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
+      continue
+    let some implementationMajorFamily := implementationMajor? | do
+      for current in grouped do
+        reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
+      continue
+    let rules := container.recursorRuleKeys.map fun (publicConstructor,
+        implementationConstructor) =>
+      { recursor := key, publicConstructor, implementationConstructor }
+    containerRecursorPlans := containerRecursorPlans.push
+      { key, parameterArity := container.parameterArity, indexArity := container.indexArity,
+        publicType := container.sourceRecursorType,
+        implementationType := container.implementationRecursorType,
+        publicMajorFamily, implementationMajorFamily, rules,
+        occurrences := grouped.map (·.key), maps := container.maps }
   let mut rulePlans := #[]
   for member in resolvedMembers do
     if let some recursor := member.sourceRecursor? then
@@ -680,6 +745,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     { root := memberKeyFor firstType.name, levelParams := firstType.levelParams,
       components, members := memberPlans, constructors := constructorPlans,
       rules := rulePlans, occurrences := occurrencePlans, containerMaps := containerMapPlans,
+      containerRecursors := containerRecursorPlans,
       support := iso.familyImplementation?.map (·.support) |>.getD #[] }
   for error in plan.validate do reasons := reasons.push (.invalidPlan error)
 

@@ -148,6 +148,22 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
       backwardForwardType := .sort .zero
       forwardBackwardType := .sort .zero
       implementationCarrierType := .sort .zero }
+  let containerRecursors := containerMaps.map fun container =>
+    let key : ContainerRecursorKey :=
+      { publicRecursor := container.sourceRecursor
+        implementationRecursor := container.implementationRecursor }
+    { key
+      parameterArity := container.parameterArity
+      indexArity := container.indexArity
+      publicType := container.sourceRecursorType
+      implementationType := container.implementationRecursorType
+      publicMajorFamily := .sort .zero
+      implementationMajorFamily := .sort .zero
+      rules := container.recursorRuleKeys.map fun (publicConstructor,
+          implementationConstructor) =>
+        { recursor := key, publicConstructor, implementationConstructor }
+      occurrences := #[container.key]
+      maps := container.maps }
   return { root := memberKey 0
            levelParams := []
            components :=
@@ -157,7 +173,8 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
            constructors
            rules
            occurrences
-           containerMaps }
+           containerMaps
+           containerRecursors }
 
 private def sampledCounts : Array Nat := #[0, 1, 2, 3, 5, 8]
 

@@ -61,6 +61,22 @@ structure RuleKey where
   constructor : ConstructorKey
   deriving Inhabited, BEq, Repr
 
+/-- Exact identity of a specialised container recursor boundary. The two
+installed names are paired by checked metadata rather than spelling or array
+position. -/
+structure ContainerRecursorKey where
+  publicRecursor : Name
+  implementationRecursor : Name
+  deriving Inhabited, BEq, Repr
+
+/-- One exact public/private rule-key association of a specialised container
+recursor. -/
+structure ContainerRecursorRuleKey where
+  recursor : ContainerRecursorKey
+  publicConstructor : Name
+  implementationConstructor : Name
+  deriving Inhabited, BEq, Repr
+
 /-- A path to an occurrence inside an exact field type.  This is an expression
 path, not a taxonomy of recursive shapes; a direct occurrence has an empty
 path, while aliases, binders, and nested container arguments retain their
@@ -264,6 +280,18 @@ structure PublicRecursorCertificate where
   rules : Array RuleKey
   deriving Inhabited, BEq, Repr
 
+/-- Kernel-checked public wrapper and call agreement for one specialised
+container recursor. Its carrier boundary is the exact closed major-family
+pair recorded in [`ContainerRecursorPlan`], not a fabricated named member. -/
+structure ContainerRecursorCertificate where
+  key : ContainerRecursorKey
+  adapter : Name
+  exactType : Expr
+  callAgreement : Name
+  rules : Array ContainerRecursorRuleKey
+  occurrences : Array OccurrenceKey
+  deriving Inhabited, BEq, Repr
+
 /-- Exact paired recursor call at one installed IH slot.  The enclosing rule
 supplies the owner while both literal recursor names are retained independently;
 neither side is inferred from an array position or a spelling classifier. -/
@@ -382,6 +410,22 @@ structure ContainerMapPlan where
   implementationCarrierType : Expr
   deriving Inhabited, BEq, Repr
 
+/-- One specialised container recursor paired independently of ordinary family
+members. `publicMajorFamily` and `implementationMajorFamily` are closed lambdas
+over the exact parameter/index vectors opened from the installed recursors. -/
+structure ContainerRecursorPlan where
+  key : ContainerRecursorKey
+  parameterArity : Nat
+  indexArity : Nat
+  publicType : Expr
+  implementationType : Expr
+  publicMajorFamily : Expr
+  implementationMajorFamily : Expr
+  rules : Array ContainerRecursorRuleKey
+  occurrences : Array OccurrenceKey
+  maps : EquivalenceCertificate
+  deriving Inhabited, BEq, Repr
+
 /-- One exact public rule and its private proof oracle.  Occurrences are keyed
 to minor hypotheses rather than accepted by a count comparison. -/
 structure RulePlan where
@@ -434,6 +478,7 @@ structure FamilyAdapterPlan where
   rules : Array RulePlan
   occurrences : Array OccurrencePlan
   containerMaps : Array ContainerMapPlan := #[]
+  containerRecursors : Array ContainerRecursorPlan := #[]
   support : Array Name := #[]
   deriving Inhabited, BEq, Repr
 
@@ -465,6 +510,11 @@ inductive PlanError where
   | duplicateOccurrence (key : OccurrenceKey)
   | duplicateContainerMap (key : OccurrenceKey)
   | unknownContainerMapOccurrence (key : OccurrenceKey)
+  | duplicateContainerRecursor (key : ContainerRecursorKey)
+  | unknownContainerRecursorOccurrence (key : ContainerRecursorKey)
+      (occurrence : OccurrenceKey)
+  | containerRecursorMapMismatch (key : ContainerRecursorKey)
+      (occurrence : OccurrenceKey)
   | unknownOccurrenceConstructor (key : OccurrenceKey)
   | unknownOccurrenceTarget (key : OccurrenceKey)
   | occurrenceFieldOutOfBounds (key : OccurrenceKey) (fields : Nat)
@@ -624,6 +674,33 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
   for container in plan.containerMaps do
     unless plan.occurrences.any (·.key == container.key) do
       errors := errors.push (.unknownContainerMapOccurrence container.key)
+
+  if let some key := duplicateKey? (plan.containerRecursors.map (·.key)) then
+    errors := errors.push (.duplicateContainerRecursor key)
+  for recursor in plan.containerRecursors do
+    for occurrence in recursor.occurrences do
+      let maps := plan.containerMaps.filter (·.key == occurrence)
+      unless plan.occurrences.any (·.key == occurrence) do
+        errors := errors.push (.unknownContainerRecursorOccurrence recursor.key occurrence)
+      unless maps.size == 1 && maps.all fun map =>
+          map.sourceRecursor == recursor.key.publicRecursor &&
+            map.implementationRecursor == recursor.key.implementationRecursor &&
+            map.maps == recursor.maps do
+        errors := errors.push (.containerRecursorMapMismatch recursor.key occurrence)
+    for map in plan.containerMaps.filter fun map =>
+        map.sourceRecursor == recursor.key.publicRecursor &&
+          map.implementationRecursor == recursor.key.implementationRecursor do
+      unless recursor.occurrences.contains map.key do
+        errors := errors.push (.containerRecursorMapMismatch recursor.key map.key)
+  for map in plan.containerMaps do
+    let recursors := plan.containerRecursors.filter fun recursor =>
+      recursor.key.publicRecursor == map.sourceRecursor &&
+        recursor.key.implementationRecursor == map.implementationRecursor &&
+        recursor.occurrences.contains map.key
+    unless recursors.size == 1 do
+      errors := errors.push (.containerRecursorMapMismatch
+        { publicRecursor := map.sourceRecursor,
+          implementationRecursor := map.implementationRecursor } map.key)
 
   for constructor in plan.constructors do
     for key in telescopeOccurrences constructor.telescope do
