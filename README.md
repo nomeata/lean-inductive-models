@@ -82,8 +82,9 @@ gates. They replay declaration values and compare serialized inductive
 metadata with what Lean regenerates. Output replay is on by default; use
 `--no-type-check-output` only when the caller deliberately accepts that the
 complete final stream will not receive this additional verdict. This opt-out
-does not weaken the mandatory per-declaration kernel checks performed during
-generation.
+does not skip the kernel checks applied to each generated model island before
+it is accepted. Whole-input checking is controlled separately by
+`--type-check-input`.
 
 ## Usage
 
