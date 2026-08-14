@@ -122,6 +122,11 @@ structure MemberPlan where
   constructors : Array ConstructorKey
   /-- Exact rule-key sequence read from this member's source `ERec`. -/
   sourceRules : Array RuleKey
+  /-- Exact motive/minor prefix arities read from the source `ERec`.  These
+  locate the corresponding binders in an installed private recursor without
+  assuming a singleton or non-mutual layout. -/
+  recursorMotiveArity : Nat
+  recursorMinorArity : Nat
   sourceRecursor : Name
   implementationRecursor : Name
   publicRecursor : Name
@@ -159,6 +164,21 @@ structure TelescopeCertificate where
   decode : Name
   decodeEncode : Name
   encodeDecode : Name
+  /-- Equality of the complete dependent result-index vectors after encoding.
+  The vector is packed once, rather than split into an arity-specific list of
+  equations. -/
+  indexFibre : Name
+  deriving Inhabited, BEq, Repr
+
+/-- One occurrence's exact slot in an installed private minor telescope.
+Several source occurrences in the same field may intentionally name the same
+hypothesis; `binderIndex` remains the literal minor-binder position. -/
+structure MinorHypothesisCertificate where
+  rule : RuleKey
+  occurrence : OccurrenceKey
+  minorIndex : Nat
+  hypothesisIndex : Nat
+  binderIndex : Nat
   deriving Inhabited, BEq, Repr
 
 /-- One constructor in the public/private family boundary. -/
@@ -211,6 +231,7 @@ structure FamilyAdapterCertificate where
   members : Array MemberCertificate
   telescopes : Array TelescopeCertificate
   occurrences : Array OccurrenceCertificate
+  minorHypotheses : Array MinorHypothesisCertificate
   deriving Inhabited, BEq, Repr
 
 /-- Complete finite plan for a single private/public family boundary. -/

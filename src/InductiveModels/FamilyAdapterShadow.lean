@@ -503,6 +503,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       sourceType := member.source.type, implementationCarrier := member.implementationCarrier,
       publicCarrier := member.publicCarrier, representation := member.representation,
       constructors, sourceRules, sourceRecursor := member.sourceRecursor?.map (·.name) |>.getD .anonymous,
+      recursorMotiveArity := member.sourceRecursor?.map (·.numMotives) |>.getD 0,
+      recursorMinorArity := member.sourceRecursor?.map (·.numMinors) |>.getD 0,
       implementationRecursor := member.implementationRecursor,
       publicRecursor := member.publicRecursor }
   let plan : FamilyAdapterPlan :=

@@ -117,6 +117,8 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
       sourceRules := (Array.range memberCount).flatMap fun constructorOwner =>
         (Array.range constructorsPerMember).map
           (ruleKey constructorsPerMember ownerIndex constructorOwner)
+      recursorMotiveArity := memberCount
+      recursorMinorArity := memberCount * constructorsPerMember
       sourceRecursor := sourceRecursor ownerIndex
       implementationRecursor := numbered "FamilyAdapterPlanTest.implRecursor" ownerIndex
       publicRecursor := numbered "FamilyAdapterPlanTest.publicRecursor" ownerIndex })
