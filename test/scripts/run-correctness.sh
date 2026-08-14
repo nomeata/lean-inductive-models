@@ -20,7 +20,7 @@ compile_only_targets=(
 )
 correctness_targets=(
   test monotest clitest supervisortest generationflagstest checktest kernelchecktest ordertest
-  familyadapterplantest familyadaptershadowtest
+  familyadapterplantest familyadaptershadowtest familyadapterconstructiontest
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
   composedrecursorsyntaxtest mainclitest projectiontest indexedfibrediagnostictest
@@ -44,6 +44,7 @@ lake exe checktest "$root"
 lake exe kernelchecktest "$root"
 lake exe familyadapterplantest
 lake exe familyadaptershadowtest
+lake exe familyadapterconstructiontest
 lake exe ordertest "$root"
 lake exe incrementalordertest "$root"
 lake exe namingtest

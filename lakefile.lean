@@ -187,6 +187,11 @@ lean_exe familyadaptershadowtest where
   root := `FamilyAdapterShadowTest
   supportInterpreter := true
 
+lean_exe familyadapterconstructiontest where
+  srcDir := "test"
+  root := `FamilyAdapterConstructionTest
+  supportInterpreter := true
+
 lean_lib FamilyAdapterGeneratedFixtures where
   srcDir := "test/fixtures/inductive-models"
   roots := #[`family_adapter_generated]

@@ -40,29 +40,46 @@ If that exact association cannot be recovered, the affected occurrence and
 rule are omitted from `ShadowCoverage` and a keyed minor-telescope reason is
 reported; a dummy ordinal never counts as covered evidence.
 
-The plan contains no fabricated proof names. A separate
-`FamilyAdapterCertificate` will hold declaration-backed maps and telescope
-proofs after construction. Certificates stay as `Name` and `Expr` values in
-the incremental Lean environment; they are never serialized through JSON.
+The plan contains no fabricated proof names. `FamilyAdapterConstruction` is a
+disabled prototype seam that now builds `FamilyAdapterCertificate`: private
+member maps, dependent-telescope packers, `encode`/`decode`, both round trips,
+one packed result-index equality, and exact installed minor/IH associations.
+Every declaration is accepted by the kernel before its name enters the
+certificate. Certificates stay as `Name` and `Expr` values in the incremental
+Lean environment; they are never serialized through JSON.
 
-## Planned proof construction
+The prototype closes direct and infinitary occurrences through arbitrary
+finite binder telescopes. A nested occurrence such as `List T` deliberately
+returns the keyed `missingContainerMap` obligation and no certificate: member
+maps alone cannot manufacture the required `List P ↔ List M` equivalence.
+The existing nested model has mimic pack/unpack laws, but `Iso` does not yet
+expose them by occurrence key. Those maps must be added to installed metadata;
+there is no `List`-specific or bounded fallback.
+
+## Proof construction
 
 The proof is structural, with no clause selected by a cardinality.
 
 1. Traverse the condensation graph of source and mimic SCCs. Build members of
    one SCC simultaneously, using the already kernel-checked private family as
    the recursion oracle.
-2. For each constructor, induct over its literal binder telescope. Package the
-   whole dependent telescope, including result indices, and generate
+2. For each constructor, induct over its literal binder telescope. The
+   prototype packages the whole dependent telescope, including result indices,
+   and generates
    `encode`, `decode`, `decodeEncode`, and `encodeDecode`. Later binder types
    are transported by the accumulated package equality rather than rebuilt by
    an arity-specific template.
-3. At a recursive occurrence, use the target member correspondence. At a
-   nested occurrence, compose the generated `G(P) <-> G(M)` correspondence
+3. At a recursive occurrence, the prototype uses the target member
+   correspondence. At a nested occurrence it will compose the generated
+   `G(P) <-> G(M)` correspondence
    with the existing mimic `pack`/`unpack` laws. The expression path identifies
    the occurrence; its syntactic category does not choose a separate route.
-4. For each exact recursor rule, fold equality transport over the keyed minor
-   hypotheses in telescope order. Each fold step abstracts the current
+4. For each exact recursor rule, installed recursor metadata is opened using
+   the source-recorded motive and minor arities. Constructor keys select the
+   minor and occurrence keys select the literal IH binder, including shared
+   hypotheses for multiple occurrences in one field. The remaining recursor
+   proof will fold equality transport over those keyed minor hypotheses in
+   telescope order. Each fold step abstracts the current
    occurrence and applies `Eq.rec`; the induction is on the finite occurrence
    array, not on a unary/binary case split.
 5. Enable the adapter only after all member, constructor, telescope,

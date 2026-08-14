@@ -37,7 +37,7 @@ The executable correctness targets are:
 ```bash
 correctness_targets=(
   test monotest clitest supervisortest generationflagstest checktest kernelchecktest ordertest
-  familyadapterplantest familyadaptershadowtest
+  familyadapterplantest familyadaptershadowtest familyadapterconstructiontest
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
   composedrecursorsyntaxtest mainclitest projectiontest indexedfibrediagnostictest
@@ -68,6 +68,7 @@ lake exe checktest "$PWD"
 lake exe kernelchecktest "$PWD"
 lake exe familyadapterplantest
 lake exe familyadaptershadowtest
+lake exe familyadapterconstructiontest
 lake exe ordertest "$PWD"
 lake exe incrementalordertest "$PWD"
 lake exe namingtest

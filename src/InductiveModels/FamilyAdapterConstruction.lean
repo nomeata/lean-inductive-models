@@ -157,8 +157,18 @@ def prototypeMemberCertificates (plan : FamilyAdapterPlan) (iso : Iso) (root : N
 def packedTelescopeType (fields : Array Expr) : GenM Expr :=
   if fields.isEmpty then pure (punitT .zero) else tightTowerTy fields 0
 
-def packTelescopeValue (values : Array Expr) : GenM Expr :=
-  if values.isEmpty then pure (punitUnit .zero) else tightTowerMk values 0
+private partial def packTelescopeValueAt (fields values : Array Expr) (fieldIndex : Nat) :
+    GenM Expr := do
+  if fieldIndex + 1 == fields.size then return values[fieldIndex]!
+  let (u, v, alpha, beta) ← tightTowerAt fields fieldIndex
+    (values.extract 0 fieldIndex)
+  let tail ← packTelescopeValueAt fields values (fieldIndex + 1)
+  return psigmaMk u v alpha beta values[fieldIndex]! tail
+
+def packTelescopeValue (fields values : Array Expr) : GenM Expr := do
+  unless fields.size == values.size do
+    badShape "a family-adapter package has inconsistent finite vectors"
+  if fields.isEmpty then pure (punitUnit .zero) else packTelescopeValueAt fields values 0
 
 def unpackTelescopeValue (fields : Array Expr) (value : Expr) : GenM (Array Expr) :=
   if fields.isEmpty then pure #[] else tightTowerProjs fields 0 value
@@ -315,14 +325,14 @@ private def mapFields (plan : FamilyAdapterPlan) (certificates : Array MemberCer
     mapped := mapped.push value
   return mapped
 
-private def packageCongruence (eqi : EqInfo) (packageType : Expr)
+private def packageCongruence (eqi : EqInfo) (fields : Array Expr) (packageType : Expr)
     (before after proofs : Array Expr) : GenM Expr := do
   unless before.size == after.size && proofs.size == before.size do
     badShape "a family-adapter package congruence has inconsistent finite vectors"
   let level ← ilevel packageType
   let mixed := fun (offset : Nat) => (Array.range before.size).map fun index =>
     if index < offset then after[index]! else before[index]!
-  let makePackage := fun values => packTelescopeValue values
+  let makePackage := fun values => packTelescopeValue fields values
   let base ← makePackage before
   let mut proof := eqi.refl' level packageType base
   for fieldIndex in [:before.size] do
@@ -356,8 +366,10 @@ private def packDeclaration (plan : FamilyAdapterPlan) (constructorType : Expr)
     let fieldsType ← instantiateForall constructorType parameters
     forallBoundedTelescope fieldsType (some fieldArity) fun fields _ => do
       mkForallFVars (parameters ++ fields) (← packedTelescopeType fields)
-  let value ← forallTelescope type fun arguments _ => do
-    mkLambdaFVars arguments (← packTelescopeValue (arguments.extract parameterArity))
+  let value ← forallBoundedTelescope type (some (parameterArity + fieldArity))
+      fun arguments _ => do
+    let fields := arguments.extract parameterArity
+    mkLambdaFVars arguments (← packTelescopeValue fields fields)
   let declaration := Declaration.defnDecl
     { name, levelParams := plan.levelParams, type, value,
       hints := .abbrev, safety := .safe }
@@ -384,7 +396,8 @@ private def codecDeclaration (plan : FamilyAdapterPlan)
       let sourceValues ← liftGen <| unpackTelescopeValue sourceFields package
       let mapped ← mapFields plan certificates constructor forward sourceFields targetFields
         sourceValues
-      mkLambdaFVars (parameters.push package) (← liftGen <| packTelescopeValue mapped)
+      mkLambdaFVars (parameters.push package)
+        (← liftGen <| packTelescopeValue targetFields mapped)
   let declaration := Declaration.defnDecl
     { name, levelParams := plan.levelParams, type, value,
       hints := .abbrev, safety := .safe }
@@ -429,7 +442,8 @@ private def roundTripDeclaration (plan : FamilyAdapterPlan)
           fieldIndex constructor.telescope.binders[fieldIndex]!.occurrences sourceType targetType
           sourceValues[fieldIndex]!
         proofs := proofs.push proof
-      let proof ← liftGen <| packageCongruence eqi sourcePackage twice sourceValues proofs
+      let proof ← liftGen <| packageCongruence eqi sourceFields sourcePackage twice
+        sourceValues proofs
       mkLambdaFVars (parameters.push package) proof
   let declaration := Declaration.thmDecl
     { name, levelParams := plan.levelParams, type, value }
@@ -441,6 +455,17 @@ private def resultIndices (owner : MemberPlan) (result : Expr) : Array Expr :=
   arguments.extract owner.parameterArity
     (min arguments.size (owner.parameterArity + owner.indexArity))
 
+private def withIndexTelescopes (owner : MemberPlan)
+    (parameters : Array Expr)
+    (k : Array Expr → Array Expr → ConstructionM α) : ConstructionM α := do
+  let publicCarrierType ← liftGen <| generatedType owner.publicCarrier
+  let implementationCarrierType ← liftGen <| generatedType owner.implementationCarrier
+  let publicIndicesType ← instantiateForall publicCarrierType parameters
+  forallBoundedTelescope publicIndicesType (some owner.indexArity) fun publicIndices _ => do
+    let implementationIndicesType ← instantiateForall implementationCarrierType parameters
+    forallBoundedTelescope implementationIndicesType (some owner.indexArity)
+      fun implementationIndices _ => k publicIndices implementationIndices
+
 private def indexFibreDeclaration (plan : FamilyAdapterPlan)
     (certificates : Array MemberCertificate) (constructor : ConstructorPlan)
     (name : Name) : ConstructionM Declaration := do
@@ -450,33 +475,36 @@ private def indexFibreDeclaration (plan : FamilyAdapterPlan)
   let build := fun (makeValue : Bool) =>
     withConstructorTelescopes plan constructor fun owner parameters publicFields publicResult
         implementationFields implementationResult => do
-      let sourcePackage ← liftGen <| packedTelescopeType publicFields
-      withLocalDeclD `package sourcePackage fun package => do
-        let sourceValues ← liftGen <| unpackTelescopeValue publicFields package
-        let implementationValues ← mapFields plan certificates constructor true publicFields
-          implementationFields sourceValues
-        let publicResult := publicResult.replaceFVars publicFields sourceValues
-        let implementationResult := implementationResult.replaceFVars implementationFields
-          implementationValues
-        let publicIndices := resultIndices owner publicResult
-        let implementationIndices := resultIndices owner implementationResult
-        unless publicIndices.size == owner.indexArity &&
-            implementationIndices.size == owner.indexArity do
-          failConstruction (.indexFibreMismatch constructor.key)
-        let publicPacked ← liftGen <| packTelescopeValue publicIndices
-        let implementationPacked ← liftGen <| packTelescopeValue implementationIndices
-        let publicType ← inferType publicPacked
-        let implementationType ← inferType implementationPacked
-        unless ← isDefEq publicType implementationType do
-          failConstruction (.indexFibreMismatch constructor.key)
-        unless ← isDefEq implementationPacked publicPacked do
-          failConstruction (.indexFibreMismatch constructor.key)
-        if makeValue then
-          mkLambdaFVars (parameters.push package)
-            (eqi.refl' (← ilevel publicType) publicType implementationPacked)
-        else
-          mkForallFVars (parameters.push package)
-            (eqi.mk' (← ilevel publicType) publicType implementationPacked publicPacked)
+      withIndexTelescopes owner parameters fun publicIndexFields implementationIndexFields => do
+        let sourcePackage ← liftGen <| packedTelescopeType publicFields
+        withLocalDeclD `package sourcePackage fun package => do
+          let sourceValues ← liftGen <| unpackTelescopeValue publicFields package
+          let implementationValues ← mapFields plan certificates constructor true publicFields
+            implementationFields sourceValues
+          let publicResult := publicResult.replaceFVars publicFields sourceValues
+          let implementationResult := implementationResult.replaceFVars implementationFields
+            implementationValues
+          let publicIndices := resultIndices owner publicResult
+          let implementationIndices := resultIndices owner implementationResult
+          unless publicIndices.size == owner.indexArity &&
+              implementationIndices.size == owner.indexArity do
+            failConstruction (.indexFibreMismatch constructor.key)
+          let publicPacked ← liftGen <|
+            packTelescopeValue publicIndexFields publicIndices
+          let implementationPacked ← liftGen <|
+            packTelescopeValue implementationIndexFields implementationIndices
+          let publicType ← inferType publicPacked
+          let implementationType ← inferType implementationPacked
+          unless ← isDefEq publicType implementationType do
+            failConstruction (.indexFibreMismatch constructor.key)
+          unless ← isDefEq implementationPacked publicPacked do
+            failConstruction (.indexFibreMismatch constructor.key)
+          if makeValue then
+            mkLambdaFVars (parameters.push package)
+              (eqi.refl' (← ilevel publicType) publicType implementationPacked)
+          else
+            mkForallFVars (parameters.push package)
+              (eqi.mk' (← ilevel publicType) publicType implementationPacked publicPacked)
   let type ← build false
   let value ← build true
   let declaration := Declaration.thmDecl

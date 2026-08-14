@@ -66,6 +66,29 @@ def indexedSamples : Array Name :=
     `FamilyAdapterGenerated.GeneratedIndexed3x3,
     `FamilyAdapterGenerated.GeneratedIndexed3x8]
 
+def constructorSamples : Array Name :=
+  #[`FamilyAdapterGenerated.GeneratedConstructors1x8,
+    `FamilyAdapterGenerated.GeneratedConstructors2x8,
+    `FamilyAdapterGenerated.GeneratedConstructors3x8,
+    `FamilyAdapterGenerated.GeneratedConstructors5x8]
+
+def mutualSamples : Array (Array Name) :=
+  #[#[`FamilyAdapterGenerated.GeneratedMutual1x8_0],
+    #[`FamilyAdapterGenerated.GeneratedMutual2x8_0,
+      `FamilyAdapterGenerated.GeneratedMutual2x8_1],
+    #[`FamilyAdapterGenerated.GeneratedMutual3x8_0,
+      `FamilyAdapterGenerated.GeneratedMutual3x8_1,
+      `FamilyAdapterGenerated.GeneratedMutual3x8_2],
+    #[`FamilyAdapterGenerated.GeneratedMutual5x8_0,
+      `FamilyAdapterGenerated.GeneratedMutual5x8_1,
+      `FamilyAdapterGenerated.GeneratedMutual5x8_2,
+      `FamilyAdapterGenerated.GeneratedMutual5x8_3,
+      `FamilyAdapterGenerated.GeneratedMutual5x8_4]]
+
+def completeSamples : Array (Array Name) :=
+  (directSamples ++ dependentSamples ++ infinitarySamples ++ indexedSamples ++
+    constructorSamples).map (#[·]) ++ mutualSamples
+
 def nestedSamples : Array Name :=
   #[`FamilyAdapterGenerated.GeneratedNested1,
     `FamilyAdapterGenerated.GeneratedNested2,
@@ -80,8 +103,9 @@ structure Result where
 
 def runSamples : MetaM Result := do
   let mut result : Result := {}
-  for owner in directSamples ++ dependentSamples ++ infinitarySamples ++ indexedSamples do
-    let source ← indEDecl #[owner]
+  for owners in completeSamples do
+    let owner := owners[0]!
+    let source ← indEDecl owners
     let iso := identityIso source
     let report ← FamilyAdapter.deriveShadowPlan source iso
     let some plan := report.plan? | do
@@ -132,15 +156,14 @@ def runSamples : MetaM Result := do
         result := { result with failures }
   return result
 
-def main : IO UInt32 := do
+def runMain : IO UInt32 := do
   initSearchPath (← findSysroot)
-  let environment ← importModules #[`family_adapter_generated] {}
+  let environment ← importModules #[`Init, `family_adapter_generated] {}
   let context : Core.Context :=
     { fileName := "<family-adapter-construction-test>", fileMap := default,
       options := {}, maxHeartbeats := 0, maxRecDepth := 8192 }
   let (result, state) ← Core.CoreM.toIO (MetaM.run' runSamples) context { env := environment }
-  if result.failures.isEmpty && result.complete ==
-      (directSamples ++ dependentSamples ++ infinitarySamples ++ indexedSamples).size &&
+  if result.failures.isEmpty && result.complete == completeSamples.size &&
       result.blocked == nestedSamples.size && state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
       {result.blocked} keyed container-map obligations"
@@ -151,3 +174,5 @@ def main : IO UInt32 := do
   return 1
 
 end FamilyAdapterConstructionTest
+
+def main : IO UInt32 := FamilyAdapterConstructionTest.runMain

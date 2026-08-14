@@ -111,7 +111,7 @@ jobs:
               build_serially "${compile_only_targets[@]}"
               build_serially \
                 clitest supervisortest generationflagstest checktest kernelchecktest \
-                familyadapterplantest familyadaptershadowtest \
+                familyadapterplantest familyadaptershadowtest familyadapterconstructiontest \
                 ordertest incrementalordertest namingtest \
                 drivernamingtest privatealiastest sourcereplayaliastest simplenamingtest rulektest \
                 defaultctoriotatest sourcestructuresyntaxtest composedrecursorsyntaxtest \
@@ -127,6 +127,7 @@ jobs:
               lake exe kernelchecktest "$GITHUB_WORKSPACE"
               lake exe familyadapterplantest
               lake exe familyadaptershadowtest
+              lake exe familyadapterconstructiontest
               lake exe ordertest "$GITHUB_WORKSPACE"
               lake exe incrementalordertest "$GITHUB_WORKSPACE"
               lake exe namingtest
@@ -154,7 +155,7 @@ jobs:
               PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
               python3 test/scripts/generate_family_adapter_fixtures.py \
                 --output test/fixtures/inductive-models/family_adapter_generated.lean --check
-              count=31
+              count=32
               ;;
             mono)
               build_serially lean-inductive-models monotest mainclitest
