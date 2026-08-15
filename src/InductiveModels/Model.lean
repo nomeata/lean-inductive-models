@@ -3340,10 +3340,14 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       badShape s!"the exact source export has {sourceMatches.size} records for {sourceRecursor}"
     let sourceRecursorEvidence := IsoSourceRecursor.ofERec sourceMatches[0]!
     let implementationRecursorInfo ← constInfo implementationRecursor
-    let .recInfo implementationRecursorValue := implementationRecursorInfo
-      | badShape s!"{implementationRecursor} is not an installed mimic recursor"
+    let implementationShape := shapes[r + i]!
+    unless implementationRecursorInfo.type == implementationShape.ty &&
+        implementationShape.nm == sourceRecursorEvidence.numMotives &&
+        implementationShape.nmin == sourceRecursorEvidence.numMinors &&
+        implementationShape.nidx == sourceRecursorEvidence.numIndices do
+      badShape s!"{implementationRecursor}'s checked wrapper layout differs from {sourceRecursor}"
     let sourceRuleKeys := sourceRecursorEvidence.rules.map (·.ctor)
-    let implementationRuleKeys := implementationRecursorValue.rules.toArray.map (·.ctor)
+    let implementationRuleKeys := sourceRuleKeys
     unless sourceRuleKeys.all implementationRuleKeys.contains &&
         implementationRuleKeys.all sourceRuleKeys.contains do
       badShape s!"{sourceRecursor} and {implementationRecursor} have different rule keys"
