@@ -1162,20 +1162,27 @@ def runSamples : MetaM Result := do
     { validContainerIso with containerImplementations := #[invalidContainer] }
   let invalidContainerReport ←
     FamilyAdapter.deriveShadowPlan invalidContainerSource invalidContainerIso
+  let invalidContainerRoot := `_family_adapter_construction_test_invalid_container_map
   let invalidContainerBuilt ← (FamilyAdapter.buildFamilyPrototype invalidContainerReport
-    invalidContainerIso `_family_adapter_construction_test_invalid_container_map).run
+    invalidContainerIso invalidContainerRoot).run
   match invalidContainerBuilt with
   | .error decline =>
     let failures := result.failures.push s!"invalid container map: {decline.label}"
     result := { result with failures }
   | .ok built =>
     let exactMismatch := invalidContainerReport.reasons.any fun
-      | .installedContainerMapTypeMismatch occurrence name =>
-          occurrence.target.owner == changedNested.publicOwner &&
-            name == validContainer.backward
+      | .invalidContainerRecursorMetadata key =>
+          key.publicRecursor == validContainer.sourceRecursor &&
+            key.implementationRecursor == validContainer.implementationRecursor
       | _ => false
-    if exactMismatch && invalidContainerReport.coverage.containerMaps.isEmpty &&
-        built.certificate.isNone && built.declarations.isEmpty then
+    let noContainerPlan := invalidContainerReport.plan?.all fun plan =>
+      plan.containerMaps.isEmpty && plan.containerRecursors.isEmpty
+    let environment ← getEnv
+    let noEnvironmentLeak := !environment.constants.toList.any fun (name, _) =>
+      invalidContainerRoot.isPrefixOf name
+    if exactMismatch && noContainerPlan &&
+        invalidContainerReport.coverage.containerMaps.isEmpty && built.certificate.isNone &&
+        built.declarations.isEmpty && noEnvironmentLeak then
       result := { result with invalidContainerMaps := result.invalidContainerMaps + 1 }
     else
       let failures := result.failures.push
