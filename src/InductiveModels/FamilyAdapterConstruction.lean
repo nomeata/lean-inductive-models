@@ -1179,6 +1179,21 @@ private structure ExactCarrierCandidate where
   maps : EquivalenceCertificate
   mapped : Expr
   roundTrip : Expr
+  lawLeft : Expr
+  lawRight : Expr
+
+private def checkedExactCarrierCandidate (fallback : MemberKey) (sourceType value : Expr)
+    (maps : EquivalenceCertificate) (mapped roundTrip : Expr) :
+    ConstructionM ExactCarrierCandidate := do
+  let some (lawCarrier, lawLeft, lawRight) ←
+      liftGen <| matchEq? (← inferType roundTrip)
+    | failConstruction (.missingMemberMap fallback)
+  unless ← liftGen <| isDefEq lawCarrier sourceType do
+    failConstruction (.missingMemberMap fallback)
+  unless ← liftGen <| isDefEq lawRight value do
+    failConstruction (.missingMemberMap fallback)
+  let result : ExactCarrierCandidate := { maps, mapped, roundTrip, lawLeft, lawRight }
+  pure result
 
 /-- Resolve a live field conversion by exact source/target typing across every
 installed member and container boundary. Repeated occurrence metadata for the
@@ -1195,7 +1210,9 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
     let result : ExactCarrierCandidate :=
       { maps := fallback.maps
         mapped := value
-        roundTrip := eqi.refl' sourceLevel sourceType value }
+        roundTrip := eqi.refl' sourceLevel sourceType value
+        lawLeft := value
+        lawRight := value }
     return result
   let mut candidates : Array ExactCarrierCandidate := #[]
   for member in plan.members do
@@ -1205,26 +1222,27 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
         let law := lawName certificate forward
         let proof := mkAppN (.const law (plan.levelParams.map Level.param))
           (sourceType.getAppArgs.push value)
-        candidates := candidates.push { maps := certificate.maps, mapped, roundTrip := proof }
+        let candidate ← checkedExactCarrierCandidate fallback.key sourceType value
+          certificate.maps mapped proof
+        candidates := candidates.push candidate
   let rootParameters := rootParameters plan parameters
   for container in plan.containerMaps do
     if let some mapped ← liftGen <|
         applyContainerMap? plan container forward rootParameters sourceType targetType value then
       let proof ← applyContainerLaw plan container forward rootParameters sourceType value
-      candidates := candidates.push { maps := container.maps, mapped, roundTrip := proof }
+      let candidate ← checkedExactCarrierCandidate fallback.key sourceType value
+        container.maps mapped proof
+      candidates := candidates.push candidate
   let some first := candidates[0]? | failConstruction (.missingMemberMap fallback.key)
-  unless candidates.all (·.maps == first.maps) do
-    failConstruction (.missingMemberMap fallback.key)
-  let some (lawCarrier, _, lawRight) ←
-      liftGen <| matchEq? (← inferType first.roundTrip)
-    | failConstruction (.missingMemberMap fallback.key)
-  unless ← liftGen <| isDefEq lawCarrier sourceType do
-    failConstruction (.missingMemberMap fallback.key)
-  unless ← liftGen <| isDefEq lawRight value do
-    -- The installed law application is authoritative. In particular, its
-    -- dependent endpoint is never reconstructed from the mapped value's
-    -- apparent application arguments.
-    failConstruction (.missingMemberMap fallback.key)
+  for candidate in candidates do
+    unless candidate.maps == first.maps do
+      failConstruction (.missingMemberMap fallback.key)
+    unless ← liftGen <| isDefEq candidate.mapped first.mapped do
+      failConstruction (.missingMemberMap fallback.key)
+    unless ← liftGen <| isDefEq candidate.lawLeft first.lawLeft do
+      failConstruction (.missingMemberMap fallback.key)
+    unless ← liftGen <| isDefEq candidate.lawRight first.lawRight do
+      failConstruction (.missingMemberMap fallback.key)
   return first
 
 /-- A family member with all of its exact indices packed together with the
@@ -2660,6 +2678,8 @@ private def privateSpecialisedMinorValue (plan : FamilyAdapterPlan)
         let originalType ← liftGen <| inferType privateFields[fieldIndex]!
         let candidate ← exactCarrierCandidate plan memberCertificates parameters boundary false
           originalType publicType privateFields[fieldIndex]!
+        unless ← liftGen <| isDefEq candidate.lawLeft remappedPrivate[fieldIndex]! do
+          failConstruction (.dependentRecursorMinorTransport shape.key minor.minorIndex fieldIndex)
         proofs := proofs.push candidate.roundTrip
       let privatePackageType ← liftGen <| packedTelescopeType privateFields
       let privatePackage ← liftGen <| packTelescopeValue privateFields privateFields
