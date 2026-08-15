@@ -584,9 +584,9 @@ def expectedPrim : List Row :=
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6),
-       ("Iff", 8), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
+       ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
        ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9),
-       ("Nonempty", 4), ("WBind", 12)],
+       ("WBind", 12)],
       [("Eq", "prim model: a basis primitive")])
   -- **Arm W**, and this row is three claims at once.
   --
@@ -675,9 +675,10 @@ def expectedPrim : List Row :=
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
-       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
+       ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9),
        ("RB2", 6), ("Ctr", 9),
        ("OK", 15), ("OK._model._impl.0", 14), ("OK._model._impl.0._model._impl.tag", 6),
        ("OK._model._impl.0._model._impl.aux", 10),
@@ -740,9 +741,10 @@ def expectedPrim : List Row :=
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
-       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
+       ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4), ("PSigma", 9)],
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("PSigma", 9)],
       [ ("Eq", "prim model: a basis primitive")])
   ]
 
