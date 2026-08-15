@@ -396,6 +396,33 @@ private def installedRuleEvidence? (env : Environment) (rule recursor constructo
     catch _ => return none
   | _ => return none
 
+/-- Rebuild the closed semantic RHS of a callable equality theorem from the
+exact source recursor telescope.  The source rule's lambda domains may have
+been kernel-normalized even when the exported minor retains literal syntax
+such as `(fun _ => N) k`; the generated theorem deliberately closes its RHS
+over that literal telescope.  Mirror that construction here instead of
+normalizing either side. -/
+private def exactClosedRuleRhs? (recursor : ERec) (ruleIndex : Nat)
+    (mapping : Array (Name × Name)) : MetaM (Option Expr) := do
+  let some rule := recursor.rules[ruleIndex]? | return none
+  let numPre := recursor.numParams + recursor.numMotives + recursor.numMinors
+  let recursorTelescope := rewriteWith mapping recursor.type
+  forallBoundedTelescope recursorTelescope (some numPre) fun pre _ => do
+    let some sourceFields := exactRecursorFieldTelescope? recursor ruleIndex pre
+      | return none
+    let fieldTelescope := rewriteWith mapping sourceFields
+    forallBoundedTelescope fieldTelescope (some rule.nfields) fun fields _ => do
+      let rhs := (rewriteWith mapping rule.rhs).beta (pre ++ fields)
+      let some fieldsRhs := closeForallsExact? fieldTelescope fields rhs | return none
+      return closeForallsExact? recursorTelescope pre fieldsRhs
+
+private def expectedRuleRhs? (recursor : ERec) (ruleIndex : Nat)
+    (mapping : Array (Name × Name)) (evidence : InstalledRuleEvidence) :
+    MetaM (Option Expr) :=
+  match evidence.representation with
+  | .recursorRule => pure (some (rewriteWith mapping recursor.rules[ruleIndex]!.rhs))
+  | .equalityTheorem => exactClosedRuleRhs? recursor ruleIndex mapping
+
 private partial def exactLambdaBody (tag : Name) (expression : Expr) : Expr :=
   match expression with
   | .lam _ _ body _ =>
@@ -1189,14 +1216,21 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           catch _ => pure none
         let implementationRhs? := implementationEvidence?.map (·.semanticRhs)
         let publicRhs? := publicEvidence?.map (·.semanticRhs)
-        let expectedImplementationRhs := implementationEvidence?.map (fun evidence =>
-          rewriteWith (ruleMapping implementationMapping evidence) rule.rhs) |>.getD rule.rhs
-        let expectedPublicRhs := publicEvidence?.map (fun evidence =>
-          rewriteWith (ruleMapping publicMapping evidence) rule.rhs) |>.getD rule.rhs
-        unless implementationRhs? == some expectedImplementationRhs do
+        let expectedImplementationRhs? ← match implementationEvidence? with
+          | some evidence => expectedRuleRhs? recursor ruleIndex
+              (ruleMapping implementationMapping evidence) evidence
+          | none => pure none
+        let expectedPublicRhs? ← match publicEvidence? with
+          | some evidence => expectedRuleRhs? recursor ruleIndex
+              (ruleMapping publicMapping evidence) evidence
+          | none => pure none
+        let expectedImplementationRhs := expectedImplementationRhs?.getD rule.rhs
+        let expectedPublicRhs := expectedPublicRhs?.getD rule.rhs
+        unless expectedImplementationRhs?.isSome &&
+            implementationRhs? == expectedImplementationRhs? do
           reasons := reasons.push (.installedRuleMismatch key .privateModel)
           uncoveredRules := uncoveredRules.push key
-        unless publicRhs? == some expectedPublicRhs do
+        unless expectedPublicRhs?.isSome && publicRhs? == expectedPublicRhs? do
           reasons := reasons.push (.installedRuleMismatch key .publicModel)
           uncoveredRules := uncoveredRules.push key
         rulePlans := rulePlans.push

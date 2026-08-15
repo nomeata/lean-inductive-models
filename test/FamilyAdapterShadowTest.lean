@@ -161,9 +161,12 @@ def listSpecialisationDiagnostics (shadows : Array FamilyAdapter.ShadowObservati
       ptClean := clean `PT #[`PT.rec_1, `PT.rec_1._model] pt }
   | _, _, _ => {}
 
-/-- `OK` occurs in a container parameter but is not recursive at that field;
-the exact ERec minor therefore supplies no IH and no occurrence is recorded. -/
-def nonrecursiveParameterMentionExcluded
+/-- `OK` occurs in a container parameter but is not recursive at that field.
+Its source rule body is unchanged by the dead dependency, while its exact
+minor telescope retains the literal `(fun _ => N) k` domain.  Both installed
+equality-theorem sides must validate against that exact reclosed telescope,
+and the field must still supply neither an IH nor an occurrence. -/
+def deadLambdaDomainClosesExactly
     (shadows : Array FamilyAdapter.ShadowObservation) : Bool :=
   let root := Name.mkNum `OK._model._impl 0
   let owner := Name.mkNum `OK._model._impl 1
@@ -217,7 +220,7 @@ def main : IO UInt32 := do
   let exactHypothesisSharing := multipleSitesShareExactHypothesis familyShadows
   let specialisations := listSpecialisationDiagnostics shadows
   let listRuleAssociation := specialisations.all
-  let nonrecursiveMention := nonrecursiveParameterMentionExcluded familyShadows
+  let nonrecursiveMention := deadLambdaDomainClosesExactly familyShadows
   let containerMapsVisible := (shadows ++ familyShadows).any
     (fun shadow => !shadow.coverage.containerMaps.isEmpty)
   let malformedRejected := malformedDependenciesAreExcluded malformed
