@@ -169,7 +169,7 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
           safety := .safe }
       unless (← getEnv).constants.contains wrapper do
         match ← (addChecked wrapperDeclaration).run with
-        | .error decline => throwError "changed container wrapper declined: {repr decline}"
+        | .error decline => throwError "changed container wrapper declined: {decline.label}"
         | .ok _ => pure ()
       let metadata : IsoContainerImplementation := {
         parameterArity := 0
