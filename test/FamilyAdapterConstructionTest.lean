@@ -476,8 +476,11 @@ def repeatedSpecialisedMinorsComplete (plan : FamilyAdapterPlan)
   let recursorsBuilt ← (FamilyAdapter.buildPublicRecursorPrototypes plan certificate.members
     certificate.telescopes constructors root).run
   let .ok (.ok (_, recursors)) := recursorsBuilt | return false
-  return recursors.any fun recursor => recursor.minors.any fun first =>
-    recursor.minors.any fun second =>
+  return recursors.any fun recursor =>
+    recursor.motives.any (fun motive => !plan.members.any fun member =>
+      member.publicCarrier == motive.publicCarrier &&
+        member.implementationCarrier == motive.implementationCarrier) &&
+    recursor.minors.any fun first => recursor.minors.any fun second =>
       first.minorIndex != second.minorIndex &&
         first.publicConstructor == second.publicConstructor &&
         first.exactType != second.exactType && first.adapter != second.adapter &&
