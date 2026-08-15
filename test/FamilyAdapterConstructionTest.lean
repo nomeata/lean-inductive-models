@@ -741,6 +741,7 @@ structure Result where
   sharedHypothesis : Nat := 0
   directNestedRule : Nat := 0
   repeatedSpecialisations : Nat := 0
+  identityDependencies : Bool := false
   universeLevels : Nat := 0
   recursorRuleEvidence : Bool := false
   theoremRuleEvidence : Bool := false
@@ -907,6 +908,12 @@ def runSamples : MetaM Result := do
               result := { result with invalidIdentityContainerPlans :=
                 result.invalidIdentityContainerPlans + 1 }
       if owner == `FamilyAdapterGenerated.GeneratedRepeatedSpecialisation then
+        if report.plan?.any fun plan =>
+            plan.containerRecursors.all (fun recursor =>
+              recursor.dependencies.map (·.rule) == recursor.rules) &&
+              plan.containerRecursors.any fun recursor =>
+                recursor.dependencies.any fun dependency => !dependency.callees.isEmpty then
+          result := { result with identityDependencies := true }
         let repeated ← match report.plan?, built.certificate with
           | some plan, some certificate =>
             repeatedSpecialisedMinorsComplete plan certificate
@@ -1295,7 +1302,7 @@ def runMain : IO UInt32 := do
       result.invalidContainerRecursors == 1 &&
       result.invalidIotas == 1 && result.lateInvalidIotas == 1 && result.wrongTargetMaps == 1 &&
       result.sharedHypothesis == 1 && result.directNestedRule == 1 &&
-      result.repeatedSpecialisations == 1 &&
+      result.repeatedSpecialisations == 1 && result.identityDependencies &&
       result.universeLevels == 1 &&
       result.installedFamily == 1 && result.installedPublicConstructors == 1 &&
       result.installedPublicRecursors == 1 &&
@@ -1335,7 +1342,8 @@ def runMain : IO UInt32 := do
     recursorRuleEvidence={result.recursorRuleEvidence}, \
     theoremRuleEvidence={result.theoremRuleEvidence}, \
     exceptionRollback={result.exceptionRollback}, \
-    containerKeyNames={result.containerKeyNames}"
+    containerKeyNames={result.containerKeyNames}, \
+    identityDependencies={result.identityDependencies}"
   return 1
 
 end FamilyAdapterConstructionTest

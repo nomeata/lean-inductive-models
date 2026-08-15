@@ -1459,10 +1459,51 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           publicMajorFamily, implementationMajorFamily, boundary := .defeq,
           rules := pairedRules, occurrences := grouped, callRoles := #[callRole] }
 
-  let representedContainerRecursors := validatedContainers.map (·.sourceRecursor)
+  -- Dependency edges can only be resolved after both occurrence-independent
+  -- metadata plans and canonical definitional plans are present.  Derive one
+  -- row per exact source rule in authoritative order; an RHS reference to a
+  -- specialised source recursor must select exactly one full public/private
+  -- plan key.
+  let candidateContainerRecursors := containerRecursorPlans
+  let ordinaryRecursors := resolvedMembers.filterMap (·.sourceRecursor?.map (·.name))
+  containerRecursorPlans := #[]
+  for candidate in candidateContainerRecursors do
+    let sourceMatches := sourceRecursors.filter (·.name == candidate.key.publicRecursor)
+    if sourceMatches.size != 1 then
+      reasons := reasons.push (.invalidContainerRecursorMetadata candidate.key)
+      continue
+    let sourceRecursor := sourceMatches[0]!
+    unless sourceRecursor.rules.length == candidate.rules.size &&
+        (Array.range candidate.rules.size).all (fun index =>
+          candidate.rules[index]!.publicConstructor == sourceRecursor.rules[index]!.ctor) do
+      reasons := reasons.push (.invalidContainerRecursorMetadata candidate.key)
+      continue
+    let mut exact := true
+    let mut dependencies : Array ContainerRecursorRuleDependencies := #[]
+    for index in [:candidate.rules.size] do
+      let rule := candidate.rules[index]!
+      let sourceRule := sourceRecursor.rules[index]!
+      let heads := exactConstantHeads <|
+        exactLambdaBody ((`_family_adapter_container_rule).append sourceRule.ctor) sourceRule.rhs
+      let mut callees : Array ContainerRecursorKey := #[]
+      for sourceTarget in sourceRecursors do
+        if heads.contains sourceTarget.name && !ordinaryRecursors.contains sourceTarget.name then
+          let targetPlans := candidateContainerRecursors.filter
+            (·.key.publicRecursor == sourceTarget.name)
+          if targetPlans.size != 1 then
+            exact := false
+          else
+            let callee := targetPlans[0]!.key
+            unless callees.contains callee do callees := callees.push callee
+      dependencies := dependencies.push { rule, callees }
+    if exact then
+      containerRecursorPlans := containerRecursorPlans.push { candidate with dependencies }
+    else
+      reasons := reasons.push (.invalidContainerRecursorMetadata candidate.key)
+
+  let representedContainerRecursors := containerRecursorPlans.map (·.key.publicRecursor)
   let representedRecursors :=
-    resolvedMembers.filterMap (·.sourceRecursor?.map (·.name)) ++
-      representedContainerRecursors
+    ordinaryRecursors ++ representedContainerRecursors
   for recursor in sourceRecursors do
     unless representedRecursors.contains recursor.name do
       reasons := reasons.push (.unrepresentedSourceRecursor recursor.name)
