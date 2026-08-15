@@ -648,16 +648,16 @@ def runSamples : MetaM Result := do
       if owner == `FamilyAdapterGenerated.GeneratedShared then
         if let some plan := report.plan? then
           if let some canonical := plan.containerRecursors.find? (·.boundary == .defeq) then
-            let corrupted := { plan with
+            let corrupted : FamilyAdapterPlan := { plan with
               containerRecursors := plan.containerRecursors.map fun container =>
                 if container.key == canonical.key then
                   { container with implementationMajorFamily := .sort .zero }
                 else container }
             let corruptedDiagnostic ← match built.certificate with
               | some certificate => publicPrototypeDiagnostic corrupted certificate
-                  `_family_adapter_invalid_identity_container
+                (`_family_adapter_invalid_identity_container)
               | none => pure (.shadowIssues built.issues)
-            let ambiguous := { plan with
+            let ambiguous : FamilyAdapterPlan := { plan with
               containerRecursors := plan.containerRecursors.push canonical }
             if !corruptedDiagnostic.isComplete && !ambiguous.validate.isEmpty then
               result := { result with invalidIdentityContainerPlans :=
