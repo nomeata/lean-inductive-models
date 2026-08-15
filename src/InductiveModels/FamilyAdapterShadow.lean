@@ -1217,11 +1217,13 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         let implementationRhs? := implementationEvidence?.map (·.semanticRhs)
         let publicRhs? := publicEvidence?.map (·.semanticRhs)
         let expectedImplementationRhs? ← match implementationEvidence? with
-          | some evidence => expectedRuleRhs? recursor ruleIndex
+          | some evidence => do
+            expectedRuleRhs? recursor ruleIndex
               (ruleMapping implementationMapping evidence) evidence
           | none => pure none
         let expectedPublicRhs? ← match publicEvidence? with
-          | some evidence => expectedRuleRhs? recursor ruleIndex
+          | some evidence => do
+            expectedRuleRhs? recursor ruleIndex
               (ruleMapping publicMapping evidence) evidence
           | none => pure none
         let expectedImplementationRhs := expectedImplementationRhs?.getD rule.rhs
