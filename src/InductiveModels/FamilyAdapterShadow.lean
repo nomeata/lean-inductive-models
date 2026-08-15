@@ -816,10 +816,14 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         reasons := reasons.push
           (.missingInstalledContainerRecursor current.key key.implementationRecursor)
       continue
-    let publicMajor? ← recursorMajorFamily? publicInfo container.sourceRecursorType
-      container.parameterArity container.indexArity
-    let implementationMajor? ← recursorMajorFamily? implementationInfo
-      container.implementationRecursorType container.parameterArity container.indexArity
+    let publicMajor? ← try
+        recursorMajorFamily? publicInfo container.sourceRecursorType
+          container.parameterArity container.indexArity
+      catch _ => pure none
+    let implementationMajor? ← try
+        recursorMajorFamily? implementationInfo container.implementationRecursorType
+          container.parameterArity container.indexArity
+      catch _ => pure none
     let some (publicMajorFamily, publicResultMotive) := publicMajor? | do
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
