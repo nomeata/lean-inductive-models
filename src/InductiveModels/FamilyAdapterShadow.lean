@@ -943,7 +943,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           if candidates.size > 1 then
             addedReasons := addedReasons.push (.ambiguousContainerMap occurrence)
             continue
-          if let some (container, sourceType, implementationType) := candidates[0]? then
+          if let some (container, _publicSourceType, implementationType) := candidates[0]? then
             let (metadataReasons, metadataDiagnostics) ←
               withBinderBody sourceFieldType occurrence.binderDepth fun literalSourceType =>
                 containerMetadataInstalled environment iso.aliases iso.decls sourceRecursors
