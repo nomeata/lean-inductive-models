@@ -1150,7 +1150,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   -- RecInfo rules are internal block reductions; equality theorems are stated
   -- in the exact callable `exactSource` namespace. The representation tag, not
   -- theorem shape or proof search, selects the comparison map.
-  let ruleMapping := fun outer side (evidence : InstalledRuleEvidence) =>
+  let ruleMapping := fun outer (side : InterfaceSide) (evidence : InstalledRuleEvidence) =>
     outer ++ match evidence.representation, side with
       | .recursorRule, .privateModel => containerSemanticMapping
       | .recursorRule, .publicModel => containerPublicSemanticMapping
