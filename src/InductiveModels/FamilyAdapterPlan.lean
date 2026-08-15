@@ -318,7 +318,6 @@ structure ContainerRecursorCertificate where
   callAgreement : Name
   rules : Array ContainerRecursorRuleKey
   dependencies : Array ContainerRecursorRuleDependencies := #[]
-  dependencies : Array ContainerRecursorRuleDependencies := #[]
   occurrences : Array OccurrenceKey
   callRoles : Array ContainerRecursiveCallRole
   deriving Inhabited, BEq, Repr
@@ -530,6 +529,7 @@ structure ContainerRecursorPlan where
   implementationMajorFamily : Expr
   boundary : ContainerRecursorBoundaryPlan
   rules : Array ContainerRecursorRuleKey
+  dependencies : Array ContainerRecursorRuleDependencies := #[]
   occurrences : Array OccurrenceKey
   callRoles : Array ContainerRecursiveCallRole := #[]
   deriving Inhabited, BEq, Repr
