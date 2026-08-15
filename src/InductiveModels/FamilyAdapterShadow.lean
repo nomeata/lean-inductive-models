@@ -381,8 +381,9 @@ private def equalityRuleApplication? (binders : Array Expr) (lhs : Expr)
 
 private def uniqueRoleBinder? (binders : Array Expr)
     (application : Array InstalledRuleBinderRole) (role : InstalledRuleBinderRole) : Option Expr := do
-  let matches := (Array.range application.size).filter fun index => application[index]! == role
-  if matches.size == 1 then binders[matches[0]!]? else none
+  let roleMatches := (Array.range application.size).filter fun index =>
+    application[index]! == role
+  if roleMatches.size == 1 then binders[roleMatches[0]!]? else none
 
 private def installedRuleEvidence? (env : Environment) (rule recursor constructor : Name) :
     MetaM (Option InstalledRuleEvidence) := do
