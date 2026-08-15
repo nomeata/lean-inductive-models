@@ -89,19 +89,25 @@ def multipleSitesShareExactHypothesis (shadows : Array FamilyAdapter.ShadowObser
 sequence. This pins the real-constructor side of the mimic association rather
 than accepting a shadow that merely noticed the extra recursor. -/
 def listSpecialisationRulesCovered (shadows : Array FamilyAdapter.ShadowObservation) : Bool :=
-  let expected : Array Name := #[`List.nil, `List.cons]
-  match shadows.find? (·.root == `Tree) with
-  | none => false
-  | some tree =>
-    let constructors := tree.coverage.rules.filterMap fun rule =>
-      if rule.recursor == `Tree.rec_1 then some rule.constructor.constructor else none
-    let noInterfaceLeak := tree.reasons.all fun
-      | .missingInstalledContainerRecursor _ recursor => recursor != `Tree.rec_1._model
-      | .unrepresentedSourceRecursor recursor => recursor != `Tree.rec_1
-      | .installedRuleMismatch rule _ => rule.recursor != `Tree.rec
-      | .invalidContainerRecursorAssociation key => key.target.owner != `Tree
+  let covered := fun (observation : FamilyAdapter.ShadowObservation) recursor expected =>
+    observation.coverage.rules.filterMap (fun rule =>
+      if rule.recursor == recursor then some rule.constructor.constructor else none) == expected
+  let clean := fun owner wrappers (observation : FamilyAdapter.ShadowObservation) =>
+    observation.reasons.all fun
+      | .missingInstalledContainerRecursor _ recursor => !wrappers.contains recursor
+      | .unrepresentedSourceRecursor recursor => !wrappers.contains recursor
+      | .installedRuleMismatch rule _ => rule.recursorOwner.owner != owner
+      | .invalidContainerRecursorAssociation key => key.target.owner != owner
       | _ => true
-    constructors == expected && noInterfaceLeak
+  match shadows.find? (·.root == `Tree), shadows.find? (·.root == `BTree) with
+  | some tree, some btree =>
+    covered tree `Tree.rec_1 #[`List.nil, `List.cons] &&
+      clean `Tree #[`Tree.rec_1, `Tree.rec_1._model] tree &&
+      covered btree `BTree.rec_1 #[`Box.mk] &&
+      covered btree `BTree.rec_2 #[`List.nil, `List.cons] &&
+      clean `BTree #[`BTree.rec_1, `BTree.rec_1._model,
+        `BTree.rec_2, `BTree.rec_2._model] btree
+  | _, _ => false
 
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun

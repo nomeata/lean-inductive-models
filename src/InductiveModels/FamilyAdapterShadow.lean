@@ -921,14 +921,18 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     let some owner := resolvedMembers.find? (·.key == constructor.key.owner) | continue
     let totalBinders := owner.source.numParams + constructor.telescope.binders.size
     let (addedPlans, addedReasons, addedDiagnostics) ←
-      forallBoundedTelescope constructor.publicType (some totalBinders) fun binders _ => do
-        let parameters := binders.extract 0 owner.source.numParams
-        let fields := binders.extract owner.source.numParams binders.size
+      forallBoundedTelescope constructor.sourceType (some totalBinders) fun sourceBinders _ =>
+      forallBoundedTelescope constructor.publicType (some totalBinders) fun publicBinders _ => do
+        let sourceFields := sourceBinders.extract owner.source.numParams sourceBinders.size
+        let parameters := publicBinders.extract 0 owner.source.numParams
+        let fields := publicBinders.extract owner.source.numParams publicBinders.size
         let mut addedPlans := #[]
         let mut addedReasons := #[]
         let mut addedDiagnostics := #[]
         for occurrence in containerOccurrences do
+          let some sourceField := sourceFields[occurrence.fieldIndex]? | continue
           let some field := fields[occurrence.fieldIndex]? | continue
+          let sourceFieldType ← inferType sourceField
           let fieldType ← inferType field
           let candidates ← withBinderBody fieldType occurrence.binderDepth fun body =>
             iso.containerImplementations.filterMapM fun container => do
@@ -940,9 +944,11 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             addedReasons := addedReasons.push (.ambiguousContainerMap occurrence)
             continue
           if let some (container, sourceType, implementationType) := candidates[0]? then
-            let (metadataReasons, metadataDiagnostics) ← containerMetadataInstalled environment
-              iso.aliases iso.decls sourceRecursors containerSemanticMapping parameters sourceType
-              implementationType occurrence container
+            let (metadataReasons, metadataDiagnostics) ←
+              withBinderBody sourceFieldType occurrence.binderDepth fun literalSourceType =>
+                containerMetadataInstalled environment iso.aliases iso.decls sourceRecursors
+                  containerSemanticMapping parameters literalSourceType implementationType occurrence
+                  container
             if metadataReasons.isEmpty then
               addedPlans := addedPlans.push
                 { key := occurrence
@@ -1181,6 +1187,21 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       let callRole : ContainerRecursiveCallRole :=
         { rule := rule.key, hypothesisIndex, publicBinderIndex,
           implementationBinderIndex, occurrences := grouped }
+      let exactPlans := containerRecursorPlans.filter fun plan =>
+        grouped.all plan.occurrences.contains
+      if exactPlans.size > 1 then
+        for key in grouped do reasons := reasons.push (.ambiguousContainerMap key)
+        continue
+      if let some exactPlan := exactPlans[0]? then
+        let position := containerRecursorPlans.findIdx? (·.key == exactPlan.key) |>.get!
+        let current := containerRecursorPlans[position]!
+        let mut occurrences := current.occurrences
+        for key in grouped do unless occurrences.contains key do occurrences := occurrences.push key
+        let mut callRoles := current.callRoles
+        unless callRoles.contains callRole do callRoles := callRoles.push callRole
+        containerRecursorPlans := containerRecursorPlans.set! position
+          { current with occurrences, callRoles }
+        continue
       if let some position := containerRecursorPlans.findIdx? (·.key == key) then
         let current := containerRecursorPlans[position]!
         let mut occurrences := current.occurrences
@@ -1189,6 +1210,23 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         unless callRoles.contains callRole do callRoles := callRoles.push callRole
         containerRecursorPlans := containerRecursorPlans.set! position
           { current with occurrences, callRoles }
+        continue
+      let wrapperMetadata := iso.containerImplementations.filter fun container =>
+        container.implementationRecursorWrapper == publicRecursor ||
+          container.implementationRecursorWrapper == implementationRecursor
+      unless wrapperMetadata.isEmpty do
+        -- A callable wrapper is exact emitted interface evidence, never an
+        -- ambient RecursorVal. A valid association was consumed above; reaching
+        -- this branch means its keyed container plan failed earlier.
+        let validWrappers := wrapperMetadata.all fun container =>
+          emittedWrapperType? iso.decls container.implementationRecursorWrapper ==
+            some container.implementationRecursorWrapperType
+        for occurrence in grouped do
+          reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
+        unless validWrappers do
+          diagnostics := diagnostics ++ wrapperMetadata.flatMap fun container =>
+            emittedWrapperDiagnostics iso.aliases iso.decls
+              container.implementationRecursorWrapper container.implementationRecursorWrapperType
         continue
       let some (.recInfo publicInfo) := environment.constants.find? publicRecursor | do
         for key in grouped do reasons := reasons.push (.missingInstalledContainerRecursor
