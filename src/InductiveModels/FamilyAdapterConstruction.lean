@@ -1206,7 +1206,7 @@ private def checkedExactCarrierCandidate (fallback : MemberKey) (sourceType valu
 /-- Resolve a live field conversion by exact source/target typing across every
 installed member and container boundary. Repeated occurrence metadata for the
 same boundary is harmless; distinct successful boundaries are ambiguous. -/
-private def exactCarrierCandidate (plan : FamilyAdapterPlan)
+private def exactCarrierCandidateWithoutRecursors (plan : FamilyAdapterPlan)
     (certificates : Array MemberCertificate) (parameters : Array Expr)
     (fallback : RecursorCarrierBoundary) (forward : Bool)
     (sourceType targetType value : Expr) : ConstructionM ExactCarrierCandidate := do
@@ -1520,6 +1520,60 @@ private def recursorCarrierAt (plan : FamilyAdapterPlan)
   let forwardBackward ← makeLaw false
   return PackedCarrierBoundary.mk publicType implementationType forward backward
     backwardForward forwardBackward
+
+private def recursorBoundaryParameters? (boundary : RecursorCarrierBoundary)
+    (forward : Bool) (sourceType targetType : Expr) : ConstructionM (Option (Array Expr)) := do
+  let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
+  let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
+  let totalArity := boundary.parameterArity + boundary.indexArity
+  let rec open (position : Nat) (family : Expr) (arguments : Array Expr) : ConstructionM
+      (Option (Array Expr)) := do
+    if position == totalArity then
+      unless ← liftGen <| isDefEq family sourceType do return none
+      let resolved ← liftGen <| arguments.mapM instantiateMVars
+      for argument in resolved do
+        if ← liftGen <| hasAssignableMVar argument then return none
+      unless ← liftGen <| isDefEq (mkAppN targetFamily resolved) targetType do return none
+      return some (resolved.extract 0 boundary.parameterArity)
+    let .lam name domain body _ := family | return none
+    let argument ← liftGen <| mkFreshExprMVar domain .natural name
+    open (position + 1) (body.instantiate1 argument) (arguments.push argument)
+  open 0 sourceFamily #[]
+
+private def exactCarrierCandidate (plan : FamilyAdapterPlan)
+    (certificates : Array MemberCertificate) (parameters : Array Expr)
+    (fallback : RecursorCarrierBoundary) (forward : Bool)
+    (sourceType targetType value : Expr) : ConstructionM ExactCarrierCandidate := do
+  let mut candidates : Array ExactCarrierCandidate := #[]
+  match ← liftGen <| (exactCarrierCandidateWithoutRecursors plan certificates parameters
+      fallback forward sourceType targetType value).run with
+  | .ok candidate => candidates := candidates.push candidate
+  | .error (.missingExactCarrierCandidate key) =>
+    unless key == fallback.key do failConstruction (.missingExactCarrierCandidate key)
+  | .error issue => failConstruction issue
+  for container in plan.containerRecursors do
+    let boundary := containerRecursorBoundary container
+    if let some liveParameters ←
+        recursorBoundaryParameters? boundary forward sourceType targetType then
+      let carrier ← recursorCarrierAt plan boundary liveParameters sourceType targetType
+      let mapped := mkApp (if forward then carrier.forward else carrier.backward) value
+      let roundTrip := mkApp
+        (if forward then carrier.backwardForward else carrier.forwardBackward) value
+      let candidate ← checkedExactCarrierCandidate fallback.key sourceType value
+        container.boundary mapped roundTrip
+      candidates := candidates.push candidate
+  let some first := candidates[0]?
+    | failConstruction (.missingExactCarrierCandidate fallback.key)
+  for candidate in candidates do
+    unless candidate.boundary == first.boundary do
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
+    unless ← liftGen <| isDefEq candidate.mapped first.mapped do
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
+    unless ← liftGen <| isDefEq candidate.lawLeft first.lawLeft do
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
+    unless ← liftGen <| isDefEq candidate.lawRight first.lawRight do
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
+  return first
 
 private def recursorAgreementAt (shape : RecursorShape)
     (recursor : PublicRecursorCertificate)
