@@ -2389,6 +2389,31 @@ private def privateMotiveValue (plan : FamilyAdapterPlan)
     let publicValue := mkApp carrier.backward privateValue
     mkLambdaFVars binders (mkAppN publicMotive (indices.push publicValue))
 
+/-- Test/prototype validator for the exact motive boundaries consumed by a
+fresh recursor. It replays the same live-fibre selector as construction and
+does not assign mimic motives to source members by name or array position. -/
+def validatePublicRecursorMotiveBoundaries (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate) (member : MemberPlan)
+    (recursor : PublicRecursorCertificate) : GenM (Except ConstructionIssue Nat) := do
+  let action : ConstructionM Nat := do
+    let privateType ← liftGen <| generatedType member.implementationRecursor
+    let fallback ← memberRecursorBoundary plan memberCertificates member
+    let shape := memberRecursorShape member
+    let stop := member.parameterArity + member.recursorMotiveArity
+    forallBoundedTelescope recursor.exactType (some stop) fun publicPrefix _ => do
+      let parameters := publicPrefix.extract 0 member.parameterArity
+      let publicMotives := publicPrefix.extract member.parameterArity stop
+      let mut privateTail ← liftGen <| instantiateForall privateType parameters
+      for motiveIndex in [:member.recursorMotiveArity] do
+        let .forallE _ expected rest _ := privateTail
+          | failConstruction (.shortInstalledRecursorPrefix member.key
+              member.implementationRecursor)
+        let motive ← privateMotiveValue plan memberCertificates fallback parameters shape
+          publicMotives[motiveIndex]! expected
+        privateTail := rest.instantiate1 motive
+      return member.recursorMotiveArity
+  action.run
+
 private def privateMinorValue (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
     (telescopeCertificates : Array TelescopeCertificate)

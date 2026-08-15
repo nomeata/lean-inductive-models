@@ -436,6 +436,16 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
         return .recursorInvalid s!"{member.key.owner}: motive cardinality"
       unless adapter.motives.all (·.recursor == member.key) do
         return .recursorInvalid s!"{member.key.owner}: motive keys"
+      let motiveValidation ←
+        (FamilyAdapter.validatePublicRecursorMotiveBoundaries plan certificate.members
+          member adapter).run
+      match motiveValidation with
+      | .error decline =>
+        return .recursorInvalid s!"{member.key.owner}: motive decline {decline.label}"
+      | .ok (.error issue) =>
+        return .recursorInvalid s!"{member.key.owner}: motive boundary {repr issue}"
+      | .ok (.ok count) => unless count == member.recursorMotiveArity do
+          return .recursorInvalid s!"{member.key.owner}: motive boundary cardinality"
       unless adapter.minors.size == member.recursorMinorArity do
         return .recursorInvalid s!"{member.key.owner}: minor cardinality"
       unless adapter.minors.all fun minor =>
@@ -456,6 +466,7 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
       | .error decline => return .recursorDecline decline.label
       | .ok (.error issue) => return .recursorIssue issue
       | .ok (.ok (_, built)) => pure built
+    let containerEnvironment ← getEnv
     unless containerRecursors.size == plan.containerRecursors.size do
       return .recursorInvalid "container certificate cardinality"
     for container in plan.containerRecursors do
@@ -465,7 +476,7 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
         return .recursorInvalid s!"{container.key.publicRecursor}: container rule keys"
       unless built.certificate.occurrences == container.occurrences do
         return .recursorInvalid s!"{container.key.publicRecursor}: container occurrences"
-      unless environment.constants.contains built.certificate.callAgreement do
+      unless containerEnvironment.constants.contains built.certificate.callAgreement do
         return .recursorInvalid s!"{container.key.publicRecursor}: container call agreement"
     match ← (FamilyAdapter.buildPublicIotaPrototypes plan certificate constructors recursors
         containerRecursors (Name.str root "iotas")).run with
