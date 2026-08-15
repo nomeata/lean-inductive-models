@@ -359,8 +359,8 @@ private partial def forallCount : Expr → Nat
   | _ => 0
 
 private def exactBinderIndex? (binders : Array Expr) (value : Expr) : Option Nat := do
-  let matches := (Array.range binders.size).filter fun index => binders[index]! == value
-  if matches.size == 1 then matches[0]? else none
+  let binderMatches := (Array.range binders.size).filter fun index => binders[index]! == value
+  if binderMatches.size == 1 then binderMatches[0]? else none
 
 /-- Derive the two intentionally different views of an installed equality
 rule's telescope. `application` picks one canonical LHS occurrence for each
