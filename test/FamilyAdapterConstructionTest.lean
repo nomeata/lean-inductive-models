@@ -46,13 +46,20 @@ def exactAdapterIndEDecl (owners : Array Name) : MetaM EDecl := do
   let recursors ← recursorNames.mapM fun name => do
     let some (.recInfo recursor) := environment.constants.find? name
       | throwError "adapter fixture recursor {name} is not installed"
-    return ({ name := recursor.name, levelParams := recursor.levelParams,
-      type := recursor.type, all := recursor.all, numParams := recursor.numParams,
-      numIndices := recursor.numIndices, numMotives := recursor.numMotives,
-      numMinors := recursor.numMinors,
-      rules := recursor.rules.map fun rule =>
-        { ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs },
-      k := recursor.k, isUnsafe := recursor.isUnsafe } : ERec)
+    let exact : ERec :=
+      { name := recursor.name
+        levelParams := recursor.levelParams
+        type := recursor.type
+        all := recursor.all
+        numParams := recursor.numParams
+        numIndices := recursor.numIndices
+        numMotives := recursor.numMotives
+        numMinors := recursor.numMinors
+        rules := recursor.rules.map fun rule =>
+          { ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs }
+        k := recursor.k
+        isUnsafe := recursor.isUnsafe }
+    return exact
   return .induct types constructors recursors.toList
 
 namespace FamilyAdapterConstructionTest
