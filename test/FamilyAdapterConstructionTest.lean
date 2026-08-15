@@ -1195,6 +1195,10 @@ def runSamples : MetaM Result := do
       if recursorDiagnostic.isComplete then
         result := { result with
           installedPublicRecursors := result.installedPublicRecursors + 1 }
+      else
+        let failures := result.failures.push
+          s!"installed public prototype: {repr recursorDiagnostic}"
+        result := { result with failures }
       if installedIso.familyImplementation?.isSome && built.certificate.isSome &&
           built.issues.isEmpty && rulesComplete then
         result := { result with installedFamily := result.installedFamily + 1 }
