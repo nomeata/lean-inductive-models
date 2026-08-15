@@ -1526,7 +1526,8 @@ private def recursorBoundaryParameters? (boundary : RecursorCarrierBoundary)
   let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
   let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
   let totalArity := boundary.parameterArity + boundary.indexArity
-  let rec open (position : Nat) (family : Expr) (arguments : Array Expr) : ConstructionM
+  let rec instantiateFamily (position : Nat) (family : Expr)
+      (arguments : Array Expr) : ConstructionM
       (Option (Array Expr)) := do
     if position == totalArity then
       unless ← liftGen <| isDefEq family sourceType do return none
@@ -1537,8 +1538,9 @@ private def recursorBoundaryParameters? (boundary : RecursorCarrierBoundary)
       return some (resolved.extract 0 boundary.parameterArity)
     let .lam name domain body _ := family | return none
     let argument ← liftGen <| mkFreshExprMVar domain .natural name
-    open (position + 1) (body.instantiate1 argument) (arguments.push argument)
-  open 0 sourceFamily #[]
+    instantiateFamily (position + 1) (body.instantiate1 argument)
+      (arguments.push argument)
+  instantiateFamily 0 sourceFamily #[]
 
 private def exactCarrierCandidate (plan : FamilyAdapterPlan)
     (certificates : Array MemberCertificate) (parameters : Array Expr)
