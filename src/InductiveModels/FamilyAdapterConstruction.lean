@@ -143,6 +143,16 @@ inductive PublicIotaProofBoundary where
   | finalProof
   deriving Inhabited, BEq, Repr
 
+/-- Test-visible subdivision of the exact recursive-call certificate boundary.
+It records which keyed check rejected the call without changing proof search. -/
+inductive PublicIotaRecursiveCallBoundary where
+  | roleResolution
+  | agreementNotInstalled
+  | openedHeadMismatch
+  | agreementEndpoint
+  | dependentResult
+  deriving Inhabited, BEq, Repr
+
 inductive ConstructionIssue where
   | incompleteShadow (reason : ShadowReason)
   | invalidPlan (error : PlanError)
@@ -163,6 +173,8 @@ inductive ConstructionIssue where
   | missingPublicIotaInput (rule : RuleKey)
   | inconsistentPublicIotaHypothesis (rule : RuleKey) (binderIndex : Nat)
   | missingPublicIotaRecursiveCall (rule : RuleKey) (publicBinder implementationBinder : Nat)
+  | publicIotaRecursiveCallMismatch (rule : RuleKey)
+      (publicBinder implementationBinder : Nat) (boundary : PublicIotaRecursiveCallBoundary)
   | publicIotaProofMismatch (rule : RuleKey) (boundary : PublicIotaProofBoundary)
   | recursorResultMismatch (member : MemberKey)
   | publicRecursorResultMismatch (member : MemberKey)
@@ -1486,20 +1498,24 @@ private def recursorCarrierAt (plan : FamilyAdapterPlan)
 
 private def recursorAgreementAt (shape : RecursorShape)
     (recursor : PublicRecursorCertificate)
+    (rule : RuleKey) (publicBinderIndex implementationBinderIndex : Nat)
     (expectedPublic expectedPrivate : Expr) : ConstructionM Expr := do
   let reducedPrivate ← liftGen <| whnf expectedPrivate
   unless expectedPublic.getAppFn.constName? == some recursor.adapter &&
       reducedPrivate.getAppFn.constName? == some shape.implementationRecursor do
-    failConstruction (.recursorResultMismatch recursor.member)
+    failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+      implementationBinderIndex .openedHeadMismatch)
   let publicArguments := expectedPublic.getAppArgs
   let privateArguments := reducedPrivate.getAppArgs
   let prefixSize := shape.parameterArity + shape.motiveArity + shape.minorArity
   unless publicArguments.size > prefixSize && privateArguments.size > prefixSize do
-    failConstruction (.recursorResultMismatch recursor.member)
+    failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+      implementationBinderIndex .dependentResult)
   let publicPrefix := publicArguments.extract 0 prefixSize
   let privateTail := privateArguments.extract prefixSize privateArguments.size
   let some agreementInfo := (← getEnv).constants.find? recursor.callAgreement
-    | failConstruction (.missingInstalledRecursor recursor.member recursor.callAgreement)
+    | failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+        implementationBinderIndex .agreementNotInstalled)
   let proof := mkAppN
     (.const recursor.callAgreement (agreementInfo.levelParams.map Level.param))
     (publicPrefix ++ privateTail)
@@ -1509,7 +1525,8 @@ private def recursorAgreementAt (shape : RecursorShape)
   let resultType ← liftGen <| inferType expectedPrivate
   unless ← liftGen <| isDefEq (← inferType proof)
       (eqi.mk' (← ilevel resultType) resultType expectedPrivate expectedPublic) do
-    failConstruction (.recursorResultMismatch recursor.member)
+    failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+      implementationBinderIndex .agreementEndpoint)
   return proof
 
 private def recursiveCallCertificate (plan : FamilyAdapterPlan)
@@ -1536,8 +1553,8 @@ private def recursiveCallCertificate (plan : FamilyAdapterPlan)
       some (built.shape, built.recursor)
     | _, _ => none
   let some pair := pair?
-    | failConstruction (.missingPublicIotaRecursiveCall rule
-        publicBinderIndex implementationBinderIndex)
+    | failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+        implementationBinderIndex .roleResolution)
   return pair
 
 private def recursorForwardAgreementAt (plan : FamilyAdapterPlan)
@@ -1627,9 +1644,10 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
         reducedPrivate.getAppFn.constName? == some role.implementationRecursor
       if publicMatches || privateMatches then
         unless publicMatches && privateMatches do
-          failConstruction (.missingPublicIotaRecursiveCall rule
-            publicBinderIndex implementationBinderIndex)
-        pure (some (← recursorAgreementAt shape recursor expectedPublic expectedPrivate))
+          failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+            implementationBinderIndex .openedHeadMismatch)
+        pure (some (← recursorAgreementAt shape recursor rule publicBinderIndex
+          implementationBinderIndex expectedPublic expectedPrivate))
       else pure none
   if let some proof := direct? then return proof
   let publicType ← liftGen <| whnf (← inferType expectedPublic)
@@ -1638,7 +1656,8 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
   | .forallE publicName publicDomain _ publicInfo,
       .forallE _ privateDomain _ _ =>
     unless ← liftGen <| isDefEq publicDomain privateDomain do
-      failConstruction (.missingPublicIotaInput rule)
+      failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+        implementationBinderIndex .dependentResult)
     withLocalDecl publicName publicInfo publicDomain fun argument => do
       let pointwise ← recursorHypothesisAgreement plan recursors rule containerRecursors
         role? publicBinderIndex implementationBinderIndex
@@ -1647,11 +1666,12 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
       let functionProof ← liftGen <| mkLambdaFVars #[argument] pointwise
       liftGen <| mkAppM ``funext #[functionProof]
   | .forallE .., _ | _, .forallE .. =>
-    failConstruction (.missingPublicIotaInput rule)
+    failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+      implementationBinderIndex .dependentResult)
   | _, _ =>
     if role?.isSome then
-      failConstruction (.missingPublicIotaRecursiveCall rule
-        publicBinderIndex implementationBinderIndex)
+      failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+        implementationBinderIndex .openedHeadMismatch)
     failConstruction (.missingPublicIotaInput rule)
 
 private partial def withReboundTelescope (fixedOriginal fixedReplacement binders : Array Expr)
@@ -2154,11 +2174,13 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
   let some publicValue := exactRhsArgument?
       ((`_family_adapter_public_iota_rhs).append rule.key.recursor)
       rule.publicRhs publicBinderIndex
-    | throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+    | throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
+        implementationBinderIndex .roleResolution)
   let some implementationValue := exactRhsArgument?
       ((`_family_adapter_implementation_iota_rhs).append rule.key.recursor)
       rule.implementationRhs implementationBinderIndex
-    | throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+    | throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
+        implementationBinderIndex .roleResolution)
   let publicHead := exactRecursiveCallHead `_family_adapter_public_iota_call publicValue
   let implementationHead := exactRecursiveCallHead
     `_family_adapter_implementation_iota_call implementationValue
@@ -2172,7 +2194,8 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
         container.key.implementationRecursor == implementationRecursor &&
         occurrences.all container.occurrences.contains
     unless memberCandidates.size + containerCandidates.size == 1 do
-      throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+      throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
+        implementationBinderIndex .roleResolution)
     return some
       { publicRecursor, implementationRecursor,
         member? := memberCandidates[0]?.map (·.key),
@@ -2180,10 +2203,12 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
         containerOccurrences := if containerCandidates.isEmpty then #[] else occurrences }
   | none, none =>
     unless publicHead.isFVar && implementationHead.isFVar do
-      throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+      throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
+        implementationBinderIndex .roleResolution)
     return none
   | _, _ =>
-    throw (.missingPublicIotaRecursiveCall rule.key publicBinderIndex implementationBinderIndex)
+    throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
+      implementationBinderIndex .roleResolution)
 
 private def installedIotaBinderRoles (owner : MemberPlan) (rule : RulePlan) :
     Except ConstructionIssue (Array InstalledIotaBinderRole) := do
@@ -3206,11 +3231,11 @@ private partial def rewriteLeadingRecursiveCall (rule : RuleKey)
       return .lam name type body info
   | body => do
       let .const source levels := body.getAppFn
-        | failConstruction (.missingPublicIotaRecursiveCall rule
-            publicBinderIndex implementationBinderIndex)
+        | failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+            implementationBinderIndex .openedHeadMismatch)
       unless source == role.publicRecursor do
-        failConstruction (.missingPublicIotaRecursiveCall rule
-          publicBinderIndex implementationBinderIndex)
+        failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
+          implementationBinderIndex .openedHeadMismatch)
       return mkAppN (.const adapter levels) body.getAppArgs
 
 private partial def rewriteExactRhsArgument (rule : RuleKey) (argumentIndex : Nat)
