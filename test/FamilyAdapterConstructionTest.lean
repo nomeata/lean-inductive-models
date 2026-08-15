@@ -98,6 +98,13 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
   let containerImplementations ← match boundary.container? with
     | none => pure #[]
     | some container =>
+      let .induct _ _ sourceRecursors := source
+        | throwError "changed container source is not an inductive declaration"
+      let sourceMatches := sourceRecursors.toArray.filter
+        (·.name == container.sourceRecursor)
+      unless sourceMatches.size == 1 do
+        throwError "changed container source recursor metadata is not unique"
+      let sourceRecursorEvidence := IsoSourceRecursor.ofERec sourceMatches[0]!
       let typeOf := fun name => do
         let some information := (← getEnv).constants.find? name
           | throwError "changed container map {name} is not installed"
@@ -116,8 +123,9 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
         indexArity := 0
         implementationCarrier := container.implementationCarrier
         sourceRecursor := container.sourceRecursor
+        sourceRecursorEvidence
         implementationRecursor := container.implementationRecursor
-        sourceRecursorType := (← typeOf container.sourceRecursor)
+        sourceRecursorType := sourceRecursorEvidence.type
         implementationRecursorType := (← typeOf container.implementationRecursor)
         recursorRuleKeys := sourceRuleKeys.map fun key => (key, key)
         forward := container.forward

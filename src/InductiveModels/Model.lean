@@ -2158,6 +2158,44 @@ structure IsoFamilyImplementation where
   members : Array IsoFamilyMember
   deriving Inhabited
 
+/-- One literal rule in source-export recursor evidence. -/
+structure IsoSourceRecursorRule where
+  ctor : Name
+  nfields : Nat
+  rhs : Expr
+  deriving Inhabited, BEq, Repr
+
+/-- Exact source-export metadata for a recursor that is not yet installed while
+its owner's model island is constructed.  This is the literal `ERec` evidence,
+not a reconstruction from a generated or subsequently installed declaration. -/
+structure IsoSourceRecursor where
+  name : Name
+  levelParams : List Name
+  type : Expr
+  all : Array Name
+  numParams : Nat
+  numIndices : Nat
+  numMotives : Nat
+  numMinors : Nat
+  rules : Array IsoSourceRecursorRule
+  k : Bool
+  isUnsafe : Bool
+  deriving Inhabited, BEq, Repr
+
+def IsoSourceRecursor.ofERec (recursor : ERec) : IsoSourceRecursor :=
+  { name := recursor.name
+    levelParams := recursor.levelParams
+    type := recursor.type
+    all := recursor.all.toArray
+    numParams := recursor.numParams
+    numIndices := recursor.numIndices
+    numMotives := recursor.numMotives
+    numMinors := recursor.numMinors
+    rules := recursor.rules.toArray.map fun rule =>
+      { ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs }
+    k := recursor.k
+    isUnsafe := recursor.isUnsafe }
+
 /-- One already checked equivalence between a source-shaped nested container
 and the corresponding named private mimic member. `parameterArity` and `indexArity`
 describe the exact prefix of all four declarations; neither is an eligibility
@@ -2169,6 +2207,9 @@ structure IsoContainerImplementation where
   implementationCarrier : Name
   /-- Exact source nested recursor represented by the private mimic recursor. -/
   sourceRecursor : Name
+  /-- Literal source-export evidence. The source recursor need not yet be in the
+  construction environment because its owner is installed after its model. -/
+  sourceRecursorEvidence : IsoSourceRecursor
   /-- Exact installed recursor of the named private mimic. -/
   implementationRecursor : Name
   /-- Installed types retained so consumers can validate both endpoints before
@@ -3294,13 +3335,14 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     let implementationCarrier := g.members[r + i]!
     let sourceRecursor := g.exportRecs[r + i]!
     let implementationRecursor := g.recName (r + i)
-    let sourceRecursorInfo ← constInfo sourceRecursor
+    let sourceMatches := exportRecursors.filter (\recursor => recursor.name == sourceRecursor)
+    unless sourceMatches.size == 1 do
+      badShape s!"the exact source export has {sourceMatches.size} records for {sourceRecursor}"
+    let sourceRecursorEvidence := IsoSourceRecursor.ofERec sourceMatches[0]!
     let implementationRecursorInfo ← constInfo implementationRecursor
-    let .recInfo sourceRecursorValue := sourceRecursorInfo
-      | badShape s!"{sourceRecursor} is not an installed source recursor"
     let .recInfo implementationRecursorValue := implementationRecursorInfo
       | badShape s!"{implementationRecursor} is not an installed mimic recursor"
-    let sourceRuleKeys := sourceRecursorValue.rules.toArray.map (·.ctor)
+    let sourceRuleKeys := sourceRecursorEvidence.rules.map (·.ctor)
     let implementationRuleKeys := implementationRecursorValue.rules.toArray.map (·.ctor)
     unless sourceRuleKeys.all implementationRuleKeys.contains &&
         implementationRuleKeys.all sourceRuleKeys.contains do
@@ -3315,8 +3357,9 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       indexArity := g.midx i
       implementationCarrier
       sourceRecursor
+      sourceRecursorEvidence
       implementationRecursor
-      sourceRecursorType := sourceRecursorInfo.type
+      sourceRecursorType := sourceRecursorEvidence.type
       implementationRecursorType := implementationRecursorInfo.type
       recursorRuleKeys
       forward

@@ -40,6 +40,8 @@ inductive ShadowReason where
   | ambiguousContainerMap (occurrence : OccurrenceKey)
   | missingInstalledContainerMap (occurrence : OccurrenceKey) (name : Name)
   | installedContainerMapTypeMismatch (occurrence : OccurrenceKey) (name : Name)
+  | missingSourceContainerRecursor (occurrence : OccurrenceKey) (name : Name)
+  | sourceContainerRecursorMismatch (occurrence : OccurrenceKey) (name : Name)
   | missingInstalledContainerRecursor (occurrence : OccurrenceKey) (name : Name)
   | installedContainerRecursorTypeMismatch (occurrence : OccurrenceKey) (name : Name)
   | installedContainerRecursorRulesMismatch (occurrence : OccurrenceKey) (name : Name)
@@ -387,7 +389,20 @@ private def addInstalledCoverage (env : Environment) (name : Name) (expected : E
 private def isContainerOccurrence (key : OccurrenceKey) : Bool :=
   key.expressionPath.any (· != .binderBody)
 
-private def recursorMajorMatches (recursor : RecursorVal) (recursorType : Expr)
+private structure ExactRecursorLayoutView where
+  numParams : Nat
+  numIndices : Nat
+  numMotives : Nat
+  numMinors : Nat
+
+private def ExactRecursorLayoutView.ofSource
+    (recursor : IsoSourceRecursor) : ExactRecursorLayoutView :=
+  { numParams := recursor.numParams
+    numIndices := recursor.numIndices
+    numMotives := recursor.numMotives
+    numMinors := recursor.numMinors }
+
+private def recursorMajorMatches (recursor : ExactRecursorLayoutView) (recursorType : Expr)
     (parameters : Array Expr) (expected : Expr) : MetaM Bool := do
   let majorPosition :=
     recursor.numParams + recursor.numMotives + recursor.numMinors + recursor.numIndices
@@ -400,7 +415,14 @@ private def recursorMajorMatches (recursor : RecursorVal) (recursorType : Expr)
   let .forallE _ domain _ _ := type | return false
   return ← isDefEq domain expected
 
-private def recursorMajorFamily? (recursor : RecursorVal) (recursorType : Expr)
+private def ExactRecursorLayoutView.ofInstalled
+    (recursor : RecursorVal) : ExactRecursorLayoutView :=
+  { numParams := recursor.numParams
+    numIndices := recursor.numIndices
+    numMotives := recursor.numMotives
+    numMinors := recursor.numMinors }
+
+private def recursorMajorFamily? (recursor : ExactRecursorLayoutView) (recursorType : Expr)
     (parameterArity indexArity : Nat) : MetaM (Option (Expr × Nat)) := do
   unless recursor.numParams == parameterArity && recursor.numIndices == indexArity do
     return none
@@ -494,6 +516,7 @@ private def installedBoundaryPlan? (maps : EquivalenceCertificate)
   return some (.installed { maps, forward, backward, backwardForward, forwardBackward })
 
 private def containerMetadataInstalled (environment : Environment)
+    (sourceRecursors : Array ERec)
     (parameters : Array Expr) (sourceType implementationType : Expr)
     (occurrence : OccurrenceKey) (container : IsoContainerImplementation) :
     MetaM (Array ShadowReason) := do
@@ -507,23 +530,33 @@ private def containerMetadataInstalled (environment : Environment)
     | none => reasons := reasons.push (.missingInstalledContainerMap occurrence name)
     | some actual => unless actual == expected do
         reasons := reasons.push (.installedContainerMapTypeMismatch occurrence name)
-  for (name, expected, ruleKeys, majorType) in
-      #[(container.sourceRecursor, container.sourceRecursorType,
-          container.recursorRuleKeys.map (·.1), sourceType),
-        (container.implementationRecursor, container.implementationRecursorType,
-          container.recursorRuleKeys.map (·.2), implementationType)] do
-    match environment.constants.find? name with
-    | none => reasons := reasons.push (.missingInstalledContainerRecursor occurrence name)
-    | some information =>
-      unless information.type == expected do
-        reasons := reasons.push (.installedContainerRecursorTypeMismatch occurrence name)
-      match information with
-      | .recInfo recursor =>
-        unless recursor.rules.toArray.map (·.ctor) == ruleKeys do
-          reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
-        unless ← recursorMajorMatches recursor expected parameters majorType do
-          reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
-      | _ => reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
+  let sourceMatches := sourceRecursors.filter (·.name == container.sourceRecursor)
+  if sourceMatches.size != 1 then
+    reasons := reasons.push (.missingSourceContainerRecursor occurrence container.sourceRecursor)
+  else
+    let exact := IsoSourceRecursor.ofERec sourceMatches[0]!
+    unless exact == container.sourceRecursorEvidence &&
+        exact.name == container.sourceRecursor && exact.type == container.sourceRecursorType &&
+        exact.rules.map (·.ctor) == container.recursorRuleKeys.map (·.1) do
+      reasons := reasons.push (.sourceContainerRecursorMismatch occurrence container.sourceRecursor)
+    unless ← recursorMajorMatches (ExactRecursorLayoutView.ofSource exact)
+        exact.type parameters sourceType do
+      reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
+  let name := container.implementationRecursor
+  match environment.constants.find? name with
+  | none => reasons := reasons.push (.missingInstalledContainerRecursor occurrence name)
+  | some information =>
+    unless information.type == container.implementationRecursorType do
+      reasons := reasons.push (.installedContainerRecursorTypeMismatch occurrence name)
+    match information with
+    | .recInfo recursor =>
+      unless recursor.rules.toArray.map (·.ctor) == container.recursorRuleKeys.map (·.2) do
+        reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
+      unless ← recursorMajorMatches (ExactRecursorLayoutView.ofInstalled recursor)
+          container.implementationRecursorType
+          parameters implementationType do
+        reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
+    | _ => reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
   return reasons
 
 private def containerTarget? (container : IsoContainerImplementation)
@@ -750,8 +783,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             addedReasons := addedReasons.push (.ambiguousContainerMap occurrence)
             continue
           if let some (container, sourceType, implementationType) := candidates[0]? then
-            let metadataReasons ← containerMetadataInstalled environment parameters sourceType
-              implementationType occurrence container
+            let metadataReasons ← containerMetadataInstalled environment sourceRecursors
+              parameters sourceType implementationType occurrence container
             if metadataReasons.isEmpty then
               addedPlans := addedPlans.push
                 { key := occurrence
@@ -806,9 +839,15 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     unless sameMetadata do
       for current in grouped do reasons := reasons.push (.ambiguousContainerMap current.key)
       continue
-    let some (.recInfo publicInfo) := environment.constants.find? key.publicRecursor | do
+    let sourceMatches := sourceRecursors.filter (·.name == key.publicRecursor)
+    unless sourceMatches.size == 1 do
       for current in grouped do
-        reasons := reasons.push (.missingInstalledContainerRecursor current.key key.publicRecursor)
+        reasons := reasons.push (.missingSourceContainerRecursor current.key key.publicRecursor)
+      continue
+    let publicInfo := IsoSourceRecursor.ofERec sourceMatches[0]!
+    unless publicInfo == container.sourceRecursorEvidence do
+      for current in grouped do
+        reasons := reasons.push (.sourceContainerRecursorMismatch current.key key.publicRecursor)
       continue
     let some (.recInfo implementationInfo) :=
         environment.constants.find? key.implementationRecursor | do
@@ -817,11 +856,13 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           (.missingInstalledContainerRecursor current.key key.implementationRecursor)
       continue
     let publicMajor? ← try
-        recursorMajorFamily? publicInfo container.sourceRecursorType
+        recursorMajorFamily? (ExactRecursorLayoutView.ofSource publicInfo)
+          container.sourceRecursorType
           container.parameterArity container.indexArity
       catch _ => pure none
     let implementationMajor? ← try
-        recursorMajorFamily? implementationInfo container.implementationRecursorType
+        recursorMajorFamily? (ExactRecursorLayoutView.ofInstalled implementationInfo)
+          container.implementationRecursorType
           container.parameterArity container.indexArity
       catch _ => pure none
     let some (publicMajorFamily, publicResultMotive) := publicMajor? | do
@@ -991,11 +1032,12 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       let publicType := publicInfo.type
       let implementationType := implementationInfo.type
       let publicMajor? ← try
-          recursorMajorFamily? publicInfo publicType
+          recursorMajorFamily? (ExactRecursorLayoutView.ofInstalled publicInfo) publicType
             publicInfo.numParams publicInfo.numIndices
         catch _ => pure none
       let implementationMajor? ← try
-          recursorMajorFamily? implementationInfo implementationType
+          recursorMajorFamily? (ExactRecursorLayoutView.ofInstalled implementationInfo)
+            implementationType
             implementationInfo.numParams implementationInfo.numIndices
         catch _ => pure none
       let some (publicMajorFamily, publicResultMotive) := publicMajor? | do
