@@ -172,6 +172,11 @@ inductive ConstructionIssue where
   | malformedRecursorMinor (member : MemberKey) (minorIndex : Nat)
   | dependentRecursorMinorTransport (member : MemberKey) (minorIndex binderIndex : Nat)
   | missingMemberMap (member : MemberKey)
+  | missingRecursorMotiveBoundary (member : MemberKey)
+  | missingExactCarrierCandidate (member : MemberKey)
+  | ambiguousExactCarrierCandidate (member : MemberKey)
+  | invalidExactCarrierLaw (member : MemberKey)
+  | recursorMajorBoundaryMismatch (member : MemberKey)
   | missingOccurrenceMap (occurrence : OccurrenceKey)
   | missingContainerMap (occurrence : OccurrenceKey)
   | dependentFieldTransport (constructor : ConstructorKey) (fieldIndex : Nat)
@@ -579,23 +584,23 @@ private def applyContainerLaw (plan : FamilyAdapterPlan) (container : ContainerM
 private def instantiateRecursorBoundaryIndices (boundary : RecursorCarrierBoundary)
     (parameters : Array Expr) (recordedType sourceType : Expr) : ConstructionM (Array Expr) := do
   unless parameters.size == boundary.parameterArity do
-    failConstruction (.missingMemberMap boundary.key)
+    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   let mut type ← liftGen <| instantiateForall recordedType parameters
   let mut indices := #[]
   for _ in [:boundary.indexArity] do
     let .forallE binderName domain body _ := type
-      | failConstruction (.missingMemberMap boundary.key)
+      | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
     let index ← liftGen <| mkFreshExprMVar domain .natural binderName
     indices := indices.push index
     type := body.instantiate1 index
   let .forallE _ domain _ _ := type
-    | failConstruction (.missingMemberMap boundary.key)
+    | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   unless ← liftGen <| isDefEq domain sourceType do
-    failConstruction (.missingMemberMap boundary.key)
+    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   let resolved ← liftGen <| indices.mapM instantiateMVars
   for index in resolved do
     if ← liftGen <| hasAssignableMVar index then
-      failConstruction (.missingMemberMap boundary.key)
+      failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   return resolved
 
 private def applyRecursorBoundaryMap (plan : FamilyAdapterPlan)
@@ -611,13 +616,13 @@ private def applyRecursorBoundaryMap (plan : FamilyAdapterPlan)
   let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
   let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
   unless ← liftGen <| isDefEq (mkAppN sourceFamily (parameters ++ indices)) sourceType do
-    failConstruction (.missingMemberMap boundary.key)
+    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   unless ← liftGen <| isDefEq (mkAppN targetFamily (parameters ++ indices)) targetType do
-    failConstruction (.missingMemberMap boundary.key)
+    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   let application := mkAppN (.const name (plan.levelParams.map Level.param))
     (parameters ++ indices ++ #[value])
   unless ← liftGen <| isDefEq (← inferType application) targetType do
-    failConstruction (.missingMemberMap boundary.key)
+    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   return application
 
 private def applyRecursorBoundaryLaw (plan : FamilyAdapterPlan)
@@ -635,9 +640,9 @@ private def applyRecursorBoundaryLaw (plan : FamilyAdapterPlan)
   let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
   let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
   unless ← liftGen <| isDefEq (mkAppN sourceFamily (parameters ++ indices)) sourceType do
-    failConstruction (.missingMemberMap boundary.key)
+    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   unless ← liftGen <| isDefEq (mkAppN targetFamily (parameters ++ indices)) targetType do
-    failConstruction (.missingMemberMap boundary.key)
+    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   return mkAppN (.const name (plan.levelParams.map Level.param))
     (parameters ++ indices ++ #[value])
 
@@ -1187,11 +1192,11 @@ private def checkedExactCarrierCandidate (fallback : MemberKey) (sourceType valu
     ConstructionM ExactCarrierCandidate := do
   let some (lawCarrier, lawLeft, lawRight) ←
       liftGen <| matchEq? (← inferType roundTrip)
-    | failConstruction (.missingMemberMap fallback)
+    | failConstruction (.invalidExactCarrierLaw fallback)
   unless ← liftGen <| isDefEq lawCarrier sourceType do
-    failConstruction (.missingMemberMap fallback)
+    failConstruction (.invalidExactCarrierLaw fallback)
   unless ← liftGen <| isDefEq lawRight value do
-    failConstruction (.missingMemberMap fallback)
+    failConstruction (.invalidExactCarrierLaw fallback)
   let result : ExactCarrierCandidate := { maps, mapped, roundTrip, lawLeft, lawRight }
   pure result
 
@@ -1233,16 +1238,17 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
       let candidate ← checkedExactCarrierCandidate fallback.key sourceType value
         container.maps mapped proof
       candidates := candidates.push candidate
-  let some first := candidates[0]? | failConstruction (.missingMemberMap fallback.key)
+  let some first := candidates[0]?
+    | failConstruction (.missingExactCarrierCandidate fallback.key)
   for candidate in candidates do
     unless candidate.maps == first.maps do
-      failConstruction (.missingMemberMap fallback.key)
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.mapped first.mapped do
-      failConstruction (.missingMemberMap fallback.key)
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.lawLeft first.lawLeft do
-      failConstruction (.missingMemberMap fallback.key)
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.lawRight first.lawRight do
-      failConstruction (.missingMemberMap fallback.key)
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
   return first
 
 /-- A family member with all of its exact indices packed together with the
@@ -2355,14 +2361,15 @@ private def exactMotiveBoundary (plan : FamilyAdapterPlan)
     (publicMotive expectedPrivateType : Expr) : ConstructionM RecursorCarrierBoundary := do
   let publicMotiveType ← liftGen <| inferType publicMotive
   let some publicCarrier := motiveCarrierName? publicMotiveType
-    | failConstruction (.missingMemberMap fallback.key)
+    | failConstruction (.missingRecursorMotiveBoundary fallback.key)
   let some implementationCarrier := motiveCarrierName? expectedPrivateType
-    | failConstruction (.missingMemberMap fallback.key)
+    | failConstruction (.missingRecursorMotiveBoundary fallback.key)
   let candidates := plan.members.filter fun member =>
     member.publicCarrier == publicCarrier &&
       member.implementationCarrier == implementationCarrier
   if let some member := candidates[0]? then
-    unless candidates.size == 1 do failConstruction (.missingMemberMap fallback.key)
+    unless candidates.size == 1 do
+      failConstruction (.missingRecursorMotiveBoundary fallback.key)
     memberRecursorBoundary plan memberCertificates member
   else
     pure fallback
