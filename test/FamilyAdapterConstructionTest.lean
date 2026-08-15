@@ -626,7 +626,21 @@ def repeatedSpecialisedMinorsComplete (plan : FamilyAdapterPlan)
   let recursorsBuilt ← (FamilyAdapter.buildPublicRecursorPrototypes plan certificate.members
     certificate.telescopes constructors root).run
   let .ok (.ok (_, recursors)) := recursorsBuilt | return false
-  return recursors.any fun recursor =>
+  let expected : Array Name :=
+    #[`FamilyAdapterGenerated.GeneratedList.nil,
+      `FamilyAdapterGenerated.GeneratedList.cons]
+  let specialised := plan.containerRecursors.filter fun container =>
+    container.rules.map (·.publicConstructor) == expected
+  let exactRuleAssociations := specialised.size >= 2 && specialised.all fun container =>
+    let maps := plan.containerMaps.filter fun map =>
+      map.sourceRecursor == container.key.publicRecursor &&
+        map.implementationRecursor == container.key.implementationRecursor
+    container.rules.map (·.publicConstructor) == expected &&
+      (maps.isEmpty || maps.all fun map =>
+        map.recursorRuleKeys.map (·.1) == expected &&
+          map.recursorRuleKeys.map (·.2) ==
+            container.rules.map (·.implementationConstructor))
+  return exactRuleAssociations && recursors.any fun recursor =>
     recursor.motives.any (fun motive => !plan.members.any fun member =>
       member.publicCarrier == motive.publicCarrier &&
         member.implementationCarrier == motive.implementationCarrier) &&

@@ -85,6 +85,18 @@ def multipleSitesShareExactHypothesis (shadows : Array FamilyAdapter.ShadowObser
     | some first =>
       occurrences.size >= 2 && occurrences.all (·.hypothesisIndex == first.hypothesisIndex)
 
+/-- The nested `List Tree` recursor is represented by its exact source rule
+sequence. This pins the real-constructor side of the mimic association rather
+than accepting a shadow that merely noticed the extra recursor. -/
+def listSpecialisationRulesCovered (shadows : Array FamilyAdapter.ShadowObservation) : Bool :=
+  let expected : Array Name := #[`List.nil, `List.cons]
+  match shadows.find? (·.root == `Tree) with
+  | none => false
+  | some tree =>
+    let constructors := tree.coverage.rules.filterMap fun rule =>
+      if rule.recursor == `Tree.rec_1 then some rule.constructor.constructor else none
+    constructors == expected
+
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun
     | .missingInterfaceMember member actual => member.owner == `Nat && actual == side
@@ -120,19 +132,20 @@ def main : IO UInt32 := do
   let everyOutcomeExplicit := (shadows ++ familyShadows).all hasOnlyExplicitGaps
   let nestedGapVisible := (shadows ++ familyShadows).any fun shadow => !shadow.complete
   let exactHypothesisSharing := multipleSitesShareExactHypothesis familyShadows
+  let listRuleAssociation := listSpecialisationRulesCovered shadows
   let containerMapsVisible := (shadows ++ familyShadows).any
     (fun shadow => !shadow.coverage.containerMaps.isEmpty)
   let malformedRejected := malformedDependenciesAreExcluded malformed
   if sameResult && outputQuiet && everyAcceptedFamilyRan && keyedReportVisible &&
       everyOutcomeExplicit && nestedGapVisible && exactHypothesisSharing && containerMapsVisible &&
-      malformedRejected then
+      listRuleAssociation && malformedRejected then
     IO.println s!"family adapter shadow: {shadows.size + familyShadows.size} accepted families, \
       exact gaps reported, output unchanged"
     return 0
   IO.eprintln s!"family adapter shadow failure: same={sameResult}, quiet={outputQuiet}, \
     shadows={shadows.size + familyShadows.size}, keyed={keyedReportVisible}, \
     explicit={everyOutcomeExplicit}, gaps={nestedGapVisible}, hypotheses={exactHypothesisSharing}, \
-    containers={containerMapsVisible}, malformed={malformedRejected}"
+    listRules={listRuleAssociation}, containers={containerMapsVisible}, malformed={malformedRejected}"
   for message in plainMessages ++ observedMessages ++ familyPlainMessages ++ familyObservedMessages do
     IO.eprintln message
   for shadow in shadows ++ familyShadows do
