@@ -341,26 +341,28 @@ private def installedRuleEvidence? (env : Environment) (rule recursor constructo
         InstalledRuleBinderRole.recursorArgument
       semanticRhs := installedRule.rhs }
   | some (.thmInfo information) =>
-    forallTelescope information.type fun binders proposition => do
-      let some (_, lhs, rhs) ← matchEq? proposition | return none
-      unless lhs.getAppFn.constName? == some recursor do return none
-      let some major := lhs.getAppArgs.back? | return none
-      unless major.getAppFn.constName? == some constructor do return none
-      let recursorArguments := lhs.getAppArgs
-      let constructorArguments := major.getAppArgs
-      let mut application := #[]
-      for binder in binders do
-        if let some position := recursorArguments.findIdx? (· == binder) then
-          application := application.push (.recursorArgument position)
-        else if let some position := constructorArguments.findIdx? (· == binder) then
-          application := application.push (.constructorArgument position)
-        else
-          return none
-      return some {
-        representation := .equalityTheorem
-        declarationType := information.type
-        application
-        semanticRhs := (← mkLambdaFVars binders rhs) }
+    try
+      forallTelescope information.type fun binders proposition => do
+        let some (_, lhs, rhs) ← matchEq? proposition | return none
+        unless lhs.getAppFn.constName? == some recursor do return none
+        let some major := lhs.getAppArgs.back? | return none
+        unless major.getAppFn.constName? == some constructor do return none
+        let recursorArguments := lhs.getAppArgs
+        let constructorArguments := major.getAppArgs
+        let mut application := #[]
+        for binder in binders do
+          if let some position := recursorArguments.findIdx? (· == binder) then
+            application := application.push (.recursorArgument position)
+          else if let some position := constructorArguments.findIdx? (· == binder) then
+            application := application.push (.constructorArgument position)
+          else
+            return none
+        return some {
+          representation := .equalityTheorem
+          declarationType := information.type
+          application
+          semanticRhs := (← mkLambdaFVars binders rhs) }
+    catch _ => return none
   | _ => return none
 
 private partial def exactLambdaBody (tag : Name) (expression : Expr) : Expr :=
