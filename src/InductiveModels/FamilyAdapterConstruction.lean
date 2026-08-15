@@ -1783,13 +1783,12 @@ private def recursorAgreementAt (shape : RecursorShape)
     (recursor : PublicRecursorCertificate)
     (rule : RuleKey) (publicBinderIndex implementationBinderIndex : Nat)
     (expectedPublic expectedPrivate : Expr) : ConstructionM Expr := do
-  let reducedPrivate ← liftGen <| whnf expectedPrivate
   unless expectedPublic.getAppFn.constName? == some recursor.adapter &&
-      reducedPrivate.getAppFn.constName? == some shape.implementationRecursor do
+      expectedPrivate.getAppFn.constName? == some shape.implementationRecursor do
     failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
       implementationBinderIndex .openedHeadMismatch)
   let publicArguments := expectedPublic.getAppArgs
-  let privateArguments := reducedPrivate.getAppArgs
+  let privateArguments := expectedPrivate.getAppArgs
   let prefixSize := shape.parameterArity + shape.motiveArity + shape.minorArity
   unless publicArguments.size > prefixSize && privateArguments.size > prefixSize do
     failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
@@ -1923,10 +1922,9 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
     | some role => do
       let (shape, recursor) ← recursiveCallCertificate plan recursors containerRecursors
         rule role publicBinderIndex implementationBinderIndex
-      let reducedPrivate ← liftGen <| whnf expectedPrivate
       let publicMatches := expectedPublic.getAppFn.constName? == some recursor.adapter
       let privateMatches :=
-        reducedPrivate.getAppFn.constName? == some role.implementationRecursor
+        expectedPrivate.getAppFn.constName? == some role.implementationRecursor
       if publicMatches || privateMatches then
         unless publicMatches && privateMatches do
           failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
