@@ -827,7 +827,9 @@ def runSamples : MetaM Result := do
           if let some certificate := built.certificate then
             let collisionDiagnostic ← samePublicContainerKeysDiagnostic plan certificate
               `_family_adapter_same_public_container_pair
-            if collisionDiagnostic.isNone then
+            if collisionDiagnostic.isNone &&
+                FamilyAdapter.validateRecursorPrototypeKeyNames
+                  `_family_adapter_member_container_key_collision then
               result := { result with containerKeyNames := true }
             else
               let failures := result.failures.push

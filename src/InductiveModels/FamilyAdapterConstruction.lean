@@ -1179,10 +1179,11 @@ private partial def appendEncodedName (accumulator source : Name) : Name :=
   | .num parent value => Name.num (Name.num (appendEncodedName accumulator parent) 0) value
 
 private def recursorPrototypeOwner : RecursorPrototypeKey → Name
-  | .member member => member.owner
+  | .member member =>
+    appendEncodedName (Name.num .anonymous 3) member.owner
   | .container key =>
-    let publicPart := appendEncodedName (Name.num .anonymous 2) key.publicRecursor
-    appendEncodedName (Name.num publicPart 2) key.implementationRecursor
+    let publicPart := appendEncodedName (Name.num .anonymous 4) key.publicRecursor
+    appendEncodedName (Name.num publicPart 5) key.implementationRecursor
 
 private def publicRecursorAdapterName (root : Name) (key : RecursorPrototypeKey) : Name :=
   prototypeName root (recursorPrototypeOwner key) `publicRecursor
@@ -1194,6 +1195,31 @@ private def publicRecursorCallAgreementName (root : Name)
 private def publicMinorConstructorAdapterName (root : Name) (key : RecursorPrototypeKey)
     (minorIndex : Nat) : Name :=
   prototypeName root ((recursorPrototypeOwner key).mkNum minorIndex) `publicMinorConstructor
+
+/-- Test-only structural check that the two `RecursorPrototypeKey` variants
+occupy disjoint name subtrees even when a raw member owner is exactly a
+container key's encoded owner. -/
+def validateRecursorPrototypeKeyNames (root : Name) : Bool :=
+  let firstContainer : ContainerRecursorKey :=
+    { publicRecursor := `_family_adapter_public
+      implementationRecursor := `_family_adapter_private_a }
+  let secondContainer : ContainerRecursorKey :=
+    { publicRecursor := `_family_adapter_public
+      implementationRecursor := `_family_adapter_private_b }
+  let containerKey : RecursorPrototypeKey := .container firstContainer
+  let secondContainerKey : RecursorPrototypeKey := .container secondContainer
+  let memberKey : RecursorPrototypeKey :=
+    .member { owner := recursorPrototypeOwner containerKey }
+  let names := #[publicRecursorAdapterName root memberKey,
+    publicRecursorCallAgreementName root memberKey,
+    publicMinorConstructorAdapterName root memberKey 0,
+    publicRecursorAdapterName root containerKey,
+    publicRecursorCallAgreementName root containerKey,
+    publicMinorConstructorAdapterName root containerKey 0,
+    publicRecursorAdapterName root secondContainerKey,
+    publicRecursorCallAgreementName root secondContainerKey,
+    publicMinorConstructorAdapterName root secondContainerKey 0]
+  names.all fun name => (names.filter (· == name)).size == 1
 
 private def publicIotaAdapterName (root : Name) (rule : RuleKey) : Name :=
   prototypeName root (rule.recursor.append rule.constructor.constructor) `publicIota
