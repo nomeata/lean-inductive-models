@@ -566,10 +566,10 @@ private def installedBoundaryPlan? (maps : EquivalenceCertificate)
   return some (.installed { maps, forward, backward, backwardForward, forwardBackward })
 
 private def emittedWrapperType? (declarations : Array Declaration) (name : Name) : Option Expr :=
-  let matches := declarations.filterMap fun declaration => match declaration with
+  let wrapperMatches := declarations.filterMap fun declaration => match declaration with
     | .defnDecl value => if value.name == name then some value.type else none
     | _ => none
-  if matches.size == 1 then matches[0]? else none
+  if wrapperMatches.size == 1 then wrapperMatches[0]? else none
 
 /-- Source-side representation is settled before maps or the callable wrapper
 are considered.  This is the exact boundary used by the source-recursors
