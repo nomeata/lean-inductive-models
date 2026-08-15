@@ -454,8 +454,10 @@ structure ContainerMapPlan where
   source owner has been installed in the construction environment. -/
   sourceRecursorEvidence : IsoSourceRecursor := default
   implementationRecursor : Name
+  implementationRecursorWrapper : Name
   sourceRecursorType : Expr
   implementationRecursorType : Expr
+  implementationRecursorWrapperType : Expr
   recursorRuleKeys : Array (Name × Name)
   maps : EquivalenceCertificate
   forwardType : Expr

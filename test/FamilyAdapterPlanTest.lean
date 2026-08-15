@@ -133,8 +133,11 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
       implementationCarrier := numbered "FamilyAdapterPlanTest.containerCarrier" index
       sourceRecursor := numbered "FamilyAdapterPlanTest.containerSourceRecursor" index
       implementationRecursor := numbered "FamilyAdapterPlanTest.containerImplRecursor" index
+      implementationRecursorWrapper :=
+        numbered "FamilyAdapterPlanTest.containerImplRecursorWrapper" index
       sourceRecursorType := .sort .zero
       implementationRecursorType := .sort .zero
+      implementationRecursorWrapperType := .sort .zero
       recursorRuleKeys :=
         #[(numbered "FamilyAdapterPlanTest.containerSourceRule" index,
            numbered "FamilyAdapterPlanTest.containerImplRule" index)]

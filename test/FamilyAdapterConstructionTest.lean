@@ -32,6 +32,29 @@ inductive LaterDependency : Index -> Type where
 
 end FamilyAdapterRejectedBoundaries
 
+/-- Read the complete exact recursor census, including every nested
+specialisation. `Driver.indEDecl` intentionally serves ordinary installed
+blocks and reads only member recursors; adapter fixtures need the source
+export's full `all.size + numNested` sequence. -/
+def exactAdapterIndEDecl (owners : Array Name) : MetaM EDecl := do
+  let .induct types constructors _ ← indEDecl owners
+    | throwError "adapter fixture is not an inductive declaration"
+  let some first := types.head? | throwError "adapter fixture has no member"
+  let all := first.all.toArray
+  let recursorNames := (Array.range (all.size + first.numNested)).map (exportRecName all)
+  let environment ← getEnv
+  let recursors ← recursorNames.mapM fun name => do
+    let some (.recInfo recursor) := environment.constants.find? name
+      | throwError "adapter fixture recursor {name} is not installed"
+    return ({ name := recursor.name, levelParams := recursor.levelParams,
+      type := recursor.type, all := recursor.all, numParams := recursor.numParams,
+      numIndices := recursor.numIndices, numMotives := recursor.numMotives,
+      numMinors := recursor.numMinors,
+      rules := recursor.rules.map fun rule =>
+        { ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs },
+      k := recursor.k, isUnsafe := recursor.isUnsafe } : ERec)
+  return .induct types constructors recursors.toList
+
 namespace FamilyAdapterConstructionTest
 
 def identityIso (source : EDecl) : Iso :=
@@ -125,8 +148,10 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
         sourceRecursor := container.sourceRecursor
         sourceRecursorEvidence
         implementationRecursor := container.implementationRecursor
+        implementationRecursorWrapper := container.implementationRecursor
         sourceRecursorType := sourceRecursorEvidence.type
         implementationRecursorType := (← typeOf container.implementationRecursor)
+        implementationRecursorWrapperType := (← typeOf container.implementationRecursor)
         recursorRuleKeys := sourceRuleKeys.map fun key => (key, key)
         forward := container.forward
         backward := container.backward
@@ -713,7 +738,7 @@ def runSamples : MetaM Result := do
     result := { result with failures }
   for owners in completeSamples do
     let owner := owners[0]!
-    let source ← indEDecl owners
+    let source ← exactAdapterIndEDecl owners
     let iso := identityIso source
     let report ← FamilyAdapter.deriveShadowPlan source iso
     let some plan := report.plan? | do
@@ -760,7 +785,7 @@ def runSamples : MetaM Result := do
           let failures := result.failures.push s!"{owner}: incomplete kernel certificate"
           result := { result with failures }
   for owner in nestedSamples do
-    let source ← indEDecl #[owner]
+    let source ← exactAdapterIndEDecl #[owner]
     let iso := identityIso source
     let report ← FamilyAdapter.deriveShadowPlan source iso
     if report.plan?.isNone then
@@ -887,7 +912,7 @@ def runSamples : MetaM Result := do
           s!"{owner}: definitionally equal nested field did not close: {repr diagnostic}"
         result := { result with failures }
   for boundary in #[changedDirect, changedFunction, changedIndexed, changedNested] do
-    let source ← indEDecl #[boundary.publicOwner]
+    let source ← exactAdapterIndEDecl #[boundary.publicOwner]
     let iso ← changedIso source boundary
     let report ← FamilyAdapter.deriveShadowPlan source iso
     if report.plan?.isNone then
@@ -972,7 +997,7 @@ def runSamples : MetaM Result := do
             s!"{boundary.publicOwner}: changed boundary did not close: {repr built.issues}"
           result := { result with failures }
   let invalidBoundary := { changedDirect with forward := .anonymous }
-  let invalidSource ← indEDecl #[invalidBoundary.publicOwner]
+  let invalidSource ← exactAdapterIndEDecl #[invalidBoundary.publicOwner]
   let invalidIso ← changedIso invalidSource invalidBoundary
   let invalidReport ← FamilyAdapter.deriveShadowPlan invalidSource invalidIso
   let invalidBuilt ← (FamilyAdapter.buildFamilyPrototype invalidReport invalidIso
@@ -1015,7 +1040,7 @@ def runSamples : MetaM Result := do
         s!"invalid iota metadata was not rejected atomically: {repr built.issues}"
       result := { result with failures }
   let lateIotaOwner := `FamilyAdapterGenerated.GeneratedConstructors5x8
-  let lateIotaSource ← indEDecl #[lateIotaOwner]
+  let lateIotaSource ← exactAdapterIndEDecl #[lateIotaOwner]
   let lateIotaIso := identityIso lateIotaSource
   let lateIotaReport ← FamilyAdapter.deriveShadowPlan lateIotaSource lateIotaIso
   let lateRuleIndex := lateIotaReport.plan?.map (·.rules.size - 1) |>.getD 0
@@ -1047,7 +1072,7 @@ def runSamples : MetaM Result := do
       let failures := result.failures.push
         s!"late invalid iota metadata retained a partial rule tranche: {repr built.issues}"
       result := { result with failures }
-  let invalidContainerSource ← indEDecl #[changedNested.publicOwner]
+  let invalidContainerSource ← exactAdapterIndEDecl #[changedNested.publicOwner]
   let validContainerIso ← changedIso invalidContainerSource changedNested
   let validContainer := validContainerIso.containerImplementations[0]!
   let invalidContainer := { validContainer with forward := validContainer.backward }
@@ -1136,7 +1161,7 @@ def runSamples : MetaM Result := do
       result := { result with failures }
   let installedOwners := #[`FamilyAdapterGenerated.GeneratedLayerA,
     `FamilyAdapterGenerated.GeneratedLayerB]
-  let installedSource ← indEDecl installedOwners
+  let installedSource ← exactAdapterIndEDecl installedOwners
   match ← (mutualOneLayerIso installedSource {}).run with
   | .error decline =>
     let failures := result.failures.push s!"installed changed family: {decline.label}"

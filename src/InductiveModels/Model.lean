@@ -2212,10 +2212,14 @@ structure IsoContainerImplementation where
   sourceRecursorEvidence : IsoSourceRecursor
   /-- Exact installed recursor of the named private mimic. -/
   implementationRecursor : Name
+  /-- Checked callable wrapper used only by the model interface and theorem
+  left-hand sides. Semantic recursive calls use `implementationRecursor`. -/
+  implementationRecursorWrapper : Name
   /-- Installed types retained so consumers can validate both endpoints before
   using the association in a source-to-implementation rewrite. -/
   sourceRecursorType : Expr
   implementationRecursorType : Expr
+  implementationRecursorWrapperType : Expr
   /-- Exact source/private constructor keys of every installed recursor rule.
   The sequence is metadata, not an array-position matching contract. -/
   recursorRuleKeys : Array (Name × Name)
@@ -3334,24 +3338,41 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let containerImplementations ← (Array.range pl.mimics.size).mapM fun i => do
     let implementationCarrier := g.members[r + i]!
     let sourceRecursor := g.exportRecs[r + i]!
-    let implementationRecursor := g.recName (r + i)
+    let implementationShape := shapes[r + i]!
+    let implementationRecursor := implementationShape.src
+    let implementationRecursorWrapper := g.recName (r + i)
     let sourceMatches := exportRecursors.filter fun recursor => recursor.name == sourceRecursor
     unless sourceMatches.size == 1 do
       badShape s!"the exact source export has {sourceMatches.size} records for {sourceRecursor}"
     let sourceRecursorEvidence := IsoSourceRecursor.ofERec sourceMatches[0]!
     let implementationRecursorInfo ← constInfo implementationRecursor
-    let implementationShape := shapes[r + i]!
-    unless implementationRecursorInfo.type == implementationShape.ty &&
+    let implementationRecursorWrapperInfo ← constInfo implementationRecursorWrapper
+    let .recInfo implementationRecursorValue := implementationRecursorInfo
+      | badShape s!"{implementationRecursor} is not the installed private mimic recursor"
+    unless implementationRecursorWrapperInfo.type == implementationShape.ty &&
         implementationShape.nm == sourceRecursorEvidence.numMotives &&
         implementationShape.nmin == sourceRecursorEvidence.numMinors &&
         implementationShape.nidx == sourceRecursorEvidence.numIndices do
-      badShape s!"{implementationRecursor}'s checked wrapper layout differs from {sourceRecursor}"
+      badShape s!"{implementationRecursorWrapper}'s checked wrapper layout differs from {sourceRecursor}"
     let sourceRuleKeys := sourceRecursorEvidence.rules.map (·.ctor)
-    let implementationRuleKeys := sourceRuleKeys
-    unless sourceRuleKeys.all implementationRuleKeys.contains &&
-        implementationRuleKeys.all sourceRuleKeys.contains do
+    let implementationRules := implementationRecursorValue.rules.toArray
+    unless implementationRules.size == sourceRecursorEvidence.rules.size do
       badShape s!"{sourceRecursor} and {implementationRecursor} have different rule keys"
-    let recursorRuleKeys := sourceRuleKeys.map fun key => (key, key)
+    let mut recursorRuleKeys := #[]
+    for sourceRule in sourceRecursorEvidence.rules do
+      let matches := (Array.range pl.types[r + i]!.ctors.size).filter fun index =>
+        pl.types[r + i]!.ctors[index]!.1 == sourceRule.ctor
+      unless matches.size == 1 do
+        badShape s!"{sourceRecursor}'s rule {sourceRule.ctor} has {matches.size} private constructors"
+      let implementationConstructor := blockCtors[r + i]![matches[0]!]!
+      let implementationMatches := implementationRules.filter fun rule =>
+        rule.ctor == implementationConstructor && rule.nfields == sourceRule.nfields
+      unless implementationMatches.size == 1 do
+        badShape s!"{sourceRule.ctor}'s private rule association is absent or ambiguous"
+      recursorRuleKeys := recursorRuleKeys.push (sourceRule.ctor, implementationConstructor)
+    unless implementationRules.map (·.ctor) == recursorRuleKeys.map (·.2) &&
+        sourceRuleKeys == recursorRuleKeys.map (·.1) do
+      badShape s!"{sourceRecursor} and {implementationRecursor} have differently ordered rules"
     let forward := g.packName i
     let backward := g.unpackName i
     let backwardForward := g.retractName i
@@ -3363,8 +3384,10 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       sourceRecursor
       sourceRecursorEvidence
       implementationRecursor
+      implementationRecursorWrapper
       sourceRecursorType := sourceRecursorEvidence.type
       implementationRecursorType := implementationRecursorInfo.type
+      implementationRecursorWrapperType := implementationRecursorWrapperInfo.type
       recursorRuleKeys
       forward
       backward

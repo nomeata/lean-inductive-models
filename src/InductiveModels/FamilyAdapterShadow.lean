@@ -598,13 +598,21 @@ private def containerMetadataInstalled (environment : Environment)
   | some information =>
     unless information.type == container.implementationRecursorType do
       reasons := reasons.push (.installedContainerRecursorTypeMismatch occurrence name)
-    unless container.sourceRecursorEvidence.rules.map (·.ctor) ==
-        container.recursorRuleKeys.map (·.2) do
-      reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
-    unless ← recursorMajorMatches
-        (ExactRecursorLayoutView.ofSource container.sourceRecursorEvidence)
-        container.implementationRecursorType parameters implementationType do
-      reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
+    match information with
+    | .recInfo recursor =>
+      unless recursor.rules.toArray.map (·.ctor) == container.recursorRuleKeys.map (·.2) do
+        reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
+      unless ← recursorMajorMatches (ExactRecursorLayoutView.ofInstalled recursor)
+          container.implementationRecursorType parameters implementationType do
+        reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
+    | _ => reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
+  match environment.constants.find? container.implementationRecursorWrapper with
+  | none => reasons := reasons.push
+      (.missingInstalledContainerRecursor occurrence container.implementationRecursorWrapper)
+  | some information =>
+    unless information.type == container.implementationRecursorWrapperType do
+      reasons := reasons.push (.installedContainerRecursorTypeMismatch occurrence
+        container.implementationRecursorWrapper)
   return reasons
 
 private def containerTarget? (container : IsoContainerImplementation)
@@ -693,11 +701,6 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     resolvedMembers := resolvedMembers.push
       { index, source := sourceType, key, sourceRecursor?, implementationCarrier,
         publicCarrier, implementationRecursor, publicRecursor, representation }
-
-  let representedRecursors := resolvedMembers.filterMap (·.sourceRecursor?.map (·.name))
-  for recursor in sourceRecursors do
-    unless representedRecursors.contains recursor.name do
-      reasons := reasons.push (.unrepresentedSourceRecursor recursor.name)
 
   let mut resolvedConstructors : Array ResolvedConstructor := #[]
   for constructor in sourceConstructors do
@@ -842,8 +845,11 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
                   sourceRecursor := container.sourceRecursor
                   sourceRecursorEvidence := container.sourceRecursorEvidence
                   implementationRecursor := container.implementationRecursor
+                  implementationRecursorWrapper := container.implementationRecursorWrapper
                   sourceRecursorType := container.sourceRecursorType
                   implementationRecursorType := container.implementationRecursorType
+                  implementationRecursorWrapperType :=
+                    container.implementationRecursorWrapperType
                   recursorRuleKeys := container.recursorRuleKeys
                   maps :=
                     { forward := container.forward
@@ -869,6 +875,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     #[(container.sourceRecursor, container.implementationRecursor)] ++
       container.recursorRuleKeys
   let implementationRuleMapping := implementationMapping ++ containerRecursorMapping
+  let publicRuleMapping := publicMapping ++ containerRecursorMapping
   let mut containerRecursorPlans : Array ContainerRecursorPlan := #[]
   for container in containerMapPlans do
     let key : ContainerRecursorKey :=
@@ -883,6 +890,9 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         current.indexArity == container.indexArity &&
         current.sourceRecursorType == container.sourceRecursorType &&
         current.implementationRecursorType == container.implementationRecursorType &&
+        current.implementationRecursorWrapper == container.implementationRecursorWrapper &&
+        current.implementationRecursorWrapperType ==
+          container.implementationRecursorWrapperType &&
         current.recursorRuleKeys == container.recursorRuleKeys &&
         current.maps == container.maps
     unless sameMetadata do
@@ -898,13 +908,14 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       for current in grouped do
         reasons := reasons.push (.sourceContainerRecursorMismatch current.key key.publicRecursor)
       continue
-    let some implementationInfo := environment.constants.find? key.implementationRecursor | do
+    let some (.recInfo implementationInfo) :=
+        environment.constants.find? key.implementationRecursor | do
       for current in grouped do
         reasons := reasons.push
           (.missingInstalledContainerRecursor current.key key.implementationRecursor)
       continue
     let publicMajor? ← try
-        recursorMajorFamily? (ExactRecursorLayoutView.ofSource publicInfo)
+        recursorMajorFamily? (ExactRecursorLayoutView.ofInstalled implementationInfo)
           container.sourceRecursorType
           container.parameterArity container.indexArity
       catch _ => pure none
@@ -921,7 +932,9 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
       continue
-    unless publicResultMotive == implementationResultMotive do
+    unless publicInfo.numMotives == implementationInfo.numMotives &&
+        publicInfo.numMinors == implementationInfo.numMinors &&
+        publicResultMotive == implementationResultMotive do
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
       continue
@@ -986,7 +999,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         let implementationRhs? := implementationEvidence?.map (·.semanticRhs)
         let publicRhs? := publicEvidence?.map (·.semanticRhs)
         let expectedImplementationRhs := rewriteWith implementationRuleMapping rule.rhs
-        let expectedPublicRhs := rewriteWith publicMapping rule.rhs
+        let expectedPublicRhs := rewriteWith publicRuleMapping rule.rhs
         unless implementationRhs? == some expectedImplementationRhs do
           reasons := reasons.push (.installedRuleMismatch key .privateModel)
           uncoveredRules := uncoveredRules.push key
@@ -1122,6 +1135,13 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           resultMotiveIndex := publicResultMotive, publicType, implementationType,
           publicMajorFamily, implementationMajorFamily, boundary := .defeq,
           rules := pairedRules, occurrences := grouped, callRoles := #[callRole] }
+
+  let representedRecursors :=
+    resolvedMembers.filterMap (·.sourceRecursor?.map (·.name)) ++
+      containerRecursorPlans.map (·.key.publicRecursor)
+  for recursor in sourceRecursors do
+    unless representedRecursors.contains recursor.name do
+      reasons := reasons.push (.unrepresentedSourceRecursor recursor.name)
 
   let memberKeys := resolvedMembers.map (·.key)
   let components := componentPlans memberKeys occurrencePlans
