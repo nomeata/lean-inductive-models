@@ -476,6 +476,8 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
         return .recursorInvalid s!"{container.key.publicRecursor}: container rule keys"
       unless built.certificate.occurrences == container.occurrences do
         return .recursorInvalid s!"{container.key.publicRecursor}: container occurrences"
+      unless built.certificate.callRoles == container.callRoles do
+        return .recursorInvalid s!"{container.key.publicRecursor}: container call roles"
       unless containerEnvironment.constants.contains built.certificate.callAgreement do
         return .recursorInvalid s!"{container.key.publicRecursor}: container call agreement"
     match ← (FamilyAdapter.buildPublicIotaPrototypes plan certificate constructors recursors
@@ -628,10 +630,18 @@ def runSamples : MetaM Result := do
           | .ok schemas =>
             let roles := schemas.flatMap fun schema =>
               schema.hypotheses.filterMap (·.recursiveCall?)
+            let exactRolePositions := schemas.all fun schema =>
+              schema.hypotheses.all fun step => step.recursiveCall?.all fun role =>
+                role.containerCall?.all fun call =>
+                  call.rule == step.rule &&
+                    call.hypothesisIndex == step.occurrences[0]!.hypothesisIndex &&
+                    call.publicBinderIndex == step.publicBinderIndex &&
+                    call.implementationBinderIndex == step.binderIndex &&
+                    call.occurrences == step.occurrences
             let canonicalRoles := roles.filter fun role => role.container?.any fun key =>
               plan.containerRecursors.any fun container =>
                 container.key == key && container.boundary == .defeq
-            !canonicalRoles.isEmpty &&
+            exactRolePositions && !canonicalRoles.isEmpty &&
               roles.all fun role =>
                 let members := plan.members.filter fun member =>
                   member.publicRecursor == role.publicRecursor &&
@@ -739,6 +749,19 @@ def runSamples : MetaM Result := do
           container.key.target.owner == boundary.publicOwner &&
             container.maps.forward ==
               `FamilyAdapterGenerated.generatedChangedNestedContainerForward
+        let exactClosedEndpoint := report.plan?.any fun plan =>
+          plan.containerRecursors.any fun recursor =>
+            recursor.key.publicRecursor ==
+                `FamilyAdapterGenerated.GeneratedChangedNestedPublic.rec_1 &&
+              match recursor.boundary with
+              | .defeq => false
+              | .installed evidence =>
+                (plan.containerMaps.find? fun map =>
+                    map.sourceRecursor == recursor.key.publicRecursor &&
+                      map.implementationRecursor == recursor.key.implementationRecursor).any
+                    fun map => evidence.forward.exactType == map.forwardType &&
+                      #[evidence.forward, evidence.backward, evidence.backwardForward,
+                          evidence.forwardBackward].all (·.binders == #[.value])
         let keyedCertificate := built.certificate.any fun certificate =>
           certificate.occurrences.any fun occurrence =>
             occurrence.key.target.owner == boundary.publicOwner &&
@@ -747,7 +770,8 @@ def runSamples : MetaM Result := do
         let environment ← getEnv
         let rulesComplete := report.plan?.any fun plan => built.certificate.any fun certificate =>
           ruleCertificatesComplete plan certificate environment
-        if built.issues.isEmpty && keyedPlan && keyedCertificate && rulesComplete then
+        if built.issues.isEmpty && keyedPlan && exactClosedEndpoint && keyedCertificate &&
+            rulesComplete then
           result := { result with changed := result.changed + 1 }
           result := { result with closedContainers := result.closedContainers + 1 }
         else

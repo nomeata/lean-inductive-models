@@ -412,6 +412,90 @@ private def namedCarrierFamily (plan : FamilyAdapterPlan) (member : MemberPlan)
     mkLambdaFVars arguments
       (mkAppN (.const carrier (plan.levelParams.map Level.param)) arguments)
 
+private structure EndpointBinder where
+  type : Expr
+  value : Expr
+
+private partial def openEndpointForalls (tag : Name) (expression : Expr) :
+    Array EndpointBinder × Expr :=
+  let rec loop (expression : Expr) (binders : Array EndpointBinder) :=
+    match expression with
+    | .forallE _ type body _ =>
+      let value := mkFVar (FVarId.mk (tag.mkNum binders.size))
+      loop (body.instantiate1 value) (binders.push { type, value })
+    | body => (binders, body)
+  loop expression #[]
+
+private def endpointFamilyBinderRoles? (family expected : Expr)
+    (binders : Array EndpointBinder) : MetaM (Option (Array Nat)) := do
+  let rec instantiate (expression : Expr) (arguments : Array Expr) : MetaM (Option (Array Expr)) := do
+    match expression with
+    | .lam name domain body _ =>
+      let argument ← mkFreshExprMVar domain .natural name
+      instantiate (body.instantiate1 argument) (arguments.push argument)
+    | body =>
+      unless ← isDefEq body expected do return none
+      let resolved ← arguments.mapM instantiateMVars
+      for argument in resolved do if ← hasAssignableMVar argument then return none
+      return some resolved
+  let some arguments ← instantiate family #[] | return none
+  let mut positions := #[]
+  for argument in arguments do
+    let matches := binders.mapIdx fun index binder => (index, binder.value)
+      |>.filter (fun (_, value) => value == argument)
+    unless matches.size == 1 do return none
+    positions := positions.push matches[0]!.1
+  for position in positions do
+    unless (positions.filter (· == position)).size == 1 do return none
+  return some positions
+
+private def deriveEndpointApplicationPlan? (sourceFamily targetFamily exactType : Expr)
+    (law : Bool) : MetaM (Option CarrierEndpointApplicationPlan) := do
+  let (binders, result) := openEndpointForalls `_family_adapter_construct_endpoint exactType
+  let mut candidates := #[]
+  for valueIndex in [:binders.size] do
+    let value := binders[valueIndex]!
+    let some familyPositions ← endpointFamilyBinderRoles? sourceFamily value.type binders
+      | continue
+    unless binders.size == familyPositions.size + 1 && !familyPositions.contains valueIndex do
+      continue
+    let familyArguments := familyPositions.map (binders[·]!.value)
+    if law then
+      let some (carrier, _, right) ← matchEq? result | continue
+      unless ← isDefEq carrier value.type do continue
+      unless ← isDefEq right value.value do continue
+    else
+      unless ← isDefEq result (mkAppN targetFamily familyArguments) do continue
+    let mut roles := #[]
+    let mut complete := true
+    for binderIndex in [:binders.size] do
+      if binderIndex == valueIndex then
+        roles := roles.push .value
+      else if let some familyIndex := familyPositions.findIdx? (· == binderIndex) then
+        roles := roles.push (.familyArgument familyIndex)
+      else
+        complete := false
+    if complete then candidates := candidates.push { exactType, binders := roles }
+  unless candidates.size == 1 do return none
+  return candidates[0]?
+
+private def deriveInstalledBoundary (key : MemberKey) (maps : EquivalenceCertificate)
+    (publicFamily implementationFamily forwardType backwardType backwardForwardType
+      forwardBackwardType : Expr) : ConstructionM ContainerRecursorBoundaryPlan := do
+  let some forward ← liftGen <|
+      deriveEndpointApplicationPlan? publicFamily implementationFamily forwardType false
+    | failConstruction (.recursorMajorBoundaryMismatch key)
+  let some backward ← liftGen <|
+      deriveEndpointApplicationPlan? implementationFamily publicFamily backwardType false
+    | failConstruction (.recursorMajorBoundaryMismatch key)
+  let some backwardForward ← liftGen <|
+      deriveEndpointApplicationPlan? publicFamily implementationFamily backwardForwardType true
+    | failConstruction (.recursorMajorBoundaryMismatch key)
+  let some forwardBackward ← liftGen <|
+      deriveEndpointApplicationPlan? implementationFamily publicFamily forwardBackwardType true
+    | failConstruction (.recursorMajorBoundaryMismatch key)
+  return .installed { maps, forward, backward, backwardForward, forwardBackward }
+
 private def memberRecursorBoundary (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate) (member : MemberPlan) :
     ConstructionM RecursorCarrierBoundary := do
@@ -428,14 +512,15 @@ private def memberRecursorBoundary (plan : FamilyAdapterPlan)
     certificate.maps.forward certificate.maps.backward
   let forwardBackwardType ← liftGen <| memberLawType plan member
     member.implementationCarrier certificate.maps.backward certificate.maps.forward
+  let boundary ← deriveInstalledBoundary member.key certificate.maps publicFamily
+    implementationFamily forwardType backwardType backwardForwardType forwardBackwardType
   let result : RecursorCarrierBoundary :=
     { key := member.key
       parameterArity := member.parameterArity
       indexArity := member.indexArity
       publicFamily
       implementationFamily
-      boundary := .installed certificate.maps forwardType backwardType
-        backwardForwardType forwardBackwardType }
+      boundary }
   pure result
 
 private def containerRecursorBoundary (container : ContainerRecursorPlan) :
@@ -606,86 +691,79 @@ private def applyContainerLaw (plan : FamilyAdapterPlan) (container : ContainerM
   return mkAppN (.const name (plan.levelParams.map Level.param))
     (parameters ++ resolvedIndices ++ #[value])
 
-private def instantiateRecursorBoundaryIndices (boundary : RecursorCarrierBoundary)
+private def endpointArguments (boundary : RecursorCarrierBoundary)
     (direction : RecursorCarrierDirection) (endpoint : RecursorCarrierEndpoint)
-    (parameters : Array Expr) (recordedType sourceType : Expr) : ConstructionM (Array Expr) := do
-  unless parameters.size == boundary.parameterArity do
+    (application : CarrierEndpointApplicationPlan) (familyArguments : Array Expr)
+    (value : Expr) : ConstructionM (Array Expr) := do
+  unless familyArguments.size == boundary.parameterArity + boundary.indexArity do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
       .indexTelescope)
-  let mut type ← liftGen <| instantiateForall recordedType parameters
-  let mut indices := #[]
-  for _ in [:boundary.indexArity] do
-    let .forallE binderName domain body _ := type
-      | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
-          .indexTelescope)
-    let index ← liftGen <| mkFreshExprMVar domain .natural binderName
-    indices := indices.push index
-    type := body.instantiate1 index
-  let .forallE _ domain _ _ := type
-    | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
-        .indexTelescope)
-  unless ← liftGen <| isDefEq domain sourceType do
+  let mut arguments := #[]
+  for role in application.binders do
+    match role with
+    | .familyArgument position =>
+      let some argument := familyArguments[position]?
+        | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
+            .indexTelescope)
+      arguments := arguments.push argument
+    | .value => arguments := arguments.push value
+  unless application.binders.filter (· == .value) |>.size == 1 &&
+      (Array.range familyArguments.size).all fun position =>
+        application.binders.filter (· == .familyArgument position) |>.size == 1 do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
       .indexTelescope)
-  let resolved ← liftGen <| indices.mapM instantiateMVars
-  for index in resolved do
-    if ← liftGen <| hasAssignableMVar index then
-      failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
-        .indexTelescope)
-  return resolved
+  return arguments
 
 private def applyRecursorBoundaryMap (plan : FamilyAdapterPlan)
-    (boundary : RecursorCarrierBoundary) (forward : Bool) (parameters : Array Expr)
+    (boundary : RecursorCarrierBoundary) (forward : Bool) (familyArguments : Array Expr)
     (sourceType targetType value : Expr) : ConstructionM Expr := do
   let direction := if forward then RecursorCarrierDirection.forward else .backward
-  let .installed maps forwardType backwardType _ _ := boundary.boundary
+  let .installed evidence := boundary.boundary
     | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map
         .installedType)
-  let name := if forward then maps.forward else maps.backward
-  let recordedType := if forward then forwardType else backwardType
+  let name := if forward then evidence.maps.forward else evidence.maps.backward
+  let endpoint := if forward then evidence.forward else evidence.backward
+  let recordedType := endpoint.exactType
   let some installed := (← getEnv).constants.find? name |>.map (·.type)
     | failConstruction (.missingInstalledMemberMap boundary.key name)
   unless installed == recordedType do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map
       .installedType)
-  let indices ← instantiateRecursorBoundaryIndices boundary direction .map parameters
-    recordedType sourceType
   let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
   let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
-  unless ← liftGen <| isDefEq (mkAppN sourceFamily (parameters ++ indices)) sourceType do
+  unless ← liftGen <| isDefEq (mkAppN sourceFamily familyArguments) sourceType do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map .sourceFamily)
-  unless ← liftGen <| isDefEq (mkAppN targetFamily (parameters ++ indices)) targetType do
+  unless ← liftGen <| isDefEq (mkAppN targetFamily familyArguments) targetType do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map .targetFamily)
-  let application := mkAppN (.const name (plan.levelParams.map Level.param))
-    (parameters ++ indices ++ #[value])
+  let arguments ← endpointArguments boundary direction .map endpoint familyArguments value
+  let application := mkAppN (.const name (plan.levelParams.map Level.param)) arguments
   unless ← liftGen <| isDefEq (← inferType application) targetType do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map .application)
   return application
 
 private def applyRecursorBoundaryLaw (plan : FamilyAdapterPlan)
-    (boundary : RecursorCarrierBoundary) (forward : Bool) (parameters : Array Expr)
+    (boundary : RecursorCarrierBoundary) (forward : Bool) (familyArguments : Array Expr)
     (sourceType targetType value : Expr) : ConstructionM Expr := do
   let direction := if forward then RecursorCarrierDirection.forward else .backward
-  let .installed maps _ _ backwardForwardType forwardBackwardType := boundary.boundary
+  let .installed evidence := boundary.boundary
     | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law
         .installedType)
-  let name := if forward then maps.backwardForward else maps.forwardBackward
-  let recordedType := if forward then backwardForwardType else forwardBackwardType
+  let name := if forward then evidence.maps.backwardForward else evidence.maps.forwardBackward
+  let endpoint := if forward then evidence.backwardForward else evidence.forwardBackward
+  let recordedType := endpoint.exactType
   let some installed := (← getEnv).constants.find? name |>.map (·.type)
     | failConstruction (.missingInstalledMemberMap boundary.key name)
   unless installed == recordedType do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law
       .installedType)
-  let indices ← instantiateRecursorBoundaryIndices boundary direction .law parameters
-    recordedType sourceType
   let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
   let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
-  unless ← liftGen <| isDefEq (mkAppN sourceFamily (parameters ++ indices)) sourceType do
+  unless ← liftGen <| isDefEq (mkAppN sourceFamily familyArguments) sourceType do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law .sourceFamily)
-  unless ← liftGen <| isDefEq (mkAppN targetFamily (parameters ++ indices)) targetType do
+  unless ← liftGen <| isDefEq (mkAppN targetFamily familyArguments) targetType do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law .targetFamily)
-  let application := mkAppN (.const name (plan.levelParams.map Level.param))
-    (parameters ++ indices ++ #[value])
+  let arguments ← endpointArguments boundary direction .law endpoint familyArguments value
+  let application := mkAppN (.const name (plan.levelParams.map Level.param)) arguments
   let some (carrier, _, right) ← liftGen <| matchEq? (← inferType application)
     | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law
         .lawEndpoint)
@@ -1284,18 +1362,26 @@ private def exactCarrierCandidateWithoutRecursors (plan : FamilyAdapterPlan)
           member.publicCarrier certificate.maps.forward certificate.maps.backward
         let forwardBackwardType ← liftGen <| memberLawType plan member
           member.implementationCarrier certificate.maps.backward certificate.maps.forward
+        let publicFamily ← liftGen <| namedCarrierFamily plan member member.publicCarrier
+        let implementationFamily ← liftGen <|
+          namedCarrierFamily plan member member.implementationCarrier
+        let boundary ← deriveInstalledBoundary member.key certificate.maps publicFamily
+          implementationFamily forwardType backwardType backwardForwardType forwardBackwardType
         let candidate ← checkedExactCarrierCandidate fallback.key sourceType value
-          (.installed certificate.maps forwardType backwardType backwardForwardType
-            forwardBackwardType) mapped proof
+          boundary mapped proof
         candidates := candidates.push candidate
   let rootParameters := rootParameters plan parameters
   for container in plan.containerMaps do
     if let some mapped ← liftGen <|
         applyContainerMap? plan container forward rootParameters sourceType targetType value then
       let proof ← applyContainerLaw plan container forward rootParameters sourceType value
+      let some recursor := plan.containerRecursors.find? fun recursor =>
+          recursor.key.publicRecursor == container.sourceRecursor &&
+            recursor.key.implementationRecursor == container.implementationRecursor &&
+            recursor.occurrences.contains container.key
+        | failConstruction (.missingExactCarrierCandidate fallback.key)
       let candidate ← checkedExactCarrierCandidate fallback.key sourceType value
-        (.installed container.maps container.forwardType container.backwardType
-          container.backwardForwardType container.forwardBackwardType) mapped proof
+        recursor.boundary mapped proof
       candidates := candidates.push candidate
   let some first := candidates[0]?
     | failConstruction (.missingExactCarrierCandidate fallback.key)
@@ -1520,6 +1606,27 @@ private def fixedCarrierBoundary (plan : FamilyAdapterPlan)
   return PackedCarrierBoundary.mk publicType implementationType forward backward
     backwardForward forwardBackward
 
+private def recursorBoundaryArguments? (boundary : RecursorCarrierBoundary)
+    (forward : Bool) (sourceType targetType : Expr) : ConstructionM (Option (Array Expr)) := do
+  let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
+  let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
+  let totalArity := boundary.parameterArity + boundary.indexArity
+  let rec instantiateFamily (remaining : Nat) (family : Expr)
+      (arguments : Array Expr) : ConstructionM (Option (Array Expr)) := do
+    match remaining with
+    | 0 =>
+      unless ← liftGen <| isDefEq family sourceType do return none
+      let resolved ← liftGen <| arguments.mapM instantiateMVars
+      for argument in resolved do
+        if ← liftGen <| hasAssignableMVar argument then return none
+      unless ← liftGen <| isDefEq (mkAppN targetFamily resolved) targetType do return none
+      return some resolved
+    | remaining + 1 =>
+      let .lam name domain body _ := family | return none
+      let argument ← liftGen <| mkFreshExprMVar domain .natural name
+      instantiateFamily remaining (body.instantiate1 argument) (arguments.push argument)
+  instantiateFamily totalArity sourceFamily #[]
+
 private def recursorCarrierAt (plan : FamilyAdapterPlan)
     (boundary : RecursorCarrierBoundary) (parameters : Array Expr)
     (publicType implementationType : Expr) : ConstructionM PackedCarrierBoundary := do
@@ -1547,11 +1654,19 @@ private def recursorCarrierAt (plan : FamilyAdapterPlan)
       backwardForward forwardBackward
   let .installed .. := boundary.boundary
     | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+  let some familyArguments ← recursorBoundaryArguments? boundary true publicType implementationType
+    | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+  let liveParameters := familyArguments.extract 0 boundary.parameterArity
+  unless liveParameters.size == parameters.size do
+    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+  for index in [:parameters.size] do
+    unless ← liftGen <| isDefEq liveParameters[index]! parameters[index]! do
+      failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   let makeMap := fun (forward : Bool) => do
     let sourceType := if forward then publicType else implementationType
     let targetType := if forward then implementationType else publicType
     withLocalDeclD `value sourceType fun value => do
-      let mapped ← applyRecursorBoundaryMap plan boundary forward parameters
+      let mapped ← applyRecursorBoundaryMap plan boundary forward familyArguments
         sourceType targetType value
       liftGen <| mkLambdaFVars #[value] mapped
   let forward ← makeMap true
@@ -1560,34 +1675,13 @@ private def recursorCarrierAt (plan : FamilyAdapterPlan)
     let sourceType := if forward then publicType else implementationType
     let targetType := if forward then implementationType else publicType
     withLocalDeclD `value sourceType fun value => do
-      let proof ← applyRecursorBoundaryLaw plan boundary forward parameters
+      let proof ← applyRecursorBoundaryLaw plan boundary forward familyArguments
         sourceType targetType value
       liftGen <| mkLambdaFVars #[value] proof
   let backwardForward ← makeLaw true
   let forwardBackward ← makeLaw false
   return PackedCarrierBoundary.mk publicType implementationType forward backward
     backwardForward forwardBackward
-
-private def recursorBoundaryParameters? (boundary : RecursorCarrierBoundary)
-    (forward : Bool) (sourceType targetType : Expr) : ConstructionM (Option (Array Expr)) := do
-  let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
-  let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
-  let totalArity := boundary.parameterArity + boundary.indexArity
-  let rec instantiateFamily (remaining : Nat) (family : Expr)
-      (arguments : Array Expr) : ConstructionM (Option (Array Expr)) := do
-    match remaining with
-    | 0 =>
-      unless ← liftGen <| isDefEq family sourceType do return none
-      let resolved ← liftGen <| arguments.mapM instantiateMVars
-      for argument in resolved do
-        if ← liftGen <| hasAssignableMVar argument then return none
-      unless ← liftGen <| isDefEq (mkAppN targetFamily resolved) targetType do return none
-      return some (resolved.extract 0 boundary.parameterArity)
-    | remaining + 1 =>
-      let .lam name domain body _ := family | return none
-      let argument ← liftGen <| mkFreshExprMVar domain .natural name
-      instantiateFamily remaining (body.instantiate1 argument) (arguments.push argument)
-  instantiateFamily totalArity sourceFamily #[]
 
 private def exactCarrierCandidate (plan : FamilyAdapterPlan)
     (certificates : Array MemberCertificate) (parameters : Array Expr)
@@ -1600,8 +1694,9 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
   | .error (.missingExactCarrierCandidate key) =>
     unless key == fallback.key do failConstruction (.missingExactCarrierCandidate key)
   | .error issue => failConstruction issue
-  if let some liveParameters ←
-      recursorBoundaryParameters? fallback forward sourceType targetType then
+  if let some liveArguments ←
+      recursorBoundaryArguments? fallback forward sourceType targetType then
+    let liveParameters := liveArguments.extract 0 fallback.parameterArity
     unless liveParameters.size == parameters.size do
       failConstruction (.exactCarrierBoundaryMismatch fallback.key fallback.key)
     for index in [:parameters.size] do
@@ -1616,8 +1711,9 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
     candidates := candidates.push candidate
   for container in plan.containerRecursors do
     let boundary := containerRecursorBoundary container
-    if let some liveParameters ←
-        recursorBoundaryParameters? boundary forward sourceType targetType then
+    if let some liveArguments ←
+        recursorBoundaryArguments? boundary forward sourceType targetType then
+      let liveParameters := liveArguments.extract 0 boundary.parameterArity
       let carrierAttempt ← liftGen <|
         (recursorCarrierAt plan boundary liveParameters sourceType targetType).run
       let carrier ← match carrierAttempt with

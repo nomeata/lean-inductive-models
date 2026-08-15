@@ -426,13 +426,35 @@ structure ContainerMapPlan where
   implementationCarrierType : Expr
   deriving Inhabited, BEq, Repr
 
+/-- One literal binder of an installed carrier-map or round-trip-law endpoint.
+Family arguments are keyed by their position in the closed major-family
+lambda, independently of their order in the installed declaration. -/
+inductive CarrierEndpointBinderRole where
+  | familyArgument (position : Nat)
+  | value
+  deriving Inhabited, BEq, Repr
+
+/-- Exact installed endpoint telescope and its complete application roles. -/
+structure CarrierEndpointApplicationPlan where
+  exactType : Expr
+  binders : Array CarrierEndpointBinderRole
+  deriving Inhabited, BEq, Repr
+
+/-- Exact installed evidence for all directions of a carrier equivalence. -/
+structure InstalledRecursorCarrierBoundary where
+  maps : EquivalenceCertificate
+  forward : CarrierEndpointApplicationPlan
+  backward : CarrierEndpointApplicationPlan
+  backwardForward : CarrierEndpointApplicationPlan
+  forwardBackward : CarrierEndpointApplicationPlan
+  deriving Inhabited, BEq, Repr
+
 /-- Exact carrier evidence for an independent container recursor.  A
 definitionally equal boundary carries no fabricated declaration names;
-installed maps carry all names and exact types atomically. -/
+installed maps carry all names and endpoint application roles atomically. -/
 inductive ContainerRecursorBoundaryPlan where
   | defeq
-  | installed (maps : EquivalenceCertificate) (forwardType backwardType
-      backwardForwardType forwardBackwardType : Expr)
+  | installed (evidence : InstalledRecursorCarrierBoundary)
   deriving Inhabited, BEq, Repr
 
 /-- One specialised container recursor paired independently of ordinary family
@@ -718,8 +740,20 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
         unless maps.size == 1 && maps.all fun map =>
             map.sourceRecursor == recursor.key.publicRecursor &&
               map.implementationRecursor == recursor.key.implementationRecursor &&
-              recursor.boundary == .installed map.maps map.forwardType map.backwardType
-                map.backwardForwardType map.forwardBackwardType do
+              match recursor.boundary with
+              | .installed evidence =>
+                evidence.maps == map.maps && evidence.forward.exactType == map.forwardType &&
+                  evidence.backward.exactType == map.backwardType &&
+                  evidence.backwardForward.exactType == map.backwardForwardType &&
+                  evidence.forwardBackward.exactType == map.forwardBackwardType &&
+                  let arity := recursor.parameterArity + recursor.indexArity
+                  #[evidence.forward, evidence.backward, evidence.backwardForward,
+                      evidence.forwardBackward].all fun endpoint =>
+                    endpoint.binders.size == arity + 1 &&
+                      endpoint.binders.filter (· == .value) |>.size == 1 &&
+                      (Array.range arity).all fun position =>
+                        endpoint.binders.filter (· == .familyArgument position) |>.size == 1
+              | .defeq => false do
           errors := errors.push (.containerRecursorMapMismatch recursor.key occurrence)
     for map in plan.containerMaps.filter fun map =>
         map.sourceRecursor == recursor.key.publicRecursor &&

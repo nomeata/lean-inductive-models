@@ -383,6 +383,73 @@ private def recursorMajorFamily? (recursor : RecursorVal) (recursorType : Expr)
       | return none
     return some (family, resultMotiveIndex)
 
+private def closedFamilyBinderRoles? (family expected : Expr)
+    (binders : Array ExactBinder) : MetaM (Option (Array Nat)) := do
+  let rec instantiate (expression : Expr) (arguments : Array Expr) : MetaM (Option (Array Expr)) := do
+    match expression with
+    | .lam name domain body _ =>
+      let argument ← mkFreshExprMVar domain .natural name
+      instantiate (body.instantiate1 argument) (arguments.push argument)
+    | body =>
+      unless ← isDefEq body expected do return none
+      let resolved ← arguments.mapM instantiateMVars
+      for argument in resolved do if ← hasAssignableMVar argument then return none
+      return some resolved
+  let some arguments ← instantiate family #[] | return none
+  let mut positions := #[]
+  for argument in arguments do
+    let matches := binders.mapIdx fun index binder => (index, binder.value)
+      |>.filter (fun (_, value) => value == argument)
+    unless matches.size == 1 do return none
+    positions := positions.push matches[0]!.1
+  for position in positions do
+    unless (positions.filter (· == position)).size == 1 do return none
+  return some positions
+
+private def endpointApplicationPlan? (sourceFamily targetFamily exactType : Expr)
+    (law : Bool) : MetaM (Option CarrierEndpointApplicationPlan) := do
+  let (binders, result) := openExactForalls `_family_adapter_endpoint exactType
+  let mut candidates : Array CarrierEndpointApplicationPlan := #[]
+  for valueIndex in [:binders.size] do
+    let value := binders[valueIndex]!
+    let some familyPositions ← closedFamilyBinderRoles? sourceFamily value.type binders
+      | continue
+    unless binders.size == familyPositions.size + 1 && !familyPositions.contains valueIndex do
+      continue
+    let familyArguments := familyPositions.map (binders[·]!.value)
+    let target := mkAppN targetFamily familyArguments
+    if law then
+      let some (carrier, _, right) ← matchEq? result | continue
+      unless ← isDefEq carrier value.type do continue
+      unless ← isDefEq right value.value do continue
+    else
+      unless ← isDefEq result target do continue
+    let mut roles := #[]
+    let mut complete := true
+    for binderIndex in [:binders.size] do
+      if binderIndex == valueIndex then
+        roles := roles.push .value
+      else if let some familyIndex := familyPositions.findIdx? (· == binderIndex) then
+        roles := roles.push (.familyArgument familyIndex)
+      else
+        complete := false
+    if complete then candidates := candidates.push { exactType, binders := roles }
+  unless candidates.size == 1 do return none
+  return candidates[0]?
+
+private def installedBoundaryPlan? (maps : EquivalenceCertificate)
+    (publicFamily implementationFamily forwardType backwardType backwardForwardType
+      forwardBackwardType : Expr) : MetaM (Option ContainerRecursorBoundaryPlan) := do
+  let some forward ← endpointApplicationPlan? publicFamily implementationFamily forwardType false
+    | return none
+  let some backward ← endpointApplicationPlan? implementationFamily publicFamily backwardType false
+    | return none
+  let some backwardForward ← endpointApplicationPlan? publicFamily implementationFamily
+      backwardForwardType true | return none
+  let some forwardBackward ← endpointApplicationPlan? implementationFamily publicFamily
+      forwardBackwardType true | return none
+  return some (.installed { maps, forward, backward, backwardForward, forwardBackward })
+
 private def containerMetadataInstalled (environment : Environment)
     (parameters : Array Expr) (sourceType implementationType : Expr)
     (occurrence : OccurrenceKey) (container : IsoContainerImplementation) :
@@ -727,6 +794,13 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     let rules := container.recursorRuleKeys.map fun (publicConstructor,
         implementationConstructor) =>
       { recursor := key, publicConstructor, implementationConstructor }
+    let boundary? ← installedBoundaryPlan? container.maps publicMajorFamily
+      implementationMajorFamily container.forwardType container.backwardType
+      container.backwardForwardType container.forwardBackwardType
+    let some boundary := boundary? | do
+      for current in grouped do
+        reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
+      continue
     containerRecursorPlans := containerRecursorPlans.push
       { key, parameterArity := container.parameterArity, indexArity := container.indexArity,
         motiveArity := publicInfo.numMotives, minorArity := publicInfo.numMinors,
@@ -734,9 +808,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         publicType := container.sourceRecursorType,
         implementationType := container.implementationRecursorType,
         publicMajorFamily, implementationMajorFamily, rules,
-        occurrences := grouped.map (·.key),
-        boundary := .installed container.maps container.forwardType container.backwardType
-          container.backwardForwardType container.forwardBackwardType }
+        occurrences := grouped.map (·.key), boundary }
   let mut rulePlans := #[]
   for member in resolvedMembers do
     if let some recursor := member.sourceRecursor? then

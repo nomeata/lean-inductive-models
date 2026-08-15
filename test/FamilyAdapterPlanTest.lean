@@ -152,6 +152,9 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
     let key : ContainerRecursorKey :=
       { publicRecursor := container.sourceRecursor
         implementationRecursor := container.implementationRecursor }
+    let endpointRoles :=
+      (Array.range (container.parameterArity + container.indexArity)).map
+        CarrierEndpointBinderRole.familyArgument |>.push .value
     { key
       parameterArity := container.parameterArity
       indexArity := container.indexArity
@@ -166,8 +169,14 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
           implementationConstructor) =>
         { recursor := key, publicConstructor, implementationConstructor }
       occurrences := #[container.key]
-      boundary := .installed container.maps container.forwardType container.backwardType
-        container.backwardForwardType container.forwardBackwardType }
+      boundary := .installed
+        { maps := container.maps
+          forward := { exactType := container.forwardType, binders := endpointRoles }
+          backward := { exactType := container.backwardType, binders := endpointRoles }
+          backwardForward :=
+            { exactType := container.backwardForwardType, binders := endpointRoles }
+          forwardBackward :=
+            { exactType := container.forwardBackwardType, binders := endpointRoles } } }
   return { root := memberKey 0
            levelParams := []
            components :=
