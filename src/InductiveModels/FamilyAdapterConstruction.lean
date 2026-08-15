@@ -3967,8 +3967,8 @@ restores the actual incremental environment after both a late metadata
 exception and a late kernel rejection. -/
 def validatePrototypeExceptionRollback (root : Name) : MetaM (Bool × Bool) := do
   let metaName := Name.str root "metaInstalledBeforeFailure"
-  let kernelName := Name.str root "kernelInstalledBeforeFailure"
-  let rejectedName := Name.str root "kernelRejected"
+  let addCheckedName := Name.str root "addCheckedInstalledBeforeFailure"
+  let duplicateName := Name.str root "addCheckedDuplicateRejected"
   let validDeclaration (name : Name) := Declaration.defnDecl
     { name, levelParams := [], type := .sort (.succ .zero), value := .const ``Nat [],
       hints := .abbrev, safety := .safe }
@@ -3980,19 +3980,21 @@ def validatePrototypeExceptionRollback (root : Name) : MetaM (Bool × Bool) := d
     pure false
   catch _ =>
     pure (!(← getEnv).constants.contains metaName)
-  let kernelAction : ConstructionM Unit := do
-      liftGen <| addChecked (validDeclaration kernelName)
-      liftGen <| addChecked <| Declaration.defnDecl
-        { name := rejectedName, levelParams := [], type := .const ``Nat [],
-          value := .const ``Nat [], hints := .abbrev, safety := .safe }
-  let kernelRestored ← try
-    let _ ← (runConstructionTransaction kernelAction).run
+  let addCheckedAction : ConstructionM Unit := do
+      liftGen <| addChecked (validDeclaration addCheckedName)
+      liftGen <| addChecked (validDeclaration duplicateName)
+      -- `addChecked` uses the trusted construction environment, so a
+      -- deliberately ill-typed value is not a kernel-rejection fixture. An
+      -- exact duplicate name is a real late `addDeclCore` rejection.
+      liftGen <| addChecked (validDeclaration duplicateName)
+  let addCheckedRestored ← try
+    let _ ← (runConstructionTransaction addCheckedAction).run
     pure false
   catch _ =>
     let environment ← getEnv
-    pure (!environment.constants.contains kernelName &&
-      !environment.constants.contains rejectedName)
-  return (metadataRestored, kernelRestored)
+    pure (!environment.constants.contains addCheckedName &&
+      !environment.constants.contains duplicateName)
+  return (metadataRestored, addCheckedRestored)
 
 /-- Test/prototype-only whole-plan construction.  Every returned declaration
 has been kernel checked in the current incremental environment.  A single
