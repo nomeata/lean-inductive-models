@@ -3454,7 +3454,15 @@ def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
 /-- Installed-capability half of the indexed fibre adapter boundary.  Exact
 source eligibility is replayable through
 [`InductiveModels.indexedFibreOneLayerProjectionFamily`]; this check additionally
-pins the installed declaration to the bare Arm-C erasure route. -/
+pins the installed declaration to the bare Arm-C erasure route.
+
+The owner must be indexed, and that is the route boundary rather than a count:
+an unindexed owner is the direct-type one-layer route's
+([`InductiveModels.phase1DirectTypeOneLayerEligible`], selected first) or is
+already literal without an adapter
+([`InductiveModels.projectionIotaUsesLiteralField`]).  How *many* indices it
+carries is never asked — the certificate's `roll`/`unroll` are the identity at
+the owner's whole arity. -/
 def phase1IndexedFibreOneLayerEligible (tname : Name) (np : Nat)
     (memberTy : Expr) (exportCtors : Array (Name × Expr))
     (sourceType : EIndType) (sourceConstructor : ECtor)
@@ -3464,9 +3472,9 @@ def phase1IndexedFibreOneLayerEligible (tname : Name) (np : Nat)
     | .ok reason => pure reason.isNone
     | .error _ => pure false
   return indexedFibreOneLayerTypeShape np type.numIndices memberTy &&
-    indexedFibreOneLayerProjectionFamily #[sourceType] sourceType sourceConstructor
+    indexedFibreOneLayerProjectionFamily sourceType sourceConstructor
       sourceRecursor && erasureBare && exportCtors.size == 1 &&
-    type.all == [tname] && type.ctors.length == 1 && type.numIndices == 1 &&
+    type.all == [tname] && type.ctors.length == 1 && type.numIndices > 0 &&
     type.numNested == 0 && type.isRec == sourceType.isRec && !type.isUnsafe
 
 set_option maxRecDepth 2048 in

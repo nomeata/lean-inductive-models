@@ -706,9 +706,18 @@ def run (root : String) : IO UInt32 := do
   let twoDependentMovingIndex := twoRecursiveIndexDependencyType? twoDependentConstructor
     |>.map (replaceConstructorType boundaryGenerated `TwoRecursiveDependentResults.mk ·)
     |>.getD boundaryGenerated
-  state := state.check "two-child recursive index depending on a field fails closed" <|
-    (Check.check twoDependentMovingIndex).any
-      (hasTypeViolation `TwoRecursiveDependentResults (Name.str twoDependentRoot "self"))
+  -- A recursive occurrence whose index reads an earlier field is **not** a
+  -- refusal — `FieldIndexedRecursiveResult` above models exactly that, because
+  -- the field it reads is nonrecursive and its selector is reflexive.  What
+  -- still fails closed is that the emitted family restates *this* source and no
+  -- other: `erasedResultIndex key` reduces to `FibreIx.here`, so the mutation
+  -- is definitionally invisible and only exact syntactic restatement sees it.
+  let twoDependentMovingViolations := Check.check twoDependentMovingIndex
+  state := state.check "a definitionally invisible recursive index change fails closed" <|
+    twoDependentMovingViolations.any (hasTypeViolation `TwoRecursiveDependentResults.mk
+        (Naming.modelName `TwoRecursiveDependentResults.mk)) &&
+      twoDependentMovingViolations.any (hasTypeViolation `TwoRecursiveDependentResults
+        (Naming.projectionName `TwoRecursiveDependentResults 3))
   for recursiveOffset in [0:2] do
     let laterDependent := twoRecursiveLaterDependencyType? twoDependentConstructor
         recursiveOffset
@@ -728,8 +737,33 @@ def run (root : String) : IO UInt32 := do
       (Check.check boundaryGenerated).all
         (·.familyOwner != `TwoRecursiveDependentResults)
 
-  for owner in [`ThreeRecursiveResults, `InfinitaryRecursiveResult,
-      `FieldIndexedRecursiveResult, `TransparentRecursiveResult] do
+  -- **Neither the number of recursive children nor a child's own index is a
+  -- condition on this certificate.** `roll`/`unroll` are the identity at the
+  -- owner's whole arity and their laws are reflexivity, so a third child costs
+  -- what the first one does; and a child index that reads an earlier
+  -- *nonrecursive* field is read back by that field's reflexive selector, so
+  -- the child's rule is still the literal field.
+  for owner in [`ThreeRecursiveResults, `FieldIndexedRecursiveResult] do
+    let ownerRoot := Name.str (Naming.modelName owner) "_impl"
+    let ownerCertificate := #[Name.str ownerRoot "self", Name.str ownerRoot "ctor_0",
+      Name.str ownerRoot "rec", Name.str ownerRoot "rec_iota_0",
+      Name.str ownerRoot "roll", Name.str ownerRoot "unroll",
+      Name.str ownerRoot "unroll_roll", Name.str ownerRoot "roll_unroll"]
+    state := state.check s!"{owner} carries the complete certificate" <|
+      ownerCertificate.all boundaryNames.contains
+    state := state.check s!"{owner} partial certificate fails closed" <|
+      (Check.check <| withoutDeclaration boundaryGenerated
+          (Name.str ownerRoot "roll_unroll")).any
+        (hasTypeViolation owner (Name.str ownerRoot "roll_unroll"))
+    state := state.check s!"{owner} generates and checks" <|
+      boundaryReport.generated.any (·.1 == owner) &&
+        !boundaryReport.declined.any (·.1 == owner) &&
+        (Check.check boundaryGenerated).all (·.familyOwner != owner)
+
+  -- A recursive occurrence below another former is not a constructor field of
+  -- the owner, so these two stay outside the tranche for a reason the shape
+  -- boundary states directly.
+  for owner in [`InfinitaryRecursiveResult, `TransparentRecursiveResult] do
     let ownerRoot := Name.str (Naming.modelName owner) "_impl"
     let ownerCertificate := #[Name.str ownerRoot "self", Name.str ownerRoot "ctor_0",
       Name.str ownerRoot "rec", Name.str ownerRoot "rec_iota_0",

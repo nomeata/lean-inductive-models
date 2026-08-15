@@ -99,8 +99,10 @@ inductive TwoRecursiveDependentResults : FibreIx -> Type where
       (left right : TwoRecursiveDependentResults FibreIx.here) (tail : FibreKey) :
       TwoRecursiveDependentResults FibreIx.here
 
-/-- Three otherwise identical direct children pin the deliberate two-child
-certificate cap. -/
+/-- Three otherwise identical direct children.  `roll`/`unroll` are the
+identity and their laws are reflexivity, so each child's rule is settled on its
+own and the certificate never counts them; this is the occupant that would
+notice a count reappearing. -/
 inductive ThreeRecursiveResults : FibreIx -> Type where
   | mk (first second third : ThreeRecursiveResults FibreIx.here) :
       ThreeRecursiveResults FibreIx.here
@@ -111,8 +113,10 @@ inductive InfinitaryRecursiveResult : FibreIx -> Type where
   | mk (children : FibreIx -> InfinitaryRecursiveResult FibreIx.here) :
       InfinitaryRecursiveResult FibreIx.here
 
-/-- A recursive occurrence indexed by an ordinary constructor field is
-source-visible but not fixed, and remains outside the first tranche. -/
+/-- A recursive occurrence indexed by an ordinary constructor field.  The
+child's index reads field 0, whose selector is reflexive, so the child's own
+projection rule is still the literal field.  Only a field depending on a
+*recursive* field would need transport, and Lean has no spelling for that. -/
 inductive FieldIndexedRecursiveResult : FibreIx -> Type where
   | mk (index : FibreIx) (child : FieldIndexedRecursiveResult index) :
       FieldIndexedRecursiveResult FibreIx.here

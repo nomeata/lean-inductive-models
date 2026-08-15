@@ -68,9 +68,7 @@ Every `.transport` row is a projection iota whose right-hand side carries the
 canonical `Eq.rec`.  Delete a row only together with the change that removes
 its transport; the suite reports which row to delete. -/
 def expectedCensus : Array CensusRow :=
-  #[ { fixture := "indexed_fibre_boundary", owner := `FieldIndexedRecursiveResult,
-       field := 1, kind := .transport }
-   , { fixture := "indexed_fibre_boundary", owner := `IndexedRecursiveLayer,
+  #[ { fixture := "indexed_fibre_boundary", owner := `IndexedRecursiveLayer,
        field := 0, kind := .authored }
    , { fixture := "indexed_fibre_boundary", owner := `IndexedRecursiveLayer,
        field := 1, kind := .authored }
@@ -116,7 +114,6 @@ def expectedCensus : Array CensusRow :=
    , { fixture := "nested_value_dependency", owner := `NestedEarly, field := 2, kind := .transport }
    , { fixture := "nested_value_dependency", owner := `NestedLate, field := 1, kind := .transport }
    , { fixture := "nested_one_layer", owner := `NestedLayer, field := 1, kind := .transport }
-   , { fixture := "prim_carve", owner := `NoBase, field := 1, kind := .transport }
    , { fixture := "prop_projection_boundaries", owner := `NestedProp,
        field := 1, kind := .transport }
    , { fixture := "prop_recursive_projections", owner := `PropRecIdx,

@@ -101,6 +101,41 @@ def indexedFibreOneLayerTypeShape (numParams numIndices : Nat)
   let .sort level := type | return false
   return level.normalize.isNeverZero
 
+private partial def occursIn (needle : Expr) : Expr → Bool
+  | expression =>
+    if expression == needle then true else
+    match expression with
+    | .app function argument => occursIn needle function || occursIn needle argument
+    | .lam _ type body _ | .forallE _ type body _ =>
+      occursIn needle type || occursIn needle body
+    | .letE _ type value body _ =>
+      occursIn needle type || occursIn needle value || occursIn needle body
+    | .mdata _ body => occursIn needle body
+    | .proj _ _ structureExpr => occursIn needle structureExpr
+    | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => false
+
+/-- Earlier binders on which binder `target` depends, transitively through the
+intervening binder types, in telescope order.  `values` are the opened binder
+locals and `types` their opened types.
+
+This is the one dependency closure the module owns.  The literal projection
+contract and the canonical transport are two readings of the same set: a rule
+is transport-free exactly when nothing in this closure has a merely
+propositional projection rule, and the transport otherwise eliminates along
+exactly these positions. -/
+def dependencyClosure (values types : Array Expr) (target : Nat) : Array Nat := Id.run do
+  if target >= values.size || target >= types.size then return #[]
+  let mut needed := Array.replicate target false
+  for i in (List.range target).reverse do
+    let mut used := occursIn values[i]! types[target]!
+    if !used then
+      for k in [i + 1:target] do
+        if needed[k]! && occursIn values[i]! types[k]! then
+          used := true
+          break
+    if used then needed := needed.set! i true
+  return (Array.range target).filter (needed[·]!)
+
 private structure IndexedFibreShapeBinder where
   type : Expr
   value : Expr
@@ -116,14 +151,23 @@ private partial def openIndexedFibreShapeForalls (tag : Name) (expression : Expr
     | body => (binders, body)
   loop expression #[]
 
-/-- Exact serialized boundary for the bounded recursive indexed fibre tranche.
+/-- Exact serialized boundary for the recursive indexed fibre tranche.
 
-Each of at most two recursive occurrences must itself be one constructor
-field, rather than occur below another former.  Its index is fixed with
-respect to all constructor fields, its binder is absent from the constructor
-result and all later field types, and the exported recursor has the
-one-owner/one-rule layout which the existing Arm-C public interface
-implements. -/
+Every recursive occurrence must itself be one constructor field, applied to
+the owner's full parameter/index arity, rather than occur below another
+former.  There is no bound on how many such fields a constructor has: the
+certificate's `roll`/`unroll` are the identity and its laws are reflexivity,
+so each field's rule is settled on its own and the count never enters.
+
+The one remaining condition is that no projected field depend on a recursive
+field — neither the constructor result nor any field's dependency closure may
+mention a recursive binder.  That is what a recursive field's selector costs:
+it reconstructs the field through `unroll`, so its rule is propositional and a
+consumer of its *value* could not be stated literally.  A recursive
+occurrence's own **index** may name earlier fields freely; those fields are
+necessarily nonrecursive (Lean's positivity and nesting rules leave no
+spelling of a constructor field type that reads a recursive occurrence's
+value), so their selectors reduce and the dependent codomain is literal. -/
 def recursiveIndexedFibreOneLayerShape (type : EIndType) (constructor : ECtor)
     (recursor : ERec) : Bool := Id.run do
   unless type.isRec && constructor.induct == type.name &&
@@ -150,28 +194,30 @@ def recursiveIndexedFibreOneLayerShape (type : EIndType) (constructor : ECtor)
       let .const fieldOwner _ := fieldType.getAppFn | return false
       unless fieldOwner == type.name &&
           fieldType.getAppArgs.size == type.numParams + type.numIndices do return false
-      let recursiveIndices := fieldType.getAppArgs.extract type.numParams
-        (type.numParams + type.numIndices)
-      for index in recursiveIndices do
-        for field in fields do
-          if index.containsFVar field.value.fvarId! then return false
       recursiveFields := recursiveFields.push fieldIndex
-  if recursiveFields.isEmpty || recursiveFields.size > 2 then return false
+  if recursiveFields.isEmpty then return false
   for recursiveIndex in recursiveFields do
-    let recursiveId := fields[recursiveIndex]!.value.fvarId!
-    if result.containsFVar recursiveId then return false
-    for later in [recursiveIndex + 1:fields.size] do
-      if fields[later]!.type.containsFVar recursiveId then return false
+    if result.containsFVar fields[recursiveIndex]!.value.fvarId! then return false
+  let values := fields.map (·.value)
+  let types := fields.map (·.type)
+  for fieldIndex in [:fields.size] do
+    for dependency in dependencyClosure values types fieldIndex do
+      if recursiveFields.contains dependency then return false
   return true
 
-/-- The indexed fibre adapter's complete source-syntax boundary.  The original
-nonrecursive family and the bounded fixed-index recursive families share this
-predicate in generation and checking; the complete eight-declaration
-certificate, not shape alone, authorizes literal dependent projection rules. -/
-def indexedFibreOneLayerProjectionFamily (types : Array EIndType)
+/-- The indexed fibre adapter's complete source-syntax boundary.  The
+nonrecursive and recursive families share this predicate in generation and
+checking; the complete eight-declaration certificate, not shape alone,
+authorizes literal dependent projection rules.
+
+The owner's index telescope has no bound.  `roll`/`unroll` are the identity at
+the owner's whole parameter-and-index arity and their laws are reflexivity, so
+an index is an argument the certificate carries, never a condition on it.  A
+single-member block is pinned by `all`; the caller's array is not consulted. -/
+def indexedFibreOneLayerProjectionFamily
     (type : EIndType) (constructor : ECtor) (recursor : ERec) : Bool := Id.run do
-  unless types.size == 1 && type.all == [type.name] &&
-      type.ctors == [constructor.name] && type.numIndices == 1 &&
+  unless type.all == [type.name] &&
+      type.ctors == [constructor.name] &&
       type.numNested == 0 && !type.isUnsafe && constructor.induct == type.name &&
       constructor.numParams == type.numParams && !constructor.isUnsafe &&
       recursor.all == [type.name] && recursor.name == Name.str type.name "rec" &&
@@ -207,19 +253,6 @@ structure ProjectionField where
 
 namespace ProjectionField
 
-private partial def occurs (needle : Expr) : Expr → Bool
-  | expression =>
-    if expression == needle then true else
-    match expression with
-    | .app function argument => occurs needle function || occurs needle argument
-    | .lam _ type body _ | .forallE _ type body _ =>
-      occurs needle type || occurs needle body
-    | .letE _ type value body _ =>
-      occurs needle type || occurs needle value || occurs needle body
-    | .mdata _ body => occurs needle body
-    | .proj _ _ structureExpr => occurs needle structureExpr
-    | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => false
-
 /-- Replace constructor-field variables simultaneously.  A replacement is not
 walked again, which matters because a projected value contains the complete
 constructor major and therefore contains the original field variables. -/
@@ -237,19 +270,10 @@ private def replaceExact (sources targets : Array Expr) (expression : Expr) : Ex
     return none
 
 /-- Earlier fields on which `target` depends, transitively through their own
-binder types, in telescope order. -/
-def dependencies (fields : Array ProjectionField) (target : Nat) : Array Nat := Id.run do
-  if target >= fields.size then return #[]
-  let mut needed := Array.replicate target false
-  for i in (List.range target).reverse do
-    let mut used := occurs fields[i]!.value fields[target]!.type
-    if !used then
-      for k in [i + 1:target] do
-        if needed[k]! && occurs fields[i]!.value fields[k]!.type then
-          used := true
-          break
-    if used then needed := needed.set! i true
-  return (Array.range target).filter (needed[·]!)
+binder types, in telescope order.  The literal route's shape boundary reads
+the same closure off the serialized constructor telescope. -/
+def dependencies (fields : Array ProjectionField) (target : Nat) : Array Nat :=
+  dependencyClosure (fields.map (·.value)) (fields.map (·.type)) target
 
 private structure Binder where
   name : Name

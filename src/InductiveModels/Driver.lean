@@ -520,7 +520,7 @@ private def eligibleProjectionFieldsM (type : EIndType) (constructor : ECtor) : 
 private def phase1OneLayerProjectionCertificate (type : EIndType)
     (constructor : ECtor) (recursor : ERec) (is : Iso) : GenM Bool := do
   unless oneLayerProjectionFamily #[type] type ||
-      indexedFibreOneLayerProjectionFamily #[type] type constructor recursor do return false
+      indexedFibreOneLayerProjectionFamily type constructor recursor do return false
   let constructorName := constructor.name
   let some implementation := is.implementation? | return false
   let some publicModel := is.selfNames[0]? | return false
