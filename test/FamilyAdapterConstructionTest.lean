@@ -377,7 +377,7 @@ inductive PublicPrototypeDiagnostic where
   | shadowIssues (issues : Array ConstructionIssue)
   | recursorDecline (detail : String)
   | recursorIssue (issue : ConstructionIssue)
-  | recursorInvalid
+  | recursorInvalid (detail : String)
   | iotaDecline (detail : String)
   | iotaIssue (issue : ConstructionIssue)
   | iotaInvalid
@@ -420,22 +420,35 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
   | .ok (.error issue) => return .recursorIssue issue
   | .ok (.ok (declarations, recursors)) =>
     let environment ← getEnv
-    let valid := declarations.size >= plan.members.size && recursors.size == plan.members.size &&
-      plan.members.all fun member =>
-        (recursors.find? (·.member == member.key)).any fun adapter =>
-          adapter.implementationRecursor == member.implementationRecursor &&
-            !adapter.callAgreement.isAnonymous &&
-            environment.constants.contains adapter.callAgreement &&
-            adapter.motives.size == member.recursorMotiveArity &&
-            adapter.motives.all (·.recursor == member.key) &&
-            adapter.minors.size == member.recursorMinorArity &&
-            (adapter.minors.all fun minor =>
-              minor.recursor == member.key &&
-                (environment.constants.find? minor.adapter).any (·.type == minor.exactType)) &&
-            recursorUsesRecordedMinorAdapters member adapter &&
-            adapter.rules == member.sourceRules &&
-            (environment.constants.find? adapter.adapter).any (·.type == adapter.exactType)
-    unless valid do return .recursorInvalid
+    unless declarations.size >= plan.members.size do
+      return .recursorInvalid "ordinary declaration cardinality"
+    unless recursors.size == plan.members.size do
+      return .recursorInvalid "ordinary certificate cardinality"
+    for member in plan.members do
+      let some adapter := recursors.find? (·.member == member.key)
+        | return .recursorInvalid s!"{member.key.owner}: missing certificate"
+      unless adapter.implementationRecursor == member.implementationRecursor do
+        return .recursorInvalid s!"{member.key.owner}: implementation recursor"
+      unless !adapter.callAgreement.isAnonymous &&
+          environment.constants.contains adapter.callAgreement do
+        return .recursorInvalid s!"{member.key.owner}: call agreement"
+      unless adapter.motives.size == member.recursorMotiveArity do
+        return .recursorInvalid s!"{member.key.owner}: motive cardinality"
+      unless adapter.motives.all (·.recursor == member.key) do
+        return .recursorInvalid s!"{member.key.owner}: motive keys"
+      unless adapter.minors.size == member.recursorMinorArity do
+        return .recursorInvalid s!"{member.key.owner}: minor cardinality"
+      unless adapter.minors.all fun minor =>
+          minor.recursor == member.key &&
+            (environment.constants.find? minor.adapter).any (·.type == minor.exactType) do
+        return .recursorInvalid s!"{member.key.owner}: minor declarations"
+      unless recursorUsesRecordedMinorAdapters member adapter do
+        return .recursorInvalid s!"{member.key.owner}: minor substitutions"
+      unless adapter.rules == member.sourceRules do
+        return .recursorInvalid s!"{member.key.owner}: rule keys"
+      unless (environment.constants.find? adapter.adapter).any
+          (·.type == adapter.exactType) do
+        return .recursorInvalid s!"{member.key.owner}: exact adapter type"
     let containerBuilt ← (FamilyAdapter.buildContainerRecursorPrototypes plan
       certificate.members certificate.telescopes constructors
       (Name.str root "containerRecursors")).run
@@ -449,7 +462,7 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
             built.certificate.rules == container.rules &&
               built.certificate.occurrences == container.occurrences &&
               environment.constants.contains built.certificate.callAgreement do
-      return .recursorInvalid
+      return .recursorInvalid "container certificate coverage"
     match ← (FamilyAdapter.buildPublicIotaPrototypes plan certificate constructors recursors
         containerRecursors (Name.str root "iotas")).run with
     | .error decline => return .iotaDecline decline.label
