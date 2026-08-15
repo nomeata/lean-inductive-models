@@ -689,11 +689,9 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         publicType := container.sourceRecursorType,
         implementationType := container.implementationRecursorType,
         publicMajorFamily, implementationMajorFamily, rules,
-        occurrences := grouped.map (·.key), maps := container.maps,
-        forwardType := container.forwardType,
-        backwardType := container.backwardType,
-        backwardForwardType := container.backwardForwardType,
-        forwardBackwardType := container.forwardBackwardType }
+        occurrences := grouped.map (·.key),
+        boundary := .installed container.maps container.forwardType container.backwardType
+          container.backwardForwardType container.forwardBackwardType }
   let mut rulePlans := #[]
   for member in resolvedMembers do
     if let some recursor := member.sourceRecursor? then
@@ -770,7 +768,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       let key : ContainerRecursorKey := { publicRecursor, implementationRecursor }
       if let some position := containerRecursorPlans.findIdx? (·.key == key) then
         let current := containerRecursorPlans[position]!
-        if current.canonicalIdentity then
+        if current.boundary == .defeq then
           let mut occurrences := current.occurrences
           for key in grouped do unless occurrences.contains key do occurrences := occurrences.push key
           containerRecursorPlans := containerRecursorPlans.set! position
@@ -822,10 +820,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         { key, parameterArity := publicInfo.numParams, indexArity := publicInfo.numIndices,
           motiveArity := publicInfo.numMotives, minorArity := publicInfo.numMinors,
           resultMotiveIndex := publicResultMotive, publicType, implementationType,
-          publicMajorFamily, implementationMajorFamily, canonicalIdentity := true,
-          rules := pairedRules, occurrences := grouped, maps := {},
-          forwardType := .sort .zero, backwardType := .sort .zero,
-          backwardForwardType := .sort .zero, forwardBackwardType := .sort .zero }
+          publicMajorFamily, implementationMajorFamily, boundary := .defeq,
+          rules := pairedRules, occurrences := grouped }
 
   let memberKeys := resolvedMembers.map (·.key)
   let components := componentPlans memberKeys occurrencePlans

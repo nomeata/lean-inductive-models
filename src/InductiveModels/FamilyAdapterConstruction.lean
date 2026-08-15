@@ -229,12 +229,7 @@ structure RecursorCarrierBoundary where
   indexArity : Nat
   publicFamily : Expr
   implementationFamily : Expr
-  canonicalIdentity : Bool := false
-  maps : EquivalenceCertificate
-  forwardType : Expr
-  backwardType : Expr
-  backwardForwardType : Expr
-  forwardBackwardType : Expr
+  boundary : ContainerRecursorBoundaryPlan
   deriving Inhabited, BEq, Repr
 
 structure BuiltContainerRecursor where
@@ -415,11 +410,8 @@ private def memberRecursorBoundary (plan : FamilyAdapterPlan)
       indexArity := member.indexArity
       publicFamily
       implementationFamily
-      maps := certificate.maps
-      forwardType
-      backwardType
-      backwardForwardType
-      forwardBackwardType }
+      boundary := .installed certificate.maps forwardType backwardType
+        backwardForwardType forwardBackwardType }
   pure result
 
 private def containerRecursorBoundary (container : ContainerRecursorPlan) :
@@ -429,12 +421,7 @@ private def containerRecursorBoundary (container : ContainerRecursorPlan) :
     indexArity := container.indexArity
     publicFamily := container.publicMajorFamily
     implementationFamily := container.implementationMajorFamily
-    canonicalIdentity := container.canonicalIdentity
-    maps := container.maps
-    forwardType := container.forwardType
-    backwardType := container.backwardType
-    backwardForwardType := container.backwardForwardType
-    forwardBackwardType := container.forwardBackwardType }
+    boundary := container.boundary }
 
 /-- Resolve installed member equivalences. Identity boundaries receive fresh,
 kernel-checked private aliases; changed simultaneous members reuse the exact
@@ -620,8 +607,10 @@ private def instantiateRecursorBoundaryIndices (boundary : RecursorCarrierBounda
 private def applyRecursorBoundaryMap (plan : FamilyAdapterPlan)
     (boundary : RecursorCarrierBoundary) (forward : Bool) (parameters : Array Expr)
     (sourceType targetType value : Expr) : ConstructionM Expr := do
-  let name := if forward then boundary.maps.forward else boundary.maps.backward
-  let recordedType := if forward then boundary.forwardType else boundary.backwardType
+  let .installed maps forwardType backwardType _ _ := boundary.boundary
+    | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+  let name := if forward then maps.forward else maps.backward
+  let recordedType := if forward then forwardType else backwardType
   let some installed := (← getEnv).constants.find? name |>.map (·.type)
     | failConstruction (.missingInstalledMemberMap boundary.key name)
   unless installed == recordedType do
@@ -642,10 +631,10 @@ private def applyRecursorBoundaryMap (plan : FamilyAdapterPlan)
 private def applyRecursorBoundaryLaw (plan : FamilyAdapterPlan)
     (boundary : RecursorCarrierBoundary) (forward : Bool) (parameters : Array Expr)
     (sourceType targetType value : Expr) : ConstructionM Expr := do
-  let name := if forward then boundary.maps.backwardForward
-    else boundary.maps.forwardBackward
-  let recordedType := if forward then boundary.backwardForwardType
-    else boundary.forwardBackwardType
+  let .installed maps _ _ backwardForwardType forwardBackwardType := boundary.boundary
+    | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+  let name := if forward then maps.backwardForward else maps.forwardBackward
+  let recordedType := if forward then backwardForwardType else forwardBackwardType
   let some installed := (← getEnv).constants.find? name |>.map (·.type)
     | failConstruction (.missingInstalledMemberMap boundary.key name)
   unless installed == recordedType do
@@ -1477,7 +1466,7 @@ private def fixedCarrierBoundary (plan : FamilyAdapterPlan)
 private def recursorCarrierAt (plan : FamilyAdapterPlan)
     (boundary : RecursorCarrierBoundary) (parameters : Array Expr)
     (publicType implementationType : Expr) : ConstructionM PackedCarrierBoundary := do
-  if boundary.canonicalIdentity then
+  if boundary.boundary == .defeq then
     unless parameters.size == boundary.parameterArity &&
         !boundary.publicFamily.hasFVar && !boundary.implementationFamily.hasFVar &&
         (← liftGen <| isDefEq boundary.publicFamily boundary.implementationFamily) &&
@@ -1499,6 +1488,8 @@ private def recursorCarrierAt (plan : FamilyAdapterPlan)
       liftGen <| mkLambdaFVars #[value] proof
     return PackedCarrierBoundary.mk publicType implementationType forward backward
       backwardForward forwardBackward
+  let .installed .. := boundary.boundary
+    | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   let makeMap := fun (forward : Bool) => do
     let sourceType := if forward then publicType else implementationType
     let targetType := if forward then implementationType else publicType

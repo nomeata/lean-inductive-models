@@ -627,7 +627,7 @@ def runSamples : MetaM Result := do
           | .ok schemas =>
             let roles := schemas.flatMap fun schema =>
               schema.hypotheses.filterMap (·.recursiveCall?)
-            !roles.isEmpty && plan.containerRecursors.any (·.canonicalIdentity) &&
+            !roles.isEmpty && plan.containerRecursors.any (·.boundary == .defeq) &&
               roles.all fun role =>
                 let members := plan.members.filter fun member =>
                   member.publicRecursor == role.publicRecursor &&

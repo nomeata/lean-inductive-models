@@ -412,6 +412,15 @@ structure ContainerMapPlan where
   implementationCarrierType : Expr
   deriving Inhabited, BEq, Repr
 
+/-- Exact carrier evidence for an independent container recursor.  A
+definitionally equal boundary carries no fabricated declaration names;
+installed maps carry all names and exact types atomically. -/
+inductive ContainerRecursorBoundaryPlan where
+  | defeq
+  | installed (maps : EquivalenceCertificate) (forwardType backwardType
+      backwardForwardType forwardBackwardType : Expr)
+  deriving Inhabited, BEq, Repr
+
 /-- One specialised container recursor paired independently of ordinary family
 members. `publicMajorFamily` and `implementationMajorFamily` are closed lambdas
 over the exact parameter/index vectors opened from the installed recursors. -/
@@ -426,17 +435,9 @@ structure ContainerRecursorPlan where
   implementationType : Expr
   publicMajorFamily : Expr
   implementationMajorFamily : Expr
-  /-- The exact installed public/private major families are definitionally
-  equal, so construction may synthesize the identity maps and laws in-process.
-  No external map name is implied by this flag. -/
-  canonicalIdentity : Bool := false
+  boundary : ContainerRecursorBoundaryPlan
   rules : Array ContainerRecursorRuleKey
   occurrences : Array OccurrenceKey
-  maps : EquivalenceCertificate
-  forwardType : Expr
-  backwardType : Expr
-  backwardForwardType : Expr
-  forwardBackwardType : Expr
   deriving Inhabited, BEq, Repr
 
 /-- One exact public rule and its private proof oracle.  Occurrences are keyed
@@ -695,18 +696,15 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
       let maps := plan.containerMaps.filter (·.key == occurrence)
       unless plan.occurrences.any (·.key == occurrence) do
         errors := errors.push (.unknownContainerRecursorOccurrence recursor.key occurrence)
-      if recursor.canonicalIdentity then
+      if recursor.boundary == .defeq then
         unless maps.isEmpty do
           errors := errors.push (.containerRecursorMapMismatch recursor.key occurrence)
       else
         unless maps.size == 1 && maps.all fun map =>
             map.sourceRecursor == recursor.key.publicRecursor &&
               map.implementationRecursor == recursor.key.implementationRecursor &&
-              map.maps == recursor.maps &&
-              map.forwardType == recursor.forwardType &&
-              map.backwardType == recursor.backwardType &&
-              map.backwardForwardType == recursor.backwardForwardType &&
-              map.forwardBackwardType == recursor.forwardBackwardType do
+              recursor.boundary == .installed map.maps map.forwardType map.backwardType
+                map.backwardForwardType map.forwardBackwardType do
           errors := errors.push (.containerRecursorMapMismatch recursor.key occurrence)
     for map in plan.containerMaps.filter fun map =>
         map.sourceRecursor == recursor.key.publicRecursor &&
