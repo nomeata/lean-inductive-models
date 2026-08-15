@@ -515,6 +515,40 @@ private def addInstalledCoverage (env : Environment) (name : Name) (expected : E
 private def isContainerOccurrence (key : OccurrenceKey) : Bool :=
   key.expressionPath.any (· != .binderBody)
 
+/-- **Open a raw source binder telescope without asking the environment about
+any binder's head.**
+
+A model is derived *before* its source declaration is replayed, so every raw
+source type this module reads has binder domains headed by constants the
+environment does not hold: a constructor's own recursive field is headed by
+the owner being modelled, and so is a source recursor's major.
+
+`MetaM`'s telescope openers cannot be used on such a type. Each new binder is
+classified as a possible local instance, and that classification asks the
+environment for the domain's head constant — an `Unknown constant` and the
+tool's own failure, not a shadow reason. `Lean.Meta.withLocalDecl` and
+`Lean.Meta.forallBoundedTelescope` both do it, which is why this module owns
+its binder opener.
+
+The declared domains, binder names and binder infos are the exact source
+syntax; the local-instance vector is carried through unchanged, which is
+sound because nothing here synthesises an instance. Fewer than `maxBinders`
+`∀`s stops at the residual type rather than reducing towards one, so a source
+result type is never handed to `whnf` either. -/
+private partial def openSourceForalls {α : Type} (maxBinders : Nat)
+    (k : Array Expr → Expr → MetaM α) (lctx : LocalContext) (binders : Array Expr)
+    (type : Expr) : MetaM α := do
+  if binders.size < maxBinders then
+    if let .forallE name domain body info := type then
+      let fvarId ← mkFreshFVarId
+      let lctx := lctx.mkLocalDecl fvarId name (domain.instantiateRev binders) info
+      return ← openSourceForalls maxBinders k lctx (binders.push (.fvar fvarId)) body
+  withLCtx lctx (← getLocalInstances) (k binders (type.instantiateRev binders))
+
+private def withSourceForallBoundedTelescope {α : Type}
+    (type : Expr) (maxBinders : Nat) (k : Array Expr → Expr → MetaM α) : MetaM α := do
+  openSourceForalls maxBinders k (← getLCtx) #[] type
+
 private structure ExactRecursorLayoutView where
   numParams : Nat
   numIndices : Nat
@@ -582,7 +616,7 @@ private def exactSourceRecursorMajorMatches (recursor : ExactRecursorLayoutView)
   unless parameters.size == recursor.numParams do return false
   let type ← instantiateForall recursorType parameters
   let remaining := recursor.numMotives + recursor.numMinors + recursor.numIndices + 1
-  forallBoundedTelescope type (some remaining) fun binders _ => do
+  withSourceForallBoundedTelescope type remaining fun binders _ => do
     let indexStart := recursor.numMotives + recursor.numMinors
     let indices := binders.extract indexStart (indexStart + recursor.numIndices)
     let some major := binders[remaining - 1]? | return false
@@ -775,7 +809,7 @@ private def sourceRecursorMajorDiagnostic (label : String)
     return s!"{label}: parameter count actual={parameters.size}, expected={recursor.numParams}"
   let type ← instantiateForall recursorType parameters
   let remaining := recursor.numMotives + recursor.numMinors + recursor.numIndices + 1
-  forallBoundedTelescope type (some remaining) fun binders _ => do
+  withSourceForallBoundedTelescope type remaining fun binders _ => do
     let some major := binders[remaining - 1]?
       | return s!"{label}: missing source major in {repr type}"
     let actual ← inferType major
@@ -864,13 +898,9 @@ private def containerTarget? (container : IsoContainerImplementation)
   unless target.getAppFn.constName? == some container.implementationCarrier do return none
   return some target
 
-private partial def withBinderBody (type : Expr) (depth : Nat)
-    (k : Expr → MetaM α) : MetaM α := do
-  if depth == 0 then return ← k type
-  let .forallE name domain body info := type
-    | return ← k type
-  withLocalDecl name info domain fun value =>
-    withBinderBody (body.instantiate1 value) (depth - 1) k
+private def withBinderBody (type : Expr) (depth : Nat)
+    (k : Expr → MetaM α) : MetaM α :=
+  withSourceForallBoundedTelescope type depth fun _ body => k body
 
 private def implementationIota? (iso : Iso) (member : ResolvedMember)
     (constructor : Name) : Option Name :=
@@ -1079,7 +1109,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     let some owner := resolvedMembers.find? (·.key == constructor.key.owner) | continue
     let totalBinders := owner.source.numParams + constructor.telescope.binders.size
     let (addedPlans, addedReasons, addedDiagnostics) ←
-      forallBoundedTelescope constructor.sourceType (some totalBinders) fun sourceBinders _ =>
+      withSourceForallBoundedTelescope constructor.sourceType totalBinders fun sourceBinders _ =>
       forallBoundedTelescope constructor.publicType (some totalBinders) fun publicBinders _ => do
         let sourceParameters := sourceBinders.extract 0 owner.source.numParams
         let sourceFields := sourceBinders.extract owner.source.numParams sourceBinders.size

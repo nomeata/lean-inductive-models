@@ -241,43 +241,61 @@ def main : IO UInt32 := do
     runFixtureTagged "family/plain" familyPath false
   let (familyObserved, familyShadows, familyObservedMessages) ←
     runFixtureTagged "family/shadow" familyPath true
+  -- **A constructor that holds a direct recursive field beside a nested
+  -- container occurrence**, which nothing else here has: `I3.node : I3 N.z →
+  -- List (I3 (N.s N.z)) → I3 (N.s (N.s N.z))`. The model is derived *before*
+  -- the source owner is replayed, so every source telescope this module opens
+  -- has a binder domain headed by a constant the environment does not hold —
+  -- and `MetaM`'s own telescope openers ask the environment about each new
+  -- binder's head. A shadow derivation that opens raw source syntax through
+  -- them therefore aborts the whole tool rather than reporting a reason.
+  let indexedPath := "test/fixtures/inductive-models/indexed_decl.ndjson"
+  let (indexedPlain, indexedPlainShadows, indexedPlainMessages) ←
+    runFixtureTagged "indexed/plain" indexedPath false
+  let (indexedObserved, indexedShadows, indexedObservedMessages) ←
+    runFixtureTagged "indexed/shadow" indexedPath true
   let malformed ← runMalformedInterface
   let sameResult := plain == observed
     && familyPlain == familyObserved
+    && indexedPlain == indexedObserved
   let outputQuiet := (plainMessages ++ observedMessages ++ familyPlainMessages ++
-    familyObservedMessages).isEmpty && plainShadows.isEmpty
+    familyObservedMessages ++ indexedPlainMessages ++ indexedObservedMessages).isEmpty &&
+    plainShadows.isEmpty && indexedPlainShadows.isEmpty
   let everyAcceptedFamilyRan := shadows.size == observed.2.generated.size &&
-    familyShadows.size == familyObserved.2.generated.size
-  let keyedReportVisible := (shadows ++ familyShadows).all observationIsKeyed
-  let everyOutcomeExplicit := (shadows ++ familyShadows).all hasOnlyExplicitGaps
-  let allAcceptedComplete := (shadows ++ familyShadows).all (·.complete)
+    familyShadows.size == familyObserved.2.generated.size &&
+    indexedShadows.size == indexedObserved.2.generated.size
+  let keyedReportVisible := (shadows ++ familyShadows ++ indexedShadows).all observationIsKeyed
+  let everyOutcomeExplicit := (shadows ++ familyShadows ++ indexedShadows).all hasOnlyExplicitGaps
+  let allAcceptedComplete := (shadows ++ familyShadows ++ indexedShadows).all (·.complete)
   let exactHypothesisSharing := multipleSitesShareExactHypothesis familyShadows
   let specialisations := listSpecialisationDiagnostics shadows
   let listRuleAssociation := specialisations.all
   let nonrecursiveMention := deadLambdaDomainClosesExactly familyShadows
   let nullaryRule := nullaryRuleClosesExactly familyShadows
   let repeatedIndices := repeatedIndexArgumentsCloseExactly familyShadows
-  let containerMapsVisible := (shadows ++ familyShadows).any
+  let containerMapsVisible := (shadows ++ familyShadows ++ indexedShadows).any
     (fun shadow => !shadow.coverage.containerMaps.isEmpty)
   let malformedRejected := malformedDependenciesAreExcluded malformed
   if sameResult && outputQuiet && everyAcceptedFamilyRan && keyedReportVisible &&
       everyOutcomeExplicit && allAcceptedComplete && exactHypothesisSharing && containerMapsVisible &&
       listRuleAssociation && nonrecursiveMention && nullaryRule && repeatedIndices &&
       malformedRejected then
-    IO.println s!"family adapter shadow: {shadows.size + familyShadows.size} accepted families, \
+    IO.println s!"family adapter shadow: \
+      {shadows.size + familyShadows.size + indexedShadows.size} accepted families, \
       exact gaps reported, output unchanged"
     return 0
   IO.eprintln s!"family adapter shadow failure: same={sameResult}, quiet={outputQuiet}, \
-    shadows={shadows.size + familyShadows.size}, keyed={keyedReportVisible}, \
+    shadows={shadows.size + familyShadows.size + indexedShadows.size}, keyed={keyedReportVisible}, \
     explicit={everyOutcomeExplicit}, complete={allAcceptedComplete}, hypotheses={exactHypothesisSharing}, \
     listRules={listRuleAssociation}, listDetails={repr specialisations}, \
     nonrecursiveMention={nonrecursiveMention}, nullaryRule={nullaryRule}, \
     repeatedIndices={repeatedIndices}, \
     containers={containerMapsVisible}, \
     malformed={malformedRejected}"
-  for message in plainMessages ++ observedMessages ++ familyPlainMessages ++ familyObservedMessages do
+  for message in plainMessages ++ observedMessages ++ familyPlainMessages ++
+      familyObservedMessages ++ indexedPlainMessages ++ indexedObservedMessages do
     IO.eprintln message
-  for shadow in shadows ++ familyShadows do
+  for shadow in shadows ++ familyShadows ++ indexedShadows do
     unless shadow.complete do
       IO.eprintln s!"{shadow.root}: {repr shadow.reasons}"
       for diagnostic in shadow.diagnostics do IO.eprintln s!"{shadow.root}: {diagnostic}"

@@ -131,16 +131,16 @@ def expectedCensus : Array CensusRow :=
        field := 2, kind := .authored } ]
 
 /-- Fixtures the maximal generation configuration below cannot run to
-completion today: generation raises `Unknown constant` for a member of the
-input block rather than declining it.  This is not specific to the census
-configuration — `lake exe test` reaches the same exception on `indexed_decl`
-with its own settings — and it is recorded, not repaired, here.
+completion.  It is empty: `hard_nested_mutual_index`, `indexed_decl`,
+`infinitary` and `nest_index_cross` all raised `Unknown constant` for a member
+of their own input block, because the shadow derivation opened a raw source
+telescope through `MetaM` while that member was deliberately not installed;
+every source telescope now has its exact domains installed directly instead.
 
-They are pinned so that the census above cannot silently stop being
+The list is pinned so that the census above cannot silently stop being
 exhaustive: a fixture that starts running must be censused, and a fixture that
 stops running must be noticed. -/
-def expectedUnrunnable : Array String :=
-  #["hard_nested_mutual_index", "indexed_decl", "infinitary", "nest_index_cross"]
+def expectedUnrunnable : Array String := #[]
 
 /-- Every generation branch on, so the census sees the maximal set of modeled
 owners rather than one suite's slice. -/
