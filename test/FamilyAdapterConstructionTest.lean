@@ -655,10 +655,11 @@ def runSamples : MetaM Result := do
                 else container }
             let corruptedDiagnostic ← match built.certificate with
               | some certificate => do
-                return ← publicPrototypeDiagnostic corrupted certificate
+                let diagnostic ← publicPrototypeDiagnostic corrupted certificate
                   (`_family_adapter_invalid_identity_container)
+                pure diagnostic
               | none => do
-                return PublicPrototypeDiagnostic.shadowIssues built.issues
+                pure (PublicPrototypeDiagnostic.shadowIssues built.issues)
             let ambiguous : FamilyAdapterPlan := { plan with
               containerRecursors := plan.containerRecursors.push canonical }
             if !corruptedDiagnostic.isComplete && !ambiguous.validate.isEmpty then
