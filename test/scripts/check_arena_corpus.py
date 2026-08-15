@@ -21,7 +21,7 @@ CHECKER_ARGS = (
     "--check-input",
     "--check-output",
     "--type-check-input",
-    "--type-check-output",
+    "--type-check-generated",
     "--no-output",
 )
 MAX_MEMBER_SIZE = 256 * 1024 * 1024

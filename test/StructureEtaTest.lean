@@ -1,6 +1,6 @@
 import InductiveModels.Driver
 import InductiveModels.Check
-import InductiveModels.Mono
+import InductiveModels.ModelRoles
 
 open Lean Meta InductiveModels
 
@@ -16,7 +16,7 @@ def generation : Cli.Config :=
   { nested := false, mutualModels := true, simple := true, basic := true }
 
 def readExport (path : String) : IO Export := do
-  let .ok x := parse (← IO.FS.readFile path) (analyse := false)
+  let .ok x := parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   return x
 
@@ -136,8 +136,8 @@ def main : IO UInt32 := do
       !containsConst `Dep.key type && !containsConst `Dep.payload type
   state := state.check "checker accepts intrinsic-projection eta" <|
     Check.check projectionOutput |>.all (·.familyOwner != `Dep)
-  state := state.check "Mono keys eta to its owner without an elimination universe" <|
-    (Mono.modelTable projectionOutput)[depEta]?.any fun entry =>
+  state := state.check "eta is keyed to its owner without an elimination universe" <|
+    (ModelRoles.table projectionOutput)[depEta]?.any fun entry =>
       entry.owner == `Dep && entry.role == .eta
 
   let missing := Check.check (withoutDeclaration projectionOutput depEta)

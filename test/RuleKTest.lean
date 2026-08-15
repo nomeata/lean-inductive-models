@@ -1,6 +1,6 @@
 import InductiveModels.Driver
 import InductiveModels.Check
-import InductiveModels.Mono
+import InductiveModels.ModelRoles
 
 open Lean Meta InductiveModels
 
@@ -22,7 +22,7 @@ def noGeneration : Cli.Config :=
 
 def runFixture (path : String) (generation : Cli.Config) : IO Fixture := do
   let text ← IO.FS.readFile path
-  let .ok input := parse text (analyse := false)
+  let .ok input := parse text
     | throw <| IO.userError s!"cannot parse {path}"
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -91,9 +91,9 @@ def main : IO UInt32 := do
     let changed := Check.check (replaceType simple.output theoremName)
     state := state.check "mutated rule-K proposition is rejected"
       (changed.contains (.declarationType recursor.name theoremName))
-    let mono := Mono.modelTable simple.output
-    state := state.check "Mono records the exact rule-K role"
-      (mono[theoremName]?.any fun entry => entry.role == .ruleK)
+    let roles := ModelRoles.table simple.output
+    state := state.check "the exact rule-K role is recorded"
+      (roles[theoremName]?.any fun entry => entry.role == .ruleK)
 
   if let some recursor := (modeledNonK simple)[0]? then
     let theoremName := Naming.ruleKName recursor.name

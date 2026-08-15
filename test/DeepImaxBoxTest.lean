@@ -14,7 +14,7 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else { state with failed := state.failed.push label }
 
 def readExport (path : String) : IO Export := do
-  let .ok result := parse (← IO.FS.readFile path) (analyse := false)
+  let .ok result := parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   return result
 
@@ -176,7 +176,7 @@ def main : IO UInt32 := do
       containsConst `PSigma' value && containsConst `PUnit value &&
         !containsConst `PSigma value && !containsConst `PULiftP value
   let maxOutputCheck := Check.checkReport maxGenerated
-  let maxSerialized ← match parse maxGenerated.render (analyse := false) with
+  let maxSerialized ← match parse maxGenerated.render with
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot parse serialized WMax output: {error}"
   let maxInputCheck := Check.checkReport maxSerialized
@@ -204,7 +204,7 @@ def main : IO UInt32 := do
   state := state.check "transparent W result spelling remains literal in the model" <|
     (declarationType? aliasGenerated aliasCtors[1]!).any (containsConst `As)
   let outputCheck := Check.checkReport aliasGenerated
-  let aliasSerialized ← match parse aliasGenerated.render (analyse := false) with
+  let aliasSerialized ← match parse aliasGenerated.render with
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot parse serialized W alias output: {error}"
   let inputCheck := Check.checkReport aliasSerialized

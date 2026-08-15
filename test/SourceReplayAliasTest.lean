@@ -30,16 +30,6 @@ def runExportWith (input : Export) (generation : InductiveModels.Cli.Config)
 def runExport (input : Export) : IO (Array EDecl × Report) :=
   runExportWith input noGeneration
 
-def runShadow (input : Export) (generation : InductiveModels.Cli.Config) :
-    IO (Array EDecl × Report × Bool) := do
-  let env ← importModules #[] {}
-  let context : Core.Context :=
-    { fileName := "<source-replay-alias-shadow-test>", fileMap := default,
-      maxHeartbeats := 0, maxRecDepth := 8192 }
-  let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
-    (runFilterWithFutureSourceSupportShadow input false generation)) context { env }
-  return result
-
 def runDiscarding (input : Export) (generation : InductiveModels.Cli.Config)
     (checkRecursors : Bool := false) : IO (Report × CompactPlan) := do
   let env ← importModules #[] {}
@@ -83,6 +73,20 @@ def collisionInput (first second : Name) : Export :=
 
 def aliasesOf (input : Export) : Except String SourceReplayAliases :=
   (SourceCensus.ofSource input).replayAliases
+
+/-- Test-only prerequisite-first source variant; production never reorders
+input declarations. -/
+def withCompletePrerequisiteBefore (input : Export) (prerequisite owner : Name) : IO Export := do
+  let some prerequisiteIndex := input.decls.findIdx? (·.names.contains prerequisite)
+    | throw <| IO.userError s!"source has no {prerequisite} prerequisite"
+  let some ownerIndex := input.decls.findIdx? (·.names.contains owner)
+    | throw <| IO.userError s!"source has no {owner} owner"
+  if prerequisiteIndex < ownerIndex then return input
+  let prerequisiteRecord := input.decls[prerequisiteIndex]!
+  return { input with decls :=
+    input.decls.extract 0 ownerIndex ++ #[prerequisiteRecord] ++
+      input.decls.extract ownerIndex prerequisiteIndex ++
+      input.decls.extract (prerequisiteIndex + 1) input.decls.size }
 
 def emptyInductiveType (name : Name) : EIndType :=
   { name, levelParams := [], type := .sort (.succ .zero), all := [name], ctors := []
@@ -263,18 +267,15 @@ def main : IO UInt32 := do
     (generationReport.generated.any (·.1 == `AliasWrappedBox) &&
       generationReport.unreplayable.isNone && generationReport.stmtErrors.isEmpty &&
       !leakedBuildName && generationKernelValid)
-  let (shadowOutput, shadowReport, shadowSelected) ← runShadow generationInput generation
-  state := state.check "future-support shadow falls back before exact replay"
-    (!shadowSelected && shadowOutput == generationOutput && shadowReport == generationReport)
-
   -- Preserve the pre-existing collision capability: two exact inductive
   -- blocks whose complete role families normalize alike both model, while the
   -- construction-only source alias namespace remains absent from output.
   let shapesText ← IO.FS.readFile "test/fixtures/inductive-models/prim_shapes.ndjson"
-  let .ok shapes := InductiveModels.parse shapesText
+  let .ok shapesRaw := InductiveModels.parse shapesText
     | throw <| IO.userError "cannot parse prim_shapes for atomic alias regression"
   let publicOwner : Name := `Sv
   let privateOwner : Name := (`_private.M).mkNum 0 |>.str "Sv"
+  let shapes ← withCompletePrerequisiteBefore shapesRaw `Eq publicOwner
   let some ownerOrdinal := shapes.decls.findIdx? (·.names.contains publicOwner)
     | throw <| IO.userError "prim_shapes has no Sv owner"
   let privateRoles := shapes.decls[ownerOrdinal]!.names.foldl
@@ -304,13 +305,13 @@ def main : IO UInt32 := do
   state := state.check "compact discard preserves the colliding-inductive exact oracle"
     (collidingDiscardReport == collidingReport &&
       collidingCompact.retainedGeneratedRecords == 0 &&
-      collidingCompact.unavailable?.isNone &&
       collidingCompact.checkReport == Check.checkReport collidingExport)
 
-  let privateCarrier := Naming.modelName privateOwner
-  let some reservedPrivateModel := collidingOutput.flatMap (·.names.toArray) |>.find? fun name =>
-    privateOwner.isPrefixOf name && name != privateCarrier && name != privateOwner
-    | throw <| IO.userError "private Sv model has no deeper generated slot"
+  let some privateMember := privateOwnerRecord.names.find? (· != privateOwner)
+    | throw <| IO.userError "private Sv block has no member model slot"
+  let reservedPrivateModel := Naming.modelName privateMember
+  unless collidingOutput.any (·.names.contains reservedPrivateModel) do
+    throw <| IO.userError "private Sv member model slot was not generated"
   let reservedPublicModel := reservedPrivateModel.replacePrefix privateOwner publicOwner
   let reservedShapes := { collidingShapes with decls := (
     collidingShapes.decls.extract 0 (ownerOrdinal + 1) ++
@@ -408,7 +409,8 @@ def main : IO UInt32 := do
     { metaLine := .null, decls := #[typeAxiom `OverlapRoot, overlapBlock] }
   let .ok overlapPlanned := aliasesOf overlapInput
     | throw <| IO.userError "cannot plan overlapping owner aliases"
-  let .ok overlapAliases := sourceReplayInductiveDerivations overlapInput overlapPlanned
+  let overlapRoles := (SourceCensus.ofSource overlapInput).replayRoles
+  let .ok overlapAliases := sourceReplayInductiveDerivations overlapRoles overlapPlanned
     | throw <| IO.userError "cannot derive overlapping owner recursor aliases"
   let some overlapShortBuild := overlapAliases.build? overlapShort
     | throw <| IO.userError "short overlapping owner did not move"

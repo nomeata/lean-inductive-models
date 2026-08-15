@@ -14,6 +14,10 @@ namespace InductiveModels.Supervisor
 /-- Private recursion guard inherited only by the supervised worker. -/
 def workerMarker : String := "LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER"
 
+/-- Runtime panics in the private worker must become native failures rather
+than status `1`, which is a valid public decline result. -/
+private def abortOnPanic : String := "LEAN_ABORT_ON_PANIC"
+
 private def reportFailure (message : String) : IO Unit := do
   try IO.eprintln message
   catch _ => pure ()
@@ -28,7 +32,7 @@ def runWorkerRaw (args : List String)
     let child ← IO.Process.spawn {
       cmd := executable.toString
       args := args.toArray
-      env := environment ++ #[(workerMarker, some "1")]
+      env := environment ++ #[(workerMarker, some "1"), (abortOnPanic, some "1")]
       stdin := .inherit
       stdout := .inherit
       stderr := .inherit }

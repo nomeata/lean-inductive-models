@@ -29,12 +29,10 @@ structure Config where
   checkOutput : Bool := true
   /-- Submit the complete parsed input stream to Lean's kernel. -/
   typeCheckInput : Bool := false
-  /-- Submit the complete final transformed stream to Lean's kernel. Enabled by
-  default so an ordinary CLI run never publishes a stream the official kernel
-  rejects. Generated no-output runs feed exact records directly to an
-  incremental in-process kernel environment. -/
-  typeCheckOutput : Bool := true
-  monoLevels : Bool := false
+  /-- Kernel-check each exact generated model island as it is produced. Input
+  declarations remain trusted dependencies and are controlled independently
+  by `typeCheckInput`. -/
+  typeCheckGenerated : Bool := true
   /-- Whether an export is written. -/
   output : Bool := true
   /-- `"-"` means stdout. The target is retained while output is disabled. -/
@@ -69,8 +67,7 @@ def usage : String := String.intercalate "\n" [
   "  --[no-]check-output  check generated models",
   "  --[no-]check         set both structural model-check options",
   "  --[no-]type-check-input   submit the parsed input to Lean's kernel",
-  "  --[no-]type-check-output  submit the final output to Lean's kernel (default: on)",
-  "  --[no-]mono-levels   monomorphize universe levels",
+  "  --[no-]type-check-generated  kernel-check generated declarations (default: on)",
   "  --[no-]quiet         enable or disable diagnostics"]
 
 /-- Parse command-line arguments without performing IO. -/
@@ -110,12 +107,10 @@ where
       go rest { config with typeCheckInput := true }
     | "--no-type-check-input" :: rest, config =>
       go rest { config with typeCheckInput := false }
-    | "--type-check-output" :: rest, config =>
-      go rest { config with typeCheckOutput := true }
-    | "--no-type-check-output" :: rest, config =>
-      go rest { config with typeCheckOutput := false }
-    | "--mono-levels" :: rest, config => go rest { config with monoLevels := true }
-    | "--no-mono-levels" :: rest, config => go rest { config with monoLevels := false }
+    | "--type-check-generated" :: rest, config =>
+      go rest { config with typeCheckGenerated := true }
+    | "--no-type-check-generated" :: rest, config =>
+      go rest { config with typeCheckGenerated := false }
     | "--output" :: rest, config => go rest { config with output := true }
     | "--no-output" :: rest, config => go rest { config with output := false }
     | "--quiet" :: rest, config => go rest { config with quiet := true }

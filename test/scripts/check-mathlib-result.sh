@@ -20,7 +20,7 @@ printf '%s\n' \
   "PUnit: exempt — prim model: a basis primitive" \
   "statements: 48699 compared, 0 differ" \
   "levels: 211 planner comparisons, 0 escapes" \
-  "output backend: legacy" \
+  "output backend: declaration-stream" \
   "output check: 12001 model families checked" > "$generate"
 printf '%s\n' "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"PSigma'\"}}" > "$output"
 printf '%s\n' \
@@ -58,14 +58,14 @@ grep -Fq 'LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1' <<<"$generate_phase" || 
   echo "mathlib CI does not expose the generation backend" >&2
   exit 1
 }
-grep -Fq -- '--no-type-check-output' <<<"$generate_phase" || {
+grep -Fq -- '--no-type-check-generated' <<<"$generate_phase" || {
   echo "mathlib CI generation does not defer its kernel gate" >&2
   exit 1
 }
 
 check_phase="$(sed -n '/run_worker_measured check-input \\/,/tee "\$LOG_DIR\/check-input.log"/p' \
   "$ci_harness")"
-for flag in --type-check-input --no-type-check-output --no-output; do
+for flag in --type-check-input --no-type-check-generated --no-output; do
   grep -Fq -- "$flag" <<<"$check_phase" || {
     echo "mathlib CI serialized kernel gate is missing $flag" >&2
     exit 1
@@ -94,19 +94,20 @@ if "$checker" "$generate" "$output" "$WORK/no-kernel-check.log" >/dev/null 2>&1;
   exit 1
 fi
 
-grep -vF 'output backend: legacy' "$generate" > "$WORK/no-full-backend.log"
-if "$checker" "$WORK/no-full-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
-  echo "mathlib result parser accepted a missing full-AST backend" >&2
+grep -vF 'output backend: declaration-stream' "$generate" > "$WORK/no-stream-backend.log"
+if "$checker" "$WORK/no-stream-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
+  echo "mathlib result parser accepted a missing declaration-stream backend" >&2
   exit 1
 fi
 
-sed 's/output backend: legacy/output backend: compact-direct/' "$generate" > "$WORK/wrong-backend.log"
+sed 's/output backend: declaration-stream/output backend: compact-discard/' \
+  "$generate" > "$WORK/wrong-backend.log"
 if "$checker" "$WORK/wrong-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
   echo "mathlib result parser accepted a non-output generation backend" >&2
   exit 1
 fi
 
-sed '/output backend: legacy/p' "$generate" > "$WORK/duplicate-backend.log"
+sed '/output backend: declaration-stream/p' "$generate" > "$WORK/duplicate-backend.log"
 if "$checker" "$WORK/duplicate-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
   echo "mathlib result parser accepted duplicate backend reports" >&2
   exit 1

@@ -48,10 +48,10 @@ quotient bundle. Routes that derive function extensionality may additionally
 use `Quot.sound`; generated developments may use the standard axioms
 `Classical.choice` and `propext` when required.
 
-Every generated declaration is kernel-checked before emission in an
-owner-free replay environment. The final serialized output is then checked
-structurally and, by default, replayed through Lean's kernel as a complete
-stream before it is written.
+With `--type-check-generated`, each generated model island is kernel-checked once,
+as it is produced, against the trusted input prefix before its owner. The final
+serialized output is also checked structurally by default; it is not replayed
+as one combined input-and-output kernel stream.
 
 ## Checker contract
 
@@ -77,13 +77,12 @@ That makes the correspondence check independent of the kernel verdict.
 it on the final transformed stream. An input with no model slots is not
 rejected merely because an inductive is unsupported or generation is disabled.
 
-`--type-check-input` and `--type-check-output` are separate whole-stream kernel
-gates. They replay declaration values and compare serialized inductive
-metadata with what Lean regenerates. Output replay is on by default; use
-`--no-type-check-output` only when the caller deliberately accepts that the
-complete final stream will not receive this additional verdict. This opt-out
-does not weaken the mandatory per-declaration kernel checks performed during
-generation.
+`--type-check-input` and `--type-check-generated` govern disjoint declaration
+classes. The former checks only input declarations. The latter, enabled by
+default, checks each exact generated model island incrementally as it is
+produced; input declarations are trusted dependencies in that environment,
+not checked a second time. With either flag off, that declaration class is not
+kernel-checked.
 
 ## Usage
 
@@ -92,18 +91,18 @@ lean-inductive-models [OPTIONS] IN.ndjson
 ```
 
 `IN.ndjson` may be `-` for standard input. With no options, all generation
-routes and both structural checks run, the final output is replayed through
-Lean's kernel, and the transformed export is written to standard output.
+routes and both structural checks run, each generated island is kernel-checked
+as it is produced, and the transformed export is written to standard output.
 Diagnostics go to standard error.
 
 ```console
-# Generate, check, kernel-replay, and write to a file.
+# Generate, check generated islands, and write to a file.
 lean-inductive-models -o OUT.ndjson IN.ndjson
 
 # Check an input without generating or writing anything.
 lean-inductive-models --no-inductives --check --no-output IN.ndjson
 
-# Full Lean Kernel Arena path, with input replay enabled as well.
+# Also request a separate kernel check of the input declarations.
 lean-inductive-models --type-check-input --no-output "$IN"
 ```
 
@@ -118,8 +117,7 @@ lean-inductive-models --type-check-input --no-output "$IN"
 | `--check-output` | on | Structurally check final model families. |
 | `--check` | on | Set both structural-check options. |
 | `--type-check-input` | off | Replay the parsed input through Lean's kernel. |
-| `--type-check-output` | on | Replay the complete final output through Lean's kernel. |
-| `--mono-levels` | off | Monomorphize universe levels before generation. |
+| `--type-check-generated` | on | Kernel-check each generated model island as it is produced. |
 | `--output` | on | Write the transformed export. |
 | `-o PATH` | `-` | Select the output path and enable output. |
 | `--quiet` | off | Suppress successful-pass diagnostics. |
@@ -143,30 +141,35 @@ Exit codes follow the Lean Kernel Arena checker contract:
 Nested, mutual, simple, and basis generation are independent routes sharing
 one public correspondence. The generator keeps exact source records as the
 syntax authority and uses installed kernel metadata only as a layout and proof
-oracle. Final ordering places each complete model family before its source
-owner and rejects dependency cycles or ambiguous ownership.
+oracle. Each accepted model island is appended immediately before its source
+owner, while all other source declarations retain input order. Input
+validation rejects a model declaration that occurs after its owner.
 
-Canonical generation retains compact ordering and structural-check
-certificates while model islands are live. All named and stdout output uses
-the ordinary full-memory AST path, as does universe monomorphization. With
-generated `--no-output`, the
-default output kernel gate first parses declarations into a value-free source
-census, then feeds each exact declaration directly to an incremental in-process
-kernel environment while its compact schedule row is live. The parser's one
-completed arena is transferred to declaration-wise replay rather than reparsed.
-An input-only project-local snapshot preserves stdin/FIFO bytes for parser-
-compatible fallback and is released once the arena is replay-certified; it is
-not a generated-output representation. The checker and construction
-environments are dropped at the explicit seal boundary. Generated logical
-output never passes through JSON, an output parser, a writer, or a spool. If
-the chronological feed cannot certify the final schedule or rejects it, the
-ordinary final-order batch checker is rerun from the original imported
-environment so its established diagnostics remain authoritative. With both
-`--no-output` and `--no-type-check-output`, accepted
-islands are likewise checked and summarized while live and then discarded: no
+Canonical generation retains compact structural certificates while model
+islands are live. Actual generated output receives the exact island and then
+its source owner at that transition and feeds each declaration into one
+persistent standard arena writer. The writer retains global interning maps but
+no cumulative output declaration array. Named output remains in a
+private sibling until the final compact semantic/structural verdict commits it;
+standard output is direct and can therefore contain a parseable declaration
+prefix after a late failure. When input kernel checking is disabled, both actual
+output and eligible checked no-output generation first build a compact source
+census; each exact source declaration is trusted-installed for construction,
+and each generated island is optionally checked directly in process while its
+compact certificate is live. The parser transfers one declaration replay arena instead of reparsing; at parse
+completion its dense expression-ID table is replaced by the exact expression
+roots referenced by declarations, while the expression DAGs and name/level
+tables needed for declaration replay remain available. An input-only
+project-local snapshot preserves stdin/FIFO bytes for parser-compatible
+fallback and is released once that compact arena is replay-certified; it is
+not a generated-output representation. Generated logical declarations are
+checked directly as values, never through JSON, an output parser, a writer, or
+a spool. With both `--no-output` and `--no-type-check-generated`, accepted islands
+are summarized while live and then discarded without any kernel check: no
 workspace is opened and no cumulative generated declaration array is retained.
-Monomorphization and deliberate legacy/planner
-diagnostic modes remain on the full-memory path.
+Input kernel checking may retain the parsed source, but generated actual output
+still uses the declaration stream. No-generation writing preserves the existing
+whole-export path.
 
 Unsupported shapes pass through unchanged and are reported as declines. A
 consumer using models as an inductive front end must implement the five-member

@@ -9,8 +9,8 @@ set_option maxRecDepth 4096
 End-to-end tests for the public `lean-inductive-models` process boundary.
 
 These deliberately execute the built binary: parser-only tests cannot observe
-the stdout/stderr split, output suppression, pass ordering, or the integrated
-mode-A monomorphization pass.
+the stdout/stderr split, output suppression, pass ordering, or transactional
+output behavior.
 -/
 
 structure TestState where
@@ -26,7 +26,6 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
 def defaultInductiveModelsEnv : Array (String × Option String) :=
   #[("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", none),
     ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", none),
-    ("LEAN_INDUCTIVE_MODELS_TEST_SHARED_PREFIX_FAIL_AFTER_OWNERS", none),
     ("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", none),
     (InductiveModels.Supervisor.workerMarker, none)]
 
@@ -63,11 +62,11 @@ def hasDiagnostic (stderr diagnostic : String) : Bool :=
   (stderr.splitOn "\n").contains diagnostic
 
 def familyCount? (text : String) : Option Nat := do
-  let parsed ← (InductiveModels.parse text (analyse := false)).toOption
+  let parsed ← (InductiveModels.parse text).toOption
   return (InductiveModels.Check.discover parsed).size
 
 def sameSemanticExport (left right : String) : Bool :=
-  match InductiveModels.parse left (analyse := false), InductiveModels.parse right (analyse := false) with
+  match InductiveModels.parse left, InductiveModels.parse right with
   | .ok left, .ok right => left.metaLine == right.metaLine && left.decls == right.decls
   | _, _ => false
 
@@ -129,12 +128,9 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.createDirAll scratch
   let nested := s!"{root}/test/fixtures/inductive-models/nested_iota.ndjson"
   let nestedText ← IO.FS.readFile nested
-  let .ok nestedExport := InductiveModels.parse nestedText (analyse := false) | do
+  let .ok nestedExport := InductiveModels.parse nestedText | do
     IO.eprintln "mainclitest: nested fixture did not parse"
     return 1
-  -- This fixture contains `Expr.proj`, so success also pins that the integrated
-  -- path asked the reader for projection analysis.
-  let mono := s!"{root}/test/fixtures/mono/mono_proj.ndjson"
   let mut state : TestState := {}
 
   -- A kernel-valid declaration under a reserved basis name is unsupported
@@ -145,47 +141,63 @@ def main (args : List String) : IO UInt32 := do
   let malformedBasis := mapRecursor unusedBasis `Eq.rec fun recursor =>
     { recursor with numMinors := recursor.numMinors + 1 }
   let malformedBasisRun ← runInductiveModelsStdin binary
-    ["--no-check", "--no-type-check-output", "--no-output", "-"]
+    ["--no-check", "--no-type-check-generated", "--no-output", "-"]
     malformedBasis.render
   state := state.check "noncanonical unused basis exits unsupported 2" <|
     malformedBasisRun.exitCode == 2 && malformedBasisRun.stdout.isEmpty &&
       (malformedBasisRun.stderr.splitOn "input's Eq is not Lean's").length > 1
 
   -- The Arena CI path exercises the complete tool: all generation branches,
-  -- both structural checks, and both whole-stream kernel verdict gates. A
+  -- both structural checks, the input kernel gate, and the generated-island
+  -- kernel gate. A
   -- checker can receive its NDJSON path as `$IN`, or read the same bytes from
   -- stdin; `--no-output` suppresses only publication.
   let arenaPath ← runInductiveModels binary [
     "--inductives", "--check-input", "--check-output", "--type-check-input",
-    "--type-check-output", "--no-output", nested]
+    "--type-check-generated", "--no-output", nested]
   state := state.check "arena path generates models and validates input and output" <|
     arenaPath.exitCode == 0 && arenaPath.stdout.isEmpty &&
       hasDiagnostic arenaPath.stderr "input check: 0 model families checked" &&
       arenaPath.stderr.contains "model of" && arenaPath.stderr.contains "output check:" &&
       !arenaPath.stderr.contains "output check: 0 model families checked" &&
       hasDiagnostic arenaPath.stderr "input kernel check: accepted" &&
-      hasDiagnostic arenaPath.stderr "output kernel check: accepted"
+      hasDiagnostic arenaPath.stderr "generated kernel check: accepted"
   let arenaStdin ← runInductiveModelsStdin binary [
     "--inductives", "--check-input", "--check-output", "--type-check-input",
-    "--type-check-output", "--no-output", "-"] nestedText
+    "--type-check-generated", "--no-output", "-"] nestedText
   state := state.check "arena stdin runs the same complete pipeline" <|
     arenaStdin.exitCode == 0 && arenaStdin.stdout.isEmpty &&
       arenaStdin.stderr.contains "model of" && arenaStdin.stderr.contains "output check:" &&
       hasDiagnostic arenaStdin.stderr "input kernel check: accepted" &&
-      hasDiagnostic arenaStdin.stderr "output kernel check: accepted"
+      hasDiagnostic arenaStdin.stderr "generated kernel check: accepted"
 
-  -- Pure kernel-check mode does not impose this tool's model-before-owner
-  -- ordering policy. This export is kernel-valid even though its model-shaped
-  -- axiom depends on the source owner and would make that policy cyclic.
+  -- Input stream order is checked online without constructing a dependency
+  -- graph: once an owner has appeared, a later public model slot is too late.
   let modelCycleName := InductiveModels.Naming.modelName `Tree
   let modelCycle : InductiveModels.EDecl :=
     .ax modelCycleName [] (.const `Tree []) false
   let modelCycleText := { nestedExport with decls := nestedExport.decls.push modelCycle }.render
   let arenaModelCycle ← runInductiveModelsStdin binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-generated",
     "--no-output", "-"] modelCycleText
-  state := state.check "pure kernel mode does not impose model ordering" <|
-    arenaModelCycle.exitCode == 0 && arenaModelCycle.stdout.isEmpty
+  state := state.check "online input guard rejects a model after its owner" <|
+    arenaModelCycle.exitCode == 1 && arenaModelCycle.stdout.isEmpty &&
+      arenaModelCycle.stderr.contains "is not before Tree at record"
+  let uncheckedModelCycle ← runInductiveModelsStdin binary [
+    "--no-check", "--no-type-check-generated", "--no-output", "-"] modelCycleText
+  state := state.check "in-memory input guard rejects a model after its owner" <|
+    uncheckedModelCycle.exitCode == 1 && uncheckedModelCycle.stdout.isEmpty &&
+      uncheckedModelCycle.stderr.contains "is not before Tree at record"
+
+  let uncheckedOutput ← runInductiveModelsWithEnv binary
+    ["--no-check", "--no-type-check-generated", "--no-output", nested]
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  state := state.check "in-memory output-check-off bypasses the generated kernel gate" <|
+    uncheckedOutput.exitCode == 0 && uncheckedOutput.stdout.isEmpty &&
+      uncheckedOutput.stderr.contains "model of" &&
+      !hasDiagnostic uncheckedOutput.stderr "input route: planned-census" &&
+      hasDiagnostic uncheckedOutput.stderr "output backend: compact-discard" &&
+      hasDiagnostic uncheckedOutput.stderr "generated kernel checks: 0"
 
   let badName := `ArenaBad
   let badDeclaration : InductiveModels.EDecl :=
@@ -199,20 +211,35 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "kernel-invalid path input is rejected with exit 1" <|
     invalidInput.exitCode == 1 &&
       (invalidInput.stderr.splitOn "input kernel check rejected:").length > 1
-  let invalidOutput ← runInductiveModelsStdin binary [
+  let invalidNeither ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input",
-    "--no-output", "-"] invalidText
-  state := state.check "default output kernel gate rejects invalid stdin with exit 1" <|
-    invalidOutput.exitCode == 1 &&
-      (invalidOutput.stderr.splitOn "output kernel check rejected:").length > 1
+    "--no-type-check-generated", "--no-output", "-"] invalidText
+  state := state.check "kernel-invalid source is trusted when both class gates are off" <|
+    invalidNeither.exitCode == 0 && invalidNeither.stdout.isEmpty &&
+      !invalidNeither.stderr.contains "kernel check"
+  let invalidOutputOnly ← runInductiveModelsStdin binary [
+    "--no-inductives", "--no-check", "--no-type-check-input",
+    "--type-check-generated", "--no-output", "-"] invalidText
+  state := state.check "generated kernel gate does not recheck input declarations" <|
+    invalidOutputOnly.exitCode == 0 && invalidOutputOnly.stdout.isEmpty &&
+      !invalidOutputOnly.stderr.contains "input kernel check" &&
+      hasDiagnostic invalidOutputOnly.stderr "generated kernel check: accepted"
+  let invalidBoth ← runInductiveModelsStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input",
+    "--type-check-generated", "--no-output", "-"] invalidText
+  state := state.check "input rejection precedes an enabled generated-output gate" <|
+    invalidBoth.exitCode == 1 &&
+      invalidBoth.stderr.contains "input kernel check rejected:" &&
+      !invalidBoth.stderr.contains "generated kernel check"
   let gatedOutputPath : System.FilePath := s!"{scratch}/main-cli-gated-output.ndjson"
   let gatedSentinel := "output gate sentinel\n"
   IO.FS.writeFile gatedOutputPath gatedSentinel
   let gatedOutput ← runInductiveModelsStdin binary [
     "--no-inductives", "--no-check", "--no-type-check-input",
-    "--type-check-output", "-o", gatedOutputPath.toString, "-"] invalidText
-  state := state.check "output kernel rejection occurs before named output is touched" <|
-    gatedOutput.exitCode == 1 && (← IO.FS.readFile gatedOutputPath) == gatedSentinel
+    "--type-check-generated", "-o", gatedOutputPath.toString, "-"] invalidText
+  state := state.check "generated-output gate trusts and publishes unchanged input" <|
+    gatedOutput.exitCode == 0 && (← IO.FS.readFile gatedOutputPath) == invalidText &&
+      hasDiagnostic gatedOutput.stderr "generated kernel check: accepted"
   IO.FS.removeFile gatedOutputPath
 
   -- A later source replay failure must precede the named output transaction.
@@ -221,7 +248,7 @@ def main (args : List String) : IO UInt32 := do
   let lateReplayCorruption := mapConstructor nestedExport `PT.node fun constructor =>
     { constructor with type := .sort .zero }
   let replayRejected ← runInductiveModels binary
-    ["--no-check", "--no-type-check-output", "-o",
+    ["--no-check", "--no-type-check-generated", "-o",
       replayTarget.toString, "-"] (some lateReplayCorruption.render)
   let replayUntouched :=
     replayRejected.exitCode == 1 &&
@@ -244,7 +271,7 @@ def main (args : List String) : IO UInt32 := do
     { nestedExport with decls := #[dependentDecl, dependencyDecl] }
   let reversedText := reversedDependencies.render
   let reversedReplay ← runInductiveModelsStdin binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-generated",
     "--quiet", "-"] reversedText
   state := state.check "kernel replay dependency-orders without transforming output" <|
     reversedReplay.exitCode == 0 && reversedReplay.stdout == reversedText
@@ -381,7 +408,7 @@ def main (args : List String) : IO UInt32 := do
       [`ArenaPartial],
     .ax `ArenaUnsafe [] (.const `ArenaMissing []) true] }
   let generalReplay ← runInductiveModelsStdin binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-generated",
     "--quiet", "-"] generalMetadata.render
   state := state.check "general metadata and arena safety skips replay exactly" <|
     generalReplay.exitCode == 0 && generalReplay.stdout == generalMetadata.render
@@ -415,7 +442,7 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "unknown quotient kind is a parse/tool error with exit 3" <|
     unknownQuotient != quotientText && badQuotient.exitCode == 3 &&
       (badQuotient.stderr.splitOn "parse error:").length > 1
-  let .ok quotientExport := InductiveModels.parse quotientText (analyse := false) | do
+  let .ok quotientExport := InductiveModels.parse quotientText | do
     IO.eprintln "mainclitest: quotient fixture did not parse"
     return 1
   let quotientRecords := quotientExport.decls.filter fun declaration =>
@@ -453,15 +480,15 @@ def main (args : List String) : IO UInt32 := do
   let collision : InductiveModels.EDecl := .ax collisionName [] (.sort (.succ .zero)) false
   let declinedText := { nestedExport with decls := nestedExport.decls.push collision }.render
   let declined ← runInductiveModelsStdin binary
-    ["--no-check", "--no-type-check-output", "--no-output", "-"] declinedText
+    ["--no-check", "--no-type-check-generated", "--no-output", "-"] declinedText
   state := state.check "unsupported generation declines with exit 2" <|
     declined.exitCode == 2 && (declined.stderr.splitOn "declined").length > 1
   let kernelCheckedDecline ← runInductiveModelsStdin binary
-    ["--no-check", "--type-check-output", "--no-output", "-"] declinedText
-  state := state.check "direct output kernel acceptance preserves generation exit 2" <|
+    ["--no-check", "--type-check-generated", "--no-output", "-"] declinedText
+  state := state.check "generated-island kernel acceptance preserves generation exit 2" <|
     kernelCheckedDecline.exitCode == 2 && kernelCheckedDecline.stdout.isEmpty &&
       (kernelCheckedDecline.stderr.splitOn "declined").length > 1 &&
-      hasDiagnostic kernelCheckedDecline.stderr "output kernel check: accepted"
+      hasDiagnostic kernelCheckedDecline.stderr "generated kernel check: accepted"
 
   let malformed ← runInductiveModelsStdin binary
     ["--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"] "not ndjson\n"
@@ -499,12 +526,12 @@ def main (args : List String) : IO UInt32 := do
     "{\"ie\":1,\"mdata\":{\"data\":{\"synthetic\":true},\"expr\":0}}\n" ++
     "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":1}}\n"
   let metadataRun ← runInductiveModelsStdin binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--type-check-output",
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-generated",
     "--quiet", "-"] metadataInput
   let metadataDecl : InductiveModels.EDecl := .ax `ArenaMetadata [] (.sort .zero) false
   state := state.check "metadata expression input passes both arena kernel gates" <|
     metadataRun.exitCode == 0 &&
-      match InductiveModels.parse metadataRun.stdout (analyse := false) with
+      match InductiveModels.parse metadataRun.stdout with
       | .ok output => output.decls == #[metadataDecl]
       | .error _ => false
   let missing ← runInductiveModels binary [
@@ -513,13 +540,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "missing $IN path is a tool error with exit 3" (missing.exitCode == 3)
   let badOption ← runInductiveModels binary ["--unknown-arena-option", nested]
   state := state.check "CLI misuse is a tool error with exit 3" (badOption.exitCode == 3)
-  let monoRefusal := s!"{root}/test/fixtures/mono/marker_taken.ndjson"
-  let internal ← runInductiveModels binary [
-    "--no-inductives", "--no-check", "--mono-levels", "--no-output", monoRefusal]
-  state := state.check "internal transform refusal is a tool error with exit 3" <|
-    internal.exitCode == 3 &&
-      (internal.stderr.splitOn "monomorphization refused the export:").length > 1
-
   -- A literal `-` is standard input, not an unknown option.  The streaming
   -- reader sees the same records as a file reader; stdin cannot use the
   -- verbatim-copy shortcut after it has been consumed, so compare exports
@@ -529,21 +549,19 @@ def main (args : List String) : IO UInt32 := do
     ["--no-inductives", "--no-check", "--quiet", "-"] (some nestedText)
   state := state.check "stdin input succeeds" (stdinRun.exitCode == 0)
   state := state.check "stdin and file parse to the same export" <|
-    match InductiveModels.parse stdinRun.stdout (analyse := false),
-        InductiveModels.parse nestedText (analyse := false) with
+    match InductiveModels.parse stdinRun.stdout,
+        InductiveModels.parse nestedText with
     | .ok stdinExport, .ok fileExport => stdinExport.decls == fileExport.decls
     | _, _ => false
 
   -- All defaults are exercised here, including stdout output, both structural
-  -- checks, and the final whole-stream kernel verdict.
-  -- This succeeds once all generated model families precede their owners; it
-  -- is the integration seam between the CLI and the ordering repair.
+  -- checks, and incremental generated-island kernel checking.
   let defaults ← runInductiveModels binary [nested]
-  let directWorker ← runInductiveModelsWithEnv binary [nested]
+  let markedWorker ← runInductiveModelsWithEnv binary [nested]
     #[(InductiveModels.Supervisor.workerMarker, some "1")]
   state := state.check "supervisor preserves an ordinary CLI run byte-for-byte" <|
-    defaults.exitCode == directWorker.exitCode && defaults.stdout == directWorker.stdout &&
-      defaults.stderr == directWorker.stderr
+    defaults.exitCode == markedWorker.exitCode && defaults.stdout == markedWorker.stdout &&
+      defaults.stderr == markedWorker.stderr
   state := state.check "defaults succeed" (defaults.exitCode == 0)
   state := state.check "defaults write an export to stdout" (!defaults.stdout.isEmpty)
   state := state.check "diagnostics stay off stdout"
@@ -556,8 +574,8 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "default output check reports its exact nonempty family count" <|
     defaultOutputFamilies > 0 && hasDiagnostic defaults.stderr
       s!"output check: {defaultOutputFamilies} model families checked"
-  state := state.check "default output kernel check reports acceptance" <|
-    hasDiagnostic defaults.stderr "output kernel check: accepted"
+  state := state.check "default generated kernel check reports acceptance" <|
+    hasDiagnostic defaults.stderr "generated kernel check: accepted"
 
   -- Feed the generated result back through the default checker.  This is an
   -- actual input-side model family, rather than the vacuous check of an
@@ -598,49 +616,83 @@ def main (args : List String) : IO UInt32 := do
   let fallbackRun ← runInductiveModelsAt binaryAbsolute.toString
     ["--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "actual output ignores a missing spool root" <|
+  state := state.check "planned actual output creates only a cleaned input workspace" <|
     fallbackRun.exitCode == 0 && sameSemanticExport fallbackRun.stdout defaults.stdout &&
-      hasDiagnostic fallbackRun.stderr "output backend: legacy"
+      hasDiagnostic fallbackRun.stderr "output backend: declaration-stream" &&
+      hasDiagnostic fallbackRun.stderr "input route: planned-census" &&
+      (← ((fallbackCwd : System.FilePath) / "_tmp").readDir).isEmpty
+  IO.FS.removeDir ((fallbackCwd : System.FilePath) / "_tmp")
   IO.FS.removeDir fallbackCwd
-  -- Every actual output uses one ordinary full-AST backend, independently of
-  -- whether the final output kernel gate is enabled.
+  -- Actual generated output is declaration-wise, independently of whether
+  -- the generated-island kernel gate is enabled.
   let observedDefault ← runInductiveModelsWithEnv binary [nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "ordinary default output kernel gate selects legacy output" <|
+  state := state.check "default output selects planned declaration streaming" <|
     observedDefault.exitCode == defaults.exitCode &&
-      hasDiagnostic observedDefault.stderr "output backend: legacy" &&
+      hasDiagnostic observedDefault.stderr "output backend: declaration-stream" &&
+      hasDiagnostic observedDefault.stderr "input route: planned-census" &&
+      observedDefault.stderr.contains "generated kernel checks:" &&
+      !hasDiagnostic observedDefault.stderr "generated kernel checks: 0" &&
       sameSemanticExport observedDefault.stdout defaults.stdout
+  state := state.check "streamed stdout parses with each model before its owner" <|
+    match InductiveModels.parse observedDefault.stdout with
+    | .error _ => false
+    | .ok streamed =>
+      let model := InductiveModels.Naming.modelName `Tree
+      match streamed.decls.findIdx? (·.names.contains model),
+          streamed.decls.findIdx? (·.names.contains `Tree) with
+      | some modelIndex, some ownerIndex => modelIndex < ownerIndex
+      | _, _ => false
   let observedLegacy ← runInductiveModelsWithEnv binary [nested] #[
     ("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1"),
     ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "explicit A/B override selects legacy output" <|
+  state := state.check "A/B override retains input but still streams output" <|
     observedLegacy.exitCode == defaults.exitCode &&
-      hasDiagnostic observedLegacy.stderr "output backend: legacy" &&
+      hasDiagnostic observedLegacy.stderr "output backend: declaration-stream" &&
+      !hasDiagnostic observedLegacy.stderr "input route: planned-census" &&
       sameSemanticExport observedLegacy.stdout defaults.stdout
   let discardCwd := s!"{scratch}/main-cli-compact-discard-root"
   IO.FS.createDirAll discardCwd
   let discarded ← runInductiveModelsAt binaryAbsolute.toString
-    ["--no-output", "--no-type-check-output", nestedAbsolute.toString] discardCwd
+    ["--no-output", "--no-type-check-generated", nestedAbsolute.toString] discardCwd
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "generated no-output selects compact discard without a spool root" <|
     discarded.exitCode == defaults.exitCode && discarded.stdout.isEmpty &&
       hasDiagnostic discarded.stderr "output backend: compact-discard" &&
       !(← System.FilePath.pathExists (discardCwd / "_tmp"))
   IO.FS.removeDir discardCwd
+  let discardSentinelCwd := s!"{scratch}/main-cli-compact-discard-sentinel"
+  let discardSentinelRoot := (discardSentinelCwd : System.FilePath) / "_tmp"
+  let discardSentinel := discardSentinelRoot / "input-only-sentinel"
+  IO.FS.createDirAll discardSentinelRoot
+  IO.FS.writeFile discardSentinel "untouched"
+  let discardedWithSentinel ← runInductiveModelsAt binaryAbsolute.toString
+    ["--no-output", "--no-type-check-generated", nestedAbsolute.toString] discardSentinelCwd
+    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
+  let sentinelExists ← System.FilePath.pathExists discardSentinel
+  let sentinelContents ← if sentinelExists then IO.FS.readFile discardSentinel else pure ""
+  state := state.check "unchecked compact discard leaves a preexisting scratch sentinel untouched" <|
+    discardedWithSentinel.exitCode == defaults.exitCode &&
+      discardedWithSentinel.stdout.isEmpty &&
+      hasDiagnostic discardedWithSentinel.stderr "output backend: compact-discard" &&
+      sentinelContents == "untouched"
+  IO.FS.removeFile discardSentinel
+  IO.FS.removeDir discardSentinelRoot
+  IO.FS.removeDir discardSentinelCwd
   let discardedPlain ← runInductiveModels binary
-    ["--no-output", "--no-type-check-output", nested]
+    ["--no-output", "--no-type-check-generated", nested]
   let discardedLegacy ← runInductiveModelsLegacy binary
-    ["--no-output", "--no-type-check-output", nested]
+    ["--no-output", "--no-type-check-generated", nested]
   state := state.check "compact discard preserves the legacy report and exit" <|
     discardedPlain.exitCode == discardedLegacy.exitCode && discardedPlain.stdout.isEmpty &&
       discardedLegacy.stdout.isEmpty && discardedPlain.stderr == discardedLegacy.stderr
   let discardedStdin ← runInductiveModelsStdin binary
-    ["--no-output", "--no-type-check-output", "-"] nestedText
+    ["--no-output", "--no-type-check-generated", "-"] nestedText
   state := state.check "compact discard stdin preserves the path verdict" <|
     discardedStdin.exitCode == discardedPlain.exitCode && discardedStdin.stdout.isEmpty &&
       discardedStdin.stderr == discardedPlain.stderr.replace nested "-"
   let discardedOverride ← runInductiveModelsWithEnv binary
-    ["--no-output", "--no-type-check-output", nested] #[
+    ["--no-output", "--no-type-check-generated", nested] #[
       ("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1"),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "legacy override excludes compact discard" <|
@@ -649,61 +701,64 @@ def main (args : List String) : IO UInt32 := do
   let fullNamedPath := s!"{scratch}/main-cli-full-opt-out.ndjson"
   removeIfPresent fullNamedPath
   let fullNamed ← runInductiveModelsWithEnv binary
-    ["--no-type-check-output", "-o", fullNamedPath, nested]
+    ["--no-type-check-generated", "-o", fullNamedPath, nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   let fullNamedText ← if ← System.FilePath.pathExists fullNamedPath then
       IO.FS.readFile fullNamedPath
     else pure ""
-  state := state.check "output-kernel opt-out named output selects full output" <|
+  state := state.check "generated-kernel opt-out named output streams without a gate" <|
     fullNamed.exitCode == defaults.exitCode && fullNamed.stdout.isEmpty &&
-      hasDiagnostic fullNamed.stderr "output backend: legacy" &&
+      hasDiagnostic fullNamed.stderr "output backend: declaration-stream" &&
+      hasDiagnostic fullNamed.stderr "input route: planned-census" &&
+      hasDiagnostic fullNamed.stderr "generated kernel checks: 0" &&
       sameSemanticExport fullNamedText defaults.stdout
   removeIfPresent fullNamedPath
-  state := state.check "full named output leaves no transaction sibling" <|
+  state := state.check "streamed named output leaves no transaction sibling" <|
     !(← hasOutputSibling scratch)
 
   -- Parseable but noncanonical raw bytes retain the accepted semantic output
-  -- on the ordinary full-AST path.
+  -- on the ordinary retained-input streaming path.
   let noncanonicalInput := "\n" ++ nestedExport.render
   let noncanonicalDefault ← runInductiveModelsWithEnv binary
-    ["--no-check", "--no-type-check-output", "-"]
+    ["--no-check", "--no-type-check-generated", "-"]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")] (some noncanonicalInput)
   let noncanonicalLegacy ← runInductiveModelsLegacy binary
-    ["--no-check", "--no-type-check-output", "-"] (some noncanonicalInput)
-  state := state.check "noncanonical raw input selects legacy output" <|
+    ["--no-check", "--no-type-check-generated", "-"] (some noncanonicalInput)
+  state := state.check "noncanonical raw input preserves semantic streaming output" <|
     noncanonicalDefault.exitCode == noncanonicalLegacy.exitCode &&
-      hasDiagnostic noncanonicalDefault.stderr "output backend: legacy" &&
+      hasDiagnostic noncanonicalDefault.stderr "output backend: declaration-stream" &&
       sameSemanticExport noncanonicalDefault.stdout noncanonicalLegacy.stdout
   let noncanonicalDiscard ← runInductiveModelsWithEnv binary
-    ["--no-output", "--no-type-check-output", "-"]
+    ["--no-output", "--no-type-check-generated", "-"]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")] (some noncanonicalInput)
   state := state.check "noncanonical no-output input needs no raw source certificate" <|
     noncanonicalDiscard.exitCode == defaults.exitCode && noncanonicalDiscard.stdout.isEmpty &&
       hasDiagnostic noncanonicalDiscard.stderr "output backend: compact-discard"
   let noncanonicalKernelArgs :=
-    ["--no-output", "--no-check", "--type-check-output", "-"]
+    ["--no-output", "--no-check", "--type-check-generated", "-"]
   let noncanonicalKernelLegacy ← runInductiveModelsLegacy binary noncanonicalKernelArgs
     (some noncanonicalInput)
   let noncanonicalKernelBefore ← System.FilePath.readDir scratch
-  let noncanonicalKernelDirect ← runInductiveModels binary noncanonicalKernelArgs
+  let noncanonicalKernelPlanned ← runInductiveModels binary noncanonicalKernelArgs
     (some noncanonicalInput)
   let noncanonicalKernelAfter ← System.FilePath.readDir scratch
-  state := state.check "direct kernel replay preserves noncanonical report and exit" <|
-    noncanonicalKernelDirect.exitCode == noncanonicalKernelLegacy.exitCode &&
-      noncanonicalKernelDirect.stdout.isEmpty && noncanonicalKernelLegacy.stdout.isEmpty &&
-      noncanonicalKernelDirect.stderr == noncanonicalKernelLegacy.stderr &&
-      hasDiagnostic noncanonicalKernelDirect.stderr "output kernel check: accepted"
-  state := state.check "noncanonical direct kernel cleans its input workspace" <|
+  state := state.check "planned generated checking preserves noncanonical report and exit" <|
+    noncanonicalKernelPlanned.exitCode == noncanonicalKernelLegacy.exitCode &&
+      noncanonicalKernelPlanned.stdout.isEmpty && noncanonicalKernelLegacy.stdout.isEmpty &&
+      noncanonicalKernelPlanned.stderr == noncanonicalKernelLegacy.stderr &&
+      hasDiagnostic noncanonicalKernelPlanned.stderr "generated kernel check: accepted"
+  state := state.check "noncanonical planned generation cleans its input workspace" <|
     sameDirectoryEntries noncanonicalKernelBefore noncanonicalKernelAfter
 
   let traceMode ← runInductiveModelsWithEnv binary
-    ["--no-check-output", "--no-type-check-output", nested]
+    ["--no-check-output", "--no-type-check-generated", nested]
     #[("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", some "1"),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "planner trace mode selects legacy output" <|
-    traceMode.exitCode == 0 && hasDiagnostic traceMode.stderr "output backend: legacy"
+  state := state.check "planner trace mode retains input but streams output" <|
+    traceMode.exitCode == 0 &&
+      hasDiagnostic traceMode.stderr "output backend: declaration-stream"
   let discardTraceMode ← runInductiveModelsWithEnv binary
-    ["--no-output", "--no-check-output", "--no-type-check-output", nested]
+    ["--no-output", "--no-check-output", "--no-type-check-generated", nested]
     #[("LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE", some "1"),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
   state := state.check "planner trace excludes compact discard" <|
@@ -711,173 +766,160 @@ def main (args : List String) : IO UInt32 := do
       hasDiagnostic discardTraceMode.stderr "output backend: legacy"
 
   let kernelOutputMode ← runInductiveModelsWithEnv binary
-    ["--no-check", "--type-check-output", nested]
+    ["--no-check", "--type-check-generated", nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "output kernel checking selects legacy output" <|
+  state := state.check "generated kernel checking selects declaration streaming" <|
     kernelOutputMode.exitCode == 0 &&
-      hasDiagnostic kernelOutputMode.stderr "output backend: legacy"
-  let directSuccessBefore ← System.FilePath.readDir scratch
+      hasDiagnostic kernelOutputMode.stderr "output backend: declaration-stream" &&
+      hasDiagnostic kernelOutputMode.stderr "input route: planned-census" &&
+      !hasDiagnostic kernelOutputMode.stderr "generated kernel checks: 0"
+  let plannedSuccessBefore ← System.FilePath.readDir scratch
   let kernelDiscardMode ← runInductiveModelsWithEnv binary
-    ["--no-output", "--no-check", "--type-check-output", nested]
+    ["--no-output", "--no-check", "--type-check-generated", nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "no-output kernel checking selects compact direct" <|
+  state := state.check "no-output generated checking selects compact discard" <|
     kernelDiscardMode.exitCode == 0 && kernelDiscardMode.stdout.isEmpty &&
-      hasDiagnostic kernelDiscardMode.stderr "output backend: compact-direct" &&
-      hasDiagnostic kernelDiscardMode.stderr "direct kernel route: shared-prefix" &&
-      hasDiagnostic kernelDiscardMode.stderr "output kernel check: accepted"
-  let directSuccessAfter ← System.FilePath.readDir scratch
-  state := state.check "successful direct kernel replay cleans its input workspace" <|
-    sameDirectoryEntries directSuccessBefore directSuccessAfter
-  let directPlainArgs := ["--no-output", "--no-check", "--type-check-output", nested]
-  let directPlain ← runInductiveModels binary directPlainArgs
-  let directPlainLegacy ← runInductiveModelsLegacy binary directPlainArgs
-  state := state.check "selected shared-prefix route preserves exact ordinary diagnostics" <|
-    directPlain.exitCode == directPlainLegacy.exitCode && directPlain.stdout.isEmpty &&
-      directPlainLegacy.stdout.isEmpty && directPlain.stderr == directPlainLegacy.stderr
-  let injectedDirectBefore ← System.FilePath.readDir scratch
-  let injectedDirect ← runInductiveModelsWithEnv binary directPlainArgs #[(
-    "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1"),
-    ("LEAN_INDUCTIVE_MODELS_TEST_SHARED_PREFIX_FAIL_AFTER_OWNERS", some "1")]
-  let injectedDirectAfter ← System.FilePath.readDir scratch
-  state := state.check "injected shared-prefix failure stays on planned compact direct" <|
-    injectedDirect.exitCode == directPlain.exitCode && injectedDirect.stdout.isEmpty &&
-      hasDiagnostic injectedDirect.stderr "direct kernel route: planned-fallback" &&
-      hasDiagnostic injectedDirect.stderr "output backend: compact-direct" &&
-      hasDiagnostic injectedDirect.stderr "output kernel check: accepted"
-  state := state.check "injected planned fallback cleans its input workspace" <|
-    sameDirectoryEntries injectedDirectBefore injectedDirectAfter
+      hasDiagnostic kernelDiscardMode.stderr "output backend: compact-discard" &&
+      hasDiagnostic kernelDiscardMode.stderr "generated kernel check: accepted"
+  let plannedSuccessAfter ← System.FilePath.readDir scratch
+  state := state.check "successful planned generated check cleans its input workspace" <|
+    sameDirectoryEntries plannedSuccessBefore plannedSuccessAfter
+  let plannedPlainArgs := ["--no-output", "--no-check", "--type-check-generated", nested]
+  let plannedPlain ← runInductiveModels binary plannedPlainArgs
+  let plannedPlainLegacy ← runInductiveModelsLegacy binary plannedPlainArgs
+  state := state.check "planned generated route preserves exact ordinary diagnostics" <|
+    plannedPlain.exitCode == plannedPlainLegacy.exitCode && plannedPlain.stdout.isEmpty &&
+      plannedPlainLegacy.stdout.isEmpty && plannedPlain.stderr == plannedPlainLegacy.stderr
   let outputMetadataCorruption := mapRecursor nestedExport `N.rec fun recursor =>
     { recursor with numMinors := recursor.numMinors + 1 }
   let metadataFallbackArgs :=
-    ["--no-output", "--no-check", "--no-type-check-input", "--type-check-output", "-"]
+    ["--no-output", "--no-check", "--no-type-check-input", "--type-check-generated", "-"]
   let metadataFallbackLegacy ← runInductiveModelsLegacy binary metadataFallbackArgs
     (some outputMetadataCorruption.render)
-  let metadataFallbackDirect ← runInductiveModels binary metadataFallbackArgs
+  let metadataFallbackPlanned ← runInductiveModels binary metadataFallbackArgs
     (some outputMetadataCorruption.render)
   -- Exact source-layout validation precedes final output checking in both
-  -- routes. The direct route must preserve that ordinary generation failure,
+  -- routes. The planned route must preserve that ordinary generation failure,
   -- including its diagnostic, rather than exposing a feed-order kernel error.
   let expectedMetadataFailure :=
     "-: internal error: N.rec's exact recursor layout differs from its installed metadata\n"
   let metadataFallbackParity :=
-    metadataFallbackDirect.exitCode == metadataFallbackLegacy.exitCode &&
-      metadataFallbackDirect.stdout.isEmpty && metadataFallbackLegacy.stdout.isEmpty &&
-      metadataFallbackDirect.stderr == metadataFallbackLegacy.stderr &&
-      metadataFallbackDirect.stderr == expectedMetadataFailure
+    metadataFallbackPlanned.exitCode == metadataFallbackLegacy.exitCode &&
+      metadataFallbackPlanned.stdout.isEmpty && metadataFallbackLegacy.stdout.isEmpty &&
+      metadataFallbackPlanned.stderr == metadataFallbackLegacy.stderr &&
+      metadataFallbackPlanned.stderr == expectedMetadataFailure
   unless metadataFallbackParity do
     IO.eprintln s!"metadata fallback legacy stderr: {repr metadataFallbackLegacy.stderr}"
-    IO.eprintln s!"metadata fallback direct stderr: {repr metadataFallbackDirect.stderr}"
-  state := state.check "direct metadata rejection preserves ordinary generation diagnostic"
+    IO.eprintln s!"metadata fallback planned stderr: {repr metadataFallbackPlanned.stderr}"
+  state := state.check "planned metadata rejection preserves ordinary generation diagnostic"
     metadataFallbackParity
-  let rootedDirectCwd : System.FilePath := s!"{scratch}/main-cli-rooted-direct-cwd"
-  let rootedDirectTmp : System.FilePath := s!"{scratch}/main-cli-rooted-external-tmp"
-  let rootedDirectScratch := rootedDirectCwd / "_tmp"
-  IO.FS.createDir rootedDirectCwd
-  IO.FS.createDir rootedDirectScratch
-  IO.FS.createDir rootedDirectTmp
-  let rootedSentinel := rootedDirectScratch / "keep"
-  let externalSentinel := rootedDirectTmp / "keep"
+  let rootedPlannedCwd : System.FilePath := s!"{scratch}/main-cli-rooted-planned-cwd"
+  let rootedPlannedTmp : System.FilePath := s!"{scratch}/main-cli-rooted-external-tmp"
+  let rootedPlannedScratch := rootedPlannedCwd / "_tmp"
+  IO.FS.createDir rootedPlannedCwd
+  IO.FS.createDir rootedPlannedScratch
+  IO.FS.createDir rootedPlannedTmp
+  let rootedSentinel := rootedPlannedScratch / "keep"
+  let externalSentinel := rootedPlannedTmp / "keep"
   IO.FS.writeFile rootedSentinel "rooted\n"
   IO.FS.writeFile externalSentinel "external\n"
-  let rootedDirectRun ← runInductiveModelsAt binaryAbsolute.toString
-    ["--no-output", "--type-check-output", "--no-check", nestedAbsolute.toString]
-    rootedDirectCwd.toString #[
-      ("TMPDIR", some rootedDirectTmp.toString),
+  let rootedPlannedRun ← runInductiveModelsAt binaryAbsolute.toString
+    ["--no-output", "--type-check-generated", "--no-check", nestedAbsolute.toString]
+    rootedPlannedCwd.toString #[
+      ("TMPDIR", some rootedPlannedTmp.toString),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "compact direct roots input workspace independently of ambient TMPDIR" <|
-    rootedDirectRun.exitCode == 0 && rootedDirectRun.stdout.isEmpty &&
-      hasDiagnostic rootedDirectRun.stderr "output backend: compact-direct" &&
-      hasDiagnostic rootedDirectRun.stderr "output kernel check: accepted" &&
+  state := state.check "planned discard roots input workspace independently of ambient TMPDIR" <|
+    rootedPlannedRun.exitCode == 0 && rootedPlannedRun.stdout.isEmpty &&
+      hasDiagnostic rootedPlannedRun.stderr "output backend: compact-discard" &&
+      hasDiagnostic rootedPlannedRun.stderr "generated kernel check: accepted" &&
       (← IO.FS.readFile rootedSentinel) == "rooted\n" &&
       (← IO.FS.readFile externalSentinel) == "external\n" &&
-      (← rootedDirectScratch.readDir).size == 1 && (← rootedDirectTmp.readDir).size == 1
+      (← rootedPlannedScratch.readDir).size == 1 && (← rootedPlannedTmp.readDir).size == 1
   IO.FS.removeFile rootedSentinel
   IO.FS.removeFile externalSentinel
-  IO.FS.removeDir rootedDirectScratch
-  IO.FS.removeDir rootedDirectCwd
-  IO.FS.removeDir rootedDirectTmp
-  let directCwd : System.FilePath := s!"{scratch}/main-cli-direct-cwd"
-  let externalDirectTmp : System.FilePath := s!"{scratch}/main-cli-external-direct-tmp"
-  IO.FS.createDir directCwd
-  IO.FS.createDir externalDirectTmp
-  let directCwdScratch := directCwd / "_tmp"
-  IO.FS.writeFile directCwdScratch "not a directory\n"
-  let directCwdRun ← runInductiveModelsAt binaryAbsolute.toString
-    ["--no-output", "--type-check-output", "--no-check", nestedAbsolute.toString]
-    directCwd.toString #[
-      ("TMPDIR", some externalDirectTmp.toString),
+  IO.FS.removeDir rootedPlannedScratch
+  IO.FS.removeDir rootedPlannedCwd
+  IO.FS.removeDir rootedPlannedTmp
+  let plannedCwd : System.FilePath := s!"{scratch}/main-cli-planned-cwd"
+  let externalPlannedTmp : System.FilePath := s!"{scratch}/main-cli-external-planned-tmp"
+  IO.FS.createDir plannedCwd
+  IO.FS.createDir externalPlannedTmp
+  let plannedCwdScratch := plannedCwd / "_tmp"
+  IO.FS.writeFile plannedCwdScratch "not a directory\n"
+  let plannedCwdRun ← runInductiveModelsAt binaryAbsolute.toString
+    ["--no-output", "--type-check-generated", "--no-check", nestedAbsolute.toString]
+    plannedCwd.toString #[
+      ("TMPDIR", some externalPlannedTmp.toString),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "compact direct falls back before consuming an unusable input workspace" <|
-    directCwdRun.exitCode == 0 && directCwdRun.stdout.isEmpty &&
-      hasDiagnostic directCwdRun.stderr "output backend: compact-direct" &&
-      (← IO.FS.readFile directCwdScratch) == "not a directory\n" &&
-      (← externalDirectTmp.readDir).isEmpty
-  IO.FS.removeFile directCwdScratch
-  IO.FS.removeDir directCwd
-  IO.FS.removeDir externalDirectTmp
-  let directFailureEntriesBefore ← System.FilePath.readDir scratch
-  let failedDirectKernel ← runInductiveModelsWithEnv binary
-    ["--no-output", "--no-check", "--type-check-output", "-"]
+  state := state.check "planned discard falls back before consuming an unusable input workspace" <|
+    plannedCwdRun.exitCode == 0 && plannedCwdRun.stdout.isEmpty &&
+      hasDiagnostic plannedCwdRun.stderr "output backend: compact-discard" &&
+      (← IO.FS.readFile plannedCwdScratch) == "not a directory\n" &&
+      (← externalPlannedTmp.readDir).isEmpty
+  IO.FS.removeFile plannedCwdScratch
+  IO.FS.removeDir plannedCwd
+  IO.FS.removeDir externalPlannedTmp
+  let plannedFailureEntriesBefore ← System.FilePath.readDir scratch
+  let failedPlannedKernel ← runInductiveModelsWithEnv binary
+    ["--no-output", "--no-check", "--type-check-generated", "-"]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
     (some lateReplayCorruption.render)
-  let directFailureEntriesAfter ← System.FilePath.readDir scratch
-  state := state.check "unreplayable compact direct cleans its input workspace" <|
-    failedDirectKernel.exitCode == 1 && failedDirectKernel.stdout.isEmpty &&
-      hasDiagnostic failedDirectKernel.stderr "output backend: legacy" &&
-      sameDirectoryEntries directFailureEntriesBefore directFailureEntriesAfter
-  -- Generated arena IDs may differ from the legacy global writer, so compare
-  -- parsed exports, exact declaration order, diagnostics, and exit status
-  -- rather than raw bytes.
+  let plannedFailureEntriesAfter ← System.FilePath.readDir scratch
+  state := state.check "unreplayable planned discard cleans its input workspace" <|
+    failedPlannedKernel.exitCode == 1 && failedPlannedKernel.stdout.isEmpty &&
+      hasDiagnostic failedPlannedKernel.stderr "output backend: compact-discard" &&
+      sameDirectoryEntries plannedFailureEntriesBefore plannedFailureEntriesAfter
+  -- Compare parsed exports, exact declaration order, diagnostics, and exit
+  -- status so this pins the semantic contract independently of byte layout.
   for (label, fixture) in #[
       ("nested multi-model island", nested),
-      ("late scheduled support", s!"{root}/test/fixtures/inductive-models/prim_late_basis.ndjson")] do
-    let args := #["--no-check-output", "--no-type-check-output", "--no-mono-levels", fixture]
+      ("late source support", s!"{root}/test/fixtures/inductive-models/prim_late_basis.ndjson")] do
+    let args := #["--no-check-output", "--no-type-check-generated", fixture]
     let legacy ← runInductiveModelsLegacy binary args.toList
     let full ← runInductiveModels binary args.toList
-    state := state.check s!"opt-out full {label} preserves report and exit" <|
+    state := state.check s!"opt-out stream {label} preserves report and exit" <|
       full.exitCode == legacy.exitCode && full.stderr == legacy.stderr
-    state := state.check s!"opt-out full {label} preserves semantic output and order" <|
+    state := state.check s!"opt-out stream {label} preserves semantic output and order" <|
       sameSemanticExport full.stdout legacy.stdout
-  let checkedLegacy ← runInductiveModelsLegacy binary ["--no-type-check-output", nested]
-  let checkedFull ← runInductiveModels binary ["--no-type-check-output", nested]
-  state := state.check "opt-out full output check preserves report and exit" <|
+  let checkedLegacy ← runInductiveModelsLegacy binary ["--no-type-check-generated", nested]
+  let checkedFull ← runInductiveModels binary ["--no-type-check-generated", nested]
+  state := state.check "opt-out stream output check preserves report and exit" <|
     checkedFull.exitCode == checkedLegacy.exitCode && checkedFull.stderr == checkedLegacy.stderr
-  state := state.check "opt-out full output check preserves semantic output and order" <|
+  state := state.check "opt-out stream output check preserves semantic output and order" <|
     sameSemanticExport checkedFull.stdout checkedLegacy.stdout
-  -- Actual output stays on the full path even when compact syntax for a future
-  -- generated provider would be unavailable.
+  -- Actual output stays on the declaration stream even when a future generated
+  -- provider is unavailable at an earlier source transition.
   let futureModel := InductiveModels.Naming.modelName `Tree
   let stabilityMiss := { nestedExport with decls :=
     #[InductiveModels.EDecl.ax `CompactFallbackProbe [] (.const futureModel []) false] ++
       nestedExport.decls }
-  let fallbackArgs := #["--no-type-check-input", "--no-type-check-output", "-"]
+  let fallbackArgs := #["--no-type-check-input", "--no-type-check-generated", "-"]
   let fallbackLegacy ← runInductiveModelsLegacy binary fallbackArgs.toList (some stabilityMiss.render)
   let fallbackFull ← runInductiveModels binary fallbackArgs.toList (some stabilityMiss.render)
   state := state.check "actual output future provider preserves exact report and exit" <|
     fallbackFull.exitCode == fallbackLegacy.exitCode && fallbackFull.stderr == fallbackLegacy.stderr
   state := state.check "actual output future provider preserves exact output" <|
     fallbackFull.stdout == fallbackLegacy.stdout
-  let directFallbackArgs :=
-    ["--no-type-check-input", "--type-check-output", "--no-output", "-"]
-  let directFallbackLegacy ← runInductiveModelsLegacy binary directFallbackArgs
+  let plannedProviderArgs :=
+    ["--no-type-check-input", "--type-check-generated", "--no-output", "-"]
+  let plannedProviderLegacy ← runInductiveModelsLegacy binary plannedProviderArgs
     (some stabilityMiss.render)
-  let directFallbackBefore ← System.FilePath.readDir scratch
-  let directFallback ← runInductiveModels binary directFallbackArgs (some stabilityMiss.render)
-  let directFallbackAfter ← System.FilePath.readDir scratch
-  state := state.check "direct kernel replay preserves compact-availability fallback" <|
-    directFallback.exitCode == directFallbackLegacy.exitCode && directFallback.stdout.isEmpty &&
-      directFallbackLegacy.stdout.isEmpty && directFallback.stderr == directFallbackLegacy.stderr &&
-      hasDiagnostic directFallback.stderr "output kernel check: accepted"
-  state := state.check "compact-availability direct fallback cleans its input workspace" <|
-    sameDirectoryEntries directFallbackBefore directFallbackAfter
-  let tracedDirectFallback ← runInductiveModelsWithEnv binary directFallbackArgs
+  let plannedProviderBefore ← System.FilePath.readDir scratch
+  let plannedProvider ← runInductiveModels binary plannedProviderArgs (some stabilityMiss.render)
+  let plannedProviderAfter ← System.FilePath.readDir scratch
+  state := state.check "generated-only checking does not inspect source provider order" <|
+    plannedProvider.exitCode == plannedProviderLegacy.exitCode && plannedProvider.stdout.isEmpty &&
+      plannedProviderLegacy.stdout.isEmpty && plannedProvider.stderr == plannedProviderLegacy.stderr &&
+      hasDiagnostic plannedProvider.stderr "generated kernel check: accepted"
+  state := state.check "planned generated-provider run cleans its input workspace" <|
+    sameDirectoryEntries plannedProviderBefore plannedProviderAfter
+  let tracedPlannedProvider ← runInductiveModelsWithEnv binary plannedProviderArgs
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
     (some stabilityMiss.render)
-  state := state.check "unavailable shared prefix reports its planned fallback route" <|
-    tracedDirectFallback.exitCode == directFallback.exitCode &&
-      tracedDirectFallback.stdout.isEmpty &&
-      hasDiagnostic tracedDirectFallback.stderr "direct kernel route: planned-fallback" &&
-      hasDiagnostic tracedDirectFallback.stderr "output backend: legacy"
+  state := state.check "generated-provider run stays on planned compact discard" <|
+    tracedPlannedProvider.exitCode == plannedProvider.exitCode &&
+      tracedPlannedProvider.stdout.isEmpty &&
+      hasDiagnostic tracedPlannedProvider.stderr "output backend: compact-discard"
   let outputPath := s!"{scratch}/main-cli-output.ndjson"
   if ← System.FilePath.pathExists outputPath then IO.FS.removeFile outputPath
   let fileRun ← runInductiveModels binary
@@ -904,7 +946,29 @@ def main (args : List String) : IO UInt32 := do
     state := state.check s!"injected {repr failure} preserves named output" <|
       rejected && (← IO.FS.readFile failureTarget) == "old-output\n" &&
         !(← hasOutputSibling scratch)
+  IO.FS.writeFile failureTarget "old-output\n"
+  InductiveModels.Output.Test.writeNamedRollingBack failureTarget
+  state := state.check "semantic rollback preserves named output" <|
+    (← IO.FS.readFile failureTarget) == "old-output\n" &&
+      !(← hasOutputSibling scratch)
   IO.FS.removeFile failureTarget
+
+  let lateFailureTarget : System.FilePath := s!"{scratch}/main-cli-late-stream-failure.ndjson"
+  IO.FS.writeFile lateFailureTarget "existing-target\n"
+  let lateNamedFailure ← runInductiveModelsStdin binary
+    ["--no-check", "--type-check-generated", "-o", lateFailureTarget.toString, "-"]
+    lateReplayCorruption.render
+  state := state.check "late generation rejection rolls back the named stream" <|
+    lateNamedFailure.exitCode == 1 && lateNamedFailure.stdout.isEmpty &&
+      (← IO.FS.readFile lateFailureTarget) == "existing-target\n" &&
+      !(← hasOutputSibling scratch)
+  IO.FS.removeFile lateFailureTarget
+  let lateStdoutFailure ← runInductiveModelsStdin binary
+    ["--no-check", "--type-check-generated", "-"] lateReplayCorruption.render
+  state := state.check "late stdout rejection exposes only a parseable prefix" <|
+    lateStdoutFailure.exitCode == 1 && !lateStdoutFailure.stdout.isEmpty &&
+      (InductiveModels.parse lateStdoutFailure.stdout).isOk &&
+      lateStdoutFailure.stdout != lateReplayCorruption.render
 
   let noBasenameRejected ← try
       InductiveModels.Output.write "." fun stream => stream.putStr "unreachable"
@@ -931,7 +995,7 @@ def main (args : List String) : IO UInt32 := do
     state := state.check "named output replaces a symlink, not its referent" <|
       symbolicRun.exitCode == 0 && (← IO.FS.readFile linkReferent) == linkSentinel &&
         (← symbolicTarget.symlinkMetadata).type == .file &&
-        (InductiveModels.parse (← IO.FS.readFile symbolicTarget) (analyse := false)).isOk
+        (InductiveModels.parse (← IO.FS.readFile symbolicTarget)).isOk
   removeIfPresent symbolicTarget
   IO.FS.removeFile linkReferent
 
@@ -946,7 +1010,7 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "named output replaces only the selected hardlink entry" <|
     hardRun.exitCode == 0 && (← IO.FS.readFile hardSource) == nestedText &&
       (← hardSource.metadata).numLinks == 1 && (← hardTarget.metadata).numLinks == 1 &&
-      (InductiveModels.parse (← IO.FS.readFile hardTarget) (analyse := false)).isOk
+      (InductiveModels.parse (← IO.FS.readFile hardTarget)).isOk
   IO.FS.removeFile hardTarget
   IO.FS.removeFile hardSource
 
@@ -958,7 +1022,7 @@ def main (args : List String) : IO UInt32 := do
   let boundaryText :=
     "{\"meta\":{},\"padding\":\"" ++ String.ofList (List.replicate (5 * 1024 * 1024) 'x') ++
       "\"}\r\n"
-  let .ok boundaryExport := InductiveModels.parse boundaryText (analyse := false) | do
+  let .ok boundaryExport := InductiveModels.parse boundaryText | do
     IO.eprintln "mainclitest: chunk-boundary input did not parse"
     return 1
   IO.FS.writeFile boundaryPath boundaryText
@@ -966,8 +1030,8 @@ def main (args : List String) : IO UInt32 := do
     ["--no-inductives", "--no-check", "--quiet", boundaryPath]
   state := state.check "line spanning the chunk boundary parses" (boundaryRun.exitCode == 0)
   state := state.check "chunk-boundary output is the parsed snapshot" <|
-    match InductiveModels.parse boundaryRun.stdout (analyse := false),
-        InductiveModels.parse boundaryText (analyse := false) with
+    match InductiveModels.parse boundaryRun.stdout,
+        InductiveModels.parse boundaryText with
     | .ok output, .ok input => output.decls == input.decls && output.metaLine == input.metaLine
     | _, _ => false
   let inPlaceRun ← runInductiveModels binary
@@ -975,7 +1039,7 @@ def main (args : List String) : IO UInt32 := do
   let boundaryAfter ← IO.FS.readFile boundaryPath
   state := state.check "literal in-place output is a complete parsed snapshot" <|
     inPlaceRun.exitCode == 0 && inPlaceRun.stdout.isEmpty &&
-      match InductiveModels.parse boundaryAfter (analyse := false) with
+      match InductiveModels.parse boundaryAfter with
       | .ok output => output.metaLine == boundaryExport.metaLine
       | .error _ => false
   let aliasPath := s!"{scratch}/./main-cli-chunk-boundary.ndjson"
@@ -984,7 +1048,7 @@ def main (args : List String) : IO UInt32 := do
   let boundaryAfterAlias ← IO.FS.readFile boundaryPath
   state := state.check "canonical-path in-place output remains complete" <|
     aliasRun.exitCode == 0 && aliasRun.stdout.isEmpty &&
-      (InductiveModels.parse boundaryAfterAlias (analyse := false)).isOk
+      (InductiveModels.parse boundaryAfterAlias).isOk
   IO.FS.removeFile boundaryPath
 
   let malformedPath := s!"{scratch}/main-cli-malformed.ndjson"
@@ -1018,46 +1082,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "quiet suppresses successful check diagnostics" <|
     (nestedOnly.stderr.splitOn "input check:").length == 1 &&
       (nestedOnly.stderr.splitOn "output check:").length == 1
-
-  -- The integrated switch is mode A: it keeps recursor elimination levels,
-  -- runs before inductive generation, and performs Mono's kernel replay.
-  let monoRun ← runInductiveModelsWithEnv binary
-    ["--no-inductives", "--mono-levels", "--quiet", mono]
-    #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "mono-levels mode A succeeds" (monoRun.exitCode == 0)
-  state := state.check "mono-levels selects the legacy backend" <|
-    hasDiagnostic monoRun.stderr "output backend: legacy"
-  state := state.check "mono-levels writes marker-renamed declarations" <|
-    (monoRun.stdout.splitOn "_at").length > 1
-
-  -- Monomorphization runs before generation, so the default inductive branches
-  -- can model its result without asking Mono to infer instantiations for the
-  -- generated bootstrap basis.  This fixture has distinct universe use sites
-  -- and exercises the full default `--inductives --check` pipeline.
-  let poly := s!"{root}/test/fixtures/inductive-models/poly_nested_used.ndjson"
-  let monoModels ← runInductiveModels binary ["--mono-levels", "--quiet", poly]
-  state := state.check "monomorphized generated models pass the final check"
-    (monoModels.exitCode == 0 && !monoModels.stdout.isEmpty)
-
-  -- Check the serialized bytes again.  This pins both ordering passes and the
-  -- stdout writer: an in-memory result cannot make this second
-  -- input check green if serialization changes the declaration order.
-  let monoModeledPath := s!"{scratch}/main-cli-mono-modeled.ndjson"
-  IO.FS.writeFile monoModeledPath monoModels.stdout
-  let monoCheckedAgain ← runInductiveModels binary [
-    "--no-inductives", "--check-input", "--no-check-output", "--no-output",
-    monoModeledPath]
-  state := state.check "serialized monomorphized models remain ordered and check"
-    (monoCheckedAgain.exitCode == 0 && monoCheckedAgain.stdout.isEmpty)
-  let some monoFamilies := familyCount? monoModels.stdout | do
-    IO.eprintln "mainclitest: monomorphized model output did not parse"
-    return 1
-  state := state.check "serialized input-only check reports its exact family count" <|
-    monoFamilies > 0 && hasDiagnostic monoCheckedAgain.stderr
-      s!"input check: {monoFamilies} model families checked"
-  state := state.check "disabled output check emits no success diagnostic" <|
-    (monoCheckedAgain.stderr.splitOn "output check:").length == 1
-  IO.FS.removeFile monoModeledPath
 
   IO.println s!"main CLI: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

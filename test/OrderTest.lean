@@ -72,6 +72,34 @@ def exportOf (decls : Array EDecl) : Export := { metaLine := .null, decls }
 def declarationIndex? (x : Export) (name : Name) : Option Nat :=
   x.decls.findIdx? fun declaration => declaration.names.contains name
 
+/-- Test-only source variant making a prerequisite-first positive case
+explicit without changing production source order. -/
+def withCompletePrerequisiteBefore (x : Export) (prerequisite owner : Name) : IO Export := do
+  let prerequisiteIndices := (Array.range x.decls.size).filter fun index =>
+    x.decls[index]!.names.contains prerequisite
+  let ownerIndices := (Array.range x.decls.size).filter fun index =>
+    x.decls[index]!.names.contains owner
+  unless prerequisiteIndices.size == 1 do
+    throw <| IO.userError s!"expected one complete {prerequisite} record, got {prerequisiteIndices}"
+  unless ownerIndices.size == 1 do
+    throw <| IO.userError s!"expected one complete {owner} record, got {ownerIndices}"
+  let prerequisiteIndex := prerequisiteIndices[0]!
+  let ownerIndex := ownerIndices[0]!
+  if prerequisiteIndex < ownerIndex then return x
+  let prerequisiteRecord := x.decls[prerequisiteIndex]!
+  return { x with decls :=
+    x.decls.extract 0 ownerIndex ++ #[prerequisiteRecord] ++
+      x.decls.extract ownerIndex prerequisiteIndex ++
+      x.decls.extract (prerequisiteIndex + 1) x.decls.size }
+
+/-- No declaration-local model descendant of the complete source block was
+emitted for a declined owner. -/
+def noModeledBlockDescendants (input output : Export) (owner : Name) : Bool :=
+  (input.decls.find? (·.names.contains owner)).any fun sourceBlock =>
+    let roots := sourceBlock.names.toArray.map Naming.modelName
+    output.decls.all fun declaration => declaration.names.all fun name =>
+      roots.all fun root => !root.isPrefixOf name
+
 def declarationType? (x : Export) (name : Name) : Option Expr := do
   let declaration ← x.decls.find? (·.names.contains name)
   match declaration with
@@ -134,6 +162,9 @@ structure DiscardedFilterRun where
   report : Report
   plan : CompactPlan
 
+structure StreamedFilterRun extends DiscardedFilterRun where
+  output : Export
+
 structure PlannedCensusFilterRun extends DiscardedFilterRun where
   input : PlannedSourceInput
 
@@ -174,6 +205,23 @@ def runFilterDiscardedState (input : Export)
       (runFilterDiscarding input checkRecursors generation)) context { env }
   return { report, plan }
 
+def runFilterStreamedState (input : Export)
+    (generation : InductiveModels.Cli.Config) (checkRecursors : Bool := false) :
+    IO StreamedFilterRun := do
+  let collected ← IO.mkRef (#[] : Array EDecl)
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<order-streamed-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let emit : StreamOutputEmitter := fun event => collected.modify fun declarations =>
+    match event with
+    | .generatedIsland records => declarations ++ records
+    | .source record => declarations.push record
+  let ((report, plan), _) ← Lean.Core.CoreM.toIO
+    (Lean.Meta.MetaM.run'
+      (runFilterStreaming input checkRecursors generation emit)) context { env }
+  return { report, plan, output := { input with decls := ← collected.get } }
+
 def runFilterPlannedDiscardedState (scratch : String) (input : Export)
     (generation : InductiveModels.Cli.Config)
     (checkRecursors : Bool := false) : IO DiscardedFilterRun :=
@@ -184,7 +232,7 @@ def runFilterPlannedDiscardedState (scratch : String) (input : Export)
     let tee ← Spool.ParseTee.create workspace
     let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
       parseHandleWithSink handle tee.sink
-        (analyse := false) (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let (parsed, certificate) ← match parsedResult with
       | .ok parsed => pure parsed
       | .error error => throw <| IO.userError s!"planned source parse failed: {error}"
@@ -211,7 +259,7 @@ def runFilterPlannedCensusState (scratch : String) (input : Export)
     let tee ← Spool.ParseTee.create workspace
     let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
       parsePlannedSourceWithTee handle tee
-        (analyse := false) (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let parsed ← match parsedResult with
       | .ok parsed => pure parsed
       | .error error => throw <| IO.userError s!"planned census parse failed: {error}"
@@ -237,7 +285,7 @@ def preparePlannedCensus (workspace : Spool.Workspace) (input : Export) :
   let tee ← Spool.ParseTee.create workspace
   let parsed ← IO.FS.withFile inputFile.path .read fun handle => do
     match ← parsePlannedSourceWithTee handle tee
-        (analyse := false) (allowDuplicateNames := true) with
+        (options := { allowDuplicateNames := true }) with
     | .ok parsed => pure parsed
     | .error error => throw <| IO.userError s!"planned provenance parse failed: {error}"
   let sizes ← tee.finish
@@ -269,7 +317,7 @@ def swappedPlannedReaderRejected (scratch : String) (left right : Export) : IO B
 def generatedFixtureState (path : String) (generation : InductiveModels.Cli.Config) :
     IO FilterRun := do
   let text ← IO.FS.readFile path
-  let .ok parsed := InductiveModels.parse text (analyse := false)
+  let .ok parsed := InductiveModels.parse text
     | throw <| IO.userError s!"cannot parse {path}"
   runFilterState parsed generation
 
@@ -401,7 +449,7 @@ def finalEnvironmentIsIsolated (run : FilterRun) : Bool :=
 
 def summaryEqual (left right : Order.DeclSummary) : Bool :=
   left.ordinal == right.ordinal && left.introduced == right.introduced &&
-    left.referenced == right.referenced && left.origin == right.origin &&
+    left.referenced == right.referenced &&
     left.owner == right.owner && left.support == right.support &&
     left.modelSlots == right.modelSlots && left.modelBefore == right.modelBefore
 
@@ -409,28 +457,9 @@ def summariesEqual (left right : Array Order.DeclSummary) : Bool :=
   left.size == right.size && (Array.range left.size).all fun i =>
     summaryEqual left[i]! right[i]!
 
-def frozenSummaryPermutationEqual (source : Export) (order : Array Nat)
-    (prefer : EDecl → Bool := fun _ => false) : Bool :=
-  let census := SourceCensus.ofSource source
-  let summaries := census.summaries.map fun summary =>
-    ({ summary with support := prefer source.decls[summary.ordinal]! } : Order.DeclSummary)
-  let census := { census with summaries }
-  match census.summariesForOrder order with
-  | .error _ => false
-  | .ok summaries =>
-    let scheduled := { source with decls := order.map fun ordinal => source.decls[ordinal]! }
-    summariesEqual summaries
-      (Order.summariesIncremental scheduled census.sourceSyntax prefer)
-
 def orderOutcomesEqual (left right : Except Order.Error (Array Nat)) : Bool :=
   match left, right with
   | .ok left, .ok right => left == right
-  | .error left, .error right => toString (repr left) == toString (repr right)
-  | _, _ => false
-
-def scheduleOutcomesEqual (left right : Except Order.Error Export) : Bool :=
-  match left, right with
-  | .ok left, .ok right => left.render == right.render
   | .error left, .error right => toString (repr left) == toString (repr right)
   | _, _ => false
 
@@ -462,7 +491,7 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental source summaries equal whole-export summaries" <|
     summariesEqual census.summaries (Order.summaries censusInput)
   state := state.check "incremental certificate rows equal whole-export rows" <|
-    census.familyCertificateRecords censusInput censusInput ==
+    census.familyCertificateRecords censusInput ==
       Check.compactFamilyCertificateRecordsWithIndex censusInput referenceIndex
         (Check.discoverWithIndex censusInput referenceIndex)
   state := state.check "incremental raw-name callback keeps historical last occurrence" <|
@@ -471,27 +500,6 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental duplicate diagnostics equal full record ordering" <|
     orderOutcomesEqual (Order.summaryRecordOrder census.summaries)
       (Order.recordOrder censusInput)
-  let schedulingConfigs : Array Cli.Config := #[
-    noGeneration,
-    { noGeneration with nested := true },
-    { noGeneration with mutualModels := true },
-    { noGeneration with simple := true },
-    { noGeneration with basic := true },
-    {}]
-  state := state.check "callback scheduling facts equal declaration classifiers field-for-field" <|
-    census.scheduling.size == censusInput.decls.size && schedulingConfigs.all fun generation =>
-      (Array.range censusInput.decls.size).all fun ordinal =>
-        let fact := census.scheduling[ordinal]!
-        let declaration := censusInput.decls[ordinal]!
-        fact.support generation == scheduledSupportRecord generation declaration &&
-          fact.modelOwner generation census.reserved ==
-            scheduledModelOwner generation census.reserved declaration &&
-          fact.modelOwner generation census.reserved ==
-            generationMayAttemptOwner generation census.reserved declaration
-  state := state.check "callback planned schedule equals retained declaration scheduler" <|
-    schedulingConfigs.all fun generation =>
-      orderOutcomesEqual (census.plannedScheduleOrder generation)
-        (census.scheduleOrder censusInput generation)
   let censusCycle := exportOf #[
     axDecl `CensusCycleA (.const `CensusCycleB []),
     axDecl `CensusCycleB (.const `CensusCycleA [])]
@@ -499,67 +507,6 @@ def run (root : String) : IO UInt32 := do
   state := state.check "incremental cycle diagnostics equal full record ordering" <|
     orderOutcomesEqual (Order.summaryRecordOrder cycleCensus.summaries)
       (Order.recordOrder censusCycle)
-  state := state.check "planned cycle error equals retained scheduler" <|
-    orderOutcomesEqual (cycleCensus.plannedScheduleOrder noGeneration)
-      (cycleCensus.scheduleOrder censusCycle noGeneration)
-  let censusScheduled := exportOf #[
-    axDecl `CensusConsumer (.const `CensusProvider []), axDecl `CensusProvider]
-  let .ok censusScheduledView := Order.reorder censusScheduled
-    | throw <| IO.userError "census scheduled-view fixture did not reorder"
-  let scheduledCensus := SourceCensus.ofSource censusScheduled
-  state := state.check "scheduled callback summaries retain view ordinals" <|
-    summariesEqual
-      (Order.summariesIncremental censusScheduledView scheduledCensus.sourceSyntax)
-      (Order.summaries censusScheduledView)
-  let permutationInput := exportOf #[
-    metadataRecord,
-    modelDef (Naming.modelName `PermutationOwner),
-    inductiveRecord [`PermutationOwner],
-    axDecl `PermutationConsumer (.const `PermutationProvider []),
-    axDecl `PermutationProvider,
-    axDecl `PermutationSupport,
-    axDecl `PermutationDuplicate,
-    axDecl `PermutationDuplicate]
-  let preferPermutationSupport := fun declaration : EDecl =>
-    declaration.names.contains `PermutationSupport
-  for multiplier in #[1, 3, 5, 7] do
-    for offset in [:permutationInput.decls.size] do
-      let order := (Array.range permutationInput.decls.size).map fun ordinal =>
-        (ordinal * multiplier + offset) % permutationInput.decls.size
-      state := state.check
-        s!"frozen summaries equal callback recomputation for permutation {multiplier}/{offset}" <|
-        frozenSummaryPermutationEqual permutationInput order preferPermutationSupport
-  let permutationCensus := SourceCensus.ofSource permutationInput
-  state := state.check "permutation oracle exercises nonempty model edges" <|
-    match permutationCensus.summaries.find? (·.owner == some `PermutationOwner),
-        permutationCensus.summaries.find? (·.introduced.contains
-          (Naming.modelName `PermutationOwner)) with
-    | some owner, some model =>
-      !owner.modelSlots.isEmpty && model.modelBefore.contains `PermutationOwner
-    | _, _ => false
-  state := state.check "frozen summary permutation rejects missing records" <|
-    match permutationCensus.summariesForOrder #[0] with
-    | .error _ => true
-    | .ok _ => false
-  state := state.check "frozen summary permutation rejects repeated records" <|
-    match permutationCensus.summariesForOrder #[0, 0, 1, 2, 3, 4, 5, 6] with
-    | .error _ => true
-    | .ok _ => false
-  state := state.check "frozen summary permutation rejects out-of-range records" <|
-    match permutationCensus.summariesForOrder #[0, 1, 2, 3, 4, 5, 6, 8] with
-    | .error _ => true
-    | .ok _ => false
-  let cyclePermutation := #[1, 0]
-  state := state.check "permuted frozen cycle retains exact callback diagnostic" <|
-    match cycleCensus.summariesForOrder cyclePermutation with
-    | .error _ => false
-    | .ok frozen =>
-      let scheduledCycle := { censusCycle with decls := cyclePermutation.map fun ordinal =>
-        censusCycle.decls[ordinal]! }
-      let callback := Order.summariesIncremental scheduledCycle cycleCensus.sourceSyntax
-      orderOutcomesEqual (Order.summaryRecordOrder frozen)
-        (Order.summaryRecordOrder callback)
-
   -- lean4export spells the kernel's one quotient declaration as exactly four
   -- consecutive records.  Replay must validate the bundle before the first
   -- record installs all four constants, or malformed first records and
@@ -665,104 +612,6 @@ def run (root : String) : IO UInt32 := do
   state := state.check "original order breaks ready-node ties"
     (stable'.decls == #[independent, constantProvider, constantUser])
 
-  -- Enabled generation does not perturb an export without an unmodelled owner.
-  -- Once an exact selected owner is present, fixed support moves atomically.
-  let nestedMutualOnly := { noGeneration with nested := true, mutualModels := true }
-  let unrelatedSupport := exportOf
-    #[inductiveRecord [`UnselectedSimple], axDecl `Eq, axDecl `PUnit]
-  state := state.check "enabled generation preserves unrelated source order" <|
-    match scheduleSource unrelatedSupport nestedMutualOnly with
-    | .ok scheduled => scheduled.decls == unrelatedSupport.decls
-    | .error _ => false
-  state := state.check "disabled generation retains ordinary stable order" <|
-    match scheduleSource unrelatedSupport noGeneration with
-    | .ok scheduled => scheduled.decls == unrelatedSupport.decls
-    | .error _ => false
-  let selectedOwner := inductiveRecord [`SelectedA, `SelectedB]
-  let selectedWithoutSupport := exportOf #[selectedOwner, axDecl `IndependentTail]
-  state := state.check "selected owner without source support retains ordinary order" <|
-    match scheduleSource selectedWithoutSupport nestedMutualOnly with
-    | .ok scheduled => scheduled.decls == selectedWithoutSupport.decls
-    | .error _ => false
-  let selectedSupport := exportOf #[selectedOwner, axDecl `Eq, axDecl `PUnit]
-  state := state.check "support scheduler retains the atomic fixed-support hoist" <|
-    match scheduleSource selectedSupport nestedMutualOnly with
-    | .ok scheduled => scheduled.decls == #[axDecl `Eq, axDecl `PUnit, selectedOwner]
-    | .error _ => false
-  let selectedCensus := SourceCensus.ofSource selectedSupport
-  state := state.check "frozen-summary support schedule equals full scheduler" <|
-    scheduleOutcomesEqual (selectedCensus.schedule selectedSupport nestedMutualOnly)
-      (scheduleSource selectedSupport nestedMutualOnly)
-  let unrelatedCensus := SourceCensus.ofSource unrelatedSupport
-  state := state.check "frozen-summary ordinary schedule equals full scheduler" <|
-    scheduleOutcomesEqual (unrelatedCensus.schedule unrelatedSupport noGeneration)
-      (scheduleSource unrelatedSupport noGeneration)
-  let derivedFalse := inductiveRecord [`False]
-  let falseBeforeBasis := exportOf #[derivedFalse, selectedOwner, axDecl `Nat, axDecl `Eq]
-  state := state.check "fixed basis hoists before derived False" <|
-    match scheduleSource falseBeforeBasis { nestedMutualOnly with simple := true } with
-    | .ok scheduled =>
-        scheduled.decls == #[axDecl `Nat, axDecl `Eq, derivedFalse, selectedOwner]
-    | .error _ => false
-  let alreadyModeled := exportOf
-    #[axDecl (Naming.modelName `SelectedA), selectedOwner, axDecl `Eq, axDecl `PUnit]
-  state := state.check "already-modeled source order is preserved" <|
-    match scheduleSource alreadyModeled nestedMutualOnly with
-    | .ok scheduled => scheduled.decls == alreadyModeled.decls
-    | .error _ => false
-
-  -- The exact eighteen declarations which the full Mathlib run used to reach
-  -- before its late `Eq`.  Their shapes are irrelevant to scheduling; keeping
-  -- the real owner names makes the regression report line up with the census.
-  -- A long independent tail pins that support selection cannot depend on a
-  -- small-prefix accident.
-  let earlyNames : Array Name := #[`LE, `LT, `List, `Array, `Nat.le, `Fin,
-    `HPow, `Pow, `NatPow, `PProd, `OfNat, `BitVec, `UInt8, `ByteArray,
-    `UInt32, `Or, `And, `Char]
-  let earlyOwners := earlyNames.map fun name => inductiveRecord [name]
-  let lateSupport : Array EDecl :=
-    #[axDecl `Eq, axDecl `Nat, axDecl `PSigma', axDecl `PUnit,
-      axDecl `Quot, axDecl `Quot.sound]
-  let irrelevantTail := (Array.range 256).map fun index =>
-    axDecl ((`IrrelevantTail).mkNum index)
-  -- This real Mathlib namespace shape used to be mistaken for fixed PUnit
-  -- support. Its dependency on LE then polluted the preferred closure and
-  -- kept LE ahead of Eq. Exact support selection leaves it in the ordinary
-  -- tail while still hoisting the canonical PUnit block above the owners.
-  let punitNamespaceTail := axDecl `PUnit.le (.const `LE [])
-  let supportStress := exportOf
-    (earlyOwners ++ lateSupport ++ irrelevantTail ++ #[punitNamespaceTail])
-  let supportStress' := scheduleSource supportStress
-    { noGeneration with simple := true, basic := true }
-  state := state.check "all Mathlib early owners follow late fixed support" <|
-    match supportStress' with
-    | .ok scheduled =>
-      [`Eq, `Nat, `PSigma', `PUnit, `Quot, `Quot.sound].all fun support =>
-        earlyNames.all fun owner => before scheduled support owner
-    | .error _ => false
-  state := state.check "ordinary PUnit namespace tail is not fixed support" <|
-    !scheduledSupportRecord { noGeneration with simple := true, basic := true }
-      punitNamespaceTail &&
-      match supportStress' with
-      | .ok scheduled => before scheduled `LE `PUnit.le
-      | .error _ => false
-  state := state.check "post-schedule support certificate accepts the stress order" <|
-    match supportStress' with
-    | .ok scheduled =>
-      (validateScheduledSupport scheduled
-        { noGeneration with simple := true, basic := true }).isOk
-    | .error _ => false
-  state := state.check "post-schedule support certificate rejects the old order" <|
-    match validateScheduledSupport supportStress
-        { noGeneration with simple := true, basic := true } with
-    | .error message =>
-      -- Six support records follow the owners; the linear certificate's one
-      -- exact witness is the latest one, not the first collision it happens
-      -- to encounter.
-      message.contains "latest fixed support [Quot.sound]" &&
-        message.contains "after selected owner [LE]"
-    | .ok () => false
-
   -- Hoisting a fixed support record hoists its complete predecessor closure,
   -- not merely the named record. Otherwise the persistent replay environment
   -- would receive a support declaration before one of its own dependencies.
@@ -865,8 +714,8 @@ def run (root : String) : IO UInt32 := do
   state := state.check "exact serialized owner reference is rejected owner-free"
     (← ownerDependentRecordIsRejected)
 
-  -- With generation disabled, scheduling has no preferred class. The filter
-  -- is byte/order neutral even when the original order is not alphabetical.
+  -- With generation disabled, the filter is byte/order neutral even when the
+  -- original order is not alphabetical.
   let neutralOwner := inductiveRecord [`NeutralOwner]
   let neutralDependent := axDecl `NeutralDependent (.const `NeutralOwner [])
   let neutralInput := exportOf #[axDecl `NeutralB, neutralOwner,
@@ -879,45 +728,52 @@ def run (root : String) : IO UInt32 := do
       neutral.env.constants.contains `NeutralOwner &&
       neutral.env.constants.contains `NeutralDependent
   let neutralDiscarded ← runFilterDiscardedState neutralInput noGeneration true
+  let neutralStreamed ← runFilterStreamedState neutralInput noGeneration true
   state := state.check "empty generation preserves the compact value plan" <|
       neutralDiscarded.report == neutral.report &&
       neutralDiscarded.plan.declarations.size == neutralInput.decls.size &&
       neutralDiscarded.plan.retainedGeneratedRecords == 0 &&
       neutral.env.constants.contains `NeutralOwner && neutral.env.constants.contains `NeutralDependent
+  state := state.check "streaming neutral output retains no declaration payload" <|
+    neutralStreamed.output.decls == neutral.output.decls &&
+      neutralStreamed.report == neutral.report &&
+      neutralStreamed.plan.checkReport == neutralDiscarded.plan.checkReport &&
+      neutralStreamed.plan.retainedGeneratedRecords == 0 &&
+      neutralStreamed.plan.streamStats.sourceRecords == neutralInput.decls.size &&
+      neutralStreamed.plan.streamStats.generatedRecords == 0 &&
+      neutralStreamed.plan.streamStats.maxIslandRecords == 0
 
-  -- The declaration-wise filter seam consumes the logical dependency stream,
-  -- not raw file order.  Pin that existing contract before extracting the
-  -- loop: a source consumer may occur first in the export, but its provider is
-  -- replayed first and both exact records remain otherwise unchanged.
+  -- The declaration-wise filter consumes source records in raw order. Use an
+  -- already-valid dependency stream so both retained and planned paths can
+  -- pin the identity ordinal mapping.
   let feedConsumer := axDecl `FeedConsumer (.const `FeedProvider [])
   let feedProvider := axDecl `FeedProvider
-  let feedInput := exportOf #[feedConsumer, feedProvider]
+  let feedInput := exportOf #[feedProvider, feedConsumer]
   let feedRun ← runFilterState feedInput noGeneration
   let feedTrace ← runFilterTraceState feedInput noGeneration
   let feedDiscarded ← runFilterDiscardedState feedInput noGeneration
   let feedPlanned ← runFilterPlannedDiscardedState s!"{root}/_tmp" feedInput noGeneration
   let feedCensus ← runFilterPlannedCensusState s!"{root}/_tmp" feedInput noGeneration
-  state := state.check "filter consumes one dependency-ordered source record at a time" <|
-    feedRun.output.decls == #[feedProvider, feedConsumer] &&
+  state := state.check "filter consumes one raw-order source record at a time" <|
+    feedRun.output.decls == feedInput.decls &&
       feedRun.report == ({} : Report) &&
       feedRun.env.constants.contains `FeedProvider &&
       feedRun.env.constants.contains `FeedConsumer
   state := state.check "one-record trace preserves output and records logical/raw ordinals" <|
     feedTrace.output.decls == feedRun.output.decls && feedTrace.report == feedRun.report &&
-      feedTrace.steps.map (·.scheduledOrdinal) == #[0, 1] &&
-      feedTrace.steps.map (·.rawOrdinal) == #[1, 0] &&
+      feedTrace.steps.map (·.sourceOrdinal) == #[0, 1] &&
+      feedTrace.steps.map (·.rawOrdinal) == #[0, 1] &&
       feedTrace.steps.map (·.sourceNames) == #[#[`FeedProvider], #[`FeedConsumer]] &&
       feedTrace.steps.all fun step =>
         !step.sourceIsInductive && step.sourceInstalled &&
           step.generated.isEmpty && step.generatedRecords == 0
-  state := state.check "planned source spans drive the same frozen dependency order" <|
+  state := state.check "planned source spans drive the same frozen raw order" <|
     feedPlanned.report == feedDiscarded.report &&
       feedPlanned.plan.declarations == feedDiscarded.plan.declarations &&
       feedPlanned.plan.checkReport == feedDiscarded.plan.checkReport &&
-      feedPlanned.plan.unavailable? == feedDiscarded.plan.unavailable? &&
       feedPlanned.plan.retainedGeneratedRecords ==
         feedDiscarded.plan.retainedGeneratedRecords &&
-      feedPlanned.plan.declarations == #[.source 1, .source 0] &&
+      feedPlanned.plan.declarations == #[.source 0, .source 1] &&
       feedPlanned.plan.retainedGeneratedRecords == 0
   state := state.check "planned census releases source records and preserves dependency replay" <|
     feedCensus.input.envelope.retainedDeclarations == 0 &&
@@ -925,7 +781,6 @@ def run (root : String) : IO UInt32 := do
       feedCensus.report == feedDiscarded.report &&
       feedCensus.plan.declarations == feedDiscarded.plan.declarations &&
       feedCensus.plan.checkReport == feedDiscarded.plan.checkReport &&
-      feedCensus.plan.unavailable? == feedDiscarded.plan.unavailable? &&
       feedCensus.plan.retainedGeneratedRecords == feedDiscarded.plan.retainedGeneratedRecords
   let alteredFeedInput := exportOf #[
     axDecl `FeedConsumer (.sort .zero),
@@ -984,22 +839,13 @@ def run (root : String) : IO UInt32 := do
       nestedDeepRun.output.decls.any (·.names.contains `DTree.rec_2._model.iota_1)
   state := state.check "nested-only models are absent from the final replay environment" <|
     finalEnvironmentIsIsolated nestedRun
-  let futureModelProbe : EDecl :=
-    .ax `CompactFallbackProbe [] (.const (Naming.modelName `Tree) []) false
-  let futureModelInput := { nestedRun.input with
-    decls := #[futureModelProbe] ++ nestedRun.input.decls }
-  let futureModelDiscarded ← runFilterDiscardedState futureModelInput
-    { noGeneration with nested := true }
-  state := state.check "later generated provider marks compact checking unavailable" <|
-      futureModelDiscarded.plan.unavailable?.isSome &&
-      futureModelDiscarded.plan.retainedGeneratedRecords == 0
-
   -- The default pipeline extends the same island through the generated nested
   -- block's mutual model and then through each simple model. None of those
   -- intermediate owners or their interfaces may escape into the source replay
   -- environment, even though all remain in the serialized output.
   let composedRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/nested_iota.ndjson" {}
+  let composedStreamed ← runFilterStreamedState composedRun.input {}
   let nestedImpl := Name.num `Tree._model._impl 0
   let composedCensus := isolationCensus composedRun
   state := state.check
@@ -1009,10 +855,26 @@ def run (root : String) : IO UInt32 := do
       (emittedNames composedRun).contains nestedImpl &&
       !composedRun.env.constants.contains nestedImpl &&
       finalEnvironmentIsIsolated composedRun
+  let composedCheck := Check.check composedStreamed.output
+  state := state.check
+      s!"composed stream places every recursive model before its generated owner: \
+        families={familiesBeforeOwners composedStreamed.output}, \
+        equal={composedStreamed.output.decls == composedRun.output.decls}, \
+        records={composedStreamed.output.decls.size}/{composedRun.output.decls.size}, \
+        kernel={repr composedStreamed.report.generatedKernelRejected}, \
+        compact={repr (composedStreamed.plan.checkReport.violations[0]?)}, \
+        full={repr (composedCheck[0]?)}" <|
+    composedStreamed.output.decls == composedRun.output.decls &&
+      familiesBeforeOwners composedStreamed.output &&
+      composedStreamed.report.generatedKernelRejected.isNone &&
+      composedStreamed.plan.checkReport.violations.isEmpty &&
+      composedCheck.isEmpty
 
-  let simpleRun ← generatedFixtureState
+  let simpleRawRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/prim_shapes.ndjson"
     { noGeneration with simple := true }
+  let simpleInput ← withCompletePrerequisiteBefore simpleRawRun.input `Eq `Tri
+  let simpleRun ← runFilterState simpleInput { noGeneration with simple := true }
   let simple := simpleRun.output
   let simple' ← mustReorder "simple declaration-local output" simple
   state := state.check "complete simple output checks literally" <|
@@ -1043,7 +905,7 @@ def run (root : String) : IO UInt32 := do
           family.correspondence.iotas.any (fun rule =>
             rule.recursor == `IdxP.rec && rule.name == Naming.iotaName `IdxP.rec 1))
 
-  -- Compare the full oracle, compact discard, and planned source reader across
+  -- Compare full output, compact discard, and the planned source reader across
   -- each generation route.
   let compactMatrix : Array (String × String × InductiveModels.Cli.Config × Bool) := #[
     ("nested", "nested_iota.ndjson", { noGeneration with nested := true }, false),
@@ -1056,25 +918,24 @@ def run (root : String) : IO UInt32 := do
   for (label, fixture, generation, checkRecursors) in compactMatrix do
     let fixturePath := s!"{root}/test/fixtures/inductive-models/{fixture}"
     let text ← IO.FS.readFile fixturePath
-    let .ok input := InductiveModels.parse text (analyse := false) | do
+    let .ok input := InductiveModels.parse text | do
       state := state.check s!"compact {label} fixture parses" false
       continue
     let legacy ← runFilterState input generation checkRecursors
     let discarded ← runFilterDiscardedState input generation checkRecursors
     let plannedCensus ←
       runFilterPlannedCensusState s!"{root}/_tmp" input generation checkRecursors
-    state := state.check s!"compact-discard {label} equals full oracle" <|
-      discarded.report == legacy.report && discarded.plan.unavailable?.isNone &&
+    state := state.check s!"compact-discard {label} equals full output" <|
+      discarded.report == legacy.report &&
         discarded.plan.checkReport == Check.checkReport legacy.output &&
         discarded.plan.declarations.size == legacy.output.decls.size &&
         discarded.plan.retainedGeneratedRecords == 0
-    state := state.check s!"planned-census {label} equals full compact oracle" <|
+    state := state.check s!"planned-census {label} equals compact full output" <|
       plannedCensus.input.envelope.retainedDeclarations == 0 &&
         plannedCensus.input.envelope.declarationCount == input.decls.size &&
         plannedCensus.report == discarded.report &&
         plannedCensus.plan.checkReport == discarded.plan.checkReport &&
         plannedCensus.plan.declarations == discarded.plan.declarations &&
-        plannedCensus.plan.unavailable? == discarded.plan.unavailable? &&
         plannedCensus.plan.retainedGeneratedRecords == discarded.plan.retainedGeneratedRecords
 
   let existingDiscarded ← runFilterDiscardedState nestedRun.output
@@ -1086,7 +947,8 @@ def run (root : String) : IO UInt32 := do
       existingPlanned.report == existingDiscarded.report &&
       existingPlanned.plan.checkReport == existingDiscarded.plan.checkReport &&
       existingPlanned.plan.declarations == existingDiscarded.plan.declarations &&
-      existingPlanned.plan.unavailable? == existingDiscarded.plan.unavailable?
+      existingPlanned.plan.retainedGeneratedRecords ==
+        existingDiscarded.plan.retainedGeneratedRecords
 
   -- A malformed later inductive preserves the completed trace prefix and
   -- returns an empty compact plan.
@@ -1147,8 +1009,10 @@ def run (root : String) : IO UInt32 := do
   -- A W model has the largest fixed splice: the reusable `_wcore` fragment.
   -- The core survives for later source owners, while the public W model and its
   -- per-owner implementation forest remain confined to this island.
-  let wRun ← generatedFixtureState s!"{root}/test/fixtures/inductive-models/prim_w.ndjson"
+  let wRawRun ← generatedFixtureState s!"{root}/test/fixtures/inductive-models/prim_w.ndjson"
     { noGeneration with simple := true }
+  let wInput ← withCompletePrerequisiteBefore wRawRun.input `Eq `Tree
+  let wRun ← runFilterState wInput { noGeneration with simple := true }
   let wDiscarded ← runFilterDiscardedState wRun.input
     { noGeneration with simple := true }
   let wCensus := isolationCensus wRun
@@ -1165,34 +1029,69 @@ def run (root : String) : IO UInt32 := do
       wDiscarded.plan.checkReport == Check.checkReport wRun.output &&
       wDiscarded.plan.retainedGeneratedRecords == 0
 
-  -- Scheduling moves the input's exact PUnit bundle before the owner that
-  -- needs it. It is source state, not a generated splice, and remains present
-  -- after the owner's generated interface has been discarded.
-  let latePUnitRun ← generatedFixtureState
+  -- A prerequisite after its owner causes an exact decline and no partial
+  -- island. A test-only prerequisite-first variant then pins constructive
+  -- island-before-owner emission while every source step remains raw-order.
+  let latePUnitRawRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/tight_prop_field_late.ndjson"
     { noGeneration with simple := true }
-  state := state.check "late input PUnit survives scheduled owner-free generation" <|
+  state := state.check "late input PUnit declines without a partial model island" <|
+    latePUnitRawRun.report.declined ==
+      #[(`PFP, "prim model name taken (PUnit)")] &&
+      noModeledBlockDescendants latePUnitRawRun.input latePUnitRawRun.output `PFP
+  let latePUnitInput ←
+    withCompletePrerequisiteBefore latePUnitRawRun.input `PUnit `PFP
+  let latePUnitRun ← runFilterState latePUnitInput
+    { noGeneration with simple := true }
+  state := state.check "prerequisite-first PUnit supports owner-local generation" <|
     latePUnitRun.report.generated.any (·.1 == `PFP) &&
       !latePUnitRun.report.spliced.any (fun (_, names) => names.contains `PUnit) &&
       latePUnitRun.env.constants.contains `PUnit &&
       latePUnitRun.env.constants.contains `PFP &&
       !latePUnitRun.env.constants.contains (Naming.modelName `PFP) &&
       finalEnvironmentIsIsolated latePUnitRun
-  let latePUnitTrace ← runFilterTraceState latePUnitRun.input
+  let latePUnitTrace ← runFilterTraceState latePUnitInput
+    { noGeneration with simple := true }
+  let latePUnitStreamed ← runFilterStreamedState latePUnitInput
     { noGeneration with simple := true }
   let pfpSteps := latePUnitTrace.steps.filter fun step =>
     step.generated.any (·.1 == `PFP)
-  state := state.check "one inductive transition owns pre/post generation and island close" <|
+  let pfpIslandImmediatelyBeforeOwner := match
+      declarationIndex? latePUnitRun.input `PFP,
+      declarationIndex? latePUnitTrace.output `PFP with
+    | some sourceOwner, some outputOwner =>
+      let generatedRecords := pfpSteps[0]!.generatedRecords
+      outputOwner == sourceOwner + generatedRecords &&
+        latePUnitTrace.output.decls.extract 0 sourceOwner ==
+          latePUnitRun.input.decls.extract 0 sourceOwner &&
+        latePUnitTrace.output.decls.extract (outputOwner + 1)
+            latePUnitTrace.output.decls.size ==
+          latePUnitRun.input.decls.extract (sourceOwner + 1)
+            latePUnitRun.input.decls.size &&
+        before latePUnitTrace.output (Naming.modelName `PFP) `PFP
+    | _, _ => false
+  state := state.check "one raw-order transition emits the island immediately before its owner" <|
     latePUnitTrace.output.decls == latePUnitRun.output.decls &&
       latePUnitTrace.report == latePUnitRun.report &&
       latePUnitTrace.steps.size == latePUnitRun.input.decls.size &&
-      latePUnitTrace.steps.map (·.scheduledOrdinal) ==
+      latePUnitTrace.steps.map (·.sourceOrdinal) ==
         Array.range latePUnitRun.input.decls.size &&
-      latePUnitTrace.steps.map (·.rawOrdinal) == #[0, 2, 1] &&
+      latePUnitTrace.steps.map (·.rawOrdinal) ==
+        Array.range latePUnitRun.input.decls.size &&
       pfpSteps.size == 1 && pfpSteps[0]!.sourceNames.contains `PFP &&
       pfpSteps[0]!.sourceIsInductive && pfpSteps[0]!.sourceInstalled &&
       pfpSteps[0]!.generatedRecords > 0 &&
-      latePUnitTrace.steps.filter (·.generatedRecords > 0) == pfpSteps
+      latePUnitTrace.steps.filter (·.generatedRecords > 0) == pfpSteps &&
+      pfpIslandImmediatelyBeforeOwner
+  state := state.check "stream callback collection equals constructive full output" <|
+    latePUnitStreamed.output.decls == latePUnitRun.output.decls &&
+      latePUnitStreamed.report == latePUnitRun.report &&
+      latePUnitStreamed.plan.retainedGeneratedRecords == 0 &&
+      latePUnitStreamed.plan.streamStats.sourceRecords == latePUnitInput.decls.size &&
+      latePUnitStreamed.plan.streamStats.generatedRecords ==
+        latePUnitRun.output.decls.size - latePUnitInput.decls.size &&
+      latePUnitStreamed.plan.streamStats.maxIslandRecords ==
+        latePUnitStreamed.report.maxLiveIslandRecords
 
   IO.println s!"record order: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

@@ -34,7 +34,7 @@ def parseHandleAt (path : String) : IO (Except String Export) :=
 
 /-- Deliberately whole-text random-decode oracle for the source reader. -/
 def referenceDecode (arena declaration : String) : Except String EDecl := do
-  let parsed ← InductiveModels.parse (arena ++ declaration) (analyse := false)
+  let parsed ← InductiveModels.parse (arena ++ declaration)
   let #[result] := parsed.decls | throw "reference declaration did not decode alone"
   return result
 
@@ -45,7 +45,7 @@ def referenceDecodesTo (arena declaration : String) (expected : EDecl) : Bool :=
 
 def rawCertificateAt (path : String) : IO (Except String (Export × RawCertificate)) :=
   IO.FS.withFile path .read fun handle =>
-    InductiveModels.parseHandleWithSink handle { emit := fun _ => pure () } (analyse := false)
+    InductiveModels.parseHandleWithSink handle { emit := fun _ => pure () }
 
 def discardingCertificateAt (path : String) (allowDuplicateNames : Bool := false) :
     IO (Except String (ParsedEnvelope × RawCertificate × Nat)) := do
@@ -54,7 +54,7 @@ def discardingCertificateAt (path : String) (allowDuplicateNames : Bool := false
     InductiveModels.parseHandleDiscardingDeclarations handle
       { emit := fun _ => pure () }
       { emit := fun _ => callbacks.modify (· + 1) }
-      (analyse := false) allowDuplicateNames
+      { allowDuplicateNames }
   let count ← callbacks.get
   return result.map fun (envelope, certificate) => (envelope, certificate, count)
 
@@ -77,7 +77,7 @@ def plannedSourceRejected (scratch path text : String) : IO Bool := do
   Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
-      parseHandleWithSink handle tee.sink (analyse := false) (allowDuplicateNames := true)
+      parseHandleWithSink handle tee.sink (options := { allowDuplicateNames := true })
     let .ok (output, certificate) := captured | return false
     let sizes ← tee.finish
     return (← Spool.PlannedSourceReader.create tee certificate sizes output.decls.size) matches
@@ -89,35 +89,43 @@ def plannedDiscardingSourceRejected (scratch path text : String) : IO Bool := do
     let tee ← Spool.ParseTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
-        (analyse := false) (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let .ok (envelope, certificate) := captured | return false
     let sizes ← tee.finish
     return (← Spool.PlannedSourceReader.create tee certificate sizes
       envelope.declarationCount (some envelope.arena)) matches .error _
 
-/-- Exercise the compact-direct input tee without retaining declaration ASTs.
+/-- Exercise the checked no-output input tee without retaining declaration ASTs.
 The certified case must decode from the parser's transferred arena and may
 then release the exact raw fallback snapshot. -/
-def directInputReplayAccepted (scratch path text : String)
-    (expected : Array EDecl) : IO Bool := do
+def plannedInputReplayAccepted (scratch path text : String)
+    (expected : Array EDecl) (expectedRootCount? : Option Nat := none) : IO Bool := do
   IO.FS.writeFile path text
   let cleanedDirectory ← IO.mkRef (none : Option System.FilePath)
   let accepted ← Spool.withWorkspace scratch fun workspace => do
     cleanedDirectory.set (some workspace.directory)
-    let tee ← Spool.DirectInputTee.create workspace
+    let tee ← Spool.PlannedInputTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
-        (analyse := false) (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let .ok (envelope, certificate) := captured | return false
+    if let some expectedRootCount := expectedRootCount? then
+      unless envelope.arena.retainedExprRoots == expectedRootCount do return false
     let sizes ← tee.finish
-    let .ok reader ← Spool.PlannedSourceReader.createDirect tee certificate sizes
+    let .ok reader ← Spool.PlannedSourceReader.createFromInputTee tee certificate sizes
         envelope.declarationCount envelope.arena | return false
     let mut decoded := #[]
     for ordinal in [:reader.size] do
       let .ok declaration ← reader.read ordinal | return false
       decoded := decoded.push declaration
+    let randomReplay ← if expected.isEmpty then pure true else do
+      let .ok last ← reader.read (expected.size - 1) | return false
+      let .ok first ← reader.read 0 | return false
+      let .ok lastAgain ← reader.read (expected.size - 1) | return false
+      return first == expected[0]! && last == expected.back! && lastAgain == last
     tee.releaseFallback
-    return decoded == expected && !(← (workspace.directory / "input.ndjson").pathExists) &&
+    return decoded == expected && randomReplay &&
+      !(← (workspace.directory / "input.ndjson").pathExists) &&
       (← (workspace.directory / "declarations.ndjson").pathExists)
   let cleaned ← match ← cleanedDirectory.get with
     | some directory => directory.pathExists.map Bool.not
@@ -127,31 +135,51 @@ def directInputReplayAccepted (scratch path text : String)
 /-- Arena overwrites are parser-compatible but cannot be decoded from one
 completed arena. They must reject declaration replay and preserve the exact
 consumed input snapshot for the ordinary parser fallback. -/
-def directInputFallbackExact (scratch path text : String) : IO Bool := do
+def plannedInputFallbackExact (scratch path text : String) : IO Bool := do
   IO.FS.writeFile path text
   let ordinary ← parseHandleAt path
   let cleanedDirectory ← IO.mkRef (none : Option System.FilePath)
   let preserved ← Spool.withWorkspace scratch fun workspace => do
     cleanedDirectory.set (some workspace.directory)
-    let tee ← Spool.DirectInputTee.create workspace
+    let tee ← Spool.PlannedInputTee.create workspace
     let captured ← IO.FS.withFile path .read fun handle =>
       parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
-        (analyse := false) (allowDuplicateNames := true)
+        (options := { allowDuplicateNames := true })
     let .ok (envelope, certificate) := captured | return false
     let sizes ← tee.finish
-    let replay ← Spool.PlannedSourceReader.createDirect tee certificate sizes
+    let replay ← Spool.PlannedSourceReader.createFromInputTee tee certificate sizes
       envelope.declarationCount envelope.arena
-    let fallback ← tee.parseFallback (analyse := false) (allowDuplicateNames := true)
+    let fallback ← tee.parseFallback (options := { allowDuplicateNames := true })
     return (replay matches .error _) && match ordinary, fallback with
       | .ok expected, .ok actual =>
-        expected.metaLine == actual.metaLine && expected.decls == actual.decls &&
-          expected.projNodes == actual.projNodes
+        expected.metaLine == actual.metaLine && expected.decls == actual.decls
       | .error expected, .error actual => expected == actual
       | _, _ => false
   let cleaned ← match ← cleanedDirectory.get with
     | some directory => directory.pathExists.map Bool.not
     | none => pure false
   return preserved && cleaned
+
+/-- Compare compact random replay with the ordinary parser on a checked-in
+fixture. Together the selected fixtures exercise every declaration variant
+and inductive recursor-rule RHS roots. -/
+def plannedInputFixtureParity (scratch path : String) : IO Bool := do
+  let .ok ordinary ← parseHandleAt path | return false
+  Spool.withWorkspace scratch fun workspace => do
+    let tee ← Spool.PlannedInputTee.create workspace
+    let captured ← IO.FS.withFile path .read fun handle =>
+      parseHandleDiscardingDeclarations handle tee.sink { emit := fun _ => pure () }
+        (options := { allowDuplicateNames := true })
+    let .ok (envelope, certificate) := captured | return false
+    let sizes ← tee.finish
+    let .ok reader ← Spool.PlannedSourceReader.createFromInputTee tee certificate sizes
+        envelope.declarationCount envelope.arena | return false
+    let mut declarations := #[]
+    for ordinal in [:reader.size] do
+      let .ok declaration ← reader.read ordinal | return false
+      declarations := declarations.push declaration
+    return declarations == ordinary.decls &&
+      envelope.arena.retainedExprRoots ≤ certificate.cursor.nextExpr
 
 def bothReject (whole streamed : Except String Export) : Bool :=
   match whole, streamed with
@@ -161,14 +189,6 @@ def bothReject (whole streamed : Except String Export) : Bool :=
 def bothHaveDecls (whole streamed : Except String Export) (expected : Array EDecl) : Bool :=
   match whole, streamed with
   | .ok first, .ok second => first.decls == expected && second.decls == expected
-  | _, _ => false
-
-def bothProjectionFacts (whole streamed : Except String Export)
-    (present absent : Array Expr) : Bool :=
-  match whole, streamed with
-  | .ok first, .ok second =>
-      present.all (first.projNodes.contains ·) && present.all (second.projNodes.contains ·) &&
-        absent.all (!first.projNodes.contains ·) && absent.all (!second.projNodes.contains ·)
   | _, _ => false
 
 def isExceptError (result : Except ε α) : Bool :=
@@ -189,8 +209,6 @@ def main (args : List String) : IO UInt32 := do
   let exprHolePath := s!"{scratch}/source-spool-expr-hole.ndjson"
   let sparsePath := s!"{scratch}/source-spool-sparse.ndjson"
   let overwritePath := s!"{scratch}/source-spool-overwrite.ndjson"
-  let projectionOrderPath := s!"{scratch}/source-spool-projection-order.ndjson"
-  let projectionOverwritePath := s!"{scratch}/source-spool-projection-overwrite.ndjson"
   let parserCompatibilityPath := s!"{scratch}/source-spool-parser-compatibility.ndjson"
   let rawCanonicalPath := s!"{scratch}/raw-spool-canonical.ndjson"
   let rawNameGapPath := s!"{scratch}/raw-spool-name-gap.ndjson"
@@ -203,12 +221,14 @@ def main (args : List String) : IO UInt32 := do
   let rawCrlfPath := s!"{scratch}/raw-spool-crlf.ndjson"
   let rawKeyOrderPath := s!"{scratch}/raw-spool-key-order.ndjson"
   let rawRootSentinel := s!"{scratch}/raw-spool-root-sentinel"
+  let compactArenaPath := s!"{scratch}/source-spool-compact-arena.ndjson"
+  let declarationStreamPath := s!"{scratch}/declaration-stream-output.ndjson"
   let paths := [arenaPath, firstPath, secondPath, malformedPath,
     nameHolePath, levelHolePath, exprHolePath, sparsePath, overwritePath,
-    projectionOrderPath, projectionOverwritePath, parserCompatibilityPath,
+    parserCompatibilityPath,
     rawCanonicalPath, rawNameGapPath, rawLevelGapPath, rawExprGapPath,
     rawNameOrderPath, rawNoLfPath, rawWhitespacePath, rawBlankPath, rawCrlfPath,
-    rawKeyOrderPath, rawRootSentinel]
+    rawKeyOrderPath, rawRootSentinel, compactArenaPath, declarationStreamPath]
   for path in paths do removeIfPresent path
 
   let type := Expr.sort (.param `u)
@@ -230,7 +250,7 @@ def main (args : List String) : IO UInt32 := do
   -- Arena order is fixed; declaration records can be consumed in a different
   -- topological order without changing what their IDs decode to.
   let reordered := arenaText ++ secondText ++ firstText
-  let parsed := InductiveModels.parse reordered (analyse := false)
+  let parsed := InductiveModels.parse reordered
 
   let mut state : TestState := {}
   let secureWorkspacePath ← IO.mkRef (none : Option System.FilePath)
@@ -293,6 +313,25 @@ def main (args : List String) : IO UInt32 := do
     sharedSecondSplit.arena.size == 1 &&
       sharedSecondSplit.after == { nextName := 5, nextLevel := 2, nextExpr := 1 }
 
+  let streamStats ← IO.FS.withFile declarationStreamPath .write fun handle => do
+    let stream := IO.FS.Stream.ofHandle handle
+    let writer ← DeclarationStreamWriter.start .null stream
+    let writer ← writer.writeDeclaration stream first
+    let writer ← writer.writeDeclaration stream second
+    writer.finish stream
+    stream.flush
+    return writer
+  let streamedText ← IO.FS.readFile declarationStreamPath
+  state := state.check "persistent streaming writer remains parse-equivalent" <|
+    match InductiveModels.parse streamedText with
+    | .ok output => output.decls == #[first, second]
+    | .error _ => false
+  state := state.check "streaming writer reuses cross-declaration arena IDs exactly" <|
+    streamStats.declarationsWritten == 2 && streamStats.maxRecordLines == 6 &&
+      streamStats.cursor == sharedSecondSplit.after &&
+      streamedText == splitRender &&
+      (streamedText.splitOn "\n").length == (splitRender.splitOn "\n").length
+
   -- Parse-time source capture sees exact bytes while the input descriptor is still
   -- open.  The source arena remains interleaved here; the three spools split
   -- it without retaining any raw line in the parsed Export.
@@ -302,13 +341,25 @@ def main (args : List String) : IO UInt32 := do
   let rawCanonical := rawMeta ++ lines firstSplit.arena ++ rawFirstDecl ++
     lines secondSplit.arena ++ rawSecondDecl
   state := state.check
-      "direct input replays declarations from the transferred arena and cleans its workspace" <|
-    ← directInputReplayAccepted scratch rawCanonicalPath rawCanonical #[first, second]
+      "planned input replays declarations from the transferred arena and cleans its workspace" <|
+    ← plannedInputReplayAccepted scratch rawCanonicalPath rawCanonical #[first, second]
+  let compactArenaInput := lines #[
+    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"CompactArena\"}}",
+    "{\"ie\":0,\"sort\":0}",
+    "{\"ie\":1,\"bvar\":0}",
+    "{\"axiom\":{\"isUnsafe\":false,\"levelParams\":[],\"name\":1,\"type\":0}}"]
+  let compactArenaDeclaration : EDecl := .ax `CompactArena [] (.sort .zero) false
+  state := state.check
+      "declaration replay retains only directly referenced expression roots" <|
+    ← plannedInputReplayAccepted scratch compactArenaPath compactArenaInput
+      #[compactArenaDeclaration] (some 1)
+  state := state.check "compact replay preserves every ordinary declaration root kind" <|
+    ← plannedInputFixtureParity scratch s!"{root}/test/fixtures/inductive-models/w_core.ndjson"
   IO.FS.writeFile rawCanonicalPath rawCanonical
   let captured ← Spool.withWorkspace scratch fun workspace => do
     let tee ← Spool.ParseTee.create workspace
     let parsed ← IO.FS.withFile rawCanonicalPath .read fun handle =>
-      parseHandleWithSink handle tee.sink (analyse := false)
+      parseHandleWithSink handle tee.sink
     let sizes ← tee.finish
     let decodedParity ← match parsed with
       | .error _ => pure false
@@ -385,15 +436,13 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "ordinary and captured streaming parses are identical" <|
     match capturedParse, (← parseHandleAt rawCanonicalPath) with
     | .ok (capturedExport, _), .ok ordinary =>
-      capturedExport.metaLine == ordinary.metaLine && capturedExport.decls == ordinary.decls &&
-        capturedExport.projNodes.isEmpty && ordinary.projNodes.isEmpty
+      capturedExport.metaLine == ordinary.metaLine && capturedExport.decls == ordinary.decls
     | _, _ => false
   let discardedParse ← discardingCertificateAt rawCanonicalPath
   state := state.check "declaration-discarding parser shares the exact canonical parse" <|
     match capturedParse, discardedParse with
     | .ok (retained, retainedCertificate), .ok (envelope, certificate, callbacks) =>
-      envelope.metaLine == retained.metaLine && envelope.projNodes.isEmpty &&
-        envelope.declarationCount == retained.decls.size &&
+      envelope.metaLine == retained.metaLine && envelope.declarationCount == retained.decls.size &&
         envelope.retainedDeclarations == 0 && callbacks == retained.decls.size &&
         certificate == retainedCertificate
     | _, _ => false
@@ -418,7 +467,7 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.writeFile parserCompatibilityPath duplicateInput
   let retainedAllowed ← IO.FS.withFile parserCompatibilityPath .read fun handle =>
     parseHandleWithSink handle { emit := fun _ => pure () }
-      (analyse := false) (allowDuplicateNames := true)
+      (options := { allowDuplicateNames := true })
   let discardedAllowed ← discardingCertificateAt parserCompatibilityPath true
   state := state.check "permitted duplicates preserve certificate and callback cardinality" <|
     match retainedAllowed, discardedAllowed with
@@ -443,7 +492,7 @@ def main (args : List String) : IO UInt32 := do
     | .error _ => true
     | .ok _ => false
   state := state.check "an unchecked overlapping spool does not roundtrip" <|
-    match InductiveModels.parse malformedText (analyse := false) with
+    match InductiveModels.parse malformedText with
     | .error _ => true
     | .ok output => output.decls != #[first, second]
 
@@ -498,8 +547,8 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "explicit repeated arena IDs overwrite in both readers" <|
     bothHaveDecls (InductiveModels.parse overwrite) (← parseHandleAt overwritePath) #[overwrittenDecl]
   state := state.check
-      "direct input preserves exact overwrite fallback and cleans its workspace" <|
-    ← directInputFallbackExact scratch overwritePath overwrite
+      "planned input preserves exact overwrite fallback and cleans its workspace" <|
+    ← plannedInputFallbackExact scratch overwritePath overwrite
 
   -- Parser compatibility is wider than the raw-hoist contract.  Each axis is
   -- certified independently and any gap, reorder, or overwrite selects the
@@ -558,12 +607,12 @@ def main (args : List String) : IO UInt32 := do
     (← rawFastPathRejected rawBlankPath rawBlank)
   state := state.check "raw certification rejects CRLF records"
     (← rawFastPathRejected rawCrlfPath rawCrlf)
-  state := state.check "direct input replay accepts noncanonical JSON spacing" <|
-    ← directInputReplayAccepted scratch rawWhitespacePath rawWhitespace #[first, second]
+  state := state.check "planned input replay accepts noncanonical JSON spacing" <|
+    ← plannedInputReplayAccepted scratch rawWhitespacePath rawWhitespace #[first, second]
   state := state.check "planned source falls back for missing final LF" <|
     ← plannedSourceRejected scratch rawNoLfPath rawNoLf
-  state := state.check "direct input preserves exact EOF-declaration fallback" <|
-    ← directInputFallbackExact scratch rawNoLfPath rawNoLf
+  state := state.check "planned input preserves exact EOF-declaration fallback" <|
+    ← plannedInputFallbackExact scratch rawNoLfPath rawNoLf
   state := state.check "planned source falls back for CRLF input" <|
     ← plannedSourceRejected scratch rawCrlfPath rawCrlf
   state := state.check "declaration-discarding planned source preserves raw-certificate fallback" <|
@@ -655,37 +704,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "raw spool refuses arbitrary writable roots" wrongNamedRefused
   IO.FS.removeDir wrongNamedRoot
 
-  -- Projection analysis follows record dependencies, not numeric ID order.
-  let projectionOrder := lines #[
-    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"ProjectionOwner\"}}",
-    "{\"ie\":10,\"bvar\":0}",
-    "{\"ie\":20,\"proj\":{\"idx\":0,\"struct\":10,\"typeName\":1}}",
-    "{\"ie\":2,\"app\":{\"arg\":10,\"fn\":20}}"]
-  IO.FS.writeFile projectionOrderPath projectionOrder
-  let struct := Expr.bvar 0
-  let projection := Expr.proj `ProjectionOwner 0 struct
-  let projectionParent := Expr.app projection struct
-  state := state.check "projection analysis accepts out-of-order numeric IDs" <|
-    bothProjectionFacts (InductiveModels.parse projectionOrder) (← parseHandleAt projectionOrderPath)
-      #[projection, projectionParent] #[]
-
-  -- A parent captures the child expression present when its record is parsed.
-  -- Overwriting that child ID changes only subsequent parents.
-  let projectionOverwrite := lines #[
-    "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"ProjectionOwner\"}}",
-    "{\"ie\":10,\"bvar\":0}",
-    "{\"ie\":0,\"proj\":{\"idx\":0,\"struct\":10,\"typeName\":1}}",
-    "{\"ie\":1,\"app\":{\"arg\":10,\"fn\":0}}",
-    "{\"ie\":0,\"sort\":0}",
-    "{\"ie\":2,\"app\":{\"arg\":0,\"fn\":0}}"]
-  IO.FS.writeFile projectionOverwritePath projectionOverwrite
-  let replacement := Expr.sort .zero
-  let replacementParent := Expr.app replacement replacement
-  state := state.check "projection analysis observes expression overwrite time" <|
-    bothProjectionFacts (InductiveModels.parse projectionOverwrite)
-      (← parseHandleAt projectionOverwritePath) #[projection, projectionParent]
-      #[replacement, replacementParent]
-
   -- Top-level dispatch follows the Kernel Arena parser's complete-key match.
   -- Pin every recognized record spelling: no variant may silently accept an
   -- extra tag or an arbitrary extension field.
@@ -752,6 +770,8 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "opaque records may omit isUnsafe for arena compatibility" <|
     bothHaveDecls (InductiveModels.parse legacyOpaque) (← parseHandleAt parserCompatibilityPath)
       #[legacyOpaqueDecl]
+  state := state.check "compact random replay preserves opaque declaration roots" <|
+    ← plannedInputReplayAccepted scratch parserCompatibilityPath legacyOpaque #[legacyOpaqueDecl]
 
   for path in paths do removeIfPresent path
   IO.println s!"source spool: {state.passed} passed, {state.failed.size} failed"

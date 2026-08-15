@@ -19,9 +19,9 @@ emits ordinary Lean declarations —
 the block under fresh names, a carrier, one `pack`/`unpack` pair per mimic with
 **both round trips as theorems**, the declared type's own constructors, one
 recursor per block member, one congruence per mimic, and **every one of those
-recursors' ι rules, as theorems with proofs**. Every declaration goes through
-`Environment.addDeclCore` with checking on, so a proof this module builds and
-the kernel rejects is a decline, never an emission.
+recursors' ι rules, as theorems with proofs**. Declarations are trusted-installed
+in a disposable construction environment; the exact serialized island is
+kernel-checked once at its close boundary iff generated checking is enabled.
 
 The construction can also be written by hand at `Tree`, which makes the target
 shape explicit independently of the generator.
@@ -95,7 +95,7 @@ inductive Decline where
   and what is wrong with it. -/
   | notLeans (n : Name) (why : String)
   | nameTaken (n : Name)
-  /-- **The kernel accepted the declaration and the environment then lost it.**
+  /-- **The construction environment installed the declaration and then lost it.**
   Distinct from [`InductiveModels.Decline.nameTaken`], which is the input already
   holding the name, because the two want opposite responses. This one is
   Lean's `AsyncConsts.add` refusing a *normalized* duplicate — an export
@@ -200,7 +200,8 @@ reported.** This is the one place `lean-inductive-models` writes a declaration t
   (`Eq`, `init_quot`) and `Init/Core.lean` (`Quot.sound`, `funext`), and
   `test/fixtures/inductive-models/funext_binder.lean` is that development written as a
   fixture. Each goes through [`InductiveModels.addChecked`] like everything else here,
-  so the kernel has agreed to it before it is emitted.
+  so construction can use it; the exact emitted island is kernel-checked only
+  when `--type-check-generated` is enabled.
 * **Present beats spliced.** If the input declares one, the input's own is
   used and nothing is written. A splice adds; it never substitutes.
 
@@ -291,7 +292,7 @@ pointwise-equality relation, and `E (Quot.mk eqv f)` is `f`: the `Quot.lift` ι
 rule gives `f x` at each point and η closes the lambda. So the base case of the
 `Eq.rec` — `Eq.refl f` — has the motive's type at `Quot.mk eqv f`, and the
 conclusion `Eq f (E (Quot.mk eqv g))` is the declared `Eq f g`. Both steps are
-definitional and the kernel does them; `addChecked` is what says so.
+definitional and the optional generated-island kernel check verifies them.
 
 `congrArg` is **not** emitted as a declaration of its own. It is one `Eq.rec`,
 built here the way [`InductiveModels.Gen.congrFunFor`] and [`InductiveModels.Gen.congrOne`]
@@ -568,9 +569,11 @@ def declineWith (d : Decline) : GenM α := throwThe Decline d
 
 This is deliberately *not* a [`Decline`]. A decline says that the generator
 positively recognized a valid shape it has chosen not to support. Once a route
-has committed to constructing declarations, malformed intermediate syntax,
-missing metadata, or kernel rejection is a tool failure and must reach the
-CLI's exit-3 containment boundary. -/
+has committed to constructing declarations, malformed intermediate syntax or
+missing metadata is a tool failure and must reach the CLI's exit-3 containment
+boundary. Optional exact generated kernel rejection is recorded by the
+Driver as `Report.generatedKernelRejected` and reaches the CLI's rejection exit;
+it is not raised through this trusted construction helper. -/
 def badShape (msg : String) : GenM α :=
   ExceptT.lift (show MetaM α from Lean.throwError msg)
 
@@ -2335,15 +2338,16 @@ def ruleKDecl (eqi : EqInfo) (recLevelParams : List Name) (numPre : Nat)
 def hintsFor (v : Expr) : GenM ReducibilityHints := do
   return .regular (getMaxHeight (← getEnv) v + 1)
 
-/-- Add a generated declaration, **with checking**. A proof this module builds
-and the kernel rejects is a decline, never an emission.
+/-- Trusted-install a generated declaration in the disposable construction
+environment. Exact serialized records cross the optional kernel boundary only
+once, when their completed island closes.
 
-**And a declaration the kernel accepts but the environment then loses is a
-decline too.** `Environment.addDeclCore` type-checks first and afterwards
+**A declaration the construction environment accepts but then loses is a
+decline.** `Environment.addDeclCore` installs the declaration and afterwards
 registers each name in the *async* constant map, which keys on
 `privateToUserName` — the name with its private prefix stripped.
 `AsyncConsts.add` `panic!`s on a duplicate normalized name and returns the map
-**unchanged**, so the constant is in the kernel and invisible to
+**unchanged**, so the constant is in the trusted construction map and invisible to
 `Environment.find?`. That is not survivable here: `MetaM`'s `inferType` goes
 through `find?`, so the very next declaration that names the lost one dies with
 `Unknown constant` — an exit 3, the tool's own failure, with nothing emitted.
@@ -2360,19 +2364,24 @@ nested inductives, which are legitimately absent from `find?`; that is exactly
 the set this must not ask about, and it is why the loop is over `getNames`
 rather than over the environment's diff. -/
 def addChecked (d : Declaration) : GenM Unit := do
-  match (← getEnv).addDeclCore 0 d none true with
+  -- This is the disposable construction view, not the generated kernel gate.
+  -- Exact emitted records are checked once at the island boundary when
+  -- `typeCheckGenerated` is enabled; construction declarations are otherwise
+  -- trusted in exactly the same way as replayed input declarations.
+  match (← getEnv).addDeclCore 0 d none false with
   | .ok e =>
     setEnv e
-    -- **`find?`, not `constants`.** `Environment.constants` is the *kernel*
-    -- map, which has the constant — the kernel accepted it. `Environment.find?`
-    -- is the one that consults the async map, and it is the one `MetaM` goes
-    -- through, so it is the one that must see it. The test suite's `runEnvProbe`
-    -- pins the same distinction from the other side.
+    -- **`find?`, not `constants`.** `Environment.constants` is the trusted
+    -- construction kernel map; `Environment.find?` also consults the async
+    -- map used by MetaM, so it is the visibility boundary generation needs.
+    -- The test suite's `runEnvProbe` pins the same distinction from the other
+    -- side.
     for n in d.getNames do
       if ((← getEnv).find? n).isNone then
         declineWith (.nameLost n)
   | .error ex =>
-    badShape s!"{d.getTopLevelNames} rejected by the kernel: {← (ex.toMessageData {}).toString}"
+    badShape s!"{d.getTopLevelNames} could not be installed for construction: \
+      {← (ex.toMessageData {}).toString}"
 
 /-- **The `Eq` the round trips are written at.** The input's own if it declares
 one; Lean's, spliced in, if it does not.
@@ -2402,9 +2411,9 @@ whatever it takes to have one.
 
 The input's own is used when it declares a `funext` at Lean's statement. When
 it does not, this derives one from `Quot` (the kernel's quotient, four names)
-and `Quot.sound` (Lean's axiom, at Lean's statement), with every added
-declaration checked by the kernel. Only the declarations the input is missing
-are emitted.
+and `Quot.sound` (Lean's axiom, at Lean's statement). Only the declarations the
+input is missing are emitted; the completed exact island is kernel-checked iff
+the generated-declaration gate is enabled.
 
 `T._model.funext` is namespaced and the quotient names are not, and that
 asymmetry is forced rather than chosen: standard-axiom recognition selects the
@@ -2418,7 +2427,7 @@ def ensureFunext (model : Name) (eqi : EqInfo) (reserved : Std.HashSet Name) :
   let mut out : Array Declaration := #[]
   -- ── the quotient ──
   -- Recognised **structurally**, by the record kind the kernel gives it, and
-  -- not by name, just like the monomorphizer's carried built-ins.
+  -- not by name.
   match (← getEnv).constants.find? `Quot with
   | some (.quotInfo _) => pure ()
   | some _ => declineWith (.notLeans `Quot "it is declared and is not the kernel's quotient type")
@@ -2459,12 +2468,12 @@ thirty-line tactic proofs over `List`, `Option`, `Sigma`, `Subtype`, `Acc` and
 what `Simple.lean` already does. So the construction's whole constant closure
 is carried as an **export fragment** and spliced.
 
-**It is spliced through [`InductiveModels.addChecked`], which is the checked side of
-the boundary.** `addChecked` is `addDeclCore 0 d none true` and the trusted
-input replay is the same call with `false`, so the two are one boolean apart.
-Compiling the closure in and copying its `ConstantInfo`s — the obvious
-alternative — would have put 206 of *our own* constants on the trusted side,
-unchecked and absent from the report. -/
+**It is spliced through [`InductiveModels.addChecked`] into the disposable
+construction view.** That view is deliberately trusted: the exact records
+serialized from the completed island are the sole generated kernel
+boundary, and are checked there iff `--type-check-generated` is enabled.
+Compiling the closure in and copying its `ConstantInfo`s would bypass that
+exact emitted-record boundary. -/
 
 /-- The fragment: what `lean4export` emits for `WT.W WT.sup WT.Wrec
 WT.Wrec_iota instDecidableEqNat` over the W core. 528 KB, 163
@@ -2498,6 +2507,34 @@ that added 11 declarations still spliced the old 149. The test suite's
 that comparison is the only thing standing between a fragment change and a
 silently stale tool. -/
 def wCoreText : String := include_str "../../test/fixtures/inductive-models/w_core.ndjson"
+
+/-- Fixed public support which a generated model of the fragment's `Acc` may
+use. The source fixture deliberately keeps some of these records after `Acc`
+to exercise raw-input decline semantics; the embedded fragment is itself a
+producer, so it must place the complete support before the generated owner. -/
+private def wCoreModelReadinessNames : Array Name := #[
+  `Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
+  `Nonempty, `Nonempty.intro, `Nonempty.rec, `Classical.choice,
+  `Iff, `Iff.intro, `Iff.rec, `propext]
+
+/-- Producer-local order for the embedded fragment. Preserve the entire raw
+prefix and the relative order of every record; only readiness records that the
+fixture intentionally placed after `Acc` move to the boundary immediately
+before its complete inductive record. This is not a general output reorder. -/
+private def wCoreGenerationOrder (declarations : Array EDecl) : Except String (Array EDecl) := do
+  let some accIndex := declarations.findIdx? (fun declaration =>
+      declaration.names.contains `Acc)
+    | throw "the W core fragment has no Acc declaration"
+  for name in wCoreModelReadinessNames do
+    unless declarations.any (fun declaration => declaration.names.contains name) do
+      throw s!"the W core fragment has no model-readiness declaration {name}"
+  let rawPrefix := declarations.extract 0 accIndex
+  let tail := declarations.extract accIndex declarations.size
+  let isReadiness := fun declaration =>
+    declaration.names.any wCoreModelReadinessNames.contains
+  let readiness := tail.filter isReadiness
+  let remainder := tail.filter fun declaration => !isReadiness declaration
+  return rawPrefix ++ readiness ++ remainder
 
 /-- The prefix every fragment name gets, bar the shared ones below. The
 fragment's names are Lean core's, so splicing its `List` into an input that
@@ -2639,24 +2676,28 @@ Three things can happen to a fragment record:
 
 * every name it introduces is already in the environment — it is one of the
   shared twelve and the input had it, so it is the *input's* and this skips it;
-* it is new — the reserved guard runs and it goes through `addChecked`;
+* it is new — the reserved guard runs and it is installed in the disposable
+  construction environment;
 * some of its names are present and some are not, which can only happen to a
   shared declaration and means the input has half of a quotient or of `Eq`.
   That is a shape this cannot repair, and it says so.
 
 **No shared declaration is separately checked against Lean's statement, and it
 does not need to be.** If the input's `Eq` or `Iff` or `propext` is not Lean's,
-the fragment's 200-odd proofs are stated and proved against it and `addChecked`
-rejects one of them. That is a decline with a name on it rather than a silent
-wrong answer, which is the property that matters. -/
+the fragment's 200-odd proofs are stated and proved against it. With output
+checking enabled, the exact generated island is then checked once at its close
+boundary. -/
 def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
   if (← getEnv).constants.contains wCoreSelf then return #[]
   let ex ←
-    match InductiveModels.parse wCoreText (analyse := false) with
+    match InductiveModels.parse wCoreText with
     | .ok ex => pure ex
     | .error msg => badShape s!"the W core fragment does not parse ({msg})"
+  let declarations ← match wCoreGenerationOrder ex.decls with
+    | .ok declarations => pure declarations
+    | .error msg => badShape msg
   let mut out : Array Declaration := #[]
-  for d0 in ex.decls do
+  for d0 in declarations do
     let d := EDecl.mapNames wCoreName wCoreExpr d0
     let ns := d.names
     let env ← getEnv
@@ -2840,8 +2881,9 @@ def mimicGroups (pl : Plan) : Except String (Array (Array Nat)) := Id.run do
 
 /-- **Build the model, or say which shape stopped it.**
 
-The whole of the checker interaction is [`InductiveModels.addChecked`], once per
-generated declaration. Nothing is emitted unchecked. -/
+Generated declarations are first installed through [`InductiveModels.addChecked`]
+in the disposable construction view. The exact serialized island is checked
+once at its close boundary iff generated kernel checking is enabled. -/
 def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     (exportCtors : Array (Array (Name × Expr))) (exportRecursors : Array ERec) (pl : Plan)
     (reserved : Std.HashSet Name) (buildRoot? : Option Name := none) : GenM Iso := do

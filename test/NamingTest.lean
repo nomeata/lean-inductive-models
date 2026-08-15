@@ -1,6 +1,7 @@
 import InductiveModels.Naming
+import InductiveModels.ModelRoles
 
-open Lean InductiveModels.Naming
+open Lean InductiveModels InductiveModels.Naming
 
 structure TestState where
   passed : Nat := 0
@@ -47,10 +48,78 @@ private def runPerf (direct : Bool) : IO UInt32 := do
   IO.println s!"collision census checksum: {checksum}"
   return if checksum == 1000 then 0 else 1
 
+/-- Exact role discovery must not infer ownership by parsing `_model`
+components. This makes that observable with an original type already named
+`Foo._model` and a raw private constructor name. -/
+private def modelRoleProbe : Array String := Id.run do
+  let outer : Name := `Foo
+  let typeName : Name := `Foo._model
+  let constructorName : Name := (`_private.ModelRoles).mkNum 7 |>.str "mk"
+  let recursorName : Name := `Foo._model.rec
+  let rule : ERecRule :=
+    { ctor := constructorName, nfields := 0, rhs := .sort .zero }
+  let type : EIndType :=
+    { name := typeName, levelParams := [`u], type := .sort (.param `u),
+      all := [typeName], ctors := [constructorName], numParams := 0, numIndices := 0,
+      numNested := 0, isRec := false, isReflexive := false, isUnsafe := false }
+  let constructor : ECtor :=
+    { name := constructorName, levelParams := [`u], type := .sort (.param `u), cidx := 0,
+      numParams := 0, numFields := 0, induct := typeName, isUnsafe := false }
+  let recursor : ERec :=
+    { name := recursorName, levelParams := [`w, `u], type := .sort (.param `u),
+      all := [recursorName], numParams := 0, numIndices := 0, numMotives := 1,
+      numMinors := 1, rules := [rule], k := true, isUnsafe := false }
+  let definition := fun name =>
+    EDecl.defn name [`u] (.sort (.param `u)) (.sort (.param `u))
+      EHints.abbrev "safe" [name]
+  let iota := iotaName recursorName 0
+  let unitlike := unitlikeName typeName
+  let ruleK := ruleKName recursorName
+  let helper := `Foo._model._impl.pack
+  let outerType : EIndType :=
+    { name := outer, levelParams := [], type := .sort (.succ .zero),
+      all := [outer], ctors := [], numParams := 0, numIndices := 0,
+      numNested := 0, isRec := false, isReflexive := false, isUnsafe := false }
+  let source : Export := { metaLine := .null, decls := #[
+    definition (modelName typeName),
+    definition (modelName constructorName),
+    definition (modelName recursorName),
+    .thm iota [`w, `u] (.sort (.param `u)) (.sort (.param `u)) [iota],
+    .thm unitlike [`u] (.sort (.param `u)) (.sort (.param `u)) [unitlike],
+    .thm ruleK [`w, `u] (.sort (.param `u)) (.sort (.param `u)) [ruleK],
+    definition helper,
+    .thm (unitlikeName outer) [] (.sort .zero) (.sort .zero) [unitlikeName outer],
+    .induct [type] [constructor] [recursor],
+    .induct [outerType] [] [] ] }
+  let roles := ModelRoles.table source
+  let mut errors : Array String := #[]
+  let expect := fun (errors : Array String) (name owner : Name) (role : ModelRoles.Role) =>
+    match roles[name]? with
+    | some entry =>
+      if entry.owner == owner && entry.role == role then errors
+      else errors.push s!"{name}: wrong model entry ({entry.owner})"
+    | none => errors.push s!"{name}: exact model entry missing"
+  errors := expect errors (modelName typeName) typeName .typeFormer
+  errors := expect errors (modelName constructorName) typeName .constructor
+  errors := expect errors (modelName recursorName) typeName .recursor
+  errors := expect errors iota typeName .iota
+  errors := expect errors unitlike typeName .unitlike
+  errors := expect errors ruleK typeName .ruleK
+  if roles.contains (modelName outer) then
+    errors := errors.push "the original Foo._model inductive was parsed as Foo's carrier"
+  if roles.contains helper then
+    errors := errors.push "an _impl helper was parsed as a public model declaration"
+  if roles.contains (unitlikeName outer) then
+    errors := errors.push "an extra unitlike suffix was inferred without kernel metadata"
+  return errors
+
 def main (args : List String) : IO UInt32 := do
   if args == ["--perf-direct"] then return ← runPerf true
   if args == ["--perf-materialized"] then return ← runPerf false
   let mut state : TestState := {}
+
+  state ← state.check "exact model roles do not parse generated-looking names"
+    modelRoleProbe.isEmpty
 
   state ← state.check "ordinary declaration" (modelName `Tree == `Tree._model)
   state ← state.check "namespaced declaration"

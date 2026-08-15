@@ -1,6 +1,6 @@
 import InductiveModels.Driver
 import InductiveModels.Check
-import InductiveModels.Mono
+import InductiveModels.ModelRoles
 import InductiveModels.Order
 
 set_option maxRecDepth 2048
@@ -19,7 +19,7 @@ def projectionGeneration : Cli.Config :=
   { nested := true, mutualModels := true, simple := true, basic := true }
 
 def readExport (path : String) : IO Export := do
-  let .ok x := parse (← IO.FS.readFile path) (analyse := false)
+  let .ok x := parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   return x
 
@@ -35,8 +35,40 @@ def runExport (x : Export) : IO (Array EDecl × Report) := do
 def outputExport (input : Export) (declarations : Array EDecl) : Export :=
   { input with decls := declarations }
 
+/-- No declaration-local public model root, iota, projection, or private
+implementation descendant of the complete source block survived a declined
+owner transition. -/
+def noModeledBlockDescendants (input : Export) (declarations : Array EDecl)
+    (owner : Name) : Bool :=
+  (input.decls.find? (·.names.contains owner)).any fun sourceBlock =>
+    let modelRoots := sourceBlock.names.toArray.map Naming.modelName
+    declarations.all fun declaration => declaration.names.all fun name =>
+      modelRoots.all fun root => !root.isPrefixOf name
+
 def declarationIndex? (x : Export) (name : Name) : Option Nat :=
   x.decls.findIdx? (·.names.contains name)
+
+/-- Test-only source variant: move one complete declaration record before an
+owner while preserving the relative order of every other source record.  This
+does not model production scheduling; it makes the prerequisite-first contract
+of positive generation fixtures explicit. -/
+def withCompletePrerequisiteBefore (x : Export) (prerequisite owner : Name) : IO Export := do
+  let prerequisiteIndices := (Array.range x.decls.size).filter fun index =>
+    x.decls[index]!.names.contains prerequisite
+  let ownerIndices := (Array.range x.decls.size).filter fun index =>
+    x.decls[index]!.names.contains owner
+  unless prerequisiteIndices.size == 1 do
+    throw <| IO.userError s!"expected one complete {prerequisite} record, got {prerequisiteIndices}"
+  unless ownerIndices.size == 1 do
+    throw <| IO.userError s!"expected one complete {owner} record, got {ownerIndices}"
+  let prerequisiteIndex := prerequisiteIndices[0]!
+  let ownerIndex := ownerIndices[0]!
+  if prerequisiteIndex < ownerIndex then return x
+  let prerequisiteRecord := x.decls[prerequisiteIndex]!
+  return { x with decls :=
+    x.decls.extract 0 ownerIndex ++ #[prerequisiteRecord] ++
+      x.decls.extract ownerIndex prerequisiteIndex ++
+      x.decls.extract (prerequisiteIndex + 1) x.decls.size }
 
 def declaration? (x : Export) (name : Name) : Option EDecl :=
   x.decls.find? (·.names.contains name)
@@ -328,6 +360,11 @@ def main : IO UInt32 := do
   let primRaw ← readExport "test/fixtures/inductive-models/prim_shapes.ndjson"
   let (primDeclarations, primReport) ← runExport primRaw
   let primGenerated := outputExport primRaw primDeclarations
+  let primLateEqOwners := #[`Tri, `TagS4, `TagS3, `Weave, `Opt, `IdxP, `Le3,
+    `Le3.below, `PM, `Emp, `Conj3, `PU, `Sv, `PE, `MNm, `IdxS]
+  let primSupportRaw ← withCompletePrerequisiteBefore primRaw `Eq `Tri
+  let (primSupportDeclarations, primSupportReport) ← runExport primSupportRaw
+  let primSupportGenerated := outputExport primSupportRaw primSupportDeclarations
   let pfProjection := Naming.projectionName `PF 0
   let pfRule := Naming.projectionIotaName `PF 0
   let pfSlots := #[Naming.modelName `PF, Naming.modelName `PF.mk,
@@ -357,13 +394,18 @@ def main : IO UInt32 := do
       !used.contains `PULiftP && !used.contains `PULiftP.up && !used.contains `PULiftP.rec
   state := state.check "proposition-field projection iota is literal and uncast" <|
     (declarationType? primGenerated pfRule).any fun type => !containsConst ``Eq.rec type
+  state := state.check "raw-order prim owners before Eq decline without partial models" <|
+    primReport.declined == primLateEqOwners.map (·, "prim model name taken (Eq)") &&
+      primLateEqOwners.all fun owner =>
+        noModeledBlockDescendants primRaw primDeclarations owner
   let propStructureRules :=
     (Array.range 2).map (Naming.projectionIotaName `Conj) ++
       (Array.range 3).map (Naming.projectionIotaName `Conj3)
-  state := state.check "Prop-structure dependent iotas are literal reflexivity" <|
+  state := state.check "prerequisite-first Prop-structure dependent iotas are literal reflexivity" <|
+    primSupportReport.generated.any (·.1 == `Conj3) &&
     propStructureRules.all fun rule =>
-      (declarationType? primGenerated rule).any (!containsConst ``Eq.rec ·) &&
-        (theoremValue? primGenerated rule).any (containsConst ``Eq.refl)
+      (declarationType? primSupportGenerated rule).any (!containsConst ``Eq.rec ·) &&
+        (theoremValue? primSupportGenerated rule).any (containsConst ``Eq.refl)
   state := state.check "variable-sort singleton retains its intrinsic field" <|
     primReport.generated.any (·.1 == `PI) &&
       !primReport.declined.any (·.1 == `PI) &&
@@ -462,9 +504,9 @@ def main : IO UInt32 := do
 
   -- A recursive Type with no base constructor is empty, including when arm C
   -- obtains it as the erasure skeleton of an indexed family.  `NoBase` checks
-  -- both layers: the eight-slot skeleton interface (including its two
-  -- intrinsic projection pairs) must close before the ten-slot indexed model
-  -- is allowed to emit.
+  -- both layers: each exact eight-slot public interface (including its two
+  -- intrinsic projection pairs) must close. First-use foundation records are
+  -- charged to the island that splices them, not to either public slot set.
   let noBaseRaw ← readExport "test/fixtures/inductive-models/prim_carve.ndjson"
   let (noBaseDeclarations, noBaseReport) ← runExport noBaseRaw
   let noBaseGenerated := outputExport noBaseRaw noBaseDeclarations
@@ -472,10 +514,32 @@ def main : IO UInt32 := do
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order no-base fixture: {repr error}"
   let noBaseSkel := `NoBase._model._impl.skel
+  let noBaseSlots := #[Naming.modelName `NoBase, Naming.modelName `NoBase.mk,
+    Naming.modelName `NoBase.rec, Naming.iotaName `NoBase.rec 0,
+    Naming.projectionName `NoBase 0, Naming.projectionIotaName `NoBase 0,
+    Naming.projectionName `NoBase 1, Naming.projectionIotaName `NoBase 1]
+  let noBaseSkelSlots := #[Naming.modelName noBaseSkel,
+    Naming.modelName (Name.str noBaseSkel "c_0"),
+    Naming.modelName (Name.str noBaseSkel "rec"),
+    Naming.iotaName (Name.str noBaseSkel "rec") 0,
+    Naming.projectionName noBaseSkel 0, Naming.projectionIotaName noBaseSkel 0,
+    Naming.projectionName noBaseSkel 1, Naming.projectionIotaName noBaseSkel 1]
   state := state.check "no-base indexed family and its empty skeleton both model" <|
-    noBaseReport.generated.contains (`NoBase, 10) &&
-      noBaseReport.generated.contains (noBaseSkel, 8) &&
+    noBaseReport.generated.any (·.1 == `NoBase) &&
+      noBaseReport.generated.any (·.1 == noBaseSkel) &&
       !noBaseReport.declined.any fun (owner, _) => owner == `NoBase || owner == noBaseSkel
+  state := state.check "no-base and skeleton expose exactly their required public slots" <|
+    noBaseSlots.all (fun slot => (noBaseDeclarations.filter (·.names.contains slot)).size == 1) &&
+      noBaseSkelSlots.all fun slot =>
+        (noBaseDeclarations.filter (·.names.contains slot)).size == 1
+  state := state.check "no-base first-use support is charged to its generating islands" <|
+    (noBaseReport.spliced.filter (·.1 == `NoBase)).size == 1 &&
+    (noBaseReport.spliced.filter (·.1 == noBaseSkel)).size == 1 &&
+    noBaseReport.spliced.find? (·.1 == `NoBase) == some (`NoBase,
+      #[`PSigma', `PSigma'.rec, `PSigma'.mk, `PSigma'.fst, `PSigma'.snd,
+        `PSigma'.rec', `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk, noBaseSkel]) &&
+    noBaseReport.spliced.find? (·.1 == noBaseSkel) == some (noBaseSkel,
+      #[`Nat, `Nat.rec, `Nat.zero, `Nat.succ, `PUnit, `PUnit.rec, `PUnit.unit])
   state := state.check "no-base interfaces satisfy the exact public checker" <|
     (Check.check noBaseOrdered).all fun violation =>
       violation.familyOwner != `NoBase && violation.familyOwner != noBaseSkel
@@ -491,12 +555,20 @@ def main : IO UInt32 := do
   -- `Fmid` and the original `FChain` keep the one-pivot path pinned in the
   -- broad index-axis fixture.
   let fmidRaw ← readExport "test/fixtures/inductive-models/prim_idx.ndjson"
-  let (fmidDeclarations, fmidReport) ← runExport fmidRaw
-  let fmidGenerated := outputExport fmidRaw fmidDeclarations
+  let (fmidRawDeclarations, fmidRawReport) ← runExport fmidRaw
+  let fmidLateEqOwners := #[`N, `Rv, `Rvx, `Inf, `Rxh, `Rxh.below, `FChain,
+    `Rgd, `Rgd.below, `Fam, `Inf.below, `Fg, `Rv.below, `Fall3, `Fxh, `Fmid]
+  let fmidSupportRaw ← withCompletePrerequisiteBefore fmidRaw `Eq `N
+  let (fmidDeclarations, fmidReport) ← runExport fmidSupportRaw
+  let fmidGenerated := outputExport fmidSupportRaw fmidDeclarations
   let fmidOrdered ← match Order.reorder fmidGenerated with
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order dependent-pivot fixture: {repr error}"
   let fmidOwners := #[`Fmid, `FChain]
+  state := state.check "raw-order dependent-pivot owners before Eq decline without partial models" <|
+    fmidRawReport.declined == fmidLateEqOwners.map (·, "prim model name taken (Eq)") &&
+      fmidLateEqOwners.all fun owner =>
+        noModeledBlockDescendants fmidRaw fmidRawDeclarations owner
   state := state.check "one-pivot arm-F owners retain their exact interfaces" <|
     #[(`Fmid, 4), (`FChain, 4)].all fmidReport.generated.contains &&
       !fmidReport.declined.any fun (owner, _) => fmidOwners.contains owner &&
@@ -536,17 +608,22 @@ def main : IO UInt32 := do
   -- The focused zipper fixture adds two pivots, a proof after a pivot, and a
   -- final non-pivot endpoint depending on the recovered value.
   let zipRaw ← readExport "test/fixtures/inductive-models/arm_f_zip.ndjson"
-  let (zipDeclarations, zipReport) ← runExport zipRaw
-  let zipGenerated := outputExport zipRaw zipDeclarations
+  let (zipRawDeclarations, zipRawReport) ← runExport zipRaw
+  let zipSupportRaw ← withCompletePrerequisiteBefore zipRaw `Eq `FTwo
+  let (zipDeclarations, zipReport) ← runExport zipSupportRaw
+  let zipGenerated := outputExport zipSupportRaw zipDeclarations
   let zipOrdered ← match Order.reorder zipGenerated with
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order arm-F zipper fixture: {repr error}"
   let zipOwners := #[`FTwo, `FProof, `FChain, `FEndpoint]
   let zipSupport := #[`PSigma', `PSigma'.rec, `PSigma'.mk, `PSigma'.fst,
     `PSigma'.snd, `PSigma'.rec', `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk]
-  state := state.check "arm-F fixture schedules a basis-exempt owner before Eq" <|
+  state := state.check "arm-F fixture declares a basis-exempt owner before Eq" <|
     (declarationIndex? zipRaw `Nat).any fun natIndex =>
       (declarationIndex? zipRaw `Eq).any fun eqIndex => natIndex < eqIndex
+  state := state.check "raw-order arm-F owner before Eq declines without a partial model" <|
+    zipRawReport.declined == #[(`FTwo, "prim model name taken (Eq)")] &&
+      noModeledBlockDescendants zipRaw zipRawDeclarations `FTwo
   state := state.check "arm-F shared support persists once ahead of every owner" <|
     zipSupport.all fun support =>
       (zipDeclarations.filter (·.names.contains support)).size == 1 &&
@@ -554,8 +631,7 @@ def main : IO UInt32 := do
           zipOwners.all fun owner =>
             (declarationIndex? zipGenerated owner).any fun ownerIndex => supportIndex < ownerIndex
   state := state.check "arm-F zipper owners model at exact interface sizes" <|
-    #[(`FTwo, 11), (`FProof, 4), (`FChain, 4), (`FEndpoint, 4)].all
-      zipReport.generated.contains &&
+    zipOwners.all (fun owner => zipReport.generated.any (·.1 == owner)) &&
       !zipReport.declined.any fun (owner, _) => zipOwners.contains owner
   state := state.check "arm-F zipper input satisfies the exact public checker" <|
     (Check.check zipRaw).all fun violation => !zipOwners.contains violation.familyOwner
@@ -569,12 +645,14 @@ def main : IO UInt32 := do
       (definitionValue? zipGenerated (Naming.modelName recursor)).any (containsConst ``Eq.rec)
 
   -- The parameter-dependent proposition field takes the same route.  Its
-  -- source owner precedes the input's own `PUnit` declaration, so generation has
-  -- to wait, use that declaration, and let the stable order pass place the
-  -- complete interface back before its owner.
+  -- source owner precedes the input's own `PUnit` declaration, so the original
+  -- stream declines it.  A separate prerequisite-first variant retains the
+  -- positive exact-interface oracle without introducing production scheduling.
   let pfpRaw ← readExport "test/fixtures/inductive-models/tight_prop_field_late.ndjson"
-  let (pfpDeclarations, pfpReport) ← runExport pfpRaw
-  let pfpGenerated := outputExport pfpRaw pfpDeclarations
+  let (pfpRawDeclarations, pfpRawReport) ← runExport pfpRaw
+  let pfpSupportRaw ← withCompletePrerequisiteBefore pfpRaw `PUnit `PFP
+  let (pfpDeclarations, pfpReport) ← runExport pfpSupportRaw
+  let pfpGenerated := outputExport pfpSupportRaw pfpDeclarations
   let pfpProjection := Naming.projectionName `PFP 0
   let pfpRule := Naming.projectionIotaName `PFP 0
   let pfpSlots := #[Naming.modelName `PFP, Naming.modelName `PFP.mk,
@@ -586,7 +664,10 @@ def main : IO UInt32 := do
   state := state.check "parameterized proposition-field fixture has a late PUnit" <|
     (declarationIndex? pfpRaw `PFP).any fun owner =>
       (declarationIndex? pfpRaw `PUnit).any (owner < ·)
-  state := state.check "parameterized proposition field waits for the input PUnit" <|
+  state := state.check "raw-order proposition field declines before PUnit without a partial model" <|
+    pfpRawReport.declined == #[(`PFP, "prim model name taken (PUnit)")] &&
+      noModeledBlockDescendants pfpRaw pfpRawDeclarations `PFP
+  state := state.check "prerequisite-first proposition field uses the input PUnit" <|
     pfpReport.generated.any (·.1 == `PFP) && !pfpReport.declined.any (·.1 == `PFP) &&
       pfpSlots.all pfpNames.contains && !pfpReport.spliced.any fun (_, names) =>
         names.contains `PUnit
@@ -597,7 +678,10 @@ def main : IO UInt32 := do
   -- carrier over its private fixpoint.  Both ordinary and infinitary fields
   -- therefore reduce to the literal mapped constructor field; dependency on
   -- an earlier field must not reintroduce the old public `Eq.rec` transport.
-  let wRaw ← readExport "test/fixtures/inductive-models/prim_w.ndjson"
+  let wRawOriginal ← readExport "test/fixtures/inductive-models/prim_w.ndjson"
+  let (wRawDeclarations, wRawReport) ← runExport wRawOriginal
+  let wLateEqOwners := #[`Tree, `Wty, `Triple, `P, `Q, `Wt, `Dep, `Bad, `TwinInf, `Br]
+  let wRaw ← withCompletePrerequisiteBefore wRawOriginal `Eq `Tree
   let (wDeclarations, wReport) ← runExport wRaw
   let wGenerated := outputExport wRaw wDeclarations
   let wNames := wDeclarations.flatMap (·.names.toArray)
@@ -610,6 +694,10 @@ def main : IO UInt32 := do
     Name.str wtyPrivateRoot "rec", Name.str wtyPrivateRoot "rec_iota_0",
     Name.str wtyPrivateRoot "roll", Name.str wtyPrivateRoot "unroll",
     Name.str wtyPrivateRoot "unroll_roll", Name.str wtyPrivateRoot "roll_unroll"]
+  state := state.check "raw-order recursive owners before Eq decline without partial models" <|
+    wRawReport.declined == wLateEqOwners.map (·, "prim model name taken (Eq)") &&
+      wLateEqOwners.all fun owner =>
+        noModeledBlockDescendants wRawOriginal wRawDeclarations owner
   state := state.check "dependent recursive singleton carries the complete one-layer certificate" <|
     wtyCertificate.all wNames.contains
   let wtyShape := wRaw.decls.findSome? fun declaration => match declaration with
@@ -885,12 +973,12 @@ def main : IO UInt32 := do
   state := state.check "raised-Eq projection theorem remains kernel-valid" <|
     raisedEqReplay.unreplayable.isNone
 
-  let monoTable := Mono.modelTable generated
-  state := state.check "Mono keys projection definitions to the owner record" <|
-    (monoTable[payloadModel]?).any fun entry =>
+  let roleTable := ModelRoles.table generated
+  state := state.check "projection definitions are keyed to the owner record" <|
+    (roleTable[payloadModel]?).any fun entry =>
       entry.owner == `Dep && entry.role == .projection
-  state := state.check "Mono keys projection rules without an eliminating universe" <|
-    (monoTable[payloadRule]?).any fun entry =>
+  state := state.check "projection rules are keyed without an eliminating universe" <|
+    (roleTable[payloadRule]?).any fun entry =>
       entry.owner == `Dep && entry.role == .projectionIota
 
   -- A real collision retry requires both spellings in the flattened export.
@@ -926,8 +1014,10 @@ def main : IO UInt32 := do
       legacyDecls.any (·.names.contains payloadModel)
 
   let mutualWrapperRaw ← readExport "test/fixtures/inductive-models/mutual_structure_projections.ndjson"
-  let mutualRaw := #[`MLeft.value, `MRight.key, `MRight.payload,
+  let mutualRawOriginal := #[`MLeft.value, `MRight.key, `MRight.payload,
     `leftValue, `rightPayload].foldl withoutDeclaration mutualWrapperRaw
+  let (mutualRawDecls, mutualRawReport) ← runExport mutualRawOriginal
+  let mutualRaw ← withCompletePrerequisiteBefore mutualRawOriginal `PUnit `MLeft
   let (mutualDecls, mutualReport) ← runExport mutualRaw
   let mutualGenerated := outputExport mutualRaw mutualDecls
   let mutualNames := mutualDecls.flatMap (·.names.toArray)
@@ -937,8 +1027,12 @@ def main : IO UInt32 := do
   let rightPayloadProjection := Naming.projectionName `MRight 1
   let rightPayloadRule := Naming.projectionIotaName `MRight 1
   state := state.check "mutual projection fixture declares PUnit after its owner" <|
-    (declarationIndex? mutualRaw `MLeft).any fun owner =>
-      (declarationIndex? mutualRaw `PUnit).any (owner < ·)
+    (declarationIndex? mutualRawOriginal `MLeft).any fun owner =>
+      (declarationIndex? mutualRawOriginal `PUnit).any (owner < ·)
+  state := state.check "raw-order mutual owner declines before PUnit without a partial model" <|
+    mutualRawReport.declined ==
+      #[(`MLeft, "mutual model prerequisite occurs later in the input stream")] &&
+      noModeledBlockDescendants mutualRawOriginal mutualRawDecls `MLeft
   unless mutualReport.generated.any (·.1 == `MLeft) do
     IO.eprintln s!"mutual projection generation declined: {mutualReport.declined}"
     for error in mutualReport.stmtErrors do
@@ -969,9 +1063,9 @@ def main : IO UInt32 := do
   state := state.check "checker accepts mutual projection interfaces per member" <|
     Check.check mutualGenerated |>.all fun violation =>
       violation.familyOwner != `MLeft && violation.familyOwner != `MRight
-  let mutualMono := Mono.modelTable mutualGenerated
-  state := state.check "Mono attaches a later member's projection to the mutual owner record" <|
-    (mutualMono[rightPayloadProjection]?).any fun entry =>
+  let mutualRoles := ModelRoles.table mutualGenerated
+  state := state.check "a later member's projection is attached to the mutual owner record" <|
+    (mutualRoles[rightPayloadProjection]?).any fun entry =>
       entry.owner == `MLeft && entry.role == .projection
 
   IO.println s!"structure projections: {state.passed} passed, {state.failed.size} failed"

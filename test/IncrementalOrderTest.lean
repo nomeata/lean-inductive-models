@@ -56,25 +56,6 @@ def sameOutcome [BEq α] (left right : Except Order.Error α) : Bool :=
 def outcomesAgree (x : Export) (prefer : EDecl → Bool := fun _ => false) : Bool :=
   sameOutcome (fullOutcome x prefer) (compactOutcome x prefer)
 
-def noGeneration : Cli.Config :=
-  { nested := false, mutualModels := false, simple := false, basic := false }
-
-def compactScheduledOutcome (x : Export) (generation : Cli.Config) :
-    Except Order.Error (Array (Array Name)) :=
-  let reserved := x.decls.foldl (fun names declaration =>
-    declaration.names.foldl (·.insert ·) names) {}
-  let selected := sourceNeedsSupportScheduling x generation reserved
-  compactOutcome x fun declaration =>
-    selected && scheduledSupportRecord generation declaration
-
-def fullScheduledOutcome (x : Export) (generation : Cli.Config) :
-    Except Order.Error (Array (Array Name)) := do
-  let scheduled ← scheduleSource x generation
-  return scheduled.decls.map fun declaration => declaration.names.toArray
-
-def schedulingAgrees (x : Export) (generation : Cli.Config) : Bool :=
-  sameOutcome (fullScheduledOutcome x generation) (compactScheduledOutcome x generation)
-
 def isExactOrder (outcome : Except Order.Error (Array (Array Name)))
     (expected : Array (Array Name)) : Bool :=
   match outcome with
@@ -83,7 +64,7 @@ def isExactOrder (outcome : Except Order.Error (Array (Array Name)))
 
 def readExport (path : System.FilePath) : IO Export := do
   let text ← IO.FS.readFile path
-  match InductiveModels.parse text (analyse := false) with
+  match InductiveModels.parse text with
   | .ok x => return x
   | .error error => throw <| IO.userError s!"cannot parse {path}: {error}"
 
@@ -95,11 +76,10 @@ def fixturePaths (root : String) : IO (Array System.FilePath) := do
 def summary (ordinal : Nat) (introduced : Array Name)
     (referenced : Array Name := #[]) (owner : Option Name := none)
     (support := false) (modelSlots : Array Name := #[])
-    (modelBefore : Array Name := #[])
-    (origin : Order.SummaryOrigin := .source) : Order.DeclSummary :=
+    (modelBefore : Array Name := #[]) : Order.DeclSummary :=
   { ordinal, introduced
     referenced := referenced.foldl (fun names name => names.insert name) {}
-    owner, support, modelSlots, modelBefore, origin }
+    owner, support, modelSlots, modelBefore }
 
 /-! A deliberately quadratic copy of the pre-index compact graph builder.
 It is test-local so the optimized implementation cannot accidentally share
@@ -266,19 +246,11 @@ def randomCycleSummaries (seed : Nat) :
 
 def run (root : String) : IO UInt32 := do
   let mut state : TestState := {}
-  let configs : Array (String × Cli.Config) := #[
-    ("none", noGeneration),
-    ("nested-mutual", { noGeneration with nested := true, mutualModels := true }),
-    ("simple", { noGeneration with simple := true }),
-    ("default", {})]
   let paths ← fixturePaths root
   for path in paths do
     let x ← readExport path
     let label := path.toString
     state := state.check s!"{label}: ordinary name order/error" (outcomesAgree x)
-    for (configName, config) in configs do
-      state := state.check s!"{label}: {configName} source schedule"
-        (schedulingAgrees x config)
 
   -- Preferred support brings its complete predecessor closure forward, while
   -- retaining the least original ordinal inside both classes.
@@ -315,7 +287,7 @@ def run (root : String) : IO UInt32 := do
   state := state.check "duplicate ownership has the exact diagnostic"
     (sameOutcome (fullOutcome duplicate) (compactOutcome duplicate))
 
-  -- This is the composition shape produced by source scheduling followed by
+  -- This is the composition shape produced by source replay followed by
   -- one locally ordered generated island. It contains only names and edges:
   -- no declaration value is available to this check. Ordinary stable ordering
   -- is therefore the identity, which makes a final full Export reorder
@@ -325,14 +297,12 @@ def run (root : String) : IO UInt32 := do
     summary 0 #[`SupportDependency],
     summary 1 #[`Support] #[`SupportDependency] (support := true),
     summary 2 #[`Earlier],
-    summary 3 #[`Owner._model.impl] #[`Support]
-      (origin := .island 7),
-    summary 4 #[Naming.modelName `Owner] #[`Owner._model.impl]
-      (origin := .island 7),
+    summary 3 #[`Owner._model.impl] #[`Support],
+    summary 4 #[Naming.modelName `Owner] #[`Owner._model.impl],
     summary 5 #[`Owner] #[`Support] (owner := some `Owner)
       (modelSlots := #[Naming.modelName `Owner]),
     summary 6 #[`Later] #[`Owner]]
-  state := state.check "scheduled source plus ordered island is a final fixed point"
+  state := state.check "source plus constructively ordered island is a final fixed point"
     (Order.summariesAreOrdered composed)
   let misplaced := composed.swap 4 5
   state := state.check "a public slot after its owner is not a fixed point"

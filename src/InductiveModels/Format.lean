@@ -140,10 +140,9 @@ end EDecl
 
 The one function that turns a parsed record into something the kernel takes,
 and the two hint/safety translations it needs. **It lives here rather than
-beside its callers because it has three of them at three different heights of
-the import graph**: the input replay in `InductiveModels.Driver`, the replay in
-`InductiveModels.Mono` — which deliberately does not import `Driver` — and the
-fragment splice in `InductiveModels.Simple`, which sits *below* `Driver`. `Format` is
+beside its callers because they sit at different heights of the import graph**:
+the input replay in `InductiveModels.Driver` and the fragment splice in
+`InductiveModels.Simple`, which sits *below* `Driver`. `Format` is
 the shared floor, and the function is pure in its argument, so nothing but the
 name resolution moves. -/
 
@@ -405,23 +404,6 @@ def SourceReplayAliases.exactDerivedRecord (aliases : SourceReplayAliases) : EDe
 structure Export where
   metaLine : Json
   decls : Array EDecl
-  /-- **The nodes with an `Expr.proj` somewhere in their subtree**, when the
-  reader was asked for them (`analyse`), and empty when it was not.
-
-  This is here rather than in the consumer because it is **an arena property and
-  the arena is only in scope during the read**. Computing it afterwards, over
-  `Expr`s, needs a visited set spanning every distinct node in the file so that
-  a shared subterm is not walked once per parent — and that set is enormous and
-  almost entirely `false`: at ten million lines of Mathlib, 9,264,612 entries
-  of which **90,765 (1.0 %) are `true`**. The reader instead computes the bit
-  when each expression record arrives. Every child record precedes its parent,
-  even when their numeric IDs are sparse or out of order, so the retained set
-  contains only the 1 %.
-
-  A consumer reads it as a **set membership and not a memo**: `e ∈ projNodes`
-  is the whole query, there is nothing to fill in, and a node that is not in it
-  is not in it. -/
-  projNodes : Std.HashSet Expr := {}
   deriving Inhabited
 
 /-- Declaration names are semantic export identities. The library parsers use
@@ -509,7 +491,7 @@ type.  In particular, when `T` is `Prop` the selected field must be a
 proposition; and each earlier non-proof field on which the remaining telescope
 depends also makes the projection invalid.  This is the literal field walk in
 the kernel's `infer_proj`, expressed over export records so generation,
-checking, and monomorphization enumerate the same slots without consulting a
+checking, and serialization enumerate the same slots without consulting a
 named projection wrapper. -/
 
 /-- One transparent definition available to the format-only normalizer. -/
@@ -845,9 +827,6 @@ structure RCtx where
   names : ArenaTable Name := .seed .anonymous
   levels : ArenaTable Level := .seed .zero
   exprs : ArenaTable Expr := {}
-  /-- Whether expression records are being classified for monomorphization. -/
-  analyse : Bool := true
-  projNodes : Std.HashSet Expr := {}
   deriving Inhabited
 
 namespace RCtx
@@ -913,24 +892,37 @@ private def readIndType (c : RCtx) (j : Json) : Except String EIndType := do
     numNested := ← jNat j "numNested", isRec := ← jBool j "isRec"
     isReflexive := ← jBool j "isReflexive", isUnsafe := ← jBool j "isUnsafe" }
 
+/-- Exact expression-arena roots named directly by one declaration record.
+Expression nodes already contain their children, so random declaration replay
+needs only these roots rather than the complete parser lookup table. -/
+private def declarationExprRootIds (j : Json) : Except String (Array Nat) := do
+  let mut roots := #[]
+  if hasExactKeys j ["axiom"] || hasExactKeys j ["quot"] then
+    roots := roots.push (← jNat (← jField j (if hasExactKeys j ["axiom"] then "axiom" else "quot")) "type")
+  else if hasExactKeys j ["def"] || hasExactKeys j ["thm"] ||
+      hasExactKeys j ["opaque"] then
+    let key := if hasExactKeys j ["def"] then "def" else if hasExactKeys j ["thm"] then "thm" else "opaque"
+    let declaration ← jField j key
+    roots := (roots.push (← jNat declaration "type")).push (← jNat declaration "value")
+  else if hasExactKeys j ["inductive"] then
+    let declaration ← jField j "inductive"
+    for type in ← jArr declaration "types" do
+      roots := roots.push (← jNat type "type")
+    for ctor in ← jArr declaration "ctors" do
+      roots := roots.push (← jNat ctor "type")
+    for recursor in ← jArr declaration "recs" do
+      roots := roots.push (← jNat recursor "type")
+      for rule in ← jArr recursor "rules" do
+        roots := roots.push (← jNat rule "rhs")
+  else
+    throw "cannot collect expression roots from a non-declaration record"
+  return roots
+
 private def readHints (j : Json) : Except String EHints :=
   match j with
   | .str "abbrev" => .ok .abbrev
   | .str "opaque" => .ok .opaque
   | o => do return .regular (← jNat o "regular")
-
-/-- Whether an expression record contains a primitive projection.  Child
-records have already been parsed, so membership in `known` replaces a recursive
-walk and remains correct when arena IDs are sparse, out of order, or repeated. -/
-private def containsProjection (known : Std.HashSet Expr) : Expr → Bool
-  | .proj .. => true
-  | .app function argument => known.contains function || known.contains argument
-  | .lam _ type body _ | .forallE _ type body _ =>
-      known.contains type || known.contains body
-  | .letE _ type value body _ =>
-      known.contains type || known.contains value || known.contains body
-  | .mdata _ body => known.contains body
-  | _ => false
 
 /-- Read one line into the context, returning a declaration if the line was one. -/
 def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
@@ -1007,10 +999,7 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
     else pure none
   if let some e := expression? then
     let i ← jNat j "ie"
-    let projNodes :=
-      if c.analyse && containsProjection c.projNodes e then c.projNodes.insert e
-      else c.projNodes
-    return ({ c with exprs := c.exprs.set i e, projNodes }, none)
+    return ({ c with exprs := c.exprs.set i e }, none)
   -- Declaration records.
   if hasExactKeys j ["axiom"] then
     let o ← jField j "axiom"
@@ -1049,9 +1038,10 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
       (← (← jArr o "recs").toList.mapM (readRec c)))
   .error s!"unrecognised record: {j.compress}"
 
-/-- Complete name/level/expression tables sufficient to decode declaration
-records in any order.  The context is opaque so callers cannot mutate or
-observe parser implementation tables. -/
+/-- Complete name/level tables and expression roots sufficient to decode
+declaration records in any order. The parser-backed form retains only roots
+named directly by declarations; every root already owns its expression DAG.
+The context is opaque so callers cannot mutate parser implementation tables. -/
 structure DeclarationArena where private context : RCtx
   deriving Inhabited
 
@@ -1072,11 +1062,17 @@ def DeclarationArena.decode (arena : DeclarationArena)
     | throw "declaration span decoded as an arena record"
   return declaration
 
+/-- Number of expression roots retained by a completed random-decode arena.
+This observer exposes storage cardinality, never expression values. -/
+def DeclarationArena.retainedExprRoots (arena : DeclarationArena) : Nat :=
+  arena.context.exprs.dense.size + arena.context.exprs.sparse.size
+
 /-- Build the random-decode arena from an arena-only stream using the same
-bounded chunk/UTF-8 boundary discipline as the full streaming parser.  This
-retains the completed interning tables, but no declaration value. -/
+bounded chunk/UTF-8 boundary discipline as the full streaming parser. This
+fallback has no declaration records from which to derive the compact root set,
+so it retains the completed interning tables but no declaration value. -/
 def DeclarationArena.ofStream (stream : IO.FS.Stream) : IO (Except String DeclarationArena) := do
-  let context ← IO.mkRef ({ analyse := false } : RCtx)
+  let context ← IO.mkRef ({} : RCtx)
   let mut carry : ByteArray := .empty
   let mut eof := false
   let mut err : Option String := none
@@ -1123,15 +1119,9 @@ def DeclarationArena.ofStream (stream : IO.FS.Stream) : IO (Except String Declar
 def DeclarationArena.ofHandle (handle : IO.FS.Handle) : IO (Except String DeclarationArena) :=
   DeclarationArena.ofStream (IO.FS.Stream.ofHandle handle)
 
-/-- Parse a whole export.
-
-`analyse` fills [`Export.projNodes`] and **defaults to on**, because an empty
-`projNodes` reads as "no declaration contains a projection" and a consumer that
-believed it would emit wrong output silently. A caller that does not look at the
-field can turn it off; `monomorphize` refuses a file whose projections it can
-see but whose `projNodes` is empty, so the two cannot disagree unnoticed. -/
-def parse (text : String) (analyse : Bool := true) : Except String Export := do
-  let mut c : RCtx := { analyse }
+/-- Parse a whole export. -/
+def parse (text : String) : Except String Export := do
+  let mut c : RCtx := {}
   let mut decls : Array EDecl := #[]
   let mut metaLine : Json := .null
   let mut first := true
@@ -1146,7 +1136,7 @@ def parse (text : String) (analyse : Bool := true) : Except String Export := do
     let (c', d?) ← readLine c j
     c := c'
     if let some d := d? then decls := decls.push d
-  let resultExport : Export := { metaLine, decls, projNodes := c.projNodes }
+  let resultExport : Export := { metaLine, decls }
   resultExport.validateUniqueDeclarationNames
   return resultExport
 
@@ -1181,22 +1171,22 @@ retain declaration records after the call returns. -/
 structure DeclarationSink where
   emit : EDecl → IO Unit
 
-/-- The whole-input facts which survive declaration-discarding parsing.  The
-arena itself is owned by the raw tee/`PlannedSourceReader`; this envelope owns
-only metadata, projection facts, and cardinality. -/
+/-- The whole-input facts which survive declaration-discarding parsing. The
+arena holds complete name/level tables plus only exact declaration expression
+roots; `PlannedSourceReader` receives this value without reparsing. -/
 structure ParsedEnvelope where
   metaLine : Json := .null
-  projNodes : Std.HashSet Expr := {}
   declarationCount : Nat := 0
-  /-- The exact completed parser arena. Planned replay decodes declaration
-  spans against this value instead of reparsing a second arena graph. -/
+  /-- The exact compacted parser arena. Planned replay decodes declaration
+  spans against this value instead of retaining the dense expression-ID table
+  or reparsing a second expression graph. -/
   private declarationArena : DeclarationArena := { context := {} }
   /-- Observable retention contract for regression tests. -/
   retainedDeclarations : Nat := 0
   deriving Inhabited
 
 def ParsedEnvelope.template (envelope : ParsedEnvelope) : Export :=
-  { metaLine := envelope.metaLine, decls := #[], projNodes := envelope.projNodes }
+  { metaLine := envelope.metaLine, decls := #[] }
 
 /-- Share the completed parser arena with one planned declaration reader. -/
 def ParsedEnvelope.arena (envelope : ParsedEnvelope) : DeclarationArena :=
@@ -1409,6 +1399,13 @@ private def emitRaw (sink : RawSink) (state : IO.Ref RawCertState)
         (kind != .declaration || terminated) } }
     if kind == .arena then json?.elim current current.observeArena else current
 
+/-- Options shared by the streaming/handle parser entry points. A structure is
+used deliberately: adding or removing an option cannot silently reinterpret a
+positional `Bool` at public call sites. -/
+structure ParseOptions where
+  allowDuplicateNames : Bool := false
+  deriving Inhabited, Repr, BEq
+
 /-- **The same parse, off a handle, a chunk at a time.**
 
 [`parse`] takes the file as one `String`, and on a large export that costs more
@@ -1430,7 +1427,7 @@ the 10-million-line prefix it takes the parse's peak from 2,381,888 KB to
 **1.3 % fewer instructions**. `Handle.getLine` is not the route: it did not
 finish a 1-million-line prefix in ten minutes.
 -/
-private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
+private def parseStreamCore (h : IO.FS.Stream)
     (sink? : Option RawSink) (declarationSink? : Option DeclarationSink)
     (retainDeclarations allowDuplicateNames : Bool) :
     IO (Except String (Export × RawCertificate × Nat × DeclarationArena)) := do
@@ -1444,11 +1441,15 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
   --     projection reads the field while the record still holds it: **79.5 s**.
   -- `modifyGet` takes the value out of the ref, so what `readLine` is handed is
   -- the only reference to it.
-  let cRef ← IO.mkRef ({ analyse } : RCtx)
+  let cRef ← IO.mkRef ({} : RCtx)
   let declsRef ← IO.mkRef (#[] : Array EDecl)
   let declarationCountRef ← IO.mkRef 0
   let declarationNamesRef ← IO.mkRef ({} : Std.HashSet Name)
   let duplicateRef ← IO.mkRef (none : Option Name)
+  -- A declaration refers directly to very few expression roots. Preserve
+  -- exactly those roots for later random replay instead of retaining the
+  -- parser's complete dense expression-ID table.
+  let declarationExprRootsRef ← IO.mkRef ({} : Std.HashMap Nat Expr)
   let rawRef ← IO.mkRef ({} : RawCertState)
   let mut metaLine : Json := .null
   let mut first := true
@@ -1507,9 +1508,18 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
               -- refcount two and every push reallocates. The parse is over when
               -- this arm fires, so the context is dead either way.
               | .error e => (Except.error e, ({} : RCtx))
-              | .ok (c', d?) => (Except.ok d?, c') with
+              | .ok (c', d?) =>
+                  let result : Except String (Option EDecl × Array (Nat × Expr)) := do
+                    let ids ← if d?.isSome then declarationExprRootIds j else pure #[]
+                    let roots ← ids.mapM fun id => return (id, ← c'.expr! id)
+                    return (d?, roots)
+                  (result, c') with
           | .error e => err := some e; break
-          | .ok d? =>
+          | .ok (d?, expressionRoots) =>
+            unless retainDeclarations do
+              declarationExprRootsRef.modify fun roots =>
+                expressionRoots.foldl (fun roots (id, expression) =>
+                  roots.insert id expression) roots
             if let some sink := sink? then
               emitRaw sink rawRef (if d?.isSome then .declaration else .arena)
                 line terminated (some j)
@@ -1535,26 +1545,28 @@ private def parseStreamCore (h : IO.FS.Stream) (analyse : Bool)
     -- the table wrapper after returning, while declaration-discarding callers
     -- transfer this exact graph to `PlannedSourceReader`.
     let completed ← cRef.modifyGet fun c => (c, {})
-    let projNodes := completed.projNodes
+    let declarationExprRoots ← declarationExprRootsRef.modifyGet fun roots => (roots, {})
+    let replayArena : DeclarationArena := if retainDeclarations then default else
+      { context := { completed with exprs := { sparse := declarationExprRoots } } }
     let rawState ← rawRef.get
     let declarationCount ← declarationCountRef.get
     let certificate := if sink?.isSome then rawState.certificate else {}
-    let resultExport := { metaLine, decls, projNodes }
+    let resultExport := { metaLine, decls }
     unless allowDuplicateNames do
       if retainDeclarations then
         if let .error message := resultExport.validateUniqueDeclarationNames then
           return .error message
       else if let some name ← duplicateRef.get then
           return .error s!"duplicate declaration {name}"
-    return .ok (resultExport, certificate, declarationCount, { context := completed })
+    return .ok (resultExport, certificate, declarationCount, replayArena)
 
 /-- Parse while sending exact input records to `sink`. The compact returned
 certificate is necessary but not sufficient for a later raw-hoist fast path;
 a false certificate unconditionally requires the ordinary writer. -/
 def parseStreamWithSink (h : IO.FS.Stream) (sink : RawSink)
-    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String (Export × RawCertificate)) := do
-  return (← parseStreamCore h analyse (some sink) none true allowDuplicateNames).map
+  return (← parseStreamCore h (some sink) none true options.allowDuplicateNames).map
     fun (parsed, certificate, _, _) => (parsed, certificate)
 
 /-- Parse and certify the exact stream while delivering each decoded
@@ -1562,37 +1574,36 @@ declaration to one callback instead of retaining a whole `Export.decls`.
 The callback and raw sink observe the same successful `readLine` transition;
 there is no second JSON or arena pass. -/
 def parseStreamDiscardingDeclarations (h : IO.FS.Stream) (rawSink : RawSink)
-    (declarationSink : DeclarationSink) (analyse : Bool := true)
-    (allowDuplicateNames : Bool := false) :
+    (declarationSink : DeclarationSink)
+    (options : ParseOptions := {}) :
     IO (Except String (ParsedEnvelope × RawCertificate)) := do
-  return (← parseStreamCore h analyse (some rawSink) (some declarationSink)
-    false allowDuplicateNames).map fun (parsed, certificate, declarationCount, arena) =>
-      ({ metaLine := parsed.metaLine, projNodes := parsed.projNodes,
-         declarationCount, declarationArena := arena,
+  return (← parseStreamCore h (some rawSink) (some declarationSink)
+    false options.allowDuplicateNames).map fun (parsed, certificate, declarationCount, arena) =>
+      ({ metaLine := parsed.metaLine, declarationCount, declarationArena := arena,
          retainedDeclarations := parsed.decls.size }, certificate)
 
-def parseStream (h : IO.FS.Stream) (analyse : Bool := true)
-    (allowDuplicateNames : Bool := false) : IO (Except String Export) := do
-  return (← parseStreamCore h analyse none none true allowDuplicateNames).map (·.1)
+def parseStream (h : IO.FS.Stream) (options : ParseOptions := {}) :
+    IO (Except String Export) := do
+  return (← parseStreamCore h none none true options.allowDuplicateNames).map (·.1)
 
 /-- Handle-specialized wrapper around [`parseStream`]. -/
-def parseHandle (h : IO.FS.Handle) (analyse : Bool := true)
-    (allowDuplicateNames : Bool := false) : IO (Except String Export) :=
-  parseStream (IO.FS.Stream.ofHandle h) analyse allowDuplicateNames
+def parseHandle (h : IO.FS.Handle) (options : ParseOptions := {}) :
+    IO (Except String Export) :=
+  parseStream (IO.FS.Stream.ofHandle h) options
 
 /-- Handle-specialized raw-source-capture parser. -/
 def parseHandleWithSink (h : IO.FS.Handle) (sink : RawSink)
-    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String (Export × RawCertificate)) :=
-  parseStreamWithSink (IO.FS.Stream.ofHandle h) sink analyse allowDuplicateNames
+  parseStreamWithSink (IO.FS.Stream.ofHandle h) sink options
 
 /-- Handle-specialized declaration-discarding parser. -/
 def parseHandleDiscardingDeclarations (h : IO.FS.Handle) (rawSink : RawSink)
-    (declarationSink : DeclarationSink) (analyse : Bool := true)
-    (allowDuplicateNames : Bool := false) :
+    (declarationSink : DeclarationSink)
+    (options : ParseOptions := {}) :
     IO (Except String (ParsedEnvelope × RawCertificate)) :=
   parseStreamDiscardingDeclarations (IO.FS.Stream.ofHandle h) rawSink declarationSink
-    analyse allowDuplicateNames
+    options
 
 /-- Lowercase hexadecimal encoding used for random spool leaf names. Exposed
 so the secure workspace tests can pin the entropy-preserving representation. -/
@@ -1881,6 +1892,73 @@ def splitDecl (w : Writer) (d : EDecl) : Writer × DeclSplit :=
         { before, arena, declaration, after })
 
 end Writer
+
+/-- Standard persistent export writer for declarations which become available
+one at a time. Arena lines are flushed in bounded physical chunks, while the
+ordinary name, level, and expression interning maps remain global for exactly
+the lifetime of the output transaction. Complete `EDecl` arrays are never
+retained by this state. -/
+structure DeclarationStreamWriter where
+  writer : Writer := {}
+  buffer : String := ""
+  bufferedBytes : Nat := 0
+  declarationsWritten : Nat := 0
+  maxRecordLines : Nat := 0
+  deriving Inhabited
+
+namespace DeclarationStreamWriter
+
+private def writeChunk : Nat := 4 * 1024 * 1024
+
+private def emitLines (state : DeclarationStreamWriter) (h : IO.FS.Stream)
+    (lines : Array String) : IO DeclarationStreamWriter := do
+  -- Consume the buffer from the input state before extending it, preserving
+  -- unique string ownership across the callback boundary.
+  let { writer, buffer, bufferedBytes, declarationsWritten, maxRecordLines } := state
+  let mut buffer := buffer
+  let mut bufferedBytes := bufferedBytes
+  for line in lines do
+    buffer := buffer ++ line ++ "\n"
+    bufferedBytes := bufferedBytes + line.utf8ByteSize + 1
+  if bufferedBytes >= writeChunk then
+    h.putStr buffer
+    buffer := ""
+    bufferedBytes := 0
+  return { writer, buffer, bufferedBytes, declarationsWritten, maxRecordLines }
+
+/-- Begin a declaration stream and emit its optional metadata record. -/
+def start (metaLine : Json) (h : IO.FS.Stream) : IO DeclarationStreamWriter := do
+  let state : DeclarationStreamWriter := {}
+  if metaLine.isNull then return state
+  state.emitLines h #[metaLine.compress]
+
+/-- Feed one exact declaration into the persistent standard writer. The lines
+it adds are moved into the bounded buffer immediately; the returned state keeps
+only the standard global interning maps, not the declaration or line array. -/
+def writeDeclaration (state : DeclarationStreamWriter) (h : IO.FS.Stream)
+    (declaration : EDecl) : IO DeclarationStreamWriter := do
+  -- Consume the outer state before extending the writer. Keeping `state`
+  -- alive across `Writer.decl` would retain a sibling reference to its maps
+  -- and could force every declaration insertion down a copy-on-write path.
+  let { writer, buffer, bufferedBytes, declarationsWritten, maxRecordLines } := state
+  let { out := lines, names, levels, exprs, nextName, nextLevel, nextExpr } :=
+    writer.decl declaration
+  let state : DeclarationStreamWriter := {
+    writer := { out := #[], names, levels, exprs, nextName, nextLevel, nextExpr }
+    buffer, bufferedBytes, declarationsWritten, maxRecordLines }
+  let nextState ← state.emitLines h lines
+  let nextState := { nextState with
+    declarationsWritten := declarationsWritten + 1 }
+  return { nextState with maxRecordLines := max maxRecordLines lines.size }
+
+def cursor (state : DeclarationStreamWriter) : Writer.Cursor := state.writer.cursor
+
+/-- Flush the final bounded buffer. The enclosing output transaction owns the
+stream flush and commit decision. -/
+def finish (state : DeclarationStreamWriter) (h : IO.FS.Stream) : IO Unit :=
+  unless state.buffer.isEmpty do h.putStr state.buffer
+
+end DeclarationStreamWriter
 
 /-- **Serialise a whole export, one record at a time.**
 

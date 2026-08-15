@@ -18,11 +18,6 @@ lean_exe test where
   root := `Test
   supportInterpreter := true
 
-lean_exe monotest where
-  srcDir := "test"
-  root := `MonoTest
-  supportInterpreter := true
-
 lean_exe clitest where
   srcDir := "test"
   root := `CliTest

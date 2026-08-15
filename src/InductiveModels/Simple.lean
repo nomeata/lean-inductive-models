@@ -5211,15 +5211,15 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
           -- *complete* procedure can see is one **Lean's kernel cannot see
           -- either** — the kernel's `lean::is_equivalent` is a different
           -- function with the same `max`-does-not-absorb-`imax` gap. So a
-          -- plan reached by the complete procedure is a plan `addChecked`
-          -- rejects.
+          -- plan reached only by the complete procedure is not justified by
+          -- the stock kernel equality used by the optional exact generated gate.
           --
           -- Asking completely *first* is therefore actively worse, and was
           -- measured so: `Trans` in `init-prelude` has a bare chain the
           -- complete procedure equates to `w` and the stock kernel does not,
-          -- so it took the unboxed plan and was rejected — where the
-          -- elaborator's own refusal had sent it to the boxing retry, which
-          -- the stock kernel accepts. Coverage went 125 → 124. Second
+          -- so it took the unboxed plan and the exact generated gate rejected it
+          -- — where the elaborator's own refusal had sent it to the boxing
+          -- retry, which the stock kernel accepts. Coverage went 125 → 124. Second
           -- refusal costs nothing and cannot lose a plan that already works:
           -- every accepted declaration keeps the route chosen by the first
           -- procedure, and the complete procedure is consulted only where

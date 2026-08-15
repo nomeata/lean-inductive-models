@@ -1,15 +1,14 @@
 /- **An ordinary declaration physically follows unrelated model owners in the
    raw export.**
 
-   [`InductiveModels.runFilter`] dependency-orders the source and prioritizes the
-   complete fixed support closure before opening any selected owner island.
-   `Eq`, `Nat`, `PSigma'`, and `PUnit` are support; ordinary `PSigma` is not,
-   and therefore remains an ordinary modelled owner at its dependency position.
+   [`InductiveModels.runFilter`] consumes the source in its physical order.
+   `Eq`, `Nat`, `PSigma'`, and `PUnit` are fixed support; ordinary `PSigma` is
+   not, and therefore remains an ordinary modelled owner at its source position.
 
-   **What this file adds is that the scheduled prefix reaches composition.**
+   **What this file adds is that available fixed support reaches composition.**
    [`InductiveModels.primCompose`] is the third step over the `_model._impl.tag` and
    `_model._impl.aux` a mutual model just emitted. It runs inside the same
-   disposable island as `genMutual` or the nested arm, with the scheduled exact
+   disposable island as `genMutual` or the nested arm, with the exact
    fixed support already installed in the persistent prefix.
 
    The layout is the whole fixture:
@@ -51,7 +50,7 @@ inductive L (α : Type) : Type where
   | nil : L α
   | cons : α → L α → L α
 
-/-- The direct-simple control, using the same scheduled support prefix. -/
+/-- The direct-simple control, using the same available support prefix. -/
 inductive Pre : Type where
   | p0 : Pre
   | p1 : N → Pre

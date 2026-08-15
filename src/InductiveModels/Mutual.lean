@@ -10,8 +10,9 @@ This is the second construction in this package. Given
 nesting**, this emits ordinary Lean declarations: one *tag* enumeration carrying
 each member's index telescope, one *single* inductive indexed by it, one carrier
 per member, the block's constructors, one recursor per member and every one of
-those recursors' ι rules as theorems. Every declaration goes through
-`Environment.addDeclCore` with checking on.
+those recursors' ι rules as theorems. Declarations are trusted-installed in the
+disposable construction view; the exact serialized island is kernel-checked
+iff generated checking is enabled.
 
 The target shape can also be written by hand at a three-member block; doing so
 answers the load-bearing question — *are the ι rules definitional?* — before
@@ -191,8 +192,9 @@ order. **The export's block must already be installed**: the recursors this
 restates are the ones Lean minted for it, and there is nothing else to read them
 off (see the header).
 
-The whole of the checker interaction is [`InductiveModels.addChecked`], once per
-generated declaration. Nothing is emitted unchecked. -/
+Generated declarations are installed through [`InductiveModels.addChecked`]
+in the disposable construction view. The exact serialized island is checked
+once at its close boundary iff generated kernel checking is enabled. -/
 def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     (memberTys : Array Expr) (exportCtors : Array (Array (Name × Expr)))
     (reserved : Std.HashSet Name) (buildRoot? : Option Name := none)

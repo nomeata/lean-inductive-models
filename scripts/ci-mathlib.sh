@@ -4,7 +4,7 @@
 #
 # This harness is intentionally shaped for a standard GitHub-hosted runner:
 # it never materializes the uncompressed source export, and it removes build
-# and checkout phases before the full-AST generator needs their disk space.
+# and checkout phases before declaration-wise generation needs their disk space.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,8 +27,8 @@ EXPORTER_PATCH_SHA="151c25f6adbfd915ce62786da33352c089653f62d5d3445cc3b38879de19
 WORKER_LIMIT_KIB=$((10 * 1024 * 1024))
 BUILD_LIMIT_KIB=$((12 * 1024 * 1024))
 EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))
-# Keep the prior conservative generation-phase disk guard until the full-AST
-# named-output route has an authoritative hosted-runner measurement. This is
+# Keep the conservative generation-phase disk guard for the named-output
+# transaction's private sibling. This is
 # applied after all disposable builds and checkouts are gone; it is not a
 # runner-size preflight.
 GENERATION_FREE_KIB=$((12 * 1024 * 1024))
@@ -239,9 +239,8 @@ feeder_pid=$!
 feeder_job="$feeder_pid"
 
 # Keep the documented generation and structural-check defaults. Named output
-# now uses the ordinary full-AST backend. The 10 GiB worker cap is intentionally
-# unchanged pending an authoritative hosted-runner measurement; the separate
-# serialized input pass below remains the authoritative kernel verdict.
+# streams declarations into a transactional sibling. The separate serialized
+# input pass below remains the authoritative kernel verdict.
 set +e
 (
   set -o pipefail
@@ -249,7 +248,7 @@ set +e
     env -u LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER \
       LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1 \
     "$BIN_DIR/lean-inductive-models" "$INPUT_FIFO" -o "$OUTPUT" \
-      --no-type-check-output \
+      --no-type-check-generated \
     2>&1 | tee "$LOG_DIR/generate.log" >&2
 ) &
 generator_pid=$!
@@ -290,14 +289,14 @@ grep -Eq ': model of [1-9][0-9]* declarations' "$LOG_DIR/generate.log" ||
 
 # Re-read the bytes that were actually written. Keep structural input checking
 # enabled and additionally ask Lean's kernel to validate every declaration.
-# This pass is serialized after the full-AST generation process exits.
+# This pass is serialized after declaration-wise generation exits.
 (
   set -o pipefail
   run_worker_measured check-input \
     env -u LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER \
     "$BIN_DIR/lean-inductive-models" "$OUTPUT" \
       --no-inductives --check-input --no-check-output \
-      --type-check-input --no-type-check-output --no-output \
+      --type-check-input --no-type-check-generated --no-output \
     2>&1 | tee "$LOG_DIR/check-input.log" >&2
 )
 

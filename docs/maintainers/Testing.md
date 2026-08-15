@@ -36,7 +36,7 @@ The executable correctness targets are:
 
 ```bash
 correctness_targets=(
-  test monotest clitest supervisortest generationflagstest checktest kernelchecktest ordertest
+  test clitest supervisortest generationflagstest checktest kernelchecktest ordertest
   familyadapterplantest familyadaptershadowtest familyadapterconstructiontest
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
@@ -60,7 +60,6 @@ The individual execution matrix, useful when isolating a failure, is:
 
 ```console
 lake exe test "$PWD"
-lake exe monotest "$PWD"
 lake exe clitest
 lake exe supervisortest --run-tests "$PWD/.lake/build/bin/supervisortest"
 lake exe generationflagstest
@@ -102,24 +101,23 @@ test/scripts/check-hard-nested-a.sh
 test/scripts/check-hard-nested-c.sh
 test/scripts/check-mathlib-result.sh
 test/scripts/check-lean4export-patch.sh
-test/scripts/check-shared-prefix-ownership.sh
 test/scripts/check-ci-serialized-builds.sh
 ```
 
-`mainclitest` exercises the public process boundary, including universe
-monomorphization and default final-output kernel replay. `monotest` exercises
-the underlying universe pass directly. The Arena corpus runner accepts every
+`mainclitest` exercises the public process boundary, including independent
+input/generated kernel-check flags and constructive model-before-owner output.
+The Arena corpus runner accepts every
 published `good/` case and requires each `bad/` case to be rejected or to stop
 at the documented internal-invariant boundary; unsupported exit 2 is a corpus
 failure.
 
-`ordertest` compares the full-AST oracle with sink-free compact discard over
-the same generation fixtures and exercises planned declaration-wise source
-replay. `mainclitest`
-selects compact discard explicitly with `--no-output --no-type-check-output`;
-generated `--no-output --type-check-output` feeds exact records directly to an
-incremental in-process kernel environment. It pins exit-2 precedence,
-noncanonical and compact-availability fallback equivalence, cleanup of the
+`ordertest` compares the compatibility retained-array path, declaration-event
+collection, and sink-free compact discard over the
+same generation fixtures and exercises planned declaration-wise source
+replay. `mainclitest` selects compact discard explicitly with `--no-output`;
+`--type-check-generated` checks each exact generated island directly in process,
+while `--no-type-check-generated` invokes no generated checker. It pins exit-2 precedence,
+noncanonical parser fallback equivalence, cleanup of the
 input-only source snapshot workspace, and ordinary fallback before input is
 consumed when `_tmp` is unusable. The snapshot exists only to preserve exact
 stdin/FIFO input for parser-compatible fallback; generated logical output is
@@ -127,24 +125,23 @@ never serialized through it.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and
-monomorphization jobs and limits each process to 12 GiB. The Mathlib workflow
+CLI jobs and limits each process to 12 GiB. The Mathlib workflow
 uses its separately documented 10/12 GiB phase envelopes and artifact gates.
-Its generation pass uses the ordinary full-AST named-output backend and
-explicitly defers output kernel replay; a serialized
-`--type-check-input --no-output` pass supplies the authoritative whole-output
-kernel verdict after generation exits. The existing 10 GiB generation cap is
-unchanged while an authoritative hosted-runner measurement of the full-AST
-route is pending.
+Its generation pass uses transactional declaration-stream named output with
+the generated-island gate disabled; a separate artifact-validation invocation uses
+`--type-check-input --no-output` to check the serialized export as input after
+generation exits. The existing 10 GiB generation cap is
+unchanged; the streamed generation and serialized input validation remain
+strictly separate processes.
 
 ## Fixture regeneration
 
 Human-readable sources and committed exports live in
-`test/fixtures/inductive-models/` and `test/fixtures/mono/`. Regenerate them
+`test/fixtures/inductive-models/`. Regenerate them
 with the pinned exporter:
 
 ```console
 test/scripts/export-inductive-models.sh prim_shapes
-test/scripts/export-mono.sh mono_proj
 ```
 
 `LEAN4EXPORT_DIFFERENTIAL=1 test/scripts/check-lean4export-patch.sh` compares a

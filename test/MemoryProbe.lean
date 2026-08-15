@@ -37,9 +37,9 @@ def main (args : List String) : IO UInt32 := do
     | "whole" => do
         let text ← IO.FS.readFile path
         memory "whole-read"
-        pure (InductiveModels.parse text (analyse := false))
+        pure (InductiveModels.parse text)
     | "stream" =>
-        IO.FS.withFile path .read fun handle => InductiveModels.parseHandle handle (analyse := false)
+        IO.FS.withFile path .read fun handle => InductiveModels.parseHandle handle
     | _ => do
         IO.eprintln s!"memoryprobe: unknown mode {mode}"
         return 1

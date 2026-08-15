@@ -22,7 +22,7 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
   else { state with failed := state.failed.push label }
 
 def readExport (path : String) : IO Export := do
-  let .ok result := parse (← IO.FS.readFile path) (analyse := false)
+  let .ok result := parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   return result
 
@@ -98,7 +98,7 @@ def main : IO UInt32 := do
         (declarationType? generated name).any (containsConst alias)
 
   let outputCheck := Check.checkReport generated
-  let reparsed ← match parse generated.render (analyse := false) with
+  let reparsed ← match parse generated.render with
     | .ok result => pure result
     | .error error => throw <| IO.userError s!"cannot parse generated output: {error}"
   let inputCheck := Check.checkReport reparsed

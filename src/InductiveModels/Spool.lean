@@ -208,50 +208,50 @@ def ParseTee.finish (tee : ParseTee) : IO RawSpoolSizes := do
     arena := ← tee.arena.finish
     declarations := ← tee.declarations.finish }
 
-/-- Input-only source snapshot for compact-direct CLI parsing. The exact raw
+/-- Input-only source snapshot for checked no-output CLI parsing. The exact raw
 file makes ordinary fallback possible after consuming stdin or a FIFO; the
 declaration file supplies random-access feed spans. The completed arena is
 transferred in memory by the parser, so this tee deliberately has no second
 arena or metadata spool. -/
-structure DirectInputTee where private mk ::
+structure PlannedInputTee where private mk ::
   private raw : SpoolFile
   private declarations : SpoolFile
   private provenance : SourceProvenance
 
-structure DirectInputSizes where
+structure PlannedInputSizes where
   raw : UInt64
   declarations : UInt64
   deriving Inhabited, Repr, BEq
 
-def DirectInputTee.create (workspace : Workspace) : IO DirectInputTee := do
+def PlannedInputTee.create (workspace : Workspace) : IO PlannedInputTee := do
   let marker ← IO.mkRef ()
   return {
     raw := ← workspace.createFile "input.ndjson"
     declarations := ← workspace.createFile "declarations.ndjson"
     provenance := .mk marker }
 
-def DirectInputTee.sourceProvenance (tee : DirectInputTee) : SourceProvenance :=
+def PlannedInputTee.sourceProvenance (tee : PlannedInputTee) : SourceProvenance :=
   tee.provenance
 
-def DirectInputTee.sink (tee : DirectInputTee) : RawSink where
+def PlannedInputTee.sink (tee : PlannedInputTee) : RawSink where
   emit record := do
     discard <| tee.raw.append record.bytes
     if record.kind == .declaration then
       discard <| tee.declarations.append record.bytes
 
-def DirectInputTee.finish (tee : DirectInputTee) : IO DirectInputSizes := do
+def PlannedInputTee.finish (tee : PlannedInputTee) : IO PlannedInputSizes := do
   return { raw := ← tee.raw.finish, declarations := ← tee.declarations.finish }
 
 /-- Reparse the exact consumed input snapshot for an ordinary compatibility
 fallback. This is input JSON, never generated logical output. -/
-def DirectInputTee.parseFallback (tee : DirectInputTee) (analyse : Bool := false)
-    (allowDuplicateNames : Bool := true) : IO (Except String Export) :=
+def PlannedInputTee.parseFallback (tee : PlannedInputTee)
+    (options : ParseOptions := { allowDuplicateNames := true }) : IO (Except String Export) :=
   IO.FS.withFile tee.raw.path .read fun handle =>
-    parseHandle handle analyse allowDuplicateNames
+    parseHandle handle options
 
 /-- Release the exact fallback snapshot once declaration replay is certified;
-late compact-direct fallback materializes from the transferred arena instead. -/
-def DirectInputTee.releaseFallback (tee : DirectInputTee) : IO Unit := do
+late planned-input fallback materializes from the transferred arena instead. -/
+def PlannedInputTee.releaseFallback (tee : PlannedInputTee) : IO Unit := do
   if ← tee.raw.path.pathExists then IO.FS.removeFile tee.raw.path
 
 /-- Random-access source decoder over one completed raw tee. The immutable
@@ -303,8 +303,8 @@ def PlannedSourceReader.create (tee : ParseTee) (certificate : RawCertificate)
 
 /-- Open the CLI's input-only declaration spool against the exact parser arena.
 No arena JSON is reparsed or retained twice. -/
-def PlannedSourceReader.createDirect (tee : DirectInputTee)
-    (certificate : RawCertificate) (sizes : DirectInputSizes)
+def PlannedSourceReader.createFromInputTee (tee : PlannedInputTee)
+    (certificate : RawCertificate) (sizes : PlannedInputSizes)
     (declarationCount : Nat) (arena : DeclarationArena) :
     IO (Except String PlannedSourceReader) := do
   match certificate.validateReplay sizes.declarations declarationCount with
@@ -314,24 +314,24 @@ def PlannedSourceReader.createDirect (tee : DirectInputTee)
     let rawMetadata ← tee.raw.path.symlinkMetadata
     let declarationMetadata ← tee.declarations.path.symlinkMetadata
     unless rawMetadata.type == .file && declarationMetadata.type == .file do
-      return .error "direct input spool is not backed by physical files"
+      return .error "planned input spool is not backed by physical files"
     unless rawMetadata.byteSize == sizes.raw &&
         declarationMetadata.byteSize == sizes.declarations do
-      return .error "direct input spool changed after completion"
+      return .error "planned input spool changed after completion"
     let declarations ← IO.FS.Handle.mk tee.declarations.path .read
     let position ← IO.mkRef 0
     let readCalls ← IO.mkRef 0
     return .ok <| PlannedSourceReader.mk arena declarations position readCalls
       sizes.declarations certificate.declarations tee.provenance
   catch error =>
-    return .error s!"cannot open direct input spool: {error}"
+    return .error s!"cannot open planned input spool: {error}"
 
 /-- Number of source declaration records certified for this reader. -/
 def PlannedSourceReader.size (reader : PlannedSourceReader) : Nat := reader.spans.size
 
 /-- Number of declaration-read requests made through this reader. This
-value-only observer lets retention tests distinguish the one Phase-A pass plus
-owner rereads from accidental materialization or a second all-source pass. -/
+value-only observer lets retention tests distinguish the one declaration-wise
+source pass from accidental materialization or a second all-source pass. -/
 def PlannedSourceReader.readCount (reader : PlannedSourceReader) : IO Nat :=
   reader.readCalls.get
 

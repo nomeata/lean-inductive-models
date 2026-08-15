@@ -1,6 +1,5 @@
 import InductiveModels.Driver
 import InductiveModels.Check
-import InductiveModels.Mono
 import InductiveModels.Order
 import InductiveModels.Output
 import InductiveModels.Supervisor
@@ -13,14 +12,13 @@ module owns only the IO boundary and the pipeline between the already separate
 passes:
 
 1. parse the input export;
-2. optionally submit the complete input stream to Lean's kernel;
+2. optionally kernel-check the input declarations;
 3. structurally check model families already in the input;
-4. optionally monomorphize the input's universe levels;
-5. put the resulting records in dependency and model-before-owner order;
-6. generate the selected inductive models;
-7. order the generated records;
-8. structurally check and optionally kernel-check the final export;
-9. emit it, unless output was disabled.
+4. reject an input model that appears after its owner;
+5. stream source declarations, generating each selected model immediately
+    before its owner and optionally kernel-checking that generated island;
+6. structurally check the constructively ordered output;
+7. emit it, unless output was disabled.
 
 The export is the only stream written to stdout.  Reports and errors go to
 stderr, and `--quiet` suppresses successful pass reports without hiding fatal
@@ -59,15 +57,6 @@ def reportGeneration (config : InductiveModels.Cli.Config) (rep : InductiveModel
   IO.eprintln s!"levels: {calls} planner comparisons, {escapes} escapes\
     {if InductiveModels.LevelAlgebra.stockLevels then " (widening OFF — control run)" else ""}"
 
-def reportMono (config : InductiveModels.Cli.Config) (rep : InductiveModels.Mono.Report) : IO Unit := do
-  if config.quiet then return
-  IO.eprintln s!"monomorphization: {rep.declsIn} declarations in, {rep.declsOut} out \
-    ({rep.recordsIn} → {rep.recordsOut} records), {rep.groups} groups, \
-    {rep.defaulted} defaulted"
-  IO.eprintln s!"  copies per group: {rep.hist.toList}"
-  IO.eprintln s!"  model groups: {rep.modelGroups} keyed, {rep.modelLoose} loose, \
-    {rep.modelDeclined} declined; {rep.recRegen} recursors regenerated"
-
 def violationMessage (violation : InductiveModels.Check.Violation) : String :=
   violation.message
 
@@ -90,7 +79,7 @@ def reportCheckSuccess (config : InductiveModels.Cli.Config) (stage : String)
   unless config.quiet do
     IO.eprintln s!"{stage} check: {report.familiesChecked} model families checked"
 
-/-- Run the whole-stream kernel gate in a genuinely empty environment.  The
+/-- Run the requested input-only kernel gate in a genuinely empty environment. The
 outer `Except` reports a tool failure; the inner one is Lean's rejection of
 the submitted export. -/
 def typeCheckExportIO (context : Core.Context) (x : Export) :
@@ -123,58 +112,196 @@ def unsupportedDeclines (input : Export) (report : InductiveModels.Report) : Arr
     report.declined.filter fun entry =>
       InductiveModels.declineIsUnsupported alreadyCovered generated entry.1
 
-/-- Shared compact-generation boundary. Structural and direct kernel checking
-consume records while each family is live. Monomorphization still rewrites
-source declarations and therefore remains on the full-AST path. -/
+/-- Classify generation declines from compact input-family certificates. This
+is the planned/streaming equivalent of [`unsupportedDeclines`] and does not
+materialize source declarations. -/
+def unsupportedDeclinesFromOwners (coveredInputOwners : Array Name)
+    (report : InductiveModels.Report) : Array (Name × String) :=
+  let alreadyCovered := coveredInputOwners.foldl
+    (fun owners owner => owners.insert owner) ({} : Std.HashSet Name)
+  let generated := report.generated.foldl (init := ({} : Std.HashSet Name))
+    fun owners entry => owners.insert entry.1
+  report.declined.filter fun entry =>
+    InductiveModels.declineIsUnsupported alreadyCovered generated entry.1
+
+/-- Shared compact-generation boundary. Structural validation and optional
+generated-island checking consume records while each family is live. -/
 def compactModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  InductiveModels.generationEnabled config && !config.monoLevels
+  InductiveModels.generationEnabled config
 
-/-- No-output compact generation retains the same value-only verdict
-certificates but deliberately has no workspace or physical spool. -/
+/-- No-output compact generation retains value-only verdict certificates and
+never creates a generated-output workspace or spool. The checked planned
+subroute may separately use an input-only snapshot workspace. -/
 def discardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  !config.output && !config.typeCheckOutput && compactModeEligible config
+  !config.output && compactModeEligible config
 
-/-- The only production direct-kernel route. Output bytes, writers, spools,
-and extra subprocess phases are unnecessary when generated output is discarded. -/
-def directKernelModeEligible (config : InductiveModels.Cli.Config) : Bool :=
-  !config.output && config.typeCheckOutput && compactModeEligible config
+/-- The planned source reader pays for an input snapshot only when generated
+declarations are checked as they are produced. Unchecked no-output generation
+uses the ordinary in-memory compact-discard path and opens no workspace. -/
+def plannedDiscardModeEligible (config : InductiveModels.Cli.Config) : Bool :=
+  discardModeEligible config && config.typeCheckGenerated
+
+/-- Planned input avoids retaining a full source export for actual streaming
+output, and for checked no-output compact generation. -/
+def plannedGenerationModeEligible (config : InductiveModels.Cli.Config) : Bool :=
+  InductiveModels.generationEnabled config &&
+    (config.output || plannedDiscardModeEligible config)
 
 private inductive FilterOutput where
   | full (declarations : Array InductiveModels.EDecl)
   | discarded (plan : InductiveModels.CompactPlan)
-  | direct (plan : InductiveModels.CompactPlan)
-      (kernelVerdict : InductiveModels.CompactKernelCheckVerdict)
+
+private inductive OutputBackend where
+  | full | compactDiscard | declarationStream
 
 /-- Optional A/B and test diagnostic. This observes the actual filter result;
 it never changes output retention or route eligibility. -/
-private def reportOutputBackend (output : FilterOutput) : IO Unit := do
+private def reportOutputBackend (backend : OutputBackend) (generatedKernelChecks : Nat) : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
-    IO.eprintln s!"output backend: {match output with
-      | .full .. => "legacy"
-      | .discarded .. => "compact-discard"
-      | .direct .. => "compact-direct"}"
+    IO.eprintln s!"output backend: {match backend with
+      | .full => "legacy"
+      | .compactDiscard => "compact-discard"
+      | .declarationStream => "declaration-stream"}"
+    IO.eprintln s!"generated kernel checks: {generatedKernelChecks}"
 
-/-- Trace-only refinement of the compatible `compact-direct` backend label.
-An internal planned fallback still stays in-process and value-level; this line
-exists only so tests and memory runs can prove which checker supplied it. -/
-private def reportDirectKernelRoute (selectedSharedPrefix : Bool) : IO Unit := do
+private def reportPlannedRouteSelected : IO Unit := do
   if (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" then
-    IO.eprintln s!"direct kernel route: \
-      {if selectedSharedPrefix then "shared-prefix" else "planned-fallback"}"
+    IO.eprintln "input route: planned-census"
 
-/-- Regression-only late-failure seam, gated behind backend tracing so it can
-never affect an ordinary invocation or ordinary stderr. -/
-private def sharedPrefixFailureInjection? : IO (Option Nat) := do
-  unless (← IO.getEnv "LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE") == some "1" do
-    return none
-  return (← IO.getEnv "LEAN_INDUCTIVE_MODELS_TEST_SHARED_PREFIX_FAIL_AFTER_OWNERS").bind
-    String.toNat?
+private abbrev StreamWriterRef := IO.Ref (Option InductiveModels.DeclarationStreamWriter)
+
+private def readStreamWriter (writer : StreamWriterRef) : IO InductiveModels.DeclarationStreamWriter := do
+  let some current ← writer.get
+    | throw <| IO.userError "declaration stream writer is already in use"
+  return current
+
+private def writeStreamEvent (writer : StreamWriterRef)
+    (stream : IO.FS.Stream) : InductiveModels.StreamOutputEmitter := fun event => do
+  let declarations := match event with
+    | .generatedIsland records => records
+    | .source record => #[record]
+  for declaration in declarations do
+    -- Atomically remove the writer from the ref before extending its persistent
+    -- maps. A plain `get` would leave an RC sibling in the ref and force COW.
+    let some current ← writer.modifyGet fun current => (current, none)
+      | throwError "declaration stream writer is already in use"
+    writer.set (some (← current.writeDeclaration stream declaration))
+
+/-- Apply every post-generation verdict before deciding whether a named
+streaming sibling may become visible. -/
+private def finishStreamingVerdict (config : InductiveModels.Cli.Config)
+    (input : String) (report : InductiveModels.Report)
+    (plan : InductiveModels.CompactPlan) :
+    IO (InductiveModels.Output.TransactionResult UInt32) := do
+  reportOutputBackend .declarationStream report.generatedKernelChecks
+  reportGeneration config report
+  if let some why := report.unreplayable then
+    IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
+    return .rollback exitRejected
+  unless report.stmtErrors.isEmpty do
+    IO.eprintln s!"{input}: internal error: {report.stmtErrors.size} generated \
+      statements differ from their exact exported owner interface; no output written"
+    for error in report.stmtErrors do IO.eprintln s!"  ! {error}"
+    return .rollback exitToolError
+  if config.checkOutput then
+    unless plan.checkReport.violations.isEmpty do
+      reportViolations input "output" plan.checkReport.violations
+      return .rollback exitRejected
+    reportCheckSuccess config "output" plan.checkReport
+  if config.typeCheckGenerated then
+    match report.generatedKernelRejected with
+    | some message =>
+      IO.eprintln s!"{input}: generated kernel check rejected: {message}"
+      return .rollback exitRejected
+    | none => reportTypeCheckSuccess config "generated"
+  let outcome := if (unsupportedDeclinesFromOwners plan.coveredInputOwners report).isEmpty then
+      exitAccepted
+    else exitDeclined
+  return .commit outcome
+
+private def runStreamingParsedGeneration (config : InductiveModels.Cli.Config)
+    (parsed : Export) (context : Core.Context) (env : Environment) : IO UInt32 := do
+  let input := config.input.getD ""
+  try
+    InductiveModels.Output.transaction config.outputTarget fun stream => do
+      let writer ← IO.mkRef (some (←
+        InductiveModels.DeclarationStreamWriter.start parsed.metaLine stream))
+      let generated : Except String (InductiveModels.Report × InductiveModels.CompactPlan) ← try
+        let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+          (InductiveModels.runFilterStreaming parsed false config
+            (writeStreamEvent writer stream))) context { env }
+        pure (Except.ok result)
+      catch error => pure (Except.error (toString error))
+      let (report, plan) ← match generated with
+        | .ok result => pure result
+        | .error message =>
+          IO.eprintln s!"{input}: internal error: {message}"
+          return InductiveModels.Output.TransactionResult.rollback exitToolError
+      let writerState ← readStreamWriter writer
+      writerState.finish stream
+      unless report.unreplayable.isSome || writerState.declarationsWritten ==
+          plan.streamStats.sourceRecords + plan.streamStats.generatedRecords do
+        IO.eprintln s!"{input}: internal error: streaming writer/driver counts disagree"
+        return InductiveModels.Output.TransactionResult.rollback exitToolError
+      finishStreamingVerdict config input report plan
+  catch error =>
+    IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
+    return exitToolError
+
+private inductive PlannedStreamOutcome where
+  | done (exitCode : UInt32)
+  | fallback (message : String)
+
+private def runStreamingPlannedGeneration (config : InductiveModels.Cli.Config)
+    (planned : InductiveModels.PlannedSourceInput)
+    (reader : InductiveModels.Spool.PlannedSourceReader)
+    (context : Core.Context) (env : Environment) : IO PlannedStreamOutcome := do
+  let input := config.input.getD ""
+  try
+    InductiveModels.Output.transaction config.outputTarget fun stream => do
+      let writer ← IO.mkRef (some (← InductiveModels.DeclarationStreamWriter.start
+        planned.envelope.template.metaLine stream))
+      let generated : Except String (InductiveModels.Report × InductiveModels.CompactPlan) ← try
+        let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
+          (InductiveModels.runFilterStreamingPlannedCensus planned reader false config
+            (writeStreamEvent writer stream))) context { env }
+        pure (Except.ok result)
+      catch error => pure (Except.error (toString error))
+      let (report, plan) ← match generated with
+        | .ok result => pure result
+        | .error message =>
+          if config.outputTarget == "-" then
+            (← readStreamWriter writer).finish stream
+            IO.eprintln s!"{input}: internal error: {message}"
+            return InductiveModels.Output.TransactionResult.rollback (.done exitToolError)
+          else
+            return InductiveModels.Output.TransactionResult.rollback (.fallback message)
+      let writerState ← readStreamWriter writer
+      writerState.finish stream
+      unless report.unreplayable.isSome || writerState.declarationsWritten ==
+          plan.streamStats.sourceRecords + plan.streamStats.generatedRecords do
+        IO.eprintln s!"{input}: internal error: streaming writer/driver counts disagree"
+        return InductiveModels.Output.TransactionResult.rollback (.done exitToolError)
+      reportPlannedRouteSelected
+      match ← finishStreamingVerdict config input report plan with
+      | .commit code =>
+        return InductiveModels.Output.TransactionResult.commit (.done code)
+      | .rollback code =>
+        return InductiveModels.Output.TransactionResult.rollback (.done code)
+  catch error =>
+    IO.eprintln s!"{config.outputTarget}: cannot write output: {error}"
+    return .done exitToolError
 
 private def runParsedPipeline (config : InductiveModels.Cli.Config)
     (compactEnabled : Bool) (parsed : Export) : IO UInt32 := do
   let input := config.input.getD ""
   if let .error message := parsed.validateUniqueDeclarationNames then
     IO.eprintln s!"{input}: invalid export: {message}"
+    return exitRejected
+  let inputOrderViolations :=
+    (InductiveModels.SourceCensus.ofSource parsed).modelAfterOwnerViolations
+  unless inputOrderViolations.isEmpty do
+    reportViolations input "input" inputOrderViolations
     return exitRejected
 
   initSearchPath (← findSysroot)
@@ -200,95 +327,19 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
       return exitRejected
     reportCheckSuccess config "input" report
 
-  -- Monomorphize before generation.  Generated simple/bootstrap support is
-  -- already monomorphic at this point; feeding that support back through Mono
-  -- would instead ask the optional pass to infer instantiations for its
-  -- carried primitive basis, which has no such instantiation relation.
-  if config.monoLevels then
-    match (InductiveModels.SourceCensus.ofSource parsed).replayAliases with
-    | .error message =>
-        IO.eprintln s!"{input}: cannot plan collision-safe source replay: {message}"
-        return exitToolError
-    | .ok aliases => unless aliases.isEmpty do
-        -- Mono owns an independent exact-name replay loop.  Refuse before it
-        -- reaches Lean's normalized async map until that loop shares Driver's
-        -- explicit exact/replay alias view.
-        IO.eprintln s!"{input}: --mono-levels does not yet support normalized source-name \
-          collisions ({aliases.entries.size} declaration names require replay aliases)"
-        return exitToolError
-  let generationInput ← if config.monoLevels then do
-      let result ← try
-          let ((output, report), _) ← Lean.Core.CoreM.toIO
-            (Lean.Meta.MetaM.run'
-              (InductiveModels.Mono.monomorphize parsed { check := true })) context { env }
-          pure (Except.ok (output, report))
-        catch error =>
-          pure (Except.error (toString error))
-      match result with
-      | .error message =>
-          IO.eprintln s!"{input}: monomorphization failed: {message}"
-          return exitToolError
-      | .ok (output, report) =>
-          if let some why := report.refused then
-            IO.eprintln s!"{input}: monomorphization refused the export: {why}"
-            return exitToolError
-          unless report.errors.isEmpty do
-            IO.eprintln s!"{input}: monomorphization produced {report.errors.size} errors"
-            for error in report.errors do IO.eprintln s!"  ! {error}"
-            return exitToolError
-          reportMono config report
-          match InductiveModels.Order.reorder output with
-          | .error error =>
-              IO.eprintln s!"{input}: cannot order monomorphized input: \
-                {orderErrorMessage error}"
-              return exitToolError
-          | .ok orderedOutput => pure orderedOutput
-    else
-      pure parsed
+  if InductiveModels.generationEnabled config && config.output then
+    return ← runStreamingParsedGeneration config parsed context env
+
+  let generationInput := parsed
 
   let (filterOutput, generationReport) ← if InductiveModels.generationEnabled config then do
       let generated : Except String (FilterOutput × InductiveModels.Report) ← try
-          if compactEnabled && directKernelModeEligible config then
-            let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
-            let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
-            let ((report, plan, kernelVerdict?), _) ← Lean.Core.CoreM.toIO
-              (Lean.Meta.MetaM.run'
-                (InductiveModels.runFilterDirectChecking generationInput false config))
-              context { env }
-            match kernelVerdict? with
-            | some kernelVerdict => match kernelVerdict.fallback?, kernelVerdict.result with
-              | none, .ok () =>
-                pure (Except.ok (FilterOutput.direct plan kernelVerdict, report))
-              | _, _ =>
-                InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
-                InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-                let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                  (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
-                  context { env }
-                pure (Except.ok (FilterOutput.full decls, fallbackReport))
-            | none =>
-              InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
-              InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
-                context { env }
-              pure (Except.ok (FilterOutput.full decls, fallbackReport))
-          else if compactEnabled && discardModeEligible config then
-            let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
-            let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
+          if compactEnabled && discardModeEligible config then
             let ((report, plan), _) ← Lean.Core.CoreM.toIO
               (Lean.Meta.MetaM.run'
                 (InductiveModels.runFilterDiscarding generationInput false config))
               context { env }
-            match plan.unavailable? with
-            | none => pure (Except.ok (FilterOutput.discarded plan, report))
-            | some _ =>
-              InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
-              InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-              let ((decls, fallbackReport), _) ← Lean.Core.CoreM.toIO
-                (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
-                context { env }
-              pure (Except.ok (FilterOutput.full decls, fallbackReport))
+            pure (Except.ok (FilterOutput.discarded plan, report))
           else
             let ((decls, report), _) ← Lean.Core.CoreM.toIO
               (Lean.Meta.MetaM.run' (InductiveModels.runFilter generationInput false config))
@@ -304,7 +355,9 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
     else
       pure (FilterOutput.full generationInput.decls, ({} : InductiveModels.Report))
 
-  reportOutputBackend filterOutput
+  reportOutputBackend (match filterOutput with
+    | .full .. => .full
+    | .discarded .. => .compactDiscard) generationReport.generatedKernelChecks
   reportGeneration config generationReport
   if let some why := generationReport.unreplayable then
     IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -322,39 +375,25 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
     if (unsupportedDeclines parsed generationReport).isEmpty then exitAccepted
     else exitDeclined
   match filterOutput with
-  | .direct plan kernelVerdict =>
-    if config.checkOutput then
-      unless plan.checkReport.violations.isEmpty do
-        reportViolations input "output" plan.checkReport.violations
-        return exitRejected
-      reportCheckSuccess config "output" plan.checkReport
-    -- Eligibility guarantees this flag, but keep the output-success diagnostic
-    -- at the historical precedence point: after generation/statement/structural
-    -- verdicts and immediately before the final accepted/declined exit.
-    if config.typeCheckOutput then
-      match kernelVerdict.result with
-      | .ok () => reportTypeCheckSuccess config "output"
-      | .error _ =>
-        IO.eprintln s!"{input}: internal error: compact direct rejection escaped fallback"
-        return exitToolError
-    return outcome
   | .discarded plan =>
     if config.checkOutput then
       unless plan.checkReport.violations.isEmpty do
         reportViolations input "output" plan.checkReport.violations
         return exitRejected
       reportCheckSuccess config "output" plan.checkReport
+    if config.typeCheckGenerated then
+      match generationReport.generatedKernelRejected with
+      | some message =>
+        IO.eprintln s!"{input}: generated kernel check rejected: {message}"
+        return exitRejected
+      | none => reportTypeCheckSuccess config "generated"
     return outcome
   | .full decls =>
     let transformed : Export := { generationInput with decls }
-    let finalExport ← if InductiveModels.generationEnabled config || config.monoLevels then
-        match InductiveModels.Order.reorder transformed with
-        | .error error =>
-            IO.eprintln s!"{input}: cannot order output: {orderErrorMessage error}"
-            return exitToolError
-        | .ok output => pure output
-      else
-        pure transformed
+    -- Generation emits each live model island immediately before its source
+    -- owner and otherwise preserves source order. That constructive stream is
+    -- the output; there is no final global ordering pass.
+    let finalExport := transformed
 
     if config.checkOutput then
       let report := InductiveModels.Check.checkReport finalExport
@@ -363,15 +402,15 @@ private def runParsedPipeline (config : InductiveModels.Cli.Config)
         return exitRejected
       reportCheckSuccess config "output" report
 
-    if config.typeCheckOutput then
-      match ← typeCheckExportIO context finalExport with
-      | .error message =>
-        IO.eprintln s!"{input}: output kernel check failed internally: {message}"
-        return exitToolError
-      | .ok (.error message) =>
-        IO.eprintln s!"{input}: output kernel check rejected: {message}"
+    if config.typeCheckGenerated then
+      match generationReport.generatedKernelRejected with
+      | some message =>
+        IO.eprintln s!"{input}: generated kernel check rejected: {message}"
         return exitRejected
-      | .ok (.ok ()) => reportTypeCheckSuccess config "output"
+      | none =>
+        -- Every generated island was checked against its trusted source
+        -- prefix at close. Input is governed only by typeCheckInput.
+        reportTypeCheckSuccess config "generated"
 
     if config.output then
       try
@@ -388,11 +427,11 @@ private def runPipeline (config : InductiveModels.Cli.Config)
       if input == "-" then
         let stdin ← IO.getStdin
         pure (some (← InductiveModels.parseStream stdin
-          (analyse := config.monoLevels) (allowDuplicateNames := true)))
+          (options := { allowDuplicateNames := true })))
       else
         IO.FS.withFile input .read fun handle => do
           pure (some (← InductiveModels.parseHandle handle
-            (analyse := config.monoLevels) (allowDuplicateNames := true)))
+            (options := { allowDuplicateNames := true })))
     catch error =>
       IO.eprintln s!"{input}: {error}"
       pure none
@@ -404,26 +443,26 @@ private def runPipeline (config : InductiveModels.Cli.Config)
     | .ok parsedExport => pure parsedExport
   runParsedPipeline config compactEnabled parsed
 
-/-- Declaration-discarding input path for the sole generated no-output direct
-kernel route. The physical snapshot is input provenance/fallback state only;
-generated logical output stays as live `EDecl` values throughout. -/
-private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO UInt32 := do
+/-- Declaration-discarding input path for kernel-checked generated no-output runs. The
+physical snapshot is input provenance/fallback state only; generated logical
+output stays as live `EDecl` values throughout. -/
+private def runPlannedDiscardPipeline (config : InductiveModels.Cli.Config) : IO UInt32 := do
   let input := config.input.getD ""
   let scratch := (← IO.currentDir) / "_tmp"
   let consumed ← IO.mkRef false
   try
     IO.FS.createDirAll scratch
     InductiveModels.Spool.withWorkspace scratch fun workspace => do
-      let tee ← InductiveModels.Spool.DirectInputTee.create workspace
+      let tee ← InductiveModels.Spool.PlannedInputTee.create workspace
       let parsedResult ← if input == "-" then
           consumed.set true
-          InductiveModels.parsePlannedSourceStreamWithDirectTee (← IO.getStdin) tee
-            (analyse := false) (allowDuplicateNames := true)
+          InductiveModels.parsePlannedSourceStreamWithInputTee (← IO.getStdin) tee
+            (options := { allowDuplicateNames := true })
         else
           IO.FS.withFile input .read fun handle => do
             consumed.set true
-            InductiveModels.parsePlannedSourceWithDirectTee handle tee
-              (analyse := false) (allowDuplicateNames := true)
+            InductiveModels.parsePlannedSourceWithInputTee handle tee
+              (options := { allowDuplicateNames := true })
       let planned ← match parsedResult with
         | .error message =>
           IO.eprintln s!"{input}: parse error: {message}"
@@ -432,16 +471,20 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
       if let .error message := planned.census.validateUniqueDeclarationNames then
         IO.eprintln s!"{input}: invalid export: {message}"
         return exitRejected
+      let inputOrderViolations := planned.census.modelAfterOwnerViolations
+      unless inputOrderViolations.isEmpty do
+        reportViolations input "input" inputOrderViolations
+        return exitRejected
       let sizes ← tee.finish
-      let readerResult ← InductiveModels.Spool.PlannedSourceReader.createDirect
+      let readerResult ← InductiveModels.Spool.PlannedSourceReader.createFromInputTee
         tee planned.certificate sizes planned.envelope.declarationCount planned.envelope.arena
       let reader ← match readerResult with
         | .ok reader => pure reader
         | .error _ =>
           -- Parser-compatible arena overwrites cannot be reconstructed from a
           -- completed arena. Reparse the exact consumed input snapshot and use
-          -- the ordinary full-AST pipeline with unchanged diagnostics.
-          let fallback ← tee.parseFallback (analyse := false) (allowDuplicateNames := true)
+          -- the ordinary retained-input pipeline with unchanged diagnostics.
+          let fallback ← tee.parseFallback (options := { allowDuplicateNames := true })
           let parsed ← match fallback with
             | .ok parsed => pure parsed
             | .error message =>
@@ -470,41 +513,42 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
 
       let levelCallsBefore ← InductiveModels.LevelAlgebra.levelCalls.get
       let levelEscapesBefore ← InductiveModels.LevelAlgebra.levelEscapes.get
+      if config.output then
+        match ← runStreamingPlannedGeneration config planned reader context env with
+        | .done exitCode => return exitCode
+        | .fallback message =>
+          InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
+          InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
+          let fallback ← InductiveModels.materializePlannedSource planned reader
+          let parsed ← match fallback with
+            | .ok parsed => pure parsed
+            | .error fallbackMessage =>
+              IO.eprintln s!"{input}: internal error: planned generation failed ({message}); \
+                cannot materialize fallback: {fallbackMessage}"
+              return exitToolError
+          return ← runParsedPipeline { config with checkInput := false } true parsed
       let generated : Except String
-          ((InductiveModels.Report × InductiveModels.CompactPlan ×
-            Option InductiveModels.CompactKernelCheckVerdict) ×
-            InductiveModels.SharedPrefixDirectObservation) ← try
-        let failAfterOwners? ← sharedPrefixFailureInjection?
+          (InductiveModels.Report × InductiveModels.CompactPlan) ← try
         let (result, _) ← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run'
-          (InductiveModels.runFilterDirectCheckingSharedPrefixPlannedCensus
-            planned reader config failAfterOwners?)) context { env }
+          (InductiveModels.runFilterDiscardingPlannedCensus
+            planned reader false config)) context { env }
         pure (Except.ok result)
       catch error => pure (Except.error (toString error))
-      let ((generationReport, plan, kernelVerdict?), sharedPrefixObservation) ←
-          match generated with
+      let (generationReport, plan) ← match generated with
         | Except.error message =>
-          IO.eprintln s!"{input}: internal error: {message}"
-          return exitToolError
+          InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
+          InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
+          let fallback ← InductiveModels.materializePlannedSource planned reader
+          let parsed ← match fallback with
+            | .ok parsed => pure parsed
+            | .error fallbackMessage =>
+              IO.eprintln s!"{input}: internal error: planned generation failed ({message}); \
+                cannot materialize fallback: {fallbackMessage}"
+              return exitToolError
+          return ← runParsedPipeline { config with checkInput := false } true parsed
         | Except.ok result => pure result
-      reportDirectKernelRoute sharedPrefixObservation.selected
-      let directAccepted := kernelVerdict?.any fun verdict =>
-        verdict.fallback?.isNone && verdict.result matches .ok ()
-      unless directAccepted do
-        InductiveModels.LevelAlgebra.levelCalls.set levelCallsBefore
-        InductiveModels.LevelAlgebra.levelEscapes.set levelEscapesBefore
-        let fallback ← InductiveModels.materializePlannedSource planned reader
-        let parsed ← match fallback with
-          | .ok parsed => pure parsed
-          | .error message =>
-            IO.eprintln s!"{input}: internal error: cannot materialize direct fallback: {message}"
-            return exitToolError
-        -- The planned route has already emitted the exact input structural
-        -- verdict.  Reuse the ordinary generation/output path without
-        -- checking or reporting that same input a second time.
-        return ← runParsedPipeline { config with checkInput := false } true parsed
-      let some kernelVerdict := kernelVerdict? | return exitToolError
-
-      reportOutputBackend (.direct plan kernelVerdict)
+      reportPlannedRouteSelected
+      reportOutputBackend .compactDiscard generationReport.generatedKernelChecks
       reportGeneration config generationReport
       if let some why := generationReport.unreplayable then
         IO.eprintln s!"{input}: kernel rejected an input declaration during generation: {why}"
@@ -514,21 +558,22 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
           statements differ from their exact exported owner interface; no output written"
         for error in generationReport.stmtErrors do IO.eprintln s!"  ! {error}"
         return exitToolError
-      let outcome ← if generationReport.declined.isEmpty then pure exitAccepted else do
-        let fallback ← InductiveModels.materializePlannedSource planned reader
-        let source ← match fallback with
-          | .ok source => pure source
-          | .error message =>
-            IO.eprintln s!"{input}: internal error: cannot classify direct declines: {message}"
-            return exitToolError
-        pure <| if (unsupportedDeclines source generationReport).isEmpty then
-          exitAccepted else exitDeclined
+      let outcome := if (unsupportedDeclinesFromOwners
+          plan.coveredInputOwners generationReport).isEmpty then
+        exitAccepted
+      else
+        exitDeclined
       if config.checkOutput then
         unless plan.checkReport.violations.isEmpty do
           reportViolations input "output" plan.checkReport.violations
           return exitRejected
         reportCheckSuccess config "output" plan.checkReport
-      reportTypeCheckSuccess config "output"
+      if config.typeCheckGenerated then
+        match generationReport.generatedKernelRejected with
+        | some message =>
+          IO.eprintln s!"{input}: generated kernel check rejected: {message}"
+          return exitRejected
+        | none => reportTypeCheckSuccess config "generated"
       return outcome
   catch error =>
     if ← consumed.get then
@@ -538,12 +583,13 @@ private def runPlannedDirectPipeline (config : InductiveModels.Cli.Config) : IO 
 
 def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   -- The legacy override remains a deliberate A/B switch for no-output compact
-  -- modes. Every actual output uses the ordinary full-AST path.
+  -- modes. Actual generated output is declaration-wise on either retained or
+  -- planned input.
   let compactEnabled :=
     (← IO.getEnv "LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT") != some "1" &&
       (← IO.getEnv "LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE") != some "1"
-  if compactEnabled && directKernelModeEligible config && !config.typeCheckInput then
-    runPlannedDirectPipeline config
+  if compactEnabled && plannedGenerationModeEligible config && !config.typeCheckInput then
+    runPlannedDiscardPipeline config
   else
     runPipeline config compactEnabled
 

@@ -75,7 +75,7 @@ structure Evidence where
   ownerFreeAccepted : Bool
 
 def collectEvidence (path : String) : IO Evidence := do
-  let .ok input := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok input := InductiveModels.parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   let base ← importModules #[] {}
   let context : Core.Context :=

@@ -6,8 +6,8 @@ import Lean
 Named output is prepared in a fresh sibling and made visible with one rename.
 This keeps an existing target intact when serialization or flushing fails and
 also makes literal and path-alias in-place operation safe. Standard output is
-necessarily different: once a consumer has received bytes they cannot be
-recalled, so it is written only after the caller has completed every gate.
+necessarily different: declaration-wise generation writes it directly, so a
+late semantic failure can leave the consumer with a complete-record prefix.
 -/
 
 namespace InductiveModels.Output
@@ -51,15 +51,15 @@ path and result ensures the handle and its stream are released before rename,
 which is required on Windows as well as being the intended ownership boundary
 on POSIX systems. `flush` reports buffered write failures; this helper does not
 claim power-loss durability (`fsync`). -/
-private def prepareSibling (target : System.FilePath) (emit : IO.FS.Stream → IO Unit)
-    (hooks : Hooks) : IO (System.FilePath × Except IO.Error Unit) := do
+private def prepareSibling (target : System.FilePath) (emit : IO.FS.Stream → IO α)
+    (hooks : Hooks) : IO (System.FilePath × Except IO.Error α) := do
   let (path, handle) ← reserveSibling target
-  let result : Except IO.Error Unit ← try
+  let result : Except IO.Error α ← try
       let stream := IO.FS.Stream.ofHandle handle
-      emit stream
+      let value ← emit stream
       hooks.beforeFlush
       stream.flush
-      pure (.ok ())
+      pure (.ok value)
     catch error => pure (.error error)
   return (path, result)
 
@@ -91,6 +91,40 @@ private def writeNamedWith (target : System.FilePath) (emit : IO.FS.Stream → I
       hooks.beforeRename
       IO.FS.rename path target
     catch error => failAndCleanup path error
+
+/-- Commit decision returned from a scoped streaming output producer. Named
+targets keep their randomized sibling private on `rollback`; standard output
+cannot retract bytes and therefore returns the value directly. -/
+inductive TransactionResult (α : Type) where
+  | commit (value : α)
+  | rollback (value : α)
+
+/-- Hold one output destination across declaration-wise generation.
+
+Named output is serialized into a private sibling and becomes visible only
+when the producer returns `commit`; every exception and `rollback` removes the
+sibling while preserving an existing target. Standard output is necessarily
+direct and may contain a valid prefix when the producer later rolls back. -/
+def transaction (target : String)
+    (produce : IO.FS.Stream → IO (TransactionResult α)) : IO α := do
+  if target == "-" then
+    let stdout ← IO.getStdout
+    let result ← produce stdout
+    stdout.flush
+    return match result with
+      | .commit value | .rollback value => value
+  else
+    let (path, prepared) ← prepareSibling target produce {}
+    match prepared with
+    | .error error => failAndCleanup path error
+    | .ok (.rollback value) =>
+      removeSibling path
+      return value
+    | .ok (.commit value) =>
+      try
+        IO.FS.rename path target
+        return value
+      catch error => failAndCleanup path error
 
 /-- Write to standard output, or atomically replace one literal named path.
 
@@ -134,6 +168,12 @@ def writeNamedFailing (target : System.FilePath) (failure : Failure) : IO Unit :
       beforeRename := if failure == .rename then
         throw <| IO.userError "injected output rename failure" else pure () }
   writeNamedWith target emit hooks
+
+/-- Exercise semantic rollback independently of an injected IO failure. -/
+def writeNamedRollingBack (target : System.FilePath) : IO Unit := do
+  discard <| transaction target.toString fun stream => do
+    stream.putStr "rolled-back-output"
+    return .rollback ()
 
 end Test
 

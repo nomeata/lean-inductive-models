@@ -12,14 +12,15 @@ import InductiveModels.Spool
 
 `.ndjson` in, `.ndjson` out. Generation replays source declarations into its
 analysis environment without checking their values; the independent
-`--type-check-input` and `--type-check-output` gates request whole-stream kernel
-verdicts. Every declaration this tool generates is always checked in an
-owner-free environment before it can be emitted.
+`--type-check-input` gate checks only input declarations, while
+`--type-check-generated` checks each exact generated island once in an owner-free
+environment as it is produced. Turning either gate off skips kernel checking
+for that declaration class.
 
 Beside each supported inductive the output carries that declaration's complete
-public model family. Final ordering places every model record before its owner
-and preserves the dependency constraints of the complete transformed export.
-Input declarations themselves retain their exact exported records.
+public model family. Each island is appended immediately before its owner and
+all other source declarations retain input order. Input declarations
+themselves retain their exact exported records.
 
 There are **three** constructions and they are separate files.
 `src/InductiveModels/Model.lean` specialises a nested declaration into a mutual block
@@ -31,10 +32,11 @@ of another, and this driver is the only thing that composes them.
 
 ## Why output is re-interned
 
-Declaration records refer into one file-wide name, level, and expression arena.
-After generation and ordering, [`InductiveModels.Export.writeTo`] therefore serializes
-the parsed snapshot as one self-contained arena. The writer streams record
-lines rather than retaining the rendered file as one string.
+Declaration records refer to numeric name, level, and expression arena IDs.
+Actual generated output feeds each callback declaration into one persistent
+standard writer, reusing its global interning maps while releasing the `EDecl`
+after the callback. The no-generation path keeps
+[`InductiveModels.Export.writeTo`] for byte-stable whole-export writing.
 
 ## The free oracle
 
@@ -120,12 +122,18 @@ structure Report where
   is a retention invariant, not an output statistic. -/
   maxLivePendingModels : Nat := 0
   /-- Peak number of generated declaration records retained by one island
-  before ordering, checking, and either full output or compact discard. -/
+  before validation, optional generated checking, and emission or compact discard. -/
   maxLiveIslandRecords : Nat := 0
   /-- The input stopped replaying here: a declaration Lean's kernel will not
   load at all. The filter then becomes the identity, which is what a filter
   should be when it can do nothing. -/
   unreplayable : Option String := none
+  /-- First exact generated-island kernel rejection. Input declarations are
+  trusted dependencies and are never submitted through this gate. -/
+  generatedKernelRejected : Option String := none
+  /-- Number of generated-island kernel invocations. This value-level counter
+  pins that disabling generated checking bypasses the gate entirely. -/
+  generatedKernelChecks : Nat := 0
   deriving Inhabited, Repr, BEq
 
 /-- Whether one reported decline still represents unsupported generation after
@@ -163,57 +171,49 @@ inductive CompactLocator where
   | generated (island declaration : Nat)
   deriving Inhabited, Repr, BEq
 
-/-- Atomic value-free scheduling row. `summary` and `globalExtra` are captured
-together with their logical locator and must always be permuted as one value. -/
+/-- Atomic value-free output row. `summary` and `globalExtra` are captured
+together with their logical locator as one value. -/
 structure CompactRecord where
   summary : Order.DeclSummary
   globalExtra : Check.GlobalExtraRecord
   families : Array Check.CompactFamilyCertificate := #[]
-  /-- Syntax availability at certificate capture. Source payload can be
-  recaptured with its current generated island while retaining its logical
-  locator and scheduling origin. -/
-  checkIsland? : Option Nat := none
   locator : CompactLocator
   deriving Inhabited, Repr
 
-private def compactAvailabilityError? (records : Array CompactRecord)
-    (persistentSupportOrigins : Std.HashMap Name Nat) : Option String := Id.run do
-  let mut generatedProviders : Std.HashMap Name Nat := {}
-  for record in records do
-    if let .island island := record.summary.origin then
-      for name in record.summary.introduced do
-        generatedProviders := generatedProviders.insert name island
-  let availableAt := fun (origin : Option Nat) (name : Name) =>
-    match generatedProviders[name]? with
-    | none => true
-    | some provider => match origin with
-      | none => false
-      | some consumer => provider == consumer ||
-          (provider < consumer && persistentSupportOrigins[name]? == some provider)
-  for record in records do
-    let origin := record.checkIsland?.orElse fun _ => match record.summary.origin with
-      | .source => none
-      | .island island => some island
-    if let some name := record.summary.referenced.toArray.find?
-        (fun name => !availableAt origin name) then
-      return some s!"compact syntax for {record.summary.introduced} references generated \
-        provider {name} unavailable at its capture point"
-    for family in record.families do
-      if let some name := family.publicNames.find?
-          (fun name => !availableAt family.captureIsland? name) then
-        return some s!"compact family {family.owner} depends on generated public slot {name} \
-          unavailable at its capture point"
-  return none
+/-- Value-only accounting for one declaration-wise output stream.  The
+largest callback payload is one generated island; source declarations are
+delivered separately and no prior payload remains owned by the driver. -/
+structure StreamOutputStats where
+  generatedRecords : Nat := 0
+  sourceRecords : Nat := 0
+  maxIslandRecords : Nat := 0
+  deriving Inhabited, Repr, BEq
 
 /-- Value-only shadow of a compact generation pass, with no physical payloads
 or generated declaration expressions. -/
 structure CompactPlan where
   declarations : Array CompactLocator := #[]
   checkReport : Check.Report := { familiesChecked := 0, violations := #[] }
-  unavailable? : Option String := none
   /-- A regression counter for the payload-retention contract. Compact discard
   never appends generated declarations to a cumulative output array. -/
   retainedGeneratedRecords : Nat := 0
+  streamStats : StreamOutputStats := {}
+  /-- Source owners whose already-present model family has no final compact
+  structural violation. Planned routes use this value-only set to classify
+  declines without materializing the source export. -/
+  coveredInputOwners : Array Name := #[]
+
+/-- Exact logical output events.  A nonempty generated island is delivered as
+one atomic event after its optional kernel gate and compact capture; its source
+record is the immediately following event. -/
+inductive StreamOutputEvent where
+  | generatedIsland (records : Array EDecl)
+  | source (record : EDecl)
+
+/-- Declaration-wise output callback.  It is deliberately value-level: no
+writer, JSON representation, environment, or physical sink enters generation
+or generated-island checking. -/
+abbrev StreamOutputEmitter := StreamOutputEvent → MetaM Unit
 
 /-- The unique minor-premise position belonging to `constructorName` in a
 mutual recursor telescope.  Each exported recursor record carries only its
@@ -991,6 +991,17 @@ def addStructureModels (types : Array EIndType) (constructors : Array ECtor)
 private abbrev ModelIslandState :=
   Array EDecl × Report × Array PendingModel × Array FamilyAdapter.ShadowObservation
 
+/-- Place one newly generated model at its constructive emission boundary. A
+source owner is not in the private forest yet, so its model appends and the
+source callback follows it. A recursively generated owner is already present
+inside a dependency-ordered parent segment; splice immediately before that
+complete record, preserving every earlier support record the child may use. -/
+private def appendModelRecords (out records : Array EDecl) (owner : Name) : Array EDecl :=
+  match out.findIdx? (fun declaration => declaration.names.contains owner) with
+  | none => out ++ records
+  | some ownerIndex =>
+    out.extract 0 ownerIndex ++ records ++ out.extract ownerIndex out.size
+
 /-- Read one inductive block back out of the environment, including the
 recursors the **kernel** generated for it. -/
 def indEDecl (names : Array Name) : MetaM EDecl := do
@@ -1068,8 +1079,7 @@ def toEDecl : Declaration → MetaM EDecl
 
 /-- The export's word for each of the four quotient records. Read off the
 `QuotKind` the kernel stamped on the constant, so the record is recognised
-**structurally** on the way back out, just as the monomorphizer's carried
-built-ins recognise it on the way in. -/
+**structurally** on the way back out. -/
 def quotKindStr : QuotKind → String
   | .type => "type" | .ctor => "ctor" | .lift => "lift" | .ind => "ind"
 
@@ -1116,8 +1126,8 @@ arbitrary source-prefix environment.
 
 Generation may use a separate analysis environment containing the owner.  A
 successful public model must nevertheless install here, where the owner is
-absent.  This makes owner independence a kernel-checked invariant instead of a
-hope later imposed by record ordering.  The returned environment is a fork;
+absent. This makes owner independence a kernel-checked invariant at the same
+prefix where the island is constructively emitted. The returned environment is a fork;
 the caller may discard it after streaming the records. -/
 def checkGeneratedIn (base : Environment) (records : Array EDecl) :
     MetaM (Except String Environment) := do
@@ -1182,16 +1192,18 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
     let some declaration := toDeclaration main record | do
       if installedQuotRecord main record then continue
       return .error s!"{record.names}: cannot reconstruct shared support"
-    match main.addDeclCore 0 declaration none true with
+    -- Reusable support belongs to the construction view. The complete exact
+    -- emitted island is checked once, separately, when generated checking is on.
+    match main.addDeclCore 0 declaration none false with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
     | .ok next => main := next
   return .ok main
 
-/-- Finalize one atomic generated forest.  The source owner participates in
-record ordering but is removed before checked replay, so the kernel sees every
-exact serialized model declaration in the owner-free persistent environment.
-Only fixed shared support is copied back. -/
+/-- Finalize one atomic generated forest. Generated records stay in generator
+append order, and only fixed shared support is copied back into the persistent
+construction environment. The caller may separately submit the exact returned
+island to the generated kernel gate. -/
 def closeModelIsland (template : Export) (main : Environment)
     (records : Array EDecl) (models : Array PendingModel) (owner : EDecl)
     (sourceSyntax : Check.SyntaxIndex) (generatedOwners : Std.HashSet Name)
@@ -1200,27 +1212,22 @@ def closeModelIsland (template : Export) (main : Environment)
       (Array EDecl × CompactIsland × Environment × Check.StatementReport)) := do
   -- Generation runs in the collision-free replay environment, so generated
   -- expressions can mention replay aliases.  Restore the exact source names
-  -- before every syntax/output operation.  Checked replay below converts the
-  -- ordered result back in the opposite direction.
+  -- before every syntax/output operation. The optional caller-side kernel
+  -- gate converts the returned exact records back to their collision-safe
+  -- build image.
   let exactRecords := records.map sourceAliases.exactRecord
   unless exactRecords.map sourceAliases.buildRecord == records do
     return .error "generated source-alias round trip changed a declaration"
   -- Round-trip equality alone cannot see an unregistered derived build name:
   -- both exactRecord and buildRecord would leave it unchanged.  The exhaustive
   -- record mapper must find no construction prefix after exactification, even
-  -- when output typechecking has been disabled by the caller.
+  -- when generated-declaration checking has been disabled by the caller.
   unless exactRecords.map sourceAliases.exactDerivedRecord == exactRecords do
     return .error "generated declaration retained an unregistered source replay alias"
-  let island := { template with decls := exactRecords.push owner }
-  let ordered ← match Order.reorder island with
-    | .ok ordered => pure ordered
-    | .error error => return .error s!"cannot order generated island: {repr error}"
-  let mut generated : Array EDecl := #[]
-  let mut removedOwner := false
-  for record in ordered.decls do
-    if !removedOwner && record == owner then removedOwner := true
-    else generated := generated.push record
-  unless removedOwner do return .error s!"source owner {owner.names} disappeared from its island"
+  -- Generation appends every declaration in dependency order. The island is
+  -- emitted exactly in that constructive order immediately before `owner`;
+  -- no additional island or stream ordering pass is part of the route.
+  let generated := exactRecords
   -- Statement correspondence is an export-syntax check, so it can run while
   -- the owner is still absent from the persistent replay environment. Source
   -- owners use family templates indexed once; generated owners use the island
@@ -1279,21 +1286,18 @@ def closeModelIsland (template : Export) (main : Environment)
       let combinedViolations := generatedReport.violations ++ sourceReport.violations
       ({ statementsChecked := checkedCount, violations := combinedViolations } :
         Check.StatementReport)
-  -- Drop the construction fork before reconstructing any declaration.  The
-  -- exact serialized records and compact splice witnesses above are the only
-  -- state allowed to cross into owner-free checked replay.
+  -- Drop the owner-local construction fork before reconstructing persistent
+  -- support. The exact serialized records and compact splice witnesses above
+  -- are the only state allowed to cross this boundary.
   setEnv main
   let replayGenerated := generated.map sourceAliases.buildRecord
-  match ← checkGeneratedIn main replayGenerated with
+  match ← installGeneratedSupportIn main replayGenerated models with
   | .error message => return .error message
-  | .ok _ =>
-    match ← installGeneratedSupportIn main replayGenerated models with
-    | .error message => return .error message
-    | .ok supported => return .ok (generated, compact, supported, statementReport)
+  | .ok supported => return .ok (generated, compact, supported, statementReport)
 
 /-- The exact quotient/choice interface that a prim model may splice after its
-ordinary basis is ready.  These are source-scheduling names as well as the
-readiness class used at the construction site below. -/
+ordinary basis is ready. Input-reserved names in this class must already have
+appeared in the raw source stream at the construction site below. -/
 def lateSpliceNames : List Name :=
   [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
    `Nonempty, `Nonempty.intro, `Nonempty.rec, `Classical.choice]
@@ -1301,140 +1305,9 @@ def lateSpliceNames : List Name :=
 /-- The exact logical interface shared with the fixed W fragment. -/
 def wLogicalLateNames : List Name := [`Iff, `Iff.intro, `Iff.rec, `propext]
 
-/-- The exact ordinary basis interface which can be input-owned.  Namespace
-membership is intentionally insufficient: Mathlib contains hundreds of
-unrelated later declarations such as `PUnit.le`, and preferring one of those
-also prefers its complete dependency closure. -/
-def scheduledPrimBasisNames : List Name :=
-  [`Eq, `Eq.refl, `Eq.rec,
-   `Nat, `Nat.zero, `Nat.succ, `Nat.rec,
-   `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
-   `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
-   `PUnit, `PUnit.unit, `PUnit.rec]
-
-/-- Source declarations which must be replayed before an unmodelled owner that
-can need them.  Public core interfaces are selected by exact name.  The one
-prefix exception is this tool's private `_wcore` namespace: its sentinel is
-only sound when the complete fixed fragment has been replayed. -/
-private def broadScheduledSupportRecord (declaration : EDecl) : Bool :=
-  declaration.names.any fun name =>
-    scheduledPrimBasisNames.contains name || lateSpliceNames.contains name ||
-      wLogicalLateNames.contains name || wCoreRoot.isPrefixOf name
-
-private def structuralScheduledSupportRecord (declaration : EDecl) : Bool :=
-  declaration.names.any fun name =>
-    [`Eq, `Eq.refl, `Eq.rec,
-     `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
-     `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
-     `PUnit, `PUnit.unit, `PUnit.rec].contains name
-
-def scheduledSupportRecord (generation : Cli.Config) (declaration : EDecl) : Bool :=
-  if generation.simple || generation.basic then broadScheduledSupportRecord declaration
-  else if generation.nested || generation.mutualModels then
-    structuralScheduledSupportRecord declaration
-  else false
-
-/-- Whether this input record reaches any enabled model-generation branch.
-
-This is the cheap scheduling pre-scan.  Fixed source support is relevant only
-when an enabled branch has an owner whose public carrier is absent; basis and
-fixed-support records are never such owners. -/
-def scheduledModelOwner (generation : Cli.Config) (reserved : Std.HashSet Name) : EDecl → Bool
-  | declaration@(.induct types _ _) =>
-    match types with
-    | [] => false
-    | first :: _ =>
-      !scheduledSupportRecord generation declaration &&
-        !reserved.contains (Naming.modelName first.name) &&
-        ((generation.nested && types.any (·.numNested > 0)) ||
-          (generation.mutualModels && types.length > 1 && !types.any (·.numNested > 0)) ||
-          (types.length == 1 && first.numNested == 0 &&
-            generation.modelsSimpleInput first.name))
-  | _ => false
-
-/-- Independently classify the exact source owners for which generation lacks
-the public carrier.  This repeats the enabled-branch cases instead of calling
-[`scheduledModelOwner`], so the post-schedule certificate cannot certify a
-pre-scan bug by reusing that pre-scan. -/
-def generationMayAttemptOwner (generation : Cli.Config)
-    (reserved : Std.HashSet Name) : EDecl → Bool
-  | declaration@(.induct types _ _) =>
-    match types with
-    | [] => false
-    | first :: _ =>
-      !scheduledSupportRecord generation declaration &&
-        !reserved.contains (Naming.modelName first.name) &&
-        ((generation.nested && types.any (·.numNested > 0)) ||
-          (generation.mutualModels && types.length > 1 && !types.any (·.numNested > 0)) ||
-          (types.length == 1 && first.numNested == 0 &&
-            generation.modelsSimpleInput first.name))
-  | _ => false
-
-/-- Whether any model-generation branch is enabled.  Kept local to the driver
-so the library scheduler has the same boundary as the command-line driver. -/
+/-- Whether any model-generation branch is enabled. -/
 def generationEnabled (generation : Cli.Config) : Bool :=
   generation.nested || generation.mutualModels || generation.simple || generation.basic
-
-/-- Whether the source contains an actual late-support ordering hazard.
-
-An absent public carrier is not sufficient: already-filtered files retain
-permanently declined owners, and prioritizing support which already precedes
-all of them changes independent byte order without enabling any construction.
-Scan once in source order and request prioritization only when an exact
-unmodelled candidate has already occurred before a later fixed-support record. -/
-def sourceNeedsSupportScheduling (x : Export) (generation : Cli.Config)
-    (reserved : Std.HashSet Name) : Bool := Id.run do
-  let mut candidateSeen := false
-  for declaration in x.decls do
-    if scheduledModelOwner generation reserved declaration then
-      candidateSeen := true
-    if candidateSeen && scheduledSupportRecord generation declaration then
-      return true
-  return false
-
-/-- Dependency-order source records.  Preserve ordinary stable order unless
-an exact unmodelled owner precedes later source-owned support; only then hoist
-the exact fixed interface and its dependency closure. -/
-def scheduleSource (x : Export) (generation : Cli.Config) : Except Order.Error Export :=
-  let reserved := x.decls.foldl (fun names declaration =>
-    declaration.names.foldl (·.insert ·) names) {}
-  if sourceNeedsSupportScheduling x generation reserved then
-    Order.reorderPrioritizing x (scheduledSupportRecord generation)
-  else
-    Order.reorder x
-
-/-- Certify the fixed-support scheduling invariant before constructing a
-model.
-
-Every selected owner outside the support class must follow every source record
-in that class.  Support owners themselves are excluded: requiring `Eq` before
-`Quot` and `Quot` before `Eq` would turn the atomic class into a cycle.  The
-ordering pass already carries each support record's complete predecessor
-closure; this check makes a regression in either selection or prioritization a
-fail-fast internal error instead of eighteen unrelated model declines.
-
-The owner classifier is intentionally [`generationMayAttemptOwner`], not
-[`scheduledModelOwner`]: the scheduling pre-scan cannot certify itself. -/
-def validateScheduledSupport (scheduled : Export) (generation : Cli.Config) : Except String Unit := do
-  unless generationEnabled generation do return
-  let reserved := scheduled.decls.foldl (fun names declaration =>
-    declaration.names.foldl (·.insert ·) names) {}
-  -- `every support index < ownerIndex` is equivalent to checking only the
-  -- greatest support index.  Compute that witness once: the certificate stays
-  -- exactly linear even on an export with many selected owners.
-  let mut latestSupport? : Option (Nat × List Name) := none
-  for supportIndex in [:scheduled.decls.size] do
-    let support := scheduled.decls[supportIndex]!
-    if scheduledSupportRecord generation support then
-      latestSupport? := some (supportIndex, support.names)
-  let some (supportIndex, supportNames) := latestSupport? | return
-  for ownerIndex in [:scheduled.decls.size] do
-    let owner := scheduled.decls[ownerIndex]!
-    if scheduledSupportRecord generation owner then continue
-    unless generationMayAttemptOwner generation reserved owner do continue
-    unless supportIndex < ownerIndex do
-      throw s!"latest fixed support {supportNames} remains at record {supportIndex} \
-        after selected owner {owner.names} at record {ownerIndex}"
 
 /-- Proof-value-free exact inductive records retained only until the
 immediately following composed generation step. They still carry public types
@@ -1475,9 +1348,9 @@ def serialiseIso (source : EDecl) (is : Iso)
   let mut rawRecords : Array EDecl := #[]
   for declaration in is.decls do
     rawRecords := rawRecords ++ (← toEDecls declaration)
-  rawRecords := rawRecords.map fun record => match record with
-    | .induct .. => exactTransform record
-    | _ => record
+  -- Test-facing transforms observe the same complete emitted-record boundary
+  -- as the optional generated kernel gate, not just inductive blocks.
+  rawRecords := rawRecords.map exactTransform
   let mut exactBlocks : ExactGeneratedBlocks := {}
   for record in rawRecords do
     if let .induct types _ _ := record then
@@ -1526,7 +1399,7 @@ def checkInductiveMetadata (types : List EIndType) (constructors : List ECtor)
   return KernelCheck.checkInductiveMetadataIn (← getEnv) types constructors recursors
 
 /-- Optional generation-time recursor audit retained for the library driver.
-The whole-stream CLI gate additionally checks types and constructors above. -/
+The generated-island kernel gate additionally checks types and constructors. -/
 def checkRecs (recursors : List ERec) : MetaM (Nat × Array Name) := do
   let env ← getEnv
   let mut bad : Array Name := #[]
@@ -1611,11 +1484,10 @@ def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
   return (← primMissingBasis reserved).isEmpty
 
 /- **The names beyond the basis that a prim model may splice** — the ones
-[`InductiveModels.primReady`] does not cover. Input-owned records for these names are
-moved, with their dependency closure, ahead of selected owners by
-[`InductiveModels.scheduleSource`].
+[`InductiveModels.primReady`] does not cover. Input-owned records for these
+names must already have appeared in the source stream.
 
-They form one post-scheduling readiness class:
+They form one readiness class:
 
 * the quotient-side names deriving `funext` may splice
   ([`InductiveModels.ensureFunext`]). A prim model reaches them on the singleton route
@@ -1665,8 +1537,8 @@ def PrimReadiness.ready (readiness : PrimReadiness)
   | .wLogical => primWLogicalReady reserved
 
 /-- Classify a support-name collision by its exact atomic prerequisite set.
-Callers use this to distinguish a violated scheduling/closure invariant from a
-genuine model-shape decline. -/
+Callers use this to distinguish a later source prerequisite from a genuine
+model-shape decline. -/
 def Decline.lateReadiness? : Decline → Option PrimReadiness
   | .nameTaken n =>
     if lateSpliceNames.contains n then some .late
@@ -1724,9 +1596,9 @@ other two constructions emit).
 
 `canWait` enables prerequisite classification: a collision at fixed support
 ([`InductiveModels.Decline.lateReadiness?`]) returns its exact class in the second
-component instead of recording a model-shape decline. Source owners have
-already passed through [`InductiveModels.scheduleSource`]; recursive splice closure
-passes `false` because it must complete inside the same model island.
+component instead of recording a model-shape decline. Source owners may wait
+for a later prerequisite and decline at their original position; recursive
+splice closure passes `false` because it must complete inside the same model island.
 
 **And, with `basicModels`, models for whatever that model had to splice.**
 
@@ -1742,9 +1614,9 @@ Only *non-basis* splices are modelled: the four on
 well-founded and must stay unmodelled. That is also what bounds the recursion
 — a model's own splices are basis members or already present.
 
-**Ordering is safe.** A spliced inductive is pushed to the output before the
-model that needed it, and its own model is appended after; the export only
-requires a declaration to precede its uses. -/
+**Ordering is constructive.** A spliced inductive enters the private forest as
+part of its consumer's model. Its model is placed immediately before that exact
+owner record while retaining the parent's earlier dependency prefix. -/
 partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (ctors : Array (Name × Expr))
     (projections : Array EProjection)
@@ -1855,8 +1727,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     let serialised ← serialiseIso source is exactTransform collectAdapterShadows
     let records := serialised.records
     let is := serialised.model
-    let mut out := out
-    out := out ++ records
+    let out := appendModelRecords out records tname
     let mut rep := { rep with generated := rep.generated.push (tname, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
@@ -1928,9 +1799,9 @@ too. The tag is a plain sum and models; the auxiliary is indexed and takes
 arm C. Their own public carriers are the declaration-local names
 `T._model._impl.tag._model` and `T._model._impl.aux._model`.
 
-All input-owned prerequisite declarations are dependency-closed and scheduled
-before model islands. Composition therefore completes in the same disposable
-environment as the mutual model; retaining a job after its generated owner
+All required input-owned prerequisites must already have appeared. Composition
+therefore completes in the same disposable environment as the mutual model;
+retaining a job after its generated owner
 would retain precisely the ownerful state this pass is designed to discard. -/
 def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     (reserved : Std.HashSet Name) (basicModels : Bool)
@@ -1942,8 +1813,13 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
   -- one block is at the same point in the replay.
   let ready ← primReady reserved
   unless ready do
-    throwError "composed simple model basis remained late after support scheduling: \
-      {repr (← primMissingBasis reserved)}"
+    let owner := members[0]!
+    let missing ← primMissingBasis reserved
+    let (out, rep, pending, shadows) := st
+    let declined := rep.declined.push
+      (owner, s!"composed prim model prerequisites occur later in the input stream: \
+        {repr missing}")
+    return (out, { rep with declined }, pending, shadows)
   for n in members do
     let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
     let mut cts : Array (Name × Expr) := #[]
@@ -1956,9 +1832,13 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
       genPrim n lparams np iv.type cts #[] reserved basicModels true st
         (some (exactBlock, normalizer)) exactTransform
         (collectAdapterShadows := collectAdapterShadows)
-    if wait?.isSome then
-      throwError "composed simple model prerequisite remained late after support scheduling"
-    st := next
+    match wait? with
+    | none => st := next
+    | some _ =>
+      let (out, rep, pending, shadows) := st
+      let declined := rep.declined.push
+        (n, "composed prim model prerequisite occurs later in the input stream")
+      return (out, { rep with declined }, pending, shadows)
   return st
 
 /-- One plain mutual block's model, generated and accounted for.
@@ -2005,8 +1885,7 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     let serialised ← serialiseIso source is exactTransform collectAdapterShadows
     let records := serialised.records
     let is := serialised.model
-    let mut out := out
-    out := out ++ records
+    let out := appendModelRecords out records all[0]!
     let mut rep := { rep with generated := rep.generated.push (all[0]!, is.decls.size) }
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
@@ -2026,11 +1905,13 @@ def legacyGenerationConfig (primModels : Bool) : Cli.Config :=
 
 /-! ## Declaration-wise filter state
 
-The source scheduler still materialises a complete `Export` in this phase, but
-the generation loop below no longer owns its mutable state as local variables.
+Retained-input routes materialise a complete `Export`, while planned-input
+routes decode one certified declaration at a time. The generation loop below
+does not own its mutable state as local variables.
 `FilterState.feedSource` is the one-record logical transition and
-`FilterState.finalize` consumes only its accumulated compact/output state.
-This is the boundary a later census/span reader can drive without changing an
+`FilterState.finalize` consumes only accumulated value-level certificates or
+the compatibility retained output. This is the boundary a census/span reader
+and declaration emitter drive without changing an
 owner's pre-replay generation, source replay, post-replay generation, or atomic
 island close. -/
 
@@ -2038,7 +1919,7 @@ island close. -/
 This regression seam deliberately exposes neither `FilterState` nor a live
 environment, so a test cannot mutate subsequent generation. -/
 structure FilterSourceStep where
-  scheduledOrdinal : Nat
+  sourceOrdinal : Nat
   rawOrdinal : Nat
   sourceNames : Array Name
   sourceIsInductive : Bool
@@ -2047,129 +1928,27 @@ structure FilterSourceStep where
   generatedRecords : Nat
   deriving Inhabited, Repr, BEq
 
-/-- Value-only comparison between declaration-wise exact kernel replay and the
-historical batch oracle over the final reordered export.  `batchResult` is
-always authoritative: a feed-order miss or differently ordered diagnostic
-sets `usedFallback`. `streamedResult` remains observable only for A/B tests. -/
-structure FilterKernelCheckShadow where
-  streamedResult : Except String Unit
-  batchResult : Except String Unit
-  recordsPushed : Nat
-  finalRecords : Nat
-  usedFallback : Bool
-  deriving Repr
-
-private def sameKernelCheckResult (left right : Except String Unit) : Bool :=
-  match left, right with
-  | .ok (), .ok () => true
-  | .error left, .error right => left == right
-  | _, _ => false
-
-/-- The diagnostic-order-preserving result of a full-oracle shadow run. -/
-def FilterKernelCheckShadow.result (shadow : FilterKernelCheckShadow) : Except String Unit :=
-  shadow.batchResult
-
-/-- Environment-free result of direct compact kernel replay.  The checker has
-already been sealed and its exact `Kernel.Environment` is unreachable.  A
-`fallback?` means the chronological compact feed was not a complete final
-schedule (for example, a generated provider appeared later); the eventual
-caller must use the ordinary reordered batch oracle and its diagnostics. A
-streamed rejection is represented only by a generic deferred error, never its
-feed-order diagnostic. -/
-structure CompactKernelCheckVerdict where
-  result : Except String Unit
-  recordsPushed : Nat
-  scheduledRecords : Nat
-  /-- Number of source transitions for which the direct route retained its
-  cumulative construction environment.  The remaining source tail was
-  checked and certified exactly without replaying it into Meta state. -/
-  constructionTransitions : Nat
-  fallback? : Option String := none
-  deriving Repr
-
-/-- Output retention is explicit: the full oracle retains declarations, while
-the two compact no-output modes retain only value-level certificates. -/
+/-- Output retention is explicit: compatibility callers may retain a complete
+array, while production output streams and no-output mode retain only
+value-level certificates. -/
 private inductive RetentionMode where
-  | fullOracle
+  | fullOutput
   | compactDiscard
-  | compactDirect
+  | streamOutput
 
 private def RetentionMode.isCompact : RetentionMode → Bool
-  | .fullOracle => false
-  | .compactDiscard | .compactDirect => true
+  | .fullOutput => false
+  | .compactDiscard => true
+  | .streamOutput => true
 
-private def RetentionMode.retainsOracle : RetentionMode → Bool
-  | .fullOracle => true
-  | .compactDiscard | .compactDirect => false
+private def RetentionMode.retainsOutput : RetentionMode → Bool
+  | .fullOutput => true
+  | .compactDiscard => false
+  | .streamOutput => false
 
-private def RetentionMode.checksKernelDirect : RetentionMode → Bool
-  | .compactDirect => true
+private def RetentionMode.streamsOutput : RetentionMode → Bool
+  | .streamOutput => true
   | _ => false
-
-/-- Value-free facts used by the planned scheduler after the source
-declaration callback has returned.  `root?` and the three shape bits reproduce
-the exact enabled-owner classification; the support bits preserve the two
-configuration-dependent fixed interfaces. -/
-structure SourceScheduleFact where
-  root? : Option Name := none
-  nestedOwner : Bool := false
-  mutualOwner : Bool := false
-  simpleOwner : Bool := false
-  /-- This record owns any primitive inductive used to validate the simple
-  construction basis.  Unlike `root?`, this ranges over every member of a
-  mutual block. -/
-  basisOwner : Bool := false
-  /-- The exact output kernel checker deliberately omits this record.  The
-  construction environment may still retain it for Meta visibility. -/
-  kernelSkipped : Bool := false
-  broadSupport : Bool := false
-  structuralSupport : Bool := false
-  deriving Inhabited, Repr, BEq
-
-def SourceScheduleFact.ofDeclaration (declaration : EDecl) : SourceScheduleFact :=
-  let (root?, nestedOwner, mutualOwner, simpleOwner, basisOwner) := match declaration with
-    | .induct types _ _ => match types with
-      | [] => (none, false, false, false, false)
-      | first :: _ =>
-        (some first.name, types.any (·.numNested > 0),
-          types.length > 1 && !types.any (·.numNested > 0),
-          types.length == 1 && first.numNested == 0,
-          types.any fun type => inductiveBasis.contains type.name)
-    | _ => (none, false, false, false, false)
-  { root?, nestedOwner, mutualOwner, simpleOwner, basisOwner
-    kernelSkipped := KernelCheck.metaOnlySkipped declaration
-    broadSupport := broadScheduledSupportRecord declaration
-    structuralSupport := structuralScheduledSupportRecord declaration }
-
-def SourceScheduleFact.support (fact : SourceScheduleFact)
-    (generation : Cli.Config) : Bool :=
-  if generation.simple || generation.basic then fact.broadSupport
-  else if generation.nested || generation.mutualModels then fact.structuralSupport
-  else false
-
-def SourceScheduleFact.modelOwner (fact : SourceScheduleFact)
-    (generation : Cli.Config) (reserved : Std.HashSet Name) : Bool :=
-  match fact.root? with
-  | none => false
-  | some root =>
-    !fact.support generation && !reserved.contains (Naming.modelName root) &&
-      ((generation.nested && fact.nestedOwner) ||
-       (generation.mutualModels && fact.mutualOwner) ||
-       (fact.simpleOwner && generation.modelsSimpleInput root))
-
-/-- Whether this record can read or mutate cumulative construction state.
-
-This is deliberately more conservative than [`SourceScheduleFact.modelOwner`]:
-an occupied public carrier still reaches generation and reports `nameTaken`,
-and every primitive-basis owner is validated even when it is exempt or
-invalid. Recursive and composed generation remains inside the transition of
-one of the three enabled owner shapes. -/
-def SourceScheduleFact.constructionTouch (fact : SourceScheduleFact)
-    (generation : Cli.Config) : Bool :=
-  fact.basisOwner ||
-    (generation.nested && fact.nestedOwner) ||
-    (generation.mutualModels && fact.mutualOwner) ||
-    (fact.simpleOwner && fact.root?.any generation.modelsSimpleInput)
 
 /-- Deterministic collision-free aliases from the complete source-name census.
 
@@ -2253,12 +2032,11 @@ def SourceReplayRoles.push (roles : SourceReplayRoles) (declaration : EDecl) :
 
 /-- Immutable source products accumulated declaration by declaration.  The
 syntax index intentionally owns exact declaration types, constructor/owner
-records, and transparent definition values. Summaries, scheduling facts,
-reserved names and raw ordinals do not retain complete `EDecl` values. -/
+records, and transparent definition values. Summaries, reserved names and raw
+ordinals do not retain complete `EDecl` values. -/
 structure SourceCensus where
   sourceSyntax : Check.SyntaxIndex
   summaries : Array Order.DeclSummary
-  scheduling : Array SourceScheduleFact
   reserved : Std.HashSet Name
   rawOrdinals : Std.HashMap Name Nat
   replayAliases : Except String SourceReplayAliases
@@ -2269,7 +2047,6 @@ structure SourceCensus where
 structure SourceCensus.Builder where
   private syntaxBuilder : Check.SyntaxIndex.Builder := {}
   private summaryBuilder : Order.SummaryBuilder := {}
-  private scheduling : Array SourceScheduleFact := #[]
   private reserved : Std.HashSet Name := {}
   private rawOrdinals : Std.HashMap Name Nat := {}
   private duplicate? : Option (Name × Nat × Nat) := none
@@ -2284,7 +2061,7 @@ def SourceCensus.Builder.push (builder : SourceCensus.Builder)
   -- live here would share that array and copy its complete prefix on every
   -- declaration.
   match builder with
-  | { syntaxBuilder, summaryBuilder, scheduling, reserved, rawOrdinals, duplicate?,
+  | { syntaxBuilder, summaryBuilder, reserved, rawOrdinals, duplicate?,
       replayRoles, nextOrdinal } =>
     let (duplicate?, _) := declaration.names.foldl
       (init := (duplicate?, ({} : Std.HashSet Name))) fun (duplicate?, seen) name =>
@@ -2294,7 +2071,6 @@ def SourceCensus.Builder.push (builder : SourceCensus.Builder)
         (duplicate?, seen.insert name)
     { syntaxBuilder := syntaxBuilder.push declaration
       summaryBuilder := summaryBuilder.push declaration
-      scheduling := scheduling.push (.ofDeclaration declaration)
       reserved := declaration.names.foldl (·.insert ·) reserved
       rawOrdinals := declaration.names.foldl
         (fun ordinals name => ordinals.insert name nextOrdinal) rawOrdinals
@@ -2310,7 +2086,6 @@ def SourceCensus.Builder.freeze (builder : SourceCensus.Builder) : SourceCensus 
   let replayAliases := sourceReplayAliasesFromSummaries summaries builder.reserved builder.duplicate?
   { sourceSyntax
     summaries
-    scheduling := builder.scheduling
     reserved := builder.reserved
     rawOrdinals := builder.rawOrdinals
     replayAliases
@@ -2328,6 +2103,25 @@ ordering still reports the duplicate before consuming that map. -/
 def SourceCensus.ofSource (source : Export) : SourceCensus :=
   (source.decls.foldl (fun builder declaration => builder.push declaration)
     ({} : SourceCensus.Builder)).freeze
+
+/-- One-pass model-before-owner guard for an input stream. Once an inductive
+owner has appeared, any later record introducing one of that owner's exact
+public model slots is too late. This intentionally performs no dependency
+graph construction and never reorders the source. -/
+def SourceCensus.modelAfterOwnerViolations (census : SourceCensus) :
+    Array Check.Violation := Id.run do
+  let mut expected : Std.HashMap Name (Array (Name × Nat)) := {}
+  let mut violations : Array Check.Violation := #[]
+  for recordIndex in [:census.summaries.size] do
+    let summary := census.summaries[recordIndex]!
+    for name in summary.introduced do
+      for (owner, ownerIndex) in expected.getD name #[] do
+        violations := violations.push
+          (.modelNotBefore owner name recordIndex ownerIndex)
+    if let some owner := summary.owner then
+      for slot in summary.modelSlots do
+        expected := expected.insert slot ((expected.getD slot #[]).push (owner, recordIndex))
+  return violations
 
 /-- Kernel recursor names are derived from their inductive type-former names,
 not accepted as independent inputs to `Declaration.inductDecl`.  When a type
@@ -2351,11 +2145,12 @@ def sourceReplayInductiveDerivations (roles : SourceReplayRoles)
     aliases ← aliases.replace recursor buildRecursor
   return aliases
 
-/-- Declaration-discarding parser result for the internal planned route.  The
+/-- Declaration-discarding parser result for the internal planned route. The
 raw certificate is not an eligibility promise: callers must still finish the
 tee and construct a `PlannedSourceReader`. Generic raw composition requires a
-canonical stream; the compact-direct CLI needs only a progressive arena and
-falls back to the exact input snapshot when declaration replay is unsafe. -/
+canonical stream; declaration-wise output and checked no-output generation need
+only a progressive arena and fall back to the exact input snapshot when
+declaration replay is unsafe. -/
 structure PlannedSourceInput where private mk ::
   envelope : ParsedEnvelope
   census : SourceCensus
@@ -2364,299 +2159,53 @@ structure PlannedSourceInput where private mk ::
 
 private def parsePlannedSourceWithSink (stream : IO.FS.Stream) (sink : RawSink)
     (provenance : Spool.SourceProvenance)
-    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String PlannedSourceInput) := do
   let builder ← IO.mkRef ({} : SourceCensus.Builder)
   let result ← parseStreamDiscardingDeclarations stream sink
     { emit := fun declaration => builder.modify (·.push declaration) }
-    analyse allowDuplicateNames
+    options
   match result with
   | .error error => return .error error
   | .ok (envelope, certificate) =>
     let census := (← builder.get).freeze
-    unless census.summaries.size == envelope.declarationCount &&
-        census.scheduling.size == envelope.declarationCount do
+    unless census.summaries.size == envelope.declarationCount do
       return .error "planned source census cardinality disagrees with parser"
     return .ok (.mk envelope census certificate provenance)
 
 def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
-    (analyse : Bool := true) (allowDuplicateNames : Bool := false) :
+    (options : ParseOptions := {}) :
     IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
-    analyse allowDuplicateNames
+    options
 
-/-- Parse the compact-direct CLI input into a frozen census plus one exact raw
-fallback snapshot and declaration spans. Generated output is not involved. -/
-def parsePlannedSourceWithDirectTee (handle : IO.FS.Handle)
-    (tee : Spool.DirectInputTee) (analyse : Bool := true)
-    (allowDuplicateNames : Bool := false) : IO (Except String PlannedSourceInput) :=
+/-- Parse planned CLI input into a frozen census plus one exact raw fallback
+snapshot and declaration spans. Generated values are never written here. -/
+def parsePlannedSourceWithInputTee (handle : IO.FS.Handle)
+    (tee : Spool.PlannedInputTee) (options : ParseOptions := {}) :
+    IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
-    analyse allowDuplicateNames
+    options
 
-def parsePlannedSourceStreamWithDirectTee (stream : IO.FS.Stream)
-    (tee : Spool.DirectInputTee) (analyse : Bool := true)
-    (allowDuplicateNames : Bool := false) : IO (Except String PlannedSourceInput) :=
+def parsePlannedSourceStreamWithInputTee (stream : IO.FS.Stream)
+    (tee : Spool.PlannedInputTee) (options : ParseOptions := {}) :
+    IO (Except String PlannedSourceInput) :=
   parsePlannedSourceWithSink stream tee.sink tee.sourceProvenance
-    analyse allowDuplicateNames
+    options
 
-/-- Rebind declaration-local frozen summaries to a logical source order.
-Every summary field except `ordinal` is a function of the declaration itself
-and the source-wide owner-name table, so a permutation need not traverse its
-expression graph again.  Validate the permutation here so future callers
-cannot silently duplicate or omit one source record. -/
-def SourceCensus.summariesForOrder (census : SourceCensus)
-    (order : Array Nat) : Except String (Array Order.DeclSummary) := do
-  unless order.size == census.summaries.size do
-    throw "source summary order has the wrong number of records"
-  let mut seen := Array.replicate census.summaries.size false
-  let mut summaries : Array Order.DeclSummary := #[]
-  for scheduledOrdinal in [:order.size] do
-    let rawOrdinal := order[scheduledOrdinal]!
-    unless rawOrdinal < census.summaries.size do
-      throw s!"source summary order contains out-of-range record {rawOrdinal}"
-    if seen[rawOrdinal]! then
-      throw s!"source summary order repeats record {rawOrdinal}"
-    seen := seen.set! rawOrdinal true
-    summaries := summaries.push
-      { census.summaries[rawOrdinal]! with ordinal := scheduledOrdinal }
-  return summaries
-
-/-- Rebind source-family certificates to a reordered declaration view without
-interpreting the source index's raw record occurrences as view ordinals. -/
+/-- Build source-family certificate rows in raw declaration order. -/
 def SourceCensus.familyCertificateRecords (census : SourceCensus)
-    (source view : Export) : Array (Array Check.CompactFamilyCertificate) := Id.run do
+    (source : Export) : Array (Array Check.CompactFamilyCertificate) := Id.run do
   let mut byOwner : Std.HashMap Name (Array Check.CompactFamilyCertificate) := {}
   for family in Check.discoverWithIndex source census.sourceSyntax do
     let certificate := Check.compactFamilyCertificateWithIndex source census.sourceSyntax family
     byOwner := byOwner.insert family.owner
       ((byOwner.getD family.owner #[]).push certificate)
-  let mut rows := Array.replicate view.decls.size #[]
-  for i in [0:view.decls.size] do
-    if let .induct (type :: _) _ _ := view.decls[i]! then
+  let mut rows := Array.replicate source.decls.size #[]
+  for i in [0:source.decls.size] do
+    if let .induct (type :: _) _ _ := source.decls[i]! then
       rows := rows.set! i (byOwner.getD type.name #[])
   return rows
-
-/-- Produce today's exact dependency order from frozen summaries. -/
-def SourceCensus.scheduleOrder (census : SourceCensus) (source : Export)
-    (generation : Cli.Config) : Except Order.Error (Array Nat) := do
-  let preferSupport := sourceNeedsSupportScheduling source generation census.reserved
-  let summaries := if preferSupport then
-      census.summaries.map fun summary =>
-        { summary with support :=
-            scheduledSupportRecord generation source.decls[summary.ordinal]! }
-    else census.summaries
-  Order.summaryRecordOrderPrioritizing summaries
-
-/-- Exact support-hazard decision from callback facts only.  This is kept
-separate from `sourceNeedsSupportScheduling` so the full-Export scheduler
-remains an independent property oracle during migration. -/
-def SourceCensus.needsPlannedSupportScheduling (census : SourceCensus)
-    (generation : Cli.Config) : Bool := Id.run do
-  let mut candidateSeen := false
-  for fact in census.scheduling do
-    if fact.modelOwner generation census.reserved then candidateSeen := true
-    if candidateSeen && fact.support generation then return true
-  return false
-
-/-- Planned dependency order without a retained declaration array. -/
-def SourceCensus.plannedScheduleOrder (census : SourceCensus)
-    (generation : Cli.Config) : Except Order.Error (Array Nat) :=
-  let preferSupport := census.needsPlannedSupportScheduling generation
-  let summaries := if preferSupport then
-      census.summaries.mapIdx fun ordinal summary =>
-        { summary with support := census.scheduling[ordinal]!.support generation }
-    else census.summaries
-  Order.summaryRecordOrderPrioritizing summaries
-
-/-- Recheck the post-schedule fixed-support invariant using only callback
-facts. This mirrors, but does not call, the retained-Export certificate. -/
-def SourceCensus.validatePlannedSupport (census : SourceCensus)
-    (order : Array Nat) (generation : Cli.Config) : Except String Unit := do
-  unless generationEnabled generation do return
-  unless order.size == census.scheduling.size do
-    throw "planned support order has the wrong number of records"
-  let mut latestSupport? : Option (Nat × Array Name) := none
-  for scheduledOrdinal in [:order.size] do
-    let rawOrdinal := order[scheduledOrdinal]!
-    unless rawOrdinal < census.scheduling.size do
-      throw s!"planned support order contains out-of-range record {rawOrdinal}"
-    if census.scheduling[rawOrdinal]!.support generation then
-      latestSupport? := some (scheduledOrdinal, census.summaries[rawOrdinal]!.introduced)
-  let some (supportIndex, supportNames) := latestSupport? | return
-  for ownerIndex in [:order.size] do
-    let rawOrdinal := order[ownerIndex]!
-    let owner := census.scheduling[rawOrdinal]!
-    if owner.support generation then continue
-    unless owner.modelOwner generation census.reserved do continue
-    unless supportIndex < ownerIndex do
-      throw s!"latest fixed support {supportNames} remains at record {supportIndex} \
-        after selected owner {census.summaries[rawOrdinal]!.introduced} at record {ownerIndex}"
-
-/-- Produce today's complete scheduled `Export` from frozen summaries.  The
-historical value-retaining scheduler remains as a property oracle; both use
-the same owner-major/model-major stable graph algorithm. -/
-def SourceCensus.schedule (census : SourceCensus) (source : Export)
-    (generation : Cli.Config) : Except Order.Error Export := do
-  let order ← census.scheduleOrder source generation
-  return { source with decls := order.map fun ordinal => source.decls[ordinal]! }
-
-/-- Exact source declarations installed ahead of their logical source turn.
-The map is keyed by raw source ordinal so namespace similarity can never turn
-an unrelated declaration into support. -/
-private structure FutureSourceSupport where
-  env : Environment
-  records : Std.HashMap Nat EDecl
-
-private def exactSupportBundleRecords? (source : Export) (names : Array Name) :
-    Except String (Option (Array (Nat × EDecl))) := do
-  let mut ordinals : Std.HashSet Nat := {}
-  let mut anyPresent := false
-  for name in names do
-    let mut occurrences : Array Nat := #[]
-    for ordinal in [:source.decls.size] do
-      if source.decls[ordinal]!.names.contains name then
-        occurrences := occurrences.push ordinal
-    if !occurrences.isEmpty then anyPresent := true
-    unless occurrences.size ≤ 1 do
-      throw s!"future support name {name} is introduced more than once"
-    if let some ordinal := occurrences[0]? then ordinals := ordinals.insert ordinal
-  unless anyPresent do return none
-  for name in names do
-    unless source.decls.any (·.names.contains name) do
-      throw s!"future support bundle containing {name} is incomplete"
-  let mut records : Array (Nat × EDecl) := #[]
-  for ordinal in [:source.decls.size] do
-    if ordinals.contains ordinal then
-      let declaration := source.decls[ordinal]!
-      unless declaration.names.all names.contains do
-        throw s!"future support record {declaration.names} also introduces an unaudited name"
-      records := records.push (ordinal, declaration)
-  return some records
-
-private def installFutureRecords (env : Environment) (template : Export)
-    (records : Array (Nat × EDecl)) : MetaM (Except String Environment) := do
-  let bundle := { template with decls := records.map (·.2) }
-  let ordered ← match Order.reorder bundle with
-    | .ok ordered => pure ordered
-    | .error error => return .error s!"cannot order future support bundle: {repr error}"
-  checkGeneratedIn env ordered.decls
-
-private def validateFutureBasis (env : Environment) (root : Name) (record : EDecl) :
-    MetaM (Except String Unit) := do
-  setEnv env
-  match ← (validateBasisOwner root record).run with
-  | .ok () => return .ok ()
-  | .error decline => return .error decline.label
-
-/-- Build the exact phase-one shadow ledger. Any partial, malformed, or
-unsupported scheduled-support family makes the internal comparison mode use
-the historical scheduler instead. This is deliberately narrower than
-`scheduledSupportRecord`: no prefix or arbitrary future declaration is ever
-preinstalled. -/
-private def FutureSourceSupport.create (base : Environment) (source : Export)
-    (generation : Cli.Config) : MetaM (Except String FutureSourceSupport) := do
-  let eqNames : Array Name := #[`Eq, `Eq.refl, `Eq.rec]
-  let natNames : Array Name := #[`Nat, `Nat.zero, `Nat.succ, `Nat.rec]
-  let punitNames : Array Name := #[`PUnit, `PUnit.unit, `PUnit.rec]
-  let psigmaNames : Array Name := #[`PSigma', `PSigma'.mk, `PSigma'.rec,
-    `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk, `PSigma'.snd_mk,
-    `PSigma'.rec', `PSigma'.rec'_mk]
-  let quotNames : Array Name := #[`Quot, `Quot.mk, `Quot.lift, `Quot.ind]
-  let audited := (eqNames ++ natNames ++ punitNames ++ psigmaNames ++ quotNames).push `Quot.sound
-  for declaration in source.decls do
-    if scheduledSupportRecord generation declaration &&
-        !declaration.names.all audited.contains then
-      return .error s!"scheduled support {declaration.names} is outside the audited shadow set"
-  let mut env := base
-  let mut shadowed : Std.HashMap Nat EDecl := {}
-  for (root, names) in #[( `Eq, eqNames), (`Nat, natNames),
-      (`PUnit, punitNames), (`PSigma', psigmaNames)] do
-    -- A canonical bundle outside the active route's scheduling class remains
-    -- ordinary future source.  Preinstalling it would grant capabilities the
-    -- historical scheduler deliberately leaves late (Nat for nested-only,
-    -- and quotient support below).
-    unless source.decls.any fun declaration =>
-        scheduledSupportRecord generation declaration &&
-          declaration.names.any names.contains do
-      continue
-    let records? ← match exactSupportBundleRecords? source names with
-      | .ok records => pure records
-      | .error error => return .error error
-    if let some records := records? then
-      let some (_, owner) := records.find? fun entry => entry.2.names.contains root
-        | return .error s!"future support bundle {root} has no owner record"
-      match ← validateFutureBasis env root owner with
-      | .error error => return .error s!"future support {root} is not canonical: {error}"
-      | .ok () => pure ()
-      match ← installFutureRecords env source records with
-      | .error error => return .error error
-      | .ok next => env := next
-      if root == `Eq then
-        match EqInfo.check env with
-        | .error error => return .error s!"future Eq is not canonical: {error}"
-        | .ok _ => pure ()
-      else if root == `Nat then
-        match checkNat env with
-        | .error error => return .error s!"future Nat is not canonical: {error}"
-        | .ok () => pure ()
-      else if root == `PUnit then
-        match checkPUnit env with
-        | .error error => return .error s!"future PUnit is not canonical: {error}"
-        | .ok () => pure ()
-      else
-        setEnv env
-        match ← (ensurePSigmaPrime {}).run with
-        | .error decline => return .error s!"future PSigma' is not canonical: {decline.label}"
-        | .ok added => unless added.isEmpty do
-            return .error "future PSigma' bundle was incomplete"
-      for (ordinal, record) in records do shadowed := shadowed.insert ordinal record
-  let quotScheduled := source.decls.any fun declaration =>
-    scheduledSupportRecord generation declaration &&
-      declaration.names.any quotNames.contains
-  let quotRecords? ← if quotScheduled then
-    match exactSupportBundleRecords? source quotNames with
-    | .ok records => pure records
-    | .error error => return .error error
-  else
-    pure none
-  if let some records := quotRecords? then
-    let ordinals := records.map (·.1)
-    unless ordinals.size == 4 && ordinals[1]! == ordinals[0]! + 1 &&
-        ordinals[2]! == ordinals[1]! + 1 && ordinals[3]! == ordinals[2]! + 1 do
-      return .error "future quotient is not one atomic four-record source bundle"
-    match ← installFutureRecords env source records with
-    | .error error => return .error error
-    | .ok next => env := next
-    let some expected := installedQuotRecords? env
-      | return .error "future quotient did not install the kernel's four-record bundle"
-    unless records.map (·.2) == expected do
-      return .error "future quotient source records are not the kernel's exact bundle"
-    for (ordinal, record) in records do shadowed := shadowed.insert ordinal record
-  let soundRecords? ← if source.decls.any fun declaration =>
-      scheduledSupportRecord generation declaration && declaration.names.contains `Quot.sound then
-    match exactSupportBundleRecords? source #[`Quot.sound] with
-    | .ok records => pure records
-    | .error error => return .error error
-  else
-    pure none
-  if let some records := soundRecords? then
-    let #[entry] := records | return .error "future Quot.sound is not one source record"
-    let .ax `Quot.sound levelParams _ false := entry.2
-      | return .error "future Quot.sound is not a safe axiom"
-    let [su] := levelParams | return .error "future Quot.sound has the wrong universe arity"
-    match ← installFutureRecords env source records with
-    | .error error => return .error error
-    | .ok next => env := next
-    let some info := env.constants.find? `Quot.sound
-      | return .error "future Quot.sound disappeared after replay"
-    let eqi ← match EqInfo.check env with
-      | .ok eqi => pure eqi
-      | .error error => return .error s!"future Quot.sound lacks canonical Eq: {error}"
-    setEnv env
-    unless ← isDefEq info.type (← quotSoundType eqi.eqN (.param su)) do
-      return .error "future Quot.sound does not have Lean's statement"
-    shadowed := shadowed.insert entry.1 entry.2
-  return .ok { env, records := shadowed }
 
 private structure FilterContext where
   source : Export
@@ -2669,22 +2218,14 @@ private structure FilterContext where
   constructionNormalizer : ExactNormalizationEnv
   sourceAliases : SourceReplayAliases
   sourceSummaries : Array Order.DeclSummary
-  /-- Construction-touch bits in scheduled source order.  These are frozen
-  census facts, not retained declarations. -/
-  sourceConstructionTouches : Array Bool
-  /-- Exclusive scheduled-source cutoff for cumulative construction replay. -/
-  constructionTransitions : Nat
   sourceGlobalExtras? : Option (Array Check.GlobalExtraRecord)
   sourceFamilyRecords? : Option (Array (Array Check.CompactFamilyCertificate))
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
   constructionReserved : Std.HashSet Name
-  kernelCheckBase? : Option Environment := none
-  futureSupport? : Option FutureSourceSupport := none
-  outputSourceOrder? : Option (Array Nat) := none
   collectTrace : Bool := false
   collectAdapterShadows : Bool := false
-  sharedPrefixPhaseB : Bool := false
+  outputEmitter? : Option StreamOutputEmitter := none
 
 /-- Cheap summary-first test for whether an exhaustive record rewrite can
 change anything. `all` fields are bookkeeping rather than dependencies, so
@@ -2701,243 +2242,6 @@ private def sourceRecordUsesAliases (aliases : SourceReplayAliases)
   summary.introduced.any aliases.hasExact ||
     summary.referenced.any aliases.hasExact || bookkeepingUsesAlias
 
-/-- Value-only observation of Phase A in the shared-prefix direct design.
-`fallback?` makes the optimization unavailable without changing the ordinary
-filter result.  The private preparation object below owns the actual shared
-source environment and owner snapshots; this public seam cannot retain them. -/
-structure SharedPrefixSourceObservation where
-  sourceRecords : Nat
-  ownerSnapshots : Nat
-  metaOnlyRecords : Nat
-  constructionTransitions : Nat
-  fallback? : Option String := none
-  deriving Inhabited, Repr, BEq
-
-private structure SharedPrefixOwnerSnapshot where
-  scheduledOrdinal : Nat
-  rawOrdinal : Nat
-  env : Environment
-
-private inductive SharedPrefixSourceAccess where
-  | retained (source : Export)
-  | planned (reader : Spool.PlannedSourceReader)
-
-private def SharedPrefixSourceAccess.read (access : SharedPrefixSourceAccess)
-    (rawOrdinal : Nat) : MetaM (Except String EDecl) := match access with
-  | .retained source => pure <| match source.decls[rawOrdinal]? with
-    | some declaration => .ok declaration
-    | none => .error s!"retained shared-prefix source ordinal {rawOrdinal} is out of range"
-  | .planned reader => reader.read rawOrdinal
-
-private structure SharedPrefixSourcePrepared where
-  observation : SharedPrefixSourceObservation
-  completedEnv : Environment
-  snapshots : Array SharedPrefixOwnerSnapshot
-  rows : Array CompactRecord
-  context : FilterContext
-  aliases : SourceReplayAliases
-  metaOnlyNames : Std.HashSet Name
-  sourceAccess : SharedPrefixSourceAccess
-
-/-- Phase A: replay the collision-free source build image once, checking every
-kernel-relevant record and retaining unchecked unsafe/partial records only for
-Meta visibility.  Exact dependency roots certify that the latter are an
-irrelevant extension.  Owner snapshots share the one persistent source prefix
-and contain no generated declaration payload. -/
-private def prepareSharedPrefixSourceCore (template : Export) (census : SourceCensus)
-    (sourceAccess : SharedPrefixSourceAccess) (generation : Cli.Config) :
-    MetaM (Except String SharedPrefixSourcePrepared) := do
-  let plannedAliases ← match census.replayAliases with
-    | .ok aliases => pure aliases
-    | .error message => return .error s!"cannot plan collision-safe source replay: {message}"
-  let aliases ← match sourceReplayInductiveDerivations census.replayRoles plannedAliases with
-    | .ok aliases => pure aliases
-    | .error message => return .error s!"cannot derive collision-safe inductive replay: {message}"
-  unless aliases.isEmpty do
-    for name in census.replayRoles.quotients do
-      if aliases.hasExact name then
-        return .error s!"normalized source-name collision moves quotient role {name}"
-  let planned := sourceAccess matches .planned _
-  let sourceOrder ← match if planned then census.plannedScheduleOrder generation else
-      match sourceAccess with
-      | .retained source => census.scheduleOrder source generation
-      | .planned _ => unreachable! with
-    | .ok order => pure order
-    | .error error => return .error s!"cannot schedule shared support: {repr error}"
-  let supportValidation := if planned then census.validatePlannedSupport sourceOrder generation
-    else match sourceAccess with
-      | .retained source =>
-        let scheduled := { source with
-          decls := sourceOrder.map fun ordinal => source.decls[ordinal]! }
-        validateScheduledSupport scheduled generation
-      | .planned _ => unreachable!
-  match supportValidation with
-  | .error message => return .error s!"invalid shared-support schedule: {message}"
-  | .ok () => pure ()
-  let sourceSummaries ← match census.summariesForOrder sourceOrder with
-    | .ok summaries => pure summaries
-    | .error message => return .error s!"cannot rebind frozen source summaries: {message}"
-  let mut metaOnlyNames : Std.HashSet Name := {}
-  let mut metaOnlyRecords := 0
-  for rawOrdinal in [:census.scheduling.size] do
-    if census.scheduling[rawOrdinal]!.kernelSkipped then
-      metaOnlyRecords := metaOnlyRecords + 1
-      for name in census.summaries[rawOrdinal]!.introduced do
-        metaOnlyNames := metaOnlyNames.insert name
-  let base ← getEnv
-  let mut env := base
-  let mut snapshots : Array SharedPrefixOwnerSnapshot := #[]
-  let mut rows : Array CompactRecord := #[]
-  let mut sourceGlobals : Array Check.GlobalExtraRecord := #[]
-  let mut sourceFamilies : Array (Array Check.CompactFamilyCertificate) := #[]
-  let mut constructionSyntax := census.sourceSyntax
-  let mut constructionTransitions := 0
-  let sourceConstructionTouches := sourceOrder.map fun rawOrdinal =>
-    census.scheduling[rawOrdinal]!.constructionTouch generation
-  for scheduledOrdinal in [:sourceOrder.size] do
-    let rawOrdinal := sourceOrder[scheduledOrdinal]!
-    let declaration ← match ← sourceAccess.read rawOrdinal with
-      | .ok declaration => pure declaration
-      | .error message =>
-        return .error s!"cannot decode shared-prefix source record {rawOrdinal}: {message}"
-    let fact := census.scheduling[rawOrdinal]!
-    if fact.constructionTouch generation then
-      constructionTransitions := scheduledOrdinal + 1
-      snapshots := snapshots.push { scheduledOrdinal, rawOrdinal, env }
-    let logicalDisposition ← match KernelCheck.replayDisposition declaration with
-      | .error message => return .error message
-      | .ok disposition => pure disposition
-    unless (logicalDisposition matches .metaOnly) == fact.kernelSkipped do
-      return .error s!"source replay classification disagrees for {declaration.names}"
-    if !fact.kernelSkipped then
-      if let some dependency := (KernelCheck.inputReferences declaration).toArray.find?
-          metaOnlyNames.contains then
-        return .error s!"checked source record {declaration.names} depends on \
-          unchecked construction-only declaration {dependency}"
-    let replay := aliases.buildRecord declaration
-    unless aliases.exactRecord replay == declaration do
-      return .error s!"source replay round trip changed {declaration.names}"
-    unless aliases.exactDerivedRecord declaration == declaration do
-      return .error s!"source declaration {declaration.names} contains a fresh build alias"
-    if sourceRecordUsesAliases aliases census.summaries[rawOrdinal]! declaration then
-      match constructionSyntax.withReplayRecords #[declaration] #[replay] with
-      | .ok next => constructionSyntax := next
-      | .error message =>
-        return .error s!"cannot index collision-safe source replay: {message}"
-    let buildDisposition ← match KernelCheck.replayDisposition replay with
-      | .error message => return .error (aliases.exactMessage message)
-      | .ok disposition => pure disposition
-    unless (logicalDisposition matches .checked ..) == (buildDisposition matches .checked ..) &&
-        (logicalDisposition matches .metaOnly) == (buildDisposition matches .metaOnly) &&
-        (logicalDisposition matches .bundled) == (buildDisposition matches .bundled) do
-      return .error s!"source replay classification changed under aliases for {declaration.names}"
-    setEnv env
-    let kernelDeclaration? ← match buildDisposition with
-      | .checked kernelDeclaration => pure (some (kernelDeclaration, true))
-      | .metaOnly => match toDeclaration env replay with
-        | some kernelDeclaration => pure (some (kernelDeclaration, false))
-        | none => return .error s!"construction-only source record {declaration.names} \
-            could not be reconstructed for Meta visibility"
-      | .bundled => pure none
-    if let some (kernelDeclaration, doCheck) := kernelDeclaration? then
-      match env.addDeclCore 0 kernelDeclaration none doCheck with
-      | .error exception =>
-        return .error s!"{declaration.names}: {aliases.exactMessage
-          (← (exception.toMessageData {}).toString)}"
-      | .ok next =>
-        env := next
-        setEnv next
-    if buildDisposition matches .checked .. then
-      let mismatches := KernelCheck.mappedMetadataMismatches env replay
-      unless mismatches.isEmpty do
-        return .error s!"source build-image metadata differs from Lean's kernel for \
-          {declaration.names}: {mismatches.toList.map aliases.exactMessage}"
-    if sourceRecordUsesAliases aliases sourceSummaries[scheduledOrdinal]! declaration then
-      if let .induct types constructors recursors := replay then
-        let mismatches ← checkInductiveMetadata types constructors recursors
-        unless mismatches.isEmpty do
-          return .error s!"collision-safe inductive replay metadata differs for \
-            {declaration.names}: {mismatches.toList.map aliases.exactMessage}"
-    if declaration matches .quot .. then
-      let some installed := installedQuotRecords? env
-        | return .error "source quotient bundle was not installed by its leading record"
-      unless installed.contains declaration do
-        return .error s!"source quotient record {declaration.names} differs from the kernel bundle"
-    let some firstName := declaration.names.head?
-      | return .error "shared-prefix source declaration has no name"
-    let some certifiedRaw := census.rawOrdinals[firstName]?
-      | return .error s!"shared-prefix source declaration {firstName} lost its raw ordinal"
-    unless certifiedRaw == rawOrdinal do
-      return .error s!"shared-prefix source declaration {firstName} changed raw ordinal"
-    unless sourceSummaries[scheduledOrdinal]!.introduced == declaration.names.toArray do
-      return .error s!"shared-prefix source row changed names for {declaration.names}"
-    let globalExtra := (Check.globalExtraRecordsWithIndex census.sourceSyntax #[declaration])[0]!
-    let families := census.sourceSyntax.sourceFamilyCertificatesForRecord template declaration
-    sourceGlobals := sourceGlobals.push globalExtra
-    sourceFamilies := sourceFamilies.push families
-    rows := rows.push {
-      summary := sourceSummaries[scheduledOrdinal]!
-      globalExtra
-      families
-      locator := .source rawOrdinal }
-  let constructionReserved := census.reserved.fold (init := census.reserved) fun names name =>
-    (aliases.buildDerivedNames name).foldl (fun names build => names.insert build) names
-  let context : FilterContext := {
-    source := template
-    checkRecursors := false
-    generation
-    retention := .compactDirect
-    exactTransform := id
-    sourceSyntax := census.sourceSyntax
-    constructionSyntax
-    constructionNormalizer := constructionSyntax.exactNormalizer
-    sourceAliases := aliases
-    sourceSummaries
-    sourceConstructionTouches
-    constructionTransitions
-    sourceGlobalExtras? := some sourceGlobals
-    sourceFamilyRecords? := some sourceFamilies
-    rawOrdinals := census.rawOrdinals
-    reserved := census.reserved
-    constructionReserved
-    kernelCheckBase? := some base
-    sharedPrefixPhaseB := true }
-  return .ok {
-    observation := {
-      sourceRecords := sourceOrder.size
-      ownerSnapshots := snapshots.size
-      metaOnlyRecords
-      constructionTransitions }
-    completedEnv := env
-    snapshots
-    rows
-    context
-    aliases
-    metaOnlyNames
-    sourceAccess }
-
-private def prepareSharedPrefixSource (x : Export) (generation : Cli.Config) :
-    MetaM (Except String SharedPrefixSourcePrepared) :=
-  prepareSharedPrefixSourceCore x (SourceCensus.ofSource x) (.retained x) generation
-
-/-- Test-facing Phase-A observer.  It always restores the invocation base and
-returns only counts/fallback text; the shared environments remain private. -/
-def observeSharedPrefixSource (x : Export) (generation : Cli.Config) :
-    MetaM SharedPrefixSourceObservation := do
-  let base ← getEnv
-  let prepared ← try
-    prepareSharedPrefixSource x generation
-  finally
-    setEnv base
-  match prepared with
-  | .ok prepared => return prepared.observation
-  | .error message => return {
-      sourceRecords := x.decls.size
-      ownerSnapshots := 0
-      metaOnlyRecords := 0
-      constructionTransitions := 0
-      fallback? := some message }
-
 private structure FilterState where
   mainEnv : Environment
   persistentSyntax : Check.SyntaxIndex
@@ -2945,28 +2249,14 @@ private structure FilterState where
   report : Report := {}
   compactIslands : Array CompactIsland := #[]
   compactRecords : Array CompactRecord := #[]
-  scheduledOrdinal : Nat := 0
+  sourceOrdinal : Nat := 0
   islandStatements : Check.StatementReport :=
     { statementsChecked := 0, violations := #[] }
   invalidBasis : Std.HashSet Name := {}
-  persistentSupportOrigins : Std.HashMap Name Nat := {}
-  futureSupportRemaining : Std.HashMap Nat EDecl := {}
-  emissionByRaw : Std.HashMap Nat (Array EDecl) := {}
   sourceSteps : Array FilterSourceStep := #[]
-  kernelCheckState? : Option KernelCheck.State := none
-  /-- Exact name rows captured atomically with direct compact pushes.  Names
-  only: retaining this array cannot retain a declaration expression graph. -/
-  kernelCheckRows : Array (Array Name) := #[]
   adapterShadows : Array FamilyAdapter.ShadowObservation := #[]
-  /-- Phase-B-only exact support payload witnessed by accepted islands. No
-  non-support generated declaration may enter this array. -/
-  constructionSupportRecords : Array EDecl := #[]
-  /-- Phase-B-only cumulative aliases for the completed output checker and
-  exact witnessed-support replay. They include disposable generated names to
-  keep the checker build image injective, but must never affect construction,
-  readiness, `nameTaken`, or report spelling. -/
-  sharedPrefixAliases? : Option SourceReplayAliases := none
-  sharedPrefixMetaOnlyNames : Std.HashSet Name := {}
+  streamStats : StreamOutputStats := {}
+  inputFamilyCandidates : Array Name := #[]
 
 private inductive FilterFeedResult where
   | next (state : FilterState)
@@ -2974,44 +2264,7 @@ private inductive FilterFeedResult where
   previous state while `feedSource` appends to its accumulated arrays. -/
   | unreplayable (report : Report) (sourceSteps : Array FilterSourceStep)
 
-/-- Consume a source record after the final possible construction transition.
-The cumulative construction environment has already been replaced by the
-exact invocation base.  Frozen syntax products supply the same compact row;
-the live exact declaration is bound directly to that row and immediately
-released after the incremental kernel push. -/
-private def FilterState.feedSourceExactTail (state : FilterState)
-    (context : FilterContext) (d : EDecl) : MetaM FilterState := do
-  unless context.retention.checksKernelDirect do
-    throwError "exact-only source tail selected outside direct retention"
-  let scheduledOrdinal := state.scheduledOrdinal
-  if context.sourceConstructionTouches[scheduledOrdinal]! then
-    throwError "construction-touching source record reached the exact-only tail"
-  let sourceSummary := context.sourceSummaries[scheduledOrdinal]!
-  let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[scheduledOrdinal]?) with
-    | some record => record
-    | none => (Check.globalExtraRecordsWithIndex context.sourceSyntax #[d])[0]!
-  let sourceFamilyRecord := match context.sourceFamilyRecords?.bind (·[scheduledOrdinal]?) with
-    | some records => records
-    | none => context.sourceSyntax.sourceFamilyCertificatesForRecord context.source d
-  let some firstName := d.names.head? | throwError "source declaration has no name"
-  let some rawOrdinal := context.rawOrdinals[firstName]?
-    | throwError "scheduled source declaration {firstName} lost its raw ordinal"
-  let row : CompactRecord := {
-    summary := sourceSummary
-    globalExtra := sourceGlobalExtra
-    families := sourceFamilyRecord
-    checkIsland? := none
-    locator := .source rawOrdinal }
-  let some checker := state.kernelCheckState?
-    | throwError "compact direct exact tail lost its exact kernel checker"
-  let checker ← checker.pushBound d row.summary.introduced
-  return { state with
-    compactRecords := state.compactRecords.push row
-    scheduledOrdinal := scheduledOrdinal + 1
-    kernelCheckState? := some checker
-    kernelCheckRows := state.kernelCheckRows.push row.summary.introduced }
-
-/-- Consume one declaration from the already dependency-ordered logical source
+/-- Consume one declaration from the raw-order logical source
 stream.  Every mutable field which survives this call is explicit in
 `FilterState`; `out`, `pending`, and the replay fork remain owner-local. -/
 private def FilterState.feedSource (state : FilterState) (context : FilterContext)
@@ -3020,24 +2273,22 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let generation := context.generation
   let retention := context.retention
   let compactMode := retention.isCompact
-  let retainOracle := retention.retainsOracle
+  let retainOutput := retention.retainsOutput
+  let streamOutput := retention.streamsOutput
   let exactTransform := context.exactTransform
   let sourceSyntax := context.sourceSyntax
   let constructionSyntax := context.constructionSyntax
   let constructionNormalizer := context.constructionNormalizer
-  -- Each transition must use the same source-only alias view as the ordinary
-  -- construction path. Phase B keeps a separate cumulative table solely for
-  -- checker mapping and witnessed-support replay into historical snapshots.
   let sourceAliases := context.sourceAliases
   let sourceSummaries := context.sourceSummaries
-  let scheduledOrdinal := state.scheduledOrdinal
-  let sourceSummary := sourceSummaries[scheduledOrdinal]!
+  let sourceOrdinal := state.sourceOrdinal
+  let sourceSummary := sourceSummaries[sourceOrdinal]!
   let sourceUsesAlias := sourceRecordUsesAliases sourceAliases sourceSummary d
   let replayD := if sourceUsesAlias then sourceAliases.buildRecord d else d
-  let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[scheduledOrdinal]?) with
+  let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[sourceOrdinal]?) with
     | some record => record
     | none => (Check.globalExtraRecordsWithIndex sourceSyntax #[d])[0]!
-  let sourceFamilyRecord := match context.sourceFamilyRecords?.bind (·[scheduledOrdinal]?) with
+  let sourceFamilyRecord := match context.sourceFamilyRecords?.bind (·[sourceOrdinal]?) with
     | some records => records
     | none => sourceSyntax.sourceFamilyCertificatesForRecord x d
   let rawOrdinals := context.rawOrdinals
@@ -3050,17 +2301,13 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut compactRecords := state.compactRecords
   let mut islandStatements := state.islandStatements
   let mut invalidBasis := state.invalidBasis
-  let mut persistentSupportOrigins := state.persistentSupportOrigins
-  let mut futureSupportRemaining := state.futureSupportRemaining
-  let mut emissionByRaw := state.emissionByRaw
   let mut sourceSteps := state.sourceSteps
-  let mut kernelCheckState? := state.kernelCheckState?
-  let mut kernelCheckRows := state.kernelCheckRows
   let mut adapterShadows := state.adapterShadows
-  let mut constructionSupportRecords := state.constructionSupportRecords
-  let mut sharedPrefixAliases? := state.sharedPrefixAliases?
-  let mut sharedPrefixMetaOnlyNames := state.sharedPrefixMetaOnlyNames
-  let emissionStart := legacyOut.size
+  let mut streamStats := state.streamStats
+  let mut inputFamilyCandidates := state.inputFamilyCandidates
+  for family in sourceFamilyRecord do
+    unless inputFamilyCandidates.contains family.owner do
+      inputFamilyCandidates := inputFamilyCandidates.push family.owner
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
   let mut out : Array EDecl := #[]
@@ -3068,6 +2315,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut islandAdapterShadows : Array FamilyAdapter.ShadowObservation := #[]
   let mut modeledSourceFamilies : Array Check.CompactFamilyCertificate := #[]
   let mut modeledSourceGlobalExtra? : Option Check.GlobalExtraRecord := none
+  let mut streamIsland? : Option (Array EDecl) := none
   let basisRoot? := match replayD with
     | .induct types _ _ => types.findSome? fun type =>
         if inductiveBasis.contains type.name then some type.name else none
@@ -3126,7 +2374,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
               islandAdapterShadows := islandAdapterShadows.push shadow
             let records := serialised.records
             let is := serialised.model
-            out := out ++ records
+            out := appendModelRecords out records t.name
             rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
             unless is.spliced.isEmpty do
               rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
@@ -3161,7 +2409,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
                   islandAdapterShadows := islandAdapterShadows.push shadow
                 let records := serialised2.records
                 let is2 := serialised2.model
-                out := out ++ records
+                out := appendModelRecords out records is.members[0]!
                 rep := { rep with
                   generated := rep.generated.push (is.members[0]!, is2.decls.size) }
                 pending := pending.push { spliced := is2.spliced }
@@ -3174,50 +2422,27 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   -- Replay the source record between its pre-owner and post-owner generation
   -- phases.  An unreplayable source record terminates the complete machine and
   -- discards every private island, matching the historical loop return.
-  -- Raw ordinals are an obligation only for the shadow emission ledger.  The
-  -- ordinary full path historically accepts declaration records with no
-  -- introduced names (notably an empty `.induct` record), and must not become
-  -- stricter merely because the internal shadow mode shares this transition.
-  let rawSourceOrdinal? ← if context.outputSourceOrder?.isSome then do
-    let some firstSourceName := d.names.head?
-      | throwError "shadow source declaration has no name"
-    let some rawSourceOrdinal := rawOrdinals[firstSourceName]?
-      | throwError "logical source declaration {firstSourceName} lost its raw ordinal"
-    pure (some rawSourceOrdinal)
-  else
-    pure none
-  let shadowedSource ← match rawSourceOrdinal? with
-  | some rawSourceOrdinal => match futureSupportRemaining[rawSourceOrdinal]? with
-    | some expected =>
-      unless d == expected do
-        throwError "future support source record {rawSourceOrdinal} changed before discharge"
-      futureSupportRemaining := futureSupportRemaining.erase rawSourceOrdinal
-      replayedOwnerEnv? := some (← getEnv)
-      pure true
-    | none => pure false
-  | none => pure false
-  unless shadowedSource do
-    if let some dcl := toDeclaration (← getEnv) replayD then
-      match (← getEnv).addDeclCore 0 dcl none false with
-      | .ok e =>
-        replayedOwnerEnv? := some e
-        setEnv e
-      | .error ex =>
-        let msg ← (ex.toMessageData {}).toString
-        return .unreplayable
-          { rep with unreplayable := some s!"{d.names}: {sourceAliases.exactMessage msg}" }
-          sourceSteps
-    if sourceUsesAlias then
-      let replayEnv ← getEnv
-      for name in replayD.names do
-        unless (replayEnv.find? name).isSome do
-          throwError "source replay lost Meta visibility for {sourceAliases.exactName name} \
-            while installing {d.names}"
-      if let .induct types constructors recursors := replayD then
-        let mismatches ← checkInductiveMetadata types constructors recursors
-        unless mismatches.isEmpty do
-          throwError "collision-safe inductive replay metadata differs for {d.names}: \
-            {mismatches.toList.map sourceAliases.exactMessage}"
+  if let some dcl := toDeclaration (← getEnv) replayD then
+    match (← getEnv).addDeclCore 0 dcl none false with
+    | .ok e =>
+      replayedOwnerEnv? := some e
+      setEnv e
+    | .error ex =>
+      let msg ← (ex.toMessageData {}).toString
+      return .unreplayable
+        { rep with unreplayable := some s!"{d.names}: {sourceAliases.exactMessage msg}" }
+        sourceSteps
+  if sourceUsesAlias then
+    let replayEnv ← getEnv
+    for name in replayD.names do
+      unless (replayEnv.find? name).isSome do
+        throwError "source replay lost Meta visibility for {sourceAliases.exactName name} \
+          while installing {d.names}"
+    if let .induct types constructors recursors := replayD then
+      let mismatches ← checkInductiveMetadata types constructors recursors
+      unless mismatches.isEmpty do
+        throwError "collision-safe inductive replay metadata differs for {d.names}: \
+          {mismatches.toList.map sourceAliases.exactMessage}"
   if let some root := basisRoot? then
     match ← (validateBasisOwner root replayD).run with
     | .ok () =>
@@ -3243,12 +2468,15 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           for type in ts do
             if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then
               needsExactSortLift := true
-        unless ← mutualReady needsExactSortLift reserved do
-          throwError "plain mutual model prerequisites remained late after support scheduling"
-        let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
-          generation.simple generation.basic (out, rep, pending, islandAdapterShadows)
-          (some replayD) exactTransform context.collectAdapterShadows
-        (out, rep, pending, islandAdapterShadows) ← pure st3
+        if ← mutualReady needsExactSortLift reserved then
+          let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
+            generation.simple generation.basic (out, rep, pending, islandAdapterShadows)
+            (some replayD) exactTransform context.collectAdapterShadows
+          (out, rep, pending, islandAdapterShadows) ← pure st3
+        else
+          let declined := rep.declined.push
+            (t.name, "mutual model prerequisite occurs later in the input stream")
+          rep := { rep with declined }
       if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
           basisRoot?.isNone && invalidBasis.isEmpty then
         let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
@@ -3256,9 +2484,12 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           #[] reserved generation.basic true (out, rep, pending, islandAdapterShadows)
           (some (replayD, constructionNormalizer)) exactTransform true
           context.collectAdapterShadows
-        if wait?.isSome then
-          throwError "simple model prerequisite remained late after support scheduling"
-        (out, rep, pending, islandAdapterShadows) ← pure st
+        match wait? with
+        | none => (out, rep, pending, islandAdapterShadows) ← pure st
+        | some _ =>
+          let declined := rep.declined.push
+            (t.name, "prim model prerequisite occurs later in the input stream")
+          rep := { rep with declined }
   if d matches .induct .. then
     let generated := out
     let islandModels := pending
@@ -3267,18 +2498,6 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       | .error message => throwError
         "cannot register generated source replay aliases for {d.names}: \
             {sourceAliases.exactMessage message}"
-    if context.sharedPrefixPhaseB then
-      -- The checker/support view is global across islands, unlike the local
-      -- construction view above. Register the complete live island directly
-      -- against that cumulative table so its build image remains injective
-      -- with every prior generated declaration, including disposable ones.
-      -- This table is never exposed to generation, readiness, or nameTaken.
-      sharedPrefixAliases? := some (← match
-          (sharedPrefixAliases?.getD context.sourceAliases).registerRecords generated with
-        | .ok aliases => pure aliases
-        | .error message => throwError
-          "cannot retain cumulative generated replay aliases for {d.names}: \
-            {islandAliases.exactMessage message}")
     rep := { rep with
       generated := rep.generated.extract 0 reportedBefore ++
         (rep.generated.extract reportedBefore rep.generated.size).map fun (name, count) =>
@@ -3323,87 +2542,32 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         throwError "accepted island cardinality mismatch for {d.names}: \
           records={orderedGenerated.size}, summaries={compact.summaries.size}, \
           extras={compact.globalExtras.size}, families={compact.families.size}"
-      unless compactMode do
-        if let some checker := kernelCheckState? then
-          let mut checker := checker
-          for localOrdinal in [:orderedGenerated.size] do
-            checker ← checker.pushBound orderedGenerated[localOrdinal]!
-              compact.summaries[localOrdinal]!.introduced
-          kernelCheckState? := some checker
+      if generation.typeCheckGenerated && rep.generatedKernelRejected.isNone then
+        rep := { rep with generatedKernelChecks := rep.generatedKernelChecks + 1 }
+        match ← checkGeneratedIn mainBefore (orderedGenerated.map islandAliases.buildRecord) with
+        | .ok _ => pure ()
+        | .error message =>
+          rep := { rep with generatedKernelRejected := some (islandAliases.exactMessage message) }
       modeledSourceFamilies := compact.sourceFamilies
       modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
       if compactMode then
         let islandNumber := compactIslands.size
-        let tagged := Order.tagIsland islandNumber compact.summaries
-        let compact := { compact with summaries := tagged }
-        for localOrdinal in [:tagged.size] do
+        for localOrdinal in [:compact.summaries.size] do
           let row : CompactRecord := {
-            summary := tagged[localOrdinal]!
+            summary := compact.summaries[localOrdinal]!
             globalExtra := compact.globalExtras[localOrdinal]!
-            families := compact.families[localOrdinal]!.map (·.inIsland islandNumber)
-            checkIsland? := some islandNumber
+            families := compact.families[localOrdinal]!
             locator := .generated islandNumber localOrdinal }
-          if let some checker := kernelCheckState? then
-            let exact := orderedGenerated[localOrdinal]!
-            if context.sharedPrefixPhaseB then
-              let checkerAliases := sharedPrefixAliases?.getD islandAliases
-              let build := checkerAliases.buildRecord exact
-              unless checkerAliases.exactRecord build == exact do
-                throwError "generated replay round trip changed {exact.names}"
-              unless checkerAliases.exactDerivedRecord exact == exact do
-                throwError "generated declaration {exact.names} contains a fresh build alias"
-              let exactDisposition ← match KernelCheck.replayDisposition exact with
-                | .ok disposition => pure disposition
-                | .error message => throwError message
-              let buildDisposition ← match KernelCheck.replayDisposition build with
-                | .ok disposition => pure disposition
-                | .error message => throwError (checkerAliases.exactMessage message)
-              unless (exactDisposition matches .checked ..) ==
-                    (buildDisposition matches .checked ..) &&
-                  (exactDisposition matches .metaOnly) ==
-                    (buildDisposition matches .metaOnly) &&
-                  (exactDisposition matches .bundled) ==
-                    (buildDisposition matches .bundled) do
-                throwError "generated replay classification changed under aliases for \
-                  {exact.names}"
-              match exactDisposition with
-              | .metaOnly =>
-                -- Preserve the ordinary output checker's unsafe/partial skip
-                -- semantics, but make the extra Meta visibility irrelevant to
-                -- every later checked generated record.
-                for name in exact.names do
-                  sharedPrefixMetaOnlyNames := sharedPrefixMetaOnlyNames.insert name
-              | .checked _ =>
-                if let some dependency := (KernelCheck.inputReferences exact).toArray.find?
-                    sharedPrefixMetaOnlyNames.contains then
-                  throwError "checked generated record {exact.names} depends on unchecked \
-                    construction-only declaration {dependency}"
-              | .bundled =>
-                -- Quot.mk/lift/ind have no independent replay step: the
-                -- leading checked Quot record installs the exact bundle.
-                pure ()
-            kernelCheckState? := some (← if context.sharedPrefixPhaseB then
-              checker.pushMappedBound exact
-                ((sharedPrefixAliases?.getD islandAliases).buildRecord exact)
-                row.summary.introduced
-            else
-              checker.pushBound exact row.summary.introduced)
-            kernelCheckRows := kernelCheckRows.push row.summary.introduced
           compactRecords := compactRecords.push row
         compactIslands := compactIslands.push compact
+      if streamOutput && rep.generatedKernelRejected.isNone then
+        streamIsland? := some orderedGenerated
       let persistentRecords := generatedSupportRecords orderedGenerated exactIslandModels
-      if context.sharedPrefixPhaseB then
-        constructionSupportRecords := constructionSupportRecords ++ persistentRecords
-      if compactMode then
-        let islandNumber := compactIslands.size - 1
-        for record in persistentRecords do
-          for name in record.names do
-            persistentSupportOrigins := persistentSupportOrigins.insert name islandNumber
       persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
         | .ok index => pure index
         | .error message => throwError
             "cannot index accepted persistent support for {d.names}: {message}"
-      if retainOracle then legacyOut := legacyOut ++ orderedGenerated
+      if retainOutput then legacyOut := legacyOut ++ orderedGenerated
       setEnv mainWithSupport
       if let some ownerDeclaration := toDeclaration mainWithSupport replayD then
         match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
@@ -3418,35 +2582,16 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             sourceSteps
   else
     mainEnv ← getEnv
-  unless compactMode do
-    if let some checker := kernelCheckState? then
-      kernelCheckState? := some (← checker.pushBound d sourceSummary.introduced)
-  if retainOracle then legacyOut := legacyOut.push d
-  if retainOracle && context.outputSourceOrder?.isSome then
-    let some rawSourceOrdinal := rawSourceOrdinal?
-      | throwError "shadow source declaration has no raw ordinal"
-    emissionByRaw := emissionByRaw.insert rawSourceOrdinal
-      (legacyOut.extract emissionStart legacyOut.size)
+  if retainOutput then legacyOut := legacyOut.push d
   if compactMode then
     let some firstName := d.names.head? | throwError "source declaration has no name"
     let some rawOrdinal := rawOrdinals[firstName]?
-      | throwError "scheduled source declaration {firstName} lost its raw ordinal"
-    let modeledIsland? ← if modeledSourceFamilies.isEmpty then pure none else
-      match compactIslands.size with
-      | 0 => throwError "modeled source family {d.names} has no committed generated island"
-      | size + 1 => pure (some size)
+      | throwError "source declaration {firstName} lost its raw ordinal"
     let row : CompactRecord := {
-      summary := sourceSummaries[scheduledOrdinal]!
+      summary := sourceSummaries[sourceOrdinal]!
       globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtra
-      families := sourceFamilyRecord ++
-        (modeledSourceFamilies.map fun family =>
-          modeledIsland?.elim family family.inIsland)
-      checkIsland? := modeledIsland?
+      families := sourceFamilyRecord ++ modeledSourceFamilies
       locator := .source rawOrdinal }
-    if let some checker := kernelCheckState? then
-      unless context.sharedPrefixPhaseB do
-        kernelCheckState? := some (← checker.pushBound d row.summary.introduced)
-        kernelCheckRows := kernelCheckRows.push row.summary.introduced
     compactRecords := compactRecords.push row
   if context.checkRecursors then
     if let .induct _ _ rs := replayD then
@@ -3459,7 +2604,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     let some rawOrdinal := rawOrdinals[firstName]?
       | throwError "logical source declaration {firstName} lost its raw ordinal"
     sourceSteps := sourceSteps.push {
-      scheduledOrdinal
+      sourceOrdinal
       rawOrdinal
       sourceNames := d.names.toArray
       sourceIsInductive := d matches .induct ..
@@ -3468,179 +2613,49 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       generatedRecords := out.size }
   if context.collectAdapterShadows then
     adapterShadows := adapterShadows ++ islandAdapterShadows
+  if streamOutput && rep.generatedKernelRejected.isNone then
+    let some emit := context.outputEmitter?
+      | throwError "streaming output mode has no declaration emitter"
+    if let some island := streamIsland? then
+      emit (.generatedIsland island)
+      streamStats := {
+        streamStats with
+        generatedRecords := streamStats.generatedRecords + island.size
+        maxIslandRecords := max streamStats.maxIslandRecords island.size }
+    emit (.source d)
+    streamStats := { streamStats with sourceRecords := streamStats.sourceRecords + 1 }
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, compactRecords,
-    scheduledOrdinal := scheduledOrdinal + 1, islandStatements, invalidBasis,
-    persistentSupportOrigins, futureSupportRemaining, emissionByRaw, sourceSteps,
-    kernelCheckState?, kernelCheckRows, adapterShadows,
-    constructionSupportRecords, sharedPrefixAliases?, sharedPrefixMetaOnlyNames }
+    sourceOrdinal := sourceOrdinal + 1, islandStatements, invalidBasis,
+    sourceSteps, adapterShadows, streamStats, inputFamilyCandidates }
 
-/-- Payload-free handoff from logical generation to compact finalization.  It
-contains neither an `Environment`, `Kernel.Environment`, `EDecl`, sink, writer,
-nor spool commit. The private constructor keeps that retention claim local to
-the consuming seal below. -/
-private structure CompactDirectSealed where
-  report : Report
-  compactIslands : Array CompactIsland
-  compactRecords : Array CompactRecord
-  islandStatements : Check.StatementReport
-  persistentSupportOrigins : Std.HashMap Name Nat
-  kernelVerdict : KernelCheck.Verdict
-  constructionTransitions : Nat
-
-/-- Consume the complete direct state at the last expression-bearing boundary.
-Every exact record was already submitted through `pushBound`.  This function
-binds the feed rows to the compact rows, seals away `Kernel.Environment`, and
-resets Meta state to the invocation base before returning value-only data. -/
-private def FilterState.sealCompactDirect (state : FilterState) (context : FilterContext) :
-    MetaM CompactDirectSealed := do
-  unless context.retention.checksKernelDirect do
-    throwError "compact direct seal selected outside direct retention"
-  unless state.futureSupportRemaining.isEmpty do
-    throwError "future support shadow retained undischarged source records"
-  unless state.legacyOut.isEmpty do
-    throwError "compact direct checker retained {state.legacyOut.size} declaration records"
-  unless state.scheduledOrdinal == context.sourceSummaries.size do
-    throwError "compact direct source schedule consumed {state.scheduledOrdinal} of \
-      {context.sourceSummaries.size} rows"
-  let compactRows := state.compactRecords.map (·.summary.introduced)
-  unless state.kernelCheckRows == compactRows do
-    throwError "compact direct kernel rows differ from compact rows: \
-      kernel={repr state.kernelCheckRows}, compact={repr compactRows}"
-  let sourceRows := state.compactRecords.foldl (init := 0) fun count record =>
-    match record.locator with
-    | .source _ => count + 1
-    | .generated .. => count
-  unless sourceRows == state.scheduledOrdinal do
-    throwError "compact direct retained {sourceRows} source rows for \
-      {state.scheduledOrdinal} transitions"
-  let some checker := state.kernelCheckState?
-    | throwError "compact direct state lost its exact kernel checker"
-  let kernelVerdict := checker.seal
-  unless kernelVerdict.recordsPushed == state.compactRecords.size do
-    throwError "compact direct kernel consumed {kernelVerdict.recordsPushed} records, \
-      but retained {state.compactRecords.size} compact rows"
-  let some base := context.kernelCheckBase?
-    | throwError "compact direct state lost its exact base environment"
-  -- No later compact operation may observe construction declarations. The
-  -- returned structure cannot retain either this Lean environment or the
-  -- checker's exact kernel environment.
-  setEnv base
-  return {
-    report := state.report
-    compactIslands := state.compactIslands
-    compactRecords := state.compactRecords
-    islandStatements := state.islandStatements
-    persistentSupportOrigins := state.persistentSupportOrigins
-    kernelVerdict
-    constructionTransitions := context.constructionTransitions }
-
-/-- Finish ordering and structural checks from the value-only direct handoff. -/
-private def CompactDirectSealed.finalize (sealed : CompactDirectSealed) :
-    MetaM (Report × CompactPlan × CompactKernelCheckVerdict) := do
-  let compactOrder ← match Order.summaryRecordOrder (sealed.compactRecords.map (·.summary)) with
-    | .ok order => pure order
-    | .error error => throwError "cannot compactly order direct records: {repr error}"
-  let mut scheduled : Std.HashSet Nat := {}
-  for index in compactOrder do
-    unless index < sealed.compactRecords.size do
-      throwError "compact direct schedule index {index} exceeds \
-        {sealed.compactRecords.size} rows"
-    if scheduled.contains index then
-      throwError "compact direct schedule repeats row {index}"
-    scheduled := scheduled.insert index
-  unless scheduled.size == sealed.compactRecords.size do
-    throwError "compact direct schedule covers {scheduled.size} of \
-      {sealed.compactRecords.size} rows"
-  let orderedRecords := compactOrder.map fun i =>
-    { owner := sealed.compactRecords[i]!.summary.owner
-      modelSlots := sealed.compactRecords[i]!.summary.modelSlots
-      globalExtra := sealed.compactRecords[i]!.globalExtra
-      families := sealed.compactRecords[i]!.families : Check.CompactCheckRecord }
-  let compactCheckReport ← match Check.compactOrderedReport orderedRecords with
-    | .ok report => pure report
-    | .error message => throwError "invalid compact direct output certificate: {message}"
-  let compactUnavailable? :=
-    compactAvailabilityError? sealed.compactRecords sealed.persistentSupportOrigins
-  let orderedGlobals := compactOrder.map fun i => sealed.compactRecords[i]!.globalExtra
-  let diagnosticOwners := sealed.compactIslands.foldl (init := ({} : Std.HashSet Name))
-    fun owners island => island.diagnosticOwners.toArray.foldl
-      (fun owners owner => owners.insert owner) owners
-  let compactGlobal := Check.globalExtrasFromRecordsFor orderedGlobals diagnosticOwners
-  let statementReport : Check.StatementReport :=
-    { sealed.islandStatements with
-      violations := sealed.islandStatements.violations ++ compactGlobal }
-  let rep := { sealed.report with
-    stmtChecked := statementReport.statementsChecked
-    stmtErrors := statementReport.violations.map fun violation => violation.message }
-  let declarations := compactOrder.map fun index => sealed.compactRecords[index]!.locator
-  unless declarations.size == sealed.kernelVerdict.recordsPushed do
-    throwError "compact direct final schedule has {declarations.size} rows after checking \
-      {sealed.kernelVerdict.recordsPushed} exact records"
-  let compactPlan : CompactPlan := {
-    declarations
-    checkReport := compactCheckReport
-    unavailable? := compactUnavailable?
-    retainedGeneratedRecords := 0 }
-  let (deferredResult, kernelFallback?) := match sealed.kernelVerdict.result with
-    | .ok () => (.ok (), compactUnavailable?)
-    | .error _ =>
-      let fallback := compactUnavailable?.getD
-        "direct kernel rejection requires the final reordered batch diagnostic"
-      (.error fallback, some fallback)
-  let kernelVerdict : CompactKernelCheckVerdict := {
-    result := deferredResult
-    recordsPushed := sealed.kernelVerdict.recordsPushed
-    scheduledRecords := declarations.size
-    constructionTransitions := sealed.constructionTransitions
-    fallback? := kernelFallback? }
-  return (rep, compactPlan, kernelVerdict)
-
-/-- Complete compact ordering and checking after the logical source stream has
+/-- Complete compact structural checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
 private def FilterState.finalize (state : FilterState) (context : FilterContext) :
-    MetaM (Array EDecl × Report × CompactPlan × Option FilterKernelCheckShadow) := do
+    MetaM (Array EDecl × Report × CompactPlan) := do
   let x := context.source
   let retention := context.retention
   let compactMode := retention.isCompact
-  let retainOracle := retention.retainsOracle
+  let retainOutput := retention.retainsOutput
   let sourceSyntax := context.sourceSyntax
   let reserved := context.reserved
-  let legacyOut ← match context.outputSourceOrder? with
-    | none => pure state.legacyOut
-    | some order => do
-      let mut reordered : Array EDecl := #[]
-      for rawOrdinal in order do
-        let some records := state.emissionByRaw[rawOrdinal]?
-          | throwError "source emission order lost raw record {rawOrdinal}"
-        reordered := reordered ++ records
-      pure reordered
+  let legacyOut := state.legacyOut
   let compactIslands := state.compactIslands
   let compactRecords := state.compactRecords
   let islandStatements := state.islandStatements
-  let persistentSupportOrigins := state.persistentSupportOrigins
-  unless state.futureSupportRemaining.isEmpty do
-    throwError "future support shadow retained undischarged source records"
   let mut rep := state.report
-  let compactOrder ← if compactMode then
-      match Order.summaryRecordOrder (compactRecords.map (·.summary)) with
-      | .ok order => pure order
-      | .error error => throwError "cannot order compact records: {repr error}"
-    else pure #[]
+  let compactOrder := if compactMode then Array.range compactRecords.size else #[]
   let compactCheckReport : Check.Report ← if compactMode then
       let orderedRecords := compactOrder.map fun i =>
         { owner := compactRecords[i]!.summary.owner
           modelSlots := compactRecords[i]!.summary.modelSlots
           globalExtra := compactRecords[i]!.globalExtra
           families := compactRecords[i]!.families : Check.CompactCheckRecord }
-      match Check.compactOrderedReport orderedRecords with
+      match Check.compactSourceReport orderedRecords with
       | .ok report => pure report
       | .error message => throwError "invalid compact output certificate: {message}"
     else
       pure ({ familiesChecked := 0, violations := #[] } : Check.Report)
-  let compactUnavailable? := if compactMode then
-      compactAvailabilityError? compactRecords persistentSupportOrigins
-    else none
   let compactStatementReport := if compactMode then
     let orderedGlobals := compactOrder.map fun i => compactRecords[i]!.globalExtra
     let diagnosticOwners := compactIslands.foldl (init := ({} : Std.HashSet Name))
@@ -3650,7 +2665,7 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
     ({ islandStatements with
       violations := islandStatements.violations ++ compactGlobal } : Check.StatementReport)
   else islandStatements
-  let statementReport ← if retainOracle then do
+  let statementReport ← if retainOutput then do
       let generatedOwners := rep.generated.foldl
         (fun owners entry => owners.insert entry.1) ({} : Std.HashSet Name)
       let finalExport := { x with decls := legacyOut }
@@ -3667,81 +2682,38 @@ private def FilterState.finalize (state : FilterState) (context : FilterContext)
           islands={repr islandStatements}, aggregate={repr finalLocal}"
       let fullReport :=
         Check.checkStatementFamiliesWithIndex finalExport finalIndex finalFamilies
-      if compactMode then
-        let fullOrder ← match Order.recordOrder finalExport with
-          | .ok order => pure order
-          | .error error => throwError "full oracle cannot order compact records: {repr error}"
-        let compactNames := compactOrder.map fun i => compactRecords[i]!.summary.introduced
-        let fullNames := fullOrder.map fun i => finalExport.decls[i]!.names.toArray
-        unless compactNames == fullNames do
-          throwError "compact order disagrees with full export: \
-            compact={repr compactNames}, full={repr fullNames}"
-        unless compactStatementReport == fullReport do
-          throwError "compact statements disagree with full export: \
-            compact={repr compactStatementReport}, full={repr fullReport}"
-        let orderedExport := { finalExport with
-          decls := fullOrder.map fun index => finalExport.decls[index]! }
-        let fullCheckReport := Check.checkReport orderedExport
-        if compactUnavailable?.isNone then
-          unless compactCheckReport == fullCheckReport do
-            throwError "compact output check disagrees with full export: \
-              compact={repr compactCheckReport}, full={repr fullCheckReport}"
       pure fullReport
     else pure compactStatementReport
   rep := { rep with stmtChecked := statementReport.statementsChecked }
   rep := { rep with
     stmtErrors := statementReport.violations.map fun violation => violation.message }
-  unless retainOracle || legacyOut.isEmpty do
+  unless retainOutput || legacyOut.isEmpty do
     throwError "compact filter retained {legacyOut.size} cumulative declaration records"
   let declarations := compactOrder.map fun index => compactRecords[index]!.locator
   let compactPlan : CompactPlan := {
     declarations
     checkReport := compactCheckReport
-    unavailable? := compactUnavailable?
     retainedGeneratedRecords := legacyOut.foldl (fun count declaration =>
-      if declaration.names.any fun name => !reserved.contains name then count + 1 else count) 0 }
-  let kernelCheckShadow? ← match state.kernelCheckState? with
-    | none => pure none
-    | some checker => do
-      let streamed := checker.seal
-      unless streamed.recordsPushed == legacyOut.size do
-        throwError "kernel-check shadow consumed {streamed.recordsPushed} records, \
-          but the final full oracle retained {legacyOut.size}"
-      let finalExport := { x with decls := legacyOut }
-      let orderedExport ← match Order.reorder finalExport with
-        | .ok ordered => pure ordered
-        | .error error => throwError "kernel-check full oracle cannot order final export: {repr error}"
-      let saved ← getEnv
-      let some kernelCheckBase := context.kernelCheckBase?
-        | throwError "kernel-check shadow lost its exact base environment"
-      let batchResult ← try
-        setEnv kernelCheckBase
-        typeCheckExport orderedExport
-      finally
-        setEnv saved
-      pure (some {
-        streamedResult := streamed.result
-        batchResult
-        recordsPushed := streamed.recordsPushed
-        finalRecords := orderedExport.decls.size
-        usedFallback := !sameKernelCheckResult streamed.result batchResult })
-  return (legacyOut, rep, compactPlan, kernelCheckShadow?)
+      if declaration.names.any fun name => !reserved.contains name then count + 1 else count) 0
+    streamStats := state.streamStats
+    coveredInputOwners :=
+      let invalidOwners := compactCheckReport.violations.foldl
+        (fun owners violation => owners.insert violation.familyOwner)
+        ({} : Std.HashSet Name)
+      state.inputFamilyCandidates.filter fun owner => !invalidOwners.contains owner }
+  return (legacyOut, rep, compactPlan)
 
 /-- Shared generation loop. Compact modes summarize every accepted island at
-its close boundary; oracle mode retains the historical full declaration array
-for actual output and exact A/B comparison. -/
+its close boundary; streaming emits and releases it, while the compatibility
+full mode retains declarations. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (retention : RetentionMode)
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false)
     (plannedSource? : Option Spool.PlannedSourceReader := none)
-    (sourceOrder? : Option (Array Nat) := none)
-    (futureSupport? : Option FutureSourceSupport := none)
-    (outputSourceOrder? : Option (Array Nat) := none)
     (sourceCensus? : Option SourceCensus := none)
-    (kernelCheckShadow : Bool := false)
-    (collectAdapterShadows : Bool := false) :
+    (collectAdapterShadows : Bool := false)
+    (outputEmitter? : Option StreamOutputEmitter := none) :
     MetaM (Array EDecl × Report × CompactPlan × Array FilterSourceStep ×
-      Option FilterKernelCheckShadow × Option CompactKernelCheckVerdict ×
       Array FamilyAdapter.ShadowObservation) := do
   let plannedCensus := sourceCensus?.isSome
   let sourceCensus := sourceCensus?.getD (SourceCensus.ofSource x)
@@ -3757,21 +2729,11 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       if sourceAliases.hasExact name then
         throwError "normalized source-name collision moves quotient role {name}; \
           collision-safe quotient replay is not supported"
-  let sourceOrder ← match sourceOrder? with
-    | some order => pure order
-    | none => match if plannedCensus then sourceCensus.plannedScheduleOrder generation
-        else sourceCensus.scheduleOrder x generation with
-      | .ok order => pure order
-      | .error error => throwError "cannot schedule shared support: {repr error}"
-  let scheduled := if plannedCensus then x else
-    { x with decls := sourceOrder.map fun ordinal => x.decls[ordinal]! }
-  if futureSupport?.isNone then
-    match if plannedCensus then sourceCensus.validatePlannedSupport sourceOrder generation
-        else validateScheduledSupport scheduled generation with
-    | .ok () => pure ()
-    | .error message => throwError "invalid shared-support schedule: {message}"
-  let fallbackEnv ← getEnv
-  let mainEnv := futureSupport?.map (·.env) |>.getD fallbackEnv
+  let sourceOrder := Array.range sourceCensus.summaries.size
+  -- Source records are consumed in their original stream order. A model
+  -- owner whose fixed support occurs later declines at that owner; the normal
+  -- route never moves input declarations or preinstalls later prerequisites.
+  let mainEnv ← getEnv
   -- Reuse the immutable census products. Retained sources may still supply
   -- whole-export row caches; planned sources derive missing rows from each
   -- transient declaration at its logical transition.
@@ -3805,48 +2767,23 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
       | .ok index => pure index
       | .error message => throwError "cannot index collision-safe source replay: {message}"
   let constructionNormalizer := constructionSyntax.exactNormalizer
-  let sourceSummaries ← match sourceCensus.summariesForOrder sourceOrder with
-    | .ok summaries => pure summaries
-    | .error error => throwError "cannot rebind frozen source summaries: {error}"
+  let sourceSummaries := sourceCensus.summaries
   let sourceGlobalExtras? := if plannedCensus then none else
-    some (Check.globalExtraRecordsWithIndex sourceSyntax scheduled.decls)
+    some (Check.globalExtraRecordsWithIndex sourceSyntax x.decls)
   let sourceFamilyRecords? := if plannedCensus then none else
-    some (sourceCensus.familyCertificateRecords x scheduled)
+    some (sourceCensus.familyCertificateRecords x)
   let rawOrdinals := sourceCensus.rawOrdinals
   let reserved := sourceCensus.reserved
-  let sourceConstructionTouches := sourceOrder.map fun rawOrdinal =>
-    sourceCensus.scheduling[rawOrdinal]!.constructionTouch generation
-  let constructionCutoffEnabled :=
-    retention.checksKernelDirect && !checkRecursors && !collectTrace &&
-      !collectAdapterShadows && futureSupport?.isNone
-  let constructionTransitions := if constructionCutoffEnabled then Id.run do
-      let mut cutoff := 0
-      for ordinal in [:sourceConstructionTouches.size] do
-        if sourceConstructionTouches[ordinal]! then cutoff := ordinal + 1
-      return cutoff
-    else sourceOrder.size
   let constructionReserved := reserved.fold (init := reserved) fun names name =>
     (sourceAliases.buildDerivedNames name).foldl (fun names build => names.insert build) names
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
-    sourceSummaries, sourceConstructionTouches, constructionTransitions,
-    sourceGlobalExtras?, sourceFamilyRecords?,
-    rawOrdinals, reserved, constructionReserved,
-    kernelCheckBase? := if kernelCheckShadow || retention.checksKernelDirect then
-      some fallbackEnv else none,
-    futureSupport?, outputSourceOrder?, collectTrace, collectAdapterShadows }
-  let initialFutureSupport := futureSupport?.map (·.records) |>.getD
-    ({} : Std.HashMap Nat EDecl)
+    sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
+    rawOrdinals, reserved, constructionReserved, collectTrace, collectAdapterShadows,
+    outputEmitter? }
   let mut state : FilterState :=
-    { mainEnv := mainEnv
-      persistentSyntax := sourceSyntax
-      futureSupportRemaining := initialFutureSupport
-      kernelCheckState? := if kernelCheckShadow || retention.checksKernelDirect then
-        some (KernelCheck.State.create fallbackEnv) else none }
-  if retention.checksKernelDirect && constructionTransitions == 0 then
-    state := { state with mainEnv := fallbackEnv }
-    setEnv fallbackEnv
+    { mainEnv := mainEnv, persistentSyntax := sourceSyntax }
   for rawOrdinal in sourceOrder do
     let declaration ← match plannedSource? with
       | none => match x.decls[rawOrdinal]? with
@@ -3866,47 +2803,19 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     -- return and is never part of the public result.
     let current := state
     state := { mainEnv, persistentSyntax := sourceSyntax }
-    let feedResult ← if retention.checksKernelDirect &&
-        current.scheduledOrdinal >= constructionTransitions then
-      pure (.next (← current.feedSourceExactTail context declaration))
-    else
-      current.feedSource context declaration
+    let feedResult ← current.feedSource context declaration
     match feedResult with
-    | .next next =>
-      if retention.checksKernelDirect &&
-          next.scheduledOrdinal == constructionTransitions then
-        state := { next with mainEnv := fallbackEnv }
-        setEnv fallbackEnv
-      else
-        state := next
+    | .next next => state := next
     | .unreplayable report sourceSteps =>
-      if retention.checksKernelDirect then
-        let some base := context.kernelCheckBase?
-          | throwError "unreplayable compact direct state lost its exact base environment"
-        setEnv base
-        return (#[], report, {}, sourceSteps, none, none, #[])
-      return (x.decls, report, {}, sourceSteps, none, none, #[])
-  if retention.checksKernelDirect then
-    let sourceSteps := state.sourceSteps
-    let some base := context.kernelCheckBase?
-      | throwError "compact direct finalization lost its exact base environment"
-    let sealed ← try
-      state.sealCompactDirect context
-    finally
-      -- Validation errors must not strand construction declarations in the
-      -- caller's Meta state either.
-      setEnv base
-    let (report, compact, kernelVerdict) ← sealed.finalize
-    return (#[], report, compact, sourceSteps, none, some kernelVerdict, #[])
-  let (decls, report, compact, kernelCheckShadow?) ← state.finalize context
-  return (decls, report, compact, state.sourceSteps, kernelCheckShadow?, none,
-    state.adapterShadows)
+      return (x.decls, report, {}, sourceSteps, #[])
+  let (decls, report, compact) ← state.finalize context
+  return (decls, report, compact, state.sourceSteps, state.adapterShadows)
 
 /-- **The filter.** -/
 def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _, _, _, _) ←
-    runFilterCore x checkRecursors generation .fullOracle
+  let (decls, report, _, _, _) ←
+    runFilterCore x checkRecursors generation .fullOutput
   return (decls, report)
 
 /-- Test-facing observer for generic family-adapter shadow validation. The
@@ -3915,85 +2824,17 @@ these compact observations and emits no trace or log output. -/
 def runFilterWithFamilyAdapterShadow (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) :
     MetaM (Array EDecl × Report × Array FamilyAdapter.ShadowObservation) := do
-  let (decls, report, _, _, _, _, shadows) ← runFilterCore x checkRecursors generation
-    .fullOracle (collectAdapterShadows := true)
+  let (decls, report, _, _, shadows) ← runFilterCore x checkRecursors generation
+    .fullOutput (collectAdapterShadows := true)
   return (decls, report, shadows)
-
-/-- Test-facing full-output oracle with an exact declaration-wise kernel
-shadow.  The ordinary filter and CLI do not select this path.  Each completed
-transition feeds exact generated values and the exact source value; final
-comparison uses the batch checker over the reordered full export and preserves
-its result on any mismatch. An ordinary unreplayable source result has no final
-stream to seal, so it returns its unchanged output/report with `none`. -/
-def runFilterWithKernelCheckShadow (x : Export) (checkRecursors : Bool)
-    (generation : Cli.Config) :
-    MetaM (Array EDecl × Report × Option FilterKernelCheckShadow) := do
-  let (decls, report, _, _, shadow?, _, _) ← runFilterCore x checkRecursors generation
-    .fullOracle (kernelCheckShadow := true)
-  return (decls, report, shadow?)
-
-/-- Internal phase-one A/B path for replacing support-priority execution.
-Only a complete exact [`FutureSourceSupport`] ledger selects it; every
-unsupported or malformed source shape runs the historical scheduler unchanged.
-Logical processing uses ordinary dependency order, while the returned export
-is put through the existing stable support-priority order so this phase changes
-neither bytes nor report ordering. -/
-def runFilterWithFutureSourceSupportShadow (x : Export) (checkRecursors : Bool)
-    (generation : Cli.Config) : MetaM (Array EDecl × Report × Bool) := do
-  -- The shadow ledger and output reconstruction are intentionally keyed by a
-  -- declaration's first introduced name.  Nameless records are valid on the
-  -- historical path, so they make this phase-one optimization unavailable
-  -- rather than becoming a new input restriction after another record selects
-  -- future support.
-  if x.decls.any (·.names.isEmpty) then
-    let (decls, report) ← runFilter x checkRecursors generation
-    return (decls, report, false)
-  let census := SourceCensus.ofSource x
-  let aliases ← match census.replayAliases with
-    | .ok aliases => pure aliases
-    | .error message => throwError "cannot plan collision-safe source replay: {message}"
-  unless aliases.isEmpty do
-    -- The phase-one shadow preinstalls exact future source declarations, so
-    -- it cannot share the collision-safe replay view yet.  Fall back before
-    -- certification mutates any environment; the ordinary path is alias-aware.
-    let (decls, report) ← runFilter x checkRecursors generation
-    return (decls, report, false)
-  unless sourceNeedsSupportScheduling x generation census.reserved do
-    let (decls, report) ← runFilter x checkRecursors generation
-    return (decls, report, false)
-  let base ← getEnv
-  let shadowResult ← try
-    FutureSourceSupport.create base x generation
-  finally
-    -- Certification temporarily installs the exact future source bundle in
-    -- Meta state.  No ordering or fallback failure may expose that private
-    -- environment to the caller.
-    setEnv base
-  let .ok shadow := shadowResult | do
-    let (decls, report) ← runFilter x checkRecursors generation
-    return (decls, report, false)
-  unless !shadow.records.isEmpty do
-    let (decls, report) ← runFilter x checkRecursors generation
-    return (decls, report, false)
-  let ordinaryOrder ← match Order.summaryRecordOrder census.summaries with
-    | .ok order => pure order
-    | .error error => throwError "cannot ordinarily order source shadow: {repr error}"
-  let outputOrder ← match census.scheduleOrder x generation with
-    | .ok order => pure order
-    | .error error => throwError "cannot retain support-priority output order: {repr error}"
-  let (decls, report, _, _, _, _, _) ←
-    runFilterCore x checkRecursors generation .fullOracle
-    (sourceOrder? := some ordinaryOrder) (futureSupport? := some shadow)
-      (outputSourceOrder? := some outputOrder)
-  return (decls, report, true)
 
 /-- Test-facing observer for the declaration-wise transition.  The generated
 output and report are produced by the same core invocation as the snapshots;
 ordinary production callers collect no snapshots. -/
 def runFilterWithSourceTrace (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Array EDecl × Report × Array FilterSourceStep) := do
-  let (decls, report, _, steps, _, _, _) ←
-    runFilterCore x checkRecursors generation .fullOracle (collectTrace := true)
+  let (decls, report, _, steps, _) ←
+    runFilterCore x checkRecursors generation .fullOutput (collectTrace := true)
   return (decls, report, steps)
 
 /-- Focused exact-syntax regression seam. The transform is applied only to
@@ -4002,213 +2843,28 @@ composed consumer sees them; ordinary production callers use [`runFilter`]. -/
 def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) (transform : EDecl → EDecl) :
     MetaM (Array EDecl × Report) := do
-  let (decls, report, _, _, _, _, _) ←
-    runFilterCore x checkRecursors generation .fullOracle transform
+  let (decls, report, _, _, _) ←
+    runFilterCore x checkRecursors generation .fullOutput transform
   return (decls, report)
 
-/-- Direct compact kernel path used by generated no-output checking. Exact
-generated and source records are consumed only while their compact rows are
-live; the returned report, plan, and optional deferred verdict contain no
-declaration, environment, writer, sink, or spool payload. An unreplayable
-source encountered while construction is live terminates like the ordinary
-filter and returns `none`. A rejection in the exact-only tail returns a
-deferred fallback so the ordinary replay can recover its generation report and
-diagnostic without keeping construction state alive speculatively. -/
-def runFilterDirectChecking (x : Export) (checkRecursors : Bool)
-    (generation : Cli.Config) :
-    MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict) := do
-  let (_, report, compact, _, _, kernelVerdict?, _) ←
-    runFilterCore x checkRecursors generation .compactDirect
-  return (report, compact, kernelVerdict?)
-
-/-- Value-only test observation for the complete two-phase shared-prefix
-prototype. `selected` means Phase B consumed the private source snapshots;
-otherwise the returned filter result came from the ordinary direct fallback. -/
-structure SharedPrefixDirectObservation where
-  selected : Bool
-  source : SharedPrefixSourceObservation
-  retainedSupportRecords : Nat := 0
-  ownerSnapshotsConsumed : Nat := 0
-  pendingOwnerSnapshotsAtSeal : Nat := 0
-  fallback? : Option String := none
-  deriving Inhabited, Repr, BEq
-
-private def installSharedPrefixSupport (base : Environment)
-    (records : Array EDecl) (aliases : SourceReplayAliases) :
-    MetaM (Except String Environment) :=
-  -- `records` is exactly the witnessed persistent subset selected at island
-  -- close. Every member already passed the exact/build classification and
-  -- no-leak audits before entering the Phase-B state.
-  checkGeneratedIn base (records.map aliases.buildRecord)
-
-/-- Release the preceding owner's construction environment before rebuilding
-the witnessed support view over the next historical source snapshot. -/
-private def prepareSharedPrefixOwnerState (state : FilterState) (base : Environment)
-    (snapshot : SharedPrefixOwnerSnapshot) (aliases : SourceReplayAliases) :
-    MetaM (FilterState × Environment) := do
-  let state := { state with mainEnv := base }
-  -- `feedSource` also installed the preceding owner in the ambient Meta state.
-  -- Drop that independent root before rebuilding support over the next
-  -- historical snapshot, not merely before the following feed.
-  setEnv base
-  let installed ← match ← installSharedPrefixSupport snapshot.env
-      state.constructionSupportRecords aliases with
-    | .ok env => pure env
-    | .error message => throwError "cannot replay witnessed construction support: {message}"
-  return (state, installed)
-
-/-- Consume the dynamic Phase-B state into one historical owner transition.
-Keeping this call boundary linear lets the RC compiler pass the sole
-`FilterState` reference to `feedSource`; in particular, its staged arrays do
-not acquire a copy-on-write sibling while generation appends to them. -/
-private def feedSharedPrefixOwner (state : FilterState) (context : FilterContext)
-    (installed : Environment) (snapshot : SharedPrefixOwnerSnapshot)
-    (declaration : EDecl) : MetaM (FilterState × Array CompactRecord) := do
-  unless state.compactRecords.isEmpty && state.kernelCheckRows.isEmpty do
-    throwError "shared-prefix owner transition retained rows from an earlier owner"
-  setEnv installed
-  match ← ({ state with
-      mainEnv := installed
-      scheduledOrdinal := snapshot.scheduledOrdinal }).feedSource context declaration with
-  | .unreplayable report _ =>
-    throwError "shared-prefix owner replay became unreplayable: {report.unreplayable}"
-  | .next next =>
-    let chunk := next.compactRecords
-    unless chunk.any fun row => row.locator == .source snapshot.rawOrdinal do
-      throwError "shared-prefix owner transition lost source row {snapshot.rawOrdinal}"
-    -- The historical row array is owned by `chunks`; it is not also carried
-    -- through the next mutating owner transition. The checker itself retains
-    -- its cumulative kernel state, while final name rows are rebuilt below.
-    return ({ next with compactRecords := #[], kernelCheckRows := #[] }, chunk)
-
-private def runSharedPrefixPhaseB (prepared : SharedPrefixSourcePrepared)
-    (failAfterOwners? : Option Nat := none) :
-    MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict × Nat × Nat × Nat) := do
-  let ⟨_, completedEnv, snapshots, sourceRows, context, aliases, metaOnlyNames,
-    sourceAccess⟩ := prepared
-  let mut chunks := sourceRows.map fun row => #[row]
-  let some base := context.kernelCheckBase?
-    | throwError "shared-prefix source preparation lost its invocation base"
-  let mut state : FilterState := {
-    mainEnv := base
-    persistentSyntax := context.sourceSyntax
-    kernelCheckState? := some
-      (KernelCheck.State.createCheckedPrefix completedEnv
-        (sourceRows.map (·.summary.introduced)))
-    sharedPrefixAliases? := some aliases
-    sharedPrefixMetaOnlyNames := metaOnlyNames }
-  -- Reverse once, then remove each root before running its transition.  The
-  -- original array is consumed by this function, so at most the unvisited
-  -- shared prefixes plus the current snapshot remain rooted during Phase B.
-  let snapshotCount := snapshots.size
-  let mut pendingSnapshots := snapshots.reverse
-  let mut ownerSnapshotsConsumed := 0
-  for _ in [:snapshotCount] do
-    let some snapshot := pendingSnapshots.back?
-      | throwError "shared-prefix owner snapshot stack ended early"
-    pendingSnapshots := pendingSnapshots.pop
-    ownerSnapshotsConsumed := ownerSnapshotsConsumed + 1
-    let aliases := state.sharedPrefixAliases?.getD aliases
-    let (withoutPriorOwner, installed) ←
-      prepareSharedPrefixOwnerState state base snapshot aliases
-    let declaration ← match ← sourceAccess.read snapshot.rawOrdinal with
-      | .ok declaration => pure declaration
-      | .error message => throwError
-        "cannot reread shared-prefix owner {snapshot.rawOrdinal}: {message}"
-    let (next, chunk) ←
-      feedSharedPrefixOwner withoutPriorOwner context installed snapshot declaration
-    chunks := chunks.set! snapshot.scheduledOrdinal chunk
-    state := next
-    if failAfterOwners? == some ownerSnapshotsConsumed then
-      throwError "injected shared-prefix failure after owner {ownerSnapshotsConsumed}"
-  unless pendingSnapshots.isEmpty do
-    throwError "shared-prefix owner snapshot stack retained unconsumed roots"
-  -- The last owner has no following preparation call to clear the ambient
-  -- Meta root. Release it before assembling the value-only compact result.
-  setEnv base
-  let mut compactRecords : Array CompactRecord := #[]
-  for chunk in chunks do compactRecords := compactRecords ++ chunk
-  let kernelCheckRows := compactRecords.map (·.summary.introduced)
-  let retainedSupportRecords := state.constructionSupportRecords.size
-  state := { state with
-    mainEnv := base
-    compactRecords
-    scheduledOrdinal := sourceRows.size
-    kernelCheckRows }
-  let sealed ← try
-    state.sealCompactDirect context
-  finally
-    setEnv base
-  let (report, compact, verdict) ← sealed.finalize
-  return (report, compact, some verdict, retainedSupportRecords,
-    ownerSnapshotsConsumed, pendingSnapshots.size)
-
-/-- Opt-in test-facing two-phase direct path. Phase A owns one checked source
-build image plus structurally shared pre-owner snapshots; Phase B buffers no
-non-support generated record across owner transitions. Any unavailable audit
-or prototype invariant restores the base and returns the authoritative current
-direct implementation instead. `failAfterOwners?` is a regression-only fault
-injection for fallback-state parity. Main never selects this observer. -/
-def runFilterDirectCheckingSharedPrefix (x : Export) (generation : Cli.Config)
-    (failAfterOwners? : Option Nat := none) :
-    MetaM ((Report × CompactPlan × Option CompactKernelCheckVerdict) ×
-      SharedPrefixDirectObservation) := do
-  let base ← getEnv
-  let levelCallsBefore ← LevelAlgebra.levelCalls.get
-  let levelEscapesBefore ← LevelAlgebra.levelEscapes.get
-  let restoreLevelCounters : MetaM Unit := do
-    LevelAlgebra.levelCalls.set levelCallsBefore
-    LevelAlgebra.levelEscapes.set levelEscapesBefore
-  let preparation : Except String SharedPrefixSourcePrepared ← try
-    prepareSharedPrefixSource x generation
-  catch error =>
-    pure (.error (← error.toMessageData.toString))
-  finally
-    setEnv base
-  let .ok prepared := preparation | do
-    let .error message := preparation | unreachable!
-    restoreLevelCounters
-    let result ← runFilterDirectChecking x false generation
-    return (result, {
-      selected := false
-      source := {
-        sourceRecords := x.decls.size
-        ownerSnapshots := 0
-        metaOnlyRecords := 0
-        constructionTransitions := 0
-        fallback? := some message }
-      fallback? := some message })
-  let sourceObservation := prepared.observation
-  let phase : Except String
-      (Report × CompactPlan × Option CompactKernelCheckVerdict × Nat × Nat × Nat) ← try
-    pure (Except.ok (← runSharedPrefixPhaseB prepared failAfterOwners?))
-  catch error =>
-    pure (Except.error (← error.toMessageData.toString))
-  match phase with
-  | Except.ok (report, compact, verdict?, retainedSupportRecords,
-      ownerSnapshotsConsumed, pendingOwnerSnapshotsAtSeal) =>
-    return ((report, compact, verdict?), {
-      selected := true
-      source := sourceObservation
-      retainedSupportRecords
-      ownerSnapshotsConsumed
-      pendingOwnerSnapshotsAtSeal })
-  | Except.error message =>
-    setEnv base
-    restoreLevelCounters
-    let result ← runFilterDirectChecking x false generation
-    return (result, {
-      selected := false
-      source := sourceObservation
-      fallback? := some message })
-
-/-- AST-dropping no-output generation. Accepted generated records are checked
-and summarized at island close, then discarded without opening a workspace or
-retaining any physical span. -/
+/-- AST-dropping no-output generation. Accepted generated records are
+summarized at island close, optionally kernel-checked according to the generated
+gate, then discarded without opening a workspace or retaining a physical span. -/
 def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     MetaM (Report × CompactPlan) := do
-  let (_, report, compact, _, _, _, _) ←
+  let (_, report, compact, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard
+  return (report, compact)
+
+/-- Declaration-wise generated output. The callback sees a generated island
+only after compact structural capture and its optional kernel gate, then sees
+the corresponding exact source declaration. No output declaration is retained
+after its callback returns. -/
+def runFilterStreaming (x : Export) (checkRecursors : Bool)
+    (generation : Cli.Config) (emit : StreamOutputEmitter) :
+    MetaM (Report × CompactPlan) := do
+  let (_, report, compact, _, _) ← runFilterCore x checkRecursors generation
+    .streamOutput (outputEmitter? := some emit)
   return (report, compact)
 
 /-- Phase-three declaration-span driver.  The complete parsed export remains
@@ -4217,7 +2873,7 @@ record is nevertheless the value consumed by `feedSource`, and compact mode
 does not retain it after that transition. -/
 def runFilterDiscardingPlanned (x : Export) (reader : Spool.PlannedSourceReader)
     (checkRecursors : Bool) (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
-  let (_, report, compact, _, _, _, _) ←
+  let (_, report, compact, _, _) ←
     runFilterCore x checkRecursors generation .compactDiscard (plannedSource? := some reader)
   return (report, compact)
 
@@ -4228,7 +2884,6 @@ private def validatePlannedSource (input : PlannedSourceInput)
   unless input.envelope.retainedDeclarations == 0 do
     return .error "planned source parser retained complete declaration values"
   unless input.envelope.declarationCount == input.census.summaries.size &&
-      input.envelope.declarationCount == input.census.scheduling.size &&
       input.envelope.declarationCount == reader.size do
     return .error "planned source parser/census/reader cardinalities disagree"
   return .ok ()
@@ -4258,8 +2913,7 @@ def checkPlannedSource (input : PlannedSourceInput)
       families }
   return Check.compactSourceReport records
 
-/-- Materialize the exact parsed source only for a compatibility fallback.
-The ordinary successful compact-direct route never calls this function. -/
+/-- Materialize the exact parsed source only for a planned-input compatibility fallback. -/
 def materializePlannedSource (input : PlannedSourceInput)
     (reader : Spool.PlannedSourceReader) : IO (Except String Export) := do
   if let .error message ← validatePlannedSource input reader then
@@ -4271,97 +2925,33 @@ def materializePlannedSource (input : PlannedSourceInput)
     | .ok declaration => declarations := declarations.push declaration
   return .ok { input.envelope.template with decls := declarations }
 
-/-- Declaration-discarding compact-direct checker. Exact source values are
-decoded into the kernel environment only while their feed transition is live;
-the construction environment receives only the prefix through its last
-possible consumer. No generated logical output is serialized. -/
-def runFilterDirectCheckingPlannedCensus (input : PlannedSourceInput)
-    (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
-    (generation : Cli.Config) :
-    MetaM (Report × CompactPlan × Option CompactKernelCheckVerdict) := do
-  if let .error message ← validatePlannedSource input reader then
-    throwError message
-  let (_, report, compact, _, _, kernelVerdict?, _) ←
-    runFilterCore input.envelope.template checkRecursors generation .compactDirect
-      (plannedSource? := some reader) (sourceCensus? := some input.census)
-  return (report, compact, kernelVerdict?)
-
-/-- Planned-census counterpart of [`runFilterDirectCheckingSharedPrefix`].
-Phase A reads each scheduled source declaration once from the completed arena,
-and Phase B rereads only captured owner ordinals. The retained template has no
-declarations; unavailability reruns the existing authoritative planned direct
-path rather than materializing an `Export`. Main selects this seam only for
-eligible generated `--no-output --type-check-output` invocations. -/
-def runFilterDirectCheckingSharedPrefixPlannedCensus (input : PlannedSourceInput)
-    (reader : Spool.PlannedSourceReader) (generation : Cli.Config)
-    (failAfterOwners? : Option Nat := none) :
-    MetaM ((Report × CompactPlan × Option CompactKernelCheckVerdict) ×
-      SharedPrefixDirectObservation) := do
-  if let .error message ← validatePlannedSource input reader then
-    throwError message
-  let base ← getEnv
-  let levelCallsBefore ← LevelAlgebra.levelCalls.get
-  let levelEscapesBefore ← LevelAlgebra.levelEscapes.get
-  let restoreLevelCounters : MetaM Unit := do
-    LevelAlgebra.levelCalls.set levelCallsBefore
-    LevelAlgebra.levelEscapes.set levelEscapesBefore
-  let preparation : Except String SharedPrefixSourcePrepared ← try
-    prepareSharedPrefixSourceCore input.envelope.template input.census
-      (.planned reader) generation
-  catch error =>
-    pure (.error (← error.toMessageData.toString))
-  finally
-    setEnv base
-  let .ok prepared := preparation | do
-    let .error message := preparation | unreachable!
-    restoreLevelCounters
-    let result ← runFilterDirectCheckingPlannedCensus input reader false generation
-    return (result, {
-      selected := false
-      source := {
-        sourceRecords := input.envelope.declarationCount
-        ownerSnapshots := 0
-        metaOnlyRecords := 0
-        constructionTransitions := 0
-        fallback? := some message }
-      fallback? := some message })
-  let sourceObservation := prepared.observation
-  let phase : Except String
-      (Report × CompactPlan × Option CompactKernelCheckVerdict × Nat × Nat × Nat) ← try
-    pure (Except.ok (← runSharedPrefixPhaseB prepared failAfterOwners?))
-  catch error =>
-    pure (Except.error (← error.toMessageData.toString))
-  match phase with
-  | Except.ok (report, compact, verdict?, retainedSupportRecords,
-      ownerSnapshotsConsumed, pendingOwnerSnapshotsAtSeal) =>
-    return ((report, compact, verdict?), {
-      selected := true
-      source := sourceObservation
-      retainedSupportRecords
-      ownerSnapshotsConsumed
-      pendingOwnerSnapshotsAtSeal })
-  | Except.error message =>
-    setEnv base
-    restoreLevelCounters
-    let result ← runFilterDirectCheckingPlannedCensus input reader false generation
-    return (result, {
-      selected := false
-      source := sourceObservation
-      fallback? := some message })
-
-/-- Phase-four internal route: the parser has released its complete source
-declaration array, and scheduled replay decodes exactly one certified raw
-record for each `FilterState.feedSource` transition.  Main does not select this
-path yet; the retained full parser/filter remains its independent fallback and
-property oracle. -/
+/-- Planned no-output route: the parser has released its complete source
+declaration array, and stream-order replay decodes exactly one certified raw
+record for each `FilterState.feedSource` transition. Main selects this path
+when generated output is discarded, generated-island kernel checking is
+enabled, and input kernel checking is disabled. -/
 def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
     (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
     (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
   if let .error message ← validatePlannedSource input reader then
     throwError message
-  let (_, report, compact, _, _, _, _) ← runFilterCore input.envelope.template
+  let (_, report, compact, _, _) ← runFilterCore input.envelope.template
     checkRecursors generation .compactDiscard (plannedSource? := some reader)
     (sourceCensus? := some input.census)
+  return (report, compact)
+
+/-- Declaration-wise planned-source output. The reader owns the frozen input
+arena and decodes one raw source record at a time; the callback owns only the
+current generated island or source record. -/
+def runFilterStreamingPlannedCensus (input : PlannedSourceInput)
+    (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
+    (generation : Cli.Config) (emit : StreamOutputEmitter) :
+    MetaM (Report × CompactPlan) := do
+  if let .error message ← validatePlannedSource input reader then
+    throwError message
+  let (_, report, compact, _, _) ← runFilterCore input.envelope.template
+    checkRecursors generation .streamOutput (plannedSource? := some reader)
+    (sourceCensus? := some input.census) (outputEmitter? := some emit)
   return (report, compact)
 
 end InductiveModels

@@ -92,7 +92,7 @@ def instantiateForalls? (expression : Expr) (arguments : Array Expr) : Option Ex
   return expression
 
 def readExport (path : String) : IO Export := do
-  let .ok parsed := InductiveModels.parse (← IO.FS.readFile path) (analyse := false)
+  let .ok parsed := InductiveModels.parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
   return parsed
 
