@@ -268,6 +268,24 @@ private def failConstruction (issue : ConstructionIssue) : ConstructionM α :=
 private def liftGen (action : GenM α) : ConstructionM α :=
   ExceptT.lift action
 
+/-- Run one declaration-producing prototype tranche atomically.  The saved
+environment is restored for a deliberate decline, a keyed construction issue,
+or any exception thrown by metadata elaboration or the kernel. -/
+private def runConstructionTransaction (action : ConstructionM α) : GenM (Except ConstructionIssue α) := do
+  let saved ← getEnv
+  try
+    match ← ExceptT.lift action.run with
+    | .error decline =>
+      setEnv saved
+      declineWith decline
+    | .ok (.error issue) =>
+      setEnv saved
+      return .error issue
+    | .ok (.ok value) => return .ok value
+  catch exception =>
+    setEnv saved
+    throw exception
+
 private def generatedType (name : Name) : GenM Expr := do
   let some information := (← getEnv).constants.find? name
     | badShape s!"family-adapter prototype declaration {name} is absent"
@@ -2034,17 +2052,9 @@ family prototype. -/
 def buildPublicConstructorPrototypes (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
     (telescopeCertificates : Array TelescopeCertificate) (root : Name) : GenM
-    (Except ConstructionIssue (Array Declaration × Array PublicConstructorCertificate)) := do
-  let saved ← getEnv
-  match ← ExceptT.lift
-      (buildPublicConstructorPrototypesCore plan memberCertificates telescopeCertificates root).run with
-  | .error decline =>
-    setEnv saved
-    declineWith decline
-  | .ok (.error issue) =>
-    setEnv saved
-    return .error issue
-  | .ok (.ok built) => return .ok built
+    (Except ConstructionIssue (Array Declaration × Array PublicConstructorCertificate)) :=
+  runConstructionTransaction <|
+    buildPublicConstructorPrototypesCore plan memberCertificates telescopeCertificates root
 
 private structure InstalledBinder where
   type : Expr
@@ -2390,17 +2400,9 @@ and rolls the incremental environment back on either a keyed obligation or a
 kernel/generator decline, so callers cannot retain a partial rule boundary. -/
 def buildRuleCompatibilityPrototypes (plan : FamilyAdapterPlan)
     (minorHypotheses : Array MinorHypothesisCertificate) (root : Name) : GenM
-    (Except ConstructionIssue (Array Declaration × Array RuleCompatibilityCertificate)) := do
-  let saved ← getEnv
-  match ← ExceptT.lift
-      (buildRuleCompatibilityPrototypesCore plan minorHypotheses root).run with
-  | .error decline =>
-    setEnv saved
-    declineWith decline
-  | .ok (.error issue) =>
-    setEnv saved
-    return .error issue
-  | .ok (.ok built) => return .ok built
+    (Except ConstructionIssue (Array Declaration × Array RuleCompatibilityCertificate)) :=
+  runConstructionTransaction <|
+    ExceptT (buildRuleCompatibilityPrototypesCore plan minorHypotheses root)
 
 private partial def openExactLambdas (tag : Name) (expression : Expr) : Array Expr × Expr :=
   let rec loop (expression : Expr) (binders : Array Expr) :=
@@ -3294,18 +3296,10 @@ def buildPublicRecursorPrototypes (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
     (telescopeCertificates : Array TelescopeCertificate)
     (constructorCertificates : Array PublicConstructorCertificate) (root : Name) : GenM
-    (Except ConstructionIssue (Array Declaration × Array PublicRecursorCertificate)) := do
-  let saved ← getEnv
-  match ← ExceptT.lift
-      (buildPublicRecursorPrototypesCore plan memberCertificates telescopeCertificates
-        constructorCertificates root).run with
-  | .error decline =>
-    setEnv saved
-    declineWith decline
-  | .ok (.error issue) =>
-    setEnv saved
-    return .error issue
-  | .ok (.ok built) => return .ok built
+    (Except ConstructionIssue (Array Declaration × Array PublicRecursorCertificate)) :=
+  runConstructionTransaction <|
+    buildPublicRecursorPrototypesCore plan memberCertificates telescopeCertificates
+      constructorCertificates root
 
 private def buildContainerRecursorPrototypesCore (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
@@ -3333,13 +3327,10 @@ def buildContainerRecursorPrototypes (plan : FamilyAdapterPlan)
     (telescopeCertificates : Array TelescopeCertificate)
     (constructorCertificates : Array PublicConstructorCertificate)
     (root : Name) : GenM
-    (Except ConstructionIssue (Array Declaration × Array BuiltContainerRecursor)) := do
-  let saved ← getEnv
-  match ← ExceptT.lift (buildContainerRecursorPrototypesCore plan memberCertificates
-      telescopeCertificates constructorCertificates root).run with
-  | .error decline => setEnv saved; declineWith decline
-  | .ok (.error issue) => setEnv saved; return .error issue
-  | .ok (.ok built) => return .ok built
+    (Except ConstructionIssue (Array Declaration × Array BuiltContainerRecursor)) :=
+  runConstructionTransaction <|
+    buildContainerRecursorPrototypesCore plan memberCertificates telescopeCertificates
+      constructorCertificates root
 
 private def exactMinorArguments (rule : RuleKey) (binders fields hypotheses fieldValues
     hypothesisValues : Array Expr) : ConstructionM (Array Expr) := do
@@ -3911,17 +3902,39 @@ def buildPublicIotaPrototypes (plan : FamilyAdapterPlan)
     (constructors : Array PublicConstructorCertificate)
     (recursors : Array PublicRecursorCertificate)
     (containerRecursors : Array BuiltContainerRecursor) (root : Name) : GenM
-    (Except ConstructionIssue (Array Declaration × Array PublicIotaCertificate)) := do
-  let saved ← getEnv
-  match ← ExceptT.lift
-      (buildPublicIotaPrototypesCore plan base constructors recursors containerRecursors root).run with
-  | .error decline =>
-    setEnv saved
-    declineWith decline
-  | .ok (.error issue) =>
-    setEnv saved
-    return .error issue
-  | .ok (.ok built) => return .ok built
+    (Except ConstructionIssue (Array Declaration × Array PublicIotaCertificate)) :=
+  runConstructionTransaction <|
+    buildPublicIotaPrototypesCore plan base constructors recursors containerRecursors root
+
+/-- Test-only regression hook proving that the shared prototype transaction
+restores the actual incremental environment after both a late metadata
+exception and a late kernel rejection. -/
+def validatePrototypeExceptionRollback (root : Name) : MetaM (Bool × Bool) := do
+  let metaName := Name.str root "metaInstalledBeforeFailure"
+  let kernelName := Name.str root "kernelInstalledBeforeFailure"
+  let rejectedName := Name.str root "kernelRejected"
+  let validDeclaration (name : Name) := Declaration.defnDecl
+    { name, levelParams := [], type := .sort (.succ .zero), value := .const ``Nat [],
+      hints := .abbrev, safety := .safe }
+  let metadataRestored ← try
+    let _ ← (runConstructionTransaction do
+      liftGen <| addChecked (validDeclaration metaName)
+      liftGen <| badShape "injected late prototype metadata exception").run
+    pure false
+  catch _ =>
+    pure (!(← getEnv).constants.contains metaName)
+  let kernelRestored ← try
+    let _ ← (runConstructionTransaction do
+      liftGen <| addChecked (validDeclaration kernelName)
+      liftGen <| addChecked <| Declaration.defnDecl
+        { name := rejectedName, levelParams := [], type := .const ``Nat [],
+          value := .const ``Nat [], hints := .abbrev, safety := .safe }).run
+    pure false
+  catch _ =>
+    let environment ← getEnv
+    pure (!environment.constants.contains kernelName &&
+      !environment.constants.contains rejectedName)
+  return (metadataRestored, kernelRestored)
 
 /-- Test/prototype-only whole-plan construction.  Every returned declaration
 has been kernel checked in the current incremental environment.  A single
@@ -4002,14 +4015,18 @@ def buildFamilyPrototype (report : ShadowReport) (iso : Iso) (root : Name) :
   let some plan := report.plan?
     | return { issues := #[.incompleteShadow .sourceNotInductive] }
   let saved ← getEnv
-  match ← ExceptT.lift (buildPlanPrototype plan iso root).run with
-  | .error decline =>
-    setEnv saved
-    declineWith decline
-  | .ok built =>
-    if built.certificate.isNone then
+  try
+    match ← ExceptT.lift (buildPlanPrototype plan iso root).run with
+    | .error decline =>
       setEnv saved
-      return { built with declarations := #[] }
-    return built
+      declineWith decline
+    | .ok built =>
+      if built.certificate.isNone then
+        setEnv saved
+        return { built with declarations := #[] }
+      return built
+  catch exception =>
+    setEnv saved
+    throw exception
 
 end InductiveModels.FamilyAdapter

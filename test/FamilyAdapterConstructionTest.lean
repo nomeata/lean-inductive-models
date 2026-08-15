@@ -625,6 +625,7 @@ structure Result where
   universeLevels : Nat := 0
   recursorRuleEvidence : Bool := false
   theoremRuleEvidence : Bool := false
+  exceptionRollback : Bool := false
   failures : Array String := #[]
 
 def implementationEvidenceConsistent (rule : RulePlan)
@@ -635,6 +636,13 @@ def implementationEvidenceConsistent (rule : RulePlan)
 
 def runSamples : MetaM Result := do
   let mut result : Result := {}
+  let (metadataRestored, kernelRestored) ←
+    FamilyAdapter.validatePrototypeExceptionRollback `_family_adapter_transaction_test
+  if metadataRestored && kernelRestored then
+    result := { result with exceptionRollback := true }
+  else
+    result := { result with failures := result.failures.push
+      "prototype transaction leaked a declaration after an exception" }
   for owners in completeSamples do
     let owner := owners[0]!
     let source ← indEDecl owners
@@ -1156,6 +1164,7 @@ def runMain : IO UInt32 := do
       result.installedFamily == 1 && result.installedPublicConstructors == 1 &&
       result.installedPublicRecursors == 1 &&
       result.recursorRuleEvidence && result.theoremRuleEvidence &&
+      result.exceptionRollback &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
       {result.identityNested} definitional nested plans, {result.changed} changed plans, \
@@ -1187,7 +1196,8 @@ def runMain : IO UInt32 := do
     repeatedSpecialisations={result.repeatedSpecialisations}, \
     universeLevels={result.universeLevels}, \
     recursorRuleEvidence={result.recursorRuleEvidence}, \
-    theoremRuleEvidence={result.theoremRuleEvidence}"
+    theoremRuleEvidence={result.theoremRuleEvidence}, \
+    exceptionRollback={result.exceptionRollback}"
   return 1
 
 end FamilyAdapterConstructionTest
