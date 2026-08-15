@@ -323,11 +323,20 @@ private def componentFor (components : Array ComponentPlan) (member : MemberKey)
 private def installedType? (env : Environment) (name : Name) : Option Expr :=
   env.constants.find? name |>.map (·.type)
 
-private def installedRuleRhs? (env : Environment) (recursor constructor : Name) : Option Expr := do
-  match env.constants.find? recursor with
+private def installedRuleRhs? (env : Environment) (rule recursor constructor : Name) :
+    MetaM (Option Expr) := do
+  match env.constants.find? rule with
   | some (.recInfo information) =>
-    information.rules.find? (·.ctor == constructor) |>.map (·.rhs)
-  | _ => none
+    unless rule == recursor do return none
+    return information.rules.find? (·.ctor == constructor) |>.map (·.rhs)
+  | some (.thmInfo information) =>
+    forallTelescope information.type fun binders proposition => do
+      let some (_, lhs, rhs) ← matchEq? proposition | return none
+      unless lhs.getAppFn.constName? == some recursor do return none
+      let some major := lhs.getAppArgs.back? | return none
+      unless major.getAppFn.constName? == some constructor do return none
+      return some (← mkLambdaFVars binders rhs)
+  | _ => return none
 
 private partial def exactLambdaBody (tag : Name) (expression : Expr) : Expr :=
   match expression with
@@ -846,9 +855,10 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           reasons := reasons.push (.missingInterfaceRule key .privateModel)
         let publicIota := (publicIota? iso member rule.ctor).getD .anonymous
         if publicIota.isAnonymous then reasons := reasons.push (.missingInterfaceRule key .publicModel)
-        let implementationRhs? := installedRuleRhs? environment implementationIota
-          constructor.implementationName
-        let publicRhs? := installedRuleRhs? environment publicIota constructor.publicName
+        let implementationRhs? ← installedRuleRhs? environment implementationIota
+          member.implementationRecursor constructor.implementationName
+        let publicRhs? ← installedRuleRhs? environment publicIota member.publicRecursor
+          constructor.publicName
         let expectedImplementationRhs := rewriteWith implementationRuleMapping rule.rhs
         let expectedPublicRhs := rewriteWith publicMapping rule.rhs
         unless implementationRhs? == some expectedImplementationRhs do
