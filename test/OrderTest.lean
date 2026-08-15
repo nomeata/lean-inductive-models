@@ -92,14 +92,6 @@ def withCompletePrerequisiteBefore (x : Export) (prerequisite owner : Name) : IO
       x.decls.extract ownerIndex prerequisiteIndex ++
       x.decls.extract (prerequisiteIndex + 1) x.decls.size }
 
-/-- No declaration-local model descendant of the complete source block was
-emitted for a declined owner. -/
-def noModeledBlockDescendants (input output : Export) (owner : Name) : Bool :=
-  (input.decls.find? (·.names.contains owner)).any fun sourceBlock =>
-    let roots := sourceBlock.names.toArray.map Naming.modelName
-    output.decls.all fun declaration => declaration.names.all fun name =>
-      roots.all fun root => !root.isPrefixOf name
-
 def declarationType? (x : Export) (name : Name) : Option Expr := do
   let declaration ← x.decls.find? (·.names.contains name)
   match declaration with
@@ -1029,16 +1021,20 @@ def run (root : String) : IO UInt32 := do
       wDiscarded.plan.checkReport == Check.checkReport wRun.output &&
       wDiscarded.plan.retainedGeneratedRecords == 0
 
-  -- A prerequisite after its owner causes an exact decline and no partial
-  -- island. A test-only prerequisite-first variant then pins constructive
-  -- island-before-owner emission while every source step remains raw-order.
+  -- A fixed prerequisite behind its owner is the declaration generation would
+  -- otherwise have spliced, so the input's own is installed before the stream
+  -- is consumed: the owner models where it stands, nothing is spliced under
+  -- that name, and the input's record is emitted once, in place. A test-only
+  -- prerequisite-first variant then pins constructive island-before-owner
+  -- emission while every source step remains raw-order.
   let latePUnitRawRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/tight_prop_field_late.ndjson"
     { noGeneration with simple := true }
-  state := state.check "late input PUnit declines without a partial model island" <|
-    latePUnitRawRun.report.declined ==
-      #[(`PFP, "prim model name taken (PUnit)")] &&
-      noModeledBlockDescendants latePUnitRawRun.input latePUnitRawRun.output `PFP
+  state := state.check "late input PUnit supports the owner in front of it" <|
+    !latePUnitRawRun.report.declined.any (·.1 == `PFP) &&
+      latePUnitRawRun.report.generated.any (·.1 == `PFP) &&
+      !latePUnitRawRun.report.spliced.any (fun row => row.2.contains `PUnit) &&
+      (latePUnitRawRun.output.decls.filter (·.names.contains `PUnit)).size == 1
   let latePUnitInput ←
     withCompletePrerequisiteBefore latePUnitRawRun.input `PUnit `PFP
   let latePUnitRun ← runFilterState latePUnitInput

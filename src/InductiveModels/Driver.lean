@@ -2110,6 +2110,130 @@ def SourceCensus.ofSource (source : Export) : SourceCensus :=
   (source.decls.foldl (fun builder declaration => builder.push declaration)
     ({} : SourceCensus.Builder)).freeze
 
+/-- **The axioms this tool writes at a fixed canonical statement**, with the
+statement builders the input's own declaration is compared against. These are
+the same two builders [`InductiveModels.ensureFunext`] and
+[`InductiveModels.ensureChoice`] use, so an input axiom accepted here is exactly
+one those two would have accepted where it stands. -/
+def canonicalSpliceAxioms : List (Name × (Level → MetaM Expr)) :=
+  [(`Quot.sound, fun level => quotSoundType `Eq level),
+   (`Classical.choice, fun level => pure (choiceType level))]
+
+/-- **The input's own copies of the declarations this tool writes, installed
+before its stream is consumed.**
+
+Generation writes a small fixed set of declarations of its own: the four
+basis inductives, `Nonempty`, the kernel quotient, `Quot.sound` and
+`Classical.choice`. It splices the one it needs whenever the input declares
+none. When the input declares one *later* in the stream, the splice and the
+input's own replay would bind the same name twice and the kernel binds a
+constant once — so every owner standing in front of that record declined at
+`prim model name taken`, or waited for a prerequisite that never arrived in
+time, purely because of where the record physically sits. `arm_f_zip`'s
+`FTwo` and `prim_late_eq`'s `Cnt` are the smallest instances.
+
+What makes the second copy redundant rather than merely inconvenient is that
+the input's record is required to be *the same declaration*:
+[`InductiveModels.validateBasisOwner`]'s comparison for an inductive — byte-identical
+to the declaration this kernel mints, in every field the export carries —
+[`InductiveModels.installedQuotRecord`]'s for the quotient's four records, and
+`ensureFunext`/`ensureChoice`'s own statement check for the two axioms. A
+record which does not pass is left alone: it still reserves its names, and
+the owners in front of it still decline.
+
+**No declaration moves.** The input's record is emitted at its own source
+position and replays there as a no-op, the way the second and later `quot`
+records of one kernel quotient bundle already do
+([`InductiveModels.toDeclaration`]). This is a fact about the replay environment,
+not an ordering of the output, and it is confined to declarations this tool
+would otherwise have written itself.
+
+`read` is the raw-record reader for the stream about to be consumed; only the
+at most eleven ordinals the census already knows are read. -/
+structure CanonicalBasisInstall where
+  /-- The replay environment with the accepted declarations already in it. -/
+  env : Environment
+  /-- The raw source ordinals whose declaration `env` already carries. Each of
+  these records replays as a no-op: its own declaration is what was installed. -/
+  ordinals : Std.HashSet Nat
+
+def installInputCanonicalBasis (env0 : Environment) (census : SourceCensus)
+    (read : Nat → MetaM (Except String EDecl)) :
+    MetaM (Except String CanonicalBasisInstall) := do
+  let saved ← getEnv
+  let mut env := env0
+  let mut installed : Std.HashSet Nat := {}
+  let mut failure? : Option String := none
+  let mut quotientRecords : Array (Nat × EDecl) := #[]
+  -- The fixed inductives, then the kernel quotient, then the two axioms whose
+  -- statements are read against them.
+  for (root, canonical) in canonicalSpliceInductives do
+    if failure?.isSome then break
+    let some ordinal := census.rawOrdinals[root]? | continue
+    let record ← match ← read ordinal with
+      | .ok record => pure record
+      | .error message =>
+        failure? := some s!"cannot decode source record {ordinal} for {root}: {message}"
+        continue
+    let .induct (type :: _) _ _ := record | continue
+    -- The comparison mints under the environment built so far, which is the
+    -- one the declaration is then installed in.
+    setEnv env
+    unless ← isCanonicalInductiveRecord root canonical record do continue
+    match env.addDeclCore 0 (alignBasisLevelParams canonical type.levelParams) none false with
+    | .ok next =>
+      env := next
+      installed := installed.insert ordinal
+    | .error exception =>
+      failure? := some s!"cannot install the input's own {root}: \
+        {← (exception.toMessageData {}).toString}"
+  -- One kernel declaration, four export records: all four must be the
+  -- quotient's own before any of them is.
+  for name in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
+    if failure?.isSome then break
+    let some ordinal := census.rawOrdinals[name]? | continue
+    match ← read ordinal with
+    | .ok record => quotientRecords := quotientRecords.push (ordinal, record)
+    | .error message =>
+      failure? := some s!"cannot decode source record {ordinal} for {name}: {message}"
+  if failure?.isNone && quotientRecords.size == 4 then
+    match env.addDeclCore 0 .quotDecl none false with
+    | .ok minted =>
+      if quotientRecords.all (fun (_, record) => installedQuotRecord minted record) then
+        env := minted
+        for (ordinal, _) in quotientRecords do installed := installed.insert ordinal
+    | .error _ => pure ()
+  for (name, statement) in canonicalSpliceAxioms do
+    if failure?.isSome then break
+    let some ordinal := census.rawOrdinals[name]? | continue
+    let record ← match ← read ordinal with
+      | .ok record => pure record
+      | .error message =>
+        failure? := some s!"cannot decode source record {ordinal} for {name}: {message}"
+        continue
+    let .ax axiomName levelParams type isUnsafe := record | continue
+    unless axiomName == name && !isUnsafe do continue
+    let [level] := levelParams | continue
+    -- The statements name `Eq`, `Quot` and `Nonempty`, so they can only be
+    -- read once those are installed; an input which does not supply them
+    -- canonically simply keeps its axiom to itself.
+    setEnv env
+    let expected? ← try pure (some (← statement (.param level))) catch _ => pure none
+    let some expected := expected? | continue
+    unless ← isDefEq type expected do continue
+    match env.addDeclCore 0
+        (.axiomDecl { name, levelParams, type, isUnsafe }) none false with
+    | .ok next =>
+      env := next
+      installed := installed.insert ordinal
+    | .error exception =>
+      failure? := some s!"cannot install the input's own {name}: \
+        {← (exception.toMessageData {}).toString}"
+  setEnv saved
+  match failure? with
+  | some message => return .error message
+  | none => return .ok { env, ordinals := installed }
+
 /-- One-pass model-before-owner guard for an input stream. Once an inductive
 owner has appeared, any later record introducing one of that owner's exact
 public model slots is too late. This intentionally performs no dependency
@@ -2229,6 +2353,9 @@ private structure FilterContext where
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
   constructionReserved : Std.HashSet Name
+  /-- Raw source ordinals whose declaration `installInputCanonicalBasis`
+  already put in the replay environment. -/
+  preinstalledOrdinals : Std.HashSet Nat
   collectTrace : Bool := false
   collectAdapterShadows : Bool := false
   outputEmitter? : Option StreamOutputEmitter := none
@@ -2428,7 +2555,16 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   -- Replay the source record between its pre-owner and post-owner generation
   -- phases.  An unreplayable source record terminates the complete machine and
   -- discards every private island, matching the historical loop return.
-  if let some dcl := toDeclaration (← getEnv) replayD then
+  if context.preinstalledOrdinals.contains sourceOrdinal then
+    -- **This record's own declaration is already installed.**
+    -- `installInputCanonicalBasis` put it in, from this very record, after
+    -- proving it to be the declaration generation would otherwise have
+    -- written; installing it again is installing the same declaration, which
+    -- the kernel refuses by name. So the record replays as a no-op — the same
+    -- answer `toDeclaration` gives the second `quot` record of one kernel
+    -- quotient bundle — and is still emitted at this position.
+    replayedOwnerEnv? := some (← getEnv)
+  else if let some dcl := toDeclaration (← getEnv) replayD then
     match (← getEnv).addDeclCore 0 dcl none false with
     | .ok e =>
       replayedOwnerEnv? := some e
@@ -2575,7 +2711,12 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             "cannot index accepted persistent support for {d.names}: {message}"
       if retainOutput then legacyOut := legacyOut ++ orderedGenerated
       setEnv mainWithSupport
-      if let some ownerDeclaration := toDeclaration mainWithSupport replayD then
+      if context.preinstalledOrdinals.contains sourceOrdinal then
+        -- The owner-free island replay restores this record's own declaration
+        -- together with the prefix; it was installed before the stream began
+        -- and is not installed a second time here either.
+        mainEnv := mainWithSupport
+      else if let some ownerDeclaration := toDeclaration mainWithSupport replayD then
         match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
         | .ok env =>
           mainEnv := env
@@ -2736,10 +2877,23 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
         throwError "normalized source-name collision moves quotient role {name}; \
           collision-safe quotient replay is not supported"
   let sourceOrder := Array.range sourceCensus.summaries.size
-  -- Source records are consumed in their original stream order. A model
-  -- owner whose fixed support occurs later declines at that owner; the normal
-  -- route never moves input declarations or preinstalls later prerequisites.
-  let mainEnv ← getEnv
+  -- Source records are consumed in their original stream order and no
+  -- declaration is ever moved. An owner whose fixed *support* occurs later
+  -- still declines at that owner; the one exception is the fixed basis, whose
+  -- canonical declaration the input's own record is required to be
+  -- byte-identical to and which is therefore installed below.
+  let readSourceRecord : Nat → MetaM (Except String EDecl) := fun ordinal => do
+    match plannedSource? with
+    | some reader => reader.read ordinal
+    | none => match x.decls[ordinal]? with
+      | some record => return .ok record
+      | none => return .error "the record has neither retained nor planned payload"
+  let canonicalBasis ← match
+      ← installInputCanonicalBasis (← getEnv) sourceCensus readSourceRecord with
+    | .ok install => pure install
+    | .error message =>
+      throwError "cannot install the input's own basis declarations: {message}"
+  let mainEnv := canonicalBasis.env
   -- Reuse the immutable census products. Retained sources may still supply
   -- whole-export row caches; planned sources derive missing rows from each
   -- transient declaration at its logical transition.
@@ -2786,7 +2940,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
     sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
-    rawOrdinals, reserved, constructionReserved, collectTrace, collectAdapterShadows,
+    rawOrdinals, reserved, constructionReserved,
+    preinstalledOrdinals := canonicalBasis.ordinals, collectTrace, collectAdapterShadows,
     outputEmitter? }
   let mut state : FilterState :=
     { mainEnv := mainEnv, persistentSyntax := sourceSyntax }

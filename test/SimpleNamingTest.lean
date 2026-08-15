@@ -85,13 +85,17 @@ def FixtureResult.noLegacySlots (result : FixtureResult) (owner : Name) : Bool :
   !result.hasName (Name.str root "rec_0") &&
   !result.hasName (Name.str root "iota_0_0")
 
-def FixtureResult.declinedWithoutModel (result : FixtureResult) (owner : Name)
-    (reason : String) : Bool :=
-  result.report.declined.contains (owner, reason) &&
-    (result.input.decls.find? (·.names.contains owner)).any fun sourceBlock =>
-      let modelRoots := sourceBlock.names.toArray.map modelName
-      result.output.all fun declaration => declaration.names.all fun name =>
-        modelRoots.all fun root => !root.isPrefixOf name
+/-- **An owner standing in front of the input's own fixed support models
+where it stands.** The support record is the declaration generation would
+otherwise have written, so it is installed before the stream is consumed:
+the owner does not decline, nothing is spliced under that name, and the
+input's own record is emitted exactly once, at its own source position. -/
+def FixtureResult.modelsAtInputSupport (result : FixtureResult) (owner : Name)
+    (support : Name) : Bool :=
+  result.report.generated.any (·.1 == owner) &&
+    !result.report.declined.any (·.1 == owner) &&
+    !result.report.spliced.any (fun row => row.2.contains support) &&
+    (result.output.filter (·.names.contains support)).size == 1
 
 def FixtureResult.hasInterface (result : FixtureResult) (owner recursor : Name)
     (constructors : Array Name) (numRules : Nat) : Bool :=
@@ -114,9 +118,9 @@ def main : IO UInt32 := do
   let shapesInput ← readInput "test/fixtures/inductive-models/prim_shapes.ndjson"
   let shapesRaw ← runInput shapesInput simpleOnly
   let shapes ← runInput (← withCompletePrerequisiteBefore shapesInput `Eq `Tri) simpleOnly
-  state := state.check "raw Type routes before Eq decline without partial models"
-    (shapesRaw.declinedWithoutModel `Tri "prim model name taken (Eq)" &&
-      shapesRaw.declinedWithoutModel `IdxP "prim model name taken (Eq)")
+  state := state.check "raw Type routes before Eq model at the input's own Eq"
+    (shapesRaw.modelsAtInputSupport `Tri `Eq &&
+      shapesRaw.modelsAtInputSupport `IdxP `Eq)
   state := state.check "Type route has declaration-local interface"
     (shapes.hasInterface `Tri `Tri.rec #[`Tri.a, `Tri.b, `Tri.c] 3)
   state := state.check "Type route has no legacy indexed slots" (shapes.noLegacySlots `Tri)
@@ -128,8 +132,8 @@ def main : IO UInt32 := do
   let graphInput ← readInput "test/fixtures/inductive-models/prim_graph.ndjson"
   let graphRaw ← runInput graphInput simpleOnly
   let graph ← runInput (← withCompletePrerequisiteBefore graphInput `Eq `Ac) simpleOnly
-  state := state.check "raw graph owner before Eq declines without a partial model"
-    (graphRaw.declinedWithoutModel `Ac "prim model name taken (Eq)")
+  state := state.check "raw graph owner before Eq models at the input's own Eq"
+    (graphRaw.modelsAtInputSupport `Ac `Eq)
   state := state.check "graph route has declaration-local interface"
     (graph.hasInterface `Ac `Ac.rec #[`Ac.intro] 1)
   state := state.check "graph helpers are implementation descendants"
@@ -140,8 +144,8 @@ def main : IO UInt32 := do
   let carveInput ← readInput "test/fixtures/inductive-models/prim_carve.ndjson"
   let carveRaw ← runInput carveInput simpleOnly
   let carve ← runInput (← withCompletePrerequisiteBefore carveInput `Eq `Bif) simpleOnly
-  state := state.check "raw carve owner before Eq declines without a partial model"
-    (carveRaw.declinedWithoutModel `Bif "prim model name taken (Eq)")
+  state := state.check "raw carve owner before Eq models at the input's own Eq"
+    (carveRaw.modelsAtInputSupport `Bif `Eq)
   state := state.check "carve route has declaration-local interface"
     (carve.hasInterface `Bif `Bif.rec #[`Bif.b0, `Bif.b2] 2)
   state := state.check "skeleton helpers are implementation descendants"
@@ -151,8 +155,8 @@ def main : IO UInt32 := do
   let wInput ← readInput "test/fixtures/inductive-models/prim_w.ndjson"
   let wRaw ← runInput wInput simpleOnly
   let w ← runInput (← withCompletePrerequisiteBefore wInput `Eq `Wt) simpleOnly
-  state := state.check "raw W owner before Eq declines without a partial model"
-    (wRaw.declinedWithoutModel `Wt "prim model name taken (Eq)")
+  state := state.check "raw W owner before Eq models at the input's own Eq"
+    (wRaw.modelsAtInputSupport `Wt `Eq)
   state := state.check "W route has declaration-local interface"
     (w.hasInterface `Wt `Wt.rec #[`Wt.leaf, `Wt.one, `Wt.two, `Wt.mix, `Wt.gap, `Wt.alt] 6)
   state := state.check "W helpers are implementation descendants"
@@ -172,9 +176,9 @@ def main : IO UInt32 := do
   let accSupportInput ← withCompletePrerequisitesBefore accInput
     #[`Nat, `Nonempty, `Classical.choice] `Acc
   let basicAcc ← runInput accSupportInput { noGeneration with basic := true }
-  state := state.check "raw basic Acc before its complete support declines without a partial model"
-    (basicAccRaw.declinedWithoutModel `Acc
-      "prim model prerequisite occurs later in the input stream")
+  state := state.check "raw basic Acc models at the input's own late support"
+    (basicAccRaw.modelsAtInputSupport `Acc `Nonempty &&
+      basicAccRaw.modelsAtInputSupport `Acc `Nat)
   state := state.check "basic Acc has declaration-local interface"
     (basicAcc.hasInterface `Acc `Acc.rec #[`Acc.intro] 1)
   state := state.check "basic Acc has no legacy slots" (basicAcc.noLegacySlots `Acc)
@@ -184,8 +188,8 @@ def main : IO UInt32 := do
   let privateCtor ← runInput
     (← withCompletePrerequisiteBefore privateInput `Eq `Off) simpleOnly
   let privateCtors := inputConstructors privateCtor.input `Off
-  state := state.check "raw private-constructor owner before Eq declines without a partial model"
-    (privateRaw.declinedWithoutModel `Off "prim model name taken (Eq)")
+  state := state.check "raw private-constructor owner before Eq models at the input's own Eq"
+    (privateRaw.modelsAtInputSupport `Off `Eq)
   state := state.check "private constructor keeps its exact raw exported name"
     (privateCtors.size == 1 && privateCtor.hasName (modelName privateCtors[0]!))
   state := state.check "private-constructor route has no legacy slots"

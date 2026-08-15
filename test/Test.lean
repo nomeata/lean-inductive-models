@@ -479,7 +479,7 @@ def expectedPrim : List Row :=
        ("G1.below", 18), ("G2", 13), ("G5", 13), ("G5.below", 13),
        ("G2.below", 13)],
       [ ("Eq", "prim model: a basis primitive")])
-  , ("prim_graph_pre", [("Nonempty", 4), ("Ac", 20), ("Ac.below", 13),
+  , ("prim_graph_pre", [("Ac", 20), ("Ac.below", 13), ("Nonempty", 4),
       ("PSigma", 11)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
@@ -502,12 +502,19 @@ def expectedPrim : List Row :=
   -- because it is arm G's graph route and this input has both the `Nonempty`
   -- and the `Classical.choice` it would otherwise splice; it is **the only
   -- model in the fragment that spends `Classical.choice`** at the tagged
-  -- instantiation; and it is **last in the list rather than in the middle**,
-  -- because those two are declared *after* it here — `Acc` arrives through
-  -- `WellFounded.fix` and `Nonempty` only through `Classical.propDecidable`.
-  -- This is the late-primitive class rather than a lost name:
-  -- [`InductiveModels.lateSpliceNames`] reserves it against generated splicing,
-  -- so a model owner encountered before it declines in the raw-order stream.
+  -- instantiation; and it uses both of them **from behind**, because both are
+  -- declared *after* it here — `Acc` arrives through `WellFounded.fix` and
+  -- `Nonempty` only through `Classical.propDecidable`.
+  --
+  -- **The order of this row is raw source order and nothing else.** `Iff` sits
+  -- between `Or` and `Acc` and `Nonempty` is last, exactly where the export
+  -- puts them; the row used to carry both at the front, from a scheduler that
+  -- moved fixed support ahead of its consumers and no longer exists. What
+  -- takes its place is [`InductiveModels.installInputCanonicalBasis`]: the input's own
+  -- `Eq`, `Nat`, `PUnit`, `Nonempty`, quotient and axioms are the declarations
+  -- generation would otherwise have written itself, so they are installed
+  -- before the stream is consumed and replay as no-ops where they stand.
+  -- Nothing moves in the output, and every count in this row is unchanged.
   --
   -- `Subtype`, `Sigma`, `And`, `Iff`, `WellFounded`, and `PProd` expose
   -- intrinsic projection roles. Their larger
@@ -516,10 +523,10 @@ def expectedPrim : List Row :=
   -- additionally receive one eta theorem; unit-like and K-like declarations
   -- receive their own one-theorem metadata roles.
   , ("w_core",
-      [("Iff", 8), ("Nonempty", 4), ("Subtype", 16), ("List", 6), ("Sigma", 9),
+      [("Subtype", 16), ("List", 6), ("Sigma", 9),
        ("Option", 6), ("Exists", 4), ("And", 8), ("False", 2), ("Decidable", 6),
-       ("True", 6), ("Or", 6), ("Acc", 12), ("WellFounded", 6), ("Bool", 6),
-       ("HEq", 5), ("PProd", 9)],
+       ("True", 6), ("Or", 6), ("Iff", 8), ("Acc", 12), ("WellFounded", 6),
+       ("Bool", 6), ("HEq", 5), ("PProd", 9), ("Nonempty", 4)],
       [ ("Eq", "prim model: a basis primitive")
       , ("PUnit", "prim model: a basis primitive")
       , ("Nat", "prim model: a basis primitive")])
@@ -556,14 +563,23 @@ def expectedPrim : List Row :=
   -- cannot be written in a `prelude` source. `nest_fam_arg`'s `OK` and `Key`
   -- are the positive layer-3 occupants for discarding a βζ-dead mention, and
   -- the row below asserts their auxiliary models and erased skeletons.
+  --
+  -- **`NoBase` is 18 and its skeleton 16, rather than 10 and 8.** Both gained
+  -- the same eight-record private one-layer certificate, the skeleton through
+  -- `2d8891a` — which classifies a generated owner by its own declaration —
+  -- and `NoBase` itself through `81ad237`, which reads the indexed-fibre
+  -- boundary off the dependency closure. Both counts were unobservable while
+  -- this row's earlier owners were declining. `ProjectionTest` names the eight
+  -- records; this row only counts them.
   , ("prim_carve",
       [("N", 15), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
-       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
+       ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9),
        ("Cf", 8), ("Cf._model._impl.skel", 12), ("Inf2", 8), ("Inf2._model._impl.skel", 12),
        ("Vec", 8), ("Vec._model._impl.skel", 6), ("Bl", 10),
        ("Bl._model._impl.skel", 8), ("IBox", 16), ("IBox._model._impl.skel", 7),
@@ -571,7 +587,7 @@ def expectedPrim : List Row :=
        ("Mx", 8), ("Mx._model._impl.skel", 12),
        ("Two2", 8), ("Two2._model._impl.skel", 6), ("Fn", 8), ("Fn._model._impl.skel", 6),
        ("Sm3", 8), ("Sm3._model._impl.skel", 12), ("Br", 8), ("Br._model._impl.skel", 12),
-       ("NoBase", 10), ("NoBase._model._impl.skel", 8),
+       ("NoBase", 18), ("NoBase._model._impl.skel", 16),
        ("Tri3", 8), ("Tri3._model._impl.skel", 6)],
       [ ("Eq", "prim model: a basis primitive")])
   -- Arm W's two recursive-boxing seams. `WData` stores a non-recursive
@@ -623,9 +639,10 @@ def expectedPrim : List Row :=
       [("Tree", 224), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
-       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
+       ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Nonempty", 4), ("Wty", 23),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Wty", 23),
        ("Triple", 16), ("P", 6), ("Q", 8), ("Wt", 20),
        ("Dep", 12), ("Bad", 12), ("TwinInf", 23), ("Br", 12), ("Twin", 22),
        ("Prefix", 26), ("Utd", 14), ("Mixed", 25)],
@@ -717,6 +734,15 @@ def expectedPrim : List Row :=
        ("Ix._model._impl.0._model._impl.aux", 12),
        ("Ix._model._impl.0._model._impl.aux._model._impl.skel", 16)],
       [("Eq", "prim model: a basis primitive")])
+  -- **`Ac` is written at a quotient the input declares behind it.** `Quot`,
+  -- `Quot.sound`, `Nonempty` and `Classical.choice` all follow `Ac` in the raw
+  -- export and `Ac` needs every one of them: its 20 declarations are arm G's 13
+  -- plus the fixed-support prefix it carries as the file's first model. The
+  -- four are the declarations generation would otherwise splice, so
+  -- [`InductiveModels.installInputCanonicalBasis`] installs the input's own and each
+  -- record replays as a no-op at its own position. `Nonempty` then models where
+  -- it stands, behind the two owners that already used it.
+  --
   -- **An ordinary `PSigma` occurs after unrelated owners in the raw export.**
   -- It is no longer support: earlier owners use the fixed `PSigma'` bundle,
   -- while the source `PSigma` remains at its dependency position and receives
@@ -746,6 +772,22 @@ def expectedPrim : List Row :=
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("PSigma", 9)],
       [ ("Eq", "prim model: a basis primitive")])
+  -- **The basis record itself stands at a positive ordinal.** `Cnt` is an
+  -- ordinary owner in front of the `Nat` and `Eq` that `Use` drags in, and it
+  -- is written at the same `Eq` every other prim model is written at. The two
+  -- declarations are the same declaration, so the splice proceeds and the
+  -- input's own record replays as a no-op at its own position.
+  --
+  -- `Cnt`'s 14 is the Church route's own and `Use`'s 6 is arm F's, unchanged
+  -- from the run in which `Cnt` declines — which is the point. The claim of the
+  -- row is that `Cnt` models at all, and models exactly as it would if `Nat`
+  -- and `Eq` came first: an implementation that only recovers owners *behind*
+  -- the basis record leaves `Cnt` in the decline row, and one that moves the
+  -- record leaves the input's own declaration out of the output.
+  , ("prim_late_eq",
+      [("Cnt", 14), ("Use", 6)],
+      [ ("Nat", "prim model: a basis primitive")
+      , ("Eq", "prim model: a basis primitive")])
   ]
 
 structure TAcc where
@@ -846,13 +888,12 @@ def runOne (root : String) (a : TAcc) (r : Row)
     s!"{name}: the export's recursors differ from Lean's own: {rep.recMismatch}"
   -- The compact graph retains no declaration values.  It must nevertheless
   -- select exactly the same final order (or error) as the full export pass.
-  -- `prim_graph_pre`'s exact quotient support precedes the owner which derives
-  -- `funext`. Island-local emission must preserve that
-  -- boundary: `Quot.lift`, then the derived `funext`, then its source owner.
-  -- The compact sequence is consequently already an ordinary-order fixed
-  -- point; the retained-export reference below independently checks the same order.
+  -- `prim_graph_pre`'s quotient support sits *behind* the owner which derives
+  -- `funext`, because that is where the input puts it and emission moves no
+  -- input declaration; the boundary claim below is therefore about the order
+  -- this pipeline selects, and the retained-export reference independently
+  -- checks the same order.
   let compact := Order.summaries { x with decls }
-  let compactFixed := Order.summariesAreOrdered compact
   let compactOrder := Order.summaryRecordOrder compact
   let fullOrder := Order.recordOrder { x with decls }
   let sameOrder := match compactOrder, fullOrder with
@@ -865,19 +906,29 @@ def runOne (root : String) (a : TAcc) (r : Row)
     let positionIn := fun order target => do
       let source ← indexOf target
       order.findIdx? (· == source)
+    -- **The input declares its quotient behind the owner that uses it**, so the
+    -- emitted stream is deliberately not an ordering fixed point here: `Ac`'s
+    -- island stays at `Ac`'s source position and `Quot.lift` stays at its own,
+    -- three records later. That is the raw export's shape and nothing moves it;
+    -- the output contract is source order plus islands, with no final global
+    -- reorder.
+    --
+    -- What must survive is that the emitted stream is still *orderable* and
+    -- that the public ordering pipeline recovers the dependency boundary:
+    -- `Quot.lift`, then the derived `funext`, then its source owner. A run that
+    -- emitted a second copy of an input declaration, or that lost the
+    -- model-before-owner edge, fails here rather than in a consumer.
     let quotientBoundary := match compactOrder with
       | .ok order =>
-        match indexOf `Ac._model._impl.funext, indexOf `Ac, indexOf `Quot.lift,
-            positionIn order `Ac._model._impl.funext, positionIn order `Ac,
+        match positionIn order `Ac._model._impl.funext, positionIn order `Ac,
             positionIn order `Quot.lift with
-        | some rawFunext, some rawOwner, some rawLift,
-            some finalFunext, some finalOwner, some finalLift =>
-          rawLift < rawFunext && rawFunext < rawOwner &&
-            finalLift < finalFunext && finalFunext < finalOwner
-        | _, _, _, _, _, _ => false
+        | some finalFunext, some finalOwner, some finalLift =>
+          finalLift < finalFunext && finalFunext < finalOwner
+        | _, _, _ => false
       | .error _ => false
-    a := check a (compactFixed && quotientBoundary)
-      "prim_graph_pre: quotient support does not precede derived funext and its owner"
+    a := check a quotientBoundary
+      "prim_graph_pre: the ordered output does not put quotient support before \
+       the derived funext and its owner"
   -- axis 4: the round trip
   let out := ({ x with decls }).render
   match InductiveModels.parse out with

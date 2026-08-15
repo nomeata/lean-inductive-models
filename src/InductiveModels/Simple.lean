@@ -348,7 +348,7 @@ private partial def freshBasisAlias (env : Environment) (root : Name)
     freshBasisAlias env root canonical (attempt + 1)
   else alias
 
-private def alignBasisLevelParams (declaration : Declaration) (actual : List Name) : Declaration :=
+def alignBasisLevelParams (declaration : Declaration) (actual : List Name) : Declaration :=
   match declaration with
   | .inductDecl expected numParams types isUnsafe =>
     if expected.length != actual.length then declaration else
@@ -361,6 +361,31 @@ private def alignBasisLevelParams (declaration : Declaration) (actual : List Nam
               type := constructor.type.instantiateLevelParams expected levels } }) isUnsafe
   | _ => declaration
 
+/-- **The export record a canonical inductive declaration produces**, at the
+level-parameter names `levelParams`, minted by this same kernel under a
+disposable fresh alias and renamed back. Comparing an input record against it
+is a byte comparison over every piece of metadata the export carries. -/
+private def canonicalInductiveRecord (root : Name) (canonical : Declaration)
+    (levelParams : List Name) : MetaM (Except String EDecl) := do
+  let env ← getEnv
+  let canonical := alignBasisLevelParams canonical levelParams
+  let alias := freshBasisAlias env root canonical
+  let canonical := aliasBasisDeclaration root alias canonical
+  let expectedEnv ← match env.addDeclCore 0 canonical none true with
+    | .ok next => pure next
+    | .error exception =>
+      return .error s!"cannot mint the canonical {root} interface: \
+        {← (exception.toMessageData {}).toString}"
+  let expectedAlias ← match basisRecordFromEnv expectedEnv alias with
+    | .ok record => pure record
+    | .error message =>
+      return .error s!"cannot read the canonical {root} interface: {message}"
+  return .ok <| EDecl.mapNames
+    (fun name => if alias.isPrefixOf name then name.replacePrefix alias root else name)
+    (mapConstsE fun name =>
+      if alias.isPrefixOf name then some (name.replacePrefix alias root) else none)
+    expectedAlias
+
 /-- Require an encountered basis owner to be the exact canonical declaration
 family before it may be reported as an exemption. A noncanonical declaration
 is never a successful exemption. -/
@@ -369,26 +394,26 @@ def validateBasisOwner (root : Name) (owner : EDecl) : GenM Unit := do
     | badShape "the basis owner is not a nonempty inductive record"
   let some canonical := basisCanonicalDecl? root
     | badShape s!"{root} is not a basis owner"
-  let env ← getEnv
-  let canonical := alignBasisLevelParams canonical type.levelParams
-  let alias := freshBasisAlias env root canonical
-  let canonical := aliasBasisDeclaration root alias canonical
-  let expectedEnv ← match env.addDeclCore 0 canonical none true with
-    | .ok next => pure next
-    | .error exception =>
-      badShape s!"cannot mint the canonical {root} interface: \
-        {← (exception.toMessageData {}).toString}"
-  let expectedAlias ← match basisRecordFromEnv expectedEnv alias with
-    | .ok record => pure record
-    | .error message => badShape s!"cannot read the canonical {root} interface: {message}"
-  let expected := EDecl.mapNames
-    (fun name => if alias.isPrefixOf name then name.replacePrefix alias root else name)
-    (mapConstsE fun name =>
-      if alias.isPrefixOf name then some (name.replacePrefix alias root) else none)
-    expectedAlias
+  let expected ← match ← canonicalInductiveRecord root canonical type.levelParams with
+    | .ok expected => pure expected
+    | .error message => badShape message
   unless owner == expected do
     declineWith (.notLeans root
       "its complete inductive, constructor, and recursor metadata is not canonical")
+
+/-- **Whether an input record is the canonical basis declaration itself.**
+
+The same comparison [`InductiveModels.validateBasisOwner`] makes, asked before the
+record is reached rather than at it. A record that passes carries no
+information the canonical declaration does not: writing that declaration and
+replaying this record are the same act. -/
+def isCanonicalInductiveRecord (root : Name) (canonical : Declaration)
+    (record : EDecl) : MetaM Bool := do
+  let .induct (type :: _) _ _ := record | return false
+  unless type.name == root do return false
+  match ← canonicalInductiveRecord root canonical type.levelParams with
+  | .ok expected => return record == expected
+  | .error _ => return false
 
 def psigmaPrimeT (u v : Level) (α β : Expr) : Expr :=
   mkAppN (.const `PSigma' [u, v]) #[α, β]
@@ -534,6 +559,23 @@ def choiceType (lu : Level) : Expr :=
 def choiceDecl : Declaration :=
   .axiomDecl { name := `Classical.choice, levelParams := [`u]
                type := choiceType (.param `u), isUnsafe := false }
+
+/-- **The inductive declarations this tool writes at a fixed canonical shape.**
+
+Exactly the roots for which generation holds a `Declaration` of its own and
+splices it when the input declares none: the four of
+[`InductiveModels.inductiveBasis`], and `Nonempty`, which is not a basis primitive
+but is `Classical.choice`'s own domain and is spliced by the graph arm on the
+same terms. A name outside this list belongs to the input alone — there is no
+declaration to compare an input record against, so nothing may be written
+under it.
+
+The declaration and the root travel together because the comparison this list
+exists for is between a *declaration* and an input record, not between two
+names. -/
+def canonicalSpliceInductives : List (Name × Declaration) :=
+  [(`Eq, eqDecl), (`Nat, natDecl), (`PUnit, punitDecl),
+   (`PSigma', psigmaPrimeDecl), (`Nonempty, nonemptyDecl)]
 
 def ensurePUnit (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
   ensurePrim `PUnit [`PUnit, `PUnit.unit, `PUnit.rec] punitDecl checkPUnit reserved
