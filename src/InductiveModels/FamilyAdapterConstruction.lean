@@ -2341,38 +2341,53 @@ private def motiveHypothesisValues (motives fields binders : Array Expr) : MetaM
         result := result.push binder
   return result
 
+private def exactMotiveBoundary (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate) (parameters : Array Expr)
+    (fallback : RecursorCarrierBoundary) (publicType privateType : Expr) :
+    ConstructionM RecursorCarrierBoundary := do
+  let mut boundaries := #[fallback]
+  for member in plan.members do
+    if memberCertificates.any (·.key == member.key) then
+      let boundary ← memberRecursorBoundary plan memberCertificates member
+      unless boundaries.contains boundary do boundaries := boundaries.push boundary
+  for container in plan.containerRecursors do
+    let boundary := containerRecursorBoundary container
+    unless boundaries.contains boundary do boundaries := boundaries.push boundary
+  let mut candidates : Array (RecursorCarrierBoundary × PackedCarrierBoundary) := #[]
+  for boundary in boundaries do
+    let attempt ← liftGen <|
+      (recursorCarrierAt plan boundary parameters publicType privateType).run
+    if let .ok instantiated := attempt then
+      candidates := candidates.push (boundary, instantiated)
+  let some first := candidates[0]?
+    | failConstruction (.missingRecursorMotiveBoundary fallback.key)
+  for candidate in candidates do
+    for (left, right) in #[(candidate.2.forward, first.2.forward),
+        (candidate.2.backward, first.2.backward),
+        (candidate.2.backwardForward, first.2.backwardForward),
+        (candidate.2.forwardBackward, first.2.forwardBackward)] do
+      unless ← liftGen <| isDefEq left right do
+        failConstruction (.missingRecursorMotiveBoundary fallback.key)
+  return first.1
+
 private def privateMotiveValue (plan : FamilyAdapterPlan)
-    (boundary : RecursorCarrierBoundary) (parameters : Array Expr)
-    (shape : RecursorShape) (publicMotive expectedType : Expr) : ConstructionM Expr := do
+    (memberCertificates : Array MemberCertificate) (fallback : RecursorCarrierBoundary)
+    (parameters : Array Expr) (shape : RecursorShape) (publicMotive expectedType : Expr) :
+    ConstructionM Expr := do
   forallBoundedTelescope expectedType (some (numForalls expectedType)) fun binders _ => do
-    let some privateValue := binders.back? | failConstruction (.missingMemberMap shape.key)
+    let some privateValue := binders.back?
+      | failConstruction (.missingRecursorMotiveBoundary shape.key)
     let indices := binders.extract 0 (binders.size - 1)
     let publicMotiveType ← inferType publicMotive
     let publicAfterIndices ← instantiateForall publicMotiveType indices
     let .forallE _ publicType _ _ := publicAfterIndices
-      | failConstruction (.missingMemberMap shape.key)
+      | failConstruction (.missingRecursorMotiveBoundary shape.key)
     let privateType ← inferType privateValue
+    let boundary ← exactMotiveBoundary plan memberCertificates parameters fallback
+      publicType privateType
     let carrier ← recursorCarrierAt plan boundary parameters publicType privateType
     let publicValue := mkApp carrier.backward privateValue
     mkLambdaFVars binders (mkAppN publicMotive (indices.push publicValue))
-
-private def exactMotiveBoundary (plan : FamilyAdapterPlan)
-    (memberCertificates : Array MemberCertificate) (fallback : RecursorCarrierBoundary)
-    (publicMotive expectedPrivateType : Expr) : ConstructionM RecursorCarrierBoundary := do
-  let publicMotiveType ← liftGen <| inferType publicMotive
-  let some publicCarrier := motiveCarrierName? publicMotiveType
-    | failConstruction (.missingRecursorMotiveBoundary fallback.key)
-  let some implementationCarrier := motiveCarrierName? expectedPrivateType
-    | failConstruction (.missingRecursorMotiveBoundary fallback.key)
-  let candidates := plan.members.filter fun member =>
-    member.publicCarrier == publicCarrier &&
-      member.implementationCarrier == implementationCarrier
-  if let some member := candidates[0]? then
-    unless candidates.size == 1 do
-      failConstruction (.missingRecursorMotiveBoundary fallback.key)
-    memberRecursorBoundary plan memberCertificates member
-  else
-    pure fallback
 
 private def privateMinorValue (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
@@ -2587,9 +2602,7 @@ private def buildMinorConstructorAdapters (plan : FamilyAdapterPlan)
     for motiveIndex in [:shape.motiveArity] do
       let .forallE _ expected rest _ := privateTail
         | failConstruction (.shortInstalledRecursorPrefix shape.key shape.implementationRecursor)
-      let motiveBoundary ← exactMotiveBoundary plan memberCertificates boundary
-        publicMotives[motiveIndex]! expected
-      let motive ← privateMotiveValue plan motiveBoundary parameters shape
+      let motive ← privateMotiveValue plan memberCertificates boundary parameters shape
         publicMotives[motiveIndex]! expected
       privateTail := rest.instantiate1 motive
     let (privateBinders, _) := openExactForalls `_family_adapter_private_minor_types privateTail
@@ -2794,9 +2807,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
       let .forallE _ expected rest _ := privateTail
         | do
           failConstruction (.shortInstalledRecursorPrefix shape.key shape.implementationRecursor)
-      let motiveBoundary ← exactMotiveBoundary plan memberCertificates boundary
-        publicMotives[motiveIndex]! expected
-      let motive ← privateMotiveValue plan motiveBoundary parameters shape
+      let motive ← privateMotiveValue plan memberCertificates boundary parameters shape
         publicMotives[motiveIndex]! expected
       privateMotives := privateMotives.push motive
       privateTail := rest.instantiate1 motive
@@ -3228,9 +3239,8 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
         for motiveIndex in [:recursorCertificate.motives.size] do
           let .forallE _ expected rest _ := privateTail
             | failConstruction (.shortInstalledRecursorPrefix owner.key owner.implementationRecursor)
-          let motiveBoundary ← exactMotiveBoundary plan base.members recursorBoundary
-            publicMotives[motiveIndex]! expected
-          let motive ← privateMotiveValue plan motiveBoundary parameters recursorShape
+          let motive ← privateMotiveValue plan base.members recursorBoundary parameters
+            recursorShape
             publicMotives[motiveIndex]! expected
           privateMotives := privateMotives.push motive
           privateTail := rest.instantiate1 motive
