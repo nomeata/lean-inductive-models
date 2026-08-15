@@ -604,10 +604,12 @@ def samePublicContainerKeysComplete (plan : FamilyAdapterPlan)
     | return false
   let alias := Name.str root "implementationRecursorAlias"
   if (← getEnv).constants.contains alias then return false
-  addChecked <| Declaration.defnDecl
+  let originalRecursor := original.key.implementationRecursor
+  let aliasAdded ← (addChecked <| Declaration.defnDecl
     { name := alias, levelParams := originalInfo.levelParams, type := originalInfo.type,
-      value := .const original.key.implementationRecursor
-        (originalInfo.levelParams.map Level.param), hints := .abbrev, safety := .safe }
+      value := .const originalRecursor (originalInfo.levelParams.map Level.param),
+      hints := .abbrev, safety := .safe }).run
+  let .ok _ := aliasAdded | return false
   let key : ContainerRecursorKey :=
     { publicRecursor := original.key.publicRecursor, implementationRecursor := alias }
   let duplicate : ContainerRecursorPlan :=
