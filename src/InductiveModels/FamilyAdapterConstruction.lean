@@ -2341,10 +2341,32 @@ private def motiveHypothesisValues (motives fields binders : Array Expr) : MetaM
         result := result.push binder
   return result
 
+private def identityLiveMotiveBoundary (key : MemberKey) (publicType privateType : Expr) :
+    ConstructionM PackedCarrierBoundary := do
+  unless ← liftGen <| isDefEq publicType privateType do
+    failConstruction (.missingRecursorMotiveBoundary key)
+  let eqi ← match EqInfo.check (← getEnv) with
+    | .ok information => pure information
+    | .error _ => failConstruction (.missingRecursorMotiveBoundary key)
+  let forward ← withLocalDeclD `value publicType fun value =>
+    liftGen <| mkLambdaFVars #[value] value
+  let backward ← withLocalDeclD `value privateType fun value =>
+    liftGen <| mkLambdaFVars #[value] value
+  let backwardForward ← withLocalDeclD `value publicType fun value => do
+    let proof := eqi.refl' (← liftGen <| ilevel publicType) publicType value
+    liftGen <| mkLambdaFVars #[value] proof
+  let forwardBackward ← withLocalDeclD `value privateType fun value => do
+    let proof := eqi.refl' (← liftGen <| ilevel privateType) privateType value
+    liftGen <| mkLambdaFVars #[value] proof
+  for expression in #[forward, backward, backwardForward, forwardBackward] do
+    liftGen <| check expression
+  return PackedCarrierBoundary.mk publicType privateType forward backward
+    backwardForward forwardBackward
+
 private def exactMotiveBoundary (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate) (parameters : Array Expr)
-    (fallback : RecursorCarrierBoundary) (publicType privateType : Expr) :
-    ConstructionM RecursorCarrierBoundary := do
+    (indices : Array Expr) (fallback : RecursorCarrierBoundary)
+    (publicType privateType : Expr) : ConstructionM PackedCarrierBoundary := do
   let mut boundaries := #[fallback]
   for member in plan.members do
     if memberCertificates.any (·.key == member.key) then
@@ -2353,22 +2375,29 @@ private def exactMotiveBoundary (plan : FamilyAdapterPlan)
   for container in plan.containerRecursors do
     let boundary := containerRecursorBoundary container
     unless boundaries.contains boundary do boundaries := boundaries.push boundary
-  let mut candidates : Array (RecursorCarrierBoundary × PackedCarrierBoundary) := #[]
+  let mut candidates : Array PackedCarrierBoundary := #[]
+  let publicFamily ← liftGen <| mkLambdaFVars (parameters ++ indices) publicType
+  let privateFamily ← liftGen <| mkLambdaFVars (parameters ++ indices) privateType
+  if !publicFamily.hasFVar && !privateFamily.hasFVar &&
+      (← liftGen <| isDefEq publicFamily privateFamily) &&
+      (← liftGen <| isDefEq publicType privateType) then
+    candidates := candidates.push
+      (← identityLiveMotiveBoundary fallback.key publicType privateType)
   for boundary in boundaries do
     let attempt ← liftGen <|
       (recursorCarrierAt plan boundary parameters publicType privateType).run
     if let .ok instantiated := attempt then
-      candidates := candidates.push (boundary, instantiated)
+      candidates := candidates.push instantiated
   let some first := candidates[0]?
     | failConstruction (.missingRecursorMotiveBoundary fallback.key)
   for candidate in candidates do
-    for (left, right) in #[(candidate.2.forward, first.2.forward),
-        (candidate.2.backward, first.2.backward),
-        (candidate.2.backwardForward, first.2.backwardForward),
-        (candidate.2.forwardBackward, first.2.forwardBackward)] do
+    for (left, right) in #[(candidate.forward, first.forward),
+        (candidate.backward, first.backward),
+        (candidate.backwardForward, first.backwardForward),
+        (candidate.forwardBackward, first.forwardBackward)] do
       unless ← liftGen <| isDefEq left right do
         failConstruction (.missingRecursorMotiveBoundary fallback.key)
-  return first.1
+  return first
 
 private def privateMotiveValue (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate) (fallback : RecursorCarrierBoundary)
@@ -2383,9 +2412,8 @@ private def privateMotiveValue (plan : FamilyAdapterPlan)
     let .forallE _ publicType _ _ := publicAfterIndices
       | failConstruction (.missingRecursorMotiveBoundary shape.key)
     let privateType ← inferType privateValue
-    let boundary ← exactMotiveBoundary plan memberCertificates parameters fallback
+    let carrier ← exactMotiveBoundary plan memberCertificates parameters indices fallback
       publicType privateType
-    let carrier ← recursorCarrierAt plan boundary parameters publicType privateType
     let publicValue := mkApp carrier.backward privateValue
     mkLambdaFVars binders (mkAppN publicMotive (indices.push publicValue))
 
