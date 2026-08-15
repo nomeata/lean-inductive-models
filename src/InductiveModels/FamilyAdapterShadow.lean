@@ -606,13 +606,14 @@ private def containerMetadataInstalled (environment : Environment)
           container.implementationRecursorType parameters implementationType do
         reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
     | _ => reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
-  match environment.constants.find? container.implementationRecursorWrapper with
-  | none => reasons := reasons.push
-      (.missingInstalledContainerRecursor occurrence container.implementationRecursorWrapper)
-  | some information =>
+  if let some information :=
+      environment.constants.find? container.implementationRecursorWrapper then
     unless information.type == container.implementationRecursorWrapperType do
       reasons := reasons.push (.installedContainerRecursorTypeMismatch occurrence
         container.implementationRecursorWrapper)
+  else
+    reasons := reasons.push
+      (.missingInstalledContainerRecursor occurrence container.implementationRecursorWrapper)
   return reasons
 
 private def containerTarget? (container : IsoContainerImplementation)
