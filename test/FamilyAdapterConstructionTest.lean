@@ -623,7 +623,15 @@ structure Result where
   directNestedRule : Nat := 0
   repeatedSpecialisations : Nat := 0
   universeLevels : Nat := 0
+  recursorRuleEvidence : Bool := false
+  theoremRuleEvidence : Bool := false
   failures : Array String := #[]
+
+def implementationEvidenceConsistent (rule : RulePlan)
+    (representation : InstalledRuleRepresentation) : Bool :=
+  rule.implementationEvidence.representation == representation &&
+    rule.implementationEvidence.declarationType == rule.implementationIotaType &&
+    rule.implementationEvidence.semanticRhs == rule.implementationRhs
 
 def runSamples : MetaM Result := do
   let mut result : Result := {}
@@ -645,6 +653,9 @@ def runSamples : MetaM Result := do
       | none =>
         result := { result with failures := result.failures.push s!"{owner}: {repr built.issues}" }
       | some certificate =>
+        if plan.rules.any fun rule =>
+            implementationEvidenceConsistent rule .recursorRule then
+          result := { result with recursorRuleEvidence := true }
         let expectedHypotheses := plan.rules.foldl
           (fun count rule => count + rule.occurrences.size) 0
         let environment ← getEnv
@@ -1045,6 +1056,9 @@ def runSamples : MetaM Result := do
     result := { result with failures }
   | .ok installedIso =>
     let installedReport ← FamilyAdapter.deriveShadowPlan installedSource installedIso
+    if installedReport.plan?.any fun plan => plan.rules.any fun rule =>
+        implementationEvidenceConsistent rule .equalityTheorem then
+      result := { result with theoremRuleEvidence := true }
     let firstInstalledRule? := installedReport.plan?.bind (·.rules[0]?) |>.map (·.key)
     let rejectsFirstPublicRule := fun (report : ShadowReport) =>
       firstInstalledRule?.any fun expected =>
@@ -1141,6 +1155,7 @@ def runMain : IO UInt32 := do
       result.universeLevels == 1 &&
       result.installedFamily == 1 && result.installedPublicConstructors == 1 &&
       result.installedPublicRecursors == 1 &&
+      result.recursorRuleEvidence && result.theoremRuleEvidence &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
       {result.identityNested} definitional nested plans, {result.changed} changed plans, \
@@ -1170,7 +1185,9 @@ def runMain : IO UInt32 := do
     wrongTargetMaps={result.wrongTargetMaps}, sharedHypothesis={result.sharedHypothesis}, \
     directNestedRule={result.directNestedRule}, \
     repeatedSpecialisations={result.repeatedSpecialisations}, \
-    universeLevels={result.universeLevels}"
+    universeLevels={result.universeLevels}, \
+    recursorRuleEvidence={result.recursorRuleEvidence}, \
+    theoremRuleEvidence={result.theoremRuleEvidence}"
   return 1
 
 end FamilyAdapterConstructionTest
