@@ -415,6 +415,7 @@ private def namedCarrierFamily (plan : FamilyAdapterPlan) (member : MemberPlan)
 private structure EndpointBinder where
   type : Expr
   value : Expr
+  deriving Inhabited
 
 private partial def openEndpointForalls (tag : Name) (expression : Expr) :
     Array EndpointBinder × Expr :=
