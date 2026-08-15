@@ -2401,8 +2401,10 @@ kernel/generator decline, so callers cannot retain a partial rule boundary. -/
 def buildRuleCompatibilityPrototypes (plan : FamilyAdapterPlan)
     (minorHypotheses : Array MinorHypothesisCertificate) (root : Name) : GenM
     (Except ConstructionIssue (Array Declaration × Array RuleCompatibilityCertificate)) :=
-  runConstructionTransaction <|
-    ExceptT (buildRuleCompatibilityPrototypesCore plan minorHypotheses root)
+  runConstructionTransaction do
+    match ← liftGen <| buildRuleCompatibilityPrototypesCore plan minorHypotheses root with
+    | .error issue => failConstruction issue
+    | .ok built => return built
 
 private partial def openExactLambdas (tag : Name) (expression : Expr) : Array Expr × Expr :=
   let rec loop (expression : Expr) (binders : Array Expr) :=
@@ -3916,19 +3918,21 @@ def validatePrototypeExceptionRollback (root : Name) : MetaM (Bool × Bool) := d
   let validDeclaration (name : Name) := Declaration.defnDecl
     { name, levelParams := [], type := .sort (.succ .zero), value := .const ``Nat [],
       hints := .abbrev, safety := .safe }
-  let metadataRestored ← try
-    let _ ← (runConstructionTransaction do
+  let metadataAction : ConstructionM Unit := do
       liftGen <| addChecked (validDeclaration metaName)
-      liftGen <| badShape "injected late prototype metadata exception").run
+      liftGen <| badShape "injected late prototype metadata exception"
+  let metadataRestored ← try
+    let _ ← (runConstructionTransaction metadataAction).run
     pure false
   catch _ =>
     pure (!(← getEnv).constants.contains metaName)
-  let kernelRestored ← try
-    let _ ← (runConstructionTransaction do
+  let kernelAction : ConstructionM Unit := do
       liftGen <| addChecked (validDeclaration kernelName)
       liftGen <| addChecked <| Declaration.defnDecl
         { name := rejectedName, levelParams := [], type := .const ``Nat [],
-          value := .const ``Nat [], hints := .abbrev, safety := .safe }).run
+          value := .const ``Nat [], hints := .abbrev, safety := .safe }
+  let kernelRestored ← try
+    let _ ← (runConstructionTransaction kernelAction).run
     pure false
   catch _ =>
     let environment ← getEnv
