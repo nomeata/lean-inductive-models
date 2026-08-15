@@ -623,13 +623,17 @@ def samePublicContainerKeysDiagnostic (plan : FamilyAdapterPlan)
     return some s!"duplicate plan invalid: {repr duplicatePlan.validate}"
   let constructorsBuilt ← (FamilyAdapter.buildPublicConstructorPrototypes duplicatePlan
     certificate.members certificate.telescopes (Name.str root "constructors")).run
-  let .ok (.ok (_, constructors)) := constructorsBuilt
-    | return some s!"constructor build: {repr constructorsBuilt}"
+  let constructors ← match constructorsBuilt with
+    | .error decline => return some s!"constructor decline: {decline.label}"
+    | .ok (.error issue) => return some s!"constructor issue: {repr issue}"
+    | .ok (.ok (_, constructors)) => pure constructors
   let containerBuilt ← (FamilyAdapter.buildContainerRecursorPrototypes duplicatePlan
     certificate.members certificate.telescopes constructors
     (Name.str root "recursors")).run
-  let .ok (.ok (_, built)) := containerBuilt
-    | return some s!"container build: {repr containerBuilt}"
+  let built ← match containerBuilt with
+    | .error decline => return some s!"container decline: {decline.label}"
+    | .ok (.error issue) => return some s!"container issue: {repr issue}"
+    | .ok (.ok (_, built)) => pure built
   let samePublic := built.filter
     (·.plan.key.publicRecursor == original.key.publicRecursor)
   let allDistinct := fun (values : Array Name) =>
