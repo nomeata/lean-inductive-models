@@ -281,5 +281,9 @@ def main : IO UInt32 := do
     unless shadow.complete do
       IO.eprintln s!"{shadow.root}: {repr shadow.reasons}"
       for diagnostic in shadow.diagnostics do IO.eprintln s!"{shadow.root}: {diagnostic}"
+  unless repeatedIndices do
+    for shadow in familyShadows do
+      if shadow.root == `_wcore.Acc || shadow.root == `_wcore.HEq then
+        IO.eprintln s!"{shadow.root} repeated-index rules: {repr shadow.coverage.rules}"
   unless malformedRejected do IO.eprintln s!"malformed Nat: {repr malformed}"
   return 1
