@@ -183,6 +183,21 @@ def deadLambdaDomainClosesExactly
     !ok.coverage.occurrences.any fun occurrence =>
       occurrence.constructor.owner.owner == owner && occurrence.fieldIndex == 2
 
+/-- A nullary rule has no constructor-field suffix.  Its exact theorem
+telescope is therefore the smallest regression for recovering only the
+recursor prefix from installed binder roles. -/
+def nullaryRuleClosesExactly (shadows : Array FamilyAdapter.ShadowObservation) : Bool :=
+  match shadows.find? (·.root == `N) with
+  | none => false
+  | some natural =>
+    let covered := natural.coverage.rules.any fun rule =>
+      rule.recursor == `N.rec && rule.constructor.constructor == `N.z
+    let mismatched := natural.reasons.any fun
+      | .installedRuleMismatch rule _ =>
+        rule.recursor == `N.rec && rule.constructor.constructor == `N.z
+      | _ => false
+    covered && !mismatched
+
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun
     | .missingInterfaceMember member actual => member.owner == `Nat && actual == side
@@ -221,12 +236,13 @@ def main : IO UInt32 := do
   let specialisations := listSpecialisationDiagnostics shadows
   let listRuleAssociation := specialisations.all
   let nonrecursiveMention := deadLambdaDomainClosesExactly familyShadows
+  let nullaryRule := nullaryRuleClosesExactly familyShadows
   let containerMapsVisible := (shadows ++ familyShadows).any
     (fun shadow => !shadow.coverage.containerMaps.isEmpty)
   let malformedRejected := malformedDependenciesAreExcluded malformed
   if sameResult && outputQuiet && everyAcceptedFamilyRan && keyedReportVisible &&
       everyOutcomeExplicit && nestedGapVisible && exactHypothesisSharing && containerMapsVisible &&
-      listRuleAssociation && nonrecursiveMention && malformedRejected then
+      listRuleAssociation && nonrecursiveMention && nullaryRule && malformedRejected then
     IO.println s!"family adapter shadow: {shadows.size + familyShadows.size} accepted families, \
       exact gaps reported, output unchanged"
     return 0
@@ -234,7 +250,8 @@ def main : IO UInt32 := do
     shadows={shadows.size + familyShadows.size}, keyed={keyedReportVisible}, \
     explicit={everyOutcomeExplicit}, gaps={nestedGapVisible}, hypotheses={exactHypothesisSharing}, \
     listRules={listRuleAssociation}, listDetails={repr specialisations}, \
-    nonrecursiveMention={nonrecursiveMention}, containers={containerMapsVisible}, \
+    nonrecursiveMention={nonrecursiveMention}, nullaryRule={nullaryRule}, \
+    containers={containerMapsVisible}, \
     malformed={malformedRejected}"
   for message in plainMessages ++ observedMessages ++ familyPlainMessages ++ familyObservedMessages do
     IO.eprintln message

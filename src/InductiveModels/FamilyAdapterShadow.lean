@@ -358,6 +358,32 @@ private partial def forallCount : Expr → Nat
   | .forallE _ _ body _ => forallCount body + 1
   | _ => 0
 
+private def equalityRuleApplication? (binders : Array Expr) (lhs : Expr)
+    (recursor constructor : Name) : Option (Array InstalledRuleBinderRole) := Id.run do
+  unless lhs.getAppFn.constName? == some recursor do return none
+  let some major := lhs.getAppArgs.back? | return none
+  unless major.getAppFn.constName? == some constructor do return none
+  let recursorArguments := lhs.getAppArgs
+  let constructorArguments := major.getAppArgs
+  let mut application := #[]
+  for binder in binders do
+    let recursorMatches := (Array.range recursorArguments.size).filter fun position =>
+      recursorArguments[position]! == binder
+    unless recursorMatches.size ≤ 1 do return none
+    if let some position := recursorMatches[0]? then
+      application := application.push (.recursorArgument position)
+      continue
+    let constructorMatches := (Array.range constructorArguments.size).filter fun position =>
+      constructorArguments[position]! == binder
+    unless constructorMatches.size == 1 do return none
+    application := application.push (.constructorArgument constructorMatches[0]!)
+  return some application
+
+private def uniqueRoleBinder? (binders : Array Expr)
+    (application : Array InstalledRuleBinderRole) (role : InstalledRuleBinderRole) : Option Expr := do
+  let matches := (Array.range application.size).filter fun index => application[index]! == role
+  if matches.size == 1 then binders[matches[0]!]? else none
+
 private def installedRuleEvidence? (env : Environment) (rule recursor constructor : Name) :
     MetaM (Option InstalledRuleEvidence) := do
   match env.constants.find? rule with
@@ -375,19 +401,8 @@ private def installedRuleEvidence? (env : Environment) (rule recursor constructo
     try
       forallTelescope information.type fun binders proposition => do
         let some (_, lhs, rhs) ← matchEq? proposition | return none
-        unless lhs.getAppFn.constName? == some recursor do return none
-        let some major := lhs.getAppArgs.back? | return none
-        unless major.getAppFn.constName? == some constructor do return none
-        let recursorArguments := lhs.getAppArgs
-        let constructorArguments := major.getAppArgs
-        let mut application := #[]
-        for binder in binders do
-          if let some position := recursorArguments.findIdx? (· == binder) then
-            application := application.push (.recursorArgument position)
-          else if let some position := constructorArguments.findIdx? (· == binder) then
-            application := application.push (.constructorArgument position)
-          else
-            return none
+        let some application := equalityRuleApplication? binders lhs recursor constructor
+          | return none
         return some {
           representation := .equalityTheorem
           declarationType := information.type
@@ -396,32 +411,46 @@ private def installedRuleEvidence? (env : Environment) (rule recursor constructo
     catch _ => return none
   | _ => return none
 
-/-- Rebuild the closed semantic RHS of a callable equality theorem from the
-exact source recursor telescope.  The source rule's lambda domains may have
-been kernel-normalized even when the exported minor retains literal syntax
-such as `(fun _ => N) k`; the generated theorem deliberately closes its RHS
-over that literal telescope.  Mirror that construction here instead of
-normalizing either side. -/
-private def exactClosedRuleRhs? (recursor : ERec) (ruleIndex : Nat)
-    (mapping : Array (Name × Name)) : MetaM (Option Expr) := do
+/-- Rebuild a callable rule's closed semantic RHS over the installed theorem's
+own exact binders.  Its source `ERec` determines which LHS positions are the
+recursor prefix and constructor fields; the installed theorem alone determines
+their telescope syntax. -/
+private def exactTheoremRuleRhs? (recursor : ERec) (ruleIndex : Nat)
+    (targetRecursor targetConstructor : Name) (mapping : Array (Name × Name))
+    (evidence : InstalledRuleEvidence) : MetaM (Option Expr) := do
   let some rule := recursor.rules[ruleIndex]? | return none
   let numPre := recursor.numParams + recursor.numMotives + recursor.numMinors
-  let recursorTelescope := rewriteWith mapping recursor.type
-  forallBoundedTelescope recursorTelescope (some numPre) fun pre _ => do
-    let some sourceFields := exactRecursorFieldTelescope? recursor ruleIndex pre
+  forallTelescope evidence.declarationType fun binders proposition => do
+    let some (_, lhs, _) ← matchEq? proposition | return none
+    let some application := equalityRuleApplication? binders lhs targetRecursor targetConstructor
       | return none
-    let fieldTelescope := rewriteWith mapping sourceFields
-    forallBoundedTelescope fieldTelescope (some rule.nfields) fun fields _ => do
-      let rhs := (rewriteWith mapping rule.rhs).beta (pre ++ fields)
-      let some fieldsRhs := closeForallsExact? fieldTelescope fields rhs | return none
-      return closeForallsExact? recursorTelescope pre fieldsRhs
+    unless application == evidence.application do return none
+    let preRoles := (Array.range numPre).map InstalledRuleBinderRole.recursorArgument
+    let fieldRoles := (Array.range rule.nfields).map fun fieldIndex =>
+      InstalledRuleBinderRole.constructorArgument (recursor.numParams + fieldIndex)
+    let expectedRoles := preRoles ++ fieldRoles
+    unless application.size == expectedRoles.size &&
+        application.all expectedRoles.contains && expectedRoles.all application.contains do
+      return none
+    let mut pre := #[]
+    for role in preRoles do
+      let some binder := uniqueRoleBinder? binders application role | return none
+      pre := pre.push binder
+    let mut fields := #[]
+    for role in fieldRoles do
+      let some binder := uniqueRoleBinder? binders application role | return none
+      fields := fields.push binder
+    let rhs := (rewriteWith mapping rule.rhs).beta (pre ++ fields)
+    return some (← mkLambdaFVars binders rhs)
 
 private def expectedRuleRhs? (recursor : ERec) (ruleIndex : Nat)
-    (mapping : Array (Name × Name)) (evidence : InstalledRuleEvidence) :
+    (targetRecursor targetConstructor : Name) (mapping : Array (Name × Name))
+    (evidence : InstalledRuleEvidence) :
     MetaM (Option Expr) :=
   match evidence.representation with
   | .recursorRule => pure (some (rewriteWith mapping recursor.rules[ruleIndex]!.rhs))
-  | .equalityTheorem => exactClosedRuleRhs? recursor ruleIndex mapping
+  | .equalityTheorem => exactTheoremRuleRhs? recursor ruleIndex targetRecursor
+      targetConstructor mapping evidence
 
 private partial def exactLambdaBody (tag : Name) (expression : Expr) : Expr :=
   match expression with
@@ -1218,12 +1247,13 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         let publicRhs? := publicEvidence?.map (·.semanticRhs)
         let expectedImplementationRhs? ← match implementationEvidence? with
           | some evidence => do
-            expectedRuleRhs? recursor ruleIndex
+            expectedRuleRhs? recursor ruleIndex member.implementationRecursor
+              constructor.implementationName
               (ruleMapping implementationMapping evidence) evidence
           | none => pure none
         let expectedPublicRhs? ← match publicEvidence? with
           | some evidence => do
-            expectedRuleRhs? recursor ruleIndex
+            expectedRuleRhs? recursor ruleIndex member.publicRecursor constructor.publicName
               (ruleMapping publicMapping evidence) evidence
           | none => pure none
         let expectedImplementationRhs := expectedImplementationRhs?.getD rule.rhs
