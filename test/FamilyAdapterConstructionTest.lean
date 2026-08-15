@@ -522,6 +522,7 @@ structure Result where
   identityNested : Nat := 0
   nestedPublicConstructors : Nat := 0
   nestedPublicRecursors : Nat := 0
+  identityMemberCallAgreements : Nat := 0
   changed : Nat := 0
   changedPublicConstructors : Nat := 0
   changedPublicRecursors : Nat := 0
@@ -619,6 +620,19 @@ def runSamples : MetaM Result := do
         | _, _ => pure false
       if recursorsComplete then
         result := { result with nestedPublicRecursors := result.nestedPublicRecursors + 1 }
+      let identityMemberCalls := match report.plan?, built.certificate with
+        | some plan, some certificate =>
+          match FamilyAdapter.derivePublicIotaProofSchemas plan certificate with
+          | .error _ => false
+          | .ok schemas =>
+            let roles := schemas.flatMap fun schema =>
+              schema.hypotheses.filterMap (·.recursiveCall?)
+            !roles.isEmpty && plan.containerRecursors.isEmpty && roles.all fun role =>
+              role.member?.isSome && role.container?.isNone
+        | _, _ => false
+      if recursorsComplete && identityMemberCalls then
+        result := { result with identityMemberCallAgreements :=
+          result.identityMemberCallAgreements + 1 }
       if owner == `FamilyAdapterGenerated.GeneratedRepeatedSpecialisation then
         let repeated ← match report.plan?, built.certificate with
           | some plan, some certificate =>
@@ -942,6 +956,7 @@ def runMain : IO UInt32 := do
       result.identityNested == nestedSamples.size &&
       result.nestedPublicConstructors == nestedSamples.size && result.changed == 4 &&
       result.nestedPublicRecursors == nestedSamples.size &&
+      result.identityMemberCallAgreements == nestedSamples.size &&
       result.changedPublicConstructors == 4 &&
       result.changedPublicRecursors == 4 &&
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
@@ -966,6 +981,7 @@ def runMain : IO UInt32 := do
     identityNested={result.identityNested}, \
     nestedPublicConstructors={result.nestedPublicConstructors}, changed={result.changed}, \
     nestedPublicRecursors={result.nestedPublicRecursors}, \
+    identityMemberCallAgreements={result.identityMemberCallAgreements}, \
     changedPublicConstructors={result.changedPublicConstructors}, \
     changedPublicRecursors={result.changedPublicRecursors}, \
     installedFamily={result.installedFamily}, \

@@ -1512,6 +1512,34 @@ private def recursorAgreementAt (shape : RecursorShape)
     failConstruction (.recursorResultMismatch recursor.member)
   return proof
 
+private def recursiveCallCertificate (plan : FamilyAdapterPlan)
+    (recursors : Array PublicRecursorCertificate)
+    (containerRecursors : Array BuiltContainerRecursor) (rule : RuleKey)
+    (role : PublicIotaRecursiveCallRole)
+    (publicBinderIndex implementationBinderIndex : Nat) : ConstructionM
+    (RecursorShape × PublicRecursorCertificate) := do
+  let pair? : Option (RecursorShape × PublicRecursorCertificate) :=
+    match role.member?, role.container? with
+    | some memberKey, none => do
+      let member ← plan.members.find? fun member =>
+        member.key == memberKey && member.publicRecursor == role.publicRecursor &&
+          member.implementationRecursor == role.implementationRecursor
+      let recursor ← recursors.find? fun recursor =>
+        recursor.member == member.key &&
+          recursor.implementationRecursor == role.implementationRecursor
+      some (memberRecursorShape member, recursor)
+    | none, some key => do
+      let built ← containerRecursors.find? fun built =>
+        built.plan.key == key && built.plan.key.publicRecursor == role.publicRecursor &&
+          built.plan.key.implementationRecursor == role.implementationRecursor &&
+          role.containerOccurrences.all built.plan.occurrences.contains
+      some (built.shape, built.recursor)
+    | _, _ => none
+  let some pair := pair?
+    | failConstruction (.missingPublicIotaRecursiveCall rule
+        publicBinderIndex implementationBinderIndex)
+  return pair
+
 private def recursorForwardAgreementAt (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate)
     (member : MemberPlan) (recursor : PublicRecursorCertificate)
@@ -1591,26 +1619,8 @@ private partial def recursorHypothesisAgreement (plan : FamilyAdapterPlan)
   let direct? : Option Expr ← match role? with
     | none => pure none
     | some role => do
-      let pair? : Option (RecursorShape × PublicRecursorCertificate) :=
-        match role.member?, role.container? with
-        | some memberKey, none => do
-          let member ← plan.members.find? fun member =>
-            member.key == memberKey && member.publicRecursor == role.publicRecursor &&
-              member.implementationRecursor == role.implementationRecursor
-          let recursor ← recursors.find? fun recursor =>
-            recursor.member == member.key &&
-              recursor.implementationRecursor == role.implementationRecursor
-          some (memberRecursorShape member, recursor)
-        | none, some key => do
-          let built ← containerRecursors.find? fun built =>
-            built.plan.key == key && built.plan.key.publicRecursor == role.publicRecursor &&
-              built.plan.key.implementationRecursor == role.implementationRecursor &&
-              role.containerOccurrences.all built.plan.occurrences.contains
-          some (built.shape, built.recursor)
-        | _, _ => none
-      let some (shape, recursor) := pair?
-        | failConstruction (.missingPublicIotaRecursiveCall rule
-            publicBinderIndex implementationBinderIndex)
+      let (shape, recursor) ← recursiveCallCertificate plan recursors containerRecursors
+        rule role publicBinderIndex implementationBinderIndex
       let reducedPrivate ← liftGen <| whnf expectedPrivate
       let publicMatches := expectedPublic.getAppFn.constName? == some recursor.adapter
       let privateMatches :=
@@ -3187,6 +3197,47 @@ private def installedIotaArguments (rule : RulePlan) (schema : PublicIotaProofSc
     arguments := arguments.push value
   return arguments
 
+private partial def rewriteLeadingRecursiveCall (rule : RuleKey)
+    (role : PublicIotaRecursiveCallRole) (adapter : Name)
+    (publicBinderIndex implementationBinderIndex : Nat) : Expr → ConstructionM Expr
+  | .lam name type body info => do
+      let body ← rewriteLeadingRecursiveCall rule role adapter publicBinderIndex
+        implementationBinderIndex body
+      return .lam name type body info
+  | body => do
+      let .const source levels := body.getAppFn
+        | failConstruction (.missingPublicIotaRecursiveCall rule
+            publicBinderIndex implementationBinderIndex)
+      unless source == role.publicRecursor do
+        failConstruction (.missingPublicIotaRecursiveCall rule
+          publicBinderIndex implementationBinderIndex)
+      return mkAppN (.const adapter levels) body.getAppArgs
+
+private partial def rewriteExactRhsArgument (rule : RuleKey) (argumentIndex : Nat)
+    (rewrite : Expr → ConstructionM Expr) : Expr → ConstructionM Expr
+  | .lam name type body info => do
+      let body ← rewriteExactRhsArgument rule argumentIndex rewrite body
+      return .lam name type body info
+  | body => do
+      let arguments := body.getAppArgs
+      let some argument := arguments[argumentIndex]?
+        | failConstruction (.missingPublicIotaInput rule)
+      return mkAppN body.getAppFn (arguments.set! argumentIndex (← rewrite argument))
+
+private def rewritePublicIotaRecursiveCalls (plan : FamilyAdapterPlan)
+    (recursors : Array PublicRecursorCertificate)
+    (containerRecursors : Array BuiltContainerRecursor)
+    (schema : PublicIotaProofSchema) (rhs : Expr) : ConstructionM Expr := do
+  let mut result := rhs
+  for step in schema.hypotheses do
+    if let some role := step.recursiveCall? then
+      let (_, recursor) ← recursiveCallCertificate plan recursors containerRecursors
+        schema.key role step.publicBinderIndex step.binderIndex
+      result ← rewriteExactRhsArgument schema.key step.publicBinderIndex
+        (rewriteLeadingRecursiveCall schema.key role recursor.adapter
+          step.publicBinderIndex step.binderIndex) result
+  return result
+
 private def publicIotaDeclaration (plan : FamilyAdapterPlan)
     (base : FamilyAdapterCertificate)
     (constructors : Array PublicConstructorCertificate)
@@ -3211,16 +3262,10 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
   let constructorMapping := constructors.map fun certificate =>
     let source := (plan.constructors.find? (·.key == certificate.key)).get!.publicName
     (source, certificate.adapter)
-  let recursorMapping := recursors.map fun certificate =>
-    let source := (plan.members.find? (·.key == certificate.member)).get!.publicRecursor
-    (source, certificate.adapter)
-  let containerRecursorMapping := containerRecursors.map fun built =>
-    (built.plan.key.publicRecursor, built.certificate.adapter)
-  let rewritePublic := fun expression => mapConstsE (fun source =>
-    (constructorMapping.find? (·.1 == source) |>.map (·.2)) <|>
-      (recursorMapping.find? (·.1 == source) |>.map (·.2)) <|>
-      (containerRecursorMapping.find? (·.1 == source) |>.map (·.2))) expression
-  let mappedPublicRhs := rewritePublic rule.publicRhs
+  let constructorMappedRhs := mapConstsE (fun source =>
+    constructorMapping.find? (·.1 == source) |>.map (·.2)) rule.publicRhs
+  let mappedPublicRhs ← rewritePublicIotaRecursiveCalls plan recursors containerRecursors
+    schema constructorMappedRhs
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
     | .error _ => failConstruction (.missingPublicIotaInput rule.key)
