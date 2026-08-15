@@ -707,9 +707,9 @@ private def endpointArguments (boundary : RecursorCarrierBoundary)
             .indexTelescope)
       arguments := arguments.push argument
     | .value => arguments := arguments.push value
-  unless application.binders.filter (· == .value) |>.size == 1 &&
+  unless (application.binders.filter (· == .value)).size == 1 &&
       (Array.range familyArguments.size).all fun position =>
-        application.binders.filter (· == .familyArgument position) |>.size == 1 do
+        (application.binders.filter (· == .familyArgument position)).size == 1 do
     failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
       .indexTelescope)
   return arguments

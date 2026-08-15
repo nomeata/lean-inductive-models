@@ -750,9 +750,9 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
                   #[evidence.forward, evidence.backward, evidence.backwardForward,
                       evidence.forwardBackward].all fun endpoint =>
                     endpoint.binders.size == arity + 1 &&
-                      endpoint.binders.filter (· == .value) |>.size == 1 &&
+                      (endpoint.binders.filter (· == .value)).size == 1 &&
                       (Array.range arity).all fun position =>
-                        endpoint.binders.filter (· == .familyArgument position) |>.size == 1
+                        (endpoint.binders.filter (· == .familyArgument position)).size == 1
               | .defeq => false do
           errors := errors.push (.containerRecursorMapMismatch recursor.key occurrence)
     for map in plan.containerMaps.filter fun map =>
