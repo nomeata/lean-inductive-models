@@ -69,6 +69,14 @@ structure ContainerRecursorKey where
   implementationRecursor : Name
   deriving Inhabited, BEq, Repr
 
+/-- Stable ownership of a generated recursor artifact.  Ordinary family
+members and specialised container pairs inhabit distinct constructors; a
+container identity retains both installed recursor names. -/
+inductive RecursorPrototypeKey where
+  | member (key : MemberKey)
+  | container (key : ContainerRecursorKey)
+  deriving Inhabited, BEq, Repr
+
 /-- One exact public/private rule-key association of a specialised container
 recursor. -/
 structure ContainerRecursorRuleKey where
@@ -244,7 +252,7 @@ literal recursor owner/index/name association rather than a source-constructor
 key.  `adapter` has the source-specialised constructor type used by the public
 recursor wrapper. -/
 structure PublicMinorConstructorCertificate where
-  recursor : MemberKey
+  recursor : RecursorPrototypeKey
   minorIndex : Nat
   publicConstructor : Name
   implementationConstructor : Name
@@ -257,7 +265,7 @@ structure PublicMinorConstructorCertificate where
 need not correspond to a source `MemberKey`, so the exact public/private
 carrier heads are retained under the recursor/index key. -/
 structure PublicRecursorMotiveCertificate where
-  recursor : MemberKey
+  recursor : RecursorPrototypeKey
   motiveIndex : Nat
   publicCarrier : Name
   implementationCarrier : Name
@@ -267,7 +275,7 @@ structure PublicRecursorMotiveCertificate where
 `rules` are the literal keyed sequences consumed while wrapping the installed
 private recursor; neither sequence is inferred from a cardinality. -/
 structure PublicRecursorCertificate where
-  member : MemberKey
+  member : RecursorPrototypeKey
   adapter : Name
   exactType : Expr
   implementationRecursor : Name
