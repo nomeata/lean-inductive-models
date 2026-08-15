@@ -1704,7 +1704,9 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
     for index in [:parameters.size] do
       unless ← liftGen <| isDefEq liveParameters[index]! parameters[index]! do
         failConstruction (.exactCarrierBoundaryMismatch fallback.key fallback.key)
-    let carrier ← recursorCarrierAt plan fallback liveParameters sourceType targetType
+    let publicType := if forward then sourceType else targetType
+    let implementationType := if forward then targetType else sourceType
+    let carrier ← recursorCarrierAt plan fallback liveParameters publicType implementationType
     let mapped := mkApp (if forward then carrier.forward else carrier.backward) value
     let roundTrip := mkApp
       (if forward then carrier.backwardForward else carrier.forwardBackward) value
@@ -1716,8 +1718,10 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
     if let some liveArguments ←
         recursorBoundaryArguments? boundary forward sourceType targetType then
       let liveParameters := liveArguments.extract 0 boundary.parameterArity
+      let publicType := if forward then sourceType else targetType
+      let implementationType := if forward then targetType else sourceType
       let carrierAttempt ← liftGen <|
-        (recursorCarrierAt plan boundary liveParameters sourceType targetType).run
+        (recursorCarrierAt plan boundary liveParameters publicType implementationType).run
       let carrier ← match carrierAttempt with
         | .ok carrier => pure carrier
         | .error issue => failConstruction issue

@@ -749,7 +749,7 @@ def runSamples : MetaM Result := do
           container.key.target.owner == boundary.publicOwner &&
             container.maps.forward ==
               `FamilyAdapterGenerated.generatedChangedNestedContainerForward
-        let exactClosedEndpoint := report.plan?.any fun plan =>
+        let bidirectionalClosedEndpoint := report.plan?.any fun plan =>
           plan.containerRecursors.any fun recursor =>
             recursor.key.publicRecursor ==
                 `FamilyAdapterGenerated.GeneratedChangedNestedPublic.rec_1 &&
@@ -760,6 +760,10 @@ def runSamples : MetaM Result := do
                     map.sourceRecursor == recursor.key.publicRecursor &&
                       map.implementationRecursor == recursor.key.implementationRecursor).any
                     fun map => evidence.forward.exactType == map.forwardType &&
+                      evidence.backward.exactType == map.backwardType &&
+                      evidence.backwardForward.exactType == map.backwardForwardType &&
+                      evidence.forwardBackward.exactType == map.forwardBackwardType &&
+                      evidence.maps == map.maps &&
                       #[evidence.forward, evidence.backward, evidence.backwardForward,
                           evidence.forwardBackward].all (·.binders == #[.value])
         let keyedCertificate := built.certificate.any fun certificate =>
@@ -770,8 +774,8 @@ def runSamples : MetaM Result := do
         let environment ← getEnv
         let rulesComplete := report.plan?.any fun plan => built.certificate.any fun certificate =>
           ruleCertificatesComplete plan certificate environment
-        if built.issues.isEmpty && keyedPlan && exactClosedEndpoint && keyedCertificate &&
-            rulesComplete then
+        if built.issues.isEmpty && keyedPlan && bidirectionalClosedEndpoint &&
+            recursorDiagnostic.isComplete && keyedCertificate && rulesComplete then
           result := { result with changed := result.changed + 1 }
           result := { result with closedContainers := result.closedContainers + 1 }
         else
