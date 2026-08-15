@@ -2,7 +2,6 @@ import InductiveModels.Driver
 import InductiveModels.Check
 import InductiveModels.Order
 import InductiveModels.Output
-import InductiveModels.Supervisor
 
 /-!
 `lean-inductive-models [OPTIONS] IN.ndjson`
@@ -593,7 +592,7 @@ def run (config : InductiveModels.Cli.Config) : IO UInt32 := do
   else
     runPipeline config compactEnabled
 
-def workerMain (args : List String) : IO UInt32 := do
+def main (args : List String) : IO UInt32 := do
   InductiveModels.Output.containToolErrors do
     match InductiveModels.Cli.parseArgs args with
     | .error error =>
@@ -601,6 +600,3 @@ def workerMain (args : List String) : IO UInt32 := do
         IO.eprintln InductiveModels.Cli.usage
         return exitToolError
     | .ok config => run config
-
-def main (args : List String) : IO UInt32 :=
-  InductiveModels.Output.containToolErrors (InductiveModels.Supervisor.supervise workerMain args)

@@ -89,8 +89,7 @@ cleanup_tree() {
 # exporter patch shrinks its retained global expression index enough to restore
 # that same 12 GiB ceiling, leaving 4 GiB of the standard runner's 16 GiB for
 # gzip and runner services. The public generator and serialized kernel reread
-# retain the authoritative 10 GiB worker ceiling; the supervised child inherits
-# its parent's limit.
+# retain the authoritative 10 GiB process ceiling.
 run_capped() (
   limit_kib="$1"
   limit_label="$2"
@@ -245,8 +244,7 @@ set +e
 (
   set -o pipefail
   run_worker_measured generate \
-    env -u LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER \
-      LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1 \
+    env LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1 \
     "$BIN_DIR/lean-inductive-models" "$INPUT_FIFO" -o "$OUTPUT" \
       --no-type-check-generated \
     2>&1 | tee "$LOG_DIR/generate.log" >&2
@@ -293,7 +291,6 @@ grep -Eq ': model of [1-9][0-9]* declarations' "$LOG_DIR/generate.log" ||
 (
   set -o pipefail
   run_worker_measured check-input \
-    env -u LEAN_INDUCTIVE_MODELS_INTERNAL_WORKER \
     "$BIN_DIR/lean-inductive-models" "$OUTPUT" \
       --no-inductives --check-input --no-check-output \
       --type-check-input --no-type-check-generated --no-output \

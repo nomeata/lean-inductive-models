@@ -23,11 +23,6 @@ lean_exe clitest where
   root := `CliTest
   supportInterpreter := true
 
-lean_exe supervisortest where
-  srcDir := "test"
-  root := `SupervisorTest
-  supportInterpreter := true
-
 lean_exe generationflagstest where
   srcDir := "test"
   root := `GenerationFlagsTest

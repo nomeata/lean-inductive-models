@@ -36,7 +36,7 @@ The executable correctness targets are:
 
 ```bash
 correctness_targets=(
-  test clitest supervisortest generationflagstest checktest kernelchecktest ordertest
+  test clitest generationflagstest checktest kernelchecktest ordertest
   familyadapterplantest familyadaptershadowtest familyadapterconstructiontest
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
@@ -61,7 +61,6 @@ The individual execution matrix, useful when isolating a failure, is:
 ```console
 lake exe test "$PWD"
 lake exe clitest
-lake exe supervisortest --run-tests "$PWD/.lake/build/bin/supervisortest"
 lake exe generationflagstest
 lake exe checktest "$PWD"
 lake exe kernelchecktest "$PWD"

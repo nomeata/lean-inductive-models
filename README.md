@@ -93,6 +93,9 @@ for that check and never enter the generated-declaration gate.
 either flag performs no kernel check for that declaration class. The default
 `--check-output` structural check validates compact incremental/final
 certificates; it does not reconstruct and replay the complete output.
+Parsing, generation, structural checking, and both optional kernel gates all
+run in the invoking process; the executable neither starts a checker worker
+nor re-executes itself under a supervisor.
 
 ## Checker contract
 

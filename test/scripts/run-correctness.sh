@@ -19,7 +19,7 @@ compile_only_targets=(
   OneLayerRecursorProof
 )
 correctness_targets=(
-  test clitest supervisortest generationflagstest checktest kernelchecktest ordertest
+  test clitest generationflagstest checktest kernelchecktest ordertest
   familyadapterplantest familyadaptershadowtest familyadapterconstructiontest
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
@@ -37,7 +37,6 @@ build_serially "${correctness_targets[@]}"
 
 lake exe test "$root"
 lake exe clitest
-lake exe supervisortest --run-tests "$root/.lake/build/bin/supervisortest"
 lake exe generationflagstest
 lake exe checktest "$root"
 lake exe kernelchecktest "$root"
