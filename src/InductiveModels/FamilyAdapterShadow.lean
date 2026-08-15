@@ -841,9 +841,11 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     let rules := container.recursorRuleKeys.map fun (publicConstructor,
         implementationConstructor) =>
       { recursor := key, publicConstructor, implementationConstructor }
-    let boundary? ← installedBoundaryPlan? container.maps publicMajorFamily
-      implementationMajorFamily container.forwardType container.backwardType
-      container.backwardForwardType container.forwardBackwardType
+    let boundary? ← try
+        installedBoundaryPlan? container.maps publicMajorFamily
+          implementationMajorFamily container.forwardType container.backwardType
+          container.backwardForwardType container.forwardBackwardType
+      catch _ => pure none
     let some boundary := boundary? | do
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
