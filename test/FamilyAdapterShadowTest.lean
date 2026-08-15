@@ -140,17 +140,19 @@ def listSpecialisationDiagnostics (shadows : Array FamilyAdapter.ShadowObservati
 the exact ERec minor therefore supplies no IH and no occurrence is recorded. -/
 def nonrecursiveParameterMentionExcluded
     (shadows : Array FamilyAdapter.ShadowObservation) : Bool :=
-  match shadows.find? (·.root == `OK._model._impl.0) with
+  let root := Name.mkNum `OK._model._impl 0
+  let owner := Name.mkNum `OK._model._impl 1
+  match shadows.find? (·.root == root) with
   | none => false
   | some ok =>
     !ok.reasons.any (fun
       | .missingMinorHypothesis constructor fieldIndex =>
-        constructor.owner.owner == `OK._model._impl.1 && fieldIndex == 2
+        constructor.owner.owner == owner && fieldIndex == 2
       | .minorHypothesisMismatch rule =>
-        rule.constructor.owner.owner == `OK._model._impl.1
+        rule.constructor.owner.owner == owner
       | _ => false) &&
     !ok.coverage.occurrences.any fun occurrence =>
-      occurrence.constructor.owner.owner == `OK._model._impl.1 && occurrence.fieldIndex == 2
+      occurrence.constructor.owner.owner == owner && occurrence.fieldIndex == 2
 
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun
