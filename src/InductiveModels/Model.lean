@@ -3360,11 +3360,11 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       badShape s!"{sourceRecursor} and {implementationRecursor} have different rule keys"
     let mut recursorRuleKeys := #[]
     for sourceRule in sourceRecursorEvidence.rules do
-      let matches := (Array.range pl.types[r + i]!.ctors.size).filter fun index =>
+      let ruleMatches := (Array.range pl.types[r + i]!.ctors.size).filter fun index =>
         pl.types[r + i]!.ctors[index]!.1 == sourceRule.ctor
-      unless matches.size == 1 do
-        badShape s!"{sourceRecursor}'s rule {sourceRule.ctor} has {matches.size} private constructors"
-      let implementationConstructor := blockCtors[r + i]![matches[0]!]!
+      unless ruleMatches.size == 1 do
+        badShape s!"{sourceRecursor}'s rule {sourceRule.ctor} has {ruleMatches.size} private constructors"
+      let implementationConstructor := blockCtors[r + i]![ruleMatches[0]!]!
       let implementationMatches := implementationRules.filter fun rule =>
         rule.ctor == implementationConstructor && rule.nfields == sourceRule.nfields
       unless implementationMatches.size == 1 do
