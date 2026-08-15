@@ -339,6 +339,92 @@ def ruleCertificatesComplete (plan : FamilyAdapterPlan)
         environment.constants.contains compatibility.compatibility &&
         compatibilityUsesTransport environment compatibility
 
+/-- Test-only first-failure expansion of `ruleCertificatesComplete`.  Keeping
+this separate from the Boolean inventory check makes an installed-family
+regression identify the exact certificate conjunct without changing any
+construction proof. -/
+def ruleCertificateDiagnostic (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) (environment : Environment) : Option String :=
+    Id.run do
+  let schemas := match FamilyAdapter.derivePublicIotaProofSchemas plan certificate with
+    | .error issue => return some s!"iota schema derivation: {repr issue}"
+    | .ok schemas => schemas
+  if schemas.size != plan.rules.size then
+    return some s!"iota schema cardinality: {schemas.size}/{plan.rules.size}"
+  for rule in plan.rules do
+    let some schema := schemas.find? (·.key == rule.key)
+      | return some s!"{repr rule.key}: missing iota schema"
+    if schema.owner != rule.key.recursorOwner then
+      return some s!"{repr rule.key}: schema owner"
+    if schema.constructor != rule.key.constructor then
+      return some s!"{repr rule.key}: schema constructor"
+    if schema.implementationIota != rule.implementationIota then
+      return some s!"{repr rule.key}: schema implementation iota"
+    if schema.telescope.constructor != rule.key.constructor then
+      return some s!"{repr rule.key}: schema telescope"
+    let some member := plan.members.find? (·.key == rule.key.recursorOwner)
+      | return some s!"{repr rule.key}: missing schema member"
+    if schema.implementationIotaInputs != expectedInstalledIotaInputs member then
+      return some s!"{repr rule.key}: installed iota input roles"
+    let some compatibility := certificate.rules.find? (·.key == rule.key)
+      | return some s!"{repr rule.key}: missing compatibility certificate"
+    if schema.minorCompatibility != compatibility.compatibility then
+      return some s!"{repr rule.key}: schema minor compatibility"
+    if schema.hypotheses.map (·.binderIndex) != compatibility.transportedHypotheses then
+      return some s!"{repr rule.key}: schema transported hypotheses"
+    let keyed := certificate.minorHypotheses.filter (·.rule == rule.key)
+    for step in schema.hypotheses do
+      if step.occurrences.isEmpty then
+        return some s!"{repr rule.key}: empty hypothesis occurrence group"
+      if step.rule != rule.key then
+        return some s!"{repr rule.key}: hypothesis rule"
+      if step.minorIndex != compatibility.minorIndex then
+        return some s!"{repr rule.key}: hypothesis minor index"
+      if step.motiveIndex >= member.recursorMotiveArity then
+        return some s!"{repr rule.key}: hypothesis motive index"
+      for occurrence in step.occurrences do
+        unless keyed.any fun hypothesis => hypothesis.occurrence == occurrence &&
+            hypothesis.publicBinderIndex == step.publicBinderIndex &&
+            hypothesis.publicMotiveIndex == step.publicMotiveIndex &&
+            hypothesis.binderIndex == step.binderIndex &&
+            hypothesis.motiveIndex == step.motiveIndex &&
+            hypothesis.publicHypothesisPosition == step.publicHypothesisPosition &&
+            hypothesis.implementationHypothesisPosition ==
+              step.implementationHypothesisPosition do
+          return some s!"{repr rule.key}: keyed hypothesis association"
+      if let some role := step.recursiveCall? then
+        if role.publicRecursor.isAnonymous then
+          return some s!"{repr rule.key}: anonymous public recursive call"
+        if role.implementationRecursor.isAnonymous then
+          return some s!"{repr rule.key}: anonymous implementation recursive call"
+        unless role.containerOccurrences.all step.occurrences.contains do
+          return some s!"{repr rule.key}: recursive-call occurrences"
+        if let some key := role.container? then
+          unless plan.containerRecursors.any (·.key == key) do
+            return some s!"{repr rule.key}: recursive-call container key"
+  if certificate.rules.size != plan.rules.size then
+    return some s!"rule certificate cardinality: {certificate.rules.size}/{plan.rules.size}"
+  for rule in plan.rules do
+    let some compatibility := certificate.rules.find? (·.key == rule.key)
+      | return some s!"{repr rule.key}: missing rule certificate"
+    let expectedBinders := uniqueBinderIndices <|
+      (certificate.minorHypotheses.filter (·.rule == rule.key)).map (·.binderIndex)
+    if compatibility.transportedHypotheses != expectedBinders then
+      return some s!"{repr rule.key}: rule transported hypotheses"
+    if compatibility.implementationIota != rule.implementationIota then
+      return some s!"{repr rule.key}: rule implementation iota"
+    if compatibility.implementationIotaType != rule.implementationIotaType then
+      return some s!"{repr rule.key}: rule implementation iota type"
+    if compatibility.publicIota != rule.publicIota then
+      return some s!"{repr rule.key}: rule public iota"
+    if compatibility.publicIotaType != rule.publicIotaType then
+      return some s!"{repr rule.key}: rule public iota type"
+    unless environment.constants.contains compatibility.compatibility do
+      return some s!"{repr rule.key}: compatibility not installed"
+    unless compatibilityUsesTransport environment compatibility do
+      return some s!"{repr rule.key}: compatibility transport"
+  return none
+
 def publicConstructorsComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
   match ← (FamilyAdapter.buildPublicConstructorPrototypes plan certificate.members
@@ -1002,6 +1088,11 @@ def runSamples : MetaM Result := do
       let rulesComplete := installedReport.plan?.any fun plan =>
         built.certificate.any fun certificate =>
           ruleCertificatesComplete plan certificate environment
+      let ruleDiagnostic := match installedReport.plan?, built.certificate with
+        | some plan, some certificate =>
+          ruleCertificateDiagnostic plan certificate environment
+        | none, _ => some "missing installed plan"
+        | _, none => some "missing installed construction certificate"
       let constructorsComplete ← match installedReport.plan?, built.certificate with
         | some plan, some certificate => do
           publicConstructorsComplete plan certificate
@@ -1010,12 +1101,13 @@ def runSamples : MetaM Result := do
       if constructorsComplete then
         result := { result with
           installedPublicConstructors := result.installedPublicConstructors + 1 }
-      let recursorsComplete ← match installedReport.plan?, built.certificate with
+      let recursorDiagnostic ← match installedReport.plan?, built.certificate with
         | some plan, some certificate => do
-          publicRecursorsComplete plan certificate
+          publicPrototypeDiagnostic plan certificate
             `_family_adapter_installed_public_recursor_test
-        | _, _ => pure false
-      if recursorsComplete then
+        | none, _ => pure (.prerequisite "missing installed plan")
+        | _, none => pure (.prerequisite "missing installed construction certificate")
+      if recursorDiagnostic.isComplete then
         result := { result with
           installedPublicRecursors := result.installedPublicRecursors + 1 }
       if installedIso.familyImplementation?.isSome && built.certificate.isSome &&
@@ -1024,7 +1116,8 @@ def runSamples : MetaM Result := do
       else
         let failures := result.failures.push
           s!"installed family did not close: shadow={repr installedReport.reasons}, \
-            construction={repr built.issues}"
+            construction={repr built.issues}, baseCertificate={repr ruleDiagnostic}, \
+            publicPrototype={repr recursorDiagnostic}"
         result := { result with failures }
   return result
 
