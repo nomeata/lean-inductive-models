@@ -13,9 +13,14 @@ lean_lib InductiveModels where
   root := `Main
   supportInterpreter := true
 
+-- `Test.runCli` spawns `.lake/build/bin/lean-inductive-models` as a subprocess,
+-- so the CLI target has to be built before this suite runs. Without the `needs`
+-- the suite silently asserts the CLI contract against whatever stale binary is
+-- on disk.
 lean_exe test where
   srcDir := "test"
   root := `Test
+  needs := #[`@/«lean-inductive-models»]
   supportInterpreter := true
 
 lean_exe clitest where
@@ -93,9 +98,12 @@ lean_exe composedrecursorsyntaxtest where
   root := `ComposedRecursorSyntaxTest
   supportInterpreter := true
 
+-- Likewise: `MainCliTest` is entirely a test of the built binary's process
+-- boundary and spawns it directly.
 lean_exe mainclitest where
   srcDir := "test"
   root := `MainCliTest
+  needs := #[`@/«lean-inductive-models»]
 
 lean_exe memoryprobe where
   srcDir := "test"

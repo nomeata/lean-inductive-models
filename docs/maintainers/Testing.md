@@ -105,6 +105,21 @@ test/scripts/check-lean4export-patch.sh
 test/scripts/check-ci-serialized-builds.sh
 ```
 
+Two of those targets test the built binary rather than the library: `test`
+(its `runCli` section) and `mainclitest` spawn
+`.lake/build/bin/lean-inductive-models` as a subprocess. Both therefore declare
+`needs := #[`@/«lean-inductive-models»]` in `lakefile.lean`, so `lake exe test`
+and `lake exe mainclitest` rebuild the CLI before running and cannot assert the
+CLI contract against a stale executable. Do not remove those `needs`: without
+them the CLI checks silently pass or fail against whatever binary happens to be
+on disk.
+
+The out-of-process checks — `check_arena_corpus.py`,
+`check-hard-nested-a.sh`, `check-hard-nested-c.sh` — spawn the same binary but
+are not Lake targets, so they still require an explicit
+`lake build lean-inductive-models` first (`run-correctness.sh` does this, and
+each script fails loudly when the binary is absent).
+
 `mainclitest` exercises the public process boundary, including independent
 input/generated kernel-check flags and constructive model-before-owner output.
 The Arena corpus runner accepts every
