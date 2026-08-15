@@ -198,6 +198,24 @@ def nullaryRuleClosesExactly (shadows : Array FamilyAdapter.ShadowObservation) :
       | _ => false
     covered && !mismatched
 
+/-- Installed equality theorems may reuse one theorem binder at several exact
+LHS positions. `Acc.intro` shares its field with the recursor index, while
+`HEq.refl` repeats parameters as indices. Both rules must validate without
+turning those repeated occurrences into exclusive binder roles. -/
+def repeatedIndexArgumentsCloseExactly
+    (shadows : Array FamilyAdapter.ShadowObservation) : Bool :=
+  let clean := fun root recursor constructor =>
+    match shadows.find? (·.root == root) with
+    | none => false
+    | some observation =>
+      observation.coverage.rules.any (fun rule =>
+        rule.recursor == recursor && rule.constructor.constructor == constructor) &&
+      !observation.reasons.any fun
+        | .installedRuleMismatch rule _ =>
+          rule.recursor == recursor && rule.constructor.constructor == constructor
+        | _ => false
+  clean `_wcore.Acc `Acc.rec `Acc.intro && clean `_wcore.HEq `HEq.rec `HEq.refl
+
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun
     | .missingInterfaceMember member actual => member.owner == `Nat && actual == side
@@ -237,12 +255,14 @@ def main : IO UInt32 := do
   let listRuleAssociation := specialisations.all
   let nonrecursiveMention := deadLambdaDomainClosesExactly familyShadows
   let nullaryRule := nullaryRuleClosesExactly familyShadows
+  let repeatedIndices := repeatedIndexArgumentsCloseExactly familyShadows
   let containerMapsVisible := (shadows ++ familyShadows).any
     (fun shadow => !shadow.coverage.containerMaps.isEmpty)
   let malformedRejected := malformedDependenciesAreExcluded malformed
   if sameResult && outputQuiet && everyAcceptedFamilyRan && keyedReportVisible &&
       everyOutcomeExplicit && nestedGapVisible && exactHypothesisSharing && containerMapsVisible &&
-      listRuleAssociation && nonrecursiveMention && nullaryRule && malformedRejected then
+      listRuleAssociation && nonrecursiveMention && nullaryRule && repeatedIndices &&
+      malformedRejected then
     IO.println s!"family adapter shadow: {shadows.size + familyShadows.size} accepted families, \
       exact gaps reported, output unchanged"
     return 0
@@ -251,6 +271,7 @@ def main : IO UInt32 := do
     explicit={everyOutcomeExplicit}, gaps={nestedGapVisible}, hypotheses={exactHypothesisSharing}, \
     listRules={listRuleAssociation}, listDetails={repr specialisations}, \
     nonrecursiveMention={nonrecursiveMention}, nullaryRule={nullaryRule}, \
+    repeatedIndices={repeatedIndices}, \
     containers={containerMapsVisible}, \
     malformed={malformedRejected}"
   for message in plainMessages ++ observedMessages ++ familyPlainMessages ++ familyObservedMessages do

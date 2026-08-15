@@ -383,11 +383,18 @@ inductive InstalledRuleBinderRole where
 /-- The two distinct artifacts exposed by one installed computation rule.
 `declarationType` and `application` describe how the named constant is called;
 `semanticRhs` is the separately closed reduction RHS used for exact rule
-comparison and proof composition. -/
+comparison and proof composition.  For an equality theorem, `sourceArguments`
+maps the exact source beta inputs (`recursor prefix ++ constructor fields`) to
+opened theorem-binder indices.  It is deliberately separate from the canonical
+`application`: one theorem binder may occur at several recursor/constructor
+argument positions while remaining one source input.  Recursor-rule evidence
+leaves `sourceArguments` empty because it has no independently callable theorem
+telescope. -/
 structure InstalledRuleEvidence where
   representation : InstalledRuleRepresentation
   declarationType : Expr
   application : Array InstalledRuleBinderRole
+  sourceArguments : Array Nat := #[]
   semanticRhs : Expr
   deriving Inhabited, BEq, Repr
 
