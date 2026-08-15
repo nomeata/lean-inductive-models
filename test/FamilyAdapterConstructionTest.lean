@@ -641,8 +641,9 @@ def runSamples : MetaM Result := do
   if metadataRestored && kernelRestored then
     result := { result with exceptionRollback := true }
   else
-    result := { result with failures := result.failures.push
-      "prototype transaction leaked a declaration after an exception" }
+    let failures := result.failures.push
+      "prototype transaction leaked a declaration after an exception"
+    result := { result with failures }
   for owners in completeSamples do
     let owner := owners[0]!
     let source ← indEDecl owners
