@@ -415,6 +415,56 @@ private def recursorMajorMatches (recursor : ExactRecursorLayoutView) (recursorT
   let .forallE _ domain _ _ := type | return false
   return ← isDefEq domain expected
 
+private partial def matchExactIndexPattern (indices : Array FVarId)
+    (pattern target : Expr) (assignments : Array (Option Expr)) :
+    Option (Array (Option Expr)) :=
+  if let .fvar id := pattern then
+    match indices.findIdx? (· == id) with
+    | some index =>
+      match assignments[index]! with
+      | some assigned => if assigned == target then some assignments else none
+      | none => some (assignments.set! index (some target))
+    | none => if pattern == target then some assignments else none
+  else
+    match pattern, target with
+    | .app pf pa, .app tf ta => do
+      let assignments ← matchExactIndexPattern indices pf tf assignments
+      matchExactIndexPattern indices pa ta assignments
+    | .lam pn pt pb pi, .lam tn tt tb ti
+    | .forallE pn pt pb pi, .forallE tn tt tb ti => do
+      unless pn == tn && pi == ti do none
+      let assignments ← matchExactIndexPattern indices pt tt assignments
+      matchExactIndexPattern indices pb tb assignments
+    | .letE pn pt pv pb pnondep, .letE tn tt tv tb tnondep => do
+      unless pn == tn && pnondep == tnondep do none
+      let assignments ← matchExactIndexPattern indices pt tt assignments
+      let assignments ← matchExactIndexPattern indices pv tv assignments
+      matchExactIndexPattern indices pb tb assignments
+    | .mdata pm pb, .mdata tm tb => do
+      unless pm == tm do none
+      matchExactIndexPattern indices pb tb assignments
+    | .proj pn pi pb, .proj tn ti tb => do
+      unless pn == tn && pi == ti do none
+      matchExactIndexPattern indices pb tb assignments
+    | _, _ => if pattern == target then some assignments else none
+
+/-- Compare the exact source recursor major with a live source occurrence
+without asking the environment to unfold the not-yet-installed source owner.
+Only the literal index binders are pattern variables. -/
+private def exactSourceRecursorMajorMatches (recursor : ExactRecursorLayoutView)
+    (recursorType : Expr) (parameters : Array Expr) (expected : Expr) : MetaM Bool := do
+  unless parameters.size == recursor.numParams do return false
+  let type ← instantiateForall recursorType parameters
+  let remaining := recursor.numMotives + recursor.numMinors + recursor.numIndices + 1
+  forallBoundedTelescope type (some remaining) fun binders _ => do
+    let indexStart := recursor.numMotives + recursor.numMinors
+    let indices := binders.extract indexStart (indexStart + recursor.numIndices)
+    let some major := binders[remaining - 1]? | return false
+    let pattern ← inferType major
+    let indexIds := indices.map (·.fvarId!)
+    return (matchExactIndexPattern indexIds pattern expected
+      (Array.replicate indexIds.size none)).isSome
+
 private def ExactRecursorLayoutView.ofInstalled
     (recursor : RecursorVal) : ExactRecursorLayoutView :=
   { numParams := recursor.numParams
@@ -539,7 +589,7 @@ private def containerMetadataInstalled (environment : Environment)
         exact.name == container.sourceRecursor && exact.type == container.sourceRecursorType &&
         exact.rules.map (·.ctor) == container.recursorRuleKeys.map (·.1) do
       reasons := reasons.push (.sourceContainerRecursorMismatch occurrence container.sourceRecursor)
-    unless ← recursorMajorMatches (ExactRecursorLayoutView.ofSource exact)
+    unless ← exactSourceRecursorMajorMatches (ExactRecursorLayoutView.ofSource exact)
         exact.type parameters sourceType do
       reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
   let name := container.implementationRecursor
