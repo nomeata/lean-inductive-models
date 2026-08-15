@@ -267,7 +267,7 @@ def main : IO UInt32 := do
     IO.println s!"family adapter shadow: {shadows.size + familyShadows.size} accepted families, \
       exact gaps reported, output unchanged"
     return 0
-    IO.eprintln s!"family adapter shadow failure: same={sameResult}, quiet={outputQuiet}, \
+  IO.eprintln s!"family adapter shadow failure: same={sameResult}, quiet={outputQuiet}, \
     shadows={shadows.size + familyShadows.size}, keyed={keyedReportVisible}, \
     explicit={everyOutcomeExplicit}, complete={allAcceptedComplete}, hypotheses={exactHypothesisSharing}, \
     listRules={listRuleAssociation}, listDetails={repr specialisations}, \
