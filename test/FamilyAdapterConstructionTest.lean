@@ -965,6 +965,30 @@ def runSamples : MetaM Result := do
     result := { result with failures }
   | .ok installedIso =>
     let installedReport ← FamilyAdapter.deriveShadowPlan installedSource installedIso
+    let firstInstalledRule? := installedReport.plan?.bind (·.rules[0]?) |>.map (·.key)
+    let rejectsFirstPublicRule := fun (report : ShadowReport) =>
+      firstInstalledRule?.any fun expected =>
+        report.reasons.any (fun
+          | .installedRuleMismatch actual .publicModel => actual == expected
+          | _ => false) && !report.coverage.rules.contains expected
+    let (iotaOwner, iotaConstructor, _) := installedIso.iotas[0]!
+    let wrongKindIso := { installedIso with iotas := installedIso.iotas.set! 0
+      (iotaOwner, iotaConstructor, installedIso.selfNames[0]!) }
+    let wrongRecursorIso := { installedIso with recs := installedIso.recs.set! 0
+      installedIso.recs[1]! }
+    let (sourceConstructor, _) := installedIso.ctors[0]!
+    let wrongConstructorIso := { installedIso with ctors := installedIso.ctors.set! 0
+      (sourceConstructor, installedIso.ctors[1]!.2) }
+    let wrongKindReport ← FamilyAdapter.deriveShadowPlan installedSource wrongKindIso
+    let wrongRecursorReport ← FamilyAdapter.deriveShadowPlan installedSource wrongRecursorIso
+    let wrongConstructorReport ←
+      FamilyAdapter.deriveShadowPlan installedSource wrongConstructorIso
+    unless rejectsFirstPublicRule wrongKindReport &&
+        rejectsFirstPublicRule wrongRecursorReport &&
+        rejectsFirstPublicRule wrongConstructorReport do
+      let failures := result.failures.push
+        "installed rule theorem kind/recursor/constructor corruption was not rejected keyedly"
+      result := { result with failures }
     let installedBuilt ← (FamilyAdapter.buildFamilyPrototype installedReport installedIso
       `_family_adapter_construction_test_installed_family).run
     match installedBuilt with
