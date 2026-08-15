@@ -1624,7 +1624,6 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (canWait : Bool)
     (st : ModelIslandState) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none)
     (exactTransform : EDecl → EDecl := id)
-    (selectPublicOneLayer : Bool := false)
     (collectAdapterShadows : Bool := false) :
     MetaM (ModelIslandState × Option PrimReadiness) := do
   let (out, rep, pending, adapterShadows) := st
@@ -1653,16 +1652,23 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     | some (block, normalizer) =>
       addSourceStructureModels block projections normalizer reserved is
     | none => addInstalledStructureModels #[tname] projections reserved is
-  let selectOneLayer ← if selectPublicOneLayer then
-      phase1DirectTypeOneLayerEligible tname np ty ctors sourceRecursor?
-    else pure false
-  let selectIndexedFibre ← if selectPublicOneLayer && !selectOneLayer then
+  -- **Route selection is a property of the declaration, not of its
+  -- provenance.** The two phase-1 predicates below read only the block being
+  -- modelled — its exact serialized type, constructor and recursor — so an
+  -- inductive a model spliced (arm C's index erasure, the composition's tag
+  -- and auxiliary) is asked exactly the question an input inductive is asked.
+  -- Gating the question on "did this come from the input stream?" made a
+  -- generated owner miss the one-layer implementation certificate that its own
+  -- source owner carries, and with it the literal projection-iota contract
+  -- ([`InductiveModels.addProjectionModels`]); the erasure skeleton of an
+  -- indexed fibre owner was the observable case.
+  let selectOneLayer ← phase1DirectTypeOneLayerEligible tname np ty ctors sourceRecursor?
+  let selectIndexedFibre ← if selectOneLayer then pure false else
       match sourceType?, sourceConstructor?, sourceRecursor? with
       | some sourceType, some sourceConstructor, some sourceRecursor =>
         phase1IndexedFibreOneLayerEligible tname np ty ctors sourceType
           sourceConstructor sourceRecursor
       | _, _, _ => pure false
-    else pure false
   let exactTaken ← exactPrimNameTaken? tname ctors projections
   let initial ← match exactTaken with
     | some n => pure (.error (.nameTaken n))
@@ -2482,7 +2488,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
         let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
           #[] reserved generation.basic true (out, rep, pending, islandAdapterShadows)
-          (some (replayD, constructionNormalizer)) exactTransform true
+          (some (replayD, constructionNormalizer)) exactTransform
           context.collectAdapterShadows
         match wait? with
         | none => (out, rep, pending, islandAdapterShadows) ← pure st

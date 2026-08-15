@@ -546,8 +546,14 @@ def main : IO UInt32 := do
   state := state.check "no-base skeleton uses the derived exact empty carrier" <|
     (definitionValue? noBaseGenerated (Naming.modelName noBaseSkel)).any fun value =>
       containsConst `PSigma' value && containsConst `PUnit value && !containsConst `PULiftP value
+  -- The skeleton is one recursive constructor without indices or nesting, so
+  -- route selection puts it on the phase-1 one-layer family exactly as it
+  -- would an input inductive of that shape.  The derived recursion is then the
+  -- certificate's implementation recursor and the public slot is the adapter
+  -- over it; the elimination itself is unchanged.
   state := state.check "no-base recursor projects and eliminates Church false" <|
-    (definitionValue? noBaseGenerated (Naming.modelName (Name.str noBaseSkel "rec"))).any
+    (definitionValue? noBaseGenerated
+        (Name.str (Name.str (Naming.modelName noBaseSkel) "_impl") "rec")).any
       fun value =>
         containsConst `PSigma'.fst value && containsConst `Nat.rec value &&
           containsConst `Eq.rec value && !containsConst `PULiftP.rec value

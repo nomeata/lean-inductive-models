@@ -81,13 +81,11 @@ def expectedCensus : Array CensusRow :=
    , { fixture := "indexed_fibre_boundary",
        owner := `IndexedRecursiveLayer._model._impl.skel, field := 0, kind := .authored }
    , { fixture := "indexed_fibre_boundary",
-       owner := `IndexedRecursiveLayer._model._impl.skel, field := 1, kind := .transport }
+       owner := `IndexedRecursiveLayer._model._impl.skel, field := 1, kind := .authored }
    , { fixture := "indexed_fibre_boundary",
        owner := `IndexedRecursiveLayer._model._impl.skel, field := 2, kind := .authored }
    , { fixture := "indexed_fibre_boundary",
        owner := `IndexedRecursiveLayer._model._impl.skel, field := 3, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `ParametricRecursiveLayer._model._impl.skel, field := 1, kind := .transport }
    , { fixture := "indexed_fibre_boundary", owner := `TwoRecursiveDependentResults,
        field := 0, kind := .authored }
    , { fixture := "indexed_fibre_boundary", owner := `TwoRecursiveDependentResults,
@@ -101,7 +99,7 @@ def expectedCensus : Array CensusRow :=
    , { fixture := "indexed_fibre_boundary",
        owner := `TwoRecursiveDependentResults._model._impl.skel, field := 0, kind := .authored }
    , { fixture := "indexed_fibre_boundary",
-       owner := `TwoRecursiveDependentResults._model._impl.skel, field := 1, kind := .transport }
+       owner := `TwoRecursiveDependentResults._model._impl.skel, field := 1, kind := .authored }
    , { fixture := "indexed_fibre_boundary",
        owner := `TwoRecursiveDependentResults._model._impl.skel, field := 2, kind := .authored }
    , { fixture := "indexed_fibre_boundary",
