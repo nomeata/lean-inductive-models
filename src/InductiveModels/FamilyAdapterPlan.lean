@@ -452,7 +452,7 @@ structure ContainerMapPlan where
   sourceRecursor : Name
   /-- Exact source-export recursor record. It remains authoritative before the
   source owner has been installed in the construction environment. -/
-  sourceRecursorEvidence : IsoSourceRecursor := {}
+  sourceRecursorEvidence : IsoSourceRecursor := default
   implementationRecursor : Name
   sourceRecursorType : Expr
   implementationRecursorType : Expr
