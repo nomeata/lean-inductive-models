@@ -125,8 +125,8 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
       unroll := boundary.backward
       unrollRoll := boundary.backwardForward
       rollUnroll := boundary.forwardBackward }
-  let containerImplementations ← match boundary.container? with
-    | none => pure #[]
+  let (containerImplementations, containerDeclarations) ← match boundary.container? with
+    | none => pure (#[], #[])
     | some container =>
       let .induct _ _ sourceRecursors := source
         | throwError "changed container source is not an inductive declaration"
@@ -143,28 +143,49 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
         let some (.recInfo recursor) := (← getEnv).constants.find? name
           | throwError "changed container recursor {name} is not installed"
         return recursor.rules.toArray
-      let sourceRules ← recursorRules container.sourceRecursor
       let implementationRules ← recursorRules container.implementationRecursor
-      let sourceRuleKeys := sourceRules.map (·.ctor)
-      let implementationRuleKeys := implementationRules.map (·.ctor)
-      unless sourceRuleKeys.all implementationRuleKeys.contains &&
-          implementationRuleKeys.all sourceRuleKeys.contains do
-        throwError "changed container recursors have different rule keys"
-      pure #[{
+      let sourceRules := sourceRecursorEvidence.rules
+      let mut recursorRuleKeys : Array (Name × Name) := #[]
+      for sourceRule in sourceRules do
+        let ruleMatches := implementationRules.filter fun implementationRule =>
+          implementationRule.ctor == sourceRule.ctor &&
+            implementationRule.nfields == sourceRule.nfields
+        unless ruleMatches.size == 1 do
+          throwError "changed container source/internal rule association is not unique"
+        recursorRuleKeys := recursorRuleKeys.push (sourceRule.ctor, ruleMatches[0]!.ctor)
+      unless implementationRules.map (·.ctor) == recursorRuleKeys.map (·.2) do
+        throwError "changed container source/internal rule order differs"
+      let some implementationInformation :=
+          (← getEnv).constants.find? container.implementationRecursor
+        | throwError "changed container implementation recursor is not installed"
+      let wrapper := Name.str boundary.privateOwner "containerRecursorWrapper"
+      let wrapperDeclaration := Declaration.defnDecl
+        { name := wrapper
+          levelParams := implementationInformation.levelParams
+          type := implementationInformation.type
+          value := .const container.implementationRecursor
+            (implementationInformation.levelParams.map Level.param)
+          hints := .abbrev
+          safety := .safe }
+      unless (← getEnv).constants.contains wrapper do
+        match ← (addChecked wrapperDeclaration).run with
+        | .error decline => throwError "changed container wrapper declined: {repr decline}"
+        | .ok _ => pure ()
+      let metadata : IsoContainerImplementation := {
         parameterArity := 0
         indexArity := 0
         implementationCarrier := container.implementationCarrier
         sourceRecursor := container.sourceRecursor
         sourceRecursorEvidence
         implementationRecursor := container.implementationRecursor
-        implementationRecursorWrapper := container.implementationRecursor
+        implementationRecursorWrapper := wrapper
         sourceRecursorType := sourceRecursorEvidence.type
         implementationRecursorType := (← typeOf container.implementationRecursor)
-        implementationRecursorWrapperType := (← typeOf container.implementationRecursor)
-        recursorRuleKeys := sourceRuleKeys.map fun key => (key, key)
+        implementationRecursorWrapperType := implementationInformation.type
+        recursorRuleKeys
         implementationRecursorRules := implementationRules.map fun rule =>
           { ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs }
-        interfaceRuleKeys := sourceRuleKeys.map fun key => (key, key)
+        interfaceRuleKeys := recursorRuleKeys
         forward := container.forward
         backward := container.backward
         backwardForward := container.backwardForward
@@ -173,8 +194,10 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
         backwardType := (← typeOf container.backward)
         backwardForwardType := (← typeOf container.backwardForward)
         forwardBackwardType := (← typeOf container.forwardBackward)
-        implementationCarrierType := (← typeOf container.implementationCarrier) }]
+        implementationCarrierType := (← typeOf container.implementationCarrier) }
+      pure (#[metadata], #[wrapperDeclaration])
   return { publicIso with
+    decls := publicIso.decls ++ containerDeclarations
     familyImplementation? := some
       { root := boundary.publicOwner, support := #[], members := #[member] }
     containerImplementations }
@@ -983,6 +1006,10 @@ def runSamples : MetaM Result := do
           s!"{boundary.publicOwner}: public prototype diagnostic: {repr recursorDiagnostic}"
         result := { result with failures }
       if boundary.publicOwner == changedNested.publicOwner then
+        let wrapperSeparated := iso.containerImplementations.any fun container =>
+          container.implementationRecursorWrapper != container.implementationRecursor &&
+            iso.decls.any fun declaration =>
+              declaration.getNames.contains container.implementationRecursorWrapper
         let keyedPlan := report.plan?.any fun plan => plan.containerMaps.any fun container =>
           container.key.target.owner == boundary.publicOwner &&
             container.maps.forward ==
@@ -1012,7 +1039,7 @@ def runSamples : MetaM Result := do
         let environment ← getEnv
         let rulesComplete := report.plan?.any fun plan => built.certificate.any fun certificate =>
           ruleCertificatesComplete plan certificate environment
-        if built.issues.isEmpty && keyedPlan && bidirectionalClosedEndpoint &&
+        if built.issues.isEmpty && wrapperSeparated && keyedPlan && bidirectionalClosedEndpoint &&
             recursorDiagnostic.isComplete && keyedCertificate && rulesComplete then
           result := { result with changed := result.changed + 1 }
           result := { result with closedContainers := result.closedContainers + 1 }
