@@ -108,8 +108,6 @@ def expectedCensus : Array CensusRow :=
        owner := `TwoRecursiveDependentResults._model._impl.skel, field := 3, kind := .authored }
    , { fixture := "indexed_fibre_boundary",
        owner := `TwoRecursiveDependentResults._model._impl.skel, field := 4, kind := .authored }
-   , { fixture := "mutual_index", owner := `T1, field := 1, kind := .transport }
-   , { fixture := "mutual_index", owner := `T2, field := 1, kind := .transport }
    , { fixture := "mutual_one_layer_boundary", owner := `MutualLayerA,
        field := 0, kind := .authored }
    , { fixture := "mutual_one_layer_boundary", owner := `MutualLayerA,

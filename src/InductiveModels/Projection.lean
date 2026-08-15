@@ -22,17 +22,28 @@ namespace InductiveModels
 /-- Whether a one-constructor owner's projection rules can use each constructor
 field literally, including dependent fields.
 
-For an unindexed plain-mutual member the auxiliary inductive supplies primitive
-constructor reduction.  For a single unindexed, unnested, nonrecursive owner,
-the direct field/tight route supplies explicit reflexive projection overrides.
-Recursive, indexed, and nested-specialisation routes may reconstruct a field
-only propositionally, so their dependent rules retain the canonical transport
-below. Callers establish the one-constructor precondition while discovering
-intrinsic projections. -/
+For a plain-mutual member the auxiliary inductive supplies primitive
+constructor reduction, **whether or not the member is indexed**.  The mutual
+construction puts each member's index telescope inside its own tag constructor
+and declares `aux` as a real kernel inductive with the tag as its single index
+([`InductiveModels.mutualIso`]); `R_k.ctor._model` δ-unfolds to `aux.k.c`, so
+`aux.rec`'s primitive ι rule fires on the modeled constructor with the member's
+indices present exactly as it does without them.  Indices are arguments of the
+recursor, not conditions on its reduction, and the projection's minor lands on
+the field literally either way.
+
+For a single unindexed, unnested, nonrecursive owner, the direct field/tight
+route supplies explicit reflexive projection overrides; there is no auxiliary
+inductive underneath, so that disjunct still needs its own shape conditions.
+
+Recursive and nested-specialisation routes may reconstruct a field only
+propositionally, so their dependent rules retain the canonical transport below.
+Callers establish the one-constructor precondition while discovering intrinsic
+projections. -/
 def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType) : Bool :=
-  type.ctors.length == 1 && type.numIndices == 0 &&
+  type.ctors.length == 1 &&
     ((types.size > 1 && types.all (·.numNested == 0)) ||
-      (types.size == 1 && type.numNested == 0 && !type.isRec))
+      (types.size == 1 && type.numIndices == 0 && type.numNested == 0 && !type.isRec))
 
 /-- Whether the exact exported former ends in the literal sort `Prop`.
 
