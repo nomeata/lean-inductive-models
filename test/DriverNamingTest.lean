@@ -42,8 +42,8 @@ def flipFirstRecursorSafety (input : Export) : Option (Export × Name) := do
     | _ => false
   let .induct types constructors (recursor :: recursors) := input.decls[index]! | none
   let changed := { recursor with isUnsafe := !recursor.isUnsafe }
-  return ({ input with decls := input.decls.set! index
-    (.induct types constructors (changed :: recursors)) }, recursor.name)
+  let changedRecord := EDecl.induct types constructors (changed :: recursors)
+  return ({ input with decls := input.decls.set! index changedRecord }, recursor.name)
 
 def FixtureResult.hasName (result : FixtureResult) (name : Name) : Bool :=
   result.output.any fun declaration => declaration.names.contains name
@@ -88,6 +88,13 @@ def main : IO UInt32 := do
     "test/fixtures/inductive-models/filtered/nested_iota.ndjson"
   let .ok partialInput := InductiveModels.parse partialText
     | throw <| IO.userError "cannot parse partially filtered nested_iota"
+  -- The committed copy is filtered for the nested and mutual branches only,
+  -- and those branches spliced the tight-pair bundle *behind* `N`, `List` and
+  -- `Box`. Enabling every branch must still model the three: the input's own
+  -- copy of the bundle is the declaration generation would write, so
+  -- [`InductiveModels.installInputCanonicalBasis`] installs it rather than
+  -- letting the three decline at `prim model name taken (PSigma'.fst)` for
+  -- standing in front of a record.
   let allBranches ← runExport "partially filtered nested_iota with every branch"
     partialInput false {}
   state := state.check "partially filtered output gains missing simple models"
@@ -111,9 +118,12 @@ def main : IO UInt32 := do
 
   let w ← runFixture "test/fixtures/inductive-models/prim_w.ndjson"
     (legacyGenerationConfig true)
+  -- The W fragment's own `Acc` is the embedded `_wcore.Acc`; `Nonempty` is the
+  -- one support owner the fragment shares with the input namespace.
+  let wOwners : List Name := [`_wcore.Acc, `Nonempty]
   state := state.check "W support closure emits exact carriers"
-    ([`Acc, `Nonempty].all w.generated && [`Acc, `Nonempty].all w.hasExactCarrier &&
-      [`Acc, `Nonempty].all (fun owner => !w.hasLegacyCarrier owner))
+    (wOwners.all w.generated && wOwners.all w.hasExactCarrier &&
+      wOwners.all (fun owner => !w.hasLegacyCarrier owner) && generatedOwnersExact w)
 
   let graph ← runFixture "test/fixtures/inductive-models/prim_graph.ndjson"
     (legacyGenerationConfig true)
@@ -121,16 +131,21 @@ def main : IO UInt32 := do
     (graph.report.generated.countP (·.1 == `Nonempty) == 1 &&
       graph.hasExactCarrier `Nonempty && !graph.hasLegacyCarrier `Nonempty)
 
-  let mutual ← runFixture "test/fixtures/inductive-models/prim_late_basis.ndjson"
+  let mutualResult ← runFixture "test/fixtures/inductive-models/prim_late_basis.ndjson"
     (legacyGenerationConfig true)
   let tag := `MA._model._impl.tag
   state := state.check "mutual implementation composes through simple naming"
-    (mutual.generated tag && mutual.hasExactCarrier tag && !mutual.hasLegacyCarrier tag)
+    (mutualResult.generated tag && mutualResult.hasExactCarrier tag &&
+      !mutualResult.hasLegacyCarrier tag)
 
   let composed ← runFixture "test/fixtures/inductive-models/nested_iota.ndjson"
     (legacyGenerationConfig true)
+  -- Layer 1 models the nested `Tree`, layer 2 models the mutual block it
+  -- emitted, and layer 3 models that block's own tag: one owner per stage of
+  -- the composition, each named at the exact carrier of the stage before it.
+  let nestedBlock := Name.num `Tree._model._impl 0
   state := state.check "nested-mutual-simple composition reaches every stage"
-    ([`N, `N._model.LList, `N._model.LList._model._impl.tag].all composed.generated)
+    ([`Tree, nestedBlock, nestedBlock ++ `_model._impl.tag].all composed.generated)
   state := state.check "composed generated owners use exact carriers only"
     (generatedOwnersExact composed)
 

@@ -2187,6 +2187,66 @@ def installInputCanonicalBasis (env0 : Environment) (census : SourceCensus)
     | .error exception =>
       failure? := some s!"cannot install the input's own {root}: \
         {← (exception.toMessageData {}).toString}"
+  -- **The tight pair's six derived declarations**, on exactly the terms the
+  -- inductives above are installed on. `ensurePSigmaPrime` writes `PSigma'`
+  -- and then these six beside it, so an input which declares the same six has
+  -- already written what generation would write. Without them the inductive
+  -- alone is not enough: `PSigma'` is recognised and reported exempt while
+  -- every owner standing in front of the derived records still declines at
+  -- `prim model name taken (PSigma'.fst)`, purely because of where those
+  -- records sit. `filtered/nested_iota`, whose own earlier run spliced the
+  -- bundle behind its first three owners, is the regression.
+  --
+  -- The comparison is the export record of the declaration this pass would
+  -- add ([`InductiveModels.toEDecl`]) against the input's own, which is the
+  -- byte comparison the inductives make.
+  --
+  -- **The six are read as a prefix at ascending ordinals**, starting from the
+  -- inductive's own record. Each member names the one before it, so a record
+  -- which is not the canonical declaration, or which the input wrote ahead of
+  -- what it is written in terms of, stops the group: installing past it would
+  -- either leave a hole in the middle of the bundle or accept an input whose
+  -- replay would have failed at that record. A record left behind still
+  -- reserves its name and the owners in front of it still decline.
+  --
+  -- **Both of what the bundle is written in have to be installed first.**
+  -- The three reduction rules are equations at Lean's `Eq` and the three
+  -- definitions project `PSigma'`, so an input which supplies neither
+  -- canonically — `tight_psigma_prime` declares its own pair and no `Eq` —
+  -- has no canonical bundle for a record to be compared against, and the
+  -- group is not read at all. Each is in `env` exactly when the loop above
+  -- installed the input's own record for it, so `PSigma'`'s ordinal is read
+  -- rather than assumed.
+  match (if failure?.isNone && env.constants.contains `PSigma' &&
+      env.constants.contains `Eq then census.rawOrdinals[`PSigma']? else none) with
+  | none => pure ()
+  | some pairOrdinal =>
+    setEnv env
+    -- A decline is a bundle this input cannot be holding: none is installed.
+    match ← psigmaPrimeDerivedDecls.run with
+    | .error _ => pure ()
+    | .ok derived =>
+      let mut previous := pairOrdinal
+      for declaration in derived do
+        if failure?.isSome then break
+        let [name] := declaration.getNames | break
+        let some ordinal := census.rawOrdinals[name]? | break
+        unless previous < ordinal do break
+        let record ← match ← read ordinal with
+          | .ok record => pure record
+          | .error message =>
+            failure? := some s!"cannot decode source record {ordinal} for {name}: {message}"
+            break
+        setEnv env
+        unless record == (← toEDecl declaration) do break
+        match env.addDeclCore 0 declaration none false with
+        | .ok next =>
+          env := next
+          installed := installed.insert ordinal
+          previous := ordinal
+        | .error exception =>
+          failure? := some s!"cannot install the input's own {name}: \
+            {← (exception.toMessageData {}).toString}"
   -- One kernel declaration, four export records: all four must be the
   -- quotient's own before any of them is.
   for name in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
