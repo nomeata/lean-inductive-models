@@ -385,20 +385,25 @@ private def recursorMajorFamily? (recursor : RecursorVal) (recursorType : Expr)
 
 private def closedFamilyBinderRoles? (family expected : Expr)
     (binders : Array ExactBinder) : MetaM (Option (Array Nat)) := do
-  let rec instantiate (expression : Expr) (arguments : Array Expr) : MetaM (Option (Array Expr)) := do
-    match expression with
-    | .lam name domain body _ =>
+  let rec lambdaCount : Expr → Nat
+    | .lam _ _ body _ => lambdaCount body + 1
+    | _ => 0
+  let rec instantiate (remaining : Nat) (expression : Expr)
+      (arguments : Array Expr) : MetaM (Option (Array Expr)) := do
+    match remaining with
+    | remaining + 1 =>
+      let .lam name domain body _ := expression | return none
       let argument ← mkFreshExprMVar domain .natural name
-      instantiate (body.instantiate1 argument) (arguments.push argument)
-    | body =>
-      unless ← isDefEq body expected do return none
+      instantiate remaining (body.instantiate1 argument) (arguments.push argument)
+    | 0 =>
+      unless ← isDefEq expression expected do return none
       let resolved ← arguments.mapM instantiateMVars
       for argument in resolved do if ← hasAssignableMVar argument then return none
       return some resolved
-  let some arguments ← instantiate family #[] | return none
+  let some arguments ← instantiate (lambdaCount family) family #[] | return none
   let mut positions := #[]
   for argument in arguments do
-    let matchingBinders := binders.mapIdx fun index binder => (index, binder.value)
+    let matchingBinders := (binders.mapIdx fun index binder => (index, binder.value))
       |>.filter (fun (_, value) => value == argument)
     unless matchingBinders.size == 1 do return none
     positions := positions.push matchingBinders[0]!.1
