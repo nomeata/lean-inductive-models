@@ -882,10 +882,14 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           reasons := reasons.push (.missingInterfaceRule key .privateModel)
         let publicIota := (publicIota? iso member rule.ctor).getD .anonymous
         if publicIota.isAnonymous then reasons := reasons.push (.missingInterfaceRule key .publicModel)
-        let implementationEvidence? ← installedRuleEvidence? environment implementationIota
-          member.implementationRecursor constructor.implementationName
-        let publicEvidence? ← installedRuleEvidence? environment publicIota member.publicRecursor
-          constructor.publicName
+        let implementationEvidence? ← try
+            installedRuleEvidence? environment implementationIota
+              member.implementationRecursor constructor.implementationName
+          catch _ => pure none
+        let publicEvidence? ← try
+            installedRuleEvidence? environment publicIota member.publicRecursor
+              constructor.publicName
+          catch _ => pure none
         let implementationRhs? := implementationEvidence?.map (·.semanticRhs)
         let publicRhs? := publicEvidence?.map (·.semanticRhs)
         let expectedImplementationRhs := rewriteWith implementationRuleMapping rule.rhs
