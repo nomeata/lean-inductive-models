@@ -70,9 +70,12 @@ def main : IO UInt32 := do
 
   -- `N` is the first carrier which needs the derived exact-sort lift, so it
   -- pays once for the complete seven-declaration `PSigma'`/`PUnit` support
-  -- bundle. The alias families and their order are otherwise unchanged.
+  -- bundle. `53746e2` made that bundle the sole pair basis and removed the one
+  -- ordinary `PSigma` splice, which is the one declaration every first-owner
+  -- count lost; `5786e01` refreshed the same figure in the four other suites
+  -- and left this one behind. The alias families and their order are unchanged.
   let expected : Array (Name × Nat) :=
-    #[(`N, 16), (`AliasI, 8), (`AliasI._model._impl.skel, 6),
+    #[(`N, 15), (`AliasI, 8), (`AliasI._model._impl.skel, 6),
       (`AliasP, 16), (`Nonempty, 4), (`AliasC, 6)]
   state := state.check "generation counts pin all alias routes and support closure" <|
     report.generated == expected
