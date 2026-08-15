@@ -269,23 +269,32 @@ private def failConstruction (issue : ConstructionIssue) : ConstructionM α :=
 private def liftGen (action : GenM α) : ConstructionM α :=
   ExceptT.lift action
 
-/-- Run one declaration-producing prototype tranche atomically.  The saved
-environment is restored for a deliberate decline, a keyed construction issue,
-or any exception thrown by metadata elaboration or the kernel. -/
-private def runConstructionTransaction (action : ConstructionM α) : GenM (Except ConstructionIssue α) := do
+/-- Run an already lowered generator action against one environment snapshot.
+The `try` lives in `MetaM`, below `GenM`'s `ExceptT Decline`, so metadata and
+kernel exceptions cannot bypass restoration. -/
+private def runMetaEnvironmentTransaction (action : MetaM (Except ε α))
+    (commit : α → Bool) : MetaM (Except ε α) := do
   let saved ← getEnv
   try
-    match ← ExceptT.lift action.run with
-    | .error decline =>
+    match ← action with
+    | .error error =>
       setEnv saved
-      declineWith decline
-    | .ok (.error issue) =>
-      setEnv saved
-      return .error issue
-    | .ok (.ok value) => return .ok value
+      return .error error
+    | .ok value =>
+      unless commit value do setEnv saved
+      return .ok value
   catch exception =>
     setEnv saved
     throw exception
+
+/-- Run one declaration-producing prototype tranche atomically.  The saved
+environment is restored for a deliberate decline, a keyed construction issue,
+or any exception thrown by metadata elaboration or the kernel. -/
+private def runConstructionTransaction (action : ConstructionM α) :
+    GenM (Except ConstructionIssue α) :=
+  ExceptT.mk <| runMetaEnvironmentTransaction (action.run.run) fun
+    | .error _ => false
+    | .ok _ => true
 
 private def generatedType (name : Name) : GenM Expr := do
   let some information := (← getEnv).constants.find? name
@@ -4032,19 +4041,12 @@ def buildFamilyPrototype (report : ShadowReport) (iso : Iso) (root : Name) :
     return { issues := report.reasons.map .incompleteShadow }
   let some plan := report.plan?
     | return { issues := #[.incompleteShadow .sourceNotInductive] }
-  let saved ← getEnv
-  try
-    match ← ExceptT.lift (buildPlanPrototype plan iso root).run with
-    | .error decline =>
-      setEnv saved
-      declineWith decline
-    | .ok built =>
-      if built.certificate.isNone then
-        setEnv saved
-        return { built with declarations := #[] }
-      return built
-  catch exception =>
-    setEnv saved
-    throw exception
+  let result ← ExceptT.lift <| runMetaEnvironmentTransaction
+    (buildPlanPrototype plan iso root).run (·.certificate.isSome)
+  match result with
+  | .error decline => declineWith decline
+  | .ok built =>
+    if built.certificate.isNone then return { built with declarations := #[] }
+    return built
 
 end InductiveModels.FamilyAdapter
