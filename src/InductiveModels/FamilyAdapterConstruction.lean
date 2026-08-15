@@ -1654,13 +1654,16 @@ private def recursorCarrierAt (plan : FamilyAdapterPlan)
   let .installed .. := boundary.boundary
     | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
   let some familyArguments ← recursorBoundaryArguments? boundary true publicType implementationType
-    | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    | failConstruction (.recursorCarrierBoundaryMismatch boundary.key .forward .map
+        .sourceFamily)
   let liveParameters := familyArguments.extract 0 boundary.parameterArity
   unless liveParameters.size == parameters.size do
-    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key .forward .map
+      .indexTelescope)
   for index in [:parameters.size] do
     unless ← liftGen <| isDefEq liveParameters[index]! parameters[index]! do
-      failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+      failConstruction (.recursorCarrierBoundaryMismatch boundary.key .forward .map
+        .indexTelescope)
   let makeMap := fun (forward : Bool) => do
     let sourceType := if forward then publicType else implementationType
     let targetType := if forward then implementationType else publicType
@@ -1717,8 +1720,6 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
         (recursorCarrierAt plan boundary liveParameters sourceType targetType).run
       let carrier ← match carrierAttempt with
         | .ok carrier => pure carrier
-        | .error (.recursorMajorBoundaryMismatch _) =>
-          failConstruction (.exactCarrierBoundaryMismatch fallback.key boundary.key)
         | .error issue => failConstruction issue
       let mapped := mkApp (if forward then carrier.forward else carrier.backward) value
       let roundTrip := mkApp
