@@ -346,6 +346,34 @@ inductive InstalledIotaBinderRole where
   | major
   deriving Inhabited, BEq, Repr
 
+/-- How an exact installed rule declaration is represented.  A recursor rule
+computes by reduction after applying the recursor itself; an installed theorem
+is already the equality proof. -/
+inductive InstalledRuleRepresentation where
+  | recursorRule
+  | equalityTheorem
+  deriving Inhabited, BEq, Repr
+
+/-- One binder of an installed rule declaration, derived by matching the real
+opened binder against the validated recursor-call LHS.  The constructor path
+is needed for equality theorems whose telescope binds fields instead of a
+preassembled major. -/
+inductive InstalledRuleBinderRole where
+  | recursorArgument (position : Nat)
+  | constructorArgument (position : Nat)
+  deriving Inhabited, BEq, Repr
+
+/-- The two distinct artifacts exposed by one installed computation rule.
+`declarationType` and `application` describe how the named constant is called;
+`semanticRhs` is the separately closed reduction RHS used for exact rule
+comparison and proof composition. -/
+structure InstalledRuleEvidence where
+  representation : InstalledRuleRepresentation
+  declarationType : Expr
+  application : Array InstalledRuleBinderRole
+  semanticRhs : Expr
+  deriving Inhabited, BEq, Repr
+
 /-- Exact inputs to one public-iota proof chain.  The constructor-major
 roundtrip, private iota, dependent telescope roundtrip, grouped IH agreements,
 and minor congruence are composed in this mathematical order.  The arrays are
@@ -491,6 +519,8 @@ structure RulePlan where
   publicIota : Name
   implementationIotaType : Expr
   publicIotaType : Expr
+  implementationEvidence : InstalledRuleEvidence
+  publicEvidence : InstalledRuleEvidence
   occurrences : Array OccurrenceKey := #[]
   deriving Inhabited, BEq, Repr
 
