@@ -1062,6 +1062,13 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   let containerSemanticMapping := validatedContainers.flatMap fun container =>
     #[(container.sourceRecursor, container.implementationRecursor)] ++
       container.recursorRuleKeys
+  -- A public/source RecInfo reduces through the exact source specialised
+  -- recursor and source rule constructors. Keep this mapping explicit even
+  -- when every pair is an identity; it is independent of both the internal
+  -- private RecInfo and the callable wrapper theorem representation.
+  let containerPublicSemanticMapping := validatedContainers.flatMap fun container =>
+    #[(container.sourceRecursor, container.sourceRecursor)] ++
+      container.sourceRecursorEvidence.rules.map fun rule => (rule.ctor, rule.ctor)
   let completeContainerInterfaceMapping := validatedContainers.flatMap fun container =>
     #[(container.sourceRecursor, container.implementationRecursorWrapper)] ++
       container.interfaceRuleKeys
@@ -1143,10 +1150,11 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   -- RecInfo rules are internal block reductions; equality theorems are stated
   -- in the exact callable `exactSource` namespace. The representation tag, not
   -- theorem shape or proof search, selects the comparison map.
-  let ruleMapping := fun outer (evidence : InstalledRuleEvidence) =>
-    outer ++ match evidence.representation with
-      | .recursorRule => containerSemanticMapping
-      | .equalityTheorem => completeContainerInterfaceMapping
+  let ruleMapping := fun outer side (evidence : InstalledRuleEvidence) =>
+    outer ++ match evidence.representation, side with
+      | .recursorRule, .privateModel => containerSemanticMapping
+      | .recursorRule, .publicModel => containerPublicSemanticMapping
+      | .equalityTheorem, _ => completeContainerInterfaceMapping
   let mut containerRecursorPlans : Array ContainerRecursorPlan := #[]
   for container in validatedContainers do
     let key : ContainerRecursorKey :=
@@ -1280,13 +1288,13 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           | some evidence => do
             expectedRuleRhs? recursor ruleIndex constructor.source member.implementationRecursor
               constructor.implementationName
-              (ruleMapping implementationMapping evidence) evidence
+              (ruleMapping implementationMapping .privateModel evidence) evidence
           | none => pure none
         let expectedPublicRhs? ← match publicEvidence? with
           | some evidence => do
             expectedRuleRhs? recursor ruleIndex constructor.source member.publicRecursor
               constructor.publicName
-              (ruleMapping publicMapping evidence) evidence
+              (ruleMapping publicMapping .publicModel evidence) evidence
           | none => pure none
         let expectedImplementationRhs := expectedImplementationRhs?.getD rule.rhs
         let expectedPublicRhs := expectedPublicRhs?.getD rule.rhs

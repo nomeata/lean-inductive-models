@@ -3963,12 +3963,13 @@ def buildPublicIotaPrototypes (plan : FamilyAdapterPlan)
     buildPublicIotaPrototypesCore plan base constructors recursors containerRecursors root
 
 /-- Test-only regression hook proving that the shared prototype transaction
-restores the actual incremental environment after both a late metadata
-exception and a late kernel rejection. -/
+restores the actual incremental environment after both a late generator
+metadata exception and an explicit underlying `MetaM` exception following two
+successful declaration installs. -/
 def validatePrototypeExceptionRollback (root : Name) : MetaM (Bool × Bool) := do
   let metaName := Name.str root "metaInstalledBeforeFailure"
-  let addCheckedName := Name.str root "addCheckedInstalledBeforeFailure"
-  let duplicateName := Name.str root "addCheckedDuplicateRejected"
+  let firstExplicitName := Name.str root "firstInstalledBeforeExplicitMetaFailure"
+  let secondExplicitName := Name.str root "secondInstalledBeforeExplicitMetaFailure"
   let validDeclaration (name : Name) := Declaration.defnDecl
     { name, levelParams := [], type := .sort (.succ .zero), value := .const ``Nat [],
       hints := .abbrev, safety := .safe }
@@ -3980,21 +3981,18 @@ def validatePrototypeExceptionRollback (root : Name) : MetaM (Bool × Bool) := d
     pure false
   catch _ =>
     pure (!(← getEnv).constants.contains metaName)
-  let addCheckedAction : ConstructionM Unit := do
-      liftGen <| addChecked (validDeclaration addCheckedName)
-      liftGen <| addChecked (validDeclaration duplicateName)
-      -- `addChecked` uses the trusted construction environment, so a
-      -- deliberately ill-typed value is not a kernel-rejection fixture. An
-      -- exact duplicate name is a real late `addDeclCore` rejection.
-      liftGen <| addChecked (validDeclaration duplicateName)
-  let addCheckedRestored ← try
-    let _ ← (runConstructionTransaction addCheckedAction).run
+  let explicitMetaAction : ConstructionM Unit := do
+      liftGen <| addChecked (validDeclaration firstExplicitName)
+      liftGen <| addChecked (validDeclaration secondExplicitName)
+      liftGen <| ExceptT.lift <| throwError "injected explicit late MetaM exception"
+  let explicitMetaRestored ← try
+    let _ ← (runConstructionTransaction explicitMetaAction).run
     pure false
   catch _ =>
     let environment ← getEnv
-    pure (!environment.constants.contains addCheckedName &&
-      !environment.constants.contains duplicateName)
-  return (metadataRestored, addCheckedRestored)
+    pure (!environment.constants.contains firstExplicitName &&
+      !environment.constants.contains secondExplicitName)
+  return (metadataRestored, explicitMetaRestored)
 
 /-- Test/prototype-only whole-plan construction.  Every returned declaration
 has been kernel checked in the current incremental environment.  A single

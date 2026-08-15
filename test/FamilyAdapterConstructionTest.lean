@@ -155,9 +155,6 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
         recursorRuleKeys := recursorRuleKeys.push (sourceRule.ctor, ruleMatches[0]!.ctor)
       unless implementationRules.map (·.ctor) == recursorRuleKeys.map (·.2) do
         throwError "changed container source/internal rule order differs"
-      let some implementationInformation :=
-          (← getEnv).constants.find? container.implementationRecursor
-        | throwError "changed container implementation recursor is not installed"
       let some sourceInformation := (← getEnv).constants.find? container.sourceRecursor
         | throwError "changed container source recursor is not installed"
       let wrapper := Name.str boundary.privateOwner "containerRecursorWrapper"
@@ -770,8 +767,9 @@ structure Result where
   universeLevels : Nat := 0
   recursorRuleEvidence : Bool := false
   theoremRuleEvidence : Bool := false
+  changedThreeRepresentations : Bool := false
   metadataExceptionRollback : Bool := false
-  addCheckedExceptionRollback : Bool := false
+  explicitMetaExceptionRollback : Bool := false
   containerKeyNames : Bool := false
   failures : Array String := #[]
 
@@ -783,7 +781,7 @@ def implementationEvidenceConsistent (rule : RulePlan)
 
 def runSamples : MetaM Result := do
   let mut result : Result := {}
-  let (metadataRestored, addCheckedRestored) ←
+  let (metadataRestored, explicitMetaRestored) ←
     FamilyAdapter.validatePrototypeExceptionRollback `_family_adapter_transaction_test
   if metadataRestored then
     result := { result with metadataExceptionRollback := true }
@@ -792,12 +790,13 @@ def runSamples : MetaM Result := do
       "prototype transaction leaked `_family_adapter_transaction_test.metaInstalledBeforeFailure` \
         after the injected metadata exception"
     result := { result with failures }
-  if addCheckedRestored then
-    result := { result with addCheckedExceptionRollback := true }
+  if explicitMetaRestored then
+    result := { result with explicitMetaExceptionRollback := true }
   else
     let failures := result.failures.push
-      "prototype transaction leaked `_family_adapter_transaction_test.addCheckedInstalledBeforeFailure` \
-        or `_family_adapter_transaction_test.addCheckedDuplicateRejected` after addChecked rejection"
+      "prototype transaction leaked `_family_adapter_transaction_test.firstInstalledBeforeExplicitMetaFailure` \
+        or `_family_adapter_transaction_test.secondInstalledBeforeExplicitMetaFailure` \
+        after an explicit late MetaM exception"
     result := { result with failures }
   for owners in completeSamples do
     let owner := owners[0]!
@@ -1021,6 +1020,16 @@ def runSamples : MetaM Result := do
           container.implementationRecursorWrapper != container.implementationRecursor &&
             iso.decls.any fun declaration =>
               declaration.getNames.contains container.implementationRecursorWrapper
+        let threeRepresentations := wrapperSeparated &&
+          iso.containerImplementations.any (fun container =>
+            container.implementationRecursorWrapperType == container.sourceRecursorEvidence.type &&
+              container.implementationRecursorType != container.implementationRecursorWrapperType) &&
+          report.plan?.any (fun plan => plan.rules.any fun rule =>
+            rule.publicEvidence.representation == .recursorRule &&
+              rule.implementationEvidence.representation == .recursorRule &&
+              rule.publicRhs != rule.implementationRhs)
+        if threeRepresentations then
+          result := { result with changedThreeRepresentations := true }
         let keyedPlan := report.plan?.any fun plan => plan.containerMaps.any fun container =>
           container.key.target.owner == boundary.publicOwner &&
             container.maps.forward ==
@@ -1345,7 +1354,8 @@ def runMain : IO UInt32 := do
       result.installedFamily == 1 && result.installedPublicConstructors == 1 &&
       result.installedPublicRecursors == 1 &&
       result.recursorRuleEvidence && result.theoremRuleEvidence &&
-      result.metadataExceptionRollback && result.addCheckedExceptionRollback &&
+      result.changedThreeRepresentations &&
+      result.metadataExceptionRollback && result.explicitMetaExceptionRollback &&
       result.containerKeyNames &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
@@ -1380,7 +1390,8 @@ def runMain : IO UInt32 := do
     recursorRuleEvidence={result.recursorRuleEvidence}, \
     theoremRuleEvidence={result.theoremRuleEvidence}, \
     metadataExceptionRollback={result.metadataExceptionRollback}, \
-    addCheckedExceptionRollback={result.addCheckedExceptionRollback}, \
+    explicitMetaExceptionRollback={result.explicitMetaExceptionRollback}, \
+    changedThreeRepresentations={result.changedThreeRepresentations}, \
     containerKeyNames={result.containerKeyNames}, \
     identityDependencies={result.identityDependencies}"
   return 1
