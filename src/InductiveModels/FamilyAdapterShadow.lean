@@ -412,7 +412,7 @@ private partial def exactConstantHeads (expression : Expr) : Array Name := Id.ru
     | .letE _ _ value body _ => visit value; visit body
     | .proj _ _ value | .mdata _ value => visit value
     | _ => pure ()
-  visit expression |>.run' names
+  (visit expression *> get).run' names
 
 private def exactRuleArgumentHead? (tag : Name) (rhs : Expr) (position : Nat) : Option Name := do
   let argument ← (exactLambdaBody tag rhs).getAppArgs[position]?
@@ -1127,8 +1127,12 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         if heads.contains candidate.sourceRecursor then some (containerRecursorKey candidate)
         else none
       ({ rule, callees } : ContainerRecursorRuleDependencies)
+    let maps : EquivalenceCertificate :=
+      { forward := container.forward, backward := container.backward,
+        backwardForward := container.backwardForward,
+        forwardBackward := container.forwardBackward }
     let boundary? ← try
-        installedBoundaryPlan? container.maps publicMajorFamily
+        installedBoundaryPlan? maps publicMajorFamily
           implementationMajorFamily container.forwardType container.backwardType
           container.backwardForwardType container.forwardBackwardType
       catch _ => pure none
