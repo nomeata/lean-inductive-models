@@ -675,7 +675,9 @@ def samePublicContainerKeysDiagnostic (plan : FamilyAdapterPlan)
     { original with
       key := key
       implementationType := originalInfo.type
-      rules := original.rules.map fun rule => { rule with recursor := key } }
+      rules := original.rules.map fun rule => { rule with recursor := key }
+      dependencies := original.dependencies.map fun dependency =>
+        { dependency with rule := { dependency.rule with recursor := key } } }
   let duplicatePlan : FamilyAdapterPlan :=
     { plan with containerRecursors := plan.containerRecursors.push duplicate }
   unless duplicatePlan.validate.isEmpty do

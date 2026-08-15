@@ -300,6 +300,14 @@ structure ContainerRecursiveCallRole where
   occurrences : Array OccurrenceKey
   deriving Inhabited, BEq, Repr
 
+/-- Exact specialised-recursors mentioned by one callable source rule body.
+The rule key and callee keys are retained without imposing a construction
+order; SCC/order handling is a later consumer obligation. -/
+structure ContainerRecursorRuleDependencies where
+  rule : ContainerRecursorRuleKey
+  callees : Array ContainerRecursorKey
+  deriving Inhabited, BEq, Repr
+
 /-- Kernel-checked public wrapper and call agreement for one specialised
 container recursor. Its carrier boundary is the exact closed major-family
 pair recorded in [`ContainerRecursorPlan`], not a fabricated named member. -/
@@ -309,6 +317,8 @@ structure ContainerRecursorCertificate where
   exactType : Expr
   callAgreement : Name
   rules : Array ContainerRecursorRuleKey
+  dependencies : Array ContainerRecursorRuleDependencies := #[]
+  dependencies : Array ContainerRecursorRuleDependencies := #[]
   occurrences : Array OccurrenceKey
   callRoles : Array ContainerRecursiveCallRole
   deriving Inhabited, BEq, Repr
@@ -615,6 +625,9 @@ inductive PlanError where
       (occurrence : OccurrenceKey)
   | containerRecursorMapMismatch (key : ContainerRecursorKey)
       (occurrence : OccurrenceKey)
+  | containerRecursorDependencySequenceMismatch (key : ContainerRecursorKey)
+  | unknownContainerRecursorDependency (rule : ContainerRecursorRuleKey)
+      (callee : ContainerRecursorKey)
   | unknownOccurrenceConstructor (key : OccurrenceKey)
   | unknownOccurrenceTarget (key : OccurrenceKey)
   | occurrenceFieldOutOfBounds (key : OccurrenceKey) (fields : Nat)
@@ -778,6 +791,12 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
   if let some key := duplicateKey? (plan.containerRecursors.map (·.key)) then
     errors := errors.push (.duplicateContainerRecursor key)
   for recursor in plan.containerRecursors do
+    unless recursor.dependencies.map (·.rule) == recursor.rules do
+      errors := errors.push (.containerRecursorDependencySequenceMismatch recursor.key)
+    for dependency in recursor.dependencies do
+      for callee in dependency.callees do
+        unless plan.containerRecursors.any (·.key == callee) do
+          errors := errors.push (.unknownContainerRecursorDependency dependency.rule callee)
     for occurrence in recursor.occurrences do
       let maps := plan.containerMaps.filter (·.key == occurrence)
       unless plan.occurrences.any (·.key == occurrence) do

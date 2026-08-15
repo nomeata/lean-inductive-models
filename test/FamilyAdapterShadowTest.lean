@@ -100,6 +100,8 @@ structure SpecialisationDiagnostics where
   btreeClean : Bool := false
   btreeTagCallable : Bool := false
   btreeDistinct : Bool := false
+  btreeListEmpty : Bool := false
+  btreeDependency : Bool := false
   ptMap : Bool := false
   ptClean : Bool := false
   deriving Repr
@@ -109,6 +111,7 @@ def SpecialisationDiagnostics.all (diagnostics : SpecialisationDiagnostics) : Bo
     diagnostics.treeNodeCallable && diagnostics.treeDistinct &&
     diagnostics.btreeBoxRules && diagnostics.btreeListRules && diagnostics.btreeMap &&
     diagnostics.btreeClean && diagnostics.btreeTagCallable && diagnostics.btreeDistinct &&
+    diagnostics.btreeListEmpty && diagnostics.btreeDependency &&
     diagnostics.ptMap && diagnostics.ptClean
 
 def listSpecialisationDiagnostics (shadows : Array FamilyAdapter.ShadowObservation) :
@@ -148,6 +151,12 @@ def listSpecialisationDiagnostics (shadows : Array FamilyAdapter.ShadowObservati
         `BTree.rec_2, `BTree.rec_2._model] btree
       btreeTagCallable := callableRuleClean `BTree.tag btree
       btreeDistinct := distinct `BTree.rec_1 btree && distinct `BTree.rec_2 btree
+      btreeListEmpty := btree.emptyContainerRecursors.any
+        (·.publicRecursor == `BTree.rec_2)
+      btreeDependency := btree.containerRecursorDependencies.any fun dependency =>
+        dependency.rule.recursor.publicRecursor == `BTree.rec_1 &&
+          dependency.rule.publicConstructor == `Box.mk &&
+          dependency.callees.any (·.publicRecursor == `BTree.rec_2)
       ptMap := mapped `PT pt
       ptClean := clean `PT #[`PT.rec_1, `PT.rec_1._model] pt }
   | _, _, _ => {}
@@ -167,6 +176,7 @@ def nonrecursiveParameterMentionExcluded
       | .minorHypothesisMismatch rule =>
         rule.constructor.owner.owner == owner
       | _ => false) &&
+    !ok.reasons.any (fun | .installedRuleMismatch .. => true | _ => false) &&
     !ok.coverage.occurrences.any fun occurrence =>
       occurrence.constructor.owner.owner == owner && occurrence.fieldIndex == 2
 

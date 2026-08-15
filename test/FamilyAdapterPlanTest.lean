@@ -158,6 +158,9 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
     let endpointRoles :=
       (Array.range (container.parameterArity + container.indexArity)).map
         CarrierEndpointBinderRole.familyArgument |>.push .value
+    let rules := container.recursorRuleKeys.map fun (publicConstructor,
+        implementationConstructor) =>
+      { recursor := key, publicConstructor, implementationConstructor }
     { key
       parameterArity := container.parameterArity
       indexArity := container.indexArity
@@ -168,9 +171,8 @@ private def makePlan (memberCount constructorsPerMember parameterArity indexArit
       implementationType := container.implementationRecursorType
       publicMajorFamily := .sort .zero
       implementationMajorFamily := .sort .zero
-      rules := container.recursorRuleKeys.map fun (publicConstructor,
-          implementationConstructor) =>
-        { recursor := key, publicConstructor, implementationConstructor }
+      rules
+      dependencies := rules.map fun rule => { rule, callees := #[] }
       occurrences := #[container.key]
       boundary := .installed
         { maps := container.maps

@@ -46,6 +46,8 @@ inductive ShadowReason where
   | installedContainerRecursorTypeMismatch (occurrence : OccurrenceKey) (name : Name)
   | installedContainerRecursorRulesMismatch (occurrence : OccurrenceKey) (name : Name)
   | invalidContainerRecursorAssociation (occurrence : OccurrenceKey)
+  | duplicateContainerRecursorMetadata (recursor : ContainerRecursorKey)
+  | invalidContainerRecursorMetadata (recursor : ContainerRecursorKey)
   | unknownRuleConstructor (rule : RuleKey)
   | invalidPlan (error : PlanError)
   deriving Inhabited, BEq, Repr
@@ -94,6 +96,8 @@ structure ShadowObservation where
   /-- Validated container recursors whose callable and internal artifacts are
   literally distinct. -/
   distinctContainerRecursors : Array ContainerRecursorKey := #[]
+  emptyContainerRecursors : Array ContainerRecursorKey := #[]
+  containerRecursorDependencies : Array ContainerRecursorRuleDependencies := #[]
   reasons : Array ShadowReason
   diagnostics : Array String := #[]
   deriving Inhabited, BEq, Repr
@@ -109,6 +113,11 @@ def ShadowReport.observe (report : ShadowReport) : ShadowObservation :=
               rule.publicConstructor != rule.implementationConstructor) then
           some recursor.key
         else none) |>.getD #[],
+    emptyContainerRecursors := report.plan?.map (fun plan =>
+      plan.containerRecursors.filterMap fun recursor =>
+        if recursor.occurrences.isEmpty then some recursor.key else none) |>.getD #[],
+    containerRecursorDependencies := report.plan?.map (fun plan =>
+      plan.containerRecursors.flatMap (·.dependencies)) |>.getD #[],
     diagnostics := report.diagnostics }
 
 def ShadowObservation.complete (observation : ShadowObservation) : Bool :=
@@ -393,6 +402,18 @@ private partial def exactLambdaBody (tag : Name) (expression : Expr) : Expr :=
     exactLambdaBody tag (body.instantiate1 (mkFVar (FVarId.mk tag)))
   | body => body
 
+private partial def exactConstantHeads (expression : Expr) : Array Name := Id.run do
+  let mut names := #[]
+  let rec visit (expression : Expr) : StateM (Array Name) Unit := do
+    match expression with
+    | .const name _ => unless (← get).contains name do modify (·.push name)
+    | .app function argument => visit function; visit argument
+    | .lam _ _ body _ | .forallE _ _ body _ => visit body
+    | .letE _ _ value body _ => visit value; visit body
+    | .proj _ _ value | .mdata _ value => visit value
+    | _ => pure ()
+  visit expression |>.run' names
+
 private def exactRuleArgumentHead? (tag : Name) (rhs : Expr) (position : Nat) : Option Name := do
   let argument ← (exactLambdaBody tag rhs).getAppArgs[position]?
   let head := exactLambdaBody (tag.mkNum position) argument |>.getAppFn
@@ -606,6 +627,45 @@ private def emittedWrapperDiagnostics (aliases : Naming.AliasMap)
     related.map fun (kind, rawName, type) =>
       s!"wrapper candidate kind={kind}, raw={rawName}, exact={aliases.exact rawName}, type={repr type}"
 
+private def containerRecursorKey (container : IsoContainerImplementation) :
+    ContainerRecursorKey :=
+  { publicRecursor := container.sourceRecursor
+    implementationRecursor := container.implementationRecursor }
+
+/-- Validate occurrence-independent container evidence. Direct constructor
+occurrences assign field maps later; they do not authorize this recursor
+interface or its internal implementation. -/
+private def containerImplementationInstalled (environment : Environment)
+    (declarations : Array Declaration) (sourceRecursors : Array ERec)
+    (container : IsoContainerImplementation) : Bool :=
+  let sourceMatches := sourceRecursors.filter (·.name == container.sourceRecursor)
+  if sourceMatches.size != 1 then false else
+  let exact := IsoSourceRecursor.ofERec sourceMatches[0]!
+  let internal? := environment.constants.find? container.implementationRecursor
+  let mapsInstalled := #[(container.forward, container.forwardType),
+      (container.backward, container.backwardType),
+      (container.backwardForward, container.backwardForwardType),
+      (container.forwardBackward, container.forwardBackwardType),
+      (container.implementationCarrier, container.implementationCarrierType)].all fun pair =>
+    installedType? environment pair.1 == some pair.2
+  exact == container.sourceRecursorEvidence && exact.name == container.sourceRecursor &&
+    exact.type == container.sourceRecursorType && mapsInstalled &&
+    exact.rules.map (·.ctor) == container.recursorRuleKeys.map (·.1) &&
+    exact.rules.map (·.ctor) == container.interfaceRuleKeys.map (·.1) &&
+    container.interfaceRuleKeys.all (fun pair => !pair.2.isAnonymous) &&
+    emittedWrapperType? declarations container.implementationRecursorWrapper ==
+      some container.implementationRecursorWrapperType &&
+    match internal? with
+    | some (.recInfo recursor) =>
+      recursor.type == container.implementationRecursorType &&
+        recursor.rules.toArray.map (fun rule : RecursorRule =>
+          ({ ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs } :
+            IsoSourceRecursorRule)) == container.implementationRecursorRules &&
+        recursor.rules.toArray.map (·.ctor) == container.recursorRuleKeys.map (·.2) &&
+        (Array.range exact.rules.size).all fun index =>
+          exact.rules[index]!.nfields == recursor.rules[index]!.nfields
+    | _ => false
+
 private def recursorMajorDiagnostic (label : String) (recursor : ExactRecursorLayoutView)
     (recursorType : Expr) (parameters : Array Expr) (expected : Expr) : MetaM String := do
   let majorPosition :=
@@ -637,43 +697,9 @@ private def sourceRecursorMajorDiagnostic (label : String)
     return s!"{label}: actualHead={repr actual.getAppFn.constName?}, \
       expectedHead={repr expected.getAppFn.constName?}, actual={repr actual}, expected={repr expected}"
 
-/-- Source-side representation is settled before maps or the callable wrapper
-are considered.  This is the exact boundary used by the source-recursors
-census: later interface failures must not turn a represented recursor into an
-apparently absent one. -/
-private def validatedContainerSourceRecursor? (environment : Environment)
-    (sourceRecursors : Array ERec) (semanticMapping : Array (Name × Name))
-    (container : IsoContainerImplementation) : Option Name := do
-  let sourceMatches := sourceRecursors.filter (·.name == container.sourceRecursor)
-  if sourceMatches.size != 1 then none else
-  let exact := IsoSourceRecursor.ofERec sourceMatches[0]!
-  if exact != container.sourceRecursorEvidence || exact.name != container.sourceRecursor ||
-      exact.type != container.sourceRecursorType then none else
-  let some (.recInfo implementation) := environment.constants.find? container.implementationRecursor
-    | none
-  if implementation.type != container.implementationRecursorType ||
-      exact.rules.size != container.recursorRuleKeys.size ||
-      exact.rules.map (·.ctor) != container.interfaceRuleKeys.map (·.1) ||
-      container.interfaceRuleKeys.any (·.2.isAnonymous) ||
-      implementation.rules.length != container.recursorRuleKeys.size ||
-      implementation.rules.toArray.map (fun rule : RecursorRule =>
-        ({ ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs } :
-          IsoSourceRecursorRule)) != container.implementationRecursorRules then none else
-  if rewriteWith semanticMapping (.const container.sourceRecursor []) !=
-      .const container.implementationRecursor [] then none else
-  if (Array.range container.recursorRuleKeys.size).all fun index =>
-      let sourceRule := exact.rules[index]!
-      let implementationRule := implementation.rules[index]!
-      let pair := container.recursorRuleKeys[index]!
-      pair.1 == sourceRule.ctor && pair.2 == implementationRule.ctor &&
-        rewriteWith semanticMapping (.const pair.1 []) == .const pair.2 [] &&
-        sourceRule.nfields == implementationRule.nfields then
-    some container.sourceRecursor
-  else none
-
 private def containerMetadataInstalled (environment : Environment)
     (aliases : Naming.AliasMap) (declarations : Array Declaration)
-    (sourceRecursors : Array ERec) (semanticMapping : Array (Name × Name))
+    (sourceRecursors : Array ERec)
     (sourceParameters implementationParameters : Array Expr)
     (sourceType implementationType : Expr)
     (occurrence : OccurrenceKey) (container : IsoContainerImplementation) :
@@ -699,11 +725,6 @@ private def containerMetadataInstalled (environment : Environment)
         exact.rules.map (·.ctor) == container.recursorRuleKeys.map (·.1) &&
         exact.rules.map (·.ctor) == container.interfaceRuleKeys.map (·.1) &&
         container.interfaceRuleKeys.all (fun pair => !pair.2.isAnonymous) do
-      reasons := reasons.push (.sourceContainerRecursorMismatch occurrence container.sourceRecursor)
-    unless rewriteWith semanticMapping (.const exact.name []) ==
-        .const container.implementationRecursor [] &&
-        container.recursorRuleKeys.all fun pair =>
-          rewriteWith semanticMapping (.const pair.1 []) == .const pair.2 [] do
       reasons := reasons.push (.sourceContainerRecursorMismatch occurrence container.sourceRecursor)
     unless ← exactSourceRecursorMajorMatches (ExactRecursorLayoutView.ofSource exact)
         exact.type sourceParameters sourceType do
@@ -939,9 +960,26 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   let occurrencesFor := fun key =>
     occurrencePlans.filter (·.key.constructor == key) |>.map (·.key)
   let environment ← getEnv
-  let containerSemanticMapping := iso.containerImplementations.flatMap fun container =>
+  let mut validatedContainers : Array IsoContainerImplementation := #[]
+  let mut visitedContainerKeys : Array ContainerRecursorKey := #[]
+  for candidate in iso.containerImplementations do
+    let key := containerRecursorKey candidate
+    if visitedContainerKeys.contains key then continue
+    visitedContainerKeys := visitedContainerKeys.push key
+    let matching := iso.containerImplementations.filter fun current =>
+      containerRecursorKey current == key
+    if matching.size != 1 then
+      reasons := reasons.push (.duplicateContainerRecursorMetadata key)
+    else if containerImplementationInstalled environment iso.decls sourceRecursors candidate then
+      validatedContainers := validatedContainers.push candidate
+    else
+      reasons := reasons.push (.invalidContainerRecursorMetadata key)
+  let containerSemanticMapping := validatedContainers.flatMap fun container =>
     #[(container.sourceRecursor, container.implementationRecursor)] ++
       container.recursorRuleKeys
+  let completeContainerInterfaceMapping := validatedContainers.flatMap fun container =>
+    #[(container.sourceRecursor, container.implementationRecursorWrapper)] ++
+      container.interfaceRuleKeys
   let mut containerMapPlans := #[]
   for constructor in constructorPlans do
     let containerOccurrences := (occurrencesFor constructor.key).filter isContainerOccurrence
@@ -964,7 +1002,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           let sourceFieldType ← inferType sourceField
           let fieldType ← inferType field
           let candidates ← withBinderBody fieldType occurrence.binderDepth fun body =>
-            iso.containerImplementations.filterMapM fun container => do
+            validatedContainers.filterMapM fun container => do
               -- Domain unification assigns an occurrence to a generated map;
               -- the inferred target must be the exact recorded private mimic.
               let target? ← try containerTarget? container publicParameters body catch _ => pure none
@@ -976,7 +1014,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             let (metadataReasons, metadataDiagnostics) ←
               withBinderBody sourceFieldType occurrence.binderDepth fun literalSourceType =>
                 containerMetadataInstalled environment iso.aliases iso.decls sourceRecursors
-                  containerSemanticMapping sourceParameters publicParameters literalSourceType
+                  sourceParameters publicParameters literalSourceType
                   implementationType occurrence container
             if metadataReasons.isEmpty then
               addedPlans := addedPlans.push
@@ -1017,50 +1055,30 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     containerMapPlans := containerMapPlans ++ addedPlans
     reasons := reasons ++ addedReasons
     diagnostics := diagnostics ++ addedDiagnostics
-  let validatedContainerSemanticMapping := containerMapPlans.flatMap fun container =>
-    #[(container.sourceRecursor, container.implementationRecursor)] ++
-      container.recursorRuleKeys
-  let containerInterfaceMapping := containerMapPlans.flatMap fun container =>
-    #[(container.sourceRecursor, container.implementationRecursorWrapper)] ++
-      container.interfaceRuleKeys
   -- RecInfo rules are internal block reductions; equality theorems are stated
   -- in the exact callable `exactSource` namespace. The representation tag, not
   -- theorem shape or proof search, selects the comparison map.
   let ruleMapping := fun outer (evidence : InstalledRuleEvidence) =>
     outer ++ match evidence.representation with
-      | .recursorRule => validatedContainerSemanticMapping
-      | .equalityTheorem => containerInterfaceMapping
+      | .recursorRule => containerSemanticMapping
+      | .equalityTheorem => completeContainerInterfaceMapping
   let mut containerRecursorPlans : Array ContainerRecursorPlan := #[]
-  for container in containerMapPlans do
+  for container in validatedContainers do
     let key : ContainerRecursorKey :=
       { publicRecursor := container.sourceRecursor
         implementationRecursor := container.implementationRecursor }
-    if containerRecursorPlans.any (·.key == key) then continue
     let grouped := containerMapPlans.filter fun current =>
       current.sourceRecursor == key.publicRecursor &&
         current.implementationRecursor == key.implementationRecursor
-    let sameMetadata := grouped.all fun current =>
-      current.parameterArity == container.parameterArity &&
-        current.indexArity == container.indexArity &&
-        current.sourceRecursorType == container.sourceRecursorType &&
-        current.implementationRecursorType == container.implementationRecursorType &&
-        current.implementationRecursorWrapper == container.implementationRecursorWrapper &&
-        current.implementationRecursorWrapperType ==
-          container.implementationRecursorWrapperType &&
-        current.recursorRuleKeys == container.recursorRuleKeys &&
-        current.implementationRecursorRules == container.implementationRecursorRules &&
-        current.interfaceRuleKeys == container.interfaceRuleKeys &&
-        current.maps == container.maps
-    unless sameMetadata do
-      for current in grouped do reasons := reasons.push (.ambiguousContainerMap current.key)
-      continue
     let sourceMatches := sourceRecursors.filter (·.name == key.publicRecursor)
     unless sourceMatches.size == 1 do
+      reasons := reasons.push (.invalidContainerRecursorMetadata key)
       for current in grouped do
         reasons := reasons.push (.missingSourceContainerRecursor current.key key.publicRecursor)
       continue
     let publicInfo := IsoSourceRecursor.ofERec sourceMatches[0]!
     unless publicInfo == container.sourceRecursorEvidence do
+      reasons := reasons.push (.invalidContainerRecursorMetadata key)
       for current in grouped do
         reasons := reasons.push (.sourceContainerRecursorMismatch current.key key.publicRecursor)
       continue
@@ -1069,6 +1087,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       for current in grouped do
         reasons := reasons.push
           (.missingInstalledContainerRecursor current.key key.implementationRecursor)
+      reasons := reasons.push (.invalidContainerRecursorMetadata key)
       continue
     let publicMajor? ← try
         recursorMajorFamily? (ExactRecursorLayoutView.ofSource publicInfo)
@@ -1081,28 +1100,40 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           container.parameterArity container.indexArity
       catch _ => pure none
     let some (publicMajorFamily, publicResultMotive) := publicMajor? | do
+      reasons := reasons.push (.invalidContainerRecursorMetadata key)
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
       continue
     let some (implementationMajorFamily, implementationResultMotive) := implementationMajor? | do
+      reasons := reasons.push (.invalidContainerRecursorMetadata key)
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
       continue
     unless publicInfo.numMotives == implementationInfo.numMotives &&
         publicInfo.numMinors == implementationInfo.numMinors &&
         publicResultMotive == implementationResultMotive do
+      reasons := reasons.push (.invalidContainerRecursorMetadata key)
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
       continue
     let rules := container.recursorRuleKeys.map fun (publicConstructor,
         implementationConstructor) =>
       { recursor := key, publicConstructor, implementationConstructor }
+    let dependencies := rules.mapIdx fun index rule =>
+      let sourceRule := container.sourceRecursorEvidence.rules[index]!
+      let heads := exactConstantHeads <|
+        exactLambdaBody ((`_family_adapter_container_rule).append sourceRule.ctor) sourceRule.rhs
+      let callees := validatedContainers.filterMap fun candidate =>
+        if heads.contains candidate.sourceRecursor then some (containerRecursorKey candidate)
+        else none
+      ({ rule, callees } : ContainerRecursorRuleDependencies)
     let boundary? ← try
         installedBoundaryPlan? container.maps publicMajorFamily
           implementationMajorFamily container.forwardType container.backwardType
           container.backwardForwardType container.forwardBackwardType
       catch _ => pure none
     let some boundary := boundary? | do
+      reasons := reasons.push (.invalidContainerRecursorMetadata key)
       for current in grouped do
         reasons := reasons.push (.invalidContainerRecursorAssociation current.key)
       continue
@@ -1112,7 +1143,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         resultMotiveIndex := publicResultMotive,
         publicType := container.implementationRecursorWrapperType,
         implementationType := container.implementationRecursorType,
-        publicMajorFamily, implementationMajorFamily, rules,
+        publicMajorFamily, implementationMajorFamily, rules, dependencies,
         occurrences := grouped.map (·.key), boundary }
   let mut rulePlans := #[]
   for member in resolvedMembers do
@@ -1326,8 +1357,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           publicMajorFamily, implementationMajorFamily, boundary := .defeq,
           rules := pairedRules, occurrences := grouped, callRoles := #[callRole] }
 
-  let representedContainerRecursors := iso.containerImplementations.filterMap
-    (validatedContainerSourceRecursor? environment sourceRecursors containerSemanticMapping)
+  let representedContainerRecursors := validatedContainers.map (·.sourceRecursor)
   let representedRecursors :=
     resolvedMembers.filterMap (·.sourceRecursor?.map (·.name)) ++
       representedContainerRecursors

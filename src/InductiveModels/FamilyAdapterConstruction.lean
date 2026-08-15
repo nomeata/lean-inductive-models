@@ -3372,6 +3372,7 @@ private def buildContainerRecursorPrototypesCore (plan : FamilyAdapterPlan)
     let certificate : ContainerRecursorCertificate :=
       { key := container.key, adapter := recursor.adapter, exactType := recursor.exactType,
         callAgreement := recursor.callAgreement, rules := container.rules,
+        dependencies := container.dependencies,
         occurrences := container.occurrences, callRoles := container.callRoles }
     declarations := declarations ++ added
     built := built.push { plan := container, shape, recursor, certificate }
