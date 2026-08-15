@@ -654,7 +654,8 @@ private def validatedContainerSourceRecursor? (environment : Environment)
 private def containerMetadataInstalled (environment : Environment)
     (aliases : Naming.AliasMap) (declarations : Array Declaration)
     (sourceRecursors : Array ERec) (semanticMapping : Array (Name × Name))
-    (parameters : Array Expr) (sourceType implementationType : Expr)
+    (sourceParameters implementationParameters : Array Expr)
+    (sourceType implementationType : Expr)
     (occurrence : OccurrenceKey) (container : IsoContainerImplementation) :
     MetaM (Array ShadowReason × Array String) := do
   let mut reasons := #[]
@@ -683,10 +684,11 @@ private def containerMetadataInstalled (environment : Environment)
           rewriteWith semanticMapping (.const pair.1 []) == .const pair.2 [] do
       reasons := reasons.push (.sourceContainerRecursorMismatch occurrence container.sourceRecursor)
     unless ← exactSourceRecursorMajorMatches (ExactRecursorLayoutView.ofSource exact)
-        exact.type parameters sourceType do
+        exact.type sourceParameters sourceType do
       reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
       diagnostics := diagnostics.push (← sourceRecursorMajorDiagnostic
-        "source-major" (ExactRecursorLayoutView.ofSource exact) exact.type parameters sourceType)
+        "source-major" (ExactRecursorLayoutView.ofSource exact) exact.type sourceParameters
+          sourceType)
   let name := container.implementationRecursor
   match environment.constants.find? name with
   | none => reasons := reasons.push (.missingInstalledContainerRecursor occurrence name)
@@ -698,11 +700,11 @@ private def containerMetadataInstalled (environment : Environment)
       unless recursor.rules.toArray.map (·.ctor) == container.recursorRuleKeys.map (·.2) do
         reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
       unless ← recursorMajorMatches (ExactRecursorLayoutView.ofInstalled recursor)
-          container.implementationRecursorType parameters implementationType do
+          container.implementationRecursorType implementationParameters implementationType do
         reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
         diagnostics := diagnostics.push (← recursorMajorDiagnostic
           "implementation-major" (ExactRecursorLayoutView.ofInstalled recursor)
-          container.implementationRecursorType parameters implementationType)
+          container.implementationRecursorType implementationParameters implementationType)
     | _ => reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
   if let some exactType := emittedWrapperType? declarations
       container.implementationRecursorWrapper then
@@ -923,8 +925,9 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     let (addedPlans, addedReasons, addedDiagnostics) ←
       forallBoundedTelescope constructor.sourceType (some totalBinders) fun sourceBinders _ =>
       forallBoundedTelescope constructor.publicType (some totalBinders) fun publicBinders _ => do
+        let sourceParameters := sourceBinders.extract 0 owner.source.numParams
         let sourceFields := sourceBinders.extract owner.source.numParams sourceBinders.size
-        let parameters := publicBinders.extract 0 owner.source.numParams
+        let publicParameters := publicBinders.extract 0 owner.source.numParams
         let fields := publicBinders.extract owner.source.numParams publicBinders.size
         let mut addedPlans := #[]
         let mut addedReasons := #[]
@@ -938,7 +941,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             iso.containerImplementations.filterMapM fun container => do
               -- Domain unification assigns an occurrence to a generated map;
               -- the inferred target must be the exact recorded private mimic.
-              let target? ← try containerTarget? container parameters body catch _ => pure none
+              let target? ← try containerTarget? container publicParameters body catch _ => pure none
               return target?.map fun target => (container, body, target)
           if candidates.size > 1 then
             addedReasons := addedReasons.push (.ambiguousContainerMap occurrence)
@@ -947,8 +950,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             let (metadataReasons, metadataDiagnostics) ←
               withBinderBody sourceFieldType occurrence.binderDepth fun literalSourceType =>
                 containerMetadataInstalled environment iso.aliases iso.decls sourceRecursors
-                  containerSemanticMapping parameters literalSourceType implementationType occurrence
-                  container
+                  containerSemanticMapping sourceParameters publicParameters literalSourceType
+                  implementationType occurrence container
             if metadataReasons.isEmpty then
               addedPlans := addedPlans.push
                 { key := occurrence
@@ -1033,7 +1036,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       continue
     let publicMajor? ← try
         recursorMajorFamily? (ExactRecursorLayoutView.ofSource publicInfo)
-          container.sourceRecursorType
+          container.implementationRecursorWrapperType
           container.parameterArity container.indexArity
       catch _ => pure none
     let implementationMajor? ← try
@@ -1071,7 +1074,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       { key, parameterArity := container.parameterArity, indexArity := container.indexArity,
         motiveArity := publicInfo.numMotives, minorArity := publicInfo.numMinors,
         resultMotiveIndex := publicResultMotive,
-        publicType := container.sourceRecursorType,
+        publicType := container.implementationRecursorWrapperType,
         implementationType := container.implementationRecursorType,
         publicMajorFamily, implementationMajorFamily, rules,
         occurrences := grouped.map (·.key), boundary }

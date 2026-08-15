@@ -98,16 +98,21 @@ def listSpecialisationRulesCovered (shadows : Array FamilyAdapter.ShadowObservat
       | .unrepresentedSourceRecursor recursor => !wrappers.contains recursor
       | .installedRuleMismatch rule _ => rule.recursorOwner.owner != owner
       | .invalidContainerRecursorAssociation key => key.target.owner != owner
+      | .invalidPlan _ => false
       | _ => true
-  match shadows.find? (·.root == `Tree), shadows.find? (·.root == `BTree) with
-  | some tree, some btree =>
+  let mapped := fun owner (observation : FamilyAdapter.ShadowObservation) =>
+    observation.coverage.containerMaps.any (·.target.owner == owner)
+  match shadows.find? (·.root == `Tree), shadows.find? (·.root == `BTree),
+      shadows.find? (·.root == `PT) with
+  | some tree, some btree, some pt =>
     covered tree `Tree.rec_1 #[`List.nil, `List.cons] &&
-      clean `Tree #[`Tree.rec_1, `Tree.rec_1._model] tree &&
+      mapped `Tree tree && clean `Tree #[`Tree.rec_1, `Tree.rec_1._model] tree &&
       covered btree `BTree.rec_1 #[`Box.mk] &&
       covered btree `BTree.rec_2 #[`List.nil, `List.cons] &&
-      clean `BTree #[`BTree.rec_1, `BTree.rec_1._model,
-        `BTree.rec_2, `BTree.rec_2._model] btree
-  | _, _ => false
+      mapped `BTree btree && clean `BTree #[`BTree.rec_1, `BTree.rec_1._model,
+        `BTree.rec_2, `BTree.rec_2._model] btree &&
+      mapped `PT pt && clean `PT #[`PT.rec_1, `PT.rec_1._model] pt
+  | _, _, _ => false
 
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun
