@@ -523,6 +523,7 @@ structure Result where
   nestedPublicConstructors : Nat := 0
   nestedPublicRecursors : Nat := 0
   identityCallAgreements : Nat := 0
+  invalidIdentityContainerPlans : Nat := 0
   changed : Nat := 0
   changedPublicConstructors : Nat := 0
   changedPublicRecursors : Nat := 0
@@ -627,7 +628,10 @@ def runSamples : MetaM Result := do
           | .ok schemas =>
             let roles := schemas.flatMap fun schema =>
               schema.hypotheses.filterMap (·.recursiveCall?)
-            !roles.isEmpty && plan.containerRecursors.any (·.boundary == .defeq) &&
+            let canonicalRoles := roles.filter fun role => role.container?.any fun key =>
+              plan.containerRecursors.any fun container =>
+                container.key == key && container.boundary == .defeq
+            !canonicalRoles.isEmpty &&
               roles.all fun role =>
                 let members := plan.members.filter fun member =>
                   member.publicRecursor == role.publicRecursor &&
@@ -641,6 +645,23 @@ def runSamples : MetaM Result := do
       if recursorsComplete && identityCalls then
         result := { result with identityCallAgreements :=
           result.identityCallAgreements + 1 }
+      if owner == `FamilyAdapterGenerated.GeneratedShared then
+        if let some plan := report.plan? then
+          if let some canonical := plan.containerRecursors.find? (·.boundary == .defeq) then
+            let corrupted := { plan with
+              containerRecursors := plan.containerRecursors.map fun container =>
+                if container.key == canonical.key then
+                  { container with implementationMajorFamily := .sort .zero }
+                else container }
+            let corruptedDiagnostic ← match built.certificate with
+              | some certificate => publicPrototypeDiagnostic corrupted certificate
+                  `_family_adapter_invalid_identity_container
+              | none => pure (.shadowIssues built.issues)
+            let ambiguous := { plan with
+              containerRecursors := plan.containerRecursors.push canonical }
+            if !corruptedDiagnostic.isComplete && !ambiguous.validate.isEmpty then
+              result := { result with invalidIdentityContainerPlans :=
+                result.invalidIdentityContainerPlans + 1 }
       if owner == `FamilyAdapterGenerated.GeneratedRepeatedSpecialisation then
         let repeated ← match report.plan?, built.certificate with
           | some plan, some certificate =>
@@ -965,6 +986,7 @@ def runMain : IO UInt32 := do
       result.nestedPublicConstructors == nestedSamples.size && result.changed == 4 &&
       result.nestedPublicRecursors == nestedSamples.size &&
       result.identityCallAgreements == nestedSamples.size &&
+      result.invalidIdentityContainerPlans == 1 &&
       result.changedPublicConstructors == 4 &&
       result.changedPublicRecursors == 4 &&
       result.closedContainers == 1 && result.invalidMaps == 1 && result.invalidContainerMaps == 1 &&
@@ -990,6 +1012,7 @@ def runMain : IO UInt32 := do
     nestedPublicConstructors={result.nestedPublicConstructors}, changed={result.changed}, \
     nestedPublicRecursors={result.nestedPublicRecursors}, \
     identityCallAgreements={result.identityCallAgreements}, \
+    invalidIdentityContainerPlans={result.invalidIdentityContainerPlans}, \
     changedPublicConstructors={result.changedPublicConstructors}, \
     changedPublicRecursors={result.changedPublicRecursors}, \
     installedFamily={result.installedFamily}, \
