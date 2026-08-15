@@ -801,12 +801,12 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       let mut pairedRules : Array ContainerRecursorRuleKey := #[]
       let mut exactRules := publicInfo.rules.length == implementationInfo.rules.length
       for publicRule in publicInfo.rules do
-        let matches := implementationInfo.rules.toArray.filter fun implementationRule =>
+        let ruleMatches := implementationInfo.rules.toArray.filter fun implementationRule =>
           implementationRule.ctor == publicRule.ctor && implementationRule.rhs == publicRule.rhs
-        if matches.size == 1 then
+        if ruleMatches.size == 1 then
           pairedRules := pairedRules.push
             { recursor := key, publicConstructor := publicRule.ctor,
-              implementationConstructor := matches[0]!.ctor }
+              implementationConstructor := ruleMatches[0]!.ctor }
         else
           exactRules := false
       unless publicInfo.numParams == implementationInfo.numParams &&
