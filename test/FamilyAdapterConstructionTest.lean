@@ -768,7 +768,8 @@ structure Result where
   universeLevels : Nat := 0
   recursorRuleEvidence : Bool := false
   theoremRuleEvidence : Bool := false
-  exceptionRollback : Bool := false
+  metadataExceptionRollback : Bool := false
+  kernelExceptionRollback : Bool := false
   containerKeyNames : Bool := false
   failures : Array String := #[]
 
@@ -782,11 +783,19 @@ def runSamples : MetaM Result := do
   let mut result : Result := {}
   let (metadataRestored, kernelRestored) ←
     FamilyAdapter.validatePrototypeExceptionRollback `_family_adapter_transaction_test
-  if metadataRestored && kernelRestored then
-    result := { result with exceptionRollback := true }
+  if metadataRestored then
+    result := { result with metadataExceptionRollback := true }
   else
     let failures := result.failures.push
-      "prototype transaction leaked a declaration after an exception"
+      "prototype transaction leaked `_family_adapter_transaction_test.metaInstalledBeforeFailure` \
+        after the injected metadata exception"
+    result := { result with failures }
+  if kernelRestored then
+    result := { result with kernelExceptionRollback := true }
+  else
+    let failures := result.failures.push
+      "prototype transaction leaked `_family_adapter_transaction_test.kernelInstalledBeforeFailure` \
+        or `_family_adapter_transaction_test.kernelRejected` after kernel rejection"
     result := { result with failures }
   for owners in completeSamples do
     let owner := owners[0]!
@@ -1334,7 +1343,7 @@ def runMain : IO UInt32 := do
       result.installedFamily == 1 && result.installedPublicConstructors == 1 &&
       result.installedPublicRecursors == 1 &&
       result.recursorRuleEvidence && result.theoremRuleEvidence &&
-      result.exceptionRollback &&
+      result.metadataExceptionRollback && result.kernelExceptionRollback &&
       result.containerKeyNames &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
@@ -1368,7 +1377,8 @@ def runMain : IO UInt32 := do
     universeLevels={result.universeLevels}, \
     recursorRuleEvidence={result.recursorRuleEvidence}, \
     theoremRuleEvidence={result.theoremRuleEvidence}, \
-    exceptionRollback={result.exceptionRollback}, \
+    metadataExceptionRollback={result.metadataExceptionRollback}, \
+    kernelExceptionRollback={result.kernelExceptionRollback}, \
     containerKeyNames={result.containerKeyNames}, \
     identityDependencies={result.identityDependencies}"
   return 1
