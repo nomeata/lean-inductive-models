@@ -594,7 +594,7 @@ def repeatedSpecialisedMinorsComplete (plan : FamilyAdapterPlan)
       first.minorIndex != second.minorIndex &&
         first.publicConstructor == second.publicConstructor &&
         first.exactType != second.exactType && first.adapter != second.adapter &&
-        (plan.members.find? (·.key == recursor.member)).any fun member =>
+        (plan.members.find? fun member => recursor.member == .member member.key).any fun member =>
       recursorUsesRecordedMinorAdapters member recursor
 
 def samePublicContainerKeysComplete (plan : FamilyAdapterPlan)
@@ -611,7 +611,9 @@ def samePublicContainerKeysComplete (plan : FamilyAdapterPlan)
   let key : ContainerRecursorKey :=
     { publicRecursor := original.key.publicRecursor, implementationRecursor := alias }
   let duplicate : ContainerRecursorPlan :=
-    { original with key, implementationType := originalInfo.type,
+    { original with
+      key := key
+      implementationType := originalInfo.type
       rules := original.rules.map fun rule => { rule with recursor := key } }
   let duplicatePlan : FamilyAdapterPlan :=
     { plan with containerRecursors := plan.containerRecursors.push duplicate }
