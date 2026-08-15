@@ -928,6 +928,48 @@ def main : IO UInt32 := do
       (intrinsicFieldsFor raw `Multi).isEmpty &&
       !names.contains (Naming.projectionName `PropDependent 0) &&
       !names.contains (Naming.projectionName `Multi 0)
+
+  -- No field can depend on the *value* of a recursive or nested occurrence
+  -- field: the kernel rejects every way of writing one, and the one shape it
+  -- does accept is a head beta-redex that the export has already discarded.
+  -- The fixture therefore pins an empty class, plus the dependency that does
+  -- occur.  Transport tracks the generation route, not occurrence dependency:
+  -- occurrence-free and directly recursive owners keep the literal rule while
+  -- the nested route transports on either side of the nested field.
+  let nestedDepRaw ← readExport
+    "test/fixtures/inductive-models/nested_value_dependency.ndjson"
+  let (nestedDepDeclarations, nestedDepReport) ← runExport nestedDepRaw
+  let nestedDepGenerated := outputExport nestedDepRaw nestedDepDeclarations
+  let nestedDepOwners := #[`NestedVacuous, `RecursiveVacuous, `NestedEarly, `NestedLate,
+    `PlainDep, `RecursiveDep]
+  let nestedDepIotaHasEqRec (owner : Name) (fieldIndex : Nat) : Bool :=
+    (declarationType? nestedDepGenerated (Naming.projectionIotaName owner fieldIndex)).any
+      (containsConst ``Eq.rec)
+  state := state.check "occurrence-value dependency owners are modeled, not declined" <|
+    nestedDepOwners.all (fun owner => nestedDepReport.generated.any (·.1 == owner)) &&
+      nestedDepReport.declined.isEmpty && nestedDepReport.stmtErrors.isEmpty &&
+      nestedDepReport.unreplayable.isNone &&
+      (Check.check nestedDepGenerated).isEmpty
+  state := state.check "every occurrence-value field stays projection-eligible" <|
+    intrinsicFieldsFor nestedDepRaw `NestedVacuous == #[0, 1] &&
+      intrinsicFieldsFor nestedDepRaw `RecursiveVacuous == #[0, 1] &&
+      intrinsicFieldsFor nestedDepRaw `NestedEarly == #[0, 1, 2] &&
+      intrinsicFieldsFor nestedDepRaw `NestedLate == #[0, 1, 2] &&
+      intrinsicFieldsFor nestedDepRaw `PlainDep == #[0, 1] &&
+      intrinsicFieldsFor nestedDepRaw `RecursiveDep == #[0, 1, 2]
+  state := state.check "a discarded occurrence value leaves no exported dependency" <|
+    (Array.range 2).all fun fieldIndex =>
+      !nestedDepIotaHasEqRec `NestedVacuous fieldIndex &&
+        !nestedDepIotaHasEqRec `RecursiveVacuous fieldIndex
+  state := state.check "occurrence-free and direct recursive dependencies stay literal" <|
+    (Array.range 2).all (!nestedDepIotaHasEqRec `PlainDep ·) &&
+      (Array.range 3).all (!nestedDepIotaHasEqRec `RecursiveDep ·)
+  state := state.check "the nested route transports an occurrence-free dependency" <|
+    !nestedDepIotaHasEqRec `NestedEarly 0 && !nestedDepIotaHasEqRec `NestedEarly 1 &&
+      nestedDepIotaHasEqRec `NestedEarly 2 &&
+      !nestedDepIotaHasEqRec `NestedLate 0 && nestedDepIotaHasEqRec `NestedLate 1 &&
+      !nestedDepIotaHasEqRec `NestedLate 2
+
   let extraIndexed := Naming.projectionName `Indexed 2
   let extraViolations := Check.check (insertCollision generated extraIndexed)
   state := state.check "checker rejects an out-of-range intrinsic projection slot" <|
