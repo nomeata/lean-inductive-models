@@ -456,13 +456,17 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
       | .error decline => return .recursorDecline decline.label
       | .ok (.error issue) => return .recursorIssue issue
       | .ok (.ok (_, built)) => pure built
-    unless containerRecursors.size == plan.containerRecursors.size &&
-        plan.containerRecursors.all fun container =>
-          (containerRecursors.find? (·.plan.key == container.key)).any fun built =>
-            built.certificate.rules == container.rules &&
-              built.certificate.occurrences == container.occurrences &&
-              environment.constants.contains built.certificate.callAgreement do
-      return .recursorInvalid "container certificate coverage"
+    unless containerRecursors.size == plan.containerRecursors.size do
+      return .recursorInvalid "container certificate cardinality"
+    for container in plan.containerRecursors do
+      let some built := containerRecursors.find? (·.plan.key == container.key)
+        | return .recursorInvalid s!"{container.key.publicRecursor}: missing container certificate"
+      unless built.certificate.rules == container.rules do
+        return .recursorInvalid s!"{container.key.publicRecursor}: container rule keys"
+      unless built.certificate.occurrences == container.occurrences do
+        return .recursorInvalid s!"{container.key.publicRecursor}: container occurrences"
+      unless environment.constants.contains built.certificate.callAgreement do
+        return .recursorInvalid s!"{container.key.publicRecursor}: container call agreement"
     match ← (FamilyAdapter.buildPublicIotaPrototypes plan certificate constructors recursors
         containerRecursors (Name.str root "iotas")).run with
     | .error decline => return .iotaDecline decline.label
