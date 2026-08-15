@@ -984,10 +984,14 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         continue
       let publicType := publicInfo.type
       let implementationType := implementationInfo.type
-      let publicMajor? ← recursorMajorFamily? publicInfo publicType
-        publicInfo.numParams publicInfo.numIndices
-      let implementationMajor? ← recursorMajorFamily? implementationInfo implementationType
-        implementationInfo.numParams implementationInfo.numIndices
+      let publicMajor? ← try
+          recursorMajorFamily? publicInfo publicType
+            publicInfo.numParams publicInfo.numIndices
+        catch _ => pure none
+      let implementationMajor? ← try
+          recursorMajorFamily? implementationInfo implementationType
+            implementationInfo.numParams implementationInfo.numIndices
+        catch _ => pure none
       let some (publicMajorFamily, publicResultMotive) := publicMajor? | do
         for key in grouped do reasons := reasons.push (.invalidContainerRecursorAssociation key)
         continue
