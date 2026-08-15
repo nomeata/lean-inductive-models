@@ -642,12 +642,15 @@ def samePublicContainerKeysDiagnostic (plan : FamilyAdapterPlan)
     unique.size == values.size
   let adapters := samePublic.map (·.certificate.adapter)
   let agreements := samePublic.map (·.certificate.callAgreement)
-  let minors := samePublic.flatMap (·.recursor.minors.map (·.adapter))
+  let constructorAdapters := constructors.map (·.adapter)
+  let minors := samePublic.flatMap fun item =>
+    item.recursor.minors.filterMap fun minor =>
+      if constructorAdapters.contains minor.adapter then none else some minor.adapter
   let ownership := samePublic.all fun item => item.recursor.member == .container item.plan.key &&
       item.recursor.minors.all (·.recursor == .container item.plan.key) &&
       item.recursor.motives.all (·.recursor == .container item.plan.key)
-  let complete := samePublic.size >= 2 && allDistinct adapters &&
-    allDistinct agreements && allDistinct minors && ownership
+  let complete := samePublic.size >= 2 && minors.size >= samePublic.size &&
+    allDistinct adapters && allDistinct agreements && allDistinct minors && ownership
   return if complete then none else some
     s!"distinctness/ownership: count={samePublic.size}, adapters={repr adapters}, \
       agreements={repr agreements}, minors={repr minors}, ownership={ownership}"
