@@ -597,19 +597,19 @@ def repeatedSpecialisedMinorsComplete (plan : FamilyAdapterPlan)
         (plan.members.find? fun member => recursor.member == .member member.key).any fun member =>
       recursorUsesRecordedMinorAdapters member recursor
 
-def samePublicContainerKeysComplete (plan : FamilyAdapterPlan)
-    (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
-  let some original := plan.containerRecursors[0]? | return false
+def samePublicContainerKeysDiagnostic (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) (root : Name) : MetaM (Option String) := do
+  let some original := plan.containerRecursors[0]? | return some "missing original"
   let some originalInfo := (← getEnv).constants.find? original.key.implementationRecursor
-    | return false
+    | return some "missing original implementation recursor"
   let alias := Name.str root "implementationRecursorAlias"
-  if (← getEnv).constants.contains alias then return false
+  if (← getEnv).constants.contains alias then return some "alias already installed"
   let originalRecursor := original.key.implementationRecursor
   let aliasAdded ← (addChecked <| Declaration.defnDecl
     { name := alias, levelParams := originalInfo.levelParams, type := originalInfo.type,
       value := .const originalRecursor (originalInfo.levelParams.map Level.param),
       hints := .abbrev, safety := .safe }).run
-  let .ok _ := aliasAdded | return false
+  let .ok _ := aliasAdded | return some "alias rejected"
   let key : ContainerRecursorKey :=
     { publicRecursor := original.key.publicRecursor, implementationRecursor := alias }
   let duplicate : ContainerRecursorPlan :=
@@ -619,27 +619,31 @@ def samePublicContainerKeysComplete (plan : FamilyAdapterPlan)
       rules := original.rules.map fun rule => { rule with recursor := key } }
   let duplicatePlan : FamilyAdapterPlan :=
     { plan with containerRecursors := plan.containerRecursors.push duplicate }
-  unless duplicatePlan.validate.isEmpty do return false
+  unless duplicatePlan.validate.isEmpty do
+    return some s!"duplicate plan invalid: {repr duplicatePlan.validate}"
   let constructorsBuilt ← (FamilyAdapter.buildPublicConstructorPrototypes duplicatePlan
     certificate.members certificate.telescopes (Name.str root "constructors")).run
-  let .ok (.ok (_, constructors)) := constructorsBuilt | return false
+  let .ok (.ok (_, constructors)) := constructorsBuilt
+    | return some s!"constructor build: {repr constructorsBuilt}"
   let containerBuilt ← (FamilyAdapter.buildContainerRecursorPrototypes duplicatePlan
     certificate.members certificate.telescopes constructors
     (Name.str root "recursors")).run
-  let .ok (.ok (_, built)) := containerBuilt | return false
+  let .ok (.ok (_, built)) := containerBuilt
+    | return some s!"container build: {repr containerBuilt}"
   let samePublic := built.filter
     (·.plan.key.publicRecursor == original.key.publicRecursor)
   let allDistinct := fun (values : Array Name) =>
     let unique := values.foldl (fun names name =>
       if names.contains name then names else names.push name) #[]
     unique.size == values.size
-  return samePublic.size >= 2 &&
+  let complete := samePublic.size >= 2 &&
     allDistinct (samePublic.map (·.certificate.adapter)) &&
     allDistinct (samePublic.map (·.certificate.callAgreement)) &&
     allDistinct (samePublic.flatMap (·.recursor.minors.map (·.adapter))) &&
     samePublic.all fun item => item.recursor.member == .container item.plan.key &&
       item.recursor.minors.all (·.recursor == .container item.plan.key) &&
       item.recursor.motives.all (·.recursor == .container item.plan.key)
+  return if complete then none else some s!"distinctness/ownership: {samePublic.size}"
 
 structure Result where
   complete : Nat := 0
@@ -803,9 +807,14 @@ def runSamples : MetaM Result := do
       if owner == `FamilyAdapterGenerated.GeneratedShared then
         if let some plan := report.plan? then
           if let some certificate := built.certificate then
-            if ← samePublicContainerKeysComplete plan certificate
-                `_family_adapter_same_public_container_pair then
+            let collisionDiagnostic ← samePublicContainerKeysDiagnostic plan certificate
+              `_family_adapter_same_public_container_pair
+            if collisionDiagnostic.isNone then
               result := { result with containerKeyNames := true }
+            else
+              let failures := result.failures.push
+                s!"full container key regression: {repr collisionDiagnostic}"
+              result := { result with failures }
           if let some canonical := plan.containerRecursors.find? (·.boundary == .defeq) then
             let corrupted : FamilyAdapterPlan := { plan with
               containerRecursors := plan.containerRecursors.map fun container =>
