@@ -1163,17 +1163,17 @@ def buildTelescopePrototype (plan : FamilyAdapterPlan)
 private def publicConstructorAdapterName (root : Name) (constructor : ConstructorKey) : Name :=
   prototypeName root constructor.constructor `publicConstructor
 
-private partial def appendEncodedName (prefix source : Name) : Name :=
+private partial def appendEncodedName (accumulator source : Name) : Name :=
   match source with
-  | .anonymous => prefix
-  | .str parent value => Name.str (Name.num (appendEncodedName prefix parent) 1) value
-  | .num parent value => Name.num (Name.num (appendEncodedName prefix parent) 0) value
+  | .anonymous => accumulator
+  | .str parent value => Name.str (Name.num (appendEncodedName accumulator parent) 1) value
+  | .num parent value => Name.num (Name.num (appendEncodedName accumulator parent) 0) value
 
 private def recursorPrototypeOwner : RecursorPrototypeKey → Name
   | .member member => member.owner
   | .container key =>
-    let public := appendEncodedName (Name.num .anonymous 2) key.publicRecursor
-    appendEncodedName (Name.num public 2) key.implementationRecursor
+    let publicPart := appendEncodedName (Name.num .anonymous 2) key.publicRecursor
+    appendEncodedName (Name.num publicPart 2) key.implementationRecursor
 
 private def publicRecursorAdapterName (root : Name) (key : RecursorPrototypeKey) : Name :=
   prototypeName root (recursorPrototypeOwner key) `publicRecursor
@@ -1854,7 +1854,7 @@ private def recursorForwardAgreementAt (plan : FamilyAdapterPlan)
   unless rawPublic.getAppFn.constName? == some recursor.adapter &&
       reducedPrivate.getAppFn.constName? == some member.implementationRecursor &&
       publicArguments.size > prefixSize && privateArguments.size > prefixSize do
-    failConstruction (.recursorResultMismatch recursor.member)
+    failConstruction (.recursorResultMismatch member.key)
   let publicPrefix := publicArguments.extract 0 prefixSize
   let privatePrefix := privateArguments.extract 0 prefixSize
   let publicTail := publicArguments.extract prefixSize publicArguments.size
@@ -1869,7 +1869,7 @@ private def recursorForwardAgreementAt (plan : FamilyAdapterPlan)
   let boundary ← fixedCarrierBoundary plan memberCertificates parameters member
     publicMajorType privateMajorType
   unless ← liftGen <| isDefEq (mkApp boundary.forward publicMajor) privateMajor do
-    failConstruction (.recursorResultMismatch recursor.member)
+    failConstruction (.recursorResultMismatch member.key)
   let some privateRecursorInfo := (← getEnv).constants.find? member.implementationRecursor
     | failConstruction (.missingInstalledRecursor member.key member.implementationRecursor)
   let core ← withLocalDeclD `value boundary.implementationType fun value => do
@@ -1882,12 +1882,12 @@ private def recursorForwardAgreementAt (plan : FamilyAdapterPlan)
   let motives := recursor.motives.filter fun motive =>
     some motive.publicCarrier == carrier
   let some motiveCertificate := motives[0]?
-    | failConstruction (.recursorResultMismatch recursor.member)
+    | failConstruction (.recursorResultMismatch member.key)
   unless motives.all (·.motiveIndex == motiveCertificate.motiveIndex) do
-    failConstruction (.recursorResultMismatch recursor.member)
+    failConstruction (.recursorResultMismatch member.key)
   let some publicMotive := publicPrefix[
       member.parameterArity + motiveCertificate.motiveIndex]?
-    | failConstruction (.recursorResultMismatch recursor.member)
+    | failConstruction (.recursorResultMismatch member.key)
   let motive ← withLocalDeclD `value boundary.publicType fun value =>
     liftGen <| mkLambdaFVars #[value] (mkAppN publicMotive (publicIndices.push value))
   let agreement ← liftGen <| mkAppOptM ``packedRecursorForwardAgreement <|
@@ -1900,7 +1900,7 @@ private def recursorForwardAgreementAt (plan : FamilyAdapterPlan)
   let resultType ← liftGen <| inferType expectedPrivate
   unless ← liftGen <| isDefEq (← inferType proof)
       (eqi.mk' (← ilevel resultType) resultType expectedPrivate expectedPublic) do
-    failConstruction (.recursorResultMismatch recursor.member)
+    failConstruction (.recursorResultMismatch member.key)
   return proof
 
 /-- Lift one keyed recursive-result agreement through the exact paired
