@@ -2275,6 +2275,13 @@ structure Iso where
   to exact source occurrence keys by `FamilyAdapterShadow`; array position is
   not a consumer contract. -/
   containerImplementations : Array IsoContainerImplementation := #[]
+  /-- The `funext` this model's own proofs use, present exactly when the block
+  stores a packed position under a binder.  [`InductiveModels.ensureFunext`]
+  keeps the export's own when the export has a usable one and derives one under
+  the block's implementation namespace otherwise, so a consumer which has to
+  close a pointwise container equation must read this rather than derive a
+  second. -/
+  funext? : Option Name := none
   /-- `(member, theorem)` for the real members on which Lean's kernel enables
   its unit-like equality shortcut. -/
   unitlikes : Array (Nat × Name) := #[]
@@ -3418,6 +3425,6 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   return { decls := out, levelParams := lparams, members := g.members, selfNames
            numAll := r, ctors
            recs := (Array.range pl.types.size).map g.recName, iotas, ruleKs, spliced, aliases,
-           containerImplementations }
+           containerImplementations, funext? := fxName? }
 
 end InductiveModels

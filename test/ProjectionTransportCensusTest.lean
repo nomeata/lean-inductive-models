@@ -11,9 +11,9 @@ Every intrinsic projection rule `T._model.proj_j.iota` is stated as
 ∀ (constructor telescope), @Eq α (T._model.proj_j … (T._model.mk …)) rhs
 ```
 
-and the goal is that no such **statement** mentions `Eq.rec`.  Today some do,
-for two independent reasons, and this file separates them because only one of
-them is the generator's doing:
+and the goal is that no such **statement** mentions `Eq.rec`.  It is met: the
+`.transport` set below is **empty**, and this file separates the two reasons a
+statement can still mention `Eq.rec` so that it stays empty:
 
 * **`.transport`** — the right-hand side is
   [`InductiveModels.ProjectionField.normalizeProjectionField`]'s nested
@@ -21,7 +21,7 @@ them is the generator's doing:
   and the owner reaches [`InductiveModels.addProjectionModels`] on none of the
   literal routes (`projectionIotaUsesLiteralField`,
   `propositionProjectionIotaUsesLiteralField`, or a phase-1 one-layer
-  certificate).  **This is the set that must shrink to empty.**
+  certificate).  **This set is empty and must stay empty.**
 * **`.authored`** — the statement mentions `Eq.rec` only in the constructor
   telescope or the projection codomain, i.e. it is source syntax the model is
   required to reproduce exactly.  Generalizing the literal route neither adds
@@ -64,9 +64,9 @@ def CensusRow.key (row : CensusRow) : String :=
 
 /-- **The census, as of the current generator.**  Sorted by `CensusRow.key`.
 
-Every `.transport` row is a projection iota whose right-hand side carries the
-canonical `Eq.rec`.  Delete a row only together with the change that removes
-its transport; the suite reports which row to delete. -/
+Every row is `.authored`: the generator emits no dependency transport into any
+projection rule in the corpus.  A `.transport` row would be a regression, not a
+row to add. -/
 def expectedCensus : Array CensusRow :=
   #[ { fixture := "indexed_fibre_boundary", owner := `IndexedRecursiveLayer,
        field := 0, kind := .authored }
@@ -110,10 +110,6 @@ def expectedCensus : Array CensusRow :=
        field := 1, kind := .authored }
    , { fixture := "mutual_one_layer_boundary", owner := `MutualLayerA,
        field := 2, kind := .authored }
-   , { fixture := "nested_default_iota", owner := `NestedDefault, field := 2, kind := .transport }
-   , { fixture := "nested_value_dependency", owner := `NestedEarly, field := 2, kind := .transport }
-   , { fixture := "nested_value_dependency", owner := `NestedLate, field := 1, kind := .transport }
-   , { fixture := "nested_one_layer", owner := `NestedLayer, field := 1, kind := .transport }
    , { fixture := "prop_recursive_projections", owner := `PropRecIdx,
        field := 0, kind := .authored }
    , { fixture := "prop_recursive_projections", owner := `PropRecIdx,

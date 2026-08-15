@@ -32,17 +32,30 @@ indices present exactly as it does without them.  Indices are arguments of the
 recursor, not conditions on its reduction, and the projection's minor lands on
 the field literally either way.
 
+A block with a nested occurrence reaches the nested rung and no other: the
+plain-mutual and direct-simple routes both refuse it, so `numNested` selects a
+construction rather than describing a shape.  That rung declares its
+specialised block as a real kernel inductive and its carriers and constructors
+as definitions onto it, so the **block's own** recursor selects a constructor
+field with the kernel's primitive ι rule.  A field the block stores as declared
+therefore reduces on the nose, and a field it packs reduces to
+`unpack (pack f)`, whose rule is the container's own retraction — a round trip,
+not a dependency transport.  Neither is the canonical transport below, and no
+projected codomain can name a packed field's value in the first place, so
+nesting is a reason for the literal contract rather than against it.
+
 For a single unindexed, unnested, nonrecursive owner, the direct field/tight
 route supplies explicit reflexive projection overrides; there is no auxiliary
 inductive underneath, so that disjunct still needs its own shape conditions.
 
-Recursive and nested-specialisation routes may reconstruct a field only
+Plain recursive owners without nesting reconstruct a field only
 propositionally, so their dependent rules retain the canonical transport below.
 Callers establish the one-constructor precondition while discovering intrinsic
 projections. -/
 def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType) : Bool :=
   type.ctors.length == 1 &&
-    ((types.size > 1 && types.all (·.numNested == 0)) ||
+    (types.any (·.numNested > 0) ||
+      (types.size > 1 && types.all (·.numNested == 0)) ||
       (types.size == 1 && type.numIndices == 0 && type.numNested == 0 && !type.isRec))
 
 /-- Whether the exact exported former ends in the literal sort `Prop`.

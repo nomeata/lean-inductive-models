@@ -924,10 +924,16 @@ def main : IO UInt32 := do
   state := state.check "legacy generated recursive skeleton remains on its legacy contract" <|
     !#[`Recursive._model._impl.self, `Recursive._model._impl.ctor_0,
         `Recursive._model._impl.rec, `Recursive._model._impl.rec_iota_0].any names.contains
-  state := state.check "recursive projections retain the recursor fallback" <|
+  -- `Recursive` nests through `Maybe`, so its selectors eliminate with the
+  -- specialised block's own recursor rather than the public wrapper: that is
+  -- the eliminator whose ι rule is the kernel's primitive one.
+  state := state.check "nested recursive projections select with the block recursor" <|
     (Array.range 2).all fun fieldIndex =>
       (definitionValue? generated (Naming.projectionName `Recursive fieldIndex)).any
-        (containsConst (Naming.modelName `Recursive.rec))
+        fun value =>
+          containsConst (Name.str (Name.num (Name.str (Naming.modelName `Recursive) "_impl") 0)
+            "rec") value &&
+            !containsConst (Naming.modelName `Recursive.rec) value
 
   let directRecursiveRaw ← readExport "test/fixtures/inductive-models/unitlike.ndjson"
   let (directRecursiveDeclarations, directRecursiveReport) ← runExport directRecursiveRaw
@@ -948,9 +954,10 @@ def main : IO UInt32 := do
   -- field: the kernel rejects every way of writing one, and the one shape it
   -- does accept is a head beta-redex that the export has already discarded.
   -- The fixture therefore pins an empty class, plus the dependency that does
-  -- occur.  Transport tracks the generation route, not occurrence dependency:
-  -- occurrence-free and directly recursive owners keep the literal rule while
-  -- the nested route transports on either side of the nested field.
+  -- occur.  That emptiness is what lets the nested route state its rules
+  -- literally: the fields a projected codomain can name are exactly the ones
+  -- the specialised block stores as declared, and the block's own recursor
+  -- selects those definitionally.
   let nestedDepRaw ← readExport
     "test/fixtures/inductive-models/nested_value_dependency.ndjson"
   let (nestedDepDeclarations, nestedDepReport) ← runExport nestedDepRaw
@@ -979,11 +986,9 @@ def main : IO UInt32 := do
   state := state.check "occurrence-free and direct recursive dependencies stay literal" <|
     (Array.range 2).all (!nestedDepIotaHasEqRec `PlainDep ·) &&
       (Array.range 3).all (!nestedDepIotaHasEqRec `RecursiveDep ·)
-  state := state.check "the nested route transports an occurrence-free dependency" <|
-    !nestedDepIotaHasEqRec `NestedEarly 0 && !nestedDepIotaHasEqRec `NestedEarly 1 &&
-      nestedDepIotaHasEqRec `NestedEarly 2 &&
-      !nestedDepIotaHasEqRec `NestedLate 0 && nestedDepIotaHasEqRec `NestedLate 1 &&
-      !nestedDepIotaHasEqRec `NestedLate 2
+  state := state.check "the nested route states an occurrence-free dependency literally" <|
+    (Array.range 3).all (!nestedDepIotaHasEqRec `NestedEarly ·) &&
+      (Array.range 3).all (!nestedDepIotaHasEqRec `NestedLate ·)
 
   let extraIndexed := Naming.projectionName `Indexed 2
   let extraViolations := Check.check (insertCollision generated extraIndexed)

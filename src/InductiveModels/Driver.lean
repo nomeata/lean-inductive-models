@@ -384,8 +384,14 @@ private partial def findConstructorApp? (targetConstructor : Name)
 
 /-- Build the parameter/motive/minor prefix for one selected member of a
 mutual model recursor.  The callback supplies the body of the selected minor;
-all unrelated motives and minors receive inhabited propositional lifts. -/
-private def structureRecursorPreArgumentsWith (eqi : EqInfo) (sourceRecursor : ERec)
+all unrelated motives and minors receive inhabited propositional lifts.
+
+The motive and minor counts are arguments rather than read off a source
+recursor record: the nested rung's projections eliminate with the *block's*
+own recursor, whose motive vector covers the specialised containers as well as
+the export's own members and which no source record describes. -/
+private def structureRecursorPreArgumentsWith (eqi : EqInfo)
+    (numMotives numMinors : Nat)
     (modelRecursor targetConstructor : Name) (motiveIndex : Nat)
     (params : Array Expr) (carrier major targetMotive : Expr)
     (motiveLevel : Level) (recLevels : List Level)
@@ -407,9 +413,9 @@ private def structureRecursorPreArgumentsWith (eqi : EqInfo) (sourceRecursor : E
     (eqi.refl' carrierLevel carrier major)
   let constantMotive := fun (domain proposition : Expr) =>
     forallTelescope domain fun binders _ => mkLambdaFVars binders proposition
-  let selectedMinorIndex ← forallBoundedTelescope current (some sourceRecursor.numMotives)
+  let selectedMinorIndex ← forallBoundedTelescope current (some numMotives)
       fun _ afterMotives =>
-    forallBoundedTelescope afterMotives (some sourceRecursor.numMinors) fun minors _ => do
+    forallBoundedTelescope afterMotives (some numMinors) fun minors _ => do
       let mut selected : Option Nat := none
       for i in [:minors.size] do
         if (findConstructorApp? targetConstructor (← inferType minors[i]!)).isSome then
@@ -419,14 +425,14 @@ private def structureRecursorPreArgumentsWith (eqi : EqInfo) (sourceRecursor : E
       let some index := selected
         | badShape s!"{modelRecursor} has no minor for {targetConstructor}"
       return index
-  for motive in [0:sourceRecursor.numMotives] do
+  for motive in [0:numMotives] do
     let .forallE _ domain body _ := current
       | badShape s!"{modelRecursor} has too few motive binders"
     let value ← if motive == motiveIndex then pure targetMotive
       else constantMotive domain fillerType
     arguments := arguments.push value
     current := body.instantiate1 value
-  for minorIndex in [0:sourceRecursor.numMinors] do
+  for minorIndex in [0:numMinors] do
     let .forallE _ domain body _ := current
       | badShape s!"{modelRecursor} has too few minor binders"
     let value ← if minorIndex == selectedMinorIndex then
@@ -447,7 +453,8 @@ def structureRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ERec)
     (motiveLevel : Level) (recLevels modelLevels : List Level)
     (projectionModels : Array (Name × Nat × Name × Name)) (owner : Name) :
     GenM (Array Expr) :=
-  structureRecursorPreArgumentsWith eqi sourceRecursor modelRecursor targetConstructor
+  structureRecursorPreArgumentsWith eqi sourceRecursor.numMotives sourceRecursor.numMinors
+    modelRecursor targetConstructor
     motiveIndex params carrier major targetMotive motiveLevel recLevels fun _ conclusion => do
         let some constructorApp := findConstructorApp? targetConstructor conclusion
           | badShape s!"{targetConstructor}'s selected minor has no constructor conclusion"
@@ -487,9 +494,168 @@ private def structureEtaRecursorPreArguments (eqi : EqInfo) (sourceRecursor : ER
     (modelRecursor targetConstructor : Name) (motiveIndex : Nat)
     (params : Array Expr) (carrier major targetMotive targetMinor : Expr)
     (recLevels : List Level) : GenM (Array Expr) :=
-  structureRecursorPreArgumentsWith eqi sourceRecursor modelRecursor targetConstructor
+  structureRecursorPreArgumentsWith eqi sourceRecursor.numMotives sourceRecursor.numMinors
+    modelRecursor targetConstructor
     motiveIndex params carrier major targetMotive .zero recLevels fun binders _ =>
       pure (targetMinor.beta binders)
+
+/-- A model recursor's level list at a selected motive sort: the motive
+universe in front of the model's own when the recursor carries one, and the
+model's own alone when its block eliminates only into `Prop` and Lean minted
+none. -/
+private def recursorLevels (recursor : Name) (recursorLevelParams modelLevelParams : List Name)
+    (motiveLevel : Level) (modelLevels : List Level) : GenM (List Level) :=
+  if recursorLevelParams.length == modelLevelParams.length + 1 then
+    pure (motiveLevel :: modelLevels)
+  else if recursorLevelParams.length == modelLevelParams.length then
+    pure modelLevels
+  else
+    badShape s!"{recursor} carries unexpected universe parameters"
+
+/-! ### the nested rung's definitional field selector
+
+The nested construction declares its specialised block as a genuine kernel
+`inductDecl` and every public carrier and constructor as a definition onto it
+([`InductiveModels.iso`]).  Two eliminators therefore exist over the same
+values: the block's own recursor, whose ι rule is the kernel's primitive one,
+and the public recursor, whose ι rules are theorems stated along the container
+congruences and which reduces nothing.  A projection routed through the public
+recursor reaches its field only propositionally; one built from the block's
+recursor reaches it **definitionally**, up to the round trip a *packed* field
+makes through its container's `pack`/`unpack` — and that round trip is the
+container's own retraction, not a dependency transport.
+
+That is what puts a nested owner's projection rules on the literal contract.
+The block stores every field a later field's type can mention exactly as the
+source declares it: Lean's positivity and nesting rules leave no spelling in
+which a constructor field type reads the *value* of a nested occurrence
+(`test/fixtures/inductive-models/nested_value_dependency.lean` pins every
+attempt), so a projected codomain never names a packed position and the
+definitional part of the selector is exactly the part the codomain needs. -/
+
+/-- What an intrinsic projection needs of a nested model: the block member
+carrying this owner, the container maps, and the `funext` the model's own
+proofs already use. -/
+private structure NestedProjectionBlock where
+  /-- The block member carrying this owner, `T._model._impl.k`. -/
+  member : Name
+  /-- Its position in the block's motive vector.  The block lists the export's
+  own members first, in `all` order, so this is the owner's member index. -/
+  memberIndex : Nat
+  containers : Array IsoContainerImplementation
+  funext? : Option Name
+
+/-- The nested model under construction, or `none` for every other rung.
+`containerImplementations` is the nested construction's own checked record of
+its specialised containers and no other route produces one. -/
+private def nestedProjectionBlock? (is : Iso) (memberIndex : Nat) :
+    Option NestedProjectionBlock := do
+  if is.containerImplementations.isEmpty then none
+  let member ← is.members[memberIndex]?
+  return { member, memberIndex, containers := is.containerImplementations,
+           funext? := is.funext? }
+
+/-- The container a block field's type sits at, and how deep under a binder
+telescope.  `none` is a field the block stores exactly as the source declares
+it — the fields a packed tower selects on the nose. -/
+private def nestedContainerUnder? (block : NestedProjectionBlock) (type : Expr) :
+    MetaM (Option (IsoContainerImplementation × Nat)) := do
+  let container? := fun (candidate : Expr) => match (headNorm candidate).getAppFn with
+    | .const name _ => block.containers.find? (·.implementationCarrier == name)
+    | _ => none
+  if let some container := container? type then return some (container, 0)
+  forallTelescope (← whnf type) fun binders result => do
+    let some container := container? (← whnf result) | return none
+    return some (container, binders.size)
+
+/-- Which of the constructor's fields the block packs, in field order.  The
+block's constructor telescope is the source's with exactly the packed
+positions retyped, so one table indexes both. -/
+private def nestedFieldPacking (block : NestedProjectionBlock)
+    (blockConstructor : Name) (levels : List Level) (numParams numFields : Nat) :
+    GenM (Array (Option (IsoContainerImplementation × Nat))) := do
+  let info ← constInfo blockConstructor
+  let type := info.type.instantiateLevelParams info.levelParams levels
+  forallBoundedTelescope type (some (numParams + numFields)) fun binders _ => do
+    unless binders.size == numParams + numFields do
+      badShape s!"{blockConstructor} has fewer than {numParams + numFields} binders"
+    (binders.extract numParams binders.size).mapM fun field => do
+      nestedContainerUnder? block (← inferType field)
+
+/-- The container's index vector at one occurrence of it.  The maps take the
+model's parameters from the enclosing scope and the container's indices after
+them, and both sides of the round trip carry those indices last: the block
+member reads `Bₘ p⃗ ι⃗` and the export-side occurrence reads `C … ι⃗`, whose
+leading arguments are the container's own parameters and not the model's.  The
+trailing `indexArity` arguments are therefore the one reading which is right on
+both, and it is [`InductiveModels.Gen.idxOf`]'s. -/
+private def nestedContainerIndices (container : IsoContainerImplementation)
+    (occurrence : Expr) : GenM (Array Expr) := do
+  let arguments := (headNorm occurrence).getAppArgs
+  unless arguments.size ≥ container.indexArity do
+    badShape s!"{container.implementationCarrier} occurs at {arguments.size} arguments, \
+      fewer than its {container.indexArity} indices"
+  return arguments.extract (arguments.size - container.indexArity) arguments.size
+
+/-- One block field as the source constructor declares it.  A packed position
+comes back through its container's `unpack`, pointwise under whatever binder
+telescope the block stored it under; every other position is already the
+source's own field. -/
+private def nestedSourceField (us : List Level) (params : Array Expr)
+    (packed? : Option (IsoContainerImplementation × Nat)) (field : Expr) : GenM Expr := do
+  let some (container, depth) := packed? | return field
+  Gen.underBinders depth (← inferType field) field fun _ result inner => do
+    let indices ← nestedContainerIndices container result
+    return mkAppN (.const container.backward us) (params ++ indices ++ #[inner])
+
+/-- `funext` for a whole binder telescope, innermost first, at the `funext` the
+nested model's own proofs use.  Each step η-reduces its two sides, so the
+right-hand side closes back to the field itself rather than to its
+η-expansion. -/
+private def nestedFunextClose (fx : Name) (binders : Array Expr)
+    (lhs rhs proof : Expr) : GenM Expr := do
+  let mut lhs := lhs
+  let mut rhs := rhs
+  let mut proof := proof
+  for step in [0:binders.size] do
+    let binder := binders[binders.size - 1 - step]!
+    let domain ← inferType binder
+    let domainLevel ← ilevel domain
+    let codomain ← inferType lhs
+    let codomainLevel ← ilevel codomain
+    let family ← mkLambdaFVars #[binder] codomain
+    let closedLhs := (← mkLambdaFVars #[binder] lhs).eta
+    let closedRhs := (← mkLambdaFVars #[binder] rhs).eta
+    proof := mkAppN (.const fx [domainLevel, codomainLevel])
+      #[domain, family, closedLhs, closedRhs, ← mkLambdaFVars #[binder] proof]
+    lhs := closedLhs
+    rhs := closedRhs
+  return proof
+
+/-- The nested projection rule's proof.  Where the block stores the field as
+declared the selector reduces to it and the rule is reflexivity; where the
+block packs it the selector reduces to `unpack (pack f)` and the rule is the
+container's own retraction, closed pointwise under the field's binders. -/
+private def nestedProjectionProof (eqi : EqInfo) (block : NestedProjectionBlock)
+    (us : List Level) (params : Array Expr)
+    (packed? : Option (IsoContainerImplementation × Nat))
+    (fieldLevel : Level) (codomain lhs field : Expr) : GenM Expr := do
+  let some (container, depth) := packed? | return eqi.refl' fieldLevel codomain lhs
+  if depth == 0 then
+    let indices ← nestedContainerIndices container (← inferType field)
+    return mkAppN (.const container.backwardForward us) (params ++ indices ++ #[field])
+  let some fx := block.funext?
+    | badShape s!"{container.implementationCarrier} is packed under a binder and \
+        the nested model carries no funext"
+  forallBoundedTelescope (← inferType field) (some depth) fun binders result => do
+    let indices ← nestedContainerIndices container result
+    let applied := field.beta binders
+    let packedValue := mkAppN (.const container.forward us) (params ++ indices ++ #[applied])
+    let roundTrip := mkAppN (.const container.backward us)
+      (params ++ indices ++ #[packedValue])
+    let pointwise := mkAppN (.const container.backwardForward us)
+      (params ++ indices ++ #[applied])
+    nestedFunextClose fx binders roundTrip applied pointwise
 
 private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : Nat)
     (current : Expr) : MetaM Bool := do
@@ -726,6 +892,23 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     let ownerArity := type.numParams + type.numIndices
     let carrier := fun (arguments : Array Expr) => mkAppN (.const modelType us) arguments
 
+    -- The nested rung's own selector, and the one place generation and
+    -- checking have to agree about it.  `projectionIotaUsesLiteralField` reads
+    -- the serialized nesting metadata, which the block's existence is
+    -- equivalent to: a member with a nested occurrence reaches no other
+    -- construction ([`InductiveModels.FilterState.feedSource`] keeps the
+    -- plain-mutual and direct-simple routes off it), and no other construction
+    -- produces a container record.  Disagreement is a construction fault, not
+    -- an input's shortcoming, so it fails closed here rather than reaching the
+    -- kernel as a mis-stated rule.
+    let nestedBlock? := nestedProjectionBlock? is memberIndex
+    let blockConstructor := nestedBlock?.map fun block =>
+      Name.str block.member (lastStr constructorName)
+    let nestedPacking ← match nestedBlock?, blockConstructor with
+      | some block, some blockConstructor =>
+        nestedFieldPacking block blockConstructor us type.numParams constructor.numFields
+      | _, _ => pure #[]
+
     -- Read the selected field type from the modeled constructor telescope.
     -- Every earlier field variable is replaced by the intrinsic projection
     -- already emitted for that field, so dependent results mention no
@@ -750,6 +933,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           current := rest.instantiate1 selected
         badShape s!"{constructorName} has no field {fieldIndex}"
 
+    -- Both selectors eliminate the same major at the same motive; they differ
+    -- in *which* recursor does it and in what its selected minor has in hand.
     let value ← match override? with
       | some (_, _, value, _) => pure value
       | none => do
@@ -760,19 +945,37 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         let self := arguments[ownerArity]!
         let targetMotive ← mkLambdaFVars (indices.push self) result
         let resultLevel ← ilevel result
-        let recLevels ←
-          if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
-            pure (resultLevel :: us)
-          else if modelRecursorInfo.levelParams.length == is.levelParams.length then
-            pure us
-          else
-            badShape s!"{modelRecursor} carries unexpected universe parameters"
-        let pre ← structureRecursorPreArguments eqi recursor modelRecursor
-          modelConstructor motiveIndex params (carrier (params ++ indices))
-          self targetMotive fieldIndex constructor.numFields resultLevel recLevels us
-          projectionModels type.name
+        let (selector, recLevels, pre) ← match nestedBlock?, blockConstructor with
+          | some block, some blockConstructor => do
+            let selector := Name.str block.member "rec"
+            let .recInfo blockRecursor ← constInfo selector
+              | badShape s!"{selector} is not the nested block's own recursor"
+            let recLevels ← recursorLevels selector blockRecursor.levelParams
+              is.levelParams resultLevel us
+            -- The block's minor binds the block's own field telescope, so the
+            -- selected field arrives packed and comes back through its
+            -- container.
+            let pre ← structureRecursorPreArgumentsWith eqi
+              blockRecursor.numMotives blockRecursor.numMinors
+              selector blockConstructor block.memberIndex params
+              (carrier (params ++ indices)) self targetMotive resultLevel recLevels
+              fun binders _ => do
+                let some field := binders[fieldIndex]?
+                  | badShape s!"{blockConstructor}'s minor has no field {fieldIndex}"
+                let some packed? := nestedPacking[fieldIndex]?
+                  | badShape s!"{blockConstructor} has no packing for field {fieldIndex}"
+                nestedSourceField us params packed? field
+            pure (selector, recLevels, pre)
+          | _, _ => do
+            let recLevels ← recursorLevels modelRecursor modelRecursorInfo.levelParams
+              is.levelParams resultLevel us
+            let pre ← structureRecursorPreArguments eqi recursor modelRecursor
+              modelConstructor motiveIndex params (carrier (params ++ indices))
+              self targetMotive fieldIndex constructor.numFields resultLevel recLevels us
+              projectionModels type.name
+            pure (modelRecursor, recLevels, pre)
         mkLambdaFVars arguments
-          (mkAppN (.const modelRecursor recLevels) (pre ++ indices ++ #[self]))
+          (mkAppN (.const selector recLevels) (pre ++ indices ++ #[self]))
     let definition := Declaration.defnDecl
       { name := modelProjection, levelParams := is.levelParams, type := projectionType,
         value, hints := .abbrev, safety := .safe }
@@ -811,6 +1014,11 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
             value, type := fieldType, level, projected, iota? }
       let propositionLiteral := propositionProjectionIotaUsesLiteralField type
       let legacyLiteral := projectionIotaUsesLiteralField types type || propositionLiteral
+      unless nestedBlock?.isSome == types.any (·.numNested > 0) do
+        badShape s!"{type.name}'s nested block and its serialized nesting metadata disagree"
+      if nestedBlock?.isSome && !legacyLiteral then
+        badShape s!"{type.name}'s nested selector reduces definitionally but its \
+          projection rules are not on the literal contract"
       let rhs ←
         if legacyLiteral || phase1OneLayer then
           pure fields[fieldIndex]!
@@ -823,22 +1031,22 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           (params ++ indices ++ #[major])
         | badShape s!"{modelProjection}'s exact public type has the wrong arity"
       let fieldLevel ← ilevel alpha
-      let proof ← match override? with
-        | some (_, _, _, proof) => pure (proof.beta arguments)
-        | none =>
+      let proof ← match override?, nestedBlock? with
+        | some (_, _, _, proof), _ => pure (proof.beta arguments)
+        | none, some block => do
+          let some packed? := nestedPacking[fieldIndex]?
+            | badShape s!"{constructorName} has no packing entry for field {fieldIndex}"
+          nestedProjectionProof eqi block us params packed? fieldLevel alpha lhs
+            fields[fieldIndex]!
+        | none, none =>
           if legacyLiteral then
             pure (eqi.refl' fieldLevel alpha lhs)
           else do
           let targetMotive ← forallBoundedTelescope
               (← instantiateForall projectionType params) (some (type.numIndices + 1))
               fun motiveArguments result => mkLambdaFVars motiveArguments result
-          let recLevels ←
-            if modelRecursorInfo.levelParams.length == is.levelParams.length + 1 then
-              pure (fieldLevel :: us)
-            else if modelRecursorInfo.levelParams.length == is.levelParams.length then
-              pure us
-            else
-              badShape s!"{modelRecursor} carries unexpected universe parameters"
+          let recLevels ← recursorLevels modelRecursor modelRecursorInfo.levelParams
+            is.levelParams fieldLevel us
           let pre ← structureRecursorPreArguments eqi recursor modelRecursor
             modelConstructor motiveIndex params (carrier (params ++ indices))
             major targetMotive fieldIndex constructor.numFields fieldLevel recLevels us
