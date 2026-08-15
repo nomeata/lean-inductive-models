@@ -214,8 +214,8 @@ def repeatedIndexArgumentsCloseExactly
         | .installedRuleMismatch rule _ =>
           rule.recursor == recursor && rule.constructor.constructor == constructor
         | _ => false
-  clean `_wcore.Acc `_wcore.Acc.rec `Acc.intro &&
-    clean `_wcore.HEq `_wcore.HEq.rec `HEq.refl
+  clean `_wcore.Acc `_wcore.Acc.rec `_wcore.Acc.intro &&
+    clean `_wcore.HEq `_wcore.HEq.rec `_wcore.HEq.refl
 
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun
