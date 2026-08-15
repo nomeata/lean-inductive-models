@@ -385,7 +385,7 @@ structure PublicIotaProofSchema where
   ownerMaps : EquivalenceCertificate
   telescope : TelescopeCertificate
   implementationIota : Name
-  implementationIotaInputs : Array InstalledIotaBinderRole
+  implementationIotaInputs : Array InstalledRuleBinderRole
   minorCompatibility : Name
   hypotheses : Array PublicIotaHypothesisStep
   deriving Inhabited, BEq, Repr
@@ -519,8 +519,8 @@ structure RulePlan where
   publicIota : Name
   implementationIotaType : Expr
   publicIotaType : Expr
-  implementationEvidence : InstalledRuleEvidence
-  publicEvidence : InstalledRuleEvidence
+  implementationEvidence : InstalledRuleEvidence := {}
+  publicEvidence : InstalledRuleEvidence := {}
   occurrences : Array OccurrenceKey := #[]
   deriving Inhabited, BEq, Repr
 

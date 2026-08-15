@@ -323,19 +323,40 @@ private def componentFor (components : Array ComponentPlan) (member : MemberKey)
 private def installedType? (env : Environment) (name : Name) : Option Expr :=
   env.constants.find? name |>.map (·.type)
 
-private def installedRuleRhs? (env : Environment) (rule recursor constructor : Name) :
-    MetaM (Option Expr) := do
+private def installedRuleEvidence? (env : Environment) (rule recursor constructor : Name) :
+    MetaM (Option InstalledRuleEvidence) := do
   match env.constants.find? rule with
   | some (.recInfo information) =>
     unless rule == recursor do return none
-    return information.rules.find? (·.ctor == constructor) |>.map (·.rhs)
+    let some installedRule := information.rules.find? (·.ctor == constructor)
+      | return none
+    return some {
+      representation := .recursorRule
+      declarationType := information.type
+      application := (Array.range (numForalls information.type)).map
+        InstalledRuleBinderRole.recursorArgument
+      semanticRhs := installedRule.rhs }
   | some (.thmInfo information) =>
     forallTelescope information.type fun binders proposition => do
       let some (_, lhs, rhs) ← matchEq? proposition | return none
       unless lhs.getAppFn.constName? == some recursor do return none
       let some major := lhs.getAppArgs.back? | return none
       unless major.getAppFn.constName? == some constructor do return none
-      return some (← mkLambdaFVars binders rhs)
+      let recursorArguments := lhs.getAppArgs
+      let constructorArguments := major.getAppArgs
+      let mut application := #[]
+      for binder in binders do
+        if let some position := recursorArguments.findIdx? (· == binder) then
+          application := application.push (.recursorArgument position)
+        else if let some position := constructorArguments.findIdx? (· == binder) then
+          application := application.push (.constructorArgument position)
+        else
+          return none
+      return some {
+        representation := .equalityTheorem
+        declarationType := information.type
+        application
+        semanticRhs := (← mkLambdaFVars binders rhs) }
   | _ => return none
 
 private partial def exactLambdaBody (tag : Name) (expression : Expr) : Expr :=
@@ -855,10 +876,12 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           reasons := reasons.push (.missingInterfaceRule key .privateModel)
         let publicIota := (publicIota? iso member rule.ctor).getD .anonymous
         if publicIota.isAnonymous then reasons := reasons.push (.missingInterfaceRule key .publicModel)
-        let implementationRhs? ← installedRuleRhs? environment implementationIota
+        let implementationEvidence? ← installedRuleEvidence? environment implementationIota
           member.implementationRecursor constructor.implementationName
-        let publicRhs? ← installedRuleRhs? environment publicIota member.publicRecursor
+        let publicEvidence? ← installedRuleEvidence? environment publicIota member.publicRecursor
           constructor.publicName
+        let implementationRhs? := implementationEvidence?.map (·.semanticRhs)
+        let publicRhs? := publicEvidence?.map (·.semanticRhs)
         let expectedImplementationRhs := rewriteWith implementationRuleMapping rule.rhs
         let expectedPublicRhs := rewriteWith publicMapping rule.rhs
         unless implementationRhs? == some expectedImplementationRhs do
@@ -872,9 +895,11 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             publicRhs := publicRhs?.getD expectedPublicRhs,
             implementationRhs := implementationRhs?.getD expectedImplementationRhs,
             implementationIota, publicIota,
-            implementationIotaType := (installedType? environment implementationIota).getD
+            implementationIotaType := implementationEvidence?.map (·.declarationType) |>.getD
               (.sort .zero),
-            publicIotaType := (installedType? environment publicIota).getD (.sort .zero),
+            publicIotaType := publicEvidence?.map (·.declarationType) |>.getD (.sort .zero),
+            implementationEvidence := implementationEvidence?.getD {},
+            publicEvidence := publicEvidence?.getD {},
             occurrences := occurrencesFor constructor.key }
 
   -- Identity nested fields need no external container map, but their exact

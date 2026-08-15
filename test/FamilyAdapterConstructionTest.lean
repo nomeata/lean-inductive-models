@@ -280,12 +280,6 @@ def compatibilityName (root : Name) (rule : RuleKey) : Name :=
   Name.str (root.append (rule.recursor.append rule.constructor.constructor))
     "minorCompatibility"
 
-def expectedInstalledIotaInputs (member : MemberPlan) : Array InstalledIotaBinderRole :=
-  let prefixSize := member.parameterArity + member.recursorMotiveArity +
-    member.recursorMinorArity
-  (Array.range prefixSize).map InstalledIotaBinderRole.recursorPrefix ++
-    (Array.range member.indexArity).map InstalledIotaBinderRole.resultIndex ++ #[.major]
-
 def iotaSchemasComplete (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) : Bool :=
   match FamilyAdapter.derivePublicIotaProofSchemas plan certificate with
@@ -298,7 +292,7 @@ def iotaSchemasComplete (plan : FamilyAdapterPlan)
         schema.implementationIota == rule.implementationIota &&
         schema.telescope.constructor == rule.key.constructor &&
         (plan.members.find? (·.key == rule.key.recursorOwner)).any fun member =>
-          schema.implementationIotaInputs == expectedInstalledIotaInputs member &&
+          schema.implementationIotaInputs == rule.implementationEvidence.application &&
           compatibility.any fun compatibility =>
             schema.minorCompatibility == compatibility.compatibility &&
               schema.hypotheses.map (·.binderIndex) == compatibility.transportedHypotheses &&
@@ -364,7 +358,7 @@ def ruleCertificateDiagnostic (plan : FamilyAdapterPlan)
       return some s!"{repr rule.key}: schema telescope"
     let some member := plan.members.find? (·.key == rule.key.recursorOwner)
       | return some s!"{repr rule.key}: missing schema member"
-    if schema.implementationIotaInputs != expectedInstalledIotaInputs member then
+    if schema.implementationIotaInputs != rule.implementationEvidence.application then
       return some s!"{repr rule.key}: installed iota input roles"
     let some compatibility := certificate.rules.find? (·.key == rule.key)
       | return some s!"{repr rule.key}: missing compatibility certificate"
