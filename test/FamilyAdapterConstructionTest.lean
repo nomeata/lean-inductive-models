@@ -972,13 +972,15 @@ def runSamples : MetaM Result := do
           | .installedRuleMismatch actual .publicModel => actual == expected
           | _ => false) && !report.coverage.rules.contains expected
     let (iotaOwner, iotaConstructor, _) := installedIso.iotas[0]!
-    let wrongKindIso := { installedIso with iotas := installedIso.iotas.set! 0
-      (iotaOwner, iotaConstructor, installedIso.selfNames[0]!) }
-    let wrongRecursorIso := { installedIso with recs := installedIso.recs.set! 0
-      installedIso.recs[1]! }
+    let wrongKindIotas := installedIso.iotas.set! 0
+      (iotaOwner, iotaConstructor, installedIso.selfNames[0]!)
+    let wrongKindIso := { installedIso with iotas := wrongKindIotas }
+    let wrongRecursors := installedIso.recs.set! 0 installedIso.recs[1]!
+    let wrongRecursorIso := { installedIso with recs := wrongRecursors }
     let (sourceConstructor, _) := installedIso.ctors[0]!
-    let wrongConstructorIso := { installedIso with ctors := installedIso.ctors.set! 0
-      (sourceConstructor, installedIso.ctors[1]!.2) }
+    let wrongConstructors := installedIso.ctors.set! 0
+      (sourceConstructor, installedIso.ctors[1]!.2)
+    let wrongConstructorIso := { installedIso with ctors := wrongConstructors }
     let wrongKindReport ← FamilyAdapter.deriveShadowPlan installedSource wrongKindIso
     let wrongRecursorReport ← FamilyAdapter.deriveShadowPlan installedSource wrongRecursorIso
     let wrongConstructorReport ←
