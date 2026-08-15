@@ -233,6 +233,7 @@ membership. Specialised container recursors have this shape without becoming
 members of the source family. -/
 structure RecursorShape where
   key : MemberKey
+  identity : RecursorPrototypeKey
   parameterArity : Nat
   indexArity : Nat
   motiveArity : Nat
@@ -402,6 +403,7 @@ private def validateInstalledEquivalence (plan : FamilyAdapterPlan) (member : Me
 
 private def memberRecursorShape (member : MemberPlan) : RecursorShape :=
   { key := member.key
+    identity := .member member.key
     parameterArity := member.parameterArity
     indexArity := member.indexArity
     motiveArity := member.recursorMotiveArity
@@ -414,6 +416,7 @@ private def memberRecursorShape (member : MemberPlan) : RecursorShape :=
 private def containerRecursorShape (container : ContainerRecursorPlan) : RecursorShape :=
   let key : MemberKey := { owner := container.key.publicRecursor }
   { key
+    identity := .container container.key
     parameterArity := container.parameterArity
     indexArity := container.indexArity
     motiveArity := container.motiveArity
@@ -1160,15 +1163,28 @@ def buildTelescopePrototype (plan : FamilyAdapterPlan)
 private def publicConstructorAdapterName (root : Name) (constructor : ConstructorKey) : Name :=
   prototypeName root constructor.constructor `publicConstructor
 
-private def publicRecursorAdapterName (root : Name) (member : MemberKey) : Name :=
-  prototypeName root member.owner `publicRecursor
+private partial def appendEncodedName (prefix source : Name) : Name :=
+  match source with
+  | .anonymous => prefix
+  | .str parent value => Name.str (Name.num (appendEncodedName prefix parent) 1) value
+  | .num parent value => Name.num (Name.num (appendEncodedName prefix parent) 0) value
 
-private def publicRecursorCallAgreementName (root : Name) (member : MemberKey) : Name :=
-  prototypeName root member.owner `publicRecursorCallAgreement
+private def recursorPrototypeOwner : RecursorPrototypeKey → Name
+  | .member member => member.owner
+  | .container key =>
+    let public := appendEncodedName (Name.num .anonymous 2) key.publicRecursor
+    appendEncodedName (Name.num public 2) key.implementationRecursor
 
-private def publicMinorConstructorAdapterName (root : Name) (member : MemberKey)
+private def publicRecursorAdapterName (root : Name) (key : RecursorPrototypeKey) : Name :=
+  prototypeName root (recursorPrototypeOwner key) `publicRecursor
+
+private def publicRecursorCallAgreementName (root : Name)
+    (key : RecursorPrototypeKey) : Name :=
+  prototypeName root (recursorPrototypeOwner key) `publicRecursorCallAgreement
+
+private def publicMinorConstructorAdapterName (root : Name) (key : RecursorPrototypeKey)
     (minorIndex : Nat) : Name :=
-  prototypeName root (member.owner.mkNum minorIndex) `publicMinorConstructor
+  prototypeName root ((recursorPrototypeOwner key).mkNum minorIndex) `publicMinorConstructor
 
 private def publicIotaAdapterName (root : Name) (rule : RuleKey) : Name :=
   prototypeName root (rule.recursor.append rule.constructor.constructor) `publicIota
@@ -1809,7 +1825,7 @@ private def recursiveCallCertificate (plan : FamilyAdapterPlan)
         member.key == memberKey && member.publicRecursor == role.publicRecursor &&
           member.implementationRecursor == role.implementationRecursor
       let recursor ← recursors.find? fun recursor =>
-        recursor.member == member.key &&
+        recursor.member == .member member.key &&
           recursor.implementationRecursor == role.implementationRecursor
       some (memberRecursorShape member, recursor)
     | none, some key => do
@@ -2602,7 +2618,7 @@ private def recursorMotiveCertificates (shape : RecursorShape)
     let some implementationCarrier := motiveCarrierName? privateBinders[binderIndex]!.type
       | throw (.recursorResultMismatch shape.key)
     result := result.push
-      { recursor := shape.key, motiveIndex, publicCarrier, implementationCarrier }
+        { recursor := shape.identity, motiveIndex, publicCarrier, implementationCarrier }
   return result
 
 private def uniqueOccurrenceHypothesisIndices (constructor : ConstructorPlan) : Array Nat :=
@@ -2858,7 +2874,7 @@ private def specialisedMinorConstructorDeclaration (plan : FamilyAdapterPlan)
       let privateFields := privateMajor.getAppArgs.filter privateBinders.contains
       unless publicFields.size == privateFields.size do
         failConstruction (.malformedRecursorMinor shape.key minorIndex)
-      let name := publicMinorConstructorAdapterName root shape.key minorIndex
+      let name := publicMinorConstructorAdapterName root shape.identity minorIndex
       liftGen <| ensurePrototypeFresh name
       let publicMajorType ← liftGen <| inferType publicMajor
       let exactType ← liftGen <| mkForallFVars (parameters ++ publicFields) publicMajorType
@@ -2880,7 +2896,7 @@ private def specialisedMinorConstructorDeclaration (plan : FamilyAdapterPlan)
           hints := .abbrev, safety := .safe }
       liftGen <| addChecked declaration
       return (declaration,
-        { recursor := shape.key, minorIndex, publicConstructor, implementationConstructor,
+        { recursor := shape.identity, minorIndex, publicConstructor, implementationConstructor,
           adapter := name, exactType, fieldArity := publicFields.size })
 
 private def rewriteSpecialisedMinorType (plan : FamilyAdapterPlan)
@@ -2972,7 +2988,7 @@ private def buildMinorConstructorAdapters (plan : FamilyAdapterPlan)
         let some adapter := constructorCertificates.find? (·.key == constructor.key)
           | failConstruction (.malformedRecursorMinor shape.key minorIndex)
         certificates := certificates.push
-          { recursor := shape.key, minorIndex, publicConstructor := publicName,
+          { recursor := shape.identity, minorIndex, publicConstructor := publicName,
             implementationConstructor := privateName, adapter := adapter.adapter,
             exactType := adapter.exactType,
             fieldArity := constructor.telescope.binders.size }
@@ -3094,7 +3110,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
     (root : Name) (shape : RecursorShape) (boundary : RecursorCarrierBoundary)
     (resultMotiveIndex? : Option Nat := none) : ConstructionM
     (Array Declaration × PublicRecursorCertificate) := do
-  let name := publicRecursorAdapterName root shape.key
+  let name := publicRecursorAdapterName root shape.identity
   liftGen <| ensurePrototypeFresh name
   let some publicRecursorInfo := (← getEnv).constants.find? shape.publicRecursor
     | failConstruction (.missingInstalledRecursor shape.key shape.publicRecursor)
@@ -3138,7 +3154,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
             publicMinorNames[minorIndex]? == some certificate.publicConstructor &&
             privateMinorNames[minorIndex]? == some certificate.implementationConstructor do
     failConstruction (.malformedRecursorMinor shape.key minorCertificates.size)
-  let agreementName := publicRecursorCallAgreementName root shape.key
+  let agreementName := publicRecursorCallAgreementName root shape.identity
   liftGen <| ensurePrototypeFresh agreementName
   let ((value, agreementValue), agreementType) ←
       forallBoundedTelescope publicType (some prefixSize)
@@ -3270,7 +3286,7 @@ private def publicRecursorDeclaration (plan : FamilyAdapterPlan)
       type := agreementType, value := agreementValue }
   liftGen <| addChecked agreementDeclaration
   return (minorDeclarations ++ #[declaration, agreementDeclaration],
-    { member := shape.key, adapter := name, exactType := publicType,
+    { member := shape.identity, adapter := name, exactType := publicType,
       implementationRecursor := shape.implementationRecursor,
       callAgreement := agreementName,
       motives := motiveCertificates, minors := minorCertificates,
@@ -3528,7 +3544,7 @@ private def publicIotaDeclaration (plan : FamilyAdapterPlan)
     | failConstruction (.missingPublicIotaInput schema.key)
   let some constructorCertificate := constructors.find? (·.key == constructor.key)
     | failConstruction (.missingPublicIotaInput schema.key)
-  let some recursorCertificate := recursors.find? (·.member == owner.key)
+  let some recursorCertificate := recursors.find? (·.member == .member owner.key)
     | failConstruction (.missingPublicIotaInput schema.key)
   let some compatibility := base.rules.find? (·.key == rule.key)
     | failConstruction (.missingPublicIotaInput schema.key)

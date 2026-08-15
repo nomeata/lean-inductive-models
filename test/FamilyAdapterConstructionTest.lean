@@ -505,7 +505,7 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
     unless recursors.size == plan.members.size do
       return .recursorInvalid "ordinary certificate cardinality"
     for member in plan.members do
-      let some adapter := recursors.find? (·.member == member.key)
+      let some adapter := recursors.find? (·.member == .member member.key)
         | return .recursorInvalid s!"{member.key.owner}: missing certificate"
       unless adapter.implementationRecursor == member.implementationRecursor do
         return .recursorInvalid s!"{member.key.owner}: implementation recursor"
@@ -514,7 +514,7 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
         return .recursorInvalid s!"{member.key.owner}: call agreement"
       unless adapter.motives.size == member.recursorMotiveArity do
         return .recursorInvalid s!"{member.key.owner}: motive cardinality"
-      unless adapter.motives.all (·.recursor == member.key) do
+      unless adapter.motives.all (·.recursor == .member member.key) do
         return .recursorInvalid s!"{member.key.owner}: motive keys"
       let motiveValidation ←
         (FamilyAdapter.validatePublicRecursorMotiveBoundaries plan certificate.members
@@ -529,7 +529,7 @@ def publicPrototypeDiagnostic (plan : FamilyAdapterPlan)
       unless adapter.minors.size == member.recursorMinorArity do
         return .recursorInvalid s!"{member.key.owner}: minor cardinality"
       unless adapter.minors.all fun minor =>
-          minor.recursor == member.key &&
+          minor.recursor == .member member.key &&
             (environment.constants.find? minor.adapter).any (·.type == minor.exactType) do
         return .recursorInvalid s!"{member.key.owner}: minor declarations"
       unless recursorUsesRecordedMinorAdapters member adapter do
@@ -595,7 +595,47 @@ def repeatedSpecialisedMinorsComplete (plan : FamilyAdapterPlan)
         first.publicConstructor == second.publicConstructor &&
         first.exactType != second.exactType && first.adapter != second.adapter &&
         (plan.members.find? (·.key == recursor.member)).any fun member =>
-          recursorUsesRecordedMinorAdapters member recursor
+      recursorUsesRecordedMinorAdapters member recursor
+
+def samePublicContainerKeysComplete (plan : FamilyAdapterPlan)
+    (certificate : FamilyAdapterCertificate) (root : Name) : MetaM Bool := do
+  let some original := plan.containerRecursors[0]? | return false
+  let some originalInfo := (← getEnv).constants.find? original.key.implementationRecursor
+    | return false
+  let alias := Name.str root "implementationRecursorAlias"
+  if (← getEnv).constants.contains alias then return false
+  addChecked <| Declaration.defnDecl
+    { name := alias, levelParams := originalInfo.levelParams, type := originalInfo.type,
+      value := .const original.key.implementationRecursor
+        (originalInfo.levelParams.map Level.param), hints := .abbrev, safety := .safe }
+  let key : ContainerRecursorKey :=
+    { publicRecursor := original.key.publicRecursor, implementationRecursor := alias }
+  let duplicate : ContainerRecursorPlan :=
+    { original with key, implementationType := originalInfo.type,
+      rules := original.rules.map fun rule => { rule with recursor := key } }
+  let duplicatePlan : FamilyAdapterPlan :=
+    { plan with containerRecursors := plan.containerRecursors.push duplicate }
+  unless duplicatePlan.validate.isEmpty do return false
+  let constructorsBuilt ← (FamilyAdapter.buildPublicConstructorPrototypes duplicatePlan
+    certificate.members certificate.telescopes (Name.str root "constructors")).run
+  let .ok (.ok (_, constructors)) := constructorsBuilt | return false
+  let containerBuilt ← (FamilyAdapter.buildContainerRecursorPrototypes duplicatePlan
+    certificate.members certificate.telescopes constructors
+    (Name.str root "recursors")).run
+  let .ok (.ok (_, built)) := containerBuilt | return false
+  let samePublic := built.filter
+    (·.plan.key.publicRecursor == original.key.publicRecursor)
+  let allDistinct := fun (values : Array Name) =>
+    let unique := values.foldl (fun names name =>
+      if names.contains name then names else names.push name) #[]
+    unique.size == values.size
+  return samePublic.size >= 2 &&
+    allDistinct (samePublic.map (·.certificate.adapter)) &&
+    allDistinct (samePublic.map (·.certificate.callAgreement)) &&
+    allDistinct (samePublic.flatMap (·.recursor.minors.map (·.adapter))) &&
+    samePublic.all fun item => item.recursor.member == .container item.plan.key &&
+      item.recursor.minors.all (·.recursor == .container item.plan.key) &&
+      item.recursor.motives.all (·.recursor == .container item.plan.key)
 
 structure Result where
   complete : Nat := 0
@@ -626,6 +666,7 @@ structure Result where
   recursorRuleEvidence : Bool := false
   theoremRuleEvidence : Bool := false
   exceptionRollback : Bool := false
+  containerKeyNames : Bool := false
   failures : Array String := #[]
 
 def implementationEvidenceConsistent (rule : RulePlan)
@@ -757,6 +798,10 @@ def runSamples : MetaM Result := do
           result.identityCallAgreements + 1 }
       if owner == `FamilyAdapterGenerated.GeneratedShared then
         if let some plan := report.plan? then
+          if let some certificate := built.certificate then
+            if ← samePublicContainerKeysComplete plan certificate
+                `_family_adapter_same_public_container_pair then
+              result := { result with containerKeyNames := true }
           if let some canonical := plan.containerRecursors.find? (·.boundary == .defeq) then
             let corrupted : FamilyAdapterPlan := { plan with
               containerRecursors := plan.containerRecursors.map fun container =>
@@ -1166,6 +1211,7 @@ def runMain : IO UInt32 := do
       result.installedPublicRecursors == 1 &&
       result.recursorRuleEvidence && result.theoremRuleEvidence &&
       result.exceptionRollback &&
+      result.containerKeyNames &&
       state.messages.toArray.isEmpty then
     IO.println s!"family adapter construction: {result.complete} complete finite plans, \
       {result.identityNested} definitional nested plans, {result.changed} changed plans, \
@@ -1198,7 +1244,8 @@ def runMain : IO UInt32 := do
     universeLevels={result.universeLevels}, \
     recursorRuleEvidence={result.recursorRuleEvidence}, \
     theoremRuleEvidence={result.theoremRuleEvidence}, \
-    exceptionRollback={result.exceptionRollback}"
+    exceptionRollback={result.exceptionRollback}, \
+    containerKeyNames={result.containerKeyNames}"
   return 1
 
 end FamilyAdapterConstructionTest
