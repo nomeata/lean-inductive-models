@@ -629,8 +629,13 @@ def runSamples : MetaM Result := do
               rule.occurrences.any (fun occurrence => !occurrence.expressionPath.isEmpty)
           if mixed then result := { result with directNestedRule := result.directNestedRule + 1 }
       else
+        let diagnostic ← match report.plan?, built.certificate with
+          | some plan, some certificate =>
+            publicPrototypeDiagnostic plan certificate
+              ((`_family_adapter_nested_diagnostic).append owner)
+          | _, _ => pure (.shadowIssues built.issues)
         let failures := result.failures.push
-          s!"{owner}: definitionally equal nested field did not close: {repr built.issues}"
+          s!"{owner}: definitionally equal nested field did not close: {repr diagnostic}"
         result := { result with failures }
   for boundary in #[changedDirect, changedFunction, changedIndexed, changedNested] do
     let source ← indEDecl #[boundary.publicOwner]
