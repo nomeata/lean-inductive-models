@@ -88,12 +88,17 @@ these observations. -/
 structure ShadowObservation where
   root : Name
   coverage : ShadowCoverage
+  /-- Exact value-only rule associations for independently specialised
+  recursors. These are test-facing keys, not retained production plans. -/
+  containerRecursorRules : Array ContainerRecursorRuleKey := #[]
   reasons : Array ShadowReason
   diagnostics : Array String := #[]
   deriving Inhabited, BEq, Repr
 
 def ShadowReport.observe (report : ShadowReport) : ShadowObservation :=
   { root := report.root, coverage := report.coverage, reasons := report.reasons,
+    containerRecursorRules := report.plan?.map (fun plan =>
+      plan.containerRecursors.flatMap (·.rules)) |>.getD #[],
     diagnostics := report.diagnostics }
 
 def ShadowObservation.complete (observation : ShadowObservation) : Bool :=
@@ -869,15 +874,16 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
       let field := fieldBinders[fieldIndex]!
       let sites := occurrenceSites targets fieldIndex field.type
       let hypothesisIndex? := hypothesisIndices?.bind fun indices => indices[fieldIndex]?.join
-      if !sites.isEmpty && hypothesisIndex?.isNone then
-        reasons := reasons.push (.missingMinorHypothesis constructor.key fieldIndex)
       let mut keys := #[]
-      for site in sites do
+      -- A target-headed subexpression is only a recursive occurrence when the
+      -- exact source recursor gives this field an induction hypothesis. Types
+      -- may mention a family in a parameter or an erased dependency without
+      -- making that field recursive.
+      for site in if hypothesisIndex?.isSome then sites else #[] do
         let key : OccurrenceKey :=
           { constructor := constructor.key, fieldIndex := site.fieldIndex,
             expressionPath := site.path, binderDepth := site.binderDepth,
-            hypothesisIndex := hypothesisIndex?.getD 0, target := site.target }
-        if hypothesisIndex?.isNone then uncoveredOccurrences := uncoveredOccurrences.push key
+            hypothesisIndex := hypothesisIndex?.get!, target := site.target }
         if let some target := resolvedMembers.find? (·.key == site.target) then
           if target.implementationCarrier.isAnonymous || target.publicCarrier.isAnonymous then
             uncoveredOccurrences := uncoveredOccurrences.push key
@@ -989,13 +995,11 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     containerMapPlans := containerMapPlans ++ addedPlans
     reasons := reasons ++ addedReasons
     diagnostics := diagnostics ++ addedDiagnostics
-  -- Internal RecursorVal names and block constructors are semantic evidence;
-  -- callable rule theorems instead mention the checked wrapper at the literal
-  -- source occurrence.  Keep those two name spaces disjoint.
-  let containerInterfaceMapping := containerMapPlans.map fun container =>
-    (container.sourceRecursor, container.implementationRecursorWrapper)
-  let implementationRuleMapping := implementationMapping ++ containerInterfaceMapping
-  let publicRuleMapping := publicMapping ++ containerInterfaceMapping
+  -- A callable rule theorem names the checked wrapper only on its application
+  -- side. Its reduced semantic RHS uses the internal RecursorVal and block
+  -- constructors, so compare that RHS through the semantic association.
+  let implementationRuleMapping := implementationMapping ++ containerSemanticMapping
+  let publicRuleMapping := publicMapping ++ containerSemanticMapping
   let mut containerRecursorPlans : Array ContainerRecursorPlan := #[]
   for container in containerMapPlans do
     let key : ContainerRecursorKey :=

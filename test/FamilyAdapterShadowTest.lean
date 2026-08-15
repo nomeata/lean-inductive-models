@@ -88,10 +88,29 @@ def multipleSitesShareExactHypothesis (shadows : Array FamilyAdapter.ShadowObser
 /-- The nested `List Tree` recursor is represented by its exact source rule
 sequence. This pins the real-constructor side of the mimic association rather
 than accepting a shadow that merely noticed the extra recursor. -/
-def listSpecialisationRulesCovered (shadows : Array FamilyAdapter.ShadowObservation) : Bool :=
+structure SpecialisationDiagnostics where
+  treeRules : Bool := false
+  treeMap : Bool := false
+  treeClean : Bool := false
+  btreeBoxRules : Bool := false
+  btreeListRules : Bool := false
+  btreeMap : Bool := false
+  btreeClean : Bool := false
+  ptMap : Bool := false
+  ptClean : Bool := false
+  deriving Repr
+
+def SpecialisationDiagnostics.all (diagnostics : SpecialisationDiagnostics) : Bool :=
+  diagnostics.treeRules && diagnostics.treeMap && diagnostics.treeClean &&
+    diagnostics.btreeBoxRules && diagnostics.btreeListRules && diagnostics.btreeMap &&
+    diagnostics.btreeClean && diagnostics.ptMap && diagnostics.ptClean
+
+def listSpecialisationDiagnostics (shadows : Array FamilyAdapter.ShadowObservation) :
+    SpecialisationDiagnostics :=
   let covered := fun (observation : FamilyAdapter.ShadowObservation) recursor expected =>
-    observation.coverage.rules.filterMap (fun rule =>
-      if rule.recursor == recursor then some rule.constructor.constructor else none) == expected
+    observation.containerRecursorRules.filterMap (fun rule =>
+      if rule.recursor.publicRecursor == recursor then some rule.publicConstructor else none) ==
+        expected
   let clean := fun owner wrappers (observation : FamilyAdapter.ShadowObservation) =>
     observation.reasons.all fun
       | .missingInstalledContainerRecursor _ recursor => !wrappers.contains recursor
@@ -105,14 +124,33 @@ def listSpecialisationRulesCovered (shadows : Array FamilyAdapter.ShadowObservat
   match shadows.find? (·.root == `Tree), shadows.find? (·.root == `BTree),
       shadows.find? (·.root == `PT) with
   | some tree, some btree, some pt =>
-    covered tree `Tree.rec_1 #[`List.nil, `List.cons] &&
-      mapped `Tree tree && clean `Tree #[`Tree.rec_1, `Tree.rec_1._model] tree &&
-      covered btree `BTree.rec_1 #[`Box.mk] &&
-      covered btree `BTree.rec_2 #[`List.nil, `List.cons] &&
-      mapped `BTree btree && clean `BTree #[`BTree.rec_1, `BTree.rec_1._model,
-        `BTree.rec_2, `BTree.rec_2._model] btree &&
-      mapped `PT pt && clean `PT #[`PT.rec_1, `PT.rec_1._model] pt
-  | _, _, _ => false
+    { treeRules := covered tree `Tree.rec_1 #[`List.nil, `List.cons]
+      treeMap := mapped `Tree tree
+      treeClean := clean `Tree #[`Tree.rec_1, `Tree.rec_1._model] tree
+      btreeBoxRules := covered btree `BTree.rec_1 #[`Box.mk]
+      btreeListRules := covered btree `BTree.rec_2 #[`List.nil, `List.cons]
+      btreeMap := mapped `BTree btree
+      btreeClean := clean `BTree #[`BTree.rec_1, `BTree.rec_1._model,
+        `BTree.rec_2, `BTree.rec_2._model] btree
+      ptMap := mapped `PT pt
+      ptClean := clean `PT #[`PT.rec_1, `PT.rec_1._model] pt }
+  | _, _, _ => {}
+
+/-- `OK` occurs in a container parameter but is not recursive at that field;
+the exact ERec minor therefore supplies no IH and no occurrence is recorded. -/
+def nonrecursiveParameterMentionExcluded
+    (shadows : Array FamilyAdapter.ShadowObservation) : Bool :=
+  match shadows.find? (·.root == `OK._model._impl.0) with
+  | none => false
+  | some ok =>
+    !ok.reasons.any (fun
+      | .missingMinorHypothesis constructor fieldIndex =>
+        constructor.owner.owner == `OK._model._impl.1 && fieldIndex == 2
+      | .minorHypothesisMismatch rule =>
+        rule.constructor.owner.owner == `OK._model._impl.1
+      | _ => false) &&
+    !ok.coverage.occurrences.any fun occurrence =>
+      occurrence.constructor.owner.owner == `OK._model._impl.1 && occurrence.fieldIndex == 2
 
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun
@@ -149,20 +187,24 @@ def main : IO UInt32 := do
   let everyOutcomeExplicit := (shadows ++ familyShadows).all hasOnlyExplicitGaps
   let nestedGapVisible := (shadows ++ familyShadows).any fun shadow => !shadow.complete
   let exactHypothesisSharing := multipleSitesShareExactHypothesis familyShadows
-  let listRuleAssociation := listSpecialisationRulesCovered shadows
+  let specialisations := listSpecialisationDiagnostics shadows
+  let listRuleAssociation := specialisations.all
+  let nonrecursiveMention := nonrecursiveParameterMentionExcluded familyShadows
   let containerMapsVisible := (shadows ++ familyShadows).any
     (fun shadow => !shadow.coverage.containerMaps.isEmpty)
   let malformedRejected := malformedDependenciesAreExcluded malformed
   if sameResult && outputQuiet && everyAcceptedFamilyRan && keyedReportVisible &&
       everyOutcomeExplicit && nestedGapVisible && exactHypothesisSharing && containerMapsVisible &&
-      listRuleAssociation && malformedRejected then
+      listRuleAssociation && nonrecursiveMention && malformedRejected then
     IO.println s!"family adapter shadow: {shadows.size + familyShadows.size} accepted families, \
       exact gaps reported, output unchanged"
     return 0
   IO.eprintln s!"family adapter shadow failure: same={sameResult}, quiet={outputQuiet}, \
     shadows={shadows.size + familyShadows.size}, keyed={keyedReportVisible}, \
     explicit={everyOutcomeExplicit}, gaps={nestedGapVisible}, hypotheses={exactHypothesisSharing}, \
-    listRules={listRuleAssociation}, containers={containerMapsVisible}, malformed={malformedRejected}"
+    listRules={listRuleAssociation}, listDetails={repr specialisations}, \
+    nonrecursiveMention={nonrecursiveMention}, containers={containerMapsVisible}, \
+    malformed={malformedRejected}"
   for message in plainMessages ++ observedMessages ++ familyPlainMessages ++ familyObservedMessages do
     IO.eprintln message
   for shadow in shadows ++ familyShadows do
