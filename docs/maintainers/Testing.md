@@ -40,7 +40,8 @@ correctness_targets=(
   familyadapterplantest familyadaptershadowtest familyadapterconstructiontest
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
-  composedrecursorsyntaxtest mainclitest projectiontest indexedfibrediagnostictest
+  composedrecursorsyntaxtest mainclitest projectiontest projectiontransportcensustest
+  indexedfibrediagnostictest
   mutualonelayerdiagnostictest structureetatest
   deepimaxboxtest psigmaprimetest exactsortlifttest
   tightpsigmaprimeroutetest vanishingerasuretest
@@ -80,6 +81,7 @@ lake exe sourcestructuresyntaxtest "$PWD"
 lake exe composedrecursorsyntaxtest "$PWD"
 lake exe mainclitest "$PWD"
 lake exe projectiontest
+lake exe projectiontransportcensustest "$PWD"
 lake exe indexedfibrediagnostictest "$PWD"
 lake exe mutualonelayerdiagnostictest "$PWD"
 lake exe structureetatest
@@ -121,6 +123,17 @@ input-only source snapshot workspace, and ordinary fallback before input is
 consumed when `_tmp` is unusable. The snapshot exists only to preserve exact
 stdin/FIFO input for parser-compatible fallback; generated logical output is
 never serialized through it.
+
+`projectiontransportcensustest` is the progress meter for removing dependent
+transport from intrinsic projection rules. It generates every committed
+`test/fixtures/inductive-models` export with all generation branches enabled
+and pins, exhaustively, each `T._model.proj_j.iota` whose statement mentions
+`Eq.rec` — separating the generator's canonical right-hand-side transport from
+`Eq.rec` the source itself authored in the constructor telescope. A new row is
+a regression; a missing row is progress and the maintainer deletes it from
+`expectedCensus` by hand. It also pins the fixtures that the maximal
+configuration cannot run today, so the census cannot silently stop being
+exhaustive.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and

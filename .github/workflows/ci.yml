@@ -115,7 +115,8 @@ jobs:
                 ordertest incrementalordertest namingtest \
                 drivernamingtest privatealiastest sourcereplayaliastest simplenamingtest rulektest \
                 defaultctoriotatest sourcestructuresyntaxtest composedrecursorsyntaxtest \
-                projectiontest indexedfibrediagnostictest mutualonelayerdiagnostictest \
+                projectiontest projectiontransportcensustest \
+                indexedfibrediagnostictest mutualonelayerdiagnostictest \
                 structureetatest deepimaxboxtest \
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
                 vanishingerasuretest transparentowneraliasestest \
@@ -139,6 +140,7 @@ jobs:
               lake exe sourcestructuresyntaxtest "$GITHUB_WORKSPACE"
               lake exe composedrecursorsyntaxtest "$GITHUB_WORKSPACE"
               lake exe projectiontest
+              lake exe projectiontransportcensustest "$GITHUB_WORKSPACE"
               lake exe indexedfibrediagnostictest "$GITHUB_WORKSPACE"
               lake exe mutualonelayerdiagnostictest "$GITHUB_WORKSPACE"
               lake exe structureetatest

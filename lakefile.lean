@@ -112,6 +112,11 @@ lean_exe projectiontest where
   root := `ProjectionTest
   supportInterpreter := true
 
+lean_exe projectiontransportcensustest where
+  srcDir := "test"
+  root := `ProjectionTransportCensusTest
+  supportInterpreter := true
+
 lean_exe indexedfibrediagnostictest where
   srcDir := "test"
   root := `IndexedFibreDiagnosticTest
