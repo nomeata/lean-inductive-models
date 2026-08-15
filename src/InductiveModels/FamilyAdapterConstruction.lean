@@ -146,11 +146,31 @@ inductive PublicIotaProofBoundary where
 /-- Test-visible subdivision of the exact recursive-call certificate boundary.
 It records which keyed check rejected the call without changing proof search. -/
 inductive PublicIotaRecursiveCallBoundary where
-  | roleResolution
+  | sourceRoleResolution
+  | builtCertificateResolution
   | agreementNotInstalled
   | openedHeadMismatch
   | agreementEndpoint
   | dependentResult
+  deriving Inhabited, BEq, Repr
+
+inductive RecursorCarrierDirection where
+  | forward
+  | backward
+  deriving Inhabited, BEq, Repr
+
+inductive RecursorCarrierEndpoint where
+  | map
+  | law
+  deriving Inhabited, BEq, Repr
+
+inductive RecursorCarrierSubcheck where
+  | installedType
+  | indexTelescope
+  | sourceFamily
+  | targetFamily
+  | application
+  | lawEndpoint
   deriving Inhabited, BEq, Repr
 
 inductive ConstructionIssue where
@@ -189,6 +209,9 @@ inductive ConstructionIssue where
   | ambiguousExactCarrierCandidate (member : MemberKey)
   | invalidExactCarrierLaw (member : MemberKey)
   | exactCarrierBoundaryMismatch (fallback candidate : MemberKey)
+  | recursorCarrierBoundaryMismatch (candidate : MemberKey)
+      (direction : RecursorCarrierDirection) (endpoint : RecursorCarrierEndpoint)
+      (subcheck : RecursorCarrierSubcheck)
   | recursorMajorBoundaryMismatch (member : MemberKey)
   | missingOccurrenceMap (occurrence : OccurrenceKey)
   | missingContainerMap (occurrence : OccurrenceKey)
@@ -584,71 +607,93 @@ private def applyContainerLaw (plan : FamilyAdapterPlan) (container : ContainerM
     (parameters ++ resolvedIndices ++ #[value])
 
 private def instantiateRecursorBoundaryIndices (boundary : RecursorCarrierBoundary)
+    (direction : RecursorCarrierDirection) (endpoint : RecursorCarrierEndpoint)
     (parameters : Array Expr) (recordedType sourceType : Expr) : ConstructionM (Array Expr) := do
   unless parameters.size == boundary.parameterArity do
-    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
+      .indexTelescope)
   let mut type ← liftGen <| instantiateForall recordedType parameters
   let mut indices := #[]
   for _ in [:boundary.indexArity] do
     let .forallE binderName domain body _ := type
-      | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+      | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
+          .indexTelescope)
     let index ← liftGen <| mkFreshExprMVar domain .natural binderName
     indices := indices.push index
     type := body.instantiate1 index
   let .forallE _ domain _ _ := type
-    | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
+        .indexTelescope)
   unless ← liftGen <| isDefEq domain sourceType do
-    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
+      .indexTelescope)
   let resolved ← liftGen <| indices.mapM instantiateMVars
   for index in resolved do
     if ← liftGen <| hasAssignableMVar index then
-      failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+      failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction endpoint
+        .indexTelescope)
   return resolved
 
 private def applyRecursorBoundaryMap (plan : FamilyAdapterPlan)
     (boundary : RecursorCarrierBoundary) (forward : Bool) (parameters : Array Expr)
     (sourceType targetType value : Expr) : ConstructionM Expr := do
+  let direction := if forward then RecursorCarrierDirection.forward else .backward
   let .installed maps forwardType backwardType _ _ := boundary.boundary
-    | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map
+        .installedType)
   let name := if forward then maps.forward else maps.backward
   let recordedType := if forward then forwardType else backwardType
   let some installed := (← getEnv).constants.find? name |>.map (·.type)
     | failConstruction (.missingInstalledMemberMap boundary.key name)
   unless installed == recordedType do
-    failConstruction (.installedMemberMapTypeMismatch boundary.key name)
-  let indices ← instantiateRecursorBoundaryIndices boundary parameters recordedType sourceType
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map
+      .installedType)
+  let indices ← instantiateRecursorBoundaryIndices boundary direction .map parameters
+    recordedType sourceType
   let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
   let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
   unless ← liftGen <| isDefEq (mkAppN sourceFamily (parameters ++ indices)) sourceType do
-    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map .sourceFamily)
   unless ← liftGen <| isDefEq (mkAppN targetFamily (parameters ++ indices)) targetType do
-    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map .targetFamily)
   let application := mkAppN (.const name (plan.levelParams.map Level.param))
     (parameters ++ indices ++ #[value])
   unless ← liftGen <| isDefEq (← inferType application) targetType do
-    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .map .application)
   return application
 
 private def applyRecursorBoundaryLaw (plan : FamilyAdapterPlan)
     (boundary : RecursorCarrierBoundary) (forward : Bool) (parameters : Array Expr)
     (sourceType targetType value : Expr) : ConstructionM Expr := do
+  let direction := if forward then RecursorCarrierDirection.forward else .backward
   let .installed maps _ _ backwardForwardType forwardBackwardType := boundary.boundary
-    | failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law
+        .installedType)
   let name := if forward then maps.backwardForward else maps.forwardBackward
   let recordedType := if forward then backwardForwardType else forwardBackwardType
   let some installed := (← getEnv).constants.find? name |>.map (·.type)
     | failConstruction (.missingInstalledMemberMap boundary.key name)
   unless installed == recordedType do
-    failConstruction (.installedMemberMapTypeMismatch boundary.key name)
-  let indices ← instantiateRecursorBoundaryIndices boundary parameters recordedType sourceType
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law
+      .installedType)
+  let indices ← instantiateRecursorBoundaryIndices boundary direction .law parameters
+    recordedType sourceType
   let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
   let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
   unless ← liftGen <| isDefEq (mkAppN sourceFamily (parameters ++ indices)) sourceType do
-    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law .sourceFamily)
   unless ← liftGen <| isDefEq (mkAppN targetFamily (parameters ++ indices)) targetType do
-    failConstruction (.recursorMajorBoundaryMismatch boundary.key)
-  return mkAppN (.const name (plan.levelParams.map Level.param))
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law .targetFamily)
+  let application := mkAppN (.const name (plan.levelParams.map Level.param))
     (parameters ++ indices ++ #[value])
+  let some (carrier, _, right) ← liftGen <| matchEq? (← inferType application)
+    | failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law
+        .lawEndpoint)
+  unless ← liftGen <| isDefEq carrier sourceType do
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law .lawEndpoint)
+  unless ← liftGen <| isDefEq right value do
+    failConstruction (.recursorCarrierBoundaryMismatch boundary.key direction .law .lawEndpoint)
+  return application
 
 private def trimBinderBody? (occurrences : Array OccurrenceKey) :
     Option (Array OccurrenceKey) := do
@@ -1658,7 +1703,7 @@ private def recursiveCallCertificate (plan : FamilyAdapterPlan)
     | _, _ => none
   let some pair := pair?
     | failConstruction (.publicIotaRecursiveCallMismatch rule publicBinderIndex
-        implementationBinderIndex .roleResolution)
+        implementationBinderIndex .builtCertificateResolution)
   return pair
 
 private def recursorForwardAgreementAt (plan : FamilyAdapterPlan)
@@ -2279,12 +2324,12 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
       ((`_family_adapter_public_iota_rhs).append rule.key.recursor)
       rule.publicRhs publicBinderIndex
     | throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
-        implementationBinderIndex .roleResolution)
+        implementationBinderIndex .sourceRoleResolution)
   let some implementationValue := exactRhsArgument?
       ((`_family_adapter_implementation_iota_rhs).append rule.key.recursor)
       rule.implementationRhs implementationBinderIndex
     | throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
-        implementationBinderIndex .roleResolution)
+        implementationBinderIndex .sourceRoleResolution)
   let publicHead := exactRecursiveCallHead `_family_adapter_public_iota_call publicValue
   let implementationHead := exactRecursiveCallHead
     `_family_adapter_implementation_iota_call implementationValue
@@ -2299,7 +2344,7 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
         occurrences.all container.occurrences.contains
     unless memberCandidates.size + containerCandidates.size == 1 do
       throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
-        implementationBinderIndex .roleResolution)
+        implementationBinderIndex .sourceRoleResolution)
     return some
       { publicRecursor, implementationRecursor,
         member? := memberCandidates[0]?.map (·.key),
@@ -2308,11 +2353,11 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
   | none, none =>
     unless publicHead.isFVar && implementationHead.isFVar do
       throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
-        implementationBinderIndex .roleResolution)
+        implementationBinderIndex .sourceRoleResolution)
     return none
   | _, _ =>
     throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
-      implementationBinderIndex .roleResolution)
+      implementationBinderIndex .sourceRoleResolution)
 
 private def installedIotaBinderRoles (owner : MemberPlan) (rule : RulePlan) :
     Except ConstructionIssue (Array InstalledIotaBinderRole) := do
