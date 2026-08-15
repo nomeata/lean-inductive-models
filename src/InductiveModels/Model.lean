@@ -3360,11 +3360,16 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       badShape s!"{sourceRecursor} and {implementationRecursor} have different rule keys"
     let mut recursorRuleKeys := #[]
     for sourceRule in sourceRecursorEvidence.rules do
-      let ruleMatches := (Array.range pl.types[r + i]!.ctors.size).filter fun index =>
-        pl.types[r + i]!.ctors[index]!.1 == sourceRule.ctor
-      unless ruleMatches.size == 1 do
-        badShape s!"{sourceRecursor}'s rule {sourceRule.ctor} has {ruleMatches.size} private constructors"
-      let implementationConstructor := blockCtors[r + i]![ruleMatches[0]!]!
+      let realMatches := pl.mimics[i]!.ctors.filter fun (_, real) =>
+        real.getAppFn.constName? == some sourceRule.ctor
+      unless realMatches.size == 1 do
+        badShape s!"{sourceRecursor}'s rule {sourceRule.ctor} has {realMatches.size} mimic sources"
+      let syntheticConstructor := realMatches[0]!.1
+      let syntheticMatches := (Array.range pl.types[r + i]!.ctors.size).filter fun index =>
+        pl.types[r + i]!.ctors[index]!.1 == syntheticConstructor
+      unless syntheticMatches.size == 1 do
+        badShape s!"{sourceRule.ctor}'s synthetic constructor occurs {syntheticMatches.size} times"
+      let implementationConstructor := blockCtors[r + i]![syntheticMatches[0]!]!
       let implementationMatches := implementationRules.filter fun rule =>
         rule.ctor == implementationConstructor && rule.nfields == sourceRule.nfields
       unless implementationMatches.size == 1 do
