@@ -188,6 +188,7 @@ inductive ConstructionIssue where
   | missingExactCarrierCandidate (member : MemberKey)
   | ambiguousExactCarrierCandidate (member : MemberKey)
   | invalidExactCarrierLaw (member : MemberKey)
+  | exactCarrierBoundaryMismatch (fallback candidate : MemberKey)
   | recursorMajorBoundaryMismatch (member : MemberKey)
   | missingOccurrenceMap (occurrence : OccurrenceKey)
   | missingContainerMap (occurrence : OccurrenceKey)
@@ -1214,7 +1215,7 @@ private def exactCarrierCandidateWithoutRecursors (plan : FamilyAdapterPlan)
     | .ok information => pure information
     | .error _ => failConstruction (.missingMemberMap fallback.key)
   let mut candidates : Array ExactCarrierCandidate := #[]
-  if fallback.boundary == .defeq && (← liftGen <| isDefEq sourceType targetType) then
+  if ← liftGen <| isDefEq sourceType targetType then
     let sourceLevel ← liftGen <| ilevel sourceType
     let result : ExactCarrierCandidate :=
       { boundary := .defeq
@@ -1254,13 +1255,14 @@ private def exactCarrierCandidateWithoutRecursors (plan : FamilyAdapterPlan)
   let some first := candidates[0]?
     | failConstruction (.missingExactCarrierCandidate fallback.key)
   for candidate in candidates do
-    unless candidate.boundary == first.boundary do
-      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.mapped first.mapped do
       failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.lawLeft first.lawLeft do
       failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.lawRight first.lawRight do
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
+    let mixedDefeq := candidate.boundary == .defeq || first.boundary == .defeq
+    unless candidate.boundary == first.boundary || mixedDefeq do
       failConstruction (.ambiguousExactCarrierCandidate fallback.key)
   return first
 
@@ -1553,11 +1555,31 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
   | .error (.missingExactCarrierCandidate key) =>
     unless key == fallback.key do failConstruction (.missingExactCarrierCandidate key)
   | .error issue => failConstruction issue
+  if let some liveParameters ←
+      recursorBoundaryParameters? fallback forward sourceType targetType then
+    unless liveParameters.size == parameters.size do
+      failConstruction (.exactCarrierBoundaryMismatch fallback.key fallback.key)
+    for index in [:parameters.size] do
+      unless ← liftGen <| isDefEq liveParameters[index]! parameters[index]! do
+        failConstruction (.exactCarrierBoundaryMismatch fallback.key fallback.key)
+    let carrier ← recursorCarrierAt plan fallback liveParameters sourceType targetType
+    let mapped := mkApp (if forward then carrier.forward else carrier.backward) value
+    let roundTrip := mkApp
+      (if forward then carrier.backwardForward else carrier.forwardBackward) value
+    let candidate ← checkedExactCarrierCandidate fallback.key sourceType value
+      fallback.boundary mapped roundTrip
+    candidates := candidates.push candidate
   for container in plan.containerRecursors do
     let boundary := containerRecursorBoundary container
     if let some liveParameters ←
         recursorBoundaryParameters? boundary forward sourceType targetType then
-      let carrier ← recursorCarrierAt plan boundary liveParameters sourceType targetType
+      let carrierAttempt ← liftGen <|
+        (recursorCarrierAt plan boundary liveParameters sourceType targetType).run
+      let carrier ← match carrierAttempt with
+        | .ok carrier => pure carrier
+        | .error (.recursorMajorBoundaryMismatch _) =>
+          failConstruction (.exactCarrierBoundaryMismatch fallback.key boundary.key)
+        | .error issue => failConstruction issue
       let mapped := mkApp (if forward then carrier.forward else carrier.backward) value
       let roundTrip := mkApp
         (if forward then carrier.backwardForward else carrier.forwardBackward) value
@@ -1567,13 +1589,14 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
   let some first := candidates[0]?
     | failConstruction (.missingExactCarrierCandidate fallback.key)
   for candidate in candidates do
-    unless candidate.boundary == first.boundary do
-      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.mapped first.mapped do
       failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.lawLeft first.lawLeft do
       failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.lawRight first.lawRight do
+      failConstruction (.ambiguousExactCarrierCandidate fallback.key)
+    let mixedDefeq := candidate.boundary == .defeq || first.boundary == .defeq
+    unless candidate.boundary == first.boundary || mixedDefeq do
       failConstruction (.ambiguousExactCarrierCandidate fallback.key)
   return first
 
