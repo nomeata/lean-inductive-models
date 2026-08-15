@@ -792,6 +792,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
                   indexArity := container.indexArity
                   implementationCarrier := container.implementationCarrier
                   sourceRecursor := container.sourceRecursor
+                  sourceRecursorEvidence := container.sourceRecursorEvidence
                   implementationRecursor := container.implementationRecursor
                   sourceRecursorType := container.sourceRecursorType
                   implementationRecursorType := container.implementationRecursorType

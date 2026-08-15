@@ -450,6 +450,9 @@ structure ContainerMapPlan where
   indexArity : Nat
   implementationCarrier : Name
   sourceRecursor : Name
+  /-- Exact source-export recursor record. It remains authoritative before the
+  source owner has been installed in the construction environment. -/
+  sourceRecursorEvidence : IsoSourceRecursor := {}
   implementationRecursor : Name
   sourceRecursorType : Expr
   implementationRecursorType : Expr

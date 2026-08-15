@@ -3335,7 +3335,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     let implementationCarrier := g.members[r + i]!
     let sourceRecursor := g.exportRecs[r + i]!
     let implementationRecursor := g.recName (r + i)
-    let sourceMatches := exportRecursors.filter (\recursor => recursor.name == sourceRecursor)
+    let sourceMatches := exportRecursors.filter fun recursor => recursor.name == sourceRecursor
     unless sourceMatches.size == 1 do
       badShape s!"the exact source export has {sourceMatches.size} records for {sourceRecursor}"
     let sourceRecursorEvidence := IsoSourceRecursor.ofERec sourceMatches[0]!
