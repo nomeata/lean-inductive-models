@@ -280,6 +280,18 @@ structure PublicRecursorCertificate where
   rules : Array RuleKey
   deriving Inhabited, BEq, Repr
 
+/-- Exact association between one source rule's IH ordinal, the literal binder
+positions on both installed interfaces, and the specialised recursor call made
+at those positions.  The ordinal groups source occurrences; it is never used
+as an expression-application position. -/
+structure ContainerRecursiveCallRole where
+  rule : RuleKey
+  hypothesisIndex : Nat
+  publicBinderIndex : Nat
+  implementationBinderIndex : Nat
+  occurrences : Array OccurrenceKey
+  deriving Inhabited, BEq, Repr
+
 /-- Kernel-checked public wrapper and call agreement for one specialised
 container recursor. Its carrier boundary is the exact closed major-family
 pair recorded in [`ContainerRecursorPlan`], not a fabricated named member. -/
@@ -290,6 +302,7 @@ structure ContainerRecursorCertificate where
   callAgreement : Name
   rules : Array ContainerRecursorRuleKey
   occurrences : Array OccurrenceKey
+  callRoles : Array ContainerRecursiveCallRole
   deriving Inhabited, BEq, Repr
 
 /-- Exact paired recursor call at one installed IH slot.  The enclosing rule
@@ -302,6 +315,7 @@ structure PublicIotaRecursiveCallRole where
   mimic calls deliberately remain keyed by their independent name pair. -/
   member? : Option MemberKey
   container? : Option ContainerRecursorKey := none
+  containerCall? : Option ContainerRecursiveCallRole := none
   containerOccurrences : Array OccurrenceKey := #[]
   deriving Inhabited, BEq, Repr
 
@@ -438,6 +452,7 @@ structure ContainerRecursorPlan where
   boundary : ContainerRecursorBoundaryPlan
   rules : Array ContainerRecursorRuleKey
   occurrences : Array OccurrenceKey
+  callRoles : Array ContainerRecursiveCallRole := #[]
   deriving Inhabited, BEq, Repr
 
 /-- One exact public rule and its private proof oracle.  Occurrences are keyed
@@ -711,6 +726,15 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
           map.implementationRecursor == recursor.key.implementationRecursor do
       unless recursor.occurrences.contains map.key do
         errors := errors.push (.containerRecursorMapMismatch recursor.key map.key)
+    for role in recursor.callRoles do
+      unless plan.rules.any (·.key == role.rule) do
+        errors := errors.push (.unknownRuleOwner role.rule)
+      unless !role.occurrences.isEmpty && role.occurrences.all fun occurrence =>
+          occurrence.hypothesisIndex == role.hypothesisIndex &&
+            recursor.occurrences.contains occurrence &&
+            (plan.rules.find? (·.key == role.rule)).any (·.occurrences.contains occurrence) do
+        for occurrence in role.occurrences do
+          errors := errors.push (.unknownContainerRecursorOccurrence recursor.key occurrence)
   for map in plan.containerMaps do
     let recursors := plan.containerRecursors.filter fun recursor =>
       recursor.key.publicRecursor == map.sourceRecursor &&

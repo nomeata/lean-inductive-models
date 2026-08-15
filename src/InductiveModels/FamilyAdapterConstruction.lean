@@ -1695,10 +1695,12 @@ private def recursiveCallCertificate (plan : FamilyAdapterPlan)
           recursor.implementationRecursor == role.implementationRecursor
       some (memberRecursorShape member, recursor)
     | none, some key => do
+      let call ← role.containerCall?
       let built ← containerRecursors.find? fun built =>
         built.plan.key == key && built.plan.key.publicRecursor == role.publicRecursor &&
           built.plan.key.implementationRecursor == role.implementationRecursor &&
-          role.containerOccurrences.all built.plan.occurrences.contains
+          role.containerOccurrences.all built.plan.occurrences.contains &&
+          built.plan.callRoles.contains call && built.certificate.callRoles.contains call
       some (built.shape, built.recursor)
     | _, _ => none
   let some pair := pair?
@@ -2341,7 +2343,12 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
     let containerCandidates := plan.containerRecursors.filter fun container =>
       container.key.publicRecursor == publicRecursor &&
         container.key.implementationRecursor == implementationRecursor &&
-        occurrences.all container.occurrences.contains
+        occurrences.all container.occurrences.contains &&
+        container.callRoles.any fun role =>
+          role.rule == rule.key && role.hypothesisIndex == occurrences[0]!.hypothesisIndex &&
+            role.publicBinderIndex == publicBinderIndex &&
+            role.implementationBinderIndex == implementationBinderIndex &&
+            role.occurrences == occurrences
     unless memberCandidates.size + containerCandidates.size == 1 do
       throw (.publicIotaRecursiveCallMismatch rule.key publicBinderIndex
         implementationBinderIndex .sourceRoleResolution)
@@ -2349,6 +2356,12 @@ private def publicIotaRecursiveCallRole (plan : FamilyAdapterPlan) (rule : RuleP
       { publicRecursor, implementationRecursor,
         member? := memberCandidates[0]?.map (·.key),
         container? := containerCandidates[0]?.map (·.key),
+        containerCall? := containerCandidates[0]?.bind fun container =>
+          container.callRoles.find? fun role =>
+            role.rule == rule.key && role.hypothesisIndex == occurrences[0]!.hypothesisIndex &&
+              role.publicBinderIndex == publicBinderIndex &&
+              role.implementationBinderIndex == implementationBinderIndex &&
+              role.occurrences == occurrences,
         containerOccurrences := if containerCandidates.isEmpty then #[] else occurrences }
   | none, none =>
     unless publicHead.isFVar && implementationHead.isFVar do
@@ -3214,7 +3227,7 @@ private def buildContainerRecursorPrototypesCore (plan : FamilyAdapterPlan)
     let certificate : ContainerRecursorCertificate :=
       { key := container.key, adapter := recursor.adapter, exactType := recursor.exactType,
         callAgreement := recursor.callAgreement, rules := container.rules,
-        occurrences := container.occurrences }
+        occurrences := container.occurrences, callRoles := container.callRoles }
     declarations := declarations ++ added
     built := built.push { plan := container, shape, recursor, certificate }
   return (declarations, built)

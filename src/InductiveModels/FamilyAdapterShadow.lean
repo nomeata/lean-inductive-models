@@ -213,6 +213,51 @@ private def minorHypothesisIndices? (recursor : ERec) (ruleIndex : Nat) :
         hypotheses.findIdx? (·.value == candidate.value))
     return result
 
+/-- Literal binder position and IH ordinal for one occurrence in one exact
+installed recursor minor.  These are deliberately returned separately: only
+the ordinal groups occurrences, while the binder position indexes an iota RHS
+application. -/
+private def installedMinorHypothesisPosition? (parameterArity motiveArity minorArity : Nat)
+    (recursorType : Expr) (constructorName : Name) (fieldCount : Nat)
+    (occurrence : OccurrenceKey) : Option (Nat × Nat) := do
+  let (recursorBinders, _) := openExactForalls
+    ((`_family_adapter_shadow_installed_rec).append constructorName) recursorType
+  let prefixSize := parameterArity + motiveArity + minorArity
+  unless recursorBinders.size >= prefixSize do none
+  let motives := recursorBinders.extract parameterArity
+    (parameterArity + motiveArity) |>.map (·.value)
+  let minors := recursorBinders.extract (parameterArity + motiveArity) prefixSize
+  let matching := minors.filterMap fun minor =>
+    let (binders, result) := openExactForalls
+      ((`_family_adapter_shadow_installed_minor).append constructorName) minor.type
+    if (result.getAppArgs.back?.bind (·.getAppFn.constName?)) == some constructorName then
+      some (binders, result)
+    else none
+  unless matching.size == 1 do none
+  let (binders, result) := matching[0]!
+  let major ← result.getAppArgs.back?
+  let arguments := major.getAppArgs
+  unless arguments.size >= fieldCount do none
+  let fields := arguments.extract (arguments.size - fieldCount) arguments.size
+  let field ← fields[occurrence.fieldIndex]?
+  let mut hypotheses : Array (Nat × ExactBinder) := #[]
+  for binderIndex in [:binders.size] do
+    let binder := binders[binderIndex]!
+    if fields.contains binder.value then continue
+    let (_, body) := openExactForalls (`_family_adapter_shadow_installed_hypothesis)
+      binder.type
+    if motives.contains body.getAppFn then
+      hypotheses := hypotheses.push (binderIndex, binder)
+  let candidates := hypotheses.filter fun (_, hypothesis) =>
+    let (_, body) := openExactForalls (`_family_adapter_shadow_installed_hypothesis_body)
+      hypothesis.type
+    (body.getAppArgs.back?.map (·.getAppFn == field)).getD false
+  unless candidates.size == 1 do none
+  let (binderIndex, _) := candidates[0]!
+  let hypothesisIndex ← hypotheses.findIdx? (·.1 == binderIndex)
+  unless hypothesisIndex == occurrence.hypothesisIndex do none
+  return (binderIndex, hypothesisIndex)
+
 private partial def occurrenceSites (targets : Array MemberKey)
     (fieldIndex : Nat) (expression : Expr) (path : Array ExprPathStep := #[])
     (binderDepth : Nat := 0) : Array OccurrenceSite :=
@@ -747,18 +792,44 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   -- installed iota RHS still calls an independent specialised recursor. Build
   -- that recursor boundary from the paired literal IH slot itself.
   for rule in rulePlans do
+    let some owner := resolvedMembers.find? (·.key == rule.key.recursorOwner) | continue
+    let some constructor := resolvedConstructors.find? (·.key == rule.key.constructor) | continue
+    let some publicRecursorType := installedType? environment owner.publicRecursor | continue
+    let some implementationRecursorType :=
+        installedType? environment owner.implementationRecursor | continue
+    let motiveArity := owner.sourceRecursor?.map (·.numMotives) |>.getD 0
+    let minorArity := owner.sourceRecursor?.map (·.numMinors) |>.getD 0
     let mut seenHypotheses : Array Nat := #[]
     for occurrence in rule.occurrences do
       let hypothesisIndex := occurrence.hypothesisIndex
       if seenHypotheses.contains hypothesisIndex then continue
       seenHypotheses := seenHypotheses.push hypothesisIndex
       let grouped := rule.occurrences.filter (·.hypothesisIndex == hypothesisIndex)
+      let some (publicBinderIndex, publicHypothesisIndex) :=
+          installedMinorHypothesisPosition? owner.source.numParams motiveArity minorArity
+            publicRecursorType constructor.publicName constructor.source.numFields occurrence
+        | continue
+      let some (implementationBinderIndex, implementationHypothesisIndex) :=
+          installedMinorHypothesisPosition? owner.source.numParams motiveArity minorArity
+            implementationRecursorType constructor.implementationName
+            constructor.source.numFields occurrence
+        | continue
+      unless publicHypothesisIndex == hypothesisIndex &&
+          implementationHypothesisIndex == hypothesisIndex && grouped.all fun current =>
+            installedMinorHypothesisPosition? owner.source.numParams motiveArity minorArity
+                publicRecursorType constructor.publicName constructor.source.numFields current ==
+              some (publicBinderIndex, hypothesisIndex) &&
+            installedMinorHypothesisPosition? owner.source.numParams motiveArity minorArity
+                implementationRecursorType constructor.implementationName
+                  constructor.source.numFields current ==
+              some (implementationBinderIndex, hypothesisIndex) do
+        continue
       let publicHead? := exactRuleArgumentHead?
         ((`_family_adapter_identity_public_call).append rule.key.recursor)
-        rule.publicRhs hypothesisIndex
+        rule.publicRhs publicBinderIndex
       let implementationHead? := exactRuleArgumentHead?
         ((`_family_adapter_identity_private_call).append rule.key.recursor)
-        rule.implementationRhs hypothesisIndex
+        rule.implementationRhs implementationBinderIndex
       let some publicRecursor := publicHead? | continue
       let some implementationRecursor := implementationHead? | continue
       if resolvedMembers.any fun member =>
@@ -766,13 +837,17 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             member.implementationRecursor == implementationRecursor then
         continue
       let key : ContainerRecursorKey := { publicRecursor, implementationRecursor }
+      let callRole : ContainerRecursiveCallRole :=
+        { rule := rule.key, hypothesisIndex, publicBinderIndex,
+          implementationBinderIndex, occurrences := grouped }
       if let some position := containerRecursorPlans.findIdx? (·.key == key) then
         let current := containerRecursorPlans[position]!
-        if current.boundary == .defeq then
-          let mut occurrences := current.occurrences
-          for key in grouped do unless occurrences.contains key do occurrences := occurrences.push key
-          containerRecursorPlans := containerRecursorPlans.set! position
-            { current with occurrences }
+        let mut occurrences := current.occurrences
+        for key in grouped do unless occurrences.contains key do occurrences := occurrences.push key
+        let mut callRoles := current.callRoles
+        unless callRoles.contains callRole do callRoles := callRoles.push callRole
+        containerRecursorPlans := containerRecursorPlans.set! position
+          { current with occurrences, callRoles }
         continue
       let some (.recInfo publicInfo) := environment.constants.find? publicRecursor | do
         for key in grouped do reasons := reasons.push (.missingInstalledContainerRecursor
@@ -821,7 +896,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           motiveArity := publicInfo.numMotives, minorArity := publicInfo.numMinors,
           resultMotiveIndex := publicResultMotive, publicType, implementationType,
           publicMajorFamily, implementationMajorFamily, boundary := .defeq,
-          rules := pairedRules, occurrences := grouped }
+          rules := pairedRules, occurrences := grouped, callRoles := #[callRole] }
 
   let memberKeys := resolvedMembers.map (·.key)
   let components := componentPlans memberKeys occurrencePlans
