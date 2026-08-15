@@ -68,7 +68,6 @@ def hasOnlyExplicitGaps (observation : FamilyAdapter.ShadowObservation) : Bool :
     | .missingMinorHypothesis constructor _ => !constructor.constructor.isAnonymous
     | .minorHypothesisMismatch rule => !rule.recursor.isAnonymous
     | .malformedMinorTelescope rule => !rule.recursor.isAnonymous
-    | .unavailableInstalledMetadata root => !root.isAnonymous
     | _ => false
 
 def multipleSitesShareExactHypothesis (shadows : Array FamilyAdapter.ShadowObservation) : Bool :=

@@ -44,7 +44,6 @@ inductive ShadowReason where
   | installedContainerRecursorTypeMismatch (occurrence : OccurrenceKey) (name : Name)
   | installedContainerRecursorRulesMismatch (occurrence : OccurrenceKey) (name : Name)
   | invalidContainerRecursorAssociation (occurrence : OccurrenceKey)
-  | unavailableInstalledMetadata (root : Name)
   | unknownRuleConstructor (rule : RuleKey)
   | invalidPlan (error : PlanError)
   deriving Inhabited, BEq, Repr
@@ -566,7 +565,7 @@ private def publicIota? (iso : Iso) (member : ResolvedMember)
 /-- Derive and shadow-check a generic adapter plan.  The function deliberately
 returns reasons rather than throwing: existing generation remains authoritative
 until the generic certificate is complete and explicitly enabled. -/
-private def deriveShadowPlanCore (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
+def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   let .induct sourceTypesList sourceConstructorsList sourceRecursorsList := source
     | return { root := source.names.head?.getD .anonymous
                plan? := none
@@ -1150,13 +1149,5 @@ private def deriveShadowPlanCore (source : EDecl) (iso : Iso) : MetaM ShadowRepo
     if coverage.occurrences.contains container.key then some container.key else none
   coverage := { coverage with containerMaps := coveredContainerMaps }
   return { root := firstType.name, plan? := some plan, coverage, reasons }
-
-/-- The production shadow is observational only, so an incrementally
-unavailable declaration must become an explicit keyed gap rather than escape
-and change ordinary generation behavior. -/
-def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
-  let root := source.names.head?.getD .anonymous
-  try deriveShadowPlanCore source iso
-  catch _ => return { root, plan? := none, reasons := #[.unavailableInstalledMetadata root] }
 
 end InductiveModels.FamilyAdapter
