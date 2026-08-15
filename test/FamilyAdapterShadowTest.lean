@@ -28,6 +28,10 @@ def runFixture (path : String) (collectShadow : Bool) :
   let messages ← state.messages.toArray.mapM (·.toString)
   return (result.1, result.2, messages)
 
+def runFixtureTagged (stage path : String) (collectShadow : Bool) := do
+  try runFixture path collectShadow
+  catch exception => throw <| IO.userError s!"{stage}: {exception}"
+
 /-- An exact source block paired with an intentionally absent public/private
 interface.  The shadow must preserve the source keys in its reasons while
 excluding every result that depends on the unresolved carrier or recursor. -/
@@ -97,10 +101,14 @@ def main : IO UInt32 := do
   initSearchPath (← findSysroot)
   let nestedPath := "test/fixtures/inductive-models/nested_iota.ndjson"
   let familyPath := "test/fixtures/inductive-models/nest_fam_arg.ndjson"
-  let (plain, plainShadows, plainMessages) ← runFixture nestedPath false
-  let (observed, shadows, observedMessages) ← runFixture nestedPath true
-  let (familyPlain, _, familyPlainMessages) ← runFixture familyPath false
-  let (familyObserved, familyShadows, familyObservedMessages) ← runFixture familyPath true
+  let (plain, plainShadows, plainMessages) ←
+    runFixtureTagged "nested/plain" nestedPath false
+  let (observed, shadows, observedMessages) ←
+    runFixtureTagged "nested/shadow" nestedPath true
+  let (familyPlain, _, familyPlainMessages) ←
+    runFixtureTagged "family/plain" familyPath false
+  let (familyObserved, familyShadows, familyObservedMessages) ←
+    runFixtureTagged "family/shadow" familyPath true
   let malformed ← runMalformedInterface
   let sameResult := plain == observed
     && familyPlain == familyObserved
