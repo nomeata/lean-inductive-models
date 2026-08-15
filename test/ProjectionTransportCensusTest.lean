@@ -114,8 +114,6 @@ def expectedCensus : Array CensusRow :=
    , { fixture := "nested_value_dependency", owner := `NestedEarly, field := 2, kind := .transport }
    , { fixture := "nested_value_dependency", owner := `NestedLate, field := 1, kind := .transport }
    , { fixture := "nested_one_layer", owner := `NestedLayer, field := 1, kind := .transport }
-   , { fixture := "prop_projection_boundaries", owner := `NestedProp,
-       field := 1, kind := .transport }
    , { fixture := "prop_recursive_projections", owner := `PropRecIdx,
        field := 0, kind := .authored }
    , { fixture := "prop_recursive_projections", owner := `PropRecIdx,

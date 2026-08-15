@@ -66,18 +66,25 @@ identifies every earlier projected proof with its constructor local in the
 dependent field type, and identifies the selected projection with the literal
 constructor proof. Thus `Eq.refl` checks without a generated transport.
 
-The first tranche is deliberately limited to a single, unnested source block.
-Those owners reach [`InductiveModels.addSourceStructureModels`] with their raw
-constructor telescope. Nested and plain-mutual builders currently expose an
-installed telescope instead; selecting the exact literal contract there would
-discard a source head beta-redex before the theorem is stated. They remain on
-the legacy transported contract until those routes carry the raw source
-telescope too.
+Nesting is not a condition on this. The contract is about the two *proofs*
+the statement equates, and proof irrelevance settles them at whatever carrier
+the route built; the route only has to state the theorem at the raw source
+constructor telescope, because that is the telescope the exact statement
+checker rebuilds. Both the single-block simple route
+([`InductiveModels.addSourceStructureModels`]) and the nested route reach
+[`InductiveModels.addProjectionModels`] with the export's own constructor
+record, and the nested model declares its constructor at exactly that type.
+
+A plain-mutual member is the one route that does not: its model is built from
+the *installed* block, whose constructor-local binder types the kernel has
+already beta-normalized, so the exact literal contract could not be stated
+against the raw source syntax there. `all` pins that exclusion — and pins it
+by the same single-member reading that the rest of this predicate uses.
 
 Maybe-zero formers are also intentionally excluded: at a positive
 instantiation their fields and values need not be proof-irrelevant. -/
 def propositionProjectionIotaUsesLiteralField (type : EIndType) : Bool :=
-  type.all == [type.name] && type.ctors.length == 1 && type.numNested == 0 &&
+  type.all == [type.name] && type.ctors.length == 1 &&
     exactFormerEndsInProp type.type
 
 /-- The first production one-layer carrier tranche: one recursive member, one

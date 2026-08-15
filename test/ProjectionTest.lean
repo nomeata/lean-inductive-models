@@ -464,19 +464,23 @@ def main : IO UInt32 := do
       (declarationType? propGenerated propProjectionRules[1]!).any
         (containsConst ``Eq.rec)
 
-  -- Nested and plain-mutual builders still use installed constructor
-  -- telescopes. Their head-beta wrapper is therefore pinned to the existing
-  -- normalized/transported projection contract until those routes receive an
-  -- exact raw-source adapter of their own.
+  -- The nested builder states its model constructor at the export's own
+  -- constructor record, so a nested proposition selects the same literal
+  -- contract a single unnested one does — its dependent proof field keeps its
+  -- source default wrapper and head beta-redex and still reduces literally.
+  -- A plain-mutual member is built from the installed block instead and
+  -- remains outside the propositional tranche; its rule is literal for the
+  -- separate, non-propositional mutual reason.
   let propBoundaryRaw ← readExport
     "test/fixtures/inductive-models/prop_projection_boundaries.ndjson"
   let (propBoundaryDeclarations, propBoundaryReport) ← runExport propBoundaryRaw
   let propBoundaryGenerated := outputExport propBoundaryRaw propBoundaryDeclarations
   let nestedBoundaryRule := Naming.projectionIotaName `NestedProp 1
   let mutualBoundaryRule := Naming.projectionIotaName `MutualPropA 1
-  state := state.check "nested and mutual Prop owners remain outside the literal tranche" <|
-    (ownerAndRecursor? propBoundaryRaw `NestedProp).all fun (type, _) =>
-      !propositionProjectionIotaUsesLiteralField type &&
+  state := state.check "the nested Prop owner enters the propositional literal tranche" <|
+    (ownerAndRecursor? propBoundaryRaw `NestedProp).any fun (type, _) =>
+      propositionProjectionIotaUsesLiteralField type
+  state := state.check "the plain-mutual Prop owner stays outside it" <|
     (ownerAndRecursor? propBoundaryRaw `MutualPropA).all fun (type, _) =>
       !propositionProjectionIotaUsesLiteralField type
   state := state.check "nested and mutual Prop controls expose dependent proof fields" <|
@@ -486,11 +490,14 @@ def main : IO UInt32 := do
   state := state.check "nested Prop control is generated rather than declined" <|
     propBoundaryReport.generated.any (fun row => row.1 == `NestedProp) &&
       !propBoundaryReport.declined.any (fun row => row.1 == `NestedProp)
-  state := state.check "nested and mutual Prop controls retain their legacy rule contracts" <|
-    (declarationType? propBoundaryGenerated nestedBoundaryRule).any fun type =>
-      (outerEqualityRhs? type).any fun rhs =>
-        rhs != .bvar 1 && containsConst ``Eq.rec rhs &&
-      (declarationType? propBoundaryGenerated mutualBoundaryRule).bind outerEqualityRhs? ==
+  state := state.check "the nested Prop dependent rule is literal reflexivity" <|
+    (declarationType? propBoundaryGenerated nestedBoundaryRule).bind outerEqualityRhs? ==
+        some (.bvar 1) &&
+      (theoremValue? propBoundaryGenerated nestedBoundaryRule).any lambdaBodyIsEqRefl
+  state := state.check "the nested Prop rule retains its source default wrapper" <|
+    (declarationType? propBoundaryGenerated nestedBoundaryRule).any (containsConst `optParam)
+  state := state.check "the plain-mutual Prop rule keeps its own literal contract" <|
+    (declarationType? propBoundaryGenerated mutualBoundaryRule).bind outerEqualityRhs? ==
         some (.bvar 1) &&
       (declarationType? propBoundaryGenerated mutualBoundaryRule).any (containsConst `optParam)
   state := state.check "nested and mutual Prop controls remain exactly checked" <|
