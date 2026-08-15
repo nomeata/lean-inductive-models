@@ -476,7 +476,16 @@ def main (args : List String) : IO UInt32 := do
   -- fixed basis exemptions in the ordinary default run remain accepted.
   let collisionName := InductiveModels.Naming.modelName `Tree
   let collision : InductiveModels.EDecl := .ax collisionName [] (.sort (.succ .zero)) false
-  let declinedText := { nestedExport with decls := nestedExport.decls.push collision }.render
+  let some ownerIndex := nestedExport.decls.findIdx? (fun declaration =>
+      declaration.names.contains `Tree) | do
+    IO.eprintln "mainclitest: nested fixture did not contain Tree"
+    return 1
+  -- A preexisting model slot must precede its owner to pass the online input
+  -- order guard. It then reaches generation and occupies the exact public name
+  -- which the Tree island would publish.
+  let declinedDeclarations := nestedExport.decls.extract 0 ownerIndex ++ #[collision] ++
+    nestedExport.decls.extract ownerIndex nestedExport.decls.size
+  let declinedText := { nestedExport with decls := declinedDeclarations }.render
   let declined ← runInductiveModelsStdin binary
     ["--no-check", "--no-type-check-generated", "--no-output", "-"] declinedText
   state := state.check "unsupported generation declines with exit 2" <|
