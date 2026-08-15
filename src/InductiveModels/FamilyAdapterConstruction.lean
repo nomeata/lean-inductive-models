@@ -229,6 +229,7 @@ structure RecursorCarrierBoundary where
   indexArity : Nat
   publicFamily : Expr
   implementationFamily : Expr
+  canonicalIdentity : Bool := false
   maps : EquivalenceCertificate
   forwardType : Expr
   backwardType : Expr
@@ -428,6 +429,7 @@ private def containerRecursorBoundary (container : ContainerRecursorPlan) :
     indexArity := container.indexArity
     publicFamily := container.publicMajorFamily
     implementationFamily := container.implementationMajorFamily
+    canonicalIdentity := container.canonicalIdentity
     maps := container.maps
     forwardType := container.forwardType
     backwardType := container.backwardType
@@ -1475,6 +1477,28 @@ private def fixedCarrierBoundary (plan : FamilyAdapterPlan)
 private def recursorCarrierAt (plan : FamilyAdapterPlan)
     (boundary : RecursorCarrierBoundary) (parameters : Array Expr)
     (publicType implementationType : Expr) : ConstructionM PackedCarrierBoundary := do
+  if boundary.canonicalIdentity then
+    unless parameters.size == boundary.parameterArity &&
+        !boundary.publicFamily.hasFVar && !boundary.implementationFamily.hasFVar &&
+        (← liftGen <| isDefEq boundary.publicFamily boundary.implementationFamily) &&
+        (← liftGen <| isDefEq publicType implementationType) do
+      failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    let eqi ← match EqInfo.check (← getEnv) with
+      | .ok information => pure information
+      | .error _ => failConstruction (.recursorMajorBoundaryMismatch boundary.key)
+    let forward ← withLocalDeclD `value publicType fun value =>
+      liftGen <| mkLambdaFVars #[value] value
+    let backward ← withLocalDeclD `value implementationType fun value =>
+      liftGen <| mkLambdaFVars #[value] value
+    let backwardForward ← withLocalDeclD `value publicType fun value => do
+      let proof := eqi.refl' (← liftGen <| ilevel publicType) publicType value
+      liftGen <| mkLambdaFVars #[value] proof
+    let forwardBackward ← withLocalDeclD `value implementationType fun value => do
+      let proof := eqi.refl' (← liftGen <| ilevel implementationType)
+        implementationType value
+      liftGen <| mkLambdaFVars #[value] proof
+    return PackedCarrierBoundary.mk publicType implementationType forward backward
+      backwardForward forwardBackward
   let makeMap := fun (forward : Bool) => do
     let sourceType := if forward then publicType else implementationType
     let targetType := if forward then implementationType else publicType

@@ -426,6 +426,10 @@ structure ContainerRecursorPlan where
   implementationType : Expr
   publicMajorFamily : Expr
   implementationMajorFamily : Expr
+  /-- The exact installed public/private major families are definitionally
+  equal, so construction may synthesize the identity maps and laws in-process.
+  No external map name is implied by this flag. -/
+  canonicalIdentity : Bool := false
   rules : Array ContainerRecursorRuleKey
   occurrences : Array OccurrenceKey
   maps : EquivalenceCertificate
@@ -691,15 +695,19 @@ def FamilyAdapterPlan.validate (plan : FamilyAdapterPlan) : Array PlanError := I
       let maps := plan.containerMaps.filter (·.key == occurrence)
       unless plan.occurrences.any (·.key == occurrence) do
         errors := errors.push (.unknownContainerRecursorOccurrence recursor.key occurrence)
-      unless maps.size == 1 && maps.all fun map =>
-          map.sourceRecursor == recursor.key.publicRecursor &&
-            map.implementationRecursor == recursor.key.implementationRecursor &&
-            map.maps == recursor.maps &&
-            map.forwardType == recursor.forwardType &&
-            map.backwardType == recursor.backwardType &&
-            map.backwardForwardType == recursor.backwardForwardType &&
-            map.forwardBackwardType == recursor.forwardBackwardType do
-        errors := errors.push (.containerRecursorMapMismatch recursor.key occurrence)
+      if recursor.canonicalIdentity then
+        unless maps.isEmpty do
+          errors := errors.push (.containerRecursorMapMismatch recursor.key occurrence)
+      else
+        unless maps.size == 1 && maps.all fun map =>
+            map.sourceRecursor == recursor.key.publicRecursor &&
+              map.implementationRecursor == recursor.key.implementationRecursor &&
+              map.maps == recursor.maps &&
+              map.forwardType == recursor.forwardType &&
+              map.backwardType == recursor.backwardType &&
+              map.backwardForwardType == recursor.backwardForwardType &&
+              map.forwardBackwardType == recursor.forwardBackwardType do
+          errors := errors.push (.containerRecursorMapMismatch recursor.key occurrence)
     for map in plan.containerMaps.filter fun map =>
         map.sourceRecursor == recursor.key.publicRecursor &&
           map.implementationRecursor == recursor.key.implementationRecursor do

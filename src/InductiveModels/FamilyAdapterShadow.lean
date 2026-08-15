@@ -284,6 +284,17 @@ private def installedRuleRhs? (env : Environment) (recursor constructor : Name) 
     information.rules.find? (·.ctor == constructor) |>.map (·.rhs)
   | _ => none
 
+private partial def exactLambdaBody (tag : Name) (expression : Expr) : Expr :=
+  match expression with
+  | .lam _ _ body _ =>
+    exactLambdaBody tag (body.instantiate1 (mkFVar (FVarId.mk tag)))
+  | body => body
+
+private def exactRuleArgumentHead? (tag : Name) (rhs : Expr) (position : Nat) : Option Name := do
+  let argument ← (exactLambdaBody tag rhs).getAppArgs[position]?
+  let head := exactLambdaBody (tag.mkNum position) argument |>.getAppFn
+  head.constName?
+
 private def addInstalledCoverage (env : Environment) (name : Name) (expected : Expr)
     (missing mismatch : ShadowReason)
     (reasons : Array ShadowReason) : Array ShadowReason × Bool :=
@@ -733,6 +744,88 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
               (.sort .zero),
             publicIotaType := (installedType? environment publicIota).getD (.sort .zero),
             occurrences := occurrencesFor constructor.key }
+
+  -- Identity nested fields need no external container map, but their exact
+  -- installed iota RHS still calls an independent specialised recursor. Build
+  -- that recursor boundary from the paired literal IH slot itself.
+  for rule in rulePlans do
+    let mut seenHypotheses : Array Nat := #[]
+    for occurrence in rule.occurrences do
+      let hypothesisIndex := occurrence.hypothesisIndex
+      if seenHypotheses.contains hypothesisIndex then continue
+      seenHypotheses := seenHypotheses.push hypothesisIndex
+      let grouped := rule.occurrences.filter (·.hypothesisIndex == hypothesisIndex)
+      let publicHead? := exactRuleArgumentHead?
+        ((`_family_adapter_identity_public_call).append rule.key.recursor)
+        rule.publicRhs hypothesisIndex
+      let implementationHead? := exactRuleArgumentHead?
+        ((`_family_adapter_identity_private_call).append rule.key.recursor)
+        rule.implementationRhs hypothesisIndex
+      let some publicRecursor := publicHead? | continue
+      let some implementationRecursor := implementationHead? | continue
+      if resolvedMembers.any fun member =>
+          member.publicRecursor == publicRecursor &&
+            member.implementationRecursor == implementationRecursor then
+        continue
+      let key : ContainerRecursorKey := { publicRecursor, implementationRecursor }
+      if let some position := containerRecursorPlans.findIdx? (·.key == key) then
+        let current := containerRecursorPlans[position]!
+        if current.canonicalIdentity then
+          let mut occurrences := current.occurrences
+          for key in grouped do unless occurrences.contains key do occurrences := occurrences.push key
+          containerRecursorPlans := containerRecursorPlans.set! position
+            { current with occurrences }
+        continue
+      let some (.recInfo publicInfo) := environment.constants.find? publicRecursor | do
+        for key in grouped do reasons := reasons.push (.missingInstalledContainerRecursor
+          key publicRecursor)
+        continue
+      let some (.recInfo implementationInfo) :=
+          environment.constants.find? implementationRecursor | do
+        for key in grouped do reasons := reasons.push (.missingInstalledContainerRecursor
+          key implementationRecursor)
+        continue
+      let publicType := publicInfo.type
+      let implementationType := implementationInfo.type
+      let publicMajor? ← recursorMajorFamily? publicInfo publicType
+        publicInfo.numParams publicInfo.numIndices
+      let implementationMajor? ← recursorMajorFamily? implementationInfo implementationType
+        implementationInfo.numParams implementationInfo.numIndices
+      let some (publicMajorFamily, publicResultMotive) := publicMajor? | do
+        for key in grouped do reasons := reasons.push (.invalidContainerRecursorAssociation key)
+        continue
+      let some (implementationMajorFamily, implementationResultMotive) :=
+          implementationMajor? | do
+        for key in grouped do reasons := reasons.push (.invalidContainerRecursorAssociation key)
+        continue
+      let mut pairedRules : Array ContainerRecursorRuleKey := #[]
+      let mut exactRules := publicInfo.rules.length == implementationInfo.rules.length
+      for publicRule in publicInfo.rules do
+        let matches := implementationInfo.rules.toArray.filter fun implementationRule =>
+          implementationRule.ctor == publicRule.ctor && implementationRule.rhs == publicRule.rhs
+        if matches.size == 1 then
+          pairedRules := pairedRules.push
+            { recursor := key, publicConstructor := publicRule.ctor,
+              implementationConstructor := matches[0]!.ctor }
+        else
+          exactRules := false
+      unless publicInfo.numParams == implementationInfo.numParams &&
+          publicInfo.numIndices == implementationInfo.numIndices &&
+          publicInfo.numMotives == implementationInfo.numMotives &&
+          publicInfo.numMinors == implementationInfo.numMinors &&
+          publicResultMotive == implementationResultMotive && exactRules &&
+          (← isDefEq publicType implementationType) &&
+          (← isDefEq publicMajorFamily implementationMajorFamily) do
+        for key in grouped do reasons := reasons.push (.invalidContainerRecursorAssociation key)
+        continue
+      containerRecursorPlans := containerRecursorPlans.push
+        { key, parameterArity := publicInfo.numParams, indexArity := publicInfo.numIndices,
+          motiveArity := publicInfo.numMotives, minorArity := publicInfo.numMinors,
+          resultMotiveIndex := publicResultMotive, publicType, implementationType,
+          publicMajorFamily, implementationMajorFamily, canonicalIdentity := true,
+          rules := pairedRules, occurrences := grouped, maps := {},
+          forwardType := .sort .zero, backwardType := .sort .zero,
+          backwardForwardType := .sort .zero, forwardBackwardType := .sort .zero }
 
   let memberKeys := resolvedMembers.map (·.key)
   let components := componentPlans memberKeys occurrencePlans
