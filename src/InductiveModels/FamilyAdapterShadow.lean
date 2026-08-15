@@ -413,34 +413,36 @@ private def closedFamilyBinderRoles? (family expected : Expr)
 
 private def endpointApplicationPlan? (sourceFamily targetFamily exactType : Expr)
     (law : Bool) : MetaM (Option CarrierEndpointApplicationPlan) := do
-  let (binders, result) := openExactForalls `_family_adapter_endpoint exactType
-  let mut candidates : Array CarrierEndpointApplicationPlan := #[]
-  for valueIndex in [:binders.size] do
-    let value := binders[valueIndex]!
-    let some familyPositions ← closedFamilyBinderRoles? sourceFamily value.type binders
-      | continue
-    unless binders.size == familyPositions.size + 1 && !familyPositions.contains valueIndex do
-      continue
-    let familyArguments := familyPositions.map (binders[·]!.value)
-    let target := mkAppN targetFamily familyArguments
-    if law then
-      let some (carrier, _, right) ← matchEq? result | continue
-      unless ← isDefEq carrier value.type do continue
-      unless ← isDefEq right value.value do continue
-    else
-      unless ← isDefEq result target do continue
-    let mut roles : Array CarrierEndpointBinderRole := #[]
-    let mut complete := true
-    for binderIndex in [:binders.size] do
-      if binderIndex == valueIndex then
-        roles := roles.push CarrierEndpointBinderRole.value
-      else if let some familyIndex := familyPositions.findIdx? (· == binderIndex) then
-        roles := roles.push (CarrierEndpointBinderRole.familyArgument familyIndex)
-      else
-        complete := false
-    if complete then candidates := candidates.push { exactType, binders := roles }
-  unless candidates.size == 1 do return none
-  return candidates[0]?
+  forallTelescope exactType fun values result => do
+    let binders ← values.mapM fun value => return ({ type := (← inferType value), value } : ExactBinder)
+    let mut candidates : Array CarrierEndpointApplicationPlan := #[]
+    for valueIndex in [:binders.size] do
+      let candidate? ← withoutModifyingState do
+        let value := binders[valueIndex]!
+        let some familyPositions ← closedFamilyBinderRoles? sourceFamily value.type binders
+          | return none
+        unless binders.size == familyPositions.size + 1 &&
+            !familyPositions.contains valueIndex do return none
+        let familyArguments := familyPositions.map (binders[·]!.value)
+        let target := mkAppN targetFamily familyArguments
+        if law then
+          let some (carrier, _, right) ← matchEq? result | return none
+          unless ← isDefEq carrier value.type do return none
+          unless ← isDefEq right value.value do return none
+        else
+          unless ← isDefEq result target do return none
+        let mut roles : Array CarrierEndpointBinderRole := #[]
+        for binderIndex in [:binders.size] do
+          if binderIndex == valueIndex then
+            roles := roles.push CarrierEndpointBinderRole.value
+          else if let some familyIndex := familyPositions.findIdx? (· == binderIndex) then
+            roles := roles.push (CarrierEndpointBinderRole.familyArgument familyIndex)
+          else
+            return none
+        return some ({ exactType, binders := roles } : CarrierEndpointApplicationPlan)
+      if let some candidate := candidate? then candidates := candidates.push candidate
+    unless candidates.size == 1 do return none
+    return candidates[0]?
 
 private def installedBoundaryPlan? (maps : EquivalenceCertificate)
     (publicFamily implementationFamily forwardType backwardType backwardForwardType
