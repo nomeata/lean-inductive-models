@@ -323,6 +323,10 @@ private def componentFor (components : Array ComponentPlan) (member : MemberKey)
 private def installedType? (env : Environment) (name : Name) : Option Expr :=
   env.constants.find? name |>.map (·.type)
 
+private partial def forallCount : Expr → Nat
+  | .forallE _ _ body _ => forallCount body + 1
+  | _ => 0
+
 private def installedRuleEvidence? (env : Environment) (rule recursor constructor : Name) :
     MetaM (Option InstalledRuleEvidence) := do
   match env.constants.find? rule with
@@ -333,7 +337,7 @@ private def installedRuleEvidence? (env : Environment) (rule recursor constructo
     return some {
       representation := .recursorRule
       declarationType := information.type
-      application := (Array.range (numForalls information.type)).map
+      application := (Array.range (forallCount information.type)).map
         InstalledRuleBinderRole.recursorArgument
       semanticRhs := installedRule.rhs }
   | some (.thmInfo information) =>
@@ -898,8 +902,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             implementationIotaType := implementationEvidence?.map (·.declarationType) |>.getD
               (.sort .zero),
             publicIotaType := publicEvidence?.map (·.declarationType) |>.getD (.sort .zero),
-            implementationEvidence := implementationEvidence?.getD {},
-            publicEvidence := publicEvidence?.getD {},
+            implementationEvidence := implementationEvidence?.getD default,
+            publicEvidence := publicEvidence?.getD default,
             occurrences := occurrencesFor constructor.key }
 
   -- Identity nested fields need no external container map, but their exact
