@@ -1010,13 +1010,16 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
               implementationConstructor := ruleMatches[0]!.ctor }
         else
           exactRules := false
+      let recursorTypesDefeq ← try isDefEq publicType implementationType
+        catch _ => pure false
+      let majorFamiliesDefeq ← try isDefEq publicMajorFamily implementationMajorFamily
+        catch _ => pure false
       unless publicInfo.numParams == implementationInfo.numParams &&
           publicInfo.numIndices == implementationInfo.numIndices &&
           publicInfo.numMotives == implementationInfo.numMotives &&
           publicInfo.numMinors == implementationInfo.numMinors &&
           publicResultMotive == implementationResultMotive && exactRules &&
-          (← isDefEq publicType implementationType) &&
-          (← isDefEq publicMajorFamily implementationMajorFamily) do
+          recursorTypesDefeq && majorFamiliesDefeq do
         for key in grouped do reasons := reasons.push (.invalidContainerRecursorAssociation key)
         continue
       containerRecursorPlans := containerRecursorPlans.push
