@@ -1184,14 +1184,14 @@ private def carrierRoundTrip (plan : FamilyAdapterPlan)
   applyContainerLaw plan first forward parameters sourceType value
 
 private structure ExactCarrierCandidate where
-  maps : EquivalenceCertificate
+  boundary : ContainerRecursorBoundaryPlan
   mapped : Expr
   roundTrip : Expr
   lawLeft : Expr
   lawRight : Expr
 
 private def checkedExactCarrierCandidate (fallback : MemberKey) (sourceType value : Expr)
-    (maps : EquivalenceCertificate) (mapped roundTrip : Expr) :
+    (boundary : ContainerRecursorBoundaryPlan) (mapped roundTrip : Expr) :
     ConstructionM ExactCarrierCandidate := do
   let some (lawCarrier, lawLeft, lawRight) ←
       liftGen <| matchEq? (← inferType roundTrip)
@@ -1200,7 +1200,7 @@ private def checkedExactCarrierCandidate (fallback : MemberKey) (sourceType valu
     failConstruction (.invalidExactCarrierLaw fallback)
   unless ← liftGen <| isDefEq lawRight value do
     failConstruction (.invalidExactCarrierLaw fallback)
-  let result : ExactCarrierCandidate := { maps, mapped, roundTrip, lawLeft, lawRight }
+  let result : ExactCarrierCandidate := { boundary, mapped, roundTrip, lawLeft, lawRight }
   pure result
 
 /-- Resolve a live field conversion by exact source/target typing across every
@@ -1213,16 +1213,16 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
     | .error _ => failConstruction (.missingMemberMap fallback.key)
-  if ← liftGen <| isDefEq sourceType targetType then
+  let mut candidates : Array ExactCarrierCandidate := #[]
+  if fallback.boundary == .defeq && (← liftGen <| isDefEq sourceType targetType) then
     let sourceLevel ← liftGen <| ilevel sourceType
     let result : ExactCarrierCandidate :=
-      { maps := fallback.maps
+      { boundary := .defeq
         mapped := value
         roundTrip := eqi.refl' sourceLevel sourceType value
         lawLeft := value
         lawRight := value }
-    return result
-  let mut candidates : Array ExactCarrierCandidate := #[]
+    candidates := candidates.push result
   for member in plan.members do
     if let some certificate := certificateFor? certificates member.key then
       if let some mapped ← liftGen <|
@@ -1230,8 +1230,17 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
         let law := lawName certificate forward
         let proof := mkAppN (.const law (plan.levelParams.map Level.param))
           (sourceType.getAppArgs.push value)
+        let forwardType ← liftGen <| memberMapType plan member member.publicCarrier
+          member.implementationCarrier
+        let backwardType ← liftGen <| memberMapType plan member
+          member.implementationCarrier member.publicCarrier
+        let backwardForwardType ← liftGen <| memberLawType plan member
+          member.publicCarrier certificate.maps.forward certificate.maps.backward
+        let forwardBackwardType ← liftGen <| memberLawType plan member
+          member.implementationCarrier certificate.maps.backward certificate.maps.forward
         let candidate ← checkedExactCarrierCandidate fallback.key sourceType value
-          certificate.maps mapped proof
+          (.installed certificate.maps forwardType backwardType backwardForwardType
+            forwardBackwardType) mapped proof
         candidates := candidates.push candidate
   let rootParameters := rootParameters plan parameters
   for container in plan.containerMaps do
@@ -1239,12 +1248,13 @@ private def exactCarrierCandidate (plan : FamilyAdapterPlan)
         applyContainerMap? plan container forward rootParameters sourceType targetType value then
       let proof ← applyContainerLaw plan container forward rootParameters sourceType value
       let candidate ← checkedExactCarrierCandidate fallback.key sourceType value
-        container.maps mapped proof
+        (.installed container.maps container.forwardType container.backwardType
+          container.backwardForwardType container.forwardBackwardType) mapped proof
       candidates := candidates.push candidate
   let some first := candidates[0]?
     | failConstruction (.missingExactCarrierCandidate fallback.key)
   for candidate in candidates do
-    unless candidate.maps == first.maps do
+    unless candidate.boundary == first.boundary do
       failConstruction (.ambiguousExactCarrierCandidate fallback.key)
     unless ← liftGen <| isDefEq candidate.mapped first.mapped do
       failConstruction (.ambiguousExactCarrierCandidate fallback.key)
