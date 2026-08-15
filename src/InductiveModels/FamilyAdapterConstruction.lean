@@ -1526,21 +1526,21 @@ private def recursorBoundaryParameters? (boundary : RecursorCarrierBoundary)
   let sourceFamily := if forward then boundary.publicFamily else boundary.implementationFamily
   let targetFamily := if forward then boundary.implementationFamily else boundary.publicFamily
   let totalArity := boundary.parameterArity + boundary.indexArity
-  let rec instantiateFamily (position : Nat) (family : Expr)
-      (arguments : Array Expr) : ConstructionM
-      (Option (Array Expr)) := do
-    if position == totalArity then
+  let rec instantiateFamily (remaining : Nat) (family : Expr)
+      (arguments : Array Expr) : ConstructionM (Option (Array Expr)) := do
+    match remaining with
+    | 0 =>
       unless ← liftGen <| isDefEq family sourceType do return none
       let resolved ← liftGen <| arguments.mapM instantiateMVars
       for argument in resolved do
         if ← liftGen <| hasAssignableMVar argument then return none
       unless ← liftGen <| isDefEq (mkAppN targetFamily resolved) targetType do return none
       return some (resolved.extract 0 boundary.parameterArity)
-    let .lam name domain body _ := family | return none
-    let argument ← liftGen <| mkFreshExprMVar domain .natural name
-    instantiateFamily (position + 1) (body.instantiate1 argument)
-      (arguments.push argument)
-  instantiateFamily 0 sourceFamily #[]
+    | remaining + 1 =>
+      let .lam name domain body _ := family | return none
+      let argument ← liftGen <| mkFreshExprMVar domain .natural name
+      instantiateFamily remaining (body.instantiate1 argument) (arguments.push argument)
+  instantiateFamily totalArity sourceFamily #[]
 
 private def exactCarrierCandidate (plan : FamilyAdapterPlan)
     (certificates : Array MemberCertificate) (parameters : Array Expr)
