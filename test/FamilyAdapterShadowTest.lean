@@ -95,7 +95,13 @@ def listSpecialisationRulesCovered (shadows : Array FamilyAdapter.ShadowObservat
   | some tree =>
     let constructors := tree.coverage.rules.filterMap fun rule =>
       if rule.recursor == `Tree.rec_1 then some rule.constructor.constructor else none
-    constructors == expected
+    let noInterfaceLeak := tree.reasons.all fun
+      | .missingInstalledContainerRecursor _ recursor => recursor != `Tree.rec_1._model
+      | .unrepresentedSourceRecursor recursor => recursor != `Tree.rec_1
+      | .installedRuleMismatch rule _ => rule.recursor != `Tree.rec
+      | .invalidContainerRecursorAssociation key => key.target.owner != `Tree
+      | _ => true
+    constructors == expected && noInterfaceLeak
 
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun
