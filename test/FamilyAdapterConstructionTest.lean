@@ -142,9 +142,11 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
       let recursorRules := fun name => do
         let some (.recInfo recursor) := (← getEnv).constants.find? name
           | throwError "changed container recursor {name} is not installed"
-        return recursor.rules.toArray.map (·.ctor)
-      let sourceRuleKeys ← recursorRules container.sourceRecursor
-      let implementationRuleKeys ← recursorRules container.implementationRecursor
+        return recursor.rules.toArray
+      let sourceRules ← recursorRules container.sourceRecursor
+      let implementationRules ← recursorRules container.implementationRecursor
+      let sourceRuleKeys := sourceRules.map (·.ctor)
+      let implementationRuleKeys := implementationRules.map (·.ctor)
       unless sourceRuleKeys.all implementationRuleKeys.contains &&
           implementationRuleKeys.all sourceRuleKeys.contains do
         throwError "changed container recursors have different rule keys"
@@ -160,6 +162,9 @@ def changedIso (source : EDecl) (boundary : ChangedBoundary) : MetaM Iso := do
         implementationRecursorType := (← typeOf container.implementationRecursor)
         implementationRecursorWrapperType := (← typeOf container.implementationRecursor)
         recursorRuleKeys := sourceRuleKeys.map fun key => (key, key)
+        implementationRecursorRules := implementationRules.map fun rule =>
+          { ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs }
+        interfaceRuleKeys := sourceRuleKeys.map fun key => (key, key)
         forward := container.forward
         backward := container.backward
         backwardForward := container.backwardForward

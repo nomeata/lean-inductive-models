@@ -2223,6 +2223,13 @@ structure IsoContainerImplementation where
   /-- Exact source/private constructor keys of every installed recursor rule.
   The sequence is metadata, not an array-position matching contract. -/
   recursorRuleKeys : Array (Name × Name)
+  /-- Exact installed internal RecursorVal rules, retained independently of
+  the callable equality-theorem statements. -/
+  implementationRecursorRules : Array IsoSourceRecursorRule := #[]
+  /-- Exact constructor-name portion of the callable `exactSource` map used
+  to state the wrapper's iota theorem. This remains distinct from internal
+  block-constructor rule keys. -/
+  interfaceRuleKeys : Array (Name × Name) := #[]
   forward : Name
   backward : Name
   backwardForward : Name
@@ -3378,6 +3385,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     unless implementationRules.map (·.ctor) == recursorRuleKeys.map (·.2) &&
         sourceRuleKeys == recursorRuleKeys.map (·.1) do
       badShape s!"{sourceRecursor} and {implementationRecursor} have differently ordered rules"
+    let interfaceRuleKeys := sourceRecursorEvidence.rules.map fun rule =>
+      (rule.ctor, sourceNames[rule.ctor]?.getD rule.ctor)
     let forward := g.packName i
     let backward := g.unpackName i
     let backwardForward := g.retractName i
@@ -3394,6 +3403,9 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
       implementationRecursorType := implementationRecursorInfo.type
       implementationRecursorWrapperType := implementationRecursorWrapperInfo.type
       recursorRuleKeys
+      implementationRecursorRules := implementationRules.map fun rule =>
+        { ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs }
+      interfaceRuleKeys
       forward
       backward
       backwardForward

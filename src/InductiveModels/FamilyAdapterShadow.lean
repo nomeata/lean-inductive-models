@@ -91,6 +91,9 @@ structure ShadowObservation where
   /-- Exact value-only rule associations for independently specialised
   recursors. These are test-facing keys, not retained production plans. -/
   containerRecursorRules : Array ContainerRecursorRuleKey := #[]
+  /-- Validated container recursors whose callable and internal artifacts are
+  literally distinct. -/
+  distinctContainerRecursors : Array ContainerRecursorKey := #[]
   reasons : Array ShadowReason
   diagnostics : Array String := #[]
   deriving Inhabited, BEq, Repr
@@ -99,6 +102,13 @@ def ShadowReport.observe (report : ShadowReport) : ShadowObservation :=
   { root := report.root, coverage := report.coverage, reasons := report.reasons,
     containerRecursorRules := report.plan?.map (fun plan =>
       plan.containerRecursors.flatMap (·.rules)) |>.getD #[],
+    distinctContainerRecursors := report.plan?.map (fun plan =>
+      plan.containerRecursors.filterMap fun recursor =>
+        if recursor.publicType != recursor.implementationType ||
+            recursor.rules.any (fun rule =>
+              rule.publicConstructor != rule.implementationConstructor) then
+          some recursor.key
+        else none) |>.getD #[],
     diagnostics := report.diagnostics }
 
 def ShadowObservation.complete (observation : ShadowObservation) : Bool :=
@@ -643,7 +653,12 @@ private def validatedContainerSourceRecursor? (environment : Environment)
     | none
   if implementation.type != container.implementationRecursorType ||
       exact.rules.size != container.recursorRuleKeys.size ||
-      implementation.rules.length != container.recursorRuleKeys.size then none else
+      exact.rules.map (·.ctor) != container.interfaceRuleKeys.map (·.1) ||
+      container.interfaceRuleKeys.any (·.2.isAnonymous) ||
+      implementation.rules.length != container.recursorRuleKeys.size ||
+      implementation.rules.toArray.map (fun rule : RecursorRule =>
+        ({ ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs } :
+          IsoSourceRecursorRule)) != container.implementationRecursorRules then none else
   if rewriteWith semanticMapping (.const container.sourceRecursor []) !=
       .const container.implementationRecursor [] then none else
   if (Array.range container.recursorRuleKeys.size).all fun index =>
@@ -681,7 +696,9 @@ private def containerMetadataInstalled (environment : Environment)
     let exact := IsoSourceRecursor.ofERec sourceMatches[0]!
     unless exact == container.sourceRecursorEvidence &&
         exact.name == container.sourceRecursor && exact.type == container.sourceRecursorType &&
-        exact.rules.map (·.ctor) == container.recursorRuleKeys.map (·.1) do
+        exact.rules.map (·.ctor) == container.recursorRuleKeys.map (·.1) &&
+        exact.rules.map (·.ctor) == container.interfaceRuleKeys.map (·.1) &&
+        container.interfaceRuleKeys.all (fun pair => !pair.2.isAnonymous) do
       reasons := reasons.push (.sourceContainerRecursorMismatch occurrence container.sourceRecursor)
     unless rewriteWith semanticMapping (.const exact.name []) ==
         .const container.implementationRecursor [] &&
@@ -702,7 +719,10 @@ private def containerMetadataInstalled (environment : Environment)
       reasons := reasons.push (.installedContainerRecursorTypeMismatch occurrence name)
     match information with
     | .recInfo recursor =>
-      unless recursor.rules.toArray.map (·.ctor) == container.recursorRuleKeys.map (·.2) do
+      unless recursor.rules.toArray.map (·.ctor) == container.recursorRuleKeys.map (·.2) &&
+          recursor.rules.toArray.map (fun rule : RecursorRule =>
+            ({ ctor := rule.ctor, nfields := rule.nfields, rhs := rule.rhs } :
+              IsoSourceRecursorRule)) == container.implementationRecursorRules do
         reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
       unless ← recursorMajorMatches (ExactRecursorLayoutView.ofInstalled recursor)
           container.implementationRecursorType implementationParameters implementationType do
@@ -973,6 +993,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
                   implementationRecursorWrapperType :=
                     container.implementationRecursorWrapperType
                   recursorRuleKeys := container.recursorRuleKeys
+                  implementationRecursorRules := container.implementationRecursorRules
+                  interfaceRuleKeys := container.interfaceRuleKeys
                   maps :=
                     { forward := container.forward
                       backward := container.backward
@@ -995,11 +1017,19 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     containerMapPlans := containerMapPlans ++ addedPlans
     reasons := reasons ++ addedReasons
     diagnostics := diagnostics ++ addedDiagnostics
-  -- A callable rule theorem names the checked wrapper only on its application
-  -- side. Its reduced semantic RHS uses the internal RecursorVal and block
-  -- constructors, so compare that RHS through the semantic association.
-  let implementationRuleMapping := implementationMapping ++ containerSemanticMapping
-  let publicRuleMapping := publicMapping ++ containerSemanticMapping
+  let validatedContainerSemanticMapping := containerMapPlans.flatMap fun container =>
+    #[(container.sourceRecursor, container.implementationRecursor)] ++
+      container.recursorRuleKeys
+  let containerInterfaceMapping := containerMapPlans.flatMap fun container =>
+    #[(container.sourceRecursor, container.implementationRecursorWrapper)] ++
+      container.interfaceRuleKeys
+  -- RecInfo rules are internal block reductions; equality theorems are stated
+  -- in the exact callable `exactSource` namespace. The representation tag, not
+  -- theorem shape or proof search, selects the comparison map.
+  let ruleMapping := fun outer (evidence : InstalledRuleEvidence) =>
+    outer ++ match evidence.representation with
+      | .recursorRule => validatedContainerSemanticMapping
+      | .equalityTheorem => containerInterfaceMapping
   let mut containerRecursorPlans : Array ContainerRecursorPlan := #[]
   for container in containerMapPlans do
     let key : ContainerRecursorKey :=
@@ -1018,6 +1048,8 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
         current.implementationRecursorWrapperType ==
           container.implementationRecursorWrapperType &&
         current.recursorRuleKeys == container.recursorRuleKeys &&
+        current.implementationRecursorRules == container.implementationRecursorRules &&
+        current.interfaceRuleKeys == container.interfaceRuleKeys &&
         current.maps == container.maps
     unless sameMetadata do
       for current in grouped do reasons := reasons.push (.ambiguousContainerMap current.key)
@@ -1122,8 +1154,10 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
           catch _ => pure none
         let implementationRhs? := implementationEvidence?.map (·.semanticRhs)
         let publicRhs? := publicEvidence?.map (·.semanticRhs)
-        let expectedImplementationRhs := rewriteWith implementationRuleMapping rule.rhs
-        let expectedPublicRhs := rewriteWith publicRuleMapping rule.rhs
+        let expectedImplementationRhs := implementationEvidence?.map (fun evidence =>
+          rewriteWith (ruleMapping implementationMapping evidence) rule.rhs) |>.getD rule.rhs
+        let expectedPublicRhs := publicEvidence?.map (fun evidence =>
+          rewriteWith (ruleMapping publicMapping evidence) rule.rhs) |>.getD rule.rhs
         unless implementationRhs? == some expectedImplementationRhs do
           reasons := reasons.push (.installedRuleMismatch key .privateModel)
           uncoveredRules := uncoveredRules.push key

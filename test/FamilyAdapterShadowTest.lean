@@ -92,18 +92,24 @@ structure SpecialisationDiagnostics where
   treeRules : Bool := false
   treeMap : Bool := false
   treeClean : Bool := false
+  treeNodeCallable : Bool := false
+  treeDistinct : Bool := false
   btreeBoxRules : Bool := false
   btreeListRules : Bool := false
   btreeMap : Bool := false
   btreeClean : Bool := false
+  btreeTagCallable : Bool := false
+  btreeDistinct : Bool := false
   ptMap : Bool := false
   ptClean : Bool := false
   deriving Repr
 
 def SpecialisationDiagnostics.all (diagnostics : SpecialisationDiagnostics) : Bool :=
   diagnostics.treeRules && diagnostics.treeMap && diagnostics.treeClean &&
+    diagnostics.treeNodeCallable && diagnostics.treeDistinct &&
     diagnostics.btreeBoxRules && diagnostics.btreeListRules && diagnostics.btreeMap &&
-    diagnostics.btreeClean && diagnostics.ptMap && diagnostics.ptClean
+    diagnostics.btreeClean && diagnostics.btreeTagCallable && diagnostics.btreeDistinct &&
+    diagnostics.ptMap && diagnostics.ptClean
 
 def listSpecialisationDiagnostics (shadows : Array FamilyAdapter.ShadowObservation) :
     SpecialisationDiagnostics :=
@@ -121,17 +127,27 @@ def listSpecialisationDiagnostics (shadows : Array FamilyAdapter.ShadowObservati
       | _ => true
   let mapped := fun owner (observation : FamilyAdapter.ShadowObservation) =>
     observation.coverage.containerMaps.any (·.target.owner == owner)
+  let callableRuleClean := fun constructor (observation : FamilyAdapter.ShadowObservation) =>
+    !observation.reasons.any fun
+      | .installedRuleMismatch rule _ => rule.constructor.constructor == constructor
+      | _ => false
+  let distinct := fun recursor (observation : FamilyAdapter.ShadowObservation) =>
+    observation.distinctContainerRecursors.any (·.publicRecursor == recursor)
   match shadows.find? (·.root == `Tree), shadows.find? (·.root == `BTree),
       shadows.find? (·.root == `PT) with
   | some tree, some btree, some pt =>
     { treeRules := covered tree `Tree.rec_1 #[`List.nil, `List.cons]
       treeMap := mapped `Tree tree
       treeClean := clean `Tree #[`Tree.rec_1, `Tree.rec_1._model] tree
+      treeNodeCallable := callableRuleClean `Tree.node tree
+      treeDistinct := distinct `Tree.rec_1 tree
       btreeBoxRules := covered btree `BTree.rec_1 #[`Box.mk]
       btreeListRules := covered btree `BTree.rec_2 #[`List.nil, `List.cons]
       btreeMap := mapped `BTree btree
       btreeClean := clean `BTree #[`BTree.rec_1, `BTree.rec_1._model,
         `BTree.rec_2, `BTree.rec_2._model] btree
+      btreeTagCallable := callableRuleClean `BTree.tag btree
+      btreeDistinct := distinct `BTree.rec_1 btree && distinct `BTree.rec_2 btree
       ptMap := mapped `PT pt
       ptClean := clean `PT #[`PT.rec_1, `PT.rec_1._model] pt }
   | _, _, _ => {}

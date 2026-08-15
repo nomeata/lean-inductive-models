@@ -459,6 +459,12 @@ structure ContainerMapPlan where
   implementationRecursorType : Expr
   implementationRecursorWrapperType : Expr
   recursorRuleKeys : Array (Name × Name)
+  /-- Exact internal RecursorVal reductions, kept separate from callable
+  equality-theorem RHS evidence. -/
+  implementationRecursorRules : Array IsoSourceRecursorRule := #[]
+  /-- Source/callable constructor association captured from the exact public
+  statement map, independently of the internal block rule keys. -/
+  interfaceRuleKeys : Array (Name × Name) := #[]
   maps : EquivalenceCertificate
   forwardType : Expr
   backwardType : Expr
