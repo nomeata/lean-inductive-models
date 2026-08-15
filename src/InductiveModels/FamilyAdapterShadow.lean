@@ -398,10 +398,10 @@ private def closedFamilyBinderRoles? (family expected : Expr)
   let some arguments ← instantiate family #[] | return none
   let mut positions := #[]
   for argument in arguments do
-    let matches := binders.mapIdx fun index binder => (index, binder.value)
+    let matchingBinders := binders.mapIdx fun index binder => (index, binder.value)
       |>.filter (fun (_, value) => value == argument)
-    unless matches.size == 1 do return none
-    positions := positions.push matches[0]!.1
+    unless matchingBinders.size == 1 do return none
+    positions := positions.push matchingBinders[0]!.1
   for position in positions do
     unless (positions.filter (· == position)).size == 1 do return none
   return some positions
@@ -424,13 +424,13 @@ private def endpointApplicationPlan? (sourceFamily targetFamily exactType : Expr
       unless ← isDefEq right value.value do continue
     else
       unless ← isDefEq result target do continue
-    let mut roles := #[]
+    let mut roles : Array CarrierEndpointBinderRole := #[]
     let mut complete := true
     for binderIndex in [:binders.size] do
       if binderIndex == valueIndex then
-        roles := roles.push .value
+        roles := roles.push CarrierEndpointBinderRole.value
       else if let some familyIndex := familyPositions.findIdx? (· == binderIndex) then
-        roles := roles.push (.familyArgument familyIndex)
+        roles := roles.push (CarrierEndpointBinderRole.familyArgument familyIndex)
       else
         complete := false
     if complete then candidates := candidates.push { exactType, binders := roles }
