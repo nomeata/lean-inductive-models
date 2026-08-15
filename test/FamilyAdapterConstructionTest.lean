@@ -346,9 +346,9 @@ construction proof. -/
 def ruleCertificateDiagnostic (plan : FamilyAdapterPlan)
     (certificate : FamilyAdapterCertificate) (environment : Environment) : Option String :=
     Id.run do
-  let schemas := match FamilyAdapter.derivePublicIotaProofSchemas plan certificate with
-    | .error issue => return some s!"iota schema derivation: {repr issue}"
-    | .ok schemas => schemas
+  let some schemas :=
+      (FamilyAdapter.derivePublicIotaProofSchemas plan certificate).toOption
+    | return some "iota schema derivation"
   if schemas.size != plan.rules.size then
     return some s!"iota schema cardinality: {schemas.size}/{plan.rules.size}"
   for rule in plan.rules do
