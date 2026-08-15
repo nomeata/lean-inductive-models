@@ -11,6 +11,10 @@ complete families, declaration kinds and safety, universe arities, recursor
 rules, projections, and literal statement syntax. It can therefore reject
 model-correspondence errors that an official-kernel replay alone accepts.
 
+## Status
+
+**Work in progress**. Do not look too closely yet.
+
 ## Idea and output contract
 
 For a source type former `T`, constructor `C`, recursor `R`, and zero-based
