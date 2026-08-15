@@ -519,8 +519,8 @@ structure RulePlan where
   publicIota : Name
   implementationIotaType : Expr
   publicIotaType : Expr
-  implementationEvidence : InstalledRuleEvidence := {}
-  publicEvidence : InstalledRuleEvidence := {}
+  implementationEvidence : InstalledRuleEvidence := default
+  publicEvidence : InstalledRuleEvidence := default
   occurrences : Array OccurrenceKey := #[]
   deriving Inhabited, BEq, Repr
 
