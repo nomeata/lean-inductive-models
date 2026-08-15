@@ -214,7 +214,8 @@ def repeatedIndexArgumentsCloseExactly
         | .installedRuleMismatch rule _ =>
           rule.recursor == recursor && rule.constructor.constructor == constructor
         | _ => false
-  clean `_wcore.Acc `Acc.rec `Acc.intro && clean `_wcore.HEq `HEq.rec `HEq.refl
+  clean `_wcore.Acc `_wcore.Acc.rec `Acc.intro &&
+    clean `_wcore.HEq `_wcore.HEq.rec `HEq.refl
 
 def malformedDependenciesAreExcluded (observation : FamilyAdapter.ShadowObservation) : Bool :=
   let missingMember := fun side => observation.reasons.any fun
@@ -249,7 +250,7 @@ def main : IO UInt32 := do
     familyShadows.size == familyObserved.2.generated.size
   let keyedReportVisible := (shadows ++ familyShadows).all observationIsKeyed
   let everyOutcomeExplicit := (shadows ++ familyShadows).all hasOnlyExplicitGaps
-  let nestedGapVisible := (shadows ++ familyShadows).any fun shadow => !shadow.complete
+  let allAcceptedComplete := (shadows ++ familyShadows).all (·.complete)
   let exactHypothesisSharing := multipleSitesShareExactHypothesis familyShadows
   let specialisations := listSpecialisationDiagnostics shadows
   let listRuleAssociation := specialisations.all
@@ -260,15 +261,15 @@ def main : IO UInt32 := do
     (fun shadow => !shadow.coverage.containerMaps.isEmpty)
   let malformedRejected := malformedDependenciesAreExcluded malformed
   if sameResult && outputQuiet && everyAcceptedFamilyRan && keyedReportVisible &&
-      everyOutcomeExplicit && nestedGapVisible && exactHypothesisSharing && containerMapsVisible &&
+      everyOutcomeExplicit && allAcceptedComplete && exactHypothesisSharing && containerMapsVisible &&
       listRuleAssociation && nonrecursiveMention && nullaryRule && repeatedIndices &&
       malformedRejected then
     IO.println s!"family adapter shadow: {shadows.size + familyShadows.size} accepted families, \
       exact gaps reported, output unchanged"
     return 0
-  IO.eprintln s!"family adapter shadow failure: same={sameResult}, quiet={outputQuiet}, \
+    IO.eprintln s!"family adapter shadow failure: same={sameResult}, quiet={outputQuiet}, \
     shadows={shadows.size + familyShadows.size}, keyed={keyedReportVisible}, \
-    explicit={everyOutcomeExplicit}, gaps={nestedGapVisible}, hypotheses={exactHypothesisSharing}, \
+    explicit={everyOutcomeExplicit}, complete={allAcceptedComplete}, hypotheses={exactHypothesisSharing}, \
     listRules={listRuleAssociation}, listDetails={repr specialisations}, \
     nonrecursiveMention={nonrecursiveMention}, nullaryRule={nullaryRule}, \
     repeatedIndices={repeatedIndices}, \
