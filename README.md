@@ -15,31 +15,17 @@ model-correspondence errors that an official-kernel replay alone accepts.
 
 **Work in progress**. Do not look too closely yet.
 
-## Idea and output contract
+## Idea
 
-For a source type former `T`, constructor `C`, recursor `R`, and zero-based
-slot `j`, the public model interface is:
+The filter represents a supported inductive family with ordinary definitions
+and theorems while retaining the source declarations. This gives downstream
+tools an explicit interface they can inspect without treating a generated
+name as evidence that it really models the source.
 
-| Source | Generated declaration |
-| --- | --- |
-| `T` | `T._model` |
-| `C` | `C._model` |
-| `R` | `R._model` |
-| rule `j` of `R` | `R._model.iota_j` |
-| eligible field `j` of `T` | `T._model.proj_j` |
-| projection reduction rule | `T._model.proj_j.iota` |
-
-The generated type formers, constructors, and recursors are safe definitions;
-reduction rules are theorems. Their public statements are exact simultaneous
-name rewrites of the exported source declarations. An atomic mutual block
-still exposes one interface per member; private mutual bookkeeping is not a
-public API.
-
-Intrinsic projections are derived from kernel declaration metadata, not from
-source `structure` syntax. The output may also contain exact structure-eta,
-unit-like, and recursor-rule-K theorems when the exported kernel metadata calls
-for them. Private implementation support may be present, but consumers locate
-the interface only through the public names above.
+The structural checker supplies that missing evidence: it relates the public
+model declarations to exact exported kernel metadata and literal source
+syntax. Private declarations may implement the model, but they are not an
+additional public interface.
 
 The small trusted basis is:
 
@@ -52,10 +38,61 @@ quotient bundle. Routes that derive function extensionality may additionally
 use `Quot.sound`; generated developments may use the standard axioms
 `Classical.choice` and `propext` when required.
 
-With `--type-check-generated`, each generated model island is kernel-checked once,
-as it is produced, against the trusted input prefix before its owner. The final
-serialized output is also checked structurally by default; it is not replayed
-as one combined input-and-output kernel stream.
+## Output contract
+
+For a modeled source type former `T`, constructor `C`, recursor `R`, and
+zero-based slot `j`, the public interface is:
+
+| Source | Generated declaration |
+| --- | --- |
+| `T` | `T._model` |
+| `C` | `C._model` |
+| `R` | `R._model` |
+| rule `j` of `R` | `R._model.iota_j` |
+| eligible field `j` of `T` | `T._model.proj_j` |
+| projection reduction rule | `T._model.proj_j.iota` |
+
+Generated type formers, constructors, recursors, and intrinsic projections are
+safe definitions; iota declarations are theorems. Type-former, constructor,
+recursor, and recursor-iota statements are exact simultaneous public-name
+rewrites of the exported source declarations. Intrinsic projections come from
+kernel declaration metadata rather than source `structure` syntax. An atomic
+mutual block still exposes one interface per member; private mutual bookkeeping
+and support declarations are not public slots.
+
+The following theorem slots are part of the public family exactly when the
+exported kernel metadata makes them applicable:
+
+| Condition | Generated theorem | Contract |
+| --- | --- | --- |
+| rule `j` of modeled recursor `R` | `R._model.iota_j` | The literal exported iota proposition after the same simultaneous public-name rewrite. |
+| `T` is kernel-unit-like: nonrecursive, unindexed, with one zero-field constructor | `T._model.unitlike` | Any two inhabitants of the modeled `T` are equal. |
+| exported recursor `R` has literal `k = true` (with its one zero-field rule) | `R._model.ruleK` | The K-like reduction at the constructor-result fibre; indexed results retain that exact fibre. |
+| `T` is non-propositional and kernel-structure-like: nonrecursive, unindexed, with one constructor | `T._model.eta` | Reconstruct an inhabitant with the modeled constructor and every intrinsic modeled projection in field order. |
+| eligible field `j` of `T` | `T._model.proj_j.iota` | The intrinsic modeled projection reduces on the modeled constructor. |
+
+Generation consumes source declarations in their original order. At an
+accepted inductive owner it emits the complete generated island immediately
+before that source owner; all other source declarations retain their relative
+order. Dependencies generated recursively inside an island precede the
+generated declarations that consume them. There is no final global reorder or
+whole-output kernel replay.
+
+Actual generated output is serialized declaration by declaration through one
+persistent standard arena writer, so its declaration order is the order above.
+A named output is a sibling transaction and becomes visible only after every
+requested final semantic and structural verdict succeeds. Standard output is
+direct and may therefore contain a valid declaration prefix when a later
+transition fails.
+The no-generation write path continues to write the retained input export.
+
+`--type-check-generated` kernel-checks each exact generated island once, in
+process and before it is emitted. Source declarations are trusted dependencies
+for that check and never enter the generated-declaration gate.
+`--type-check-input` separately checks only input declarations. Disabling
+either flag performs no kernel check for that declaration class. The default
+`--check-output` structural check validates compact incremental/final
+certificates; it does not reconstruct and replay the complete output.
 
 ## Checker contract
 
