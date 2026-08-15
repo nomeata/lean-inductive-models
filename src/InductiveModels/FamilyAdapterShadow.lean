@@ -67,6 +67,9 @@ structure ShadowReport where
   plan? : Option FamilyAdapterPlan
   coverage : ShadowCoverage := {}
   reasons : Array ShadowReason := #[]
+  /-- Test-only exact evidence for a failed shadow comparison. Ordinary
+  production callers discard the complete report and retain no diagnostics. -/
+  diagnostics : Array String := #[]
   deriving Inhabited, BEq, Repr
 
 def ShadowReport.complete (report : ShadowReport) : Bool :=
@@ -86,10 +89,12 @@ structure ShadowObservation where
   root : Name
   coverage : ShadowCoverage
   reasons : Array ShadowReason
+  diagnostics : Array String := #[]
   deriving Inhabited, BEq, Repr
 
 def ShadowReport.observe (report : ShadowReport) : ShadowObservation :=
-  { root := report.root, coverage := report.coverage, reasons := report.reasons }
+  { root := report.root, coverage := report.coverage, reasons := report.reasons,
+    diagnostics := report.diagnostics }
 
 def ShadowObservation.complete (observation : ShadowObservation) : Bool :=
   observation.reasons.isEmpty
@@ -571,6 +576,52 @@ private def emittedWrapperType? (declarations : Array Declaration) (name : Name)
     | _ => none
   if wrapperMatches.size == 1 then wrapperMatches[0]? else none
 
+private def emittedWrapperDiagnostics (aliases : Naming.AliasMap)
+    (declarations : Array Declaration) (logicalName : Name) (logicalType : Expr) : Array String :=
+  let exactName := aliases.exact logicalName
+  let candidates := declarations.flatMap fun declaration => match declaration with
+    | .axiomDecl value => #[("axiom", value.name, value.type)]
+    | .defnDecl value => #[("definition", value.name, value.type)]
+    | .thmDecl value => #[("theorem", value.name, value.type)]
+    | .opaqueDecl value => #[("opaque", value.name, value.type)]
+    | _ => #[]
+  let related := candidates.filter fun (_, rawName, _) =>
+    rawName == logicalName || aliases.exact rawName == exactName
+  #[s!"wrapper logical={logicalName}, exact={exactName}, type={repr logicalType}"] ++
+    related.map fun (kind, rawName, type) =>
+      s!"wrapper candidate kind={kind}, raw={rawName}, exact={aliases.exact rawName}, type={repr type}"
+
+private def recursorMajorDiagnostic (label : String) (recursor : ExactRecursorLayoutView)
+    (recursorType : Expr) (parameters : Array Expr) (expected : Expr) : MetaM String := do
+  let majorPosition :=
+    recursor.numParams + recursor.numMotives + recursor.numMinors + recursor.numIndices
+  if parameters.size != recursor.numParams then
+    return s!"{label}: parameter count actual={parameters.size}, expected={recursor.numParams}"
+  let mut type ← instantiateForall recursorType parameters
+  for _ in [parameters.size:majorPosition] do
+    let .forallE name domain body _ := type
+      | return s!"{label}: missing binder before major in {repr type}"
+    let value ← mkFreshExprMVar domain .natural name
+    type := body.instantiate1 value
+  let .forallE _ actual _ _ := type
+    | return s!"{label}: missing major binder in {repr type}"
+  return s!"{label}: actualHead={repr actual.getAppFn.constName?}, \
+    expectedHead={repr expected.getAppFn.constName?}, actual={repr actual}, expected={repr expected}"
+
+private def sourceRecursorMajorDiagnostic (label : String)
+    (recursor : ExactRecursorLayoutView) (recursorType : Expr)
+    (parameters : Array Expr) (expected : Expr) : MetaM String := do
+  if parameters.size != recursor.numParams then
+    return s!"{label}: parameter count actual={parameters.size}, expected={recursor.numParams}"
+  let type ← instantiateForall recursorType parameters
+  let remaining := recursor.numMotives + recursor.numMinors + recursor.numIndices + 1
+  forallBoundedTelescope type (some remaining) fun binders _ => do
+    let some major := binders[remaining - 1]?
+      | return s!"{label}: missing source major in {repr type}"
+    let actual ← inferType major
+    return s!"{label}: actualHead={repr actual.getAppFn.constName?}, \
+      expectedHead={repr expected.getAppFn.constName?}, actual={repr actual}, expected={repr expected}"
+
 /-- Source-side representation is settled before maps or the callable wrapper
 are considered.  This is the exact boundary used by the source-recursors
 census: later interface failures must not turn a represented recursor into an
@@ -601,12 +652,13 @@ private def validatedContainerSourceRecursor? (environment : Environment)
   else none
 
 private def containerMetadataInstalled (environment : Environment)
-    (declarations : Array Declaration)
+    (aliases : Naming.AliasMap) (declarations : Array Declaration)
     (sourceRecursors : Array ERec) (semanticMapping : Array (Name × Name))
     (parameters : Array Expr) (sourceType implementationType : Expr)
     (occurrence : OccurrenceKey) (container : IsoContainerImplementation) :
-    MetaM (Array ShadowReason) := do
+    MetaM (Array ShadowReason × Array String) := do
   let mut reasons := #[]
+  let mut diagnostics := #[]
   for (name, expected) in #[(container.forward, container.forwardType),
       (container.backward, container.backwardType),
       (container.backwardForward, container.backwardForwardType),
@@ -633,6 +685,8 @@ private def containerMetadataInstalled (environment : Environment)
     unless ← exactSourceRecursorMajorMatches (ExactRecursorLayoutView.ofSource exact)
         exact.type parameters sourceType do
       reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
+      diagnostics := diagnostics.push (← sourceRecursorMajorDiagnostic
+        "source-major" (ExactRecursorLayoutView.ofSource exact) exact.type parameters sourceType)
   let name := container.implementationRecursor
   match environment.constants.find? name with
   | none => reasons := reasons.push (.missingInstalledContainerRecursor occurrence name)
@@ -646,6 +700,9 @@ private def containerMetadataInstalled (environment : Environment)
       unless ← recursorMajorMatches (ExactRecursorLayoutView.ofInstalled recursor)
           container.implementationRecursorType parameters implementationType do
         reasons := reasons.push (.invalidContainerRecursorAssociation occurrence)
+        diagnostics := diagnostics.push (← recursorMajorDiagnostic
+          "implementation-major" (ExactRecursorLayoutView.ofInstalled recursor)
+          container.implementationRecursorType parameters implementationType)
     | _ => reasons := reasons.push (.installedContainerRecursorRulesMismatch occurrence name)
   if let some exactType := emittedWrapperType? declarations
       container.implementationRecursorWrapper then
@@ -655,7 +712,9 @@ private def containerMetadataInstalled (environment : Environment)
   else
     reasons := reasons.push
       (.missingInstalledContainerRecursor occurrence container.implementationRecursorWrapper)
-  return reasons
+    diagnostics := diagnostics ++ emittedWrapperDiagnostics aliases declarations
+      container.implementationRecursorWrapper container.implementationRecursorWrapperType
+  return (reasons, diagnostics)
 
 private def containerTarget? (container : IsoContainerImplementation)
     (parameters : Array Expr) (sourceType : Expr) : MetaM (Option Expr) := do
@@ -714,6 +773,7 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   let publicInterface := iso.publicInterface
   let implementationInterface := iso.implementationInterface
   let mut reasons := #[]
+  let mut diagnostics := #[]
   let mut resolvedMembers : Array ResolvedMember := #[]
 
   for index in [:sourceTypes.size] do
@@ -860,12 +920,13 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
     if containerOccurrences.isEmpty then continue
     let some owner := resolvedMembers.find? (·.key == constructor.key.owner) | continue
     let totalBinders := owner.source.numParams + constructor.telescope.binders.size
-    let (addedPlans, addedReasons) ←
+    let (addedPlans, addedReasons, addedDiagnostics) ←
       forallBoundedTelescope constructor.publicType (some totalBinders) fun binders _ => do
         let parameters := binders.extract 0 owner.source.numParams
         let fields := binders.extract owner.source.numParams binders.size
         let mut addedPlans := #[]
         let mut addedReasons := #[]
+        let mut addedDiagnostics := #[]
         for occurrence in containerOccurrences do
           let some field := fields[occurrence.fieldIndex]? | continue
           let fieldType ← inferType field
@@ -879,8 +940,9 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
             addedReasons := addedReasons.push (.ambiguousContainerMap occurrence)
             continue
           if let some (container, sourceType, implementationType) := candidates[0]? then
-            let metadataReasons ← containerMetadataInstalled environment iso.decls sourceRecursors
-              containerSemanticMapping parameters sourceType implementationType occurrence container
+            let (metadataReasons, metadataDiagnostics) ← containerMetadataInstalled environment
+              iso.aliases iso.decls sourceRecursors containerSemanticMapping parameters sourceType
+              implementationType occurrence container
             if metadataReasons.isEmpty then
               addedPlans := addedPlans.push
                 { key := occurrence
@@ -908,14 +970,16 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
                   implementationCarrierType := container.implementationCarrierType }
             else
               addedReasons := addedReasons ++ metadataReasons
+              addedDiagnostics := addedDiagnostics ++ metadataDiagnostics
           else
             let some binder := constructor.telescope.binders[occurrence.fieldIndex]? | continue
             let publicField := rewriteWith publicMapping binder.sourceType
             unless publicField == binder.implementationType do
               addedReasons := addedReasons.push (.missingContainerMap occurrence)
-        return (addedPlans, addedReasons)
+        return (addedPlans, addedReasons, addedDiagnostics)
     containerMapPlans := containerMapPlans ++ addedPlans
     reasons := reasons ++ addedReasons
+    diagnostics := diagnostics ++ addedDiagnostics
   -- Internal RecursorVal names and block constructors are semantic evidence;
   -- callable rule theorems instead mention the checked wrapper at the literal
   -- source occurrence.  Keep those two name spaces disjoint.
@@ -1305,6 +1369,6 @@ def deriveShadowPlan (source : EDecl) (iso : Iso) : MetaM ShadowReport := do
   let coveredContainerMaps := containerMapPlans.filterMap fun container =>
     if coverage.occurrences.contains container.key then some container.key else none
   coverage := { coverage with containerMaps := coveredContainerMaps }
-  return { root := firstType.name, plan? := some plan, coverage, reasons }
+  return { root := firstType.name, plan? := some plan, coverage, reasons, diagnostics }
 
 end InductiveModels.FamilyAdapter

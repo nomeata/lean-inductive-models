@@ -155,6 +155,8 @@ def main : IO UInt32 := do
   for message in plainMessages ++ observedMessages ++ familyPlainMessages ++ familyObservedMessages do
     IO.eprintln message
   for shadow in shadows ++ familyShadows do
-    unless shadow.complete do IO.eprintln s!"{shadow.root}: {repr shadow.reasons}"
+    unless shadow.complete do
+      IO.eprintln s!"{shadow.root}: {repr shadow.reasons}"
+      for diagnostic in shadow.diagnostics do IO.eprintln s!"{shadow.root}: {diagnostic}"
   unless malformedRejected do IO.eprintln s!"malformed Nat: {repr malformed}"
   return 1
