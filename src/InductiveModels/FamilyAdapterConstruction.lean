@@ -2425,6 +2425,27 @@ are not source constructors.  Build their source-specialised constructor
 boundary from the two exact minor telescopes: fields are the literal binders
 used by the constructor application, and every changed field crosses only an
 already checked family/container equivalence. -/
+private def mapSpecialisedMajorToPublic (plan : FamilyAdapterPlan)
+    (memberCertificates : Array MemberCertificate) (parameters : Array Expr)
+    (fallback : RecursorCarrierBoundary) (publicFields : Array Expr)
+    (publicMajor : Expr) (privateFields privateValues : Array Expr)
+    (privateMajor : Expr) : ConstructionM (Expr × Expr) := do
+  let mut publicValues := #[]
+  for fieldIndex in [:privateValues.size] do
+    let privateValue := privateValues[fieldIndex]!
+    let privateType ← liftGen <| inferType privateValue
+    let publicType := (← liftGen <| inferType publicFields[fieldIndex]!).replaceFVars
+      (publicFields.extract 0 fieldIndex) publicValues
+    let candidate ← exactCarrierCandidate plan memberCertificates parameters fallback false
+      privateType publicType privateValue
+    publicValues := publicValues.push candidate.mapped
+  let targetMajor := publicMajor.replaceFVars publicFields publicValues
+  let publicMajorType ← liftGen <| inferType targetMajor
+  let privateMajorType ← liftGen <| inferType privateMajor
+  let candidate ← exactCarrierCandidate plan memberCertificates parameters fallback false
+    privateMajorType publicMajorType privateMajor
+  return (candidate.mapped, publicMajorType)
+
 private def specialisedMinorConstructorDeclaration (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate) (parameters : Array Expr)
     (root : Name) (shape : RecursorShape) (boundary : RecursorCarrierBoundary)
@@ -2461,9 +2482,8 @@ private def specialisedMinorConstructorDeclaration (plan : FamilyAdapterPlan)
           publicType privateType publicValue
         privateValues := privateValues.push candidate.mapped
       let privateMajor := privateMajor.replaceFVars privateFields privateValues
-      let privateMajorType ← liftGen <| inferType privateMajor
-      let carrier ← recursorCarrierAt plan boundary parameters publicMajorType privateMajorType
-      let publicValue := mkApp carrier.backward privateMajor
+      let (publicValue, _) ← mapSpecialisedMajorToPublic plan memberCertificates parameters
+        boundary publicFields publicMajor privateFields privateValues privateMajor
       let value ← liftGen <| mkLambdaFVars (parameters ++ publicFields) publicValue
       let declaration := Declaration.defnDecl
         { name, levelParams := plan.levelParams, type := exactType, value,
@@ -2660,16 +2680,9 @@ private def privateSpecialisedMinorValue (plan : FamilyAdapterPlan)
         privatePackageType remappedPackage privatePackage packageProof base fun package => do
           let values ← unpackTelescopeValue privateFields package
           let major := privateMajor.replaceFVars privateFields values
-          let majorType ← inferType major
-          let majorArguments := majorType.getAppArgs
-          unless majorArguments.size >= boundary.indexArity do
-            badShape "family-adapter specialised minor major has a short index vector"
-          let indices := majorArguments.extract (majorArguments.size - boundary.indexArity)
-            majorArguments.size
-          let publicMajorType := mkAppN boundary.publicFamily (parameters ++ indices)
-          let mapped ← (applyRecursorBoundaryMap plan boundary false parameters
-            majorType publicMajorType major).run
-          let publicMajor ← match mapped with
+          let mapped ← (mapSpecialisedMajorToPublic plan memberCertificates parameters
+            boundary publicFields publicMajor privateFields values major).run
+          let (publicMajor, publicMajorType) ← match mapped with
             | .ok mapped => pure mapped
             | .error issue =>
               badShape s!"family-adapter specialised minor map failed: {repr issue}"
