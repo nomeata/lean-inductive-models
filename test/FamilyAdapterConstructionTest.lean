@@ -640,14 +640,17 @@ def samePublicContainerKeysDiagnostic (plan : FamilyAdapterPlan)
     let unique := values.foldl (fun names name =>
       if names.contains name then names else names.push name) #[]
     unique.size == values.size
-  let complete := samePublic.size >= 2 &&
-    allDistinct (samePublic.map (·.certificate.adapter)) &&
-    allDistinct (samePublic.map (·.certificate.callAgreement)) &&
-    allDistinct (samePublic.flatMap (·.recursor.minors.map (·.adapter))) &&
-    samePublic.all fun item => item.recursor.member == .container item.plan.key &&
+  let adapters := samePublic.map (·.certificate.adapter)
+  let agreements := samePublic.map (·.certificate.callAgreement)
+  let minors := samePublic.flatMap (·.recursor.minors.map (·.adapter))
+  let ownership := samePublic.all fun item => item.recursor.member == .container item.plan.key &&
       item.recursor.minors.all (·.recursor == .container item.plan.key) &&
       item.recursor.motives.all (·.recursor == .container item.plan.key)
-  return if complete then none else some s!"distinctness/ownership: {samePublic.size}"
+  let complete := samePublic.size >= 2 && allDistinct adapters &&
+    allDistinct agreements && allDistinct minors && ownership
+  return if complete then none else some
+    s!"distinctness/ownership: count={samePublic.size}, adapters={repr adapters}, \
+      agreements={repr agreements}, minors={repr minors}, ownership={ownership}"
 
 structure Result where
   complete : Nat := 0
