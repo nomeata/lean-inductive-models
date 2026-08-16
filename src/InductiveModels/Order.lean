@@ -169,15 +169,21 @@ def resolveModelEdges (summaries : Array DeclSummary) : Array DeclSummary := Id.
     result := result.set! i summary
   return result
 
+/-- `retainReferences := false` summarizes a view whose consumer asks only
+about the introduced/owner axes.  `referenced` is the one field of a summary
+whose size is the record's expression graph rather than its declaration
+names, so a caller which will never build a dependency graph from these rows
+should not pay to keep one name set per record alive. -/
 private def summariesForFamilies (x : Export) (families : Array Check.Family)
-    (prefer : EDecl → Bool) : Array DeclSummary := Id.run do
+    (prefer : EDecl → Bool) (retainReferences : Bool := true) :
+    Array DeclSummary := Id.run do
   let mut result := x.decls.mapIdx fun ordinal declaration =>
     let owner := match declaration with
       | .induct types _ _ => types.head?.map (·.name)
       | _ => none
     { ordinal
       introduced := declaration.names.toArray
-      referenced := references declaration
+      referenced := if retainReferences then references declaration else {}
       owner
       support := prefer declaration }
   for family in families do
@@ -243,11 +249,19 @@ def summaries (x : Export) (prefer : EDecl → Bool := fun _ => false) : Array D
 
 /-- Source-aware island summary. Public model slots are discovered through the
 same overlay used by statement checking, so transparent aliases outside the
-disposable island still influence exact projection eligibility. -/
+disposable island still influence exact projection eligibility.
+
+These rows are the ones a compact run keeps for the whole stream, one per
+generated record.  Their consumer is the compact structural report, which
+reads `owner` and `modelSlots`; ordering an island against itself is not a
+question anyone asks, and the source-replay alias test consults the source
+census rather than an island.  So no dependency edge is ever resolved from
+these rows and the reference sets are not built. -/
 def summariesWithIndex (x : Export) (index : Check.SyntaxIndex)
     (owners : Std.HashSet Name) : Array DeclSummary :=
   summariesForFamilies x
     (Check.statementFamiliesForRecordsWithIndex x index owners) (fun _ => false)
+    (retainReferences := false)
 
 
 private def addEdge (outgoing : Array (Std.HashSet Nat)) (indegree : Array Nat)
