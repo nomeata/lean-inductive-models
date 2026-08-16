@@ -106,9 +106,9 @@ own parameters under its binders, so it is nested rather than infinitary"
               badShape s!"{cn}'s recursive field {i} has a binder at Sort {ℓ} and the \
 carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
 
-  for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
-  for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
-  for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensureNat do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensurePSigmaPrime do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensureExactSortLift do out := out.push d; spliced := spliced ++ d.getNames
   -- **The core itself.** `#[]` when it is
   -- already in, which is every W target after the first in a run.
   let core ← ensureWCore reserved

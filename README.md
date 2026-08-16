@@ -38,6 +38,10 @@ quotient bundle. Routes that derive function extensionality may additionally
 use `Quot.sound`; generated developments may use the standard axioms
 `Classical.choice` and `propext` when required.
 
+Each of these is written by the tool itself, at a fixed declaration, wherever a
+generated island needs one — never taken from a record the input declares later
+in the stream. See the output contract below for what happens to such a record.
+
 ## Output contract
 
 For a modeled source type former `T`, constructor `C`, recursor `R`, and
@@ -77,6 +81,22 @@ before that source owner; all other source declarations retain their relative
 order. Dependencies generated recursively inside an island precede the
 generated declarations that consume them. There is no final global reorder or
 whole-output kernel replay.
+
+**Every record therefore declares each name it references before referencing
+it**, so any prefix of the output that ends at a record boundary is itself a
+complete export. This is checked over the whole fixture corpus by
+`emissionordercensustest`.
+
+**One class of source record is dropped rather than retained.** Generation
+writes a fixed set of declarations of its own — the basis inductives above,
+the tight pair's six derived declarations, `Nonempty`, `Iff`, the kernel
+quotient, `Quot.sound`, `Classical.choice` and `propext` — at the first point
+one is needed, whatever the input reserves. When the input declares one of
+those names later in the stream, its record is compared against the
+declaration that was written: an identical record is dropped, since the output
+already carries it, and a record that is *not* that declaration rejects the
+run rather than being silently replaced. Every other source declaration is
+retained.
 
 Actual generated output is serialized declaration by declaration through one
 persistent standard arena writer, so its declaration order is the order above.

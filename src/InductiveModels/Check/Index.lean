@@ -250,6 +250,10 @@ def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
         violations := violations.push (.extraRule pair.owner name)
   return violations
 
+/-- Whether this index already carries a declaration under `name`. -/
+def SyntaxIndex.declares (index : SyntaxIndex) (name : Name) : Bool :=
+  index.names.contains name
+
 /-- Overlay an island in front of a persistent source index without rescanning
 the source export. Any name collision fails closed before first/last-map
 semantics could hide it. Declaration and rule arrays are prefixed, generated

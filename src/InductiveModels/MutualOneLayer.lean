@@ -390,7 +390,7 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
       let declaration := Declaration.thmDecl { sourceRule with name := ruleName }
       addChecked declaration
       declarations := declarations.push declaration
-  let support ← ensureExactSortLift reserved
+  let support ← ensureExactSortLift
   declarations := declarations ++ support
   let mut spliced := privateIso.spliced ++ support.flatMap (·.getNames.toArray)
   let levels := lparams.map Level.param

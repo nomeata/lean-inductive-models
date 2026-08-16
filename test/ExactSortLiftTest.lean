@@ -30,9 +30,9 @@ def checkDerivedDefeqs : MetaM (Bool × Bool × Bool) := do
 
 def auditLift : MetaM (Except Decline (Array Name × Bool × Bool × Bool × Bool × Bool)) :=
   (do
-    let (_, eqDecls) ← ensureEq {}
-    let support ← ensureExactSortLift {}
-    let second ← ensureExactSortLift {}
+    let (_, eqDecls) ← ensureEq
+    let support ← ensureExactSortLift
+    let second ← ensureExactSortLift
     let names := support.flatMap fun (declaration : Declaration) => declaration.getNames.toArray
     let expressions := #[puliftT (.param `u) trueP, puliftUp (.param `u) trueP trueI]
     let noLegacy := expressions.all (fun expression => !containsConst `PULiftP expression) &&

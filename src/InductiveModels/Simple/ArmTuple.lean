@@ -14,7 +14,6 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let lparams := site.lparams
   let np := site.np
   let exportCtors := site.exportCtors
-  let reserved := site.reserved
   let selfN := site.selfN
   let ern := site.ern
   let recN := site.recN
@@ -36,9 +35,9 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let mut spliced := st.spliced
   -- ════ the Type route ════
   unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
-  for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
-  for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
-  for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensureNat do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensurePSigmaPrime do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensureExactSortLift do out := out.push d; spliced := spliced ++ d.getNames
 
   -- Storage decisions — pure level arithmetic, and a decline here costs no
   -- further splice. A chain of one field is that field bare (no `PSigma'`,

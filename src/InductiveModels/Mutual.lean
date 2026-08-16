@@ -335,7 +335,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   let withIdx := fun {α : Type} (m : Nat) (ps : Array Expr) (k : Array Expr → GenM α) =>
     withMemberIndices memberTys[m]! nidx[m]! ps k
 
-  let (eqi, eqDecls) ← ensureEq reserved
+  let (eqi, eqDecls) ← ensureEq
   let mut out : Array Declaration := eqDecls
   let spliced : Array Name := eqDecls.flatMap (·.getNames.toArray)
 

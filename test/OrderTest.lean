@@ -1022,19 +1022,24 @@ def run (root : String) : IO UInt32 := do
       wDiscarded.plan.retainedGeneratedRecords == 0
 
   -- A fixed prerequisite behind its owner is the declaration generation would
-  -- otherwise have spliced, so the input's own is installed before the stream
-  -- is consumed: the owner models where it stands, nothing is spliced under
-  -- that name, and the input's record is emitted once, in place. A test-only
-  -- prerequisite-first variant then pins constructive island-before-owner
-  -- emission while every source step remains raw-order.
+  -- otherwise have spliced, so generation writes its own at the point the owner
+  -- needs it: the owner models where it stands, the name *is* spliced, the
+  -- input's own record is dropped against what was written, and the output
+  -- declares that name exactly once — in front of the owner rather than behind
+  -- it. A test-only prerequisite-first variant then pins constructive
+  -- island-before-owner emission while every source step remains raw-order.
   let latePUnitRawRun ← generatedFixtureState
     s!"{root}/test/fixtures/inductive-models/tight_prop_field_late.ndjson"
     { noGeneration with simple := true }
-  state := state.check "late input PUnit supports the owner in front of it" <|
+  state := state.check "a written PUnit supports the owner in front of it" <|
     !latePUnitRawRun.report.declined.any (·.1 == `PFP) &&
       latePUnitRawRun.report.generated.any (·.1 == `PFP) &&
-      !latePUnitRawRun.report.spliced.any (fun row => row.2.contains `PUnit) &&
-      (latePUnitRawRun.output.decls.filter (·.names.contains `PUnit)).size == 1
+      latePUnitRawRun.report.spliced.any (fun row => row.2.contains `PUnit) &&
+      (latePUnitRawRun.output.decls.filter (·.names.contains `PUnit)).size == 1 &&
+      (match latePUnitRawRun.output.decls.findIdx? (·.names.contains `PUnit),
+          latePUnitRawRun.output.decls.findIdx? (·.names.contains `PFP) with
+       | some unitAt, some ownerAt => unitAt < ownerAt
+       | _, _ => false)
   let latePUnitInput ←
     withCompletePrerequisiteBefore latePUnitRawRun.input `PUnit `PFP
   let latePUnitRun ← runFilterState latePUnitInput

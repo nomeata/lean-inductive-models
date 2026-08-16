@@ -4003,7 +4003,7 @@ private def buildPlanPrototype (plan : FamilyAdapterPlan) (iso : Iso) (root : Na
   let planIssues := plan.validate
   unless planIssues.isEmpty do
     return { issues := planIssues.map .invalidPlan }
-  let mut declarations ← ensureExactSortLift {}
+  let mut declarations ← ensureExactSortLift
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
     | .error message => badShape s!"family-adapter prototype needs Eq ({message})"

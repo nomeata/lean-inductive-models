@@ -27,9 +27,9 @@ partial def containsConst (target : Name) : Expr → Bool
 
 def auditPrimitive : MetaM (Except Decline (Array Name × Bool × Bool × Bool)) :=
   (do
-    let (_, eqDecls) ← ensureEq {}
-    let records ← ensurePSigmaPrime {}
-    let second ← ensurePSigmaPrime {}
+    let (_, eqDecls) ← ensureEq
+    let records ← ensurePSigmaPrime
+    let second ← ensurePSigmaPrime
     let names := records.flatMap fun (declaration : Declaration) =>
       declaration.getNames.toArray
     let coreOk := checkPSigmaPrimeCore (← getEnv) |>.isOk

@@ -85,7 +85,7 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
       churchBinders kTys 0 #[] (fun ks => k C ks kTys)
 
   if lift?.isSome then
-    for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensureExactSortLift do out := out.push d; spliced := spliced ++ d.getNames
 
   -- **Arm G's prelude, asked for before anything is emitted.** The graph
   -- route pairs a value with its graph proof (`PSigma'`) and extracts it with
@@ -95,9 +95,9 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- identity at none. That is the whole of why the axiom cost is per shape.
   let mut gFx? : Option Name := none
   if armG then
-    for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensureNonempty reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensureChoice reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensurePSigmaPrime do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensureNonempty do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensureChoice do out := out.push d; spliced := spliced ++ d.getNames
     if (Array.range gNf).any (fun i => (gRecNb[i]!.getD 0) > 0) then
       let (fxN, fxDecls) ← ensureFunext impl eqi reserved
       for d in fxDecls do out := out.push d; spliced := spliced ++ d.getNames
@@ -168,8 +168,8 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
 
   -- ── the recursor ──
   if large && nc == 0 then
-    for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
-    for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensureNat do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensureExactSortLift do out := out.push d; spliced := spliced ++ d.getNames
   -- **One fold, two consumers.** Arm G's `ind` — the free `Prop`-motive
   -- recursor the graph route folds at — *is* the strong-induction fold
   -- below at `v := 0`, so the arm forces the small-elimination branches and

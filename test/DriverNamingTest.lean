@@ -90,11 +90,12 @@ def main : IO UInt32 := do
     | throw <| IO.userError "cannot parse partially filtered nested_iota"
   -- The committed copy is filtered for the nested and mutual branches only,
   -- and those branches spliced the tight-pair bundle *behind* `N`, `List` and
-  -- `Box`. Enabling every branch must still model the three: the input's own
-  -- copy of the bundle is the declaration generation would write, so
-  -- [`InductiveModels.installInputCanonicalBasis`] installs it rather than
-  -- letting the three decline at `prim model name taken (PSigma'.fst)` for
-  -- standing in front of a record.
+  -- `Box`. Enabling every branch must still model the three: generation writes
+  -- its own copy of the bundle in front of the first of them rather than
+  -- waiting, and drops the input's own copy against it when the stream reaches
+  -- it ([`InductiveModels.canonicalBasisRecordMatches`]), instead of letting
+  -- the three decline at `prim model name taken (PSigma'.fst)` for standing in
+  -- front of a record.
   let allBranches ← runExport "partially filtered nested_iota with every branch"
     partialInput false {}
   state := state.check "partially filtered output gains missing simple models"

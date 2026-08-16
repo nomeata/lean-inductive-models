@@ -250,17 +250,22 @@ def psigmaPrimeRec (u v w : Level) (α β motive minor self : Expr) : Expr :=
 
 /-- One primitive, checked or spliced. `check` runs on a present declaration
 and says what is wrong with it; a missing one is spliced at Lean's shape and
-re-checked. The pattern is [`InductiveModels.ensureEq`]'s, and the name guard is
-the same one. -/
-def ensurePrim (n : Name) (guard : List Name) (d : Declaration)
-    (check : Environment → Except String Unit) (reserved : Std.HashSet Name) :
+re-checked. The pattern is [`InductiveModels.ensureEq`]'s.
+
+**There is no reserved-name guard here, and that is the point.** A canonical
+basis name is one this tool writes itself, at a declaration it holds. Where
+the input declares one *later* in the stream, waiting for it would emit an
+island against a constant the output does not declare until afterwards; so the
+canonical declaration is written here, at the first point it is needed, and the
+input's own later record is dropped against it
+([`InductiveModels.canonicalBasisRecordMatches`]). -/
+def ensurePrim (n : Name) (d : Declaration)
+    (check : Environment → Except String Unit) :
     GenM (Array Declaration) := do
   if (← getEnv).constants.contains n then
     match check (← getEnv) with
     | .ok () => return #[]
     | .error why => declineWith (.notLeans n why)
-  for g in guard do
-    if reserved.contains g then declineWith (.nameTaken g)
   addChecked d
   match check (← getEnv) with
   | .ok () => return #[d]
@@ -436,20 +441,40 @@ splices it when the input declares none: the four of
 but is `Classical.choice`'s own domain and is spliced by the graph arm on the
 same terms; and `Iff`, which is `propext`'s own domain and which the W
 fragment splices on those same terms. A name outside this list belongs to the
-input alone — there is no declaration to compare an input record against, so
-nothing may be written under it.
+input alone — there is no declaration of this tool's own to write under it.
 
-The declaration and the root travel together because the comparison this list
-exists for is between a *declaration* and an input record, not between two
-names. -/
+The declaration and the root travel together because the list is read for both:
+the names each declaration introduces are what
+[`InductiveModels.canonicalBasisNames`] is built from, and the declaration
+itself is the shape written under that root. `Iff`'s copy here is the W
+fragment's own, which `basisvalidationtest` pins. -/
 def canonicalSpliceInductives : List (Name × Declaration) :=
   [(`Eq, eqDecl), (`Nat, natDecl), (`PUnit, punitDecl),
    (`PSigma', psigmaPrimeDecl), (`Nonempty, nonemptyDecl), (`Iff, iffDecl)]
 
-def ensurePUnit (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
-  ensurePrim `PUnit [`PUnit, `PUnit.unit, `PUnit.rec] punitDecl checkPUnit reserved
-def ensureNonempty (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
-  ensurePrim `Nonempty [`Nonempty, `Nonempty.intro] nonemptyDecl checkNonempty reserved
+/-- **Every name generation writes at a fixed canonical declaration of its
+own** — the six inductives above with their constructors and kernel recursors,
+the tight pair's six derived declarations, the kernel quotient's four records,
+and the three axioms.
+
+This is the complete hardcoded basis group and nothing else: it is a fixed
+list, not a shape, count, or corpus test. Two rules are stated in terms of it
+and no third: generation writes these declarations at the first point one is
+needed, whatever the input reserves ([`InductiveModels.ensurePrim`]), and the
+input's own later record at one of these names is dropped against the
+declaration that was written ([`InductiveModels.canonicalBasisRecordMatches`]). -/
+def canonicalBasisNames : Std.HashSet Name :=
+  Std.HashSet.ofList <|
+    (canonicalSpliceInductives.flatMap fun (_, declaration) => declaration.getNames) ++
+      Declaration.quotDecl.getNames ++
+      [`PSigma'.fst, `PSigma'.snd, `PSigma'.rec',
+       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk,
+       `Quot.sound, `Classical.choice, `propext]
+
+def ensurePUnit : GenM (Array Declaration) :=
+  ensurePrim `PUnit punitDecl checkPUnit
+def ensureNonempty : GenM (Array Declaration) :=
+  ensurePrim `Nonempty nonemptyDecl checkNonempty
 
 /-- **`Classical.choice`, the one axiom the graph arm asserts.** The input's
 own where it declares one at Lean's statement; Lean's, spliced in, where it
@@ -457,7 +482,7 @@ does not. `funext` is *derived* from `Quot.sound` rather than asserted and
 this one cannot be — it is an axiom in Lean too — so the asymmetry is the
 subject matter's and not a shortcut. Axiom-freedom is not a goal of this
 construction and the standard axioms may be used. -/
-def ensureChoice (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
+def ensureChoice : GenM (Array Declaration) := do
   match (← getEnv).constants.find? `Classical.choice with
   | some ci =>
     let [su] := ci.levelParams
@@ -467,11 +492,10 @@ def ensureChoice (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
       declineWith (.notLeans `Classical.choice "its statement is not Lean's")
     return #[]
   | none =>
-    if reserved.contains `Classical.choice then declineWith (.nameTaken `Classical.choice)
     addChecked choiceDecl
     return #[choiceDecl]
-def ensureNat (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
-  ensurePrim `Nat [`Nat, `Nat.zero, `Nat.succ] natDecl checkNat reserved
+def ensureNat : GenM (Array Declaration) :=
+  ensurePrim `Nat natDecl checkNat
 /-- The ordinary declarations derived from the tight pair's two primitive
 projections. None of these declarations crosses the bootstrap inductive
 boundary. -/
@@ -593,17 +617,13 @@ private def checkPSigmaPrimeDerived (expected : Array Declaration) : GenM Unit :
 /-- Ensure the exact tight-pair bundle. The inductive is the one new basis
 primitive; all named projections, reduction rules, and the large `rec'` are
 ordinary checked declarations derived from primitive projections. -/
-def ensurePSigmaPrime (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
-  let supportNames :=
-    [`PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd, `PSigma'.rec',
-      `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk]
-  let mut out ← ensurePrim `PSigma' supportNames psigmaPrimeDecl checkPSigmaPrimeCore reserved
+def ensurePSigmaPrime : GenM (Array Declaration) := do
+  let mut out ← ensurePrim `PSigma' psigmaPrimeDecl checkPSigmaPrimeCore
   let expected ← psigmaPrimeDerivedDecls
   for declaration in expected do
     let [name] := declaration.getNames
       | badShape "one PSigma' support declaration has several names"
     if (← getEnv).constants.contains name then continue
-    if reserved.contains name then declineWith (.nameTaken name)
     addChecked declaration
     out := out.push declaration
   checkPSigmaPrimeDerived expected
@@ -612,9 +632,9 @@ def ensurePSigmaPrime (reserved : Std.HashSet Name) : GenM (Array Declaration) :
 /-- Ensure the complete shared support for the internally derived exact-sort
 propositional lift.  The construction itself is inlined into generated
 expressions; only the exact standard `PUnit` and tight-pair bundle persist. -/
-def ensureExactSortLift (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
-  let pairs ← ensurePSigmaPrime reserved
-  let units ← ensurePUnit reserved
+def ensureExactSortLift : GenM (Array Declaration) := do
+  let pairs ← ensurePSigmaPrime
+  let units ← ensurePUnit
   return pairs ++ units
 
 end InductiveModels

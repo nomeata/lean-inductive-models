@@ -827,7 +827,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
   -- result sort. The internally derived tight-pair/PUnit lift carries the
   -- reflexive equality filler to that exact, possibly variable universe.
   let puliftDecls ← if recursors.any (·.numMotives > 1) then
-    ensureExactSortLift reserved else pure #[]
+    ensureExactSortLift else pure #[]
 
   let env ← getEnv
   let eqi ← match EqInfo.check env with
@@ -1090,7 +1090,7 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
 
   -- A mutual recursor's unrelated motives need an inhabitant at the selected
   -- motive sort. The common adapter uses the derived tight-pair/PUnit lift.
-  let puliftDecls ← if types.size > 1 then ensureExactSortLift reserved else pure #[]
+  let puliftDecls ← if types.size > 1 then ensureExactSortLift else pure #[]
   let env ← getEnv
   let eqi ← match EqInfo.check env with
     | .ok eqi => pure eqi
@@ -1404,6 +1404,23 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
     | .ok next => main := next
   return .ok main
 
+/-- **The island records a syntax index already carries.**
+
+Generation writes its own canonical basis declaration at the first point one is
+needed, and the input's own record for that name is dropped when the stream
+reaches it ([`InductiveModels.canonicalBasisRecordMatches`]). The source syntax
+index, however, was built from the whole input and still describes the record
+that is about to be dropped, so overlaying the generated copy on top would be a
+redeclaration — of the *same* declaration, since a record that is not the same
+declaration rejects the run rather than being dropped. There is nothing to add,
+so such a record is left out of the overlay.
+
+The one gate is the fixed basis list: nothing outside it is ever both written
+by generation and already indexed, because every other generated name goes
+through the reserved-name guard. -/
+def canonicalBasisAlreadyIndexed (index : Check.SyntaxIndex) (record : EDecl) : Bool :=
+  record.names.any fun name => canonicalBasisNames.contains name && index.declares name
+
 /-- Finalize one atomic generated forest. Generated records stay in generator
 append order, and only fixed shared support is copied back into the persistent
 construction environment. The caller may separately submit the exact returned
@@ -1438,7 +1455,8 @@ def closeModelIsland (template : Export) (main : Environment)
   -- owners use family templates indexed once; generated owners use the island
   -- records plus an overlay carrying source transparent aliases and exact
   -- projection metadata. The final aggregate remains the equivalence oracle.
-  let index ← match sourceSyntax.prependRecords generated with
+  let index ← match sourceSyntax.prependRecords
+      (generated.filter (!canonicalBasisAlreadyIndexed sourceSyntax ·)) with
     | .ok index => pure index
     | .error message => return .error s!"cannot index generated island: {message}"
   let sourceRoot? : Option Name := match owner with
@@ -1499,16 +1517,6 @@ def closeModelIsland (template : Export) (main : Environment)
   match ← installGeneratedSupportIn main replayGenerated models with
   | .error message => return .error message
   | .ok supported => return .ok (generated, compact, supported, statementReport)
-
-/-- The exact quotient/choice interface that a prim model may splice after its
-ordinary basis is ready. Input-reserved names in this class must already have
-appeared in the raw source stream at the construction site below. -/
-def lateSpliceNames : List Name :=
-  [`Quot, `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
-   `Nonempty, `Nonempty.intro, `Nonempty.rec, `Classical.choice]
-
-/-- The exact logical interface shared with the fixed W fragment. -/
-def wLogicalLateNames : List Name := [`Iff, `Iff.intro, `Iff.rec, `propext]
 
 /-- Whether any model-generation branch is enabled. -/
 def generationEnabled (generation : Cli.Config) : Bool :=
@@ -1661,127 +1669,6 @@ def blockOf (names : Array Name) : MetaM (Array Expr × Array (Array (Name × Ex
     cs := cs.push ct
   return (tys, cs)
 
-/-- **Can a model be written here?** — which is only ever a question about `Eq`.
-
-`true` when the environment already has one, and when the input declares none
-anywhere, because then the prelude splice supplies Lean's own. `false` in the one remaining
-case: the input declares an `Eq` the replay has not reached yet, where a splice
-is refused by the name guard and would be wrong anyway. -/
-def eqReady (reserved : Std.HashSet Name) : MetaM Bool := do
-  if (← getEnv).constants.contains `Eq then return true
-  return !(reserved.contains `Eq || reserved.contains `Eq.refl)
-
-/-- A plain mutual projection model additionally needs the tight-pair/PUnit
-support that derives an inhabitant of each unrelated motive's exact universe.
-If the input owns any part later in dependency order, wait for the complete
-bundle; if it owns none, generation may splice the standard shapes. -/
-def mutualReady (needsExactSortLift : Bool) (reserved : Std.HashSet Name) : MetaM Bool := do
-  unless ← eqReady reserved do return false
-  unless needsExactSortLift do return true
-  let env ← getEnv
-  for name in [`PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
-      `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
-      `PUnit, `PUnit.unit, `PUnit.rec] do
-    unless env.constants.contains name || !reserved.contains name do return false
-  return true
-
-private def hasIntrinsicProjectionFields (index : Check.SyntaxIndex) (types : List EIndType)
-    (constructors : List ECtor) : Bool :=
-  types.any fun type =>
-    !(index.intrinsicProjectionFields type constructors).isEmpty
-
-private def isMutualBasisRecord (needsExactSortLift : Bool) (declaration : EDecl) : Bool :=
-  declaration.names.any fun name =>
-    name == `Eq || name == `Eq.refl ||
-      (needsExactSortLift && (name == `PSigma' || (`PSigma').isPrefixOf name ||
-        name == `PUnit || (`PUnit).isPrefixOf name))
-
-/-- **Can a prim model be written here?** — [`InductiveModels.eqReady`]'s question,
-asked of every basis constant a prim model may splice: each must be already
-installed or not declared by the input at all, else the model waits for the
-input's own declaration to be replayed. -/
-def primMissingBasis (reserved : Std.HashSet Name) : MetaM (Array Name) := do
-  let env ← getEnv
-  let mut missing := #[]
-  for n in [`Eq, `Eq.refl, `Nat, `Nat.zero, `Nat.succ,
-      `PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd, `PSigma'.fst_mk,
-      `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
-      `PUnit, `PUnit.unit, `PUnit.rec] do
-    unless env.constants.contains n || !reserved.contains n do missing := missing.push n
-  return missing
-
-def primReady (reserved : Std.HashSet Name) : MetaM Bool := do
-  return (← primMissingBasis reserved).isEmpty
-
-/- **The names beyond the basis that a prim model may splice** — the ones
-[`InductiveModels.primReady`] does not cover. Input-owned records for these
-names must already have appeared in the source stream.
-
-They form one readiness class:
-
-* the quotient-side names deriving `funext` may splice
-  ([`InductiveModels.ensureFunext`]). A prim model reaches them on the singleton route
-  and wherever a pad at a level `dsingOk` cannot build is discharged by
-  transport — `PUnit`'s and the derived exact-sort lift's shapes.
-* `Nonempty` and `Classical.choice`, which **arm G** splices and which the W
-  core's fragment now also carries. An input that declares `Acc` before
-  `Nonempty` — `test/fixtures/inductive-models/w_core.ndjson`
-  is one, since the fragment's `Acc` comes in through `WellFounded.fix` and its
-  `Nonempty` only through `Classical.propDecidable` — used to lose `Acc`'s model
-  to `prim model name taken (Nonempty)`. That is an uninstalled reserved-support
-  name, not a generated name that was lost. -/
-/- The exact logical interface the W fragment shares with the input.
-
-`ensureWCore` refuses to splice any one of these when the input reserves it.
-They form a separate atomic readiness class so a failed W construction reports
-the complete Iff/propext prerequisite rather than conflating it with the
-quotient/choice support used by non-W routes.
-
-The class is only ever reached by an input whose own `Iff` or `propext` is not
-the canonical one: [`InductiveModels.installInputCanonicalBasis`] installs the
-canonical pair before the stream is consumed, so a reserved name that is still
-uninstalled here is a record this tool would not have written. `w_late_iff`
-declares Lean's own and its `LateW` therefore models in front of it. -/
-/-- [`InductiveModels.primReady`]'s question, asked of quotient/choice support after a
-construction has actually encountered one of those names. It is not folded
-into `primReady`: most simple models never use `funext` or choice. -/
-def primLateReady (reserved : Std.HashSet Name) : MetaM Bool := do
-  let env ← getEnv
-  for n in lateSpliceNames do
-    unless env.constants.contains n || !reserved.contains n do return false
-  return true
-
-/-- Atomic readiness for the exact Iff/propext interface shared by the W
-fragment. Names the input does not reserve may be spliced; every name it does
-reserve must be installed before the one retry. -/
-def primWLogicalReady (reserved : Std.HashSet Name) : MetaM Bool := do
-  let env ← getEnv
-  for n in wLogicalLateNames do
-    unless env.constants.contains n || !reserved.contains n do return false
-  return true
-
-/-- The atomic prerequisite class responsible for a support-name collision. -/
-inductive PrimReadiness where
-  | late
-  | wLogical
-  deriving Inhabited, BEq
-
-def PrimReadiness.ready (readiness : PrimReadiness)
-    (reserved : Std.HashSet Name) : MetaM Bool :=
-  match readiness with
-  | .late => primLateReady reserved
-  | .wLogical => primWLogicalReady reserved
-
-/-- Classify a support-name collision by its exact atomic prerequisite set.
-Callers use this to distinguish a later source prerequisite from a genuine
-model-shape decline. -/
-def Decline.lateReadiness? : Decline → Option PrimReadiness
-  | .nameTaken n =>
-    if lateSpliceNames.contains n then some .late
-    else if wLogicalLateNames.contains n then some .wLogical
-    else none
-  | _ => none
-
 /-- An exact public name generated by an earlier composed step is not part of
 the input's `reserved` set.  Check those spellings before a collision-safe
 retry so aliasing can never weaken `nameTaken`. -/
@@ -1830,12 +1717,6 @@ accounted for — [`InductiveModels.primIso`], selected by `--simple`. Shared by
 input's own simple inductives and the composition (the single inductives the
 other two constructions emit).
 
-`canWait` enables prerequisite classification: a collision at fixed support
-([`InductiveModels.Decline.lateReadiness?`]) returns its exact class in the second
-component instead of recording a model-shape decline. Source owners may wait
-for a later prerequisite and decline at their original position; recursive
-splice closure passes `false` because it must complete inside the same model island.
-
 **And, with `basicModels`, models for whatever that model had to splice.**
 
 The second half closes a structural hole rather than adding a convenience.
@@ -1857,11 +1738,10 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (ctors : Array (Name × Expr))
     (projections : Array EProjection)
     (reserved : Std.HashSet Name) (basicModels : Bool)
-    (canWait : Bool)
     (st : ModelIslandState) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none)
     (exactTransform : EDecl → EDecl := id)
     (collectAdapterShadows : Bool := false) :
-    MetaM (ModelIslandState × Option PrimReadiness) := do
+    MetaM ModelIslandState := do
   let (out, rep, pending, adapterShadows) := st
   let saved ← getEnv
   -- **The retry under an alias root**, and it is a retry rather than a
@@ -1949,19 +1829,15 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
   match res with
   | .error dec =>
     setEnv saved
-    if canWait then
-      if let some readiness := dec.lateReadiness? then
-        unless ← readiness.ready reserved do
-          return ((out, rep, pending, adapterShadows), some readiness)
     -- **Exempt is not declined.** A basis primitive is what the construction
     -- is written in, so its absence from the models is the thing that makes
     -- the construction well-founded rather than a shape it cannot reach; it
     -- gets its own row and is out of the decline count.
     if dec matches .basisExempt then
-      return ((out, { rep with exempt := rep.exempt.push (tname, dec.labelAs "prim") },
-        pending, adapterShadows), none)
-    return ((out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") },
-      pending, adapterShadows), none)
+      return (out, { rep with exempt := rep.exempt.push (tname, dec.labelAs "prim") },
+        pending, adapterShadows)
+    return (out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") },
+      pending, adapterShadows)
   | .ok is =>
     let source ← match sourceBlock? with
       | some (block, _) => pure block
@@ -1991,10 +1867,10 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
         -- that operation deliberately consults no named definition, so a
         -- one-block normalizer cannot lose persistent/source aliases.
         let normalizer := ({ metaLine := .null, decls := #[exactBlock] } : Export).exactNormalizationEnv
-        st2 :=
-          (← genPrim n iv.levelParams iv.numParams iv.type cts #[] reserved
-            basicModels false st2 (some (exactBlock, normalizer)) exactTransform
-            (collectAdapterShadows := collectAdapterShadows)).1
+        st2 ←
+          genPrim n iv.levelParams iv.numParams iv.type cts #[] reserved
+            basicModels st2 (some (exactBlock, normalizer)) exactTransform
+            (collectAdapterShadows := collectAdapterShadows)
     -- **A model may not leave an inductive it introduced unmodelled.** Arm C
     -- splices the index erasure of the family it is
     -- carving, so its output contains an inductive that was in nobody's
@@ -2030,9 +1906,9 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
           let why := s!"prim model shape: the spliced inductive {n} did not model, so \
             emitting would leave an unmodelled inductive in front of a consumer \
             (the splice-closure rule) — {inner.getD "and the descent recorded no reason"}"
-          return ((st.1, { st.2.1 with declined := st.2.1.declined.push (tname, why) },
-            st.2.2.1, st.2.2.2), none)
-    return (st2, none)
+          return (st.1, { st.2.1 with declined := st.2.1.declined.push (tname, why) },
+            st.2.2.1, st.2.2.2)
+    return st2
 
 /-- **The composition's third step**: the implementation inductives a mutual
 model just emitted — `T._model._impl.tag` and `T._model._impl.aux` — are
@@ -2041,8 +1917,7 @@ too. The tag is a plain sum and models; the auxiliary is indexed and takes
 arm C. Their own public carriers are the declaration-local names
 `T._model._impl.tag._model` and `T._model._impl.aux._model`.
 
-All required input-owned prerequisites must already have appeared. Composition
-therefore completes in the same disposable environment as the mutual model;
+Composition completes in the same disposable environment as the mutual model;
 retaining a job after its generated owner
 would retain precisely the ownerful state this pass is designed to discard. -/
 def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
@@ -2051,17 +1926,6 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
     (exactTransform : EDecl → EDecl := id)
     (collectAdapterShadows : Bool := false) : MetaM ModelIslandState := do
   let mut st := st
-  -- Asked once, of the environment as it stands at the block: every member of
-  -- one block is at the same point in the replay.
-  let ready ← primReady reserved
-  unless ready do
-    let owner := members[0]!
-    let missing ← primMissingBasis reserved
-    let (out, rep, pending, shadows) := st
-    let declined := rep.declined.push
-      (owner, s!"composed prim model prerequisites occur later in the input stream: \
-        {repr missing}")
-    return (out, { rep with declined }, pending, shadows)
   for n in members do
     let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
     let mut cts : Array (Name × Expr) := #[]
@@ -2070,17 +1934,10 @@ def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
       cts := cts.push (cn, ci.type)
     let exactBlock ← blocks.require n
     let normalizer := ({ metaLine := .null, decls := #[exactBlock] } : Export).exactNormalizationEnv
-    let (next, wait?) ←
-      genPrim n lparams np iv.type cts #[] reserved basicModels true st
+    st ←
+      genPrim n lparams np iv.type cts #[] reserved basicModels st
         (some (exactBlock, normalizer)) exactTransform
         (collectAdapterShadows := collectAdapterShadows)
-    match wait? with
-    | none => st := next
-    | some _ =>
-      let (out, rep, pending, shadows) := st
-      let declined := rep.declined.push
-        (n, "composed prim model prerequisite occurs later in the input stream")
-      return (out, { rep with declined }, pending, shadows)
   return st
 
 /-- One plain mutual block's model, generated and accounted for.
@@ -2346,208 +2203,69 @@ def SourceCensus.ofSource (source : Export) : SourceCensus :=
   (source.decls.foldl (fun builder declaration => builder.push declaration)
     ({} : SourceCensus.Builder)).freeze
 
-/-- **The axioms this tool writes at a fixed canonical statement**, with the
-statement builders the input's own declaration is compared against, and the
-universe arity each statement is stated at. The first two builders are the
-ones [`InductiveModels.ensureFunext`] and [`InductiveModels.ensureChoice`] use, so
-an input axiom accepted here is exactly one those two would have accepted
-where it stands. `propext` is the W fragment's, and the fragment does not
-compare an input's own against anything — it simply keeps it. Requiring Lean's
-statement here is therefore strictly narrower than what the splice accepts,
-which is the direction this pass may err in: it never installs a record the
-fragment would have refused. -/
-def canonicalSpliceAxioms : List (Name × (List Name → MetaM Expr)) :=
-  [(`Quot.sound, fun levelParams => match levelParams with
-      | [u] => quotSoundType `Eq (.param u)
-      | _ => throwError "Quot.sound is stated at one universe parameter"),
-   (`Classical.choice, fun levelParams => match levelParams with
-      | [u] => pure (choiceType (.param u))
-      | _ => throwError "Classical.choice is stated at one universe parameter"),
-   (`propext, fun levelParams => match levelParams with
-      | [] => propextType `Eq
-      | _ => throwError "propext is stated at no universe parameter")]
+/-- **Is this input record the canonical basis declaration generation already
+wrote at that name?**
 
-/-- **The input's own copies of the declarations this tool writes, installed
-before its stream is consumed.**
+Generation writes a small fixed set of declarations of its own: the four basis
+inductives, `Nonempty`, `Iff`, the tight pair's six derived declarations, the
+kernel quotient, `Quot.sound`, `Classical.choice` and `propext`. It writes each
+at the first point one is needed, whatever the input reserves, so an island is
+never emitted against a constant the output declares later.
 
-Generation writes a small fixed set of declarations of its own: the four
-basis inductives, `Nonempty`, `Iff`, the kernel quotient, `Quot.sound`,
-`Classical.choice` and `propext`. It splices the one it needs whenever the
-input declares
-none. When the input declares one *later* in the stream, the splice and the
-input's own replay would bind the same name twice and the kernel binds a
-constant once — so every owner standing in front of that record declined at
-`prim model name taken`, or waited for a prerequisite that never arrived in
-time, purely because of where the record physically sits. `arm_f_zip`'s
-`FTwo` and `prim_late_eq`'s `Cnt` are the smallest instances; the W arm's
-class is `w_late_iff`'s `LateW`, and the published Arena's `grind-ring-5`
-declares `Lean.Syntax` at record 248 with `Iff` at 315 and `propext` at 375.
+That leaves exactly one question, and it is asked in exactly one place: when
+the input's own record for such a name is reached, is it the declaration that
+was already written? A record that passes carries no information the canonical
+declaration does not, so dropping it changes nothing and it is dropped. A
+record that does not pass is the input declaring *something else* under a basis
+name; substituting this tool's declaration for it would silently re-point every
+later record that referenced the input's own, so the run is rejected instead.
 
-What makes the second copy redundant rather than merely inconvenient is that
-the input's record is required to be *the same declaration*:
-[`InductiveModels.validateBasisOwner`]'s comparison for an inductive — byte-identical
-to the declaration this kernel mints, in every field the export carries —
-[`InductiveModels.installedQuotRecord`]'s for the quotient's four records, and
-`ensureFunext`/`ensureChoice`'s own statement check for the axioms. A
-record which does not pass is left alone: it still reserves its names, and
-the owners in front of it still decline.
+**A level-parameter name is not part of a declaration.** Lean states its own
+`Eq` at `u_1` and this tool states `eqDecl` at `u`, so every comparison below
+restates the installed declaration at the record's own level-parameter names
+first — [`InductiveModels.alignBasisLevelParams`] for an inductive, and
+`instantiateLevelParams` for everything else. Nothing else about the record is
+allowed to differ.
 
-**No declaration moves.** The input's record is emitted at its own source
-position and replays there as a no-op, the way the second and later `quot`
-records of one kernel quotient bundle already do
-([`InductiveModels.toDeclaration`]). This is a fact about the replay environment,
-not an ordering of the output, and it is confined to declarations this tool
-would otherwise have written itself.
-
-`read` is the raw-record reader for the stream about to be consumed; the only
-ordinals read are the ones the census already knows for these fixed names, at
-most one per canonical declaration, and none at all for a name the input does
-not declare. -/
-structure CanonicalBasisInstall where
-  /-- The replay environment with the accepted declarations already in it. -/
-  env : Environment
-  /-- The raw source ordinals whose declaration `env` already carries. Each of
-  these records replays as a no-op: its own declaration is what was installed. -/
-  ordinals : Std.HashSet Nat
-
-def installInputCanonicalBasis (env0 : Environment) (census : SourceCensus)
-    (read : Nat → MetaM (Except String EDecl)) :
-    MetaM (Except String CanonicalBasisInstall) := do
-  let saved ← getEnv
-  let mut env := env0
-  let mut installed : Std.HashSet Nat := {}
-  let mut failure? : Option String := none
-  let mut quotientRecords : Array (Nat × EDecl) := #[]
-  -- The fixed inductives, then the kernel quotient, then the two axioms whose
-  -- statements are read against them.
-  for (root, canonical) in canonicalSpliceInductives do
-    if failure?.isSome then break
-    let some ordinal := census.rawOrdinals[root]? | continue
-    let record ← match ← read ordinal with
-      | .ok record => pure record
-      | .error message =>
-        failure? := some s!"cannot decode source record {ordinal} for {root}: {message}"
-        continue
-    let .induct (type :: _) _ _ := record | continue
-    -- The comparison mints under the environment built so far, which is the
-    -- one the declaration is then installed in.
-    setEnv env
-    unless ← isCanonicalInductiveRecord root canonical record do continue
-    match env.addDeclCore 0 (alignBasisLevelParams canonical type.levelParams) none false with
-    | .ok next =>
-      env := next
-      installed := installed.insert ordinal
-    | .error exception =>
-      failure? := some s!"cannot install the input's own {root}: \
-        {← (exception.toMessageData {}).toString}"
-  -- **The tight pair's six derived declarations**, on exactly the terms the
-  -- inductives above are installed on. `ensurePSigmaPrime` writes `PSigma'`
-  -- and then these six beside it, so an input which declares the same six has
-  -- already written what generation would write. Without them the inductive
-  -- alone is not enough: `PSigma'` is recognised and reported exempt while
-  -- every owner standing in front of the derived records still declines at
-  -- `prim model name taken (PSigma'.fst)`, purely because of where those
-  -- records sit. `filtered/nested_iota`, whose own earlier run spliced the
-  -- bundle behind its first three owners, is the regression.
-  --
-  -- The comparison is the export record of the declaration this pass would
-  -- add ([`InductiveModels.toEDecl`]) against the input's own, which is the
-  -- byte comparison the inductives make.
-  --
-  -- **The six are read as a prefix at ascending ordinals**, starting from the
-  -- inductive's own record. Each member names the one before it, so a record
-  -- which is not the canonical declaration, or which the input wrote ahead of
-  -- what it is written in terms of, stops the group: installing past it would
-  -- either leave a hole in the middle of the bundle or accept an input whose
-  -- replay would have failed at that record. A record left behind still
-  -- reserves its name and the owners in front of it still decline.
-  --
-  -- **Both of what the bundle is written in have to be installed first.**
-  -- The three reduction rules are equations at Lean's `Eq` and the three
-  -- definitions project `PSigma'`, so an input which supplies neither
-  -- canonically — `tight_psigma_prime` declares its own pair and no `Eq` —
-  -- has no canonical bundle for a record to be compared against, and the
-  -- group is not read at all. Each is in `env` exactly when the loop above
-  -- installed the input's own record for it, so `PSigma'`'s ordinal is read
-  -- rather than assumed.
-  match (if failure?.isNone && env.constants.contains `PSigma' &&
-      env.constants.contains `Eq then census.rawOrdinals[`PSigma']? else none) with
-  | none => pure ()
-  | some pairOrdinal =>
-    setEnv env
-    -- A decline is a bundle this input cannot be holding: none is installed.
-    match ← psigmaPrimeDerivedDecls.run with
-    | .error _ => pure ()
-    | .ok derived =>
-      let mut previous := pairOrdinal
-      for declaration in derived do
-        if failure?.isSome then break
-        let [name] := declaration.getNames | break
-        let some ordinal := census.rawOrdinals[name]? | break
-        unless previous < ordinal do break
-        let record ← match ← read ordinal with
-          | .ok record => pure record
-          | .error message =>
-            failure? := some s!"cannot decode source record {ordinal} for {name}: {message}"
-            break
-        setEnv env
-        unless record == (← toEDecl declaration) do break
-        match env.addDeclCore 0 declaration none false with
-        | .ok next =>
-          env := next
-          installed := installed.insert ordinal
-          previous := ordinal
-        | .error exception =>
-          failure? := some s!"cannot install the input's own {name}: \
-            {← (exception.toMessageData {}).toString}"
-  -- One kernel declaration, four export records: all four must be the
-  -- quotient's own before any of them is.
-  for name in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
-    if failure?.isSome then break
-    let some ordinal := census.rawOrdinals[name]? | continue
-    match ← read ordinal with
-    | .ok record => quotientRecords := quotientRecords.push (ordinal, record)
-    | .error message =>
-      failure? := some s!"cannot decode source record {ordinal} for {name}: {message}"
-  if failure?.isNone && quotientRecords.size == 4 then
-    match env.addDeclCore 0 .quotDecl none false with
-    | .ok minted =>
-      if quotientRecords.all (fun (_, record) => installedQuotRecord minted record) then
-        env := minted
-        for (ordinal, _) in quotientRecords do installed := installed.insert ordinal
-    | .error _ => pure ()
-  for (name, statement) in canonicalSpliceAxioms do
-    if failure?.isSome then break
-    let some ordinal := census.rawOrdinals[name]? | continue
-    let record ← match ← read ordinal with
-      | .ok record => pure record
-      | .error message =>
-        failure? := some s!"cannot decode source record {ordinal} for {name}: {message}"
-        continue
-    let .ax axiomName levelParams type isUnsafe := record | continue
-    unless axiomName == name && !isUnsafe do continue
-    -- The statements name `Eq`, `Quot`, `Nonempty` and `Iff`, so they can only
-    -- be read — and the input's own compared against them — once those are
-    -- installed; an input which does not supply them canonically simply keeps
-    -- its axiom to itself.
-    setEnv env
-    let canonical? ← try
-        let expected ← statement levelParams
-        pure (some (← isDefEq type expected))
-      catch _ => pure none
-    unless canonical? == some true do continue
-    match env.addDeclCore 0
-        (.axiomDecl { name, levelParams, type, isUnsafe }) none false with
-    | .ok next =>
-      env := next
-      installed := installed.insert ordinal
-    | .error exception =>
-      failure? := some s!"cannot install the input's own {name}: \
-        {← (exception.toMessageData {}).toString}"
-  setEnv saved
-  match failure? with
-  | some message => return .error message
-  | none => return .ok { env, ordinals := installed }
+**The non-inductive cases compare against the environment rather than against
+a second mint**, because a second mint would be built in a *different*
+environment: `hintsFor` reads the heights of the constants a value mentions,
+and the tight pair's `rec'` mentions `PSigma'.fst` and `PSigma'.snd`, which by
+this point are installed and were not when generation built it. The inductives
+are minted, by exactly [`InductiveModels.validateBasisOwner`]'s comparison,
+because an inductive record carries the kernel-derived recursor and carries no
+hints for an environment to change. -/
+def canonicalBasisRecordMatches (record : EDecl) : MetaM Bool := do
+  let env ← getEnv
+  match record with
+  | .induct (type :: _) _ _ =>
+    let some (_, canonical) := canonicalSpliceInductives.find? (·.1 == type.name)
+      | return false
+    isCanonicalInductiveRecord type.name canonical record
+  | .quot .. => return installedQuotRecord env record
+  | _ =>
+    let some (name, levelParams) := (match record with
+      | .ax name levelParams .. | .defn name levelParams .. | .thm name levelParams ..
+      | .opaq name levelParams .. => some (name, levelParams)
+      | _ => none) | return false
+    let some info := env.constants.find? name | return false
+    unless info.levelParams.length == levelParams.length do return false
+    let levels := levelParams.map Level.param
+    let restate := fun (e : Expr) => e.instantiateLevelParams info.levelParams levels
+    let installed : Declaration ← match info with
+      | .defnInfo value =>
+        pure (.defnDecl { value with
+          levelParams, type := restate value.type, value := restate value.value })
+      | .thmInfo value =>
+        pure (.thmDecl { value with
+          levelParams, type := restate value.type, value := restate value.value })
+      | .axiomInfo value =>
+        pure (.axiomDecl { value with levelParams, type := restate value.type })
+      | .opaqueInfo value =>
+        pure (.opaqueDecl { value with
+          levelParams, type := restate value.type, value := restate value.value })
+      | _ => return false
+    return record == (← toEDecl installed)
 
 /-- One-pass model-before-owner guard for an input stream. Once an inductive
 owner has appeared, any later record introducing one of that owner's exact
@@ -2668,9 +2386,6 @@ private structure FilterContext where
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
   constructionReserved : Std.HashSet Name
-  /-- Raw source ordinals whose declaration `installInputCanonicalBasis`
-  already put in the replay environment. -/
-  preinstalledOrdinals : Std.HashSet Nat
   collectTrace : Bool := false
   collectAdapterShadows : Bool := false
   outputEmitter? : Option StreamOutputEmitter := none
@@ -2705,6 +2420,13 @@ private structure FilterState where
   adapterShadows : Array FamilyAdapter.ShadowObservation := #[]
   streamStats : StreamOutputStats := {}
   inputFamilyCandidates : Array Name := #[]
+  /-- **The canonical basis names generation has written into the output.**
+  Exactly the names whose input-owned record is dropped when the stream reaches
+  it. This is a record of what was emitted and not a question about the
+  environment: the input's own quotient bundle is four records binding four
+  constants at the first of them, so "already in the environment" would drop
+  the other three. -/
+  canonicalBasisWritten : Std.HashSet Name := {}
 
 private inductive FilterFeedResult where
   | next (state : FilterState)
@@ -2725,7 +2447,6 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let streamOutput := retention.streamsOutput
   let exactTransform := context.exactTransform
   let sourceSyntax := context.sourceSyntax
-  let constructionSyntax := context.constructionSyntax
   let constructionNormalizer := context.constructionNormalizer
   let sourceAliases := context.sourceAliases
   let sourceSummaries := context.sourceSummaries
@@ -2753,6 +2474,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let mut adapterShadows := state.adapterShadows
   let mut streamStats := state.streamStats
   let mut inputFamilyCandidates := state.inputFamilyCandidates
+  let mut canonicalBasisWritten := state.canonicalBasisWritten
   for family in sourceFamilyRecord do
     unless inputFamilyCandidates.contains family.owner do
       inputFamilyCandidates := inputFamilyCandidates.push family.owner
@@ -2772,6 +2494,22 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   -- below work in the ambient disposable fork; closing an inductive record
   -- restores this exact source prefix plus accepted reusable support.
   setEnv mainEnv
+  -- **The one record class that is dropped rather than emitted.** A canonical
+  -- basis name is already bound here exactly when generation wrote its own
+  -- declaration at that name earlier in the stream; input names are unique and
+  -- this record has not been replayed, so nothing else can have bound it.
+  -- Dropping is only correct if this record is that same declaration, and that
+  -- is asked here and nowhere else ([`InductiveModels.canonicalBasisRecordMatches`]).
+  let dropCanonicalBasisRecord ←
+    if replayD.names.any canonicalBasisWritten.contains then
+      if ← canonicalBasisRecordMatches replayD then pure true
+      else
+        return .unreplayable
+          { rep with unreplayable := some s!"{d.names}: generation already wrote the \
+            canonical basis declaration at this name, and this input record is not that \
+            declaration" }
+          sourceSteps
+    else pure false
   let mainBefore := mainEnv
   let mut replayedOwnerEnv? : Option Environment := none
   let reportedBefore := rep.generated.size
@@ -2788,7 +2526,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     -- and with one carrier per real member.
     if let t :: _ := ts then
       if generation.nested && ts.any (·.numNested > 0) &&
-          basisRoot?.isNone && invalidBasis.isEmpty then
+          basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
         let all := ts.toArray.map (·.name)
         let ctorsOfMember := fun (n : Name) =>
           (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
@@ -2870,14 +2608,14 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   -- Replay the source record between its pre-owner and post-owner generation
   -- phases.  An unreplayable source record terminates the complete machine and
   -- discards every private island, matching the historical loop return.
-  if context.preinstalledOrdinals.contains sourceOrdinal then
-    -- **This record's own declaration is already installed.**
-    -- `installInputCanonicalBasis` put it in, from this very record, after
-    -- proving it to be the declaration generation would otherwise have
-    -- written; installing it again is installing the same declaration, which
-    -- the kernel refuses by name. So the record replays as a no-op — the same
-    -- answer `toDeclaration` gives the second `quot` record of one kernel
-    -- quotient bundle — and is still emitted at this position.
+  if dropCanonicalBasisRecord then
+    -- **This record's own declaration is already installed**, because
+    -- generation wrote the canonical declaration at this name earlier and this
+    -- record was proved above to be that declaration. Installing it again is
+    -- installing the same declaration, which the kernel refuses by name, so
+    -- the record replays as a no-op — the same answer `toDeclaration` gives
+    -- the second `quot` record of one kernel quotient bundle — and it is not
+    -- emitted either.
     replayedOwnerEnv? := some (← getEnv)
   else if let some dcl := toDeclaration (← getEnv) replayD then
     match (← getEnv).addDeclCore 0 dcl none false with
@@ -2900,6 +2638,11 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       unless mismatches.isEmpty do
         throwError "collision-safe inductive replay metadata differs for {d.names}: \
           {mismatches.toList.map sourceAliases.exactMessage}"
+  -- **The exemption is a fact about the source declaration, not about where it
+  -- ends up.** A dropped basis owner is reported exempt exactly as an emitted
+  -- one is: the input declared it and this tool did not model it. For a dropped
+  -- record the verdict can only be `.ok`, because the drop above already
+  -- established that this record is the canonical declaration.
   if let some root := basisRoot? then
     match ← (validateBasisOwner root replayD).run with
     | .ok () =>
@@ -2915,38 +2658,23 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   if let .induct ts cs _ := replayD then
     if let t :: _ := ts then
       if generation.mutualModels && ts.length > 1 && !ts.any (·.numNested > 0) &&
-          basisRoot?.isNone && invalidBasis.isEmpty then
+          basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
         let all := ts.toArray.map (·.name)
         let ctors := all.map fun n =>
           (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
         let tys := ts.toArray.map (·.type)
-        let mut needsExactSortLift := hasIntrinsicProjectionFields constructionSyntax ts cs
-        unless needsExactSortLift do
-          for type in ts do
-            if type.isKernelStructureLike cs && !(← isPropFormerType type.type) then
-              needsExactSortLift := true
-        if ← mutualReady needsExactSortLift reserved then
-          let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
-            generation.simple generation.basic (out, rep, pending, islandAdapterShadows)
-            (some replayD) exactTransform context.collectAdapterShadows
-          (out, rep, pending, islandAdapterShadows) ← pure st3
-        else
-          let declined := rep.declined.push
-            (t.name, "mutual model prerequisite occurs later in the input stream")
-          rep := { rep with declined }
+        let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
+          generation.simple generation.basic (out, rep, pending, islandAdapterShadows)
+          (some replayD) exactTransform context.collectAdapterShadows
+        (out, rep, pending, islandAdapterShadows) ← pure st3
       if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
-          basisRoot?.isNone && invalidBasis.isEmpty then
+          basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
         let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
-        let (st, wait?) ← genPrim t.name t.levelParams t.numParams t.type ctors
-          #[] reserved generation.basic true (out, rep, pending, islandAdapterShadows)
+        let st ← genPrim t.name t.levelParams t.numParams t.type ctors
+          #[] reserved generation.basic (out, rep, pending, islandAdapterShadows)
           (some (replayD, constructionNormalizer)) exactTransform
           context.collectAdapterShadows
-        match wait? with
-        | none => (out, rep, pending, islandAdapterShadows) ← pure st
-        | some _ =>
-          let declined := rep.declined.push
-            (t.name, "prim model prerequisite occurs later in the input stream")
-          rep := { rep with declined }
+        (out, rep, pending, islandAdapterShadows) ← pure st
   if d matches .induct .. then
     let generated := out
     let islandModels := pending
@@ -3019,17 +2747,22 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         compactIslands := compactIslands.push compact
       if streamOutput && rep.generatedKernelRejected.isNone then
         streamIsland? := some orderedGenerated
-      let persistentRecords := generatedSupportRecords orderedGenerated exactIslandModels
+      let persistentRecords := (generatedSupportRecords orderedGenerated exactIslandModels).filter
+        (!canonicalBasisAlreadyIndexed persistentSyntax ·)
       persistentSyntax := ← match persistentSyntax.prependRecords persistentRecords with
         | .ok index => pure index
         | .error message => throwError
             "cannot index accepted persistent support for {d.names}: {message}"
+      for record in orderedGenerated do
+        for name in record.names do
+          if canonicalBasisNames.contains name then
+            canonicalBasisWritten := canonicalBasisWritten.insert name
       if retainOutput then legacyOut := legacyOut ++ orderedGenerated
       setEnv mainWithSupport
-      if context.preinstalledOrdinals.contains sourceOrdinal then
+      if dropCanonicalBasisRecord then
         -- The owner-free island replay restores this record's own declaration
-        -- together with the prefix; it was installed before the stream began
-        -- and is not installed a second time here either.
+        -- together with the prefix; generation wrote it earlier and it is not
+        -- installed a second time here either.
         mainEnv := mainWithSupport
       else if let some ownerDeclaration := toDeclaration mainWithSupport replayD then
         match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
@@ -3044,8 +2777,11 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
             sourceSteps
   else
     mainEnv ← getEnv
-  if retainOutput then legacyOut := legacyOut.push d
-  if compactMode then
+  -- **A dropped record leaves the output here.** Its declaration is already in
+  -- the output, written by generation at the point it was first needed, so
+  -- emitting this record too would bind the same constant twice.
+  if retainOutput && !dropCanonicalBasisRecord then legacyOut := legacyOut.push d
+  if compactMode && !dropCanonicalBasisRecord then
     let some firstName := d.names.head? | throwError "source declaration has no name"
     let some rawOrdinal := rawOrdinals[firstName]?
       | throwError "source declaration {firstName} lost its raw ordinal"
@@ -3055,7 +2791,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
       families := sourceFamilyRecord ++ modeledSourceFamilies
       locator := .source rawOrdinal }
     compactRecords := compactRecords.push row
-  if context.checkRecursors then
+  if context.checkRecursors && !dropCanonicalBasisRecord then
     if let .induct _ _ rs := replayD then
       let (n, b) ← checkRecs rs
       rep := { rep with
@@ -3084,12 +2820,14 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         streamStats with
         generatedRecords := streamStats.generatedRecords + island.size
         maxIslandRecords := max streamStats.maxIslandRecords island.size }
-    emit (.source d)
-    streamStats := { streamStats with sourceRecords := streamStats.sourceRecords + 1 }
+    unless dropCanonicalBasisRecord do
+      emit (.source d)
+      streamStats := { streamStats with sourceRecords := streamStats.sourceRecords + 1 }
   return .next {
     mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, compactRecords,
     sourceOrdinal := sourceOrdinal + 1, islandStatements, invalidBasis,
-    sourceSteps, adapterShadows, streamStats, inputFamilyCandidates }
+    sourceSteps, adapterShadows, streamStats, inputFamilyCandidates,
+    canonicalBasisWritten }
 
 /-- Complete compact structural checking after the logical source stream has
 been exhausted.  No source `EDecl` is consumed here. -/
@@ -3194,21 +2932,11 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let sourceOrder := Array.range sourceCensus.summaries.size
   -- Source records are consumed in their original stream order and no
   -- declaration is ever moved. An owner whose fixed *support* occurs later
-  -- still declines at that owner; the one exception is the fixed basis, whose
-  -- canonical declaration the input's own record is required to be
-  -- byte-identical to and which is therefore installed below.
-  let readSourceRecord : Nat → MetaM (Except String EDecl) := fun ordinal => do
-    match plannedSource? with
-    | some reader => reader.read ordinal
-    | none => match x.decls[ordinal]? with
-      | some record => return .ok record
-      | none => return .error "the record has neither retained nor planned payload"
-  let canonicalBasis ← match
-      ← installInputCanonicalBasis (← getEnv) sourceCensus readSourceRecord with
-    | .ok install => pure install
-    | .error message =>
-      throwError "cannot install the input's own basis declarations: {message}"
-  let mainEnv := canonicalBasis.env
+  -- still declines at that owner; the one exception is the fixed basis, which
+  -- generation writes at the first point it is needed and whose input-owned
+  -- record is then dropped where it stands
+  -- ([`InductiveModels.canonicalBasisRecordMatches`]).
+  let mainEnv ← getEnv
   -- Reuse the immutable census products. Retained sources may still supply
   -- whole-export row caches; planned sources derive missing rows from each
   -- transient declaration at its logical transition.
@@ -3255,8 +2983,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
     sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
-    rawOrdinals, reserved, constructionReserved,
-    preinstalledOrdinals := canonicalBasis.ordinals, collectTrace, collectAdapterShadows,
+    rawOrdinals, reserved, constructionReserved, collectTrace, collectAdapterShadows,
     outputEmitter? }
   let mut state : FilterState :=
     { mainEnv := mainEnv, persistentSyntax := sourceSyntax }

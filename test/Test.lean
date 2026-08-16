@@ -400,7 +400,7 @@ def expectedPrim : List Row :=
   -- checks the genuinely propositional end.
   , ("degenerate_graph", [("DG", 15)], [])
   , ("prim_shapes",
-      [("Tri", 17), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
+      [("Tri", 18), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
        ("Conj3", 10), ("PU", 6), ("Sv", 5), ("PE", 2), ("MNm", 8), ("IdxS", 5),
        ("Dec", 6), ("Conj", 8), ("TagS2", 8), ("TagS", 6), ("PT", 8),
@@ -461,7 +461,7 @@ def expectedPrim : List Row :=
   -- positive arm-F controls for one and several dependent pivot transports;
   -- `arm_f_zip` isolates the wider zipper cases.
   , ("prim_idx",
-      [("N", 15), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 14),
+      [("N", 16), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 14),
        ("Rxh", 18), ("Rxh.below", 22), ("FChain", 4), ("Rgd", 16),
        ("Rgd.below", 20), ("Fam", 6), ("Inf.below", 18),
        ("Fg", 5), ("Rv.below", 13), ("Fall3", 4), ("Fxh", 6), ("Fmid", 4),
@@ -469,17 +469,17 @@ def expectedPrim : List Row :=
        ("Rvx.below", 13), ("Fdup", 4)],
       [ ("Eq", "prim model: a basis primitive")])
   , ("arm_f_zip",
-      [("FTwo", 11), ("FProof", 4), ("FChain", 4), ("FEndpoint", 4)],
+      [("FTwo", 12), ("FProof", 4), ("FChain", 4), ("FEndpoint", 4)],
       [ ("Nat", "prim model: a basis primitive")
       , ("Eq", "prim model: a basis primitive")])
   , ("prim_graph",
-      [("G1", 23), ("Nonempty", 4), ("G4", 15), ("G4.below", 13), ("Ac", 13),
+      [("G1", 24), ("Nonempty", 4), ("G4", 15), ("G4.below", 13), ("Ac", 13),
        ("N", 8), ("BadC", 14), ("BadC.below", 18), ("Ac.below", 13),
        ("G3", 13), ("G3.below", 13),
        ("G1.below", 18), ("G2", 13), ("G5", 13), ("G5.below", 13),
        ("G2.below", 13)],
       [ ("Eq", "prim model: a basis primitive")])
-  , ("prim_graph_pre", [("Ac", 20), ("Ac.below", 13), ("Nonempty", 4),
+  , ("prim_graph_pre", [("Ac", 24), ("Nonempty", 4), ("Ac.below", 13),
       ("PSigma", 11)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
@@ -506,15 +506,22 @@ def expectedPrim : List Row :=
   -- declared *after* it here — `Acc` arrives through `WellFounded.fix` and
   -- `Nonempty` only through `Classical.propDecidable`.
   --
-  -- **The order of this row is raw source order and nothing else.** `Iff` sits
-  -- between `Or` and `Acc` and `Nonempty` is last, exactly where the export
-  -- puts them; the row used to carry both at the front, from a scheduler that
-  -- moved fixed support ahead of its consumers and no longer exists. What
-  -- takes its place is [`InductiveModels.installInputCanonicalBasis`]: the input's own
-  -- `Eq`, `Nat`, `PUnit`, `Nonempty`, quotient and axioms are the declarations
-  -- generation would otherwise have written itself, so they are installed
-  -- before the stream is consumed and replay as no-ops where they stand.
-  -- Nothing moves in the output, and every count in this row is unchanged.
+  -- **The order of this row is raw source order except where a model wrote its
+  -- own support.** `Iff` sits between `Or` and `Acc` exactly where the export
+  -- puts it, because nothing in this file reaches `Iff` before that record.
+  -- `Nonempty` does not: it is last in the export and second-to-`Acc` here,
+  -- because `Acc` is arm G and arm G asserts `Classical.choice`, whose domain
+  -- it is. Generation writes its own `Nonempty` and `Classical.choice` inside
+  -- `Acc`'s island — that is `Acc`'s 12 becoming 14 — the splice-closure rule
+  -- models the `Nonempty` it just wrote, and the input's own record is dropped
+  -- against it when the stream reaches it
+  -- ([`InductiveModels.canonicalBasisRecordMatches`]). `Subtype`'s 16 becomes
+  -- 19 for the same reason one file earlier: it is the first owner, so `Eq`,
+  -- `PUnit` and `Nat` are written in front of it.
+  --
+  -- This is not a scheduler and nothing is reordered: every record is emitted
+  -- where the construction reaches it, and what moved is where the declaration
+  -- is *written*, not where a source record sits.
   --
   -- `Subtype`, `Sigma`, `And`, `Iff`, `WellFounded`, and `PProd` expose
   -- intrinsic projection roles. Their larger
@@ -523,10 +530,10 @@ def expectedPrim : List Row :=
   -- additionally receive one eta theorem; unit-like and K-like declarations
   -- receive their own one-theorem metadata roles.
   , ("w_core",
-      [("Subtype", 16), ("List", 6), ("Sigma", 9),
+      [("Subtype", 19), ("List", 6), ("Sigma", 9),
        ("Option", 6), ("Exists", 4), ("And", 8), ("False", 2), ("Decidable", 6),
-       ("True", 6), ("Or", 6), ("Iff", 8), ("Acc", 12), ("WellFounded", 6),
-       ("Bool", 6), ("HEq", 5), ("PProd", 9), ("Nonempty", 4)],
+       ("True", 6), ("Or", 6), ("Iff", 8), ("Acc", 14), ("Nonempty", 4),
+       ("WellFounded", 6), ("Bool", 6), ("HEq", 5), ("PProd", 9)],
       [ ("Eq", "prim model: a basis primitive")
       , ("PUnit", "prim model: a basis primitive")
       , ("Nat", "prim model: a basis primitive")])
@@ -572,7 +579,7 @@ def expectedPrim : List Row :=
   -- this row's earlier owners were declining. `ProjectionTest` names the eight
   -- records; this row only counts them.
   , ("prim_carve",
-      [("N", 15), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
+      [("N", 16), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
@@ -636,7 +643,7 @@ def expectedPrim : List Row :=
   -- route: its row is present, while the assertion in `runOne` requires the
   -- one-layer private certificate to be absent.
   , ("prim_w",
-      [("Tree", 224), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
+      [("Tree", 225), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
@@ -736,12 +743,13 @@ def expectedPrim : List Row :=
       [("Eq", "prim model: a basis primitive")])
   -- **`Ac` is written at a quotient the input declares behind it.** `Quot`,
   -- `Quot.sound`, `Nonempty` and `Classical.choice` all follow `Ac` in the raw
-  -- export and `Ac` needs every one of them: its 20 declarations are arm G's 13
-  -- plus the fixed-support prefix it carries as the file's first model. The
-  -- four are the declarations generation would otherwise splice, so
-  -- [`InductiveModels.installInputCanonicalBasis`] installs the input's own and each
-  -- record replays as a no-op at its own position. `Nonempty` then models where
-  -- it stands, behind the two owners that already used it.
+  -- export and `Ac` needs every one of them: its 24 declarations are arm G's 13
+  -- plus the fixed-support prefix it carries as the file's first model —
+  -- including those four, written there rather than waited for. The input's own
+  -- records for them are dropped where they stand
+  -- ([`InductiveModels.canonicalBasisRecordMatches`]), so `Nonempty` is modelled
+  -- as part of `Ac`'s island by the splice-closure rule and appears here
+  -- immediately after it instead of behind the two owners that used it.
   --
   -- **An ordinary `PSigma` occurs after unrelated owners in the raw export.**
   -- It is no longer support: earlier owners use the fixed `PSigma'` bundle,
@@ -778,14 +786,15 @@ def expectedPrim : List Row :=
   -- declarations are the same declaration, so the splice proceeds and the
   -- input's own record replays as a no-op at its own position.
   --
-  -- `Cnt`'s 14 is the Church route's own and `Use`'s 6 is arm F's, unchanged
-  -- from the run in which `Cnt` declines — which is the point. The claim of the
-  -- row is that `Cnt` models at all, and models exactly as it would if `Nat`
-  -- and `Eq` came first: an implementation that only recovers owners *behind*
-  -- the basis record leaves `Cnt` in the decline row, and one that moves the
-  -- record leaves the input's own declaration out of the output.
+  -- `Cnt`'s 16 is the Church route's 14 plus the two records it writes in
+  -- front of itself, `Nat` and `Eq`; `Use`'s 6 is arm F's. The claim of the row
+  -- is that `Cnt` models at all: an implementation that only recovers owners
+  -- *behind* the basis record leaves `Cnt` in the decline row. The input's own
+  -- `Nat` and `Eq` records are dropped against the two that were written, so
+  -- the output declares each of them exactly once, in front of `Cnt` rather
+  -- than behind it.
   , ("prim_late_eq",
-      [("Cnt", 14), ("Use", 6)],
+      [("Cnt", 16), ("Use", 6)],
       [ ("Nat", "prim model: a basis primitive")
       , ("Eq", "prim model: a basis primitive")])
   ]

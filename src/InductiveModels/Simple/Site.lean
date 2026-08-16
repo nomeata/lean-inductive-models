@@ -406,7 +406,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- the same explicit packed transport as arm F.
   let armG := armGRec
 
-  let (eqi, eqDecls) ← ensureEq reserved
+  let (eqi, eqDecls) ← ensureEq
   let mut out : Array Declaration := eqDecls
   let mut requires : Array Name := #[]
   let mut spliced : Array Name := eqDecls.flatMap (·.getNames.toArray)

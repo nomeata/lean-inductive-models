@@ -1,30 +1,31 @@
 import InductiveModels.Driver
 
 /-!
-# Emission order, censused — and the replay that does not depend on it
+# Emission order, as an invariant — and the replay that does not depend on it
 
 Run from the repository root: `lake exe emissionordercensustest [ROOT]`.
 
-This suite pins a **known defect**. It does not fix it, and nothing here should
-be read as saying the defect is acceptable.
-
-## The defect
+## The invariant
 
 Generated output is emitted as one stream of records. Lean's kernel builds an
 environment by adding declarations one at a time, so a stream that is meant to
 be replayable *as written* must never mention a constant before the record that
-declares it. The output stream does not currently meet that.
+declares it. The invariant this suite pins is that the output stream meets that
+exactly: **no generated record references a name the stream has not declared
+yet**, in any committed fixture, under the maximal generation configuration.
 
-`Driver.installInputCanonicalBasis` installs an input's own canonical-basis
-records — `Eq`, `Nat`, `PUnit`, the `PSigma'` bundle, `Nonempty`, the `Quot`
-bundle with `Quot.sound`, `Classical.choice`, `Iff`, `propext` — into the
-replay environment *before* the stream is consumed, so a generated island may
-be emitted against a basis member that the output only declares later, at the
-raw ordinal the input put it at. An output is dirty exactly when its input
-declares a canonical-basis member *after* the first owner that consumes it;
-inputs whose basis precedes every consumer are clean. The genuine input
-fixtures themselves have no forward reference at all — this is a property of
-what the filter emits, not of what it reads.
+There is no allowlist here and no row to append. The one construct that used to
+break it was the fixed canonical basis — `Eq`, `Nat`, `PUnit`, the `PSigma'`
+bundle, `Nonempty`, the `Quot` bundle with `Quot.sound`, `Classical.choice`,
+`Iff`, `propext`. An input which declared one of those *after* the first owner
+that consumed it left the output referring to it before the record that
+declared it, in 1143 records across 15 of the 78 fixtures. Generation now writes
+its own canonical declaration at the first point one is needed, whatever the
+input reserves, and drops the input's own record where it stands once it has
+been checked to be that same declaration
+([`InductiveModels.canonicalBasisRecordMatches`]); there is no other source of a
+forward reference, so a new one is a defect in the route that produced it and
+this suite names the fixture and the record.
 
 ## What this file measures
 
@@ -34,38 +35,38 @@ reports every record whose kernel dependency set reaches a name the stream has
 not declared yet. The dependency set is `KernelCheck.inputReferences`, which is
 the project's own answer to "which constants does the kernel need in place
 before it will accept this record"; using it rather than a second, private
-traversal is what makes this census measure exactly the property that
+traversal is what makes this suite measure exactly the property that
 `KernelCheck.replayOrder` reorders around.
 
-`expectedForwardReferences` below is a **progress meter toward zero**, in the
-manner of `test/ProjectionTransportCensusTest.lean`'s `expectedUnrunnable`. It
-is an exact list, so the suite fails in every direction: a fixture that becomes
-dirty is a new defect, and a fixture that becomes clean, or whose count moves,
-is progress that has to be recorded rather than absorbed. Rows are removed, not
-edited upward, unless a maintainer deliberately writes down why.
-
-The fix is a contract decision that has not been made: either the filter emits
-each island after everything it consumes, or the output contract says in so
-many words that the stream is a set of records with a declared dependency
-schedule rather than a sequence. That decision belongs to the project owner,
-so this file only bounds and displays the gap.
+`expectedUnrunnable` remains, for the same reason it does in
+`test/ProjectionTransportCensusTest.lean`: it is about *exhaustiveness* rather
+than about ordering, and a fixture that starts or stops running under the
+maximal configuration has to be noticed or the invariant would quietly stop
+covering the corpus. The input exports are checked to be clean too — a dirty
+input is a separate defect in the fixture or its exporter, not something this
+suite may absorb.
 
 ## Why the second half is here
 
-`--type-check-input` does *not* see this defect, because
-`InductiveModels.typeCheckExport` does not replay in record order: it replays in
+`--type-check-input` does *not* see record order at all, because
+`InductiveModels.typeCheckExport` does not replay in it: it replays in
 `KernelCheck.replayOrder`, a depth-first topological sort of the same
-`inputReferences` edges. `orderInsensitiveReplayAccepts` pins that.
+`inputReferences` edges. `orderInsensitiveReplayAccepts` pins that, by taking a
+genuine input fixture, reversing it, and requiring the reversal to be both
+order-broken and accepted.
 
-**That assertion is deliberately the weaker property, and it is not an
-endorsement.** It says only what is true today: an export whose records are in
-a broken order is still accepted, so the acceptance of any generated output by
-`--type-check-input` is *no evidence* that the output is replayable in record
-order. Its purpose is to fail loudly if someone later makes replay
-order-sensitive — at which point the census above stops being a progress meter
-and becomes a set of real rejections that must be dealt with before that change
-can land. A maintainer who wants replay to be order-sensitive should expect to
-delete this assertion and empty the allowlist in the same commit.
+That assertion is deliberately the *weaker* property and it is still not an
+endorsement. It says that acceptance of any export by `--type-check-input` is
+**no evidence** that the export is replayable in record order — which is why the
+invariant above has to be checked separately and directly. It is kept, rather
+than deleted along with the allowlist it used to protect, because that
+distinction is exactly as true now as it was before: the two halves of this file
+assert two different things about the same stream.
+
+Making replay order-sensitive is a separate contract decision. With the census
+above at zero it is no longer blocked by this repository's own output; a
+maintainer who takes it should expect this assertion to fail, which is the
+intended signal, and should delete it in that same commit.
 -/
 
 set_option maxRecDepth 4096
@@ -131,7 +132,14 @@ structure FixtureCensus where
   /-- The same walk over the *input* export, which is expected to be clean. -/
   inputForwardReferencing : Nat := 0
   ran : Bool := true
+  /-- Why the filter rejected the input, if it did. -/
+  unreplayable? : Option String := none
 
+/-- **A rejected run is not a clean run.** `runFilter` answers an unreplayable
+source record by returning the *input* declarations with the reason in the
+report, and the input is clean by construction — so a rejection would otherwise
+walk zero forward references and read as a pass. The reason is carried out and
+failed on instead. -/
 def censusFixture (path : String) : IO FixtureCensus := do
   let .ok x := parse (← IO.FS.readFile path)
     | throw <| IO.userError s!"cannot parse {path}"
@@ -139,17 +147,18 @@ def censusFixture (path : String) : IO FixtureCensus := do
   let env ← importModules #[] {}
   let context : Core.Context :=
     { fileName := path, fileMap := default, maxHeartbeats := 0, maxRecDepth := 8192 }
-  let decls? ← try
-      let ((decls, _), _) ← Core.CoreM.toIO
+  let filtered? ← try
+      let ((decls, report), _) ← Core.CoreM.toIO
         (MetaM.run' (runFilter x false censusGeneration)) context { env }
-      pure (some decls)
+      pure (some (decls, report))
     catch _ => pure none
-  let some decls := decls? | return { ran := false, inputForwardReferencing }
+  let some (decls, report) := filtered? | return { ran := false, inputForwardReferencing }
   let references := forwardReferences decls
   return { forwardReferencing := references.size,
            first? := references[0]?.map (·.describe),
            records := decls.size,
-           inputForwardReferencing }
+           inputForwardReferencing,
+           unreplayable? := report.unreplayable }
 
 /-- The committed corpus, as (label prefix, directory) pairs, as in
 `ProjectionTransportCensusTest`. -/
@@ -157,33 +166,8 @@ def fixtureDirectories : Array (String × String) :=
   #[("", "test/fixtures/inductive-models"),
     ("filtered/", "test/fixtures/inductive-models/filtered")]
 
-/-- **The progress meter.** Every fixture whose generated output currently
-contains at least one record referencing a not-yet-declared name, with its
-exact count.
-
-Every row is a defect. The target is the empty array. Removing a row is the
-only edit that needs no justification; adding one, or raising a count, records
-that the output stream got further from being replayable as written and must be
-argued for in the commit message. -/
-def expectedForwardReferences : Array (String × Nat) :=
-  #[("arm_f_zip", 7),
-    ("filtered/nested_iota", 69),
-    ("filtered/nested_shapes", 69),
-    ("mutual_structure_projections", 13),
-    ("prim_carve", 288),
-    ("prim_graph", 67),
-    ("prim_graph_pre", 7),
-    ("prim_idx", 101),
-    ("prim_late_eq", 9),
-    ("prim_shapes", 65),
-    ("prim_w", 222),
-    ("private_constructor", 7),
-    ("tight_prop_field_late", 4),
-    ("w_core", 47),
-    ("w_late_iff", 168)]
-
 /-- Fixtures the maximal generation configuration cannot run to completion,
-pinned for the same reason as in `ProjectionTransportCensusTest`: the census
+pinned for the same reason as in `ProjectionTransportCensusTest`: the invariant
 must not silently stop being exhaustive. -/
 def expectedUnrunnable : Array String := #[]
 
@@ -201,8 +185,7 @@ This asserts the *weaker* property on purpose — see the header. It first
 establishes that the reversed export really is order-broken (otherwise the
 acceptance below would say nothing), then that `typeCheckExport` accepts it
 anyway. If replay is ever made order-sensitive this assertion fails, which is
-the intended signal: `expectedForwardReferences` must be driven to empty before
-such a change can land. -/
+the intended signal, and the maintainer making that change deletes it. -/
 def orderInsensitiveReplayAccepts (root : String) : IO (Array String) := do
   let path := s!"{root}/test/fixtures/inductive-models/prim_shapes.ndjson"
   let .ok x := parse (← IO.FS.readFile path)
@@ -230,8 +213,9 @@ def orderInsensitiveReplayAccepts (root : String) : IO (Array String) := do
   | .error message =>
     failures := failures.push
       s!"typeCheckExport rejected an order-broken export: {message}. Replay has \
-         become order-sensitive; expectedForwardReferences is now a list of real \
-         rejections and must be driven to empty"
+         become order-sensitive, so this assertion no longer states a property \
+         of this tool and the commit that made replay order-sensitive should \
+         delete it"
   unless failures.isEmpty do return failures
   IO.println s!"order-insensitive replay: an export reversed into \
     {brokenCount} forward-referencing records is still accepted by \
@@ -249,7 +233,6 @@ def main (args : List String) : IO UInt32 := do
   paths := paths.qsort (fun left right => left.1 < right.1)
 
   let mut failures : Array String := #[]
-  let mut dirty : Array (String × Nat) := #[]
   let mut unrunnable : Array String := #[]
   let mut records := 0
   let mut forwardReferencing := 0
@@ -258,31 +241,32 @@ def main (args : List String) : IO UInt32 := do
     records := records + result.records
     forwardReferencing := forwardReferencing + result.forwardReferencing
     unless result.ran do unrunnable := unrunnable.push fixture
+    if let some why := result.unreplayable? then
+      failures := failures.push
+        s!"{fixture}: the filter rejected an input record — {why}; a rejected run \
+           generates nothing and would read as a clean stream here"
     unless result.inputForwardReferencing == 0 do
       failures := failures.push
         s!"{fixture}: the *input* export has {result.inputForwardReferencing} \
-           forward-referencing records; this census is about generated output, \
+           forward-referencing records; this suite is about generated output, \
            and a dirty input is a separate defect in the fixture or its exporter"
-    if result.forwardReferencing > 0 then
-      dirty := dirty.push (fixture, result.forwardReferencing)
-      IO.println s!"  {fixture}: {result.forwardReferencing} forward-referencing \
-        records, first at {result.first?.getD "?"}"
+    unless result.forwardReferencing == 0 do
+      failures := failures.push
+        s!"{fixture}: {result.forwardReferencing} generated records reference a \
+           name the stream has not declared yet, first at \
+           {result.first?.getD "?"}: the output is no longer replayable in \
+           record order, which is a defect in the route that emitted it"
 
   unrunnable := unrunnable.qsort (· < ·)
   if unrunnable != expectedUnrunnable.qsort (· < ·) then
     failures := failures.push
       s!"unrunnable fixtures are {unrunnable}, expected {expectedUnrunnable}: \
          update expectedUnrunnable"
-  if dirty != expectedForwardReferences then
-    failures := failures.push
-      s!"emission-order census is {dirty}, expected {expectedForwardReferences}: \
-         a fixture became dirty, became clean, or changed count — update \
-         expectedForwardReferences and say in the commit message which"
 
   failures := failures ++ (← orderInsensitiveReplayAccepts root)
 
-  IO.println s!"emission order census: {forwardReferencing} of {records} \
-    generated records reference a name the stream has not declared yet, across \
-    {dirty.size} of {paths.size - unrunnable.size} fixtures"
+  IO.println s!"emission order: {records - forwardReferencing} of {records} \
+    generated records declare every name they reference before referencing it, \
+    across {paths.size - unrunnable.size} fixtures"
   for failure in failures do IO.eprintln s!"FAIL: {failure}"
   return if failures.isEmpty then 0 else 1

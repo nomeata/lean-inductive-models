@@ -2413,17 +2413,16 @@ An `Eq` the input *does* declare and that is not Lean's is the one case a
 splice cannot reach — the name is already bound in the output and in the
 input's own terms, and Lean's `Environment` cannot rebind a constant — so it
 declines and says which part of the shape is wrong. -/
-def ensureEq (reserved : Std.HashSet Name) : GenM (EqInfo × Array Declaration) := do
+def ensureEq : GenM (EqInfo × Array Declaration) := do
   if (← getEnv).constants.contains `Eq then
     match EqInfo.check (← getEnv) with
     | .ok e => return (e, #[])
     | .error why => declineWith (.notLeans `Eq why)
-  -- **A name the file itself introduces later is not ours to write.** The
-  -- guard is the same one the model's own names go through, and
-  -- `test/fixtures/inductive-models/nested_keying.lean` is why it looks at the whole
-  -- file rather than the prefix replayed so far.
-  for n in [`Eq, `Eq.refl] do
-    if reserved.contains n then declineWith (.nameTaken n)
+  -- **A name the file introduces later is still ours to write here.** `Eq` is
+  -- a canonical basis name: waiting for the input's own record would emit this
+  -- island against a constant the output declares afterwards. The input's own
+  -- later record is dropped against this declaration instead
+  -- ([`InductiveModels.canonicalBasisRecordMatches`]).
   addChecked eqDecl
   match EqInfo.check (← getEnv) with
   | .ok e => return (e, #[eqDecl])
@@ -2455,8 +2454,6 @@ def ensureFunext (model : Name) (eqi : EqInfo) (reserved : Std.HashSet Name) :
   | some (.quotInfo _) => pure ()
   | some _ => declineWith (.notLeans `Quot "it is declared and is not the kernel's quotient type")
   | none =>
-    for n in [`Quot, `Quot.mk, `Quot.lift, `Quot.ind] do
-      if reserved.contains n then declineWith (.nameTaken n)
     addChecked .quotDecl
     out := out.push .quotDecl
   -- ── Quot.sound ──
@@ -2468,7 +2465,6 @@ def ensureFunext (model : Name) (eqi : EqInfo) (reserved : Std.HashSet Name) :
     unless ← isDefEq ci.type (← quotSoundType eqi.eqN (.param su)) do
       declineWith (.notLeans `Quot.sound "its statement is not Lean's")
   | none =>
-    if reserved.contains `Quot.sound then declineWith (.nameTaken `Quot.sound)
     let d := Declaration.axiomDecl
       { name := `Quot.sound, levelParams := [`u], type := ← quotSoundType eqi.eqN (.param `u)
         isUnsafe := false }
@@ -2729,12 +2725,14 @@ def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
       unless ns.all wCoreShared.contains do
         badShape s!"the W core's {ns} would redeclare {present}"
       continue
-    -- **A name the input introduces later is not ours to write**, exactly as
-    -- in [`InductiveModels.ensureEq`], and for the shared twelve as much as for the
-    -- prefixed rest: `reserved` is the whole file's names, so this is the
-    -- case where the input declares `propext` below the target being modelled.
+    -- **A name the input introduces later is not ours to write** — for the
+    -- prefixed rest. The shared names are canonical basis names and are
+    -- exactly the exception, as in [`InductiveModels.ensureEq`]: the fragment
+    -- writes its `Iff` and `propext` here, at the point the target needs them,
+    -- and the input's own later record is dropped against them
+    -- ([`InductiveModels.canonicalBasisRecordMatches`]).
     for n in ns do
-      if reserved.contains n then declineWith (.nameTaken n)
+      if !wCoreShared.contains n && reserved.contains n then declineWith (.nameTaken n)
     if let some dcl := toDeclaration env d then
       addChecked dcl
       out := out.push dcl
@@ -3009,7 +3007,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   -- head of `out`, ahead
   -- of the block, so that it precedes its first use in the round trips no
   -- matter how the rest of the emission is ordered.
-  let (eqi, eqDecls) ← ensureEq reserved
+  let (eqi, eqDecls) ← ensureEq
   let mut out : Array Declaration := eqDecls
   let mut spliced : Array Name := eqDecls.flatMap (·.getNames.toArray)
 

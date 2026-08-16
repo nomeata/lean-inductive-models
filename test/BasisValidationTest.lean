@@ -73,6 +73,53 @@ def makeRawFixture (corrupt? used? : Bool) (target : Name) : IO Export := do
   return { metaLine := .null, decls := selected.map fun record =>
     if corrupt? && record.names.contains target then corruptBasisRecord record else record }
 
+/-- An owner which names no basis constant in its own declaration but whose
+model is written in all four of them — the Church route's shape. It can
+therefore stand *in front of* every basis record, which
+[`InductiveModels.consumerDeclaration`] cannot: that one has the basis types as
+its own constructor fields and could not replay ahead of them. -/
+def lateConsumerDeclaration : Declaration :=
+  let owner : Expr := .const `LateConsumer []
+  .inductDecl [] 0
+    [{ name := `LateConsumer, type := .sort (.succ .zero),
+       ctors := [{ name := `LateConsumer.zero, type := owner },
+                 { name := `LateConsumer.succ,
+                   type := .forallE `n owner owner .default }] }] false
+
+/-- **The four basis records behind the owner whose model is written in them.**
+
+Generation writes its own canonical basis declaration at the first point one is
+needed, so the owner models here even though the input declares the basis
+behind it — and the input's own record is then dropped where it stands. Which
+of the two happens is the whole question this ordering exists to ask: a record
+that is the canonical declaration is dropped silently, and one that is not
+rejects the run rather than letting this tool's declaration silently take the
+place of the input's. -/
+def makeLateBasisFixture (corrupt? : Bool) (target : Name) : IO Export := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<basis-validation-late-fixture>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (records, _) ← Core.CoreM.toIO (MetaM.run' do
+    let mut records : Array EDecl := #[← addInductiveRecord lateConsumerDeclaration]
+    for declaration in basisDeclarations do
+      records := records.push (← addInductiveRecord declaration)
+    return records) context { env }
+  return { metaLine := .null, decls := records.map fun record =>
+    if corrupt? && record.names.contains target then corruptBasisRecord record else record }
+
+/-- The exact diagnostic a dropped record which is not the canonical
+declaration must carry. Spelled out here so a reworded rejection has to be
+re-read rather than silently accepted. -/
+def noncanonicalBasisRejection : String :=
+  "generation already wrote the canonical basis declaration at this name, \
+   and this input record is not that declaration"
+
+/-- How often the output declares `name`. -/
+def declarationCount (records : Array EDecl) (name : Name) : Nat :=
+  records.foldl (init := 0) fun count record =>
+    if record.names.contains name then count + 1 else count
+
 /-- One declaration of the W fragment, which is what this tool writes under the
 logical names it shares with the input. -/
 def wCoreRecord (name : Name) : IO EDecl := do
@@ -86,15 +133,16 @@ def wCoreRecord (name : Name) : IO EDecl := do
 
 The W arm splices [`InductiveModels.wCoreText`] under the shared logical names, so
 that fragment *is* the declaration this tool writes under `Iff` and `propext`.
-The pre-install compares an input's record against `iffDecl` and `propextType`
-instead, because those are available before any fragment is parsed — which is
-sound only while the two agree. A Lean release that spelled either of them
+`iffDecl` and `propextType` are this tool's own independent statement of the
+same two, written without parsing the fragment: `canonicalSpliceInductives`
+names `Iff` by `iffDecl`, and every rule keyed on
+[`InductiveModels.canonicalBasisNames`] therefore reads `iffDecl`'s names. That
+is sound only while the two agree. A Lean release that spelled either of them
 differently, down to the binder Lean gives an anonymous arrow argument, has to
-fail here rather than quietly stop installing any input's own copy.
+fail here rather than in a W target's decline.
 
 The third check is the other half of the contract: a record which is not the
-canonical declaration is not canonical, so it reserves its names and the owners
-in front of it decline. -/
+canonical declaration is not canonical, so it is never dropped against one. -/
 def runCanonicalLogicalChecks : IO (Bool × Bool × Bool) := do
   let fragmentIff ← wCoreRecord `Iff
   let fragmentPropext ← wCoreRecord `propext
@@ -177,6 +225,27 @@ def main : IO UInt32 := do
     basisNames.all fun target => !exactUsedReport.declined.any (·.1 == target)
   state := state.check "canonical consumed basis permits generation" <|
     exactUsedReport.generated.any (·.1 == `BasisConsumer)
+
+  -- **The basis behind its consumer**, which is the ordering the canonical
+  -- declaration is written early for.
+  let lateExact ← makeLateBasisFixture false `Eq
+  let (lateOutput, lateReport) ← runRaw lateExact
+  state := state.check "late canonical basis still models its consumer" <|
+    lateReport.unreplayable.isNone && lateReport.generated.any (·.1 == `LateConsumer)
+  state := state.check "late canonical basis is exempt, not declined" <|
+    basisNames.all fun target =>
+      lateReport.exempt.any (·.1 == target) && !lateReport.declined.any (·.1 == target)
+  state := state.check "a dropped late basis record leaves exactly one declaration" <|
+    basisNames.all fun target => declarationCount lateOutput target == 1
+
+  for target in basisNames do
+    let lateMalformed ← makeLateBasisFixture true target
+    let (lateMalformedOutput, lateMalformedReport) ← runRaw lateMalformed
+    state := state.check s!"a noncanonical late {target} rejects the run" <|
+      lateMalformedReport.unreplayable.any fun why =>
+        (why.splitOn noncanonicalBasisRejection).length == 2
+    state := state.check s!"a rejected late {target} writes no output" <|
+      lateMalformedOutput == lateMalformed.decls
 
   let (canonicalIff, canonicalPropext, refusesNoncanonicalIff) ← runCanonicalLogicalChecks
   state := state.check "the canonical Iff is the W fragment's own declaration" canonicalIff

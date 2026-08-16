@@ -17,7 +17,6 @@ def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let np := site.np
   let memberTy := site.memberTy
   let exportCtors := site.exportCtors
-  let reserved := site.reserved
   let selfN := site.selfN
   let recN := site.recN
   let ctorN := site.ctorN
@@ -94,8 +93,8 @@ def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- own ι rule fires.
   let lift? : Option Level := if route matches PrimRoute.bare then some w else none
   if lift?.isSome then
-    for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
-  for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
+    for d in ← ensureExactSortLift do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensurePSigmaPrime do out := out.push d; spliced := spliced ++ d.getNames
   let (cn0, cty0) := exportCtors[0]!
   let nonPiv := gNonPiv
   let zipRoute := !gPivotTransports.isEmpty

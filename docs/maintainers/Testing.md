@@ -169,43 +169,46 @@ reproduces exactly, and is counted rather than restricted. The suite still
 pins the fixtures that the maximal configuration cannot run today, so the
 invariant cannot silently stop being exhaustive.
 
-`emissionordercensustest` bounds a **known defect**: generated output is not
-currently guaranteed to be replayable in record order. Lean's kernel starts
-from an empty environment and adds one declaration at a time, but
-`Driver.installInputCanonicalBasis` installs an input's own canonical-basis
-records (`Eq`, `Nat`, `PUnit`, the `PSigma'` bundle, `Nonempty`, the `Quot`
-bundle with `Quot.sound`, `Classical.choice`, `Iff`, `propext`) into the replay
-environment *before* the stream is consumed, so a generated island can be
-emitted against a basis member that the output only declares later. An output
-is dirty exactly when its input declares a canonical-basis member after the
-first owner that consumes it; every genuine input fixture is itself clean, so
-this is a property of what the filter emits rather than of what it reads.
-Today that is **1143 records across 15 of the 78 committed fixtures** —
-`arm_f_zip`, `mutual_structure_projections`, `prim_carve`, `prim_graph`,
-`prim_graph_pre`, `prim_idx`, `prim_late_eq`, `prim_shapes`, `prim_w`,
-`private_constructor`, `tight_prop_field_late`, `w_core`, `w_late_iff`, and the
-filtered `nested_iota` and `nested_shapes` — reaching `Eq`, `Eq.refl`,
-`PSigma'`, `PUnit` and the `Quot` bundle ahead of the record that declares them.
-The suite walks each generated stream in record order from an empty
-declared-name set, using `KernelCheck.inputReferences` as the dependency set,
-and pins the exact per-fixture counts in `expectedForwardReferences`. It fails
-both when a fixture becomes dirty and when a listed fixture becomes clean or
-changes count without the list being updated: the list is a progress meter
-toward zero, not an exemption.
+`emissionordercensustest` checks **emission order as an invariant**: no
+generated record references a name the output stream has not declared yet, in
+any committed fixture, under the maximal generation configuration. Lean's kernel
+starts from an empty environment and adds one declaration at a time, so this is
+exactly the property that makes the emitted stream replayable as written, and
+it is what lets any prefix of an output — a stream truncated at a record
+boundary, which is what standard output leaves behind when a later transition
+fails — replay on its own.
 
-**The fix is pending a contract decision the project owner has not made** —
-either the filter emits every island after everything that island consumes, or
-the output contract states that the stream is a set of records carrying a
-dependency schedule rather than a replayable sequence — so nothing in the test
-tree works around the defect and no existing gate is relaxed for it.
-`--type-check-input` does not detect it: `typeCheckExport` replays in
-`KernelCheck.replayOrder`, a depth-first topological sort, so record order never
-reaches Lean's kernel. The same suite therefore also asserts that a deliberately
-order-broken export is still *accepted*. That assertion is the weaker property
-on purpose and is not an endorsement — it records that acceptance by
-`--type-check-input` is no evidence that an output replays in record order, and
-it fails the moment replay is made order-sensitive, which forces the allowlist
-above to be driven to empty before such a change can land.
+The suite walks each generated stream in record order from an empty
+declared-name set, using `KernelCheck.inputReferences` as the dependency set.
+There is no allowlist and no row to append. A run the filter *rejects* is
+failed rather than counted clean, because `runFilter` answers an unreplayable
+record by returning the input, which is clean by construction.
+
+The one construct that used to break the invariant was the fixed canonical
+basis — `Eq`, `Nat`, `PUnit`, the `PSigma'` bundle, `Nonempty`, the `Quot`
+bundle with `Quot.sound`, `Classical.choice`, `Iff`, `propext`. An input which
+declared one of those *after* the first owner that consumed it left the output
+referring to it ahead of the record that declared it: **1143 records across 15
+of the 78 committed fixtures**, in `arm_f_zip`, `mutual_structure_projections`,
+`prim_carve`, `prim_graph`, `prim_graph_pre`, `prim_idx`, `prim_late_eq`,
+`prim_shapes`, `prim_w`, `private_constructor`, `tight_prop_field_late`,
+`w_core`, `w_late_iff`, and the filtered `nested_iota` and `nested_shapes`.
+Generation now writes its own canonical declaration at the first point one is
+needed, whatever the input reserves, and drops the input's own record where it
+stands once `Driver.canonicalBasisRecordMatches` has established that it is
+that same declaration; a record which is *not* that declaration rejects the run
+rather than being silently replaced. `basisvalidationtest` covers both halves,
+including the rejection.
+
+`--type-check-input` still does not see record order at all: `typeCheckExport`
+replays in `KernelCheck.replayOrder`, a depth-first topological sort. The same
+suite therefore also asserts that a deliberately order-broken export is still
+*accepted*. That assertion is the weaker property on purpose and is not an
+endorsement — it records that acceptance by `--type-check-input` is no evidence
+that an export replays in record order, which is why the invariant above has to
+be checked directly. Making replay order-sensitive is a separate contract
+decision; it is no longer blocked by this repository's own output, and the
+commit that takes it deletes that assertion.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and

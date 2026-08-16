@@ -385,15 +385,19 @@ def main : IO UInt32 := do
   state := state.check "proposition-field projection iota is literal and uncast" <|
     (declarationType? primGenerated pfRule).any fun type => !containsConst ``Eq.rec type
   -- **The input declares its own `Eq` behind sixteen of its owners.** That is
-  -- the declaration generation would otherwise have written, so it is installed
-  -- before the stream is consumed: every one of the sixteen models, none of
-  -- them splices an `Eq`, and the output carries the input's own record once,
-  -- where the input put it.
-  state := state.check "raw-order prim owners before Eq model at the input's own Eq" <|
+  -- the declaration generation would otherwise have written, so generation
+  -- writes it in front of the first of the sixteen instead of waiting: every
+  -- one of the sixteen models, the first splices an `Eq`, and the input's own
+  -- record is dropped against it, so the output carries exactly one `Eq` — in
+  -- front of every owner that consumes it.
+  state := state.check "raw-order prim owners before Eq model at a written Eq" <|
     !primReport.declined.any (fun row => primLateEqOwners.contains row.1) &&
       primLateEqOwners.all (fun owner => primReport.generated.any (·.1 == owner)) &&
-      !primReport.spliced.any (fun row => row.2.contains `Eq) &&
-      (primGenerated.decls.filter (·.names.contains `Eq)).size == 1
+      primReport.spliced.any (fun row => row.2.contains `Eq) &&
+      (primGenerated.decls.filter (·.names.contains `Eq)).size == 1 &&
+      (declarationIndex? primGenerated `Eq).any fun eqIndex =>
+        primLateEqOwners.all fun owner =>
+          (declarationIndex? primGenerated owner).any (eqIndex < ·)
   let propStructureRules :=
     (Array.range 2).map (Naming.projectionIotaName `Conj) ++
       (Array.range 3).map (Naming.projectionIotaName `Conj3)
@@ -540,7 +544,8 @@ def main : IO UInt32 := do
     !noBaseReport.spliced.any (·.1 == noBaseSkel) &&
     noBaseReport.spliced.find? (·.1 == `NoBase) == some (`NoBase, #[noBaseSkel]) &&
     noBaseReport.spliced.find? (·.1 == `N) == some (`N,
-      #[`Nat, `Nat.rec, `Nat.zero, `Nat.succ, `PSigma', `PSigma'.rec, `PSigma'.mk,
+      #[`Eq, `Eq.rec, `Eq.refl, `Nat, `Nat.rec, `Nat.zero, `Nat.succ,
+        `PSigma', `PSigma'.rec, `PSigma'.mk,
         `PSigma'.fst, `PSigma'.snd, `PSigma'.rec', `PSigma'.fst_mk, `PSigma'.snd_mk,
         `PSigma'.rec'_mk, `PUnit, `PUnit.rec, `PUnit.unit])
   state := state.check "no-base interfaces satisfy the exact public checker" <|
@@ -574,10 +579,10 @@ def main : IO UInt32 := do
     | .ok output => pure output
     | .error error => throw <| IO.userError s!"cannot order dependent-pivot fixture: {repr error}"
   let fmidOwners := #[`Fmid, `FChain]
-  state := state.check "raw-order dependent-pivot owners before Eq model at the input's own Eq" <|
+  state := state.check "raw-order dependent-pivot owners before Eq model at a written Eq" <|
     !fmidRawReport.declined.any (fun row => fmidLateEqOwners.contains row.1) &&
       fmidLateEqOwners.all (fun owner => fmidRawReport.generated.any (·.1 == owner)) &&
-      !fmidRawReport.spliced.any (fun row => row.2.contains `Eq) &&
+      fmidRawReport.spliced.any (fun row => row.2.contains `Eq) &&
       (fmidRawDeclarations.filter (·.names.contains `Eq)).size == 1
   state := state.check "one-pivot arm-F owners retain their exact interfaces" <|
     #[(`Fmid, 4), (`FChain, 4)].all fmidReport.generated.contains &&
@@ -631,10 +636,10 @@ def main : IO UInt32 := do
   state := state.check "arm-F fixture declares a basis-exempt owner before Eq" <|
     (declarationIndex? zipRaw `Nat).any fun natIndex =>
       (declarationIndex? zipRaw `Eq).any fun eqIndex => natIndex < eqIndex
-  state := state.check "raw-order arm-F owner before Eq models at the input's own Eq" <|
+  state := state.check "raw-order arm-F owner before Eq models at a written Eq" <|
     !zipRawReport.declined.any (·.1 == `FTwo) &&
       zipRawReport.generated.any (·.1 == `FTwo) &&
-      !zipRawReport.spliced.any (fun row => row.2.contains `Eq) &&
+      zipRawReport.spliced.any (fun row => row.2.contains `Eq) &&
       (zipRawDeclarations.filter (·.names.contains `Eq)).size == 1
   state := state.check "arm-F shared support persists once ahead of every owner" <|
     zipSupport.all fun support =>
@@ -676,10 +681,10 @@ def main : IO UInt32 := do
   state := state.check "parameterized proposition-field fixture has a late PUnit" <|
     (declarationIndex? pfpRaw `PFP).any fun owner =>
       (declarationIndex? pfpRaw `PUnit).any (owner < ·)
-  state := state.check "raw-order proposition field models before its own PUnit" <|
+  state := state.check "raw-order proposition field models at a written PUnit" <|
     !pfpRawReport.declined.any (·.1 == `PFP) &&
       pfpRawReport.generated.any (·.1 == `PFP) &&
-      !pfpRawReport.spliced.any (fun row => row.2.contains `PUnit) &&
+      pfpRawReport.spliced.any (fun row => row.2.contains `PUnit) &&
       (pfpRawDeclarations.filter (·.names.contains `PUnit)).size == 1
   state := state.check "prerequisite-first proposition field uses the input PUnit" <|
     pfpReport.generated.any (·.1 == `PFP) && !pfpReport.declined.any (·.1 == `PFP) &&
@@ -708,10 +713,10 @@ def main : IO UInt32 := do
     Name.str wtyPrivateRoot "rec", Name.str wtyPrivateRoot "rec_iota_0",
     Name.str wtyPrivateRoot "roll", Name.str wtyPrivateRoot "unroll",
     Name.str wtyPrivateRoot "unroll_roll", Name.str wtyPrivateRoot "roll_unroll"]
-  state := state.check "raw-order recursive owners before Eq model at the input's own Eq" <|
+  state := state.check "raw-order recursive owners before Eq model at a written Eq" <|
     !wRawReport.declined.any (fun row => wLateEqOwners.contains row.1) &&
       wLateEqOwners.all (fun owner => wRawReport.generated.any (·.1 == owner)) &&
-      !wRawReport.spliced.any (fun row => row.2.contains `Eq) &&
+      wRawReport.spliced.any (fun row => row.2.contains `Eq) &&
       (wRawDeclarations.filter (·.names.contains `Eq)).size == 1
   state := state.check "dependent recursive singleton carries the complete one-layer certificate" <|
     wtyCertificate.all wNames.contains
@@ -1098,10 +1103,10 @@ def main : IO UInt32 := do
   state := state.check "mutual projection fixture declares PUnit after its owner" <|
     (declarationIndex? mutualRawOriginal `MLeft).any fun owner =>
       (declarationIndex? mutualRawOriginal `PUnit).any (owner < ·)
-  state := state.check "raw-order mutual owner models before its own PUnit" <|
+  state := state.check "raw-order mutual owner models at a written PUnit" <|
     !mutualRawReport.declined.any (·.1 == `MLeft) &&
       mutualRawReport.generated.any (·.1 == `MLeft) &&
-      !mutualRawReport.spliced.any (fun row => row.2.contains `PUnit) &&
+      mutualRawReport.spliced.any (fun row => row.2.contains `PUnit) &&
       (mutualRawDecls.filter (·.names.contains `PUnit)).size == 1
   unless mutualReport.generated.any (·.1 == `MLeft) do
     IO.eprintln s!"mutual projection generation declined: {mutualReport.declined}"

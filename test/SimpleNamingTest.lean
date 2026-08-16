@@ -87,15 +87,37 @@ def FixtureResult.noLegacySlots (result : FixtureResult) (owner : Name) : Bool :
 
 /-- **An owner standing in front of the input's own fixed support models
 where it stands.** The support record is the declaration generation would
-otherwise have written, so it is installed before the stream is consumed:
-the owner does not decline, nothing is spliced under that name, and the
-input's own record is emitted exactly once, at its own source position. -/
-def FixtureResult.modelsAtInputSupport (result : FixtureResult) (owner : Name)
+otherwise have written, and generation writes exactly that declaration at the
+point this owner needs it rather than waiting: the owner does not decline, the
+support name *is* spliced, and the input's own record is dropped against what
+was written, so the output declares that name exactly once.
+
+**And it stands in front of the owner.** That is the whole point of writing it
+early — it is what makes the output replayable in record order, which
+`emissionordercensustest` then pins over the whole corpus. -/
+def FixtureResult.modelsAtWrittenSupport (result : FixtureResult) (owner : Name)
     (support : Name) : Bool :=
   result.report.generated.any (·.1 == owner) &&
     !result.report.declined.any (·.1 == owner) &&
-    !result.report.spliced.any (fun row => row.2.contains support) &&
-    (result.output.filter (·.names.contains support)).size == 1
+    result.report.spliced.any (fun row => row.2.contains support) &&
+    (result.output.filter (·.names.contains support)).size == 1 &&
+    (match result.output.findIdx? (·.names.contains support),
+        result.output.findIdx? (·.names.contains owner) with
+     | some supportAt, some ownerAt => supportAt < ownerAt
+     | _, _ => false)
+
+/-- **A canonical basis name no owner reached stays the input's own.** The drop
+rule is keyed on what generation actually wrote, not on the name, so a basis
+record nothing needed is emitted exactly once at its own source position with
+nothing spliced under it — even when an owner that models stands in front of
+it. -/
+def FixtureResult.retainsInputRecord (result : FixtureResult) (owner support : Name) : Bool :=
+  !result.report.spliced.any (fun row => row.2.contains support) &&
+    (result.output.filter (·.names.contains support)).size == 1 &&
+    (match result.output.findIdx? (·.names.contains owner),
+        result.output.findIdx? (·.names.contains support) with
+     | some ownerAt, some supportAt => ownerAt < supportAt
+     | _, _ => false)
 
 def FixtureResult.hasInterface (result : FixtureResult) (owner recursor : Name)
     (constructors : Array Name) (numRules : Nat) : Bool :=
@@ -118,9 +140,9 @@ def main : IO UInt32 := do
   let shapesInput ← readInput "test/fixtures/inductive-models/prim_shapes.ndjson"
   let shapesRaw ← runInput shapesInput simpleOnly
   let shapes ← runInput (← withCompletePrerequisiteBefore shapesInput `Eq `Tri) simpleOnly
-  state := state.check "raw Type routes before Eq model at the input's own Eq"
-    (shapesRaw.modelsAtInputSupport `Tri `Eq &&
-      shapesRaw.modelsAtInputSupport `IdxP `Eq)
+  state := state.check "raw Type routes before Eq model at a written Eq"
+    (shapesRaw.modelsAtWrittenSupport `Tri `Eq &&
+      shapesRaw.modelsAtWrittenSupport `IdxP `Eq)
   state := state.check "Type route has declaration-local interface"
     (shapes.hasInterface `Tri `Tri.rec #[`Tri.a, `Tri.b, `Tri.c] 3)
   state := state.check "Type route has no legacy indexed slots" (shapes.noLegacySlots `Tri)
@@ -132,8 +154,8 @@ def main : IO UInt32 := do
   let graphInput ← readInput "test/fixtures/inductive-models/prim_graph.ndjson"
   let graphRaw ← runInput graphInput simpleOnly
   let graph ← runInput (← withCompletePrerequisiteBefore graphInput `Eq `Ac) simpleOnly
-  state := state.check "raw graph owner before Eq models at the input's own Eq"
-    (graphRaw.modelsAtInputSupport `Ac `Eq)
+  state := state.check "raw graph owner before Eq models at a written Eq"
+    (graphRaw.modelsAtWrittenSupport `Ac `Eq)
   state := state.check "graph route has declaration-local interface"
     (graph.hasInterface `Ac `Ac.rec #[`Ac.intro] 1)
   state := state.check "graph helpers are implementation descendants"
@@ -144,8 +166,8 @@ def main : IO UInt32 := do
   let carveInput ← readInput "test/fixtures/inductive-models/prim_carve.ndjson"
   let carveRaw ← runInput carveInput simpleOnly
   let carve ← runInput (← withCompletePrerequisiteBefore carveInput `Eq `Bif) simpleOnly
-  state := state.check "raw carve owner before Eq models at the input's own Eq"
-    (carveRaw.modelsAtInputSupport `Bif `Eq)
+  state := state.check "raw carve owner before Eq models at a written Eq"
+    (carveRaw.modelsAtWrittenSupport `Bif `Eq)
   state := state.check "carve route has declaration-local interface"
     (carve.hasInterface `Bif `Bif.rec #[`Bif.b0, `Bif.b2] 2)
   state := state.check "skeleton helpers are implementation descendants"
@@ -155,8 +177,8 @@ def main : IO UInt32 := do
   let wInput ← readInput "test/fixtures/inductive-models/prim_w.ndjson"
   let wRaw ← runInput wInput simpleOnly
   let w ← runInput (← withCompletePrerequisiteBefore wInput `Eq `Wt) simpleOnly
-  state := state.check "raw W owner before Eq models at the input's own Eq"
-    (wRaw.modelsAtInputSupport `Wt `Eq)
+  state := state.check "raw W owner before Eq models at a written Eq"
+    (wRaw.modelsAtWrittenSupport `Wt `Eq)
   state := state.check "W route has declaration-local interface"
     (w.hasInterface `Wt `Wt.rec #[`Wt.leaf, `Wt.one, `Wt.two, `Wt.mix, `Wt.gap, `Wt.alt] 6)
   state := state.check "W helpers are implementation descendants"
@@ -176,9 +198,13 @@ def main : IO UInt32 := do
   let accSupportInput ← withCompletePrerequisitesBefore accInput
     #[`Nat, `Nonempty, `Classical.choice] `Acc
   let basicAcc ← runInput accSupportInput { noGeneration with basic := true }
-  state := state.check "raw basic Acc models at the input's own late support"
-    (basicAccRaw.modelsAtInputSupport `Acc `Nonempty &&
-      basicAccRaw.modelsAtInputSupport `Acc `Nat)
+  -- Arm G reaches `Nonempty` and `Classical.choice` and does not reach `Nat`,
+  -- so the two halves of the rule are visible in one run: the `Nonempty` this
+  -- `Acc` needs is written in front of it and the input's own record is
+  -- dropped, while the `Nat` nothing needed keeps its own record behind `Acc`.
+  state := state.check "raw basic Acc models at written late support"
+    (basicAccRaw.modelsAtWrittenSupport `Acc `Nonempty &&
+      basicAccRaw.retainsInputRecord `Acc `Nat)
   state := state.check "basic Acc has declaration-local interface"
     (basicAcc.hasInterface `Acc `Acc.rec #[`Acc.intro] 1)
   state := state.check "basic Acc has no legacy slots" (basicAcc.noLegacySlots `Acc)
@@ -188,8 +214,8 @@ def main : IO UInt32 := do
   let privateCtor ← runInput
     (← withCompletePrerequisiteBefore privateInput `Eq `Off) simpleOnly
   let privateCtors := inputConstructors privateCtor.input `Off
-  state := state.check "raw private-constructor owner before Eq models at the input's own Eq"
-    (privateRaw.modelsAtInputSupport `Off `Eq)
+  state := state.check "raw private-constructor owner before Eq models at a written Eq"
+    (privateRaw.modelsAtWrittenSupport `Off `Eq)
   state := state.check "private constructor keeps its exact raw exported name"
     (privateCtors.size == 1 && privateCtor.hasName (modelName privateCtors[0]!))
   state := state.check "private-constructor route has no legacy slots"

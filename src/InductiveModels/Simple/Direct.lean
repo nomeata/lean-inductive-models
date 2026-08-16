@@ -19,7 +19,6 @@ def primDirect (site : PrimSite) (directRoute : DirectRoute) (st : PrimOut) : Ge
   let np := site.np
   let memberTy := site.memberTy
   let exportCtors := site.exportCtors
-  let reserved := site.reserved
   let selfN := site.selfN
   let recN := site.recN
   let ctorN := site.ctorN
@@ -38,7 +37,7 @@ def primDirect (site : PrimSite) (directRoute : DirectRoute) (st : PrimOut) : Ge
   let modelCtorTy := publicSource cty0
   let (directDecls, directSpliced, overrides) ← emitDirectModel directRoute eqi tname
     lparams np memberTy cty0 modelCtorTy declaredMemberTy selfN (ctorN 0) recN
-    rv.levelParams installedRecTy publicRecTy w v reserved
+    rv.levelParams installedRecTy publicRecTy w v
   out := out ++ directDecls
   spliced := spliced ++ directSpliced
   projectionOverrides := projectionOverrides ++ overrides

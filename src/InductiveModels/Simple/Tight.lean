@@ -166,10 +166,9 @@ projection overrides into its route state. -/
 def emitDirectTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (v : Level)
-    (reserved : Std.HashSet Name) :
+    (recursorProofType recursorPublicType : Expr) (v : Level) :
     GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
-  let support ← ensurePSigmaPrime reserved
+  let support ← ensurePSigmaPrime
   let (declarations, overrides) ← directTightModel eqi tname lparams np memberTy
     constructorType modelConstructorType declaredMemberTy selfN constructorN recursorN
     recursorLevelParams recursorProofType recursorPublicType v
@@ -258,12 +257,11 @@ def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
     (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (w v : Level)
-    (reserved : Std.HashSet Name) :
+    (recursorProofType recursorPublicType : Expr) (w v : Level) :
     GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
   match route with
   | .field fieldRoute =>
-    let support ← if fieldRoute matches .propLift then ensureExactSortLift reserved else pure #[]
+    let support ← if fieldRoute matches .propLift then ensureExactSortLift else pure #[]
     let (declarations, override) ← directFieldModel fieldRoute eqi tname lparams np
       memberTy constructorType modelConstructorType declaredMemberTy selfN constructorN
       recursorN recursorLevelParams recursorProofType recursorPublicType w v
@@ -272,6 +270,6 @@ def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
   | .tight =>
     emitDirectTightModel eqi tname lparams np memberTy constructorType modelConstructorType
       declaredMemberTy selfN constructorN recursorN recursorLevelParams
-      recursorProofType recursorPublicType v reserved
+      recursorProofType recursorPublicType v
 
 end InductiveModels

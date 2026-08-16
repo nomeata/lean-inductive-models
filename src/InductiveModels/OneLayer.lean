@@ -954,7 +954,7 @@ def buildOneLayerBase (tname root : Name) (lparams : List Name) (np : Nat)
       if let some actual ← wTowerLevelOf level fields then
         badShape s!"{tname}'s one-layer field tower inhabits Sort {actual}, not Sort {level}"
 
-  let support ← ensureExactSortLift reserved
+  let support ← ensureExactSortLift
   let mut declarations := support
   let spliced := support.flatMap (·.getNames.toArray)
 

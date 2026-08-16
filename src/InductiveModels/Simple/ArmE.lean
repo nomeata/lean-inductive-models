@@ -13,7 +13,6 @@ def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let lparams := site.lparams
   let np := site.np
   let exportCtors := site.exportCtors
-  let reserved := site.reserved
   let selfN := site.selfN
   let ern := site.ern
   let recN := site.recN
@@ -33,8 +32,8 @@ def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let mut spliced := st.spliced
   -- ════ arm E: an exact empty model for recursion without a base ════
   unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
-  for d in ← ensureNat reserved do out := out.push d; spliced := spliced ++ d.getNames
-  for d in ← ensureExactSortLift reserved do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensureNat do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensureExactSortLift do out := out.push d; spliced := spliced ++ d.getNames
 
   -- The carrier is empty at exactly the inductive's universe.
   let selfVal ← site.withParams fun ps =>

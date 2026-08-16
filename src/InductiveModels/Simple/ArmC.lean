@@ -17,7 +17,6 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let np := site.np
   let memberTy := site.memberTy
   let exportCtors := site.exportCtors
-  let reserved := site.reserved
   let us := site.us
   let selfN := site.selfN
   let ern := site.ern
@@ -84,7 +83,7 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
     badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
   for n in [skelN, goodN] do taken n
   for j in [0:nc] do taken (skelCtorN j)
-  for d in ← ensurePSigmaPrime reserved do out := out.push d; spliced := spliced ++ d.getNames
+  for d in ← ensurePSigmaPrime do out := out.push d; spliced := spliced ++ d.getNames
 
   let skelSelf := fun (ps : Array Expr) => mkAppN (.const skelN us) ps
   -- The index telescope packed into one `PSigma'` ([`InductiveModels.packTyOf`]),
