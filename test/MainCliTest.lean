@@ -118,7 +118,8 @@ def reverseConstructorsFor (inputExport : InductiveModels.Export) (target : Lean
 /-- The committed fixtures the complete tool declines (exit 2).  Every other
 fixture in the sweep below is expected to be accepted (exit 0), so this one
 list pins the disposition of all of them. -/
-def sweepDeclinedFixtures : Array String := #["w_dependent_field.ndjson"]
+def sweepDeclinedFixtures : Array String :=
+  #["prim_shape_declines.ndjson", "w_dependent_field.ndjson"]
 
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."

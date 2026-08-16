@@ -224,7 +224,10 @@ as the fixture it happened in.  The zeros are pinned for the same reason as
 the positive counts — `arm_f_guards`, `arm_f_zip`, `default_ctor_iota`,
 `maybe_zero_indexed`, `maybe_zero_recursive` and `nonindexed_vanishing` model
 no eligible one-constructor record, and a route that starts giving one of them
-a projection has to be looked at rather than absorbed. -/
+a projection has to be looked at rather than absorbed.  `prim_shape_declines`
+is a zero of the other kind: its four one-constructor owners are exactly the
+shapes that decline, and its only model is a two-constructor enumeration, so a
+projection appearing there would mean one of the four had started modelling. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 21),
     ("decline_no_eq", 11), ("default_ctor_iota", 0), ("degenerate_graph", 1),
@@ -250,7 +253,8 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("nested_one_layer", 17), ("nested_shapes", 17), ("nested_value_dependency", 27),
     ("nonindexed_vanishing", 0), ("poly_nested", 13), ("prim_carve", 17),
     ("prim_declines", 16), ("prim_graph", 8), ("prim_graph_pre", 2), ("prim_idx", 19),
-    ("prim_late_basis", 14), ("prim_late_eq", 1), ("prim_shapes", 22), ("prim_w", 35),
+    ("prim_late_basis", 14), ("prim_late_eq", 1), ("prim_shape_declines", 0),
+    ("prim_shapes", 22), ("prim_w", 35),
     ("private_constructor", 1), ("prop_projection_boundaries", 12),
     ("prop_recursive_projections", 3), ("source_structure_syntax", 5),
     ("structure_eta", 12), ("structure_projections", 17),

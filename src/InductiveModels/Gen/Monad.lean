@@ -18,6 +18,41 @@ open Lean Meta
 
 namespace InductiveModels
 
+/-- **Which side of the boundary a shape decline falls on**, and the whole
+reason [`InductiveModels.Decline.shapeUnsupported`] carries a field rather than
+only a sentence.
+
+A run that reports "declined" collapses two facts a reader has to be able to
+separate. One is a decision: this construction has looked at the shape and
+positively decided it is not the simple representation's business. The other is
+a gap: the arm that owns the shape ought to reach it and does not, and the only
+reason no model came out is that nobody has finished the arm. Folding the
+second into the first is how an incompleteness becomes invisible and then
+permanent — the census counts it beside the deliberate exclusions and nothing
+ever asks about it again.
+
+Both are declines: neither is a tool failure, both leave the owner in the
+output unchanged, and both reach the CLI's unsupported exit. What differs is
+what a reader should do about one. -/
+inductive ShapeScope where
+  /-- **A shape the construction has decided not to model**, on a boundary it
+  states. `README`'s routing boundaries are these: a field mentioning the owner
+  other than as `∀ z⃗, T p⃗ e⃗` is a nested occurrence and belongs to layer 1,
+  not here. Nothing is missing; a model would be the wrong layer's. -/
+  | outOfScope
+  /-- **A shape the construction that owns it ought to reach and does not.**
+  The route selected an arm — or would have, but for a guard that is narrower
+  than the arm's actual reach — and no representation came out. This is a gap
+  in the arm, and the message names which arm and which guard so that the gap
+  is addressable rather than merely recorded. -/
+  | incomplete
+  deriving Inhabited, Repr, BEq, DecidableEq
+
+/-- The canonical word for one scope, in a report line and in a test. -/
+def ShapeScope.tag : ShapeScope → String
+  | .outOfScope => "out of scope"
+  | .incomplete => "incomplete"
+
 /-- A positively recognized reason not to emit a requested public interface.
 
 Construction-invariant failures do not belong here; [`InductiveModels.badShape`]
@@ -74,6 +109,28 @@ inductive Decline where
   of the contract, and `test/ProjectionTransportCensusTest.lean` holds it out,
   so there is nothing left to emit: the owner declines. -/
   | projectionCodomain (owner : Name) (field : Nat)
+  /-- **A shape the route dispatcher settled on before any arm ran, and no arm
+  represents.**
+
+  Every other constructor here is about a *name* or a *contract*; this one is
+  about the declaration's own shape, and it exists because the alternative was
+  an abort. A shape reaching no arm used to raise
+  [`InductiveModels.badShape`] — an internal tool error, exit 3 — which for a
+  thirty-minute stream means the run stops partway rather than passing the
+  owner through and saying so.
+
+  **Raised where the shape is classified, never where an exception surfaces.**
+  Wrapping a construction in a handler and calling whatever it throws a decline
+  would turn every real defect — an unknown constant, a kernel-rejected ι — into
+  a silent gap, which is worse than aborting. So each of these is a guard the
+  dispatcher evaluates on the analysis, before any declaration is installed: the
+  answer is "no arm applies", not "an arm applied and failed". An arm that has
+  committed and then cannot finish still aborts, and must.
+
+  `scope` says whether that is a decision or a gap
+  ([`InductiveModels.ShapeScope`]); `why` names the guard and the arm it
+  belongs to. -/
+  | shapeUnsupported (owner : Name) (scope : ShapeScope) (why : String)
   deriving Inhabited
 
 /-- The word that reaches a report line, **under the construction's own name**.
@@ -96,6 +153,14 @@ well-founded)"
     s!"{what} model shape: {owner}'s field {field} names an earlier field whose modeled \
 projection does not select it definitionally, so the literal projection rule for that \
 field would equate two terms of different types"
+  | .shapeUnsupported owner scope why =>
+    s!"{what} model shape ({scope.tag}): {owner} reaches no generation arm — {why}"
+
+/-- The scope verdict a decline carries, for a caller that wants the
+classification rather than the sentence. Only a shape decline has one. -/
+def Decline.shapeScope? : Decline → Option ShapeScope
+  | .shapeUnsupported _ scope _ => some scope
+  | _ => none
 
 /-- The word that reaches a report line for a **nested** declaration's model. -/
 def Decline.label : Decline → String := Decline.labelAs "nested"

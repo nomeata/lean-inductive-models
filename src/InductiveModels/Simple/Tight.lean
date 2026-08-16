@@ -143,8 +143,13 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
 /-- Decide whether the exact-sort multi-field route applies, and check its
 right-nested tight-pair carrier level before any support is installed. Kept
 outside [`InductiveModels.primIso`] so the route dispatcher does not elaborate this
-telescope walk as another large inline branch. -/
-def planDirectTightRoute (bare nonrecursiveOneConstructor : Bool) (np ni : Nat)
+telescope walk as another large inline branch.
+
+A tower that does not land on the carrier's sort is the multi-field half of the
+gap the one-field route's own comment describes: the arm has no pad, the owner
+reaches no other arm, and the answer is therefore a decline naming the arm
+rather than an internal tool error that stops the stream. -/
+def planDirectTightRoute (tname : Name) (bare nonrecursiveOneConstructor : Bool) (np ni : Nat)
     (memberTy : Expr) (exportCtors : Array (Name × Expr)) (w : Level) : GenM Bool := do
   unless bare && nonrecursiveOneConstructor && ni == 0 do return false
   let (constructorName, constructorType) := exportCtors[0]!
@@ -156,8 +161,11 @@ def planDirectTightRoute (bare nonrecursiveOneConstructor : Bool) (np ni : Nat)
       let fieldLevels ← fields.mapM fun field => do ilevel (← ityp field)
       let towerLevel := fieldLevels.foldl mkLevelMax' .zero |>.normalize
       unless ← isLevelDefEq towerLevel w do
-        badShape s!"{constructorName}'s tight field tower inhabits Sort \
-          {towerLevel}, not the carrier's Sort {w}"
+        declineWith (.shapeUnsupported tname .incomplete
+          s!"{constructorName}'s tight field tower inhabits Sort {towerLevel} while the \
+carrier inhabits Sort {w}, so the right-nested tight pair does not land on the declared \
+sort, and the field-preserving arm at a maybe-zero sort has no pad for the level gap the \
+never-zero tuple tower pads")
       return true
 
 /-- Install tight-pair support and emit the complete exact-sort model branch.

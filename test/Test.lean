@@ -963,6 +963,26 @@ def runOne (root : String) (a : TAcc) (r : Row)
         certificate.all emittedNames.contains &&
         !rep.declined.any (·.1 == `IBox))
       "prim_carve: IBox did not generate with the complete indexed-fibre certificate"
+  if name == "prim_shape_declines" then
+    -- **The same claim as the row above, off the value rather than the
+    -- sentence.** `Report.shapeScopes` is what a reader who is counting gaps
+    -- has to be able to read without matching on prose, so this asserts it
+    -- directly; a shape decline that stopped carrying its verdict, or one that
+    -- started carrying the wrong one, would leave the message untouched.
+    a := check a
+      (rep.shapeScopes.toList ==
+        [(`Foreign, InductiveModels.ShapeScope.outOfScope),
+         (`Foreign0, InductiveModels.ShapeScope.outOfScope),
+         (`PadOne, InductiveModels.ShapeScope.incomplete),
+         (`PadMany, InductiveModels.ShapeScope.incomplete)])
+      s!"prim_shape_declines: the shape scopes are {repr rep.shapeScopes}"
+    -- Every declined owner is still in the output, at its own record, with no
+    -- model family in front of it: that is the contract an abort broke.
+    let emittedNames := decls.flatMap (·.names.toArray)
+    a := check a
+      ([`Foreign, `Foreign0, `PadOne, `PadMany].all fun owner =>
+        emittedNames.contains owner && !emittedNames.contains (Naming.modelName owner))
+      "prim_shape_declines: a declined owner did not pass through unchanged"
   -- **Exempt then declined.** The basis primitives are their own row in the
   -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a

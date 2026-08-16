@@ -134,7 +134,25 @@ structure Report where
   /-- Number of generated-island kernel invocations. This value-level counter
   pins that disabling generated checking bypasses the gate entirely. -/
   generatedKernelChecks : Nat := 0
+  /-- **The scope verdict of every shape decline**, beside the sentence in
+  `declined` rather than only inside it. A decline that classified the
+  declaration's *shape* answers one further question — whether the construction
+  decided against the shape or merely does not reach it yet
+  ([`InductiveModels.ShapeScope`]) — and a reader who has to recover that by
+  matching on a message is a reader who will stop checking. Declines about a
+  name or a contract have no entry here. -/
+  shapeScopes : Array (Name × ShapeScope) := #[]
   deriving Inhabited, Repr, BEq
+
+/-- Record one decline: its report line, and the scope verdict beside it
+whenever the decline classified a shape. One function so that the two arrays
+cannot drift apart at the seven places a route reports a refusal. -/
+def Report.withDecline (rep : Report) (owner : Name) (decline : Decline)
+    (what : String) : Report :=
+  let reported := { rep with declined := rep.declined.push (owner, decline.labelAs what) }
+  match decline.shapeScope? with
+  | some scope => { reported with shapeScopes := reported.shapeScopes.push (owner, scope) }
+  | none => reported
 
 /-- Whether one reported decline still represents unsupported generation after
 accounting for an existing or newly generated model. A noncanonical basis
@@ -1859,7 +1877,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     if dec matches .basisExempt then
       return (out, { rep with exempt := rep.exempt.push (tname, dec.labelAs "prim") },
         pending, adapterShadows)
-    return (out, { rep with declined := rep.declined.push (tname, dec.labelAs "prim") },
+    return (out, rep.withDecline tname dec "prim",
       pending, adapterShadows)
   | .ok is =>
     let source ← match sourceBlock? with
@@ -1998,7 +2016,7 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
   match result with
   | .error dec =>
     setEnv saved
-    return (out, { rep with declined := rep.declined.push (all[0]!, dec.labelAs "mutual") },
+    return (out, rep.withDecline all[0]! dec "mutual",
       pending, adapterShadows)
   | .ok is =>
     let source ← match sourceBlock? with
@@ -2524,7 +2542,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           match result with
           | .error dec =>
             setEnv saved
-            rep := { rep with declined := rep.declined.push (t.name, dec.label) }
+            rep := rep.withDecline t.name dec "nested"
           | .ok is =>
             let serialised ← serialiseIso replayD is exactTransform context.collectAdapterShadows
             if let some shadow := serialised.adapterShadow? then
@@ -2557,8 +2575,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
               match mutualResult with
               | .error dec =>
                 setEnv saved2
-                rep := { rep with
-                  declined := rep.declined.push (is.members[0]!, dec.labelAs "mutual") }
+                rep := rep.withDecline is.members[0]! dec "mutual"
               | .ok is2 =>
                 let serialised2 ←
                   serialiseIso exactBlock is2 exactTransform context.collectAdapterShadows
@@ -2622,7 +2639,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
           exempt := rep.exempt.push (root, Decline.basisExempt.labelAs "prim") }
     | .error decline =>
       invalidBasis := invalidBasis.insert root
-      rep := { rep with declined := rep.declined.push (root, decline.labelAs "prim") }
+      rep := rep.withDecline root decline "prim"
   -- Plain mutual and direct-simple routes read recursor metadata installed by
   -- the replay above and therefore remain the post-owner half of this single
   -- transition.

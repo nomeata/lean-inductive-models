@@ -127,23 +127,37 @@ def analysePrim (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr
   let erasureBare : Bool := erasureBareWhy.isNone
   let erasureLinear : Bool := erasureWhy.isNone
 
-  match route with
-  | PrimRoute.type =>
-    if ni > 0 && !erasureBare then
-      badShape s!"an indexed family at a never-zero sort whose index erasure is not \
-        bare (arm C splices the erasure and carves the family out of it, \
-        so its reach is bounded by whether that erasure \
-        models, and an erasure that is not bare has either a binder type naming \
-        the declaration or an occurrence that remains under a foreign type \
-        former after βζ head normalization; `why` says which this is); \
-        erasure linear: no; B factors through the tag: \
-        {if tagFactored tname np exportCtors then "yes" else "no"}\
-        ; through the label: \
-        {if labelFactored tname np exportCtors then "yes" else "no"}\
-        ; carrier is Type u: {if w.normalize.dec.isSome then "yes" else "no"}\
-        ; why: {erasureWhy.getD "-"}"
-  | PrimRoute.bare => pure ()
-  | PrimRoute.prop => pure ()
+  -- **A recursive occurrence this construction cannot replace, decided once
+  -- and for every route.**
+  --
+  -- Every arm below represents a recursive field by *replacing* its occurrence:
+  -- the tuple tower with a spine predecessor, arm C with its index erasure, arm
+  -- W with a branch of `B'`, the Church routes with the encoding's own `C`. All
+  -- four need the occurrence to be `∀ z⃗, T p⃗ e⃗` after βζ head normalization,
+  -- which is exactly what [`InductiveModels.erasureBareFailure?`] answers, so a
+  -- field that mentions `T` any other way reaches no arm on any route.
+  --
+  -- That is **`README`'s routing boundary and not a missing case**: an
+  -- occurrence remaining under a foreign type former is nesting, and nesting is
+  -- layer 1's business — `Driver` sends a block Lean marked nested to
+  -- `Plan.plan` and never here. A binder type naming the declaration is the
+  -- other half: an internal erasure or spine keeps binder types verbatim, so
+  -- retyping the field it names would leave the binder pointing at the wrong
+  -- carrier. Neither is a gap in an arm.
+  --
+  -- This used to be raised as an internal tool error, and only on the indexed
+  -- never-zero route. It aborted the whole stream at an owner the contract says
+  -- should pass through unchanged and be reported.
+  if let some why := erasureBareWhy then
+    declineWith (.shapeUnsupported tname .outOfScope
+      s!"a field mentions {tname} other than as `∀ z⃗, {tname} p⃗ e⃗` after βζ head \
+normalization, and every arm of every route represents a recursive field by replacing \
+exactly that occurrence ({why}); route: \
+{match route with | .type => "never-zero" | .prop => "Prop" | .bare => "maybe-zero"}\
+; indices: {ni}; erasure linear: {if erasureLinear then "yes" else "no"}\
+; B factors through the tag: {if tagFactored tname np exportCtors then "yes" else "no"}\
+; through the label: {if labelFactored tname np exportCtors then "yes" else "no"}\
+; carrier is Type u: {if w.normalize.dec.isSome then "yes" else "no"}")
 
   return {
     declaredMemberTy, memberTy, ni, w, isRec, rv, large, v, recLs,

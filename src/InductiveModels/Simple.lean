@@ -241,6 +241,35 @@ def primIsoWithInterface (tname : Name) (root : Name) (lparams : List Name) (np 
     (interface? : Option PrimInterfaceNames := none) : GenM Iso := do
   let (site, st) ← mkPrimSite tname root lparams np memberTy exportCtors reserved
     sourceRecursor? interface?
+  -- **The one shape the chain below has no last resort for.**
+  --
+  -- `primArmChurch` is the chain's fallback and reaches every `Prop` and
+  -- maybe-zero shape, so a declaration that satisfies none of the earlier
+  -- conditions there still models. The never-zero route has no such fallback:
+  -- `primArmTuple` is its last arm and the tower is deliberately *linear*, so a
+  -- non-indexed recursive declaration whose recursion is branching or
+  -- infinitary is arm W's or it is nobody's. When arm W's guard says no, the
+  -- chain used to fall into the tower anyway and the tower raised an internal
+  -- tool error carrying arm W's own bill — an abort, at a shape the dispatcher
+  -- had already decided no arm would take.
+  --
+  -- **A gap in arm W, not a boundary of the construction.** The two things that
+  -- turn `armW` off here are [`InductiveModels.labelFactored`] — a syntactic
+  -- loose-bvar test which, unlike every other recursion question this file
+  -- asks, does not first discard a βζ-dead mention — and a carrier plan that
+  -- could not put the core's `Type u` at the declared sort. Both are limits of
+  -- the arm as it stands rather than a decision that the shape is
+  -- unrepresentable, so the decline says `incomplete` and names the guard.
+  if site.route matches PrimRoute.type then
+    if site.ni == 0 && site.isRec && !site.erasureLinear && !site.armW then
+      declineWith (.shapeUnsupported tname .incomplete
+        s!"a non-indexed recursive declaration at a never-zero sort whose recursion is \
+not linear, so the tuple tower cannot hold it and arm W is the only arm left — and arm \
+W's guard refuses it; B factors through the tag: \
+{if tagFactored tname np exportCtors then "yes" else "no"}\
+; through the label: {if labelFactored tname np exportCtors then "yes" else "no"}\
+; carrier is Type u: {if site.w.normalize.dec.isSome then "yes" else "no"}\
+; constrained lift available: {if site.wPlan.lifted then "yes" else "no"}")
   let st ←
     if let some directRoute := site.directRoute? then primDirect site directRoute st
     else if site.armF then primArmF site st

@@ -460,12 +460,23 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- positive instantiation two constructor payloads then become equal, so no
   -- intrinsic projection can satisfy both constructor rules.
   --
-  -- There are exactly two field-preserving cases using the existing basis.
+  -- There are two field-preserving cases this arm implements.
   -- If the field's sort is definitionally the carrier sort, the field itself
   -- is the carrier (`PI`). If the field is exactly a proposition, the derived
   -- lift raises it to the carrier sort without forgetting its proof (`PF`). Test
   -- identity first: `PI.{0}` has a proposition-valued instantiation, but its
   -- polymorphic field sort is the carrier's `u`, not the constant level zero.
+  --
+  -- **A third case is a gap rather than a boundary.** A field at `Sort u`
+  -- under a carrier at `Sort (max u v)` is retained by neither, and the
+  -- declaration reaches this arm and no other: the guard above has already
+  -- decided that a nonrecursive one-constructor maybe-zero owner is Direct's,
+  -- and the Church fallback below would record only inhabitation and lose the
+  -- field. The never-zero route closes exactly this level gap with a pad
+  -- ([`InductiveModels.unitAt`], [`InductiveModels.dsingAt`]) and this arm has
+  -- no pad, so what stops the model is an unfinished arm rather than a shape
+  -- the construction decided against. It used to be an internal tool error,
+  -- which aborted the stream at an owner the contract says passes through.
   let directFieldRoute? : Option DirectFieldRoute ←
     if (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
         numForalls exportCtors[0]!.2 - np == 1 then
@@ -476,13 +487,16 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         let fieldLevel ← ilevel fieldType
         if ← isLevelDefEq fieldLevel w then return some .identity
         if fieldLevel.normalize.isZero then return some .propLift
-        badShape s!"{exportCtors[0]!.1}'s only field inhabits Sort {fieldLevel}, but the \
-          carrier inhabits Sort {w}: neither identity nor the exact-sort lift can retain it"
+        declineWith (.shapeUnsupported tname .incomplete
+          s!"{exportCtors[0]!.1}'s only field inhabits Sort {fieldLevel} while the carrier \
+inhabits Sort {w}, so neither identity nor the exact-sort lift retains it, and the \
+field-preserving arm at a maybe-zero sort has no pad for the level gap the never-zero \
+tuple tower pads")
     else
       pure none
 
   -- Two or more exact-sort fields are retained by a right-nested `PSigma'`.
-  let directTightRoute ← planDirectTightRoute (route matches PrimRoute.bare)
+  let directTightRoute ← planDirectTightRoute tname (route matches PrimRoute.bare)
     nonrecursiveOneConstructor np ni memberTy exportCtors w
   let directRoute? : Option DirectRoute := directFieldRoute?.map DirectRoute.field <|>
     if directTightRoute then some .tight else none
