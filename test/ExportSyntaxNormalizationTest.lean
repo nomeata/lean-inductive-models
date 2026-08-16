@@ -235,11 +235,19 @@ def run (root : String) : IO UInt32 := do
     | throw <| IO.userError "prim_declines does not declare SvIx"
   let some svIxTable := Check.correspondenceAt? prim svIxDecl
     | throw <| IO.userError "SvIx has no correspondence"
-  let svIxType := declarationType? prim `SvIx
+  -- The expectation is written out rather than read back from `prim`.  Taking
+  -- it from `declarationType? prim `SvIx` and then comparing against
+  -- `declarationType? prim `SvIx` is `x == x`: it holds for whatever the
+  -- fixture says, and it holds when `SvIx` has vanished from the export and
+  -- both sides are `none`.  `SvIxFam` is the transparent former the regression
+  -- was about, so an implementation that unfolded it — or that lifted the
+  -- binder, or reordered the application — fails here.
+  let svIxType : Expr :=
+    .forallE `x (.const `P []) (mkApp (.const `SvIxFam []) (.bvar 0)) .default
   state := state.check "transparent Prop former has no illegal projections"
     svIxTable.projections.isEmpty
   state := state.check "SvIx public declaration type stays literal"
-    (declarationType? prim `SvIx == svIxType)
+    (declarationType? prim `SvIx == some svIxType)
 
   let flatInput ← readExport s!"{root}/test/fixtures/inductive-models/nest_fam_arg.ndjson"
   let (flatOutput, flatReport) ← generatedExport flatInput
