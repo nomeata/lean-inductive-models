@@ -126,10 +126,19 @@ inductive TwinInf (P Q : Type) : Type where
 inductive Prefix (α : Type u) (β : α → Type u) : Type u where
   | mk : (a : α) → β a → Prefix α β → Prefix α β → Prefix α β
 
-/- Deliberate phase boundary: the binary compatibility oracle must not be
-   partially applied to three recursive fields. -/
+/- Past the binary boundary.  `Triple` and `Quad` are three and four bare
+   recursive fields; `Trine` is three of them mixed — an ordinary field, a
+   direct occurrence, an infinitary one and a direct one — at a parameter.
+   Nothing in the compatibility construction may count, so these are the
+   arities beyond the reach of any fixed-arity lemma. -/
 inductive Triple : Type where
   | mk : Triple → Triple → Triple → Triple
+
+inductive Quad : Type where
+  | mk : Quad → Quad → Quad → Quad → Quad
+
+inductive Trine (α : Type) : Type where
+  | mk : α → Trine α → (α → Trine α) → Trine α → Trine α
 
 inductive Utd : Type where
   | nil : Utd

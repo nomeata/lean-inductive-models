@@ -639,9 +639,10 @@ def expectedPrim : List Row :=
   -- the section carries: these three at `[propext, Classical.choice,
   -- Quot.sound]` against every other target's `[propext, Quot.sound]`.
   -- `Twin`, `Mixed`, `TwinInf`, and `Prefix` are the binary one-layer
-  -- public-carrier tranche. `Triple` deliberately remains on the legacy W
-  -- route: its row is present, while the assertion in `runOne` requires the
-  -- one-layer private certificate to be absent.
+  -- public-carrier tranche. `Triple`, `Quad` and `Trine` are three and four
+  -- recursive fields, and past two the route declines: their rows are present,
+  -- while the assertion in `runOne` requires the one-layer private certificate
+  -- to be absent. They are the guard-rail on the arity restriction.
   , ("prim_w",
       [("Tree", 225), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
@@ -652,7 +653,7 @@ def expectedPrim : List Row :=
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Wty", 23),
        ("Triple", 16), ("P", 6), ("Q", 8), ("Wt", 20),
        ("Dep", 12), ("Bad", 12), ("TwinInf", 23), ("Br", 12), ("Twin", 22),
-       ("Prefix", 26), ("Utd", 14), ("Mixed", 25)],
+       ("Prefix", 26), ("Quad", 18), ("Utd", 14), ("Mixed", 25), ("Trine", 18)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The head-normalization sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
@@ -840,15 +841,18 @@ def runOne (root : String) (a : TAcc) (r : Row)
       "w_core: derived False did not model after fixed Nat support"
   if name == "prim_w" then
     let emittedNames := decls.flatMap (·.names.toArray)
-    let privateRoot := `Triple._model._impl
-    let certificate := #[Name.str privateRoot "self", Name.str privateRoot "ctor_0",
-      Name.str privateRoot "rec", Name.str privateRoot "rec_iota_0",
-      Name.str privateRoot "roll", Name.str privateRoot "unroll",
-      Name.str privateRoot "unroll_roll", Name.str privateRoot "roll_unroll"]
-    a := check a
-      (rep.generated.any (·.1 == `Triple) && emittedNames.contains `Triple._model &&
-        certificate.all fun name => !emittedNames.contains name)
-      "prim_w: Triple did not generate on the legacy route without a one-layer certificate"
+    let certificate := fun (owner : Name) =>
+      let privateRoot := Name.str (Naming.modelName owner) "_impl"
+      #[Name.str privateRoot "self", Name.str privateRoot "ctor_0",
+        Name.str privateRoot "rec", Name.str privateRoot "rec_iota_0",
+        Name.str privateRoot "roll", Name.str privateRoot "unroll",
+        Name.str privateRoot "unroll_roll", Name.str privateRoot "roll_unroll"]
+    for owner in [`Triple, `Quad, `Trine] do
+      a := check a
+        (rep.generated.any (·.1 == owner) &&
+          emittedNames.contains (Naming.modelName owner) &&
+          (certificate owner).all fun name => !emittedNames.contains name)
+        s!"prim_w: {owner} did not generate on the legacy route without a one-layer certificate"
   if name == "prim_carve" then
     -- `IBox` is the indexed-fibre occupant in this mixed route fixture.  Its
     -- count grew from the eight public/implementation records to sixteen only

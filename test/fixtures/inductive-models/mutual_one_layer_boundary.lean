@@ -31,4 +31,18 @@ inductive MutualLayerB (alpha : Type u) (beta : alpha -> Type v) : Type (max u v
   | back (parent : MutualLayerA alpha beta) : MutualLayerB alpha beta
 end
 
---#export Eq MutualLayerA MutualLayerB
+/-
+The same boundary at more than one recursive field per constructor.
+`MutualBranchA.mk` crosses to the sibling twice and recurses into itself once,
+so its ι rule needs three independent equality eliminations while the sibling
+needs one.  A count anywhere in the compatibility construction shows up here.
+-/
+mutual
+inductive MutualBranchA : Type where
+  | mk (left : MutualBranchB) (mid : MutualBranchA) (right : MutualBranchB) :
+      MutualBranchA
+inductive MutualBranchB : Type where
+  | wrap (inner : MutualBranchA) : MutualBranchB
+end
+
+--#export Eq MutualLayerA MutualLayerB MutualBranchA MutualBranchB

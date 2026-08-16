@@ -374,6 +374,23 @@ def run (root : String) : IO UInt32 := do
       collisionReport.declined.filter (·.1 == `MutualLayerA) ==
         #[(`MutualLayerA, s!"mutual model name taken ({exactCollision})")]
 
+  -- **The branching SCC in the same fixture.** `MutualBranchA.mk` has three
+  -- recursive fields and `MutualBranchB.wrap` one, so this pair is past the
+  -- one-recursive-field bound the partial family adapter used to carry. Both
+  -- members still model — on the legacy mutual route — and the assertion is
+  -- that no partial one-layer certificate was written for either.
+  let branchImpl := `MutualBranchA._model._impl
+  let branchCertificate := #[`MutualBranchA, `MutualBranchB].flatMap fun owner =>
+    let root := Name.str branchImpl (lastStr owner)
+    #[Name.str root "self", Name.str root "rec", Name.str root "roll",
+      Name.str root "unroll", Name.str root "unroll_roll", Name.str root "roll_unroll"]
+  state := state.check "branching mutual SCC models without a one-layer certificate" <|
+    #[`MutualBranchA, `MutualBranchB].all (fun owner =>
+        !report.declined.any (·.1 == owner) &&
+          generatedNames.contains (Naming.modelName owner) &&
+          generatedNames.contains (Naming.modelName (Name.str owner "rec"))) &&
+      branchCertificate.all fun name => !generatedNames.contains name
+
   IO.println s!"mutual one-layer diagnostic: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
