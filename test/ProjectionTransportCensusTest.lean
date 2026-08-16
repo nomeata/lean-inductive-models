@@ -205,6 +205,58 @@ exhaustive: a fixture that starts running must be checked, and a fixture that
 stops running must be noticed. -/
 def expectedUnrunnable : Array String := #[]
 
+/-- The projection iotas each committed fixture emits under `censusGeneration`,
+as `(label, count)` pairs in label order.
+
+Without this table the invariant above has no floor.  Every assertion in
+`censusFixture` is a statement *about* a rule that was found, so a route that
+stopped emitting projection iotas, a rename of the `T._model.proj_j.iota`
+shape `projectionIotaOwner?` recognises, or a `censusGeneration` flag that
+stopped selecting a route would leave the census with nothing to inspect and
+it would print `0 of 0` and exit 0.  `expectedUnrunnable` does not cover that:
+it names fixtures that *throw*, not fixtures that run and generate nothing.
+
+The expectation is per fixture rather than a single global minimum, because a
+global minimum still passes when one fixture silently stops generating while
+the rest carry the total.  Pinning the exact count also makes any change in
+coverage visible: a route that starts or stops emitting a rule shows up here
+as the fixture it happened in.  The zeros are pinned for the same reason as
+the positive counts — `arm_f_guards`, `arm_f_zip`, `default_ctor_iota`,
+`maybe_zero_indexed`, `maybe_zero_recursive` and `nonindexed_vanishing` model
+no eligible one-constructor record, and a route that starts giving one of them
+a projection has to be looked at rather than absorbed. -/
+def expectedProjectionIotas : Array (String × Nat) :=
+  #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 21),
+    ("decline_no_eq", 11), ("default_ctor_iota", 0), ("degenerate_graph", 1),
+    ("dependent_fields", 11), ("filtered/nat_char_equations", 3),
+    ("filtered/nested_deep", 11), ("filtered/nested_iota", 13),
+    ("filtered/nested_iota_arm", 11), ("filtered/nested_keying", 11),
+    ("filtered/nested_shapes", 17), ("funext_binder", 19),
+    ("hard_nested_mutual_index", 11), ("imax_box", 3), ("indexed_container", 11),
+    ("indexed_decl", 11), ("indexed_fibre_boundary", 57),
+    ("indexed_hidden_erasure", 11), ("infinitary", 23), ("maybe_zero_indexed", 0),
+    ("maybe_zero_recursive", 0), ("mutual_index", 6), ("mutual_keying", 2),
+    ("mutual_nonrec", 2), ("mutual_odd_shapes", 15),
+    ("mutual_one_layer_boundary", 18), ("mutual_prop", 1), ("mutual_shapes", 18),
+    ("mutual_structure_projections", 3), ("nest_binder_cross", 23),
+    ("nest_cycle_group", 13), ("nest_fam_arg", 39), ("nest_family_edges", 13),
+    ("nest_index_cross", 14), ("nest_mutual_both", 13), ("nest_mutual_cycle", 11),
+    ("nest_mutual_index", 13), ("nest_odd_shapes", 31), ("nest_sorts", 17),
+    ("nest_through_mutual", 13), ("nest_through_nested", 11), ("nested_deep", 11),
+    ("nested_default_iota", 17), ("nested_iota", 13), ("nested_iota_arm", 11),
+    ("nested_keying", 11), ("nested_mutual_indexed_container", 11),
+    ("nested_one_layer", 17), ("nested_shapes", 17), ("nested_value_dependency", 27),
+    ("nonindexed_vanishing", 0), ("poly_nested", 13), ("prim_carve", 17),
+    ("prim_declines", 16), ("prim_graph", 8), ("prim_graph_pre", 2), ("prim_idx", 19),
+    ("prim_late_basis", 14), ("prim_late_eq", 1), ("prim_shapes", 22), ("prim_w", 35),
+    ("private_constructor", 1), ("prop_projection_boundaries", 12),
+    ("prop_recursive_projections", 3), ("source_structure_syntax", 5),
+    ("structure_eta", 12), ("structure_projections", 17),
+    ("tight_prop_field_late", 1), ("tight_psigma_prime", 4),
+    ("transparent_owner_aliases", 1), ("unitlike", 6), ("w_alias", 11),
+    ("w_core", 11), ("w_dependent_field", 14), ("w_imax", 11), ("w_late_iff", 11),
+    ("w_max", 11)]
+
 def main (args : List String) : IO UInt32 := do
   initSearchPath (← findSysroot)
   let root := args.head?.getD "."
@@ -219,18 +271,47 @@ def main (args : List String) : IO UInt32 := do
   let mut literal := 0
   let mut projectionIotas := 0
   let mut authoredEqRec := 0
+  let mut perFixture : Array (String × Nat) := #[]
   for (fixture, path) in paths do
     let result ← censusFixture fixture path
     failures := failures ++ result.failures
     literal := literal + result.literal
     projectionIotas := projectionIotas + result.projectionIotas
     authoredEqRec := authoredEqRec + result.authoredEqRec
+    perFixture := perFixture.push (fixture, result.projectionIotas)
     unless result.ran do unrunnable := unrunnable.push fixture
   unrunnable := unrunnable.qsort (· < ·)
   if unrunnable != expectedUnrunnable.qsort (· < ·) then
     failures := failures.push
       s!"unrunnable fixtures are {unrunnable}, expected {expectedUnrunnable}: \
          update expectedUnrunnable"
+
+  -- **The floor.** Each fixture is asserted to have produced exactly the
+  -- rules the table above records, so a fixture that stops generating them is
+  -- a failure here rather than a smaller number in the line below.
+  for (fixture, count) in perFixture do
+    match expectedProjectionIotas.find? (·.1 == fixture) with
+    | none =>
+      failures := failures.push
+        s!"{fixture}: is not in expectedProjectionIotas ({count} projection iotas): \
+           add the row"
+    | some (_, expected) =>
+      unless count == expected do
+        failures := failures.push
+          s!"{fixture}: emitted {count} projection iotas, expected {expected}"
+  for (fixture, expected) in expectedProjectionIotas do
+    unless perFixture.any (·.1 == fixture) do
+      failures := failures.push
+        s!"{fixture}: expected {expected} projection iotas but the fixture was not \
+           swept: remove the row or restore the fixture"
+  -- Every rule that was found also has to have been recognised as literal;
+  -- `censusFixture` only counts one when it also passes the invariant, so a
+  -- rule that failed above is missing from `literal` rather than from
+  -- `projectionIotas`.
+  unless literal == projectionIotas do
+    failures := failures.push
+      s!"{literal} of {projectionIotas} projection iotas state their field binder \
+         literally"
 
   IO.println s!"intrinsic projection contract: \
     {literal} of {projectionIotas} projection iotas state their constructor \
