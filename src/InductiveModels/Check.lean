@@ -59,7 +59,8 @@ This file is a facade: it only re-exports the ten modules below, so
 * [`InductiveModels.Check.Certificates`] — declaration views and one-layer boundaries
 * [`InductiveModels.Check.Rules`] — the per-slot structural checks
 * [`InductiveModels.Check.Index`] — syntax tables, discovery, whole-export check
-* [`InductiveModels.Check.Compact`] — name-only compact certificates
+* [`InductiveModels.Check.Compact`] — name-only compact certificates, and the
+  fold which finishes the same report one record at a time
 * [`InductiveModels.Check.Statements`] — the generation-time statement oracle
 
 The graph is a chain with two side entries:

@@ -562,8 +562,12 @@ def globalExtraRecordsWithIndex (index : SyntaxIndex)
 /-- Recover the modeled-type root and field index from either spelling counted
 by [`projectionSlot?`].  Indexing by the already-modeled root avoids repeating
 the full declaration-name scan for every inductive type while retaining each
-name's original position and multiplicity. -/
-private def projectionSlotRoot? (name : Name) : Option (Name × Nat) := do
+name's original position and multiplicity.
+
+The returned root is the *model* name (`T._model`), which is the key the
+`.type` template looks up; [`InductiveModels.Check.CompactStream`] purges its
+pending slot table under exactly that key. -/
+def projectionSlotRoot? (name : Name) : Option (Name × Nat) := do
   match name with
   | .str parent suffix =>
     if suffix.startsWith "proj_" then

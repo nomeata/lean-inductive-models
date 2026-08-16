@@ -188,15 +188,6 @@ inductive CompactLocator where
   | generated (island declaration : Nat)
   deriving Inhabited, Repr, BEq
 
-/-- Atomic value-free output row. `summary` and `globalExtra` are captured
-together with their logical locator as one value. -/
-structure CompactRecord where
-  summary : Order.DeclSummary
-  globalExtra : Check.GlobalExtraRecord
-  families : Array Check.CompactFamilyCertificate := #[]
-  locator : CompactLocator
-  deriving Inhabited, Repr
-
 /-- Value-only accounting for one declaration-wise output stream.  The
 largest callback payload is one generated island; source declarations are
 delivered separately and no prior payload remains owned by the driver. -/
@@ -2522,8 +2513,22 @@ private structure FilterState (α : Type) where
   persistentSyntax : Check.SyntaxIndex
   legacyOut : Array EDecl := #[]
   report : Report := {}
-  compactIslands : Array CompactIsland := #[]
-  compactRecords : Array CompactRecord := #[]
+  /-- The compact structural check, as far as the stream has been consumed.
+  No output record — source or generated — outlives the transition that
+  produced it, so this state and the locator schedule below are the only
+  things the final report is built from. -/
+  compactCheck : Check.CompactStream := {}
+  /-- Where each emitted record came from, in emission order.  Two natural
+  numbers per record and no payload; this is the plan's own schedule, not a
+  retained view of the output. -/
+  compactLocators : Array CompactLocator := #[]
+  /-- Accepted generated islands so far, which is the island number the next
+  one's locators carry. -/
+  compactIslandCount : Nat := 0
+  /-- Owners whose generated statement diagnostics the compact statement report
+  selects. One name per generated owner, which is what `report.generated`
+  already costs. -/
+  diagnosticOwners : Std.HashSet Name := {}
   sourceOrdinal : Nat := 0
   islandStatements : Check.StatementReport :=
     { statementsChecked := 0, violations := #[] }
@@ -2574,8 +2579,10 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
   let mut persistentSyntax := state.persistentSyntax
   let mut legacyOut := state.legacyOut
   let mut rep := state.report
-  let mut compactIslands := state.compactIslands
-  let mut compactRecords := state.compactRecords
+  let mut compactCheck := state.compactCheck
+  let mut compactLocators := state.compactLocators
+  let mut compactIslandCount := state.compactIslandCount
+  let mut diagnosticOwners := state.diagnosticOwners
   let mut islandStatements := state.islandStatements
   let mut invalidBasis := state.invalidBasis
   let mut sourceSteps := state.sourceSteps
@@ -2843,15 +2850,21 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
       modeledSourceFamilies := compact.sourceFamilies
       modeledSourceGlobalExtra? := compact.sourceGlobalExtra?
       if compactMode then
-        let islandNumber := compactIslands.size
+        let islandNumber := compactIslandCount
         for localOrdinal in [:compact.summaries.size] do
-          let row : CompactRecord := {
-            summary := compact.summaries[localOrdinal]!
-            globalExtra := compact.globalExtras[localOrdinal]!
-            families := compact.families[localOrdinal]!
-            locator := .generated islandNumber localOrdinal }
-          compactRecords := compactRecords.push row
-        compactIslands := compactIslands.push compact
+          let summary := compact.summaries[localOrdinal]!
+          compactCheck ← match compactCheck.push {
+              owner := summary.owner
+              modelSlots := summary.modelSlots
+              globalExtra := compact.globalExtras[localOrdinal]!
+              families := compact.families[localOrdinal]! } with
+            | .ok next => pure next
+            | .error message =>
+              throwError "invalid compact output certificate: {message}"
+          compactLocators := compactLocators.push (.generated islandNumber localOrdinal)
+        compactIslandCount := compactIslandCount + 1
+        for owner in compact.diagnosticOwners.toArray do
+          diagnosticOwners := diagnosticOwners.insert owner
       if streamOutput && rep.generatedKernelRejected.isNone then
         streamIsland? := some orderedGenerated
       let persistentRecords := (generatedSupportRecords orderedGenerated exactIslandModels).filter
@@ -2892,12 +2905,14 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
     let some firstName := d.names.head? | throwError "source declaration has no name"
     let some rawOrdinal := rawOrdinals[firstName]?
       | throwError "source declaration {firstName} lost its raw ordinal"
-    let row : CompactRecord := {
-      summary := sourceSummaries[sourceOrdinal]!
-      globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtra
-      families := sourceFamilyRecord ++ modeledSourceFamilies
-      locator := .source rawOrdinal }
-    compactRecords := compactRecords.push row
+    compactCheck ← match compactCheck.push {
+        owner := sourceSummary.owner
+        modelSlots := sourceSummary.modelSlots
+        globalExtra := modeledSourceGlobalExtra?.getD sourceGlobalExtra
+        families := sourceFamilyRecord ++ modeledSourceFamilies } with
+      | .ok next => pure next
+      | .error message => throwError "invalid compact output certificate: {message}"
+    compactLocators := compactLocators.push (.source rawOrdinal)
   if context.checkRecursors && !dropCanonicalBasisRecord then
     if let .induct _ _ rs := replayD then
       let (n, b) ← checkRecs rs
@@ -2931,13 +2946,18 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
       emit (.source d)
       streamStats := { streamStats with sourceRecords := streamStats.sourceRecords + 1 }
   return .next {
-    mainEnv, persistentSyntax, legacyOut, report := rep, compactIslands, compactRecords,
+    mainEnv, persistentSyntax, legacyOut, report := rep, compactCheck,
+    compactLocators, compactIslandCount, diagnosticOwners,
     sourceOrdinal := sourceOrdinal + 1, islandStatements, invalidBasis,
     sourceSteps, observations, streamStats, inputFamilyCandidates,
     canonicalBasisWritten }
 
-/-- Complete compact structural checking after the logical source stream has
-been exhausted.  No source `EDecl` is consumed here. -/
+/-- Read out the verdicts once the logical source stream has been exhausted.
+
+Nothing is checked here: the compact structural report was charged record by
+record as the stream produced it, so this reads an accumulated value and never
+walks a record array. The one exception is the retained-output compatibility
+mode, whose whole point is that it kept the declarations. -/
 private def FilterState.finalize (state : FilterState α) (context : FilterContext α) :
     MetaM (Array EDecl × Report × CompactPlan) := do
   let x := context.source
@@ -2947,30 +2967,18 @@ private def FilterState.finalize (state : FilterState α) (context : FilterConte
   let sourceSyntax := context.sourceSyntax
   let reserved := context.reserved
   let legacyOut := state.legacyOut
-  let compactIslands := state.compactIslands
-  let compactRecords := state.compactRecords
   let islandStatements := state.islandStatements
   let mut rep := state.report
-  let compactOrder := if compactMode then Array.range compactRecords.size else #[]
-  let compactCheckReport : Check.Report ← if compactMode then
-      let orderedRecords := compactOrder.map fun i =>
-        { owner := compactRecords[i]!.summary.owner
-          modelSlots := compactRecords[i]!.summary.modelSlots
-          globalExtra := compactRecords[i]!.globalExtra
-          families := compactRecords[i]!.families : Check.CompactCheckRecord }
-      match Check.compactSourceReport orderedRecords with
-      | .ok report => pure report
-      | .error message => throwError "invalid compact output certificate: {message}"
-    else
-      pure ({ familiesChecked := 0, violations := #[] } : Check.Report)
+  -- Every record has already been charged against the structural check at the
+  -- transition which emitted it.  Nothing is consumed here but the accumulated
+  -- verdict.
+  let compactCheckReport : Check.Report := if compactMode then
+      state.compactCheck.finish
+    else { familiesChecked := 0, violations := #[] }
   let compactStatementReport := if compactMode then
-    let orderedGlobals := compactOrder.map fun i => compactRecords[i]!.globalExtra
-    let diagnosticOwners := compactIslands.foldl (init := ({} : Std.HashSet Name))
-      fun owners island => island.diagnosticOwners.toArray.foldl
-        (fun owners owner => owners.insert owner) owners
-    let compactGlobal := Check.globalExtrasFromRecordsFor orderedGlobals diagnosticOwners
     ({ islandStatements with
-      violations := islandStatements.violations ++ compactGlobal } : Check.StatementReport)
+      violations := islandStatements.violations ++
+        state.compactCheck.globalExtrasFor state.diagnosticOwners } : Check.StatementReport)
   else islandStatements
   let statementReport ← if retainOutput then do
       let generatedOwners := rep.generated.foldl
@@ -2996,9 +3004,8 @@ private def FilterState.finalize (state : FilterState α) (context : FilterConte
     stmtErrors := statementReport.violations.map fun violation => violation.message }
   unless retainOutput || legacyOut.isEmpty do
     throwError "compact filter retained {legacyOut.size} cumulative declaration records"
-  let declarations := compactOrder.map fun index => compactRecords[index]!.locator
   let compactPlan : CompactPlan := {
-    declarations
+    declarations := state.compactLocators
     checkReport := compactCheckReport
     retainedGeneratedRecords := legacyOut.foldl (fun count declaration =>
       if declaration.names.any fun name => !reserved.contains name then count + 1 else count) 0

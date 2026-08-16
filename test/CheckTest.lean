@@ -65,10 +65,14 @@ def indexedFamilyStatements? (x : Export) (owner : Name) : Option StatementRepor
 def indexedStatementsFor (x : Export) (owners : Std.HashSet Name) : StatementReport :=
   checkStatementFamiliesWithIndex x (.ofExport x) (statementFamiliesFor x owners)
 
+/-- Both compact forms of one report against the whole-export checker: the
+retained-row pass, and the fold generation actually runs
+([`InductiveModels.Check.CompactStream`]). They are two implementations of one
+report, so every export the oracle is asked about is asked of both. -/
 def compactMatches (x : Export) : Bool :=
-  match compactOrderedCheckReport x with
-  | .ok compact => compact == checkReport x
-  | .error _ => false
+  match compactOrderedCheckReport x, compactStreamCheckReport x with
+  | .ok compact, .ok streamed => compact == checkReport x && streamed == compact
+  | _, _ => false
 
 def compactRejected (result : Except String Report) : Bool :=
   match result with
@@ -663,15 +667,21 @@ def checkCompactCertificates (owner : Name) (valid : Export)
   let ownerCertificate := compactRows[ownerRow]!.families[0]!
   let compactRows := compactRows.set! ownerRow
     { compactRows[ownerRow]! with modelSlots := ownerCertificate.publicNames }
+  let duplicateCertificateRows := compactRows.set! ownerRow
+    { compactRows[ownerRow]! with families := #[ownerCertificate, ownerCertificate] }
+  let misboundCertificateRows := compactRows.set! ownerRow
+    { compactRows[ownerRow]! with owner := some `Wrong.Owner }
+  let uncertifiedRows := compactRows.set! ownerRow
+    { compactRows[ownerRow]! with families := #[] }
   state ← state.check "duplicate compact family certificates fail closed" <|
-    compactRejected <| compactOrderedReport (compactRows.set! ownerRow
-      { compactRows[ownerRow]! with families := #[ownerCertificate, ownerCertificate] })
+    compactRejected (compactOrderedReport duplicateCertificateRows) &&
+      compactRejected (compactStreamedReport duplicateCertificateRows)
   state ← state.check "misbound compact family certificates fail closed" <|
-    compactRejected <| compactOrderedReport (compactRows.set! ownerRow
-      { compactRows[ownerRow]! with owner := some `Wrong.Owner })
+    compactRejected (compactOrderedReport misboundCertificateRows) &&
+      compactRejected (compactStreamedReport misboundCertificateRows)
   state ← state.check "missing active compact family certificates fail closed" <|
-    compactRejected <| compactOrderedReport (compactRows.set! ownerRow
-      { compactRows[ownerRow]! with families := #[] })
+    compactRejected (compactOrderedReport uncertifiedRows) &&
+      compactRejected (compactStreamedReport uncertifiedRows)
   return some state
 
 def checkIndexedStatementViews (owner : Name) (valid : Export)
@@ -692,7 +702,8 @@ def checkIndexedStatementViews (owner : Name) (valid : Export)
     compactIndexedStatementsFor duplicateInvalidProjection treeOwners ==
       checkStatementsFor duplicateInvalidProjection treeOwners
   state ← state.check "compact ordered report rejects duplicate declaration names" <|
-    compactRejected (compactOrderedCheckReport duplicateInvalidProjection)
+    compactRejected (compactOrderedCheckReport duplicateInvalidProjection) &&
+      compactRejected (compactStreamCheckReport duplicateInvalidProjection)
   return some state
 
 def checkIslandOverlays (owner : Name) (raw valid : Export) (models : Array EDecl)
@@ -851,7 +862,8 @@ def checkRecursorSlots (owner : Name) (valid : Export) (table : Correspondence)
   state ← state.check "extra recursor occurrence is rejected" <|
     (check duplicateRec).any (isDuplicate firstRec.owner firstRec.model)
   state ← state.check "compact ordered report rejects duplicate public slots" <|
-    compactRejected (compactOrderedCheckReport duplicateRec)
+    compactRejected (compactOrderedCheckReport duplicateRec) &&
+      compactRejected (compactStreamCheckReport duplicateRec)
   let some (_, firstRecType) := exportDeclarationType? valid firstRec.model | do
     IO.eprintln "checktest: modeled recursor type missing"
     return none
