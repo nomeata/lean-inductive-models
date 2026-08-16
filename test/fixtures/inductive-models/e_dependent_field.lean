@@ -50,17 +50,34 @@
      models exactly as it did.
    * `EOpaque` — **the residual decline**, and the only one. Its first field is
      an opaque parameter at `Sort (imax u v)`, and no tower over it lands at
-     the carrier's `Type (max 1 u v)`: level equality is normal-form equality
+     the carrier's `Type (max 1 u v)`: level conversion is normal-form equality
      and a `max` does not absorb an `imax`, which is what the recursive box
      exists to fix — and no box can inspect an opaque atomic type far enough to
-     normalize its level. So this owner stores nothing, its projections are
-     eliminations again, and field 2's codomain `Vec (proj_1 … (proj_0 …))` is
-     not the field's own `Vec (f x)`. It declines.
+     remove it. So this owner stores nothing, its projections are eliminations
+     again, and field 2's codomain `Vec (proj_1 … (proj_0 …))` is not the
+     field's own `Vec (f x)`. It declines.
 
-     **This is the level algebra's limit and not the storage idea's**, and it
-     is the same one the tuple route and arm W hard-fail on. Arm E does not
-     hard-fail there only because it has a total alternative the other two do
-     not: emptiness alone is already a model.
+     **This is a limit of Lean's conversion, not of the storage idea.**
+     `imax u v ≤ max 1 u v` is true, and the kernel established it in admitting
+     this declaration: its `is_geq` splits the `imax` on the right and proves
+     the stronger `max`-shaped bound. That does not help, because the tower has
+     to *be* at `Sort (max 1 u v)` and the kernel decides that by normal-form
+     equality, in which a true inequality is not a conversion
+     (`InductiveModels.wTowerLevel` says which test is asked and why it is the
+     stock one). It is the same wall the tuple route and arm W hard-fail on;
+     arm E does not hard-fail only because it has a total alternative the other
+     two do not: emptiness alone is already a model.
+
+     The verdict is `InductiveModels.Decline.projectionCodomain` and not a
+     shape verdict because arm E models this owner completely — carrier,
+     constructors, recursor and ι rules all exist and check. Only the intrinsic
+     projection *rules* have no well-formed statement.
+
+     **The class needs a binder whose sort literally spells `imax` after
+     `whnf`.** Ordinary Lean elaboration does not produce one; it takes a source
+     that writes `Sort (imax u v)` by hand, as `HiddenIm` does here. That is a
+     fact about the class and not a defence of the decline: generality is the
+     bar and rarity justifies nothing.
 
    Every owner hides its result former behind a reducible definition — the same
    idiom `HiddenIndexed` uses in `indexed_fibre_boundary.lean` — so

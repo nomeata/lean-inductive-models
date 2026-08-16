@@ -60,15 +60,25 @@ chain that reaches the tail.
 it — a two-step dependency, several bare recursive fields, a non-bare one, two
 constructors, and both universe routes.
 
-What is left of this decline is the **level algebra**, and it is a live verdict
-because that algebra has a real gap.  A tower over a field at `Sort ℓ` lands at
-`Sort (max ℓ w)`, and the kernel's own acceptance of the input says
-`max ℓ w = w` only up to `is_geq`, which unfolds an `imax` on the right where
-`max` does not absorb one.  The recursive box closes that wherever the field's
-type can be inspected; where it cannot — an opaque atomic type at an `imax`
-level — nothing stores the field, its projection is an elimination again, and a
-later field naming it has no proposition to state.  `e_dependent_field`'s
-`EOpaque` is that owner.
+What is left of this decline is **Lean's conversion on levels**, and it is a
+live verdict for a reason that is nobody's incompleteness.  A tower over a
+field at `Sort ℓ` lands at `Sort (max ℓ w)`, so it is the carrier's `Sort w`
+only if `max ℓ w ≡ w`.  The inequality behind that is settled: the kernel
+admitted the input by `is_geq(w, ℓ)`, and `is_geq` splits an `imax` on the
+right into its two arguments, so it never reasons about `imax` — it
+over-approximates by `max` and proves the stronger `max`-shaped bound.  But
+level conversion is `is_equivalent`, which is normal-form equality and nothing
+else: no ordering, no absorption across differing bases.  `max (max u v) w`
+normalizes to `w`; `max (imax u v) w` does not, since an `imax` atom absorbs
+into no `max`.  A true and kernel-established `ℓ ≤ w` is therefore not a
+conversion, and the tower needs a conversion.  The recursive box rewrites the
+field's type until its level carries no `imax`, wherever the type can be
+inspected; at an opaque atomic type it cannot, so nothing stores the field, its
+projection is an elimination again, and a later field naming it has no
+proposition to state.  `e_dependent_field`'s `EOpaque` is that owner, and the
+verdict is [`InductiveModels.Decline.projectionCodomain`] rather than a shape
+verdict because the model itself is built and checks: only the projection rules
+have no statement.
 
 The predicates below still decide two things the contract does not: which
 construction a route is entitled to use, and — where the model is built from a

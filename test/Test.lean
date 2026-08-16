@@ -849,12 +849,12 @@ def expectedPrim : List Row :=
   -- nothing is asked back and nothing is stored.
   --
   -- `EOpaque` is what keeps `Decline.projectionCodomain` a verdict about a
-  -- shape rather than dead code, and it is the level algebra's limit rather
-  -- than the storage's: its first field is an opaque parameter at
-  -- `Sort (imax u v)`, a `max` does not absorb an `imax`, and no box can
-  -- inspect an opaque atomic type far enough to normalize its level. So that
-  -- owner stores nothing, its projections are eliminations again, and field 2
-  -- names two earlier fields.
+  -- shape rather than dead code, and it is a limit of Lean's conversion rather
+  -- than of the storage: its first field is an opaque parameter at
+  -- `Sort (imax u v)`, level conversion is normal-form equality, a `max` does
+  -- not absorb an `imax`, and no box can inspect an opaque atomic type far
+  -- enough to remove it. So that owner stores nothing, its projections are
+  -- eliminations again, and field 2 names two earlier fields.
   , ("e_dependent_field",
       [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6), ("EDep", 10),
        ("Tag", 6), ("EChain", 12), ("EMid", 12), ("ENon", 12), ("Fib", 6),

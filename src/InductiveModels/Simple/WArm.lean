@@ -101,14 +101,29 @@ partial def wTowerTy (tail : Expr) (w : Level) (xs : Array Expr) (boxed : Array 
     let β ← mkLambdaFVars #[x] (← wTowerTy tail w xs boxed (i + 1) (pre.push value))
     return psigmaT ℓ w stored β
 
-/-- **Is a tower over these fields at `Sort w`?** `max ℓᵢ w ≡ w` at every field,
-which is Lean's own constraint on the declaration re-asked as a conversion:
-a field of an inductive at `Sort w` sits at some `Sort ℓ` with `max ℓ w = w`.
-Asked before anything is spliced, so a declaration this refuses costs no
-splice, and asked of the *expression* rather than assumed. Components with an
-exposed `imax` are measured after recursive boxing; this still refuses an
-opaque atomic type whose level contains an `imax`, because no available box can
-inspect that type far enough to normalize its level. -/
+/-- **Is a tower over these fields at `Sort w`?** `max ℓᵢ w ≡ w` at every
+field: Lean's own constraint on the declaration re-asked as a *conversion*,
+and the two are not the same question. The kernel admitted the input by
+`is_geq(w, ℓ)`, which splits an `imax` on the right into its two arguments and
+so proves the stronger `max`-shaped bound; conversion on levels is
+`is_equivalent`, normal-form equality with no ordering and no absorption across
+differing bases. `max (max u v) w` normalizes to `w` and `max (imax u v) w`
+does not. Asked before anything is spliced, so a declaration this refuses costs
+no splice, and asked of the *expression* rather than assumed.
+
+**Stock `isLevelDefEq` deliberately**, not
+[`InductiveModels.LevelAlgebra.isLevelDefEqComplete`]. That procedure is
+strictly stronger — it does equate `max (imax u v) w` with `w` — and the extra
+strength is useless here: the tower is a term the kernel must accept, and the
+kernel decides this by the same normal-form equality the elaborator uses.
+Deciding the inequality more completely does not turn it into a conversion.
+That is a property of Lean's conversion, not a gap in our normaliser, and it is
+the whole of what `EOpaque` in
+`test/fixtures/inductive-models/e_dependent_field.lean` runs into.
+
+Components with an exposed `imax` are measured after recursive boxing; this
+still refuses an opaque atomic type whose level contains an `imax`, because no
+available box can inspect that type far enough to remove it. -/
 def wTowerLevel (w : Level) (xs : Array Expr) (boxed : Array Bool) : GenM (Option Level) := do
   for i in [0:xs.size] do
     let original ← ityp xs[i]!

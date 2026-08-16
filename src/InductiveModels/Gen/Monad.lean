@@ -105,22 +105,48 @@ inductive Decline where
   but reducing to no field because none is stored — leaves the left-hand side
   at `Aⱼ(proj⃗ (mk f⃗))` and the right at `Aⱼ(f⃗)`, which are different types.
 
-  **What is left in that position is a level question, not a construction.**
-  Every arm now stores the fields a codomain can name — arm W in its data
-  tower, arm E in a `PSigma'` tower ending at [`InductiveModels.emptyAt`], which
-  is empty because of its tail and stores everything in front of it — and a
-  tower over a field at `Sort ℓ` reaches the carrier's `Sort w` exactly when
-  `max ℓ w ≡ w`. The kernel's own `is_geq` accepted the input on a weaker test:
-  it unfolds an `imax` on the right where `max` does not absorb one. The
-  recursive box closes that gap wherever the field's type can be inspected;
-  at an *opaque* atomic type at an `imax` level nothing can, so that field is
-  not stored and a later field naming it has no proposition to state.
+  **What is left in that position is a conversion question, not a
+  construction.** Every arm now stores the fields a codomain can name — arm W
+  in its data tower, arm E in a `PSigma'` tower ending at
+  [`InductiveModels.emptyAt`], which is empty because of its tail and stores
+  everything in front of it — and a tower over a field at `Sort ℓ` reaches the
+  carrier's `Sort w` exactly when `max ℓ w ≡ w`.
+
+  The *inequality* `ℓ ≤ w` is not in doubt. The kernel admitted the input by
+  `is_geq(w, ℓ)` (`kernel/inductive.cpp`), and `is_geq l (imax a b)` reduces to
+  `is_geq l a && is_geq l b` (`kernel/level.cpp`), so the kernel does not reason
+  about `imax` at all: it over-approximates by `max` and establishes the
+  *stronger* `max`-shaped bound. What it does not establish is a *conversion*.
+  Level conversion is `is_equivalent l₁ l₂ := l₁ == l₂ || normalize l₁ ==
+  normalize l₂` — normal-form equality, with no ordering test and no absorption
+  across differing bases. `max (max u v) w` normalizes to `w`; `max (imax u v)
+  w` does not, because an `imax` atom absorbs into no `max`. The storing tower
+  has to *land* at `Sort w`, decided by that equality, so a true and
+  kernel-established `ℓ ≤ w` is simply not enough. The recursive box removes
+  the `imax` wherever the field's type can be inspected; at an *opaque* atomic
+  type nothing can, so that field is not stored and a later field naming it has
+  no proposition to state.
   `test/fixtures/inductive-models/e_dependent_field.lean`'s `EOpaque` is the
   occupant.
 
-  The transported right-hand side that used to bridge them is no longer part
-  of the contract, and `test/ProjectionTransportCensusTest.lean` holds it out,
-  so there is nothing left to emit: the owner declines. -/
+  **That is a genuine limit under the fixed basis, not an incompleteness.**
+  Any basis type holding an inhabitant of an opaque `α : Sort ℓ₀` carries `ℓ₀`
+  as a `max`-summand of its own level, and the one level former that erases
+  `ℓ₀` is `imax ℓ₀ 0` — a `Prop`-valued predicate, out of which no definitional
+  selector recovers the value. A generated wrapper *inductive* would be
+  kernel-accepted and would select by its own ι rule, but declaring an
+  inductive to model an inductive defeats the construction.
+
+  **Why this verdict and not [`InductiveModels.Decline.shapeUnsupported`].**
+  Arm E models `EOpaque` completely: carrier, constructors, recursor and ι
+  rules all exist and check, and construction reaches the projection stage
+  holding them. Only the intrinsic projection *rules* have no well-formed
+  statement. A `ShapeScope` verdict — `outOfScope` above all — would say no
+  model was built, which is false.
+
+  The transported right-hand side that used to bridge the two sides is no
+  longer part of the contract, and `test/ProjectionTransportCensusTest.lean`
+  holds it out, so there is nothing left to emit: the owner declines. -/
   | projectionCodomain (owner : Name) (field : Nat)
   /-- **A shape the route dispatcher settled on before any arm ran, and no arm
   represents.**
