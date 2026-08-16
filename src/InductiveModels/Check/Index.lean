@@ -136,6 +136,22 @@ than rebuilding a second whole-export map. -/
 def SyntaxIndex.exactNormalizer (index : SyntaxIndex) : ExactNormalizationEnv :=
   index.normalizer
 
+/-- Run this index's checks against a different source of transparent
+definitions, leaving every declaration-facing table alone.
+
+This exists so the two sources of one shape fact — the export's own `defn`
+records and the same bodies as the installed environment spells them — can be
+compared through the *whole* checker rather than through the eligibility
+predicates alone.  That distinction matters: shape analysis does not only
+decide which slots exist, it also feeds the compared expression, at the
+projection-iota binder β-normalization and at the `Eq` level inferred for a
+constructor field ([`InductiveModels.Check.checkProjection`]).  A divergence
+there would change an emitted statement, so the assertion has to be able to
+reach it.  `ExportSyntaxNormalizationTest` is the caller. -/
+def SyntaxIndex.withExactNormalizer (index : SyntaxIndex)
+    (normalizer : ExactNormalizationEnv) : SyntaxIndex :=
+  { index with normalizer }
+
 /-- Replace the declaration-facing portion of a syntax index with an explicit
 collision-free replay view while retaining exact source occurrence/family
 certificates.

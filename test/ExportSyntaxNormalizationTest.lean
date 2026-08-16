@@ -141,6 +141,20 @@ def compareExport (count : AgreementCount) (label : String) (x : Export)
           (x.intrinsicProjectionFieldsWith exportNormalizer) declaration ==
         Check.correspondenceFor? environmentNormalizer
           (x.intrinsicProjectionFieldsWith environmentNormalizer) declaration)
+  -- The queries above are the eligibility predicates, but shape analysis is not
+  -- only a side channel deciding which slots exist: it also feeds the compared
+  -- expression, at the projection-iota binder β-normalization and at the `Eq`
+  -- level inferred for a constructor field.  Running the whole checker under
+  -- each definition source and comparing its violations reaches both of those,
+  -- and every other consumer, in one comparison.
+  let index := Check.SyntaxIndex.ofExport x
+  let environmentIndex := index.withExactNormalizer environmentNormalizer
+  let families := Check.discoverWithIndex x index
+  count := count.check s!"{label}: whole-checker violations"
+    (Check.checkFamiliesWithIndex x index families true ==
+      Check.checkFamiliesWithIndex x environmentIndex families true)
+  count := count.check s!"{label}: discovered families"
+    (families == Check.discoverWithIndex x environmentIndex)
   return count
 
 def fixtureDirectories : Array String :=
@@ -160,9 +174,17 @@ def environmentAgreement (root : String) : IO (Nat × Nat × Array String) := do
       if entry.path.extension == some "ndjson" then entries := entries.push entry.path
     for file in entries.qsort (fun a b => a.toString < b.toString) do
       let .ok x := parse (← IO.FS.readFile file) | continue
+      let label := file.fileName.getD file.toString
       fixtures := fixtures + 1
-      count := compareExport count (file.fileName.getD file.toString) x
-        (replayExport base x)
+      count := compareExport count label x (replayExport base x)
+      -- A raw input fixture usually declares no model family at all, so the
+      -- whole-checker comparison above has little to bite on.  The generated
+      -- export is where projections and iotas actually exist, and therefore
+      -- where shape analysis reaches the compared expression.  Fixtures that
+      -- decline to generate are simply not compared twice.
+      if let .ok (generated, _) ← (generatedExport x).toBaseIO then
+        count := compareExport count s!"{label} (generated)" generated
+          (replayExport base generated)
   return (fixtures, count.compared, count.failed)
 
 def run (root : String) : IO UInt32 := do
