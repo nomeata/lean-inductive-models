@@ -928,9 +928,25 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       | _, _ => pure #[]
 
     -- Read the selected field type from the modeled constructor telescope.
-    -- Every earlier field variable is replaced by the intrinsic projection
-    -- already emitted for that field, so dependent results mention no
-    -- constructor-local variable outside their scope.
+    -- An earlier field variable the rest of the telescope still names is
+    -- replaced by the intrinsic projection already emitted for that field, so
+    -- dependent results mention no constructor-local variable outside their
+    -- scope.
+    --
+    -- **The walk drops a binder exactly where the kernel drops it.**
+    -- `infer_proj` forms `proj i self` only when the body under field `i`'s
+    -- binder has a loose occurrence of it, and only *there* does it require
+    -- field `i` to be projectable in the first place — a Prop-valued owner's
+    -- data field is skipped, not refused, when nothing later names it.
+    -- `eligibleProjectionFieldsM` mirrors that walk, so such an owner's later
+    -- proof field is projectable while its data field has no projection at
+    -- all; substituting here regardless demanded one and raised an internal
+    -- error on a kernel-accepted declaration.
+    --
+    -- Under the loose-occurrence test the lookup below is a real invariant:
+    -- a field the remaining telescope names is one the eligibility walk
+    -- required to be a proposition, hence eligible itself, and this loop
+    -- emits fields in index order.
     let projectionType ← forallBoundedTelescope modelTypeInfo.type (some ownerArity)
         fun ownerArguments _ => do
       let params := ownerArguments.extract 0 type.numParams
@@ -944,11 +960,14 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
             let selfType ← mkForallFVars #[self] fieldType
             return (closeForallsExact? modelTypeInfo.type ownerArguments selfType).getD
               (← mkForallFVars ownerArguments selfType)
-          let some (_, _, earlierProjection, _) := projectionModels.find? fun entry =>
-              entry.1 == type.name && entry.2.1 == earlier
-            | badShape s!"{type.name}'s field {fieldIndex} precedes intrinsic field {earlier}"
-          let selected := mkAppN (.const earlierProjection us) (ownerArguments.push self)
-          current := rest.instantiate1 selected
+          if rest.hasLooseBVar 0 then
+            let some (_, _, earlierProjection, _) := projectionModels.find? fun entry =>
+                entry.1 == type.name && entry.2.1 == earlier
+              | badShape s!"{type.name}'s field {fieldIndex} precedes intrinsic field {earlier}"
+            let selected := mkAppN (.const earlierProjection us) (ownerArguments.push self)
+            current := rest.instantiate1 selected
+          else
+            current := rest.lowerLooseBVars 1 1
         badShape s!"{constructorName} has no field {fieldIndex}"
 
     -- Both selectors eliminate the same major at the same motive; they differ
