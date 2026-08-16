@@ -64,6 +64,44 @@ partial def hasHiddenBinderDomain (owner : Name) : Expr → Bool
         (headNorm domain matches .forallE ..)) || hasHiddenBinderDomain owner body
   | _ => false
 
+/-- **Is `Boundary.Owner | base | lim : limTy` a declaration the kernel
+accepts?**  `none` where it is; the kernel's own message where it is not.
+
+Built in a bare environment with one earlier inductive `Boundary.Payload`
+standing in for any already-declared type, and added through `addDecl`, so the
+verdict is the kernel's positivity check and not the elaborator's.  The names
+are the ones the boundary expressions below are written at, so an expression
+that named nothing declared here would fail as an unknown constant rather than
+as the non-positive occurrence being asserted. -/
+def kernelVerdict (limTy : Expr) : IO (Option String) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<vanishing-erasure-kernel>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 4096 }
+  let (verdict, _) ← Core.CoreM.toIO (ctx := context) (s := { env }) do
+    addDecl <| .inductDecl [] 0
+      [{ name := `Boundary.Payload, type := .sort (.succ .zero),
+         ctors := [{ name := `Boundary.Payload.mk,
+                     type := .const `Boundary.Payload [] }] }] false
+    try
+      addDecl <| .inductDecl [] 0
+        [{ name := `Boundary.Owner, type := .sort (.succ .zero),
+           ctors := [{ name := `Boundary.Owner.base,
+                       type := .const `Boundary.Owner [] },
+                     { name := `Boundary.Owner.lim, type := limTy }] }] false
+      pure none
+    catch e => pure (some (← e.toMessageData.toString))
+  return verdict
+
+/-- Run one non-throwing shape analysis and report its verdict. -/
+def analysisVerdict (x : GenM α) : IO (Except Decline α) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<vanishing-erasure-analysis>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 4096 }
+  let (result, _) ← Core.CoreM.toIO (MetaM.run' x.run) context { env }
+  return result
+
 def inductiveMetadata? (input : Export) (owner : Name) : Option EIndType :=
   input.decls.findSome? fun declaration => match declaration with
     | .induct types _ _ => types.find? (·.name == owner)
@@ -235,30 +273,87 @@ def main : IO UInt32 := do
     erasureFieldDomain owner nested == headNorm nested && erasureRecursive owner nested &&
       !(headNorm nested).getAppFn.isConstOf owner
 
-  -- **What the one normalisation reaches, and what it deliberately does not.**
+  -- **What the one normalisation reaches, and why the level below it needs no
+  -- normalisation at all.**
+  --
   -- `shapeCtorTy` reduces a *field domain* whose owner mention βζ disappears
   -- and nothing else, so `labelFactored`'s `recAt` stops calling such a field
   -- an earlier recursive one.  A binder type *inside* a recursive field's own
-  -- telescope is one level deeper and is left as written; the guard therefore
-  -- stays a live conjunct rather than becoming an assertion, and these two
-  -- constructor types are the two sides of that line.
+  -- telescope is one level deeper and is left as written — and the block below
+  -- is why that is not a second normalisation waiting to be written, but the
+  -- statement that `labelFactored` refuses an **empty class** and is therefore
+  -- an invariant rather than a guard.
   let family := fun (argument : Expr) => Expr.app (Expr.const `Boundary.Fam []) argument
   let deadThenChild :=
     Expr.forallE `k dead
       (Expr.forallE `f (Expr.forallE `z (family (.bvar 0)) ownerT .default) ownerT .default)
       .default
-  let childBinderRedex :=
-    Expr.forallE `c ownerT
-      (Expr.forallE `f
-        (Expr.forallE `z (Expr.app (Expr.lam `x ownerT natT .default) (.bvar 0)) ownerT .default)
-        ownerT .default)
-      .default
   state := state.check "a dead field domain stops being an earlier recursive field" <|
     !labelFactored owner 0 #[(`Boundary.lim, deadThenChild)] &&
       labelFactored owner 0 (shapeCtors owner 0 #[(`Boundary.lim, deadThenChild)])
-  state := state.check "a dead mention inside a child's binder is still refused" <|
-    shapeCtorTy owner 0 childBinderRedex == childBinderRedex &&
-      !labelFactored owner 0 (shapeCtors owner 0 #[(`Boundary.lim, childBinderRedex)])
+
+  -- **The class `labelFactored` refuses, written out in every spelling it
+  -- has.**  To name an earlier *recursive* field, a binder type inside a later
+  -- recursive field's telescope must either mention that field through a type
+  -- former — which cannot exist, since the former's domain would have to
+  -- mention the type being declared (`nested_value_dependency.lean` writes out
+  -- every attempt) — or discard it in an uncontracted redex.  A redex that
+  -- discards a value of the owner carries the owner in its own binder
+  -- annotation, in both the β and the ζ spelling.  Two independent facts then
+  -- close the class:
+  --
+  --   * the **kernel** rejects it.  Positivity tests `has_ind_occ` on the
+  --     domain of a Π *syntactically*, so an owner mention in a recursive
+  --     field's binder is a non-positive occurrence even when it βζ vanishes —
+  --     while the same redex as a whole *field domain* is `whnf`-ed first and
+  --     is accepted, which is `nonindexed_vanishing`'s shape; and
+  --   * `erasureBareFailure?` refuses it first anyway, so `analysePrim`
+  --     declines it `.outOfScope` (a nested occurrence is layer 1's business)
+  --     before arm W's eligibility is asked at all.
+  --
+  -- So no input — valid or not — reaches arm W's label guard with the guard
+  -- false, and the arm asserts it instead of testing it.
+  let payloadT : Expr := .const `Boundary.Payload []
+  let ownerFieldRedexes : Array (String × Expr) := #[
+    ("β", Expr.app (Expr.lam `x ownerT payloadT .default) (.bvar 0)),
+    ("ζ", Expr.letE `y ownerT (.bvar 0) payloadT false)]
+  let childOf := fun (binder : Expr) =>
+    Expr.forallE `c ownerT
+      (Expr.forallE `f (Expr.forallE `z binder ownerT .default) ownerT .default) .default
+  let contracted := childOf payloadT
+  let deadDomain :=
+    Expr.forallE `c ownerT
+      (Expr.forallE `p (Expr.app (Expr.lam `x ownerT payloadT .default) (.bvar 0)) ownerT
+        .default)
+      .default
+  for (spelling, binder) in ownerFieldRedexes do
+    let cty := childOf binder
+    let shaped := shapeCtors owner 0 #[(`Boundary.lim, cty)]
+    let bareWhy ← analysisVerdict (erasureBareFailure? owner 0 0 shaped)
+    let verdict ← kernelVerdict cty
+    state := state.check s!"the {spelling} spelling reaches labelFactored unnormalized" <|
+      shapeCtorTy owner 0 cty == cty && !labelFactored owner 0 shaped
+    state := state.check s!"the {spelling} spelling is refused as nested before arm W" <|
+      match bareWhy with
+      | .ok (some _) => true
+      | _ => false
+    -- The message is read, not just the failure: an expression naming a
+    -- constant this environment does not have would also "fail", and would
+    -- assert nothing about positivity.
+    state := state.check s!"the kernel refuses the {spelling} spelling as non-positive" <|
+      match verdict with
+      | some message => (message.splitOn "non positive occurrence").length > 1
+      | none => false
+  let contractedWhy ← kernelVerdict contracted
+  let deadDomainWhy ← kernelVerdict deadDomain
+  unless contractedWhy.isNone && deadDomainWhy.isNone do
+    IO.eprintln s!"control rejected: contracted={contractedWhy}, deadDomain={deadDomainWhy}"
+  state := state.check "the branching control the kernel accepts" <| contractedWhy.isNone
+  state := state.check "the dead-field-domain control the kernel accepts" <| deadDomainWhy.isNone
+  state := state.check "the accepted controls need no label guard" <|
+    labelFactored owner 0 (shapeCtors owner 0 #[(`Boundary.lim, contracted)]) &&
+      labelFactored owner 0 (shapeCtors owner 0 #[(`Boundary.lim, deadDomain)])
+
   state := state.check "normalization is the identity on a live occurrence and on parameters" <|
     shapeCtorTy owner 0 (Expr.forallE `f hidden ownerT .default)
         == Expr.forallE `f hidden ownerT .default &&

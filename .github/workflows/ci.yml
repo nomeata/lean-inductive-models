@@ -154,6 +154,7 @@ jobs:
           )
           test/scripts/check-ci-serialized-builds.sh
           test/scripts/check-checker-imports.sh
+          test/scripts/check-no-known-gap.sh
           test/scripts/check-lean4export-patch.sh
 
           case "$SUITE" in
