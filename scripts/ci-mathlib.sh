@@ -57,7 +57,26 @@ fail() {
 for tool in awk df du git grep gzip lake mkfifo sha256sum stat; do
   command -v "$tool" >/dev/null || fail "required command not found: $tool"
 done
-[[ -x /usr/bin/time ]] || fail "required command not found: /usr/bin/time"
+
+# GNU time is a separate binary from the shell's `time` keyword, and only the
+# binary accepts `-v -o`. Hosted runners ship it at /usr/bin/time; distributions
+# which do not use the FHS (NixOS) place it elsewhere on PATH. Resolve it once
+# rather than hardcoding a path, and verify the resolved binary really is GNU
+# time so a BSD/busybox `time` cannot silently change what is measured.
+TIME_BIN="${TIME_BIN:-}"
+if [[ -z "$TIME_BIN" ]]; then
+  if [[ -x /usr/bin/time ]]; then
+    TIME_BIN=/usr/bin/time
+  else
+    # `command -v time` would answer with Bash's reserved word. `type -P`
+    # searches PATH for an executable file only, which is what is wanted here.
+    TIME_BIN="$(type -P time || true)"
+  fi
+fi
+[[ -n "$TIME_BIN" && -x "$TIME_BIN" ]] ||
+  fail "required command not found: GNU time (set TIME_BIN)"
+"$TIME_BIN" -v -o /dev/null true 2>/dev/null ||
+  fail "$TIME_BIN does not support GNU time's -v -o reporting"
 (( BASH_VERSINFO[0] >= 5 )) || fail "Bash 5 or newer is required for wait -n -p"
 
 disk_census() {
@@ -84,12 +103,30 @@ cleanup_tree() {
   fi
 }
 
-# Every large process tree has an exact address-space ceiling. Serialized Lake
-# builds and cache extraction need 12 GiB (Simple.c exceeds 10 GiB). The pinned
-# exporter patch shrinks its retained global expression index enough to restore
-# that same 12 GiB ceiling, leaving 4 GiB of the standard runner's 16 GiB for
-# gzip and runner services. The public generator and serialized kernel reread
-# retain the authoritative 10 GiB process ceiling.
+# Every large process tree has an exact address-space ceiling. Phases are
+# serialized, so the runner only has to hold the largest one at a time.
+# Measured peak RSS against the pinned corpus, in phase order:
+#
+#   build-generator  2.91 GiB   under BUILD_LIMIT_KIB  (12 GiB)
+#   build-exporter   1.43 GiB   under BUILD_LIMIT_KIB  (12 GiB)
+#   mathlib-cache    0.91 GiB   under BUILD_LIMIT_KIB  (12 GiB)
+#   export           7.80 GiB   under EXPORT_LIMIT_KIB (12 GiB)
+#   generate        13.91 GiB   under WORKER_LIMIT_KIB (10 GiB) -- exceeds it
+#
+# The build ceiling is no longer set by any single translation unit: splitting
+# the simple construction route dropped build-generator to 2.91 GiB, about a
+# quarter of this cap. 12 GiB is now sized by the exporter phase, whose 7.80
+# GiB the pinned compact-interner patch already buys, leaving 4 GiB of the
+# standard runner's 16 GiB for gzip and runner services.
+#
+# The 10 GiB worker ceiling is the authoritative one for the public generator
+# and the serialized kernel reread, and generation currently does not fit under
+# it. Raising it is not a fix: 13.91 GiB of resident working set leaves under
+# 2 GiB on a 16 GiB runner for the OS, the gzip feeder and the page cache
+# backing the ~5.9 GB output sibling, so no cap in the 10-14 GiB range makes
+# this phase fit. The compact certificates retained across the whole stream
+# have to shrink instead; see the generate phase below for what does and does
+# not influence them.
 run_capped() (
   limit_kib="$1"
   limit_label="$2"
@@ -123,12 +160,12 @@ run_measured() {
   shift 3
   if [[ "$PERF_AVAILABLE" == true ]]; then
     run_capped "$limit_kib" "$limit_label" \
-      /usr/bin/time -v -o "$PERF_DIR/$label.time" \
+      "$TIME_BIN" -v -o "$PERF_DIR/$label.time" \
       perf stat -e instructions -o "$PERF_DIR/$label.perf" -- "$@"
   else
     echo "instructions: unavailable" > "$PERF_DIR/$label.perf"
     run_capped "$limit_kib" "$limit_label" \
-      /usr/bin/time -v -o "$PERF_DIR/$label.time" "$@"
+      "$TIME_BIN" -v -o "$PERF_DIR/$label.time" "$@"
   fi
 }
 
@@ -240,6 +277,32 @@ feeder_job="$feeder_pid"
 # Keep the documented generation and structural-check defaults. Named output
 # streams declarations into a transactional sibling. The separate serialized
 # input pass below remains the authoritative kernel verdict.
+#
+# Do not try to reclaim the generate phase's cost by adding `--no-check-output`
+# here. That flag does not govern retention or work; it only governs the
+# verdict. The compact certificate arrays behind the plateau
+# (`FilterState.compactRecords`, whose rows each hold an `Order.DeclSummary`
+# with a `referenced : HashSet Name`, plus `compactIslands`) accumulate
+# whenever the retention mode is compact, which for a named output is
+# unconditionally the streaming mode. `FilterState.finalize` then runs
+# `Check.compactSourceReport` over all of them regardless of the flag, because
+# `plan.coveredInputOwners` -- and therefore the decline exit code -- is
+# derived from that report. `config.checkOutput` decides only whether the
+# resulting violations are enforced and reported, so turning it off would drop
+# the structural gate on the committed artifact and break
+# check-mathlib-result.sh's required `output check:` line while saving nothing.
+#
+# Measured A/B over the pinned Mathlib export, same binary, RLIMIT_AS raised to
+# 32 GiB so neither arm is cut off:
+#
+#                     wall        peak RSS     output bytes
+#   default          31:17.86     13.91 GiB    5937056185
+#   --no-check-output 31:19.04    13.96 GiB    5937056185
+#
+# Identical artifacts; the flag is worth +0.06% wall and +0.35% RSS, i.e.
+# nothing but noise. In both arms the output sibling was fully written roughly
+# 11 minutes before exit and RSS stayed flat for that entire tail, which is the
+# post-stream `compactSourceReport` pass, not output serialization.
 set +e
 (
   set -o pipefail
