@@ -471,6 +471,28 @@ def expectedPrim : List Row :=
        ("_wcore.PProd", 9), ("MixI", 4), ("Inf.below", 18), ("Binder", 12),
        ("BoxF", 7), ("SvIx", 4)],
       [ ("Eq", "prim model: a basis primitive")])
+  -- **The shapes that still reach no arm**, and the claim of this row is the
+  -- *word in the parenthesis* rather than the count. Each of these four
+  -- aborted the run until the dispatcher classified them: an unsupported owner
+  -- is supposed to pass through unchanged and be reported, and the four
+  -- messages below are that report. `N` is the control that keeps a run which
+  -- declined everything from passing.
+  --
+  -- `Foreign`/`Foreign0` say **out of scope** — a recursive occurrence under a
+  -- foreign type former is nesting and belongs to layer 1 — and `PadOne`/
+  -- `PadMany` say **incomplete**, because the field-preserving arm at a
+  -- maybe-zero sort is missing the pad its never-zero counterpart has. A fix
+  -- that made every one of these read the same word would put a gap and a
+  -- boundary in one bucket, which is how a gap stops being visible;
+  -- `test/fixtures/inductive-models/prim_shape_declines.lean` is the argument
+  -- for each verdict.
+  , ("prim_shape_declines",
+      [("N", 15)],
+      [ ("Eq", "prim model: a basis primitive")
+      , ("Foreign", "prim model shape (out of scope): Foreign reaches no generation arm")
+      , ("Foreign0", "prim model shape (out of scope): Foreign0 reaches no generation arm")
+      , ("PadOne", "prim model shape (incomplete): PadOne reaches no generation arm")
+      , ("PadMany", "prim model shape (incomplete): PadMany reaches no generation arm")])
   -- **The index axis**, as the explicit grid documented by
   -- `test/fixtures/inductive-models/prim_idx.lean`.
   -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
