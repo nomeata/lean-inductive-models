@@ -105,11 +105,24 @@ def shapeRoots : EDecl → Array (String × Expr)
 
 structure AgreementCount where
   compared : Nat := 0
+  /-- Records the replay did not install every name of, and which are
+  therefore not compared at all.  Counted rather than passed over silently:
+  a replay that stops installing declarations empties `compared` instead of
+  disagreeing, and the suite would be green with nothing behind it. -/
+  skippedRecords : Nat := 0
+  /-- Fixture directories in `fixtureDirectories` that are not directories. -/
+  missingDirectories : Nat := 0
+  /-- Committed `.ndjson` files that do not parse. -/
+  unparsable : Nat := 0
+  /-- Fixtures whose generated export the driver declined or could not
+  produce, and which are therefore compared once rather than twice. -/
+  ungenerated : Nat := 0
   failed : Array String := #[]
 
 def AgreementCount.check (count : AgreementCount) (label : String)
     (condition : Bool) : AgreementCount :=
-  { compared := count.compared + 1
+  { count with
+    compared := count.compared + 1,
     failed := if condition then count.failed else count.failed.push label }
 
 def compareExport (count : AgreementCount) (label : String) (x : Export)
@@ -119,7 +132,9 @@ def compareExport (count : AgreementCount) (label : String) (x : Export)
   let mut count := count
   for declaration in x.decls do
     -- Only ask about a record every one of whose names the replay installed.
-    unless declaration.names.all (env.find? · |>.isSome) do continue
+    unless declaration.names.all (env.find? · |>.isSome) do
+      count := { count with skippedRecords := count.skippedRecords + 1 }
+      continue
     for (root, expression) in shapeRoots declaration do
       count := count.check s!"{label}: whnf {root}"
         (exportNormalizer.whnf expression == environmentNormalizer.whnf expression)
@@ -157,35 +172,81 @@ def compareExport (count : AgreementCount) (label : String) (x : Export)
     (families == Check.discoverWithIndex x environmentIndex)
   return count
 
-def fixtureDirectories : Array String :=
-  #["test/fixtures/inductive-models", "test/fixtures/lean4export",
-    "test/fixtures/mono", "test/fixtures/rejected"]
+/-- Records the replay does not install every name of, over the whole sweep.
+`toDeclaration` discards an exported recursor and lets the kernel mint its
+own, so a block whose kernel recursor is named differently — nested and mutual
+inputs, mostly — has a name the environment never receives and is compared on
+neither side.
 
-/-- Assert environment/export shape agreement over every committed fixture. -/
-def environmentAgreement (root : String) : IO (Nat × Nat × Array String) := do
+It is pinned rather than merely printed because the skip is invisible from the
+other direction: a replay that stopped installing declarations, or a
+`toDeclaration` that stopped producing them, would raise this number and lower
+`compared` without a single disagreement to report. -/
+def skippedRecordsExpectation : Nat := 182
+
+/-- Fixtures the driver declines or cannot generate from, and which are
+therefore compared once rather than twice.  Every committed fixture generates
+today. -/
+def ungeneratedExpectation : Nat := 0
+
+/-- A floor under the sweep's total comparison count.  The exact number moves
+whenever a fixture is added or a shape query gains a root, so it is a floor
+rather than a pin; what it excludes is the sweep quietly shrinking towards
+nothing while every assertion above it stays green. -/
+def comparisonFloor : Nat := 200000
+
+/-- The directories swept, and the number of committed `.ndjson` exports each
+one holds.  `test/fixtures/lean4export` holds `compact_interner.args` and no
+export; `test/fixtures/mono` is *not a committed directory at all* and is
+swept as zero — it was passed over by `unless ← path.isDir` without a word,
+which is exactly the shape of skip this table exists to make visible.
+
+Asserting the counts per directory rather than in total means a directory that
+moves, empties or disappears fails here instead of quietly making the sweep
+below smaller. -/
+def fixtureDirectories : Array (String × Nat) :=
+  #[("test/fixtures/inductive-models", 73), ("test/fixtures/lean4export", 0),
+    ("test/fixtures/mono", 0), ("test/fixtures/rejected", 1)]
+
+/-- Assert environment/export shape agreement over every committed fixture.
+
+Returns the per-directory export count alongside the whole `AgreementCount`,
+so that the skips inside this sweep are numbers the caller asserts rather than
+`continue`s that reduce the work silently. -/
+def environmentAgreement (root : String) :
+    IO (Array (String × Nat) × AgreementCount) := do
   let base ← importModules #[] {}
   let mut count : AgreementCount := {}
-  let mut fixtures := 0
-  for directory in fixtureDirectories do
+  let mut perDirectory : Array (String × Nat) := #[]
+  for (directory, _) in fixtureDirectories do
     let path : System.FilePath := root / directory
-    unless ← path.isDir do continue
+    unless ← path.isDir do
+      count := { count with missingDirectories := count.missingDirectories + 1 }
+      perDirectory := perDirectory.push (directory, 0)
+      continue
     let mut entries := #[]
     for entry in ← path.readDir do
       if entry.path.extension == some "ndjson" then entries := entries.push entry.path
+    perDirectory := perDirectory.push (directory, entries.size)
     for file in entries.qsort (fun a b => a.toString < b.toString) do
-      let .ok x := parse (← IO.FS.readFile file) | continue
+      let .ok x := parse (← IO.FS.readFile file)
+        | do
+            count := { count with unparsable := count.unparsable + 1 }
+            continue
       let label := file.fileName.getD file.toString
-      fixtures := fixtures + 1
       count := compareExport count label x (replayExport base x)
       -- A raw input fixture usually declares no model family at all, so the
       -- whole-checker comparison above has little to bite on.  The generated
       -- export is where projections and iotas actually exist, and therefore
       -- where shape analysis reaches the compared expression.  Fixtures that
       -- decline to generate are simply not compared twice.
-      if let .ok (generated, _) ← (generatedExport x).toBaseIO then
+      match ← (generatedExport x).toBaseIO with
+      | .ok (generated, _) =>
         count := compareExport count s!"{label} (generated)" generated
           (replayExport base generated)
-  return (fixtures, count.compared, count.failed)
+      | .error _ =>
+        count := { count with ungenerated := count.ungenerated + 1 }
+  return (perDirectory, count)
 
 def run (root : String) : IO UInt32 := do
   let literalType :=
@@ -263,12 +324,45 @@ def run (root : String) : IO UInt32 := do
   state := state.check "generated Flat owner checks through the source syntax overlay"
     (flatReport.generated.any (·.1 == flatFamilyOwner) && flatReport.stmtErrors.isEmpty)
 
-  let (fixtures, compared, disagreements) ← environmentAgreement root
+  let (perDirectory, agreement) ← environmentAgreement root
+  let disagreements := agreement.failed
+  let compared := agreement.compared
+  let fixtures := perDirectory.foldl (fun total entry => total + entry.2) 0
   state := state.check "environment and export agree about shape on every fixture"
     disagreements.isEmpty
+  -- **The floor under the sweep.**  Every comparison above is a statement
+  -- about a record the replay installed, so a replay that stops installing
+  -- them, or a fixture directory that moves, reduces `compared` towards zero
+  -- and leaves the assertion above green with nothing behind it.  The skips
+  -- are counted and asserted rather than passed over.
+  state := state.check
+    s!"each fixture directory holds the exports it is expected to \
+      ({perDirectory} against {fixtureDirectories})"
+    (perDirectory == fixtureDirectories)
+  state := state.check
+    s!"every committed fixture parses ({agreement.unparsable} do not)"
+    (agreement.unparsable == 0)
+  -- These two are current reality, not a target: they are pinned so that a
+  -- *new* silent skip is a failure rather than a smaller number in the line
+  -- below.
+  state := state.check
+    s!"records the replay did not install stay at \
+      {skippedRecordsExpectation} ({agreement.skippedRecords} skipped)"
+    (agreement.skippedRecords == skippedRecordsExpectation)
+  state := state.check
+    s!"fixtures compared once rather than twice stay at \
+      {ungeneratedExpectation} ({agreement.ungenerated} ungenerated)"
+    (agreement.ungenerated == ungeneratedExpectation)
+  state := state.check
+    s!"the sweep still compares its full corpus ({compared} comparisons, \
+      floor {comparisonFloor})"
+    (compared >= comparisonFloor)
   IO.println s!"export syntax normalization: {state.passed} passed, {state.failed.size} failed"
   IO.println s!"environment/export shape agreement: {compared} comparisons over \
-    {fixtures} fixtures, {disagreements.size} differ"
+    {fixtures} fixtures, {disagreements.size} differ \
+    ({agreement.skippedRecords} records skipped, \
+     {agreement.missingDirectories} directories absent, \
+     {agreement.ungenerated} fixtures not generated)"
   for failure in disagreements.extract 0 40 do IO.eprintln s!"DISAGREEMENT: {failure}"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
