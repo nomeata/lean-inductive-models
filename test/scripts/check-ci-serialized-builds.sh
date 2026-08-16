@@ -30,9 +30,10 @@ fi
 # The bound has to stay stated per job. A workflow-level `env:` is inherited by
 # every job and no job can unset one, so hoisting it would push a thread ceiling
 # into the Mathlib gate's cache, export and generation phases -- which the
-# harness deliberately runs without one, and whose recorded peak RSS figures
-# were taken that way. This is the only property keeping that from happening
-# silently, because the symptom would be different numbers, not an error.
+# harness deliberately runs without one, and whose recorded peak RSS figures in
+# docs/maintainers/Testing.md were taken that way. This is the only property
+# keeping that from happening silently: the symptom would be different numbers,
+# not an error.
 if grep -qE '^env:[[:space:]]*$' "$workflow"; then
   echo "ci.yml sets a workflow-level env:, which the Mathlib gate job inherits" >&2
   exit 1

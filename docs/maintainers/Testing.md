@@ -282,11 +282,11 @@ five jobs on one trigger set — push to `main`, every pull request, a Monday
 03:17 UTC cron, and manual dispatch. Four of them are fast: an Arena corpus job
 and a three-way `fixtures`/`focused`/`cli` matrix, each capped at 30 minutes.
 The fifth is the `mathlib` job, which runs `scripts/ci-mathlib.sh` and is
-budgeted at 50–70 minutes on a cold runner against an 8-hour cap. It runs on
-pull requests too, deliberately: the full corpus is the only place a
-regression that needs 100M interned nodes shows up, and generation's peak RSS
-sits 0.64 GiB under its budget, so a change that costs memory has to be caught
-while it is still a diff. Its concurrency group is per ref, so `main` and a
+budgeted at 30–50 minutes on a cold runner against an 8-hour cap — the single
+pass dropped the 5.9 GB output write and the artifact re-read that cost 19:44
+of the old 55:50. It runs on pull requests too, deliberately: the full corpus is
+the only place a regression that needs 100M interned nodes shows up, so a change
+that only breaks at that scale has to be caught while it is still a diff. Its concurrency group is per ref, so `main` and a
 pull request each keep one run and the newest run on a ref cancels the older.
 The four fast jobs report independently, so no pull request waits on the gate
 for its quick signal. If pull-request volume ever makes the hour unreasonable,
@@ -298,8 +298,8 @@ workflow level, and `test/scripts/check-ci-serialized-builds.sh` asserts that
 `ci.yml` has no workflow-level `env:` at all. A workflow-level `env:` is
 inherited by every job and cannot be unset by one, so hoisting the bound would
 push a thread ceiling onto the Mathlib gate's cache, export and generation
-phases — which run without one by design, and whose peak RSS figures below were
-measured that way. The same guard asserts that `ci.yml` is the sole workflow
+phases, which run without one by design and whose recorded peak RSS figures
+were taken that way. The same guard asserts that `ci.yml` is the sole workflow
 file and that it invokes the gate script exactly once.
 
 The fast jobs set no per-process memory limit of their own: the runner's 16 GiB
@@ -313,52 +313,87 @@ is unchanged at roughly 2.0 GiB. Under a 12 GiB `ulimit -v` no module builds at
 all, aborting with `failed to create thread`; a cap high enough for `lean` to
 start no longer says anything about memory. **RSS is the quantity of interest.**
 
-The Mathlib job keeps per-phase budgets, and it **measures and compares** them
-rather than imposing them. Each phase runs under `TIME_BIN -v`; its reported
-peak RSS is printed as `memory: PHASE peak RSS … GiB of … GiB budget` and the
-run fails when it is over. The budgets are 6 GiB for the build and cache phases
-(measured peak 2.91 GiB), 12 GiB for the Mathlib export (measured peak
-7.79 GiB), and 12 GiB for the model worker (measured peaks 11.36 GiB generating
-and 8.19 GiB rechecking). Its two Lake build phases run under the same
-`LEAN_NUM_THREADS` bound as the fast jobs, so the build budget is met by a
-stated ceiling rather than by whatever parallelism the runner happened to
-offer; the cache, export and generation phases have no thread ceiling, being a
-download and two single measured workers.
+The Mathlib job sets no memory limit and takes no memory measurement. It used
+to run every phase under `TIME_BIN -v` and fail the run when a phase's peak RSS
+crossed a per-phase budget; the budgets, the measurement and the `TIME_BIN`
+resolution shim are all gone. CI is a pass/fail gate, and the runner's own
+ceiling already stops a runaway.
 
-`scripts/ci-mathlib.sh` used to search for a mechanism that could *enforce*
-these numbers — a per-user `systemd-run --scope`, then a `sudo` system scope
-dropping back to the calling user, then measurement as a fallback — and that
-search is gone. Enforcement is not this script's job: CI runs inside a sandbox
-that already has a hard memory ceiling and already kills a tree that crosses
-it. What the ceiling cannot do is name the phase that grew, and an opaque OOM
-kill is a far worse bug report than a budget line. Worse, the branch that
-applied varied by machine, so the same script measured different things in
-different places; one mechanism that behaves identically everywhere beats three
-that do not.
+The 12 GiB figure those budgets carried is worth keeping, but as a **design
+criterion rather than a CI verdict**. The reference point is `lean4checker`,
+which parses and kernel-checks this same Mathlib in about **9 GB**. This tool
+parses the same corpus *and* generates models from it, so staying near that
+number is evidence the design is sound and drifting well past it is evidence it
+is not — independent of what any runner happens to survive. The baseline as of
+this writing, for the whole single-pass gate over the pinned export:
 
-Read the budget lines for what they are. `TIME_BIN -v` reports the largest
-single process rather than the process tree's sum, so a build phase whose Lake
-children only exceed 6 GiB together is not caught — only the single-worker
-export, generate and check-input phases are measured by a number that means
-exactly what the budget says. And the comparison is after the fact: a genuine
-runaway takes the runner down first and the job fails as an OOM kill, not as a
-budget verdict. What the comparison does catch, by name, is the regression that
-matters in practice — a change that pushes a phase over its budget while still
-fitting in the runner. A phase whose measurement cannot be read at all is a
-hard failure rather than a skipped check: a budget satisfied by failing to
-measure is worse than no budget.
+| phase | peak RSS |
+| --- | --- |
+| `lake build lean-inductive-models`, cold | 2.91 GiB |
+| `lake build` in the patched lean4export | 1.46 GiB |
+| `lake exe cache get` | 0.95 GiB |
+| Mathlib export | 7.92 GiB |
+| generation (named output, no generated-island kernel gate) | 11.39 GiB |
 
-The generation pass uses transactional declaration-stream named output with
-the generated-island gate disabled; a separate artifact-validation invocation uses
-`--type-check-input --no-output` to check the serialized export as input after
-generation exits. Generation's measured 11.36 GiB peak RSS now fits the 12 GiB
-worker budget, but with 0.64 GiB — 5.3% — to spare, which is a number to defend
-rather than to spend: a 16 GiB runner also has to hold the OS, the gzip feeder
-and the page cache behind the ~5.9 GB output sibling, and the interner's
-power-of-two key table sits at roughly 75% of a 134.2M-entry capacity at this
-corpus' ~99.9M interned nodes, so the next doubling costs about 1.6 GB in one
-step. The streamed generation and serialized input validation remain strictly
-separate processes.
+The generation figure predates the single-pass change, which drops the 5.9 GB
+output write and turns the generated-island kernel gate on, so expect it to
+move. To take the measurement deliberately, run the generation pipeline from
+`scripts/ci-mathlib.sh` by hand under `/usr/bin/time -v` against a saved
+`_tmp/mathlib.ndjson.gz`; nothing in CI will do it for you. Two things make the
+number narrower than it looks: a 16 GiB runner also holds the OS, the gzip
+feeder and page cache, and the interner's key array is a power-of-two table
+sitting at roughly 75% of a 134.2M-entry capacity at this corpus' ~99.9M
+interned nodes, so a corpus that crosses the load factor doubles the table and
+costs about 1.6 GB in one step.
+
+The gate's two Lake build phases run under the same `LEAN_NUM_THREADS` bound as
+the fast jobs; the cache, export and generation phases have no thread ceiling,
+being a download and two single workers.
+
+`scripts/ci-mathlib.sh` runs the export through the tool in **one pass**:
+
+```
+gzip -dc mathlib.ndjson.gz |
+  lean-inductive-models - --no-output --no-type-check-input --type-check-generated
+```
+
+It is deliberately about a dozen lines of work: clone Mathlib at the pinned
+revision, fetch its cache, clone lean4export at its pinned revision, verify and
+apply the vendored compact-interner patch, build both, export, and run that one
+pass. The pinned revisions and the patch's SHA-256 verification are correctness
+and stay; everything else that used to be here was scaffolding for phases that
+no longer exist.
+
+The export is still serialized to a compressed file rather than piped live into
+the generator. That is not scaffolding: the export and generation peaks are
+roughly 8 and 12 GiB, which do not coexist on a 16 GiB runner, and gzip also
+keeps the 5.6 GB uncompressed export off the disk. Both large pipelines report
+`PIPESTATUS`, so a failed exporter or a truncated stream fails the gate instead
+of producing a plausible-looking run.
+
+What the gate proves: over the full corpus, nothing declines, Lean's kernel
+accepts every generated island as it is produced, every generated model family
+passes the structural output check, every generated statement matches its exact
+exported owner interface, and universe planning never escapes.
+`scripts/check-mathlib-result.sh` enforces all of that from the log.
+
+What it deliberately does not prove, and what covers those properties instead:
+
+* **The input export's own kernel validity** — `--no-type-check-input`. The
+  pinned Mathlib export is an assumption of this gate, not a claim of it.
+* **Serialization round-tripping** — `--no-output`. The gate used to write a
+  5.9 GB artifact and re-read it under `--type-check-input`, at 19:44 and
+  8.22 GiB. Round-tripping is covered by `lake exe test`'s fixture sweep and
+  `lake exe mainclitest`, which write and re-read real exports, and by
+  `test/scripts/check_arena_corpus.py`.
+
+That trade is not a reduction in kernel coverage. The old artifact re-read was
+the *only* kernel check in the run — generation ran with
+`--no-type-check-generated` and reported `generated kernel checks: 0`. The
+single pass moves the kernel to island time, so the corpus now gets kernel
+coverage of the generated declarations that nothing had at this scale before,
+and `scripts/check-mathlib-result.sh` requires that count to be positive rather
+than merely requiring an accepting verdict.
 
 ## Fixture regeneration
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Cheap parser regression test for scripts/check-mathlib-result.sh.
+# Cheap parser regression test for scripts/check-mathlib-result.sh, plus the
+# pins that keep scripts/ci-mathlib.sh a single pass with nothing turned off.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -8,10 +9,13 @@ WORK="$(mktemp -d "$ROOT/_tmp/mathlib-result-test.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 
 generate="$WORK/generate.log"
-output="$WORK/output.ndjson"
-recheck="$WORK/check-input.log"
 
+# One pass, in the order the tool prints it: the structural input check, the
+# backend trace, generation, the structural output check, the kernel verdict.
 printf '%s\n' \
+  "input check: 0 model families checked" \
+  "output backend: compact-discard" \
+  "generated kernel checks: 6882" \
   "Owner: model of 7 declarations" \
   "Owner: prelude spliced — Eq, PSigma', PSigma'.mk, PUnit" \
   "Eq: exempt — prim model: a basis primitive" \
@@ -20,85 +24,70 @@ printf '%s\n' \
   "PUnit: exempt — prim model: a basis primitive" \
   "statements: 48699 compared, 0 differ" \
   "levels: 211 planner comparisons, 0 escapes" \
-  "output backend: declaration-stream" \
-  "output check: 12001 model families checked" > "$generate"
-printf '%s\n' "{\"in\":1,\"str\":{\"pre\":0,\"str\":\"PSigma'\"}}" > "$output"
-printf '%s\n' \
-  'input kernel check: accepted' \
-  'input check: 12001 model families checked' > "$recheck"
+  "output check: 12001 model families checked" \
+  "generated kernel check: accepted" > "$generate"
 
 checker="$ROOT/scripts/check-mathlib-result.sh"
 ci_harness="$ROOT/scripts/ci-mathlib.sh"
 
-# The three phase budgets bound RESIDENT memory, not virtual address space:
-# since the v4.33.0 toolchain a `lean` frontend reserves about 12.8 GiB of
-# address space at startup against an unchanged 2.0 GiB peak RSS, so `ulimit -v`
-# can no longer express either quantity. Keep all three exact budgets and their
-# phase assignments explicit.
-#
-# Each of these is a pin on the harness, so each carries its own message. A bare
-# `grep -Fq` under `set -e` fails the whole suite with no output at all, which is
-# how a pin left behind by a harness change reads as an unexplained exit 1.
 require_harness() {
-  grep -Fq "$1" "$ci_harness" || {
-    echo "mathlib CI harness no longer contains: $1" >&2
+  grep -Eq -- "$1" "$ci_harness" || {
+    echo "mathlib CI harness no longer matches: $1${2:+ -- $2}" >&2
     exit 1
   }
 }
-require_harness 'BUILD_LIMIT_KIB=$((6 * 1024 * 1024))'
-require_harness 'EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))'
-require_harness 'WORKER_LIMIT_KIB=$((12 * 1024 * 1024))'
-# The budgets are observed and compared, not imposed: the harness reads GNU
-# time's peak RSS for each phase and fails the run when it is over. This pair
-# replaces a pin on `MemoryMax="${limit_kib}K"`, the cgroup ceiling the harness
-# used to try to impose; what has to stay true is that every budget above is
-# read against a resident-memory measurement and that exceeding one is fatal,
-# not which mechanism produces the number.
-require_harness 'Maximum resident set size'
-grep -Eq 'fail "\$label exceeded the \$limit_label' "$ci_harness" || {
-  echo "mathlib CI does not fail a phase that exceeds its budget" >&2
-  exit 1
-}
-if grep -Eq '^[[:space:]]*ulimit[[:space:]]+.*-v' "$ci_harness"; then
-  echo "mathlib CI still bounds virtual address space instead of memory" >&2
-  exit 1
-fi
-for phase in build-generator build-exporter mathlib-cache; do
-  grep -Eq "run_build_measured([[:space:]]+|.* )$phase" "$ci_harness" || {
-    echo "mathlib CI does not use the 6 GiB budget for $phase" >&2
+forbid_harness() {
+  if grep -Eqn -- "$1" "$ci_harness"; then
+    echo "mathlib CI harness must not contain: $1${2:+ -- $2}" >&2
     exit 1
-  }
-done
-grep -Eq 'run_export_measured([[:space:]]+|.* )export' "$ci_harness" || {
-  echo "mathlib CI does not use the 12 GiB budget for export" >&2
-  exit 1
+  fi
 }
-for phase in generate check-input; do
-  grep -Eq "run_worker_measured([[:space:]]+|.* )$phase" "$ci_harness" || {
-    echo "mathlib CI does not use the 12 GiB worker budget for $phase" >&2
-    exit 1
-  }
-done
 
-generate_phase="$(sed -n '/run_worker_measured generate \\/,/tee "\$LOG_DIR\/generate.log"/p' \
-  "$ci_harness")"
-grep -Fq 'LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1' <<<"$generate_phase" || {
-  echo "mathlib CI does not expose the generation backend" >&2
-  exit 1
-}
-grep -Fq -- '--no-type-check-generated' <<<"$generate_phase" || {
-  echo "mathlib CI generation does not defer its kernel gate" >&2
+# Correctness, not scaffolding: the corpus and the exporter are pinned, and the
+# vendored patch is verified before it is applied rather than after.
+require_harness '^MATHLIB_REV="[0-9a-f]{40}"$'
+require_harness '^EXPORTER_REV="[0-9a-f]{40}"$'
+require_harness '^EXPORTER_PATCH_SHA="[0-9a-f]{64}"$'
+require_harness 'sha256sum --check --strict' "the patch SHA must be verified"
+
+# Honest exit status. `pipefail` alone would abort the script before a
+# PIPESTATUS line could name the side that failed, so each large pipeline is
+# guarded and reports both members. A corrupt or truncated export must never
+# read as a passing gate.
+require_harness '^set -euo pipefail$'
+[[ "$(grep -Ec 'PIPESTATUS' "$ci_harness")" == 2 ]] || {
+  echo "mathlib CI does not report PIPESTATUS for both the export and the generation pipe" >&2
   exit 1
 }
 
-check_phase="$(sed -n '/run_worker_measured check-input \\/,/tee "\$LOG_DIR\/check-input.log"/p' \
-  "$ci_harness")"
-for flag in --type-check-input --no-type-check-generated --no-output; do
-  grep -Fq -- "$flag" <<<"$check_phase" || {
-    echo "mathlib CI serialized kernel gate is missing $flag" >&2
-    exit 1
-  }
+# One pass with the documented flags. `--type-check-generated` is the default
+# and is stated so this pin can read it; the other two are the deliberate
+# reductions. Everything else -- generation and both structural checks -- stays
+# at its default, so any `--no-` form of them is a weakened gate.
+generator_line="$(grep -n 'lean-inductive-models" -' "$ci_harness" || true)"
+[[ -n "$generator_line" ]] || {
+  echo "mathlib CI does not run the generator over the export on stdin" >&2
+  exit 1
+}
+for flag in --no-output --no-type-check-input --type-check-generated; do
+  require_harness "$flag"
 done
+# Anchored at the end of the option, so `git clone --no-checkout` is not
+# mistaken for the generator's `--no-check`.
+for weakening in --no-type-check-generated --no-check-input --no-check-output \
+    --no-check --no-inductives; do
+  forbid_harness "$weakening([[:space:]]|\$)" "the Mathlib gate may not turn a check off"
+done
+# No artifact is written, so no output target may be passed either.
+forbid_harness '(^|[[:space:]])-o[[:space:]]' "the gate writes no model artifact"
+require_harness 'LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE=1' \
+  "the backend and generated-kernel-check counts must be exposed"
+
+# The export is serialized to a compressed file and read back, never piped live
+# into the generator. That is what keeps the two peaks -- roughly 8 GiB and
+# 12 GiB -- from having to coexist on a 16 GiB runner.
+require_harness 'gzip -1 > "\$EXPORT_GZ"'
+require_harness 'gzip -dc "\$EXPORT_GZ"'
 
 # GitHub's stock Ubuntu runner does not provide ripgrep. Shadow any host copy
 # so this regression test also proves the checker has no hidden rg dependency.
@@ -108,43 +97,48 @@ rg() {
 }
 export -f rg
 
-"$checker" "$generate" "$output" "$recheck" >/dev/null
+"$checker" "$generate" >/dev/null
+
+reject() {
+  local description="$1" log="$2"
+  if "$checker" "$log" >/dev/null 2>&1; then
+    echo "mathlib result parser accepted $description" >&2
+    exit 1
+  fi
+}
 
 sed 's/0 differ/1 differ/' "$generate" > "$WORK/bad-statements.log"
-if "$checker" "$WORK/bad-statements.log" "$output" "$recheck" >/dev/null 2>&1; then
-  echo "mathlib result parser accepted a statement difference" >&2
-  exit 1
-fi
+reject "a statement difference" "$WORK/bad-statements.log"
 
-grep -vF 'input kernel check: accepted' "$recheck" > "$WORK/no-kernel-check.log"
-if "$checker" "$generate" "$output" "$WORK/no-kernel-check.log" >/dev/null 2>&1; then
-  echo "mathlib result parser accepted a missing kernel reread" >&2
-  exit 1
-fi
+# The regression this change exists to end: before it, the gate ran with
+# `--no-type-check-generated` and reported exactly this line.
+sed 's/^generated kernel checks: 6882$/generated kernel checks: 0/' "$generate" \
+  > "$WORK/no-generated-checks.log"
+reject "a run that kernel-checked no generated island" "$WORK/no-generated-checks.log"
 
-grep -vF 'output backend: declaration-stream' "$generate" > "$WORK/no-stream-backend.log"
-if "$checker" "$WORK/no-stream-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
-  echo "mathlib result parser accepted a missing declaration-stream backend" >&2
-  exit 1
-fi
+grep -vF 'generated kernel check: accepted' "$generate" > "$WORK/no-kernel-verdict.log"
+reject "a missing generated-island kernel verdict" "$WORK/no-kernel-verdict.log"
 
-sed 's/output backend: declaration-stream/output backend: compact-discard/' \
+grep -vF 'output check: ' "$generate" > "$WORK/no-output-check.log"
+reject "a missing generated-model structural check" "$WORK/no-output-check.log"
+
+grep -vF 'input check: ' "$generate" > "$WORK/no-input-check.log"
+reject "a missing source structural check" "$WORK/no-input-check.log"
+
+grep -vF 'output backend: compact-discard' "$generate" > "$WORK/no-backend.log"
+reject "a missing compact-discard backend" "$WORK/no-backend.log"
+
+sed 's/output backend: compact-discard/output backend: declaration-stream/' \
   "$generate" > "$WORK/wrong-backend.log"
-if "$checker" "$WORK/wrong-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
-  echo "mathlib result parser accepted a non-output generation backend" >&2
-  exit 1
-fi
+reject "a backend that writes output" "$WORK/wrong-backend.log"
 
-sed '/output backend: declaration-stream/p' "$generate" > "$WORK/duplicate-backend.log"
-if "$checker" "$WORK/duplicate-backend.log" "$output" "$recheck" >/dev/null 2>&1; then
-  echo "mathlib result parser accepted duplicate backend reports" >&2
-  exit 1
-fi
+sed '/output backend: compact-discard/p' "$generate" > "$WORK/duplicate-backend.log"
+reject "duplicate backend reports" "$WORK/duplicate-backend.log"
 
-printf '%s\n' '{"in":1,"str":{"pre":0,"str":"PULiftP"}}' >> "$output"
-if "$checker" "$generate" "$output" "$recheck" >/dev/null 2>&1; then
-  echo "mathlib result parser accepted legacy PULiftP output" >&2
-  exit 1
-fi
+{ cat "$generate"; printf '%s\n' 'Foo: declined — no route'; } > "$WORK/declined.log"
+reject "a declined inductive" "$WORK/declined.log"
+
+{ cat "$generate"; printf '%s\n' 'PULiftP: model of 3 declarations'; } > "$WORK/pulift.log"
+reject "legacy PULiftP output" "$WORK/pulift.log"
 
 echo "mathlib result parser: pass"

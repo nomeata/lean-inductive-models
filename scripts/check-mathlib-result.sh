@@ -1,46 +1,73 @@
 #!/usr/bin/env bash
-# Validate the durable artifacts produced by the full-Mathlib lean-inductive-models run.
+# Validate the log of the full-Mathlib single-pass run (scripts/ci-mathlib.sh).
 # Counts are deliberately required to be positive but are not pinned: the
 # corpus revisions, rather than a historical observation, define their values.
 set -euo pipefail
 
-if [[ $# -ne 3 ]]; then
-  echo "usage: $0 GENERATE_LOG OUTPUT_NDJSON CHECK_INPUT_LOG" >&2
+if [[ $# -ne 1 ]]; then
+  echo "usage: $0 GENERATE_LOG" >&2
   exit 2
 fi
 
 GENERATE_LOG="$1"
-OUTPUT="$2"
-CHECK_INPUT_LOG="$3"
 
 fail() {
   echo "mathlib result: $*" >&2
   exit 1
 }
 
-for artifact in "$GENERATE_LOG" "$OUTPUT" "$CHECK_INPUT_LOG"; do
-  [[ -s "$artifact" ]] || fail "missing or empty artifact: $artifact"
-done
+[[ -s "$GENERATE_LOG" ]] || fail "missing or empty artifact: $GENERATE_LOG"
 
-grep -Eq '^statements: [1-9][0-9]* compared, 0 differ$' "$GENERATE_LOG" ||
-  fail "generated-statement comparison was absent, empty, or nonzero"
-[[ "$(grep -Ec '^statements: ' "$GENERATE_LOG")" == 1 ]] ||
-  fail "generation reported more than one statement-comparison result"
+# `require_once EXACT PREFIX MESSAGE` -- a line matching EXACT is present, and
+# exactly one line matches the looser PREFIX. Both halves are load-bearing: the
+# exact form is the property, and the prefix count catches a second, differing
+# report of the same thing, which means two passes ran where one was configured.
+require_once() {
+  local matches
+  grep -Eq "$1" "$GENERATE_LOG" || fail "$3"
+  matches="$(grep -Ec "$2" "$GENERATE_LOG" || true)"
+  [[ "$matches" == 1 ]] || fail "$3: reported $matches times, expected once"
+}
 
-grep -Eq '^output check: [1-9][0-9]* model families checked$' "$GENERATE_LOG" ||
-  fail "in-memory output check reported no model families"
-[[ "$(grep -Ec '^output check: ' "$GENERATE_LOG")" == 1 ]] ||
-  fail "generation reported more than one output-check result"
+grep -Eq ': model of [1-9][0-9]* declarations$' "$GENERATE_LOG" ||
+  fail "generation reported no models"
+if grep -En ': declined' "$GENERATE_LOG" >&2; then
+  fail "one or more Mathlib inductives declined"
+fi
 
-grep -Fxq 'output backend: declaration-stream' "$GENERATE_LOG" ||
-  fail "generation did not select the declaration-stream output backend"
-[[ "$(grep -Fxc 'output backend: declaration-stream' "$GENERATE_LOG")" == 1 ]] ||
-  fail "generation reported the declaration-stream output backend more than once"
+require_once '^statements: [1-9][0-9]* compared, 0 differ$' '^statements: ' \
+  "generated-statement comparison was absent, empty, or nonzero"
+require_once '^levels: [1-9][0-9]* planner comparisons, 0 escapes$' '^levels: ' \
+  "universe planning was absent, empty, or escaped"
 
-grep -Eq '^levels: [1-9][0-9]* planner comparisons, 0 escapes$' "$GENERATE_LOG" ||
-  fail "universe planning was absent, empty, or escaped"
-[[ "$(grep -Ec '^levels: ' "$GENERATE_LOG")" == 1 ]] ||
-  fail "generation reported more than one universe-planning result"
+# The structural checks, both left at their defaults. `output check:` covers the
+# model families this run generated, read off the compact certificates rather
+# than off a written artifact -- it is the same verdict the discarded 5.9 GB
+# output's re-read used to report as `input check:`. `input check:` now covers
+# the Mathlib export itself, which carries no models of its own, so its count is
+# legitimately 0 and only its presence is a property: the source stream was
+# structurally validated before anything was generated from it.
+require_once '^output check: [1-9][0-9]* model families checked$' '^output check: ' \
+  "generated-model structural check reported no model families"
+require_once '^input check: [0-9]+ model families checked$' '^input check: ' \
+  "the source export was not structurally checked"
+
+# The kernel evidence. The gate no longer writes an artifact to re-read under
+# `--type-check-input`, which was the only kernel check in the run and reported
+# `generated kernel checks: 0`; `--type-check-generated` checks each generated
+# island against its trusted source prefix as it is produced. So the pair that
+# replaces `input kernel check: accepted` is the accepting verdict *and* a
+# positive count -- a verdict alone would be reported just as happily by a run
+# that checked nothing, which is exactly the state this change ends.
+require_once '^generated kernel check: accepted$' '^generated kernel check: ' \
+  "the kernel did not accept the generated islands"
+require_once '^generated kernel checks: [1-9][0-9]*$' '^generated kernel checks: ' \
+  "no generated island was submitted to the kernel"
+
+# No artifact is written, so the run must be on the no-output compact path.
+# Anything else means output retention came back and with it the 5.9 GB write.
+require_once '^output backend: compact-discard$' '^output backend: ' \
+  "generation did not select the no-output compact backend"
 
 # This set follows from the pinned input: it owns three of the four ordinary
 # inductive members of the five-member basis. PSigma' is absent there and must
@@ -57,25 +84,18 @@ actual_exemptions="$({
 grep -Eq '^PSigma: model of [1-9][0-9]* declarations$' "$GENERATE_LOG" ||
   fail "ordinary PSigma was not modelled"
 
+# The splice report replaces a `"str":"PSigma'"` grep over the serialized output.
+# It is the same claim about the same run one step earlier -- that the tight
+# PSigma' basis was constructed for this corpus -- and that a spliced basis
+# reaches the name table byte-for-byte is what the fixture round-trip suites
+# check, on exports they actually write.
 grep -Eq ": prelude spliced — (.*, )?PSigma'(, |$)" "$GENERATE_LOG" ||
   fail "generation did not report splicing the tight PSigma' basis"
-grep -Fq "\"str\":\"PSigma'\"}" "$OUTPUT" ||
-  fail "serialized output has no exact PSigma' name-table entry"
 
-# PULiftP was replaced by the derived PSigma'/PUnit construction. Its name
-# must not survive in either the emitted stream or either report.
-if grep -Fn 'PULiftP' "$GENERATE_LOG" "$OUTPUT" "$CHECK_INPUT_LOG"; then
+# PULiftP was replaced by the derived PSigma'/PUnit construction. Its name must
+# not survive anywhere in the report.
+if grep -Fn 'PULiftP' "$GENERATE_LOG"; then
   fail "legacy PULiftP survived in a full-Mathlib artifact"
 fi
 
-grep -Eq '^input check: [1-9][0-9]* model families checked$' "$CHECK_INPUT_LOG" ||
-  fail "serialized input recheck reported no model families"
-[[ "$(grep -Ec '^input check: ' "$CHECK_INPUT_LOG")" == 1 ]] ||
-  fail "serialized input recheck reported more than one result"
-
-grep -Fxq 'input kernel check: accepted' "$CHECK_INPUT_LOG" ||
-  fail "serialized input kernel check did not accept the export"
-[[ "$(grep -Fxc 'input kernel check: accepted' "$CHECK_INPUT_LOG")" == 1 ]] ||
-  fail "serialized input kernel check reported more than one result"
-
-echo "mathlib result: generation, exact interfaces, levels, basis, and kernel reread pass"
+echo "mathlib result: generation, exact interfaces, levels, basis, and generated-island kernel checks pass"

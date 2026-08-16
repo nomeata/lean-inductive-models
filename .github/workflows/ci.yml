@@ -44,8 +44,8 @@ permissions:
 # and generation phases without a thread ceiling -- a download and two single
 # measured workers, whose recorded peak RSS figures were taken that way. A
 # workflow-level `env:` is inherited by every job and a job cannot unset one, so
-# hoisting this would silently change the configuration those budgets were
-# measured against. The build-matrix guard asserts the value is stated
+# hoisting this would silently change the configuration the gate's recorded
+# figures were taken against. The build-matrix guard asserts the value is stated
 # identically wherever it appears.
 
 jobs:
@@ -84,10 +84,10 @@ jobs:
           # catch a runaway aborts every `lean` with "failed to create
           # thread"; a cap high enough to let it start measures nothing.
           # RSS is the quantity of interest and the runner's own 16 GiB, with
-          # the job timeout, is what bounds it here. scripts/ci-mathlib.sh
-          # carries per-phase budgets, which it measures and compares rather
-          # than imposes -- the runner already imposes a ceiling; what a
-          # budget adds is naming the phase that grew.
+          # the job timeout, is what bounds it here. scripts/ci-mathlib.sh sets
+          # no limit either; the ~9 GB `lean4checker` needs for this corpus is a
+          # design target a developer measures deliberately, not something CI
+          # polices. See docs/maintainers/Testing.md.
           PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
             python3 -m py_compile test/scripts/check_arena_corpus.py
           PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_arena_corpus_runner.py
@@ -242,17 +242,14 @@ jobs:
   # The full-Mathlib gate, formerly the whole of `.github/workflows/mathlib.yml`.
   #
   # It runs on every event this workflow runs on, pull requests included. That
-  # is a deliberate choice and it is the expensive one: the harness takes about
-  # 36 minutes on a warm local tree and is budgeted at 50-70 on a cold runner
-  # that has to clone Mathlib and fetch its cache. The case for paying it on
-  # pull requests is that this repository's entire claim is over the full
-  # Mathlib corpus, and the gate is the only thing that checks that claim --
-  # nothing in the fixture, focused or CLI suites would notice a regression that
-  # only appears at 100M interned nodes, and the generation phase's peak RSS
-  # sits 0.64 GiB under its budget, so a change that costs memory needs to be
-  # caught while it is still a diff and not after it is on `main`. The other
-  # jobs finish in minutes and report independently, so a pull request is never
-  # waiting on this one for its fast signal.
+  # is a deliberate choice and it is the expensive one, though less so since the
+  # gate became a single pass: it no longer writes a 5.9 GB artifact or re-reads
+  # it, which was 19:44 of a 55:50 run. The case for paying it on pull requests
+  # is that this repository's entire claim is over the full Mathlib corpus, and
+  # the gate is the only thing that checks that claim -- nothing in the fixture,
+  # focused or CLI suites would notice a regression that only appears at 100M
+  # interned nodes. The other jobs finish in minutes and report independently,
+  # so a pull request is never waiting on this one for its fast signal.
   #
   # If pull-request volume ever makes that unreasonable, the alternative to
   # reach for is a gate on the events -- `if: github.event_name != 'pull_request'
@@ -281,7 +278,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Prepare project-local temporary directories
-        run: mkdir -p _tmp/tmp _tmp/logs _tmp/perf
+        run: mkdir -p _tmp/tmp _tmp/logs
 
       - name: Set up Lean
         uses: leanprover/lean-action@v1
