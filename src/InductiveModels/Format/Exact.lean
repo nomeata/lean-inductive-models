@@ -37,12 +37,21 @@ structure ExactNormalizationEnv where
   /-- Sparse replacements used by disposable syntax overlays. `none` is a
   tombstone for a definition removed from the immutable public base table. -/
   private overrides : Lean.PersistentHashMap Name (Option ExactNormalizationDef) := {}
+  /-- Definition source consulted only where `overrides` and `definitions` both
+  miss.  It exists so an *installed environment* can drive the same bounded
+  unfolding through this one [`ExactNormalizationEnv.whnfCore`] instead of a
+  second copy of it, which could drift from it.  Every export-derived
+  normalizer leaves this `none`, so their answers are unchanged node for node;
+  [`ExactNormalizationEnv.ofEnvironment`] is the only constructor that sets it. -/
+  private fallback? : Option (Name → Option ExactNormalizationDef) := none
 
 private def ExactNormalizationEnv.definition? (env : ExactNormalizationEnv)
     (name : Name) : Option ExactNormalizationDef :=
   match env.overrides.find? name with
   | some replacement => replacement
-  | none => env.definitions[name]?
+  | none => match env.definitions[name]? with
+    | some definition => some definition
+    | none => env.fallback?.bind (· name)
 
 /-- Add or replace one transparent definition without copying the public base
 table.  This is the sparse update operation used by syntax-index overlays. -/
@@ -65,6 +74,43 @@ def Export.exactNormalizationEnv (x : Export) : ExactNormalizationEnv := Id.run 
       unless definitions.contains name do
         definitions := definitions.insert name { levelParams, value }
   return { definitions }
+
+/-- One transparent definition as an *installed environment* spells it.
+
+This is the environment-backed face of the export-derived table above, and the
+two are meant to answer identically.  They can, because the driver replays
+every source record through [`InductiveModels.toDeclaration`], which copies a
+`.defn` record's `levelParams` and `value` into `Declaration.defnDecl`
+verbatim: the installed constant shares the very expression the export table
+would have handed back.
+
+Only `defnInfo` qualifies, and that is the whole eligibility rule rather than a
+restriction invented here.  `toDeclaration` maps `.defn` records and nothing
+else onto `defnDecl`, so a theorem, opaque, axiom, quotient or inductive
+constant is invisible to the bounded normalizer from either side, exactly as
+this module's opening comment says.
+
+**Shape and eligibility only.**  This never becomes the authority for a literal
+statement comparison.  The environment does not carry exported recursors at all
+— `toDeclaration` drops them and lets the kernel mint its own — so every
+literal comparison stays on the `EDecl` export syntax already in hand, which is
+the same split [`InductiveModels.validateExactRecursorLayout`] documents for
+recursor slots. -/
+def environmentDefinition? (env : Environment) (name : Name) :
+    Option ExactNormalizationDef :=
+  match env.find? name with
+  | some (.defnInfo value) =>
+    some { levelParams := value.levelParams, value := value.value }
+  | _ => none
+
+/-- The bounded normalizer served entirely from an installed environment.
+
+It reuses [`ExactNormalizationEnv.whnf`] and every query built on it, so this is
+the same β/ζ/δ-transparent reduction rather than a second implementation.  The
+base table is deliberately empty: nothing is retained per definition here,
+because the environment already holds each body. -/
+def ExactNormalizationEnv.ofEnvironment (env : Environment) : ExactNormalizationEnv :=
+  { definitions := {}, fallback? := some (environmentDefinition? env) }
 
 private partial def ExactNormalizationEnv.whnfCore (env : ExactNormalizationEnv)
     (expression : Expr) (reduceLets unfoldDefinitions : Bool)
@@ -247,17 +293,19 @@ private partial def projectionFieldEligible? (x : Export)
   projectionFieldEligible? x normalizer declarations ownerIsProp (fieldIndex - 1)
     (body.instantiate1 value) (locals.push (value.fvarId!, fieldType))
 
-/-- Zero-based constructor fields for which the kernel projection expression
-is well typed.  The kernel requires one constructor, but does not require the
-owner to be non-recursive or unindexed. -/
-def Export.intrinsicProjectionFieldsFor (x : Export) (type : EIndType)
+/-- [`Export.intrinsicProjectionFieldsFor`] with the transparent-definition
+source supplied rather than derived from `x`.  Declaration types still come
+from the export, so this isolates the normalizer as the one variable — which is
+what lets `ExactEnvironmentAgreementTest` attribute any difference in the field
+walk to the definition source and to nothing else. -/
+def Export.intrinsicProjectionFieldsWith (x : Export)
+    (normalizer : ExactNormalizationEnv) (type : EIndType)
     (constructors : List ECtor) : Array Nat := Id.run do
   let [constructorName] := type.ctors | return #[]
   let some constructor := constructors.find? fun constructor =>
       constructor.name == constructorName && constructor.induct == type.name
     | return #[]
   let declarations := exactDeclarationTypes x
-  let normalizer := x.exactNormalizationEnv
   let mut ownerType := type.type
   while ownerType.isForall do ownerType := ownerType.bindingBody!
   let ownerIsProp := normalizer.isPropositionFormer ownerType
@@ -274,5 +322,12 @@ def Export.intrinsicProjectionFieldsFor (x : Export) (type : EIndType)
         some true then
       result := result.push fieldIndex
   return result
+
+/-- Zero-based constructor fields for which the kernel projection expression
+is well typed.  The kernel requires one constructor, but does not require the
+owner to be non-recursive or unindexed. -/
+def Export.intrinsicProjectionFieldsFor (x : Export) (type : EIndType)
+    (constructors : List ECtor) : Array Nat :=
+  x.intrinsicProjectionFieldsWith x.exactNormalizationEnv type constructors
 
 end InductiveModels
