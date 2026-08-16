@@ -59,13 +59,6 @@ def reportGeneration (config : InductiveModels.Cli.Config) (rep : InductiveModel
 def violationMessage (violation : InductiveModels.Check.Violation) : String :=
   violation.message
 
-def orderErrorMessage : InductiveModels.Order.Error → String
-  | .duplicateName name first second =>
-      s!"declaration name {name} occurs in both records {first} and {second}"
-  | .cycle records declarations =>
-      s!"declaration dependencies and model-before-owner constraints form a cycle at records \
-        {records.toList}: {declarations.toList.map (·.toList)}"
-
 def reportViolations (input stage : String)
     (violations : Array InductiveModels.Check.Violation) : IO Unit := do
   for violation in violations do

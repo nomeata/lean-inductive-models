@@ -147,10 +147,6 @@ def occIdx? (g : Gen) (i : Nat) (ps : Array Expr) (t : Expr) : Option (Array Exp
     some (as.extract (as.size - m) as.size)
   else none
 
-/-- Which occurrence a type is, and at which indices. -/
-def occOf? (g : Gen) (ps : Array Expr) (t : Expr) : Option (Nat × Array Expr) :=
-  (Array.range g.occs.size).findSome? fun i => (g.occIdx? i ps t).map ((i, ·))
-
 /-- **The container's own index telescope for mimic `i`**, read off the
 occurrence's type — `Vec T._model.self : N → Type` — rather than rebuilt. -/
 def withOccIndices (g : Gen) (i : Nat) (ps : Array Expr)

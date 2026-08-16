@@ -112,9 +112,6 @@ def exprF (c : RCtx) (j : Json) (k : String) : Except String Expr := do c.expr! 
 def nameL (c : RCtx) (j : Json) (k : String) : Except String (List Name) := do
   ((← jArr j k).toList.mapM fun x => do c.name! (← x.getNat?))
 
-def levelL (c : RCtx) (j : Json) (k : String) : Except String (List Level) := do
-  ((← jArr j k).toList.mapM fun x => do c.level! (← x.getNat?))
-
 end RCtx
 
 private def binderInfo : String → Except String BinderInfo

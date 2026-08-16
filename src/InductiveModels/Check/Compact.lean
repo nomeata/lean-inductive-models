@@ -73,13 +73,6 @@ def compactFamilyCertificateRecordsWithIndex (x : Export) (index : SyntaxIndex)
         (compactFamilyCertificateWithIndex x index family))
   return records
 
-/-- Capture every currently discoverable family in owner-record order. This is
-the full-export convenience form; compact generation captures source and island
-families separately through `compactFamilyCertificateWithIndex`. -/
-def compactFamilyCertificates (x : Export) : Array CompactFamilyCertificate :=
-  let index := SyntaxIndex.ofSource x
-  (discoverWithIndex x index).map (compactFamilyCertificateWithIndex x index)
-
 /-- One final record's global-extra template and family certificates. Keeping
 the fields bound makes it possible to reject a certificate attached to a row
 other than its exact owner record. -/
@@ -137,8 +130,8 @@ private def compactReport (records : Array CompactCheckRecord) :
       certifiedOwners := certifiedOwners.insert family.owner
       unless family.publicNames.any declared.contains do continue
       familiesChecked := familiesChecked + 1
-      -- `appendUnique` over each public slot's whole declaring record, without
-      -- the quadratic membership scan and without revisiting a record already
+      -- Order-preserving dedup over each public slot's whole declaring record,
+      -- without a quadratic membership scan and without revisiting a record already
       -- contributed by an earlier slot: a repeat contributes nothing new
       -- because record names are globally unique.
       let mut familyNames : Array Name := #[]

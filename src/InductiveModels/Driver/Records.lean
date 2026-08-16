@@ -44,12 +44,6 @@ def indEDecl (names : Array Name) : MetaM EDecl := do
   return .induct ts.toList cs.toList rs.toList
 
 
-/-- Read the exact recursor records of a block generated inside this pass. -/
-def recursorsOfNames (names : Array Name) : MetaM (Array ERec) := do
-  let .induct _ _ recursors ← indEDecl names
-    | throwError "{names} did not read back as an inductive block"
-  return recursors.toArray
-
 /-- A generated declaration as an export record. -/
 def toEDecl : Declaration → MetaM EDecl
   | .defnDecl v =>

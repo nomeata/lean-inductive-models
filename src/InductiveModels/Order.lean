@@ -226,13 +226,6 @@ def SummaryBuilder.freeze (builder : SummaryBuilder)
         { row with modelSlots := family.correspondence.publicNames }
   return resolveModelEdges rows
 
-/-- Incrementally summarize a declaration view against one frozen source
-syntax index. -/
-def summariesIncremental (x : Export) (index : Check.SyntaxIndex)
-    (prefer : EDecl → Bool := fun _ => false) : Array DeclSummary :=
-  (x.decls.foldl (fun builder declaration =>
-      builder.push declaration prefer) ({} : SummaryBuilder)).freeze index
-
 /-- Summarize an export while its declaration values are available.
 
 The public-model edges are computed by the same exact discovery used by the

@@ -13,9 +13,6 @@ open Lean
 
 namespace InductiveModels.Check
 
-def appendUnique (names : Array Name) (more : List Name) : Array Name :=
-  more.foldl (fun out name => if out.contains name then out else out.push name) names
-
 private partial def expressionReference? (targets : Std.HashSet Name) : Expr → Option Name
   | .const name _ => if targets.contains name then some name else none
   | .proj typeName _ struct =>

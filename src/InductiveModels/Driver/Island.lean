@@ -47,14 +47,6 @@ def appendModelRecords (out records : Array EDecl) (owner : Name) : Array EDecl 
     out.extract 0 ownerIndex ++ records ++ out.extract ownerIndex out.size
 
 
-/-- Installed-block adapter for the two generation routes which run after the
-original inductive has been replayed. -/
-def addInstalledUnitlikeTheorems (names : Array Name) (reserved : Std.HashSet Name)
-    (is : Iso) : GenM Iso := do
-  let .induct types constructors recursors ← indEDecl names
-    | badShape s!"{names} did not read back as an inductive block"
-  addUnitlikeTheorems types.toArray constructors.toArray recursors.toArray reserved is
-
 /-- Installed-block adapter for all per-member structure metadata. -/
 def addInstalledStructureModels (names : Array Name) (projections : Array EProjection)
     (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do

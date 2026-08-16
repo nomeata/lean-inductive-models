@@ -19,19 +19,6 @@ def iotaSlot? (name : Name) : Option (Name × Nat) := do
   unless suffix.startsWith "iota_" do none
   return (parent, ← (suffix.drop 5).toNat?)
 
-private def projectionSlot? (owner name : Name) : Option Nat := do
-  let modelRoot := Naming.modelName owner
-  match name with
-  | .str parent suffix =>
-    if parent == modelRoot && suffix.startsWith "proj_" then
-      (suffix.drop 5).toNat?
-    else if suffix == "iota" then
-      let .str grandParent projectionSuffix := parent | none
-      unless grandParent == modelRoot && projectionSuffix.startsWith "proj_" do none
-      (projectionSuffix.drop 5).toNat?
-    else none
-  | _ => none
-
 private abbrev IotaSlots := Lean.PersistentHashMap Name (Array (Name × Nat))
 
 private def iotaSlots (x : Export) : IotaSlots := Id.run do
@@ -417,7 +404,7 @@ private def discoverWithIndexWhere (x : Export) (index : SyntaxIndex)
         publicNames.any (fun name => !(index.recordOccurrences name).isEmpty) do continue
     -- Both accumulators below are order-preserving deduplications, and both
     -- historically answered their membership test by scanning what they had
-    -- already accepted -- `Array.contains` here and [`appendUnique`] below.
+    -- already accepted.
     -- A hash set answers the same question without the scan, so one family
     -- costs its own occurrence and declaration-name count rather than their
     -- squares. The accepted arrays are unchanged, element for element.
@@ -559,8 +546,8 @@ def globalExtraRecordsWithIndex (index : SyntaxIndex)
         recursors.toArray.map fun recursor => .recursor recursor.name recursor.k }
     | _ => { names := declaration.names.toArray, templates := #[] }
 
-/-- Recover the modeled-type root and field index from either spelling counted
-by [`projectionSlot?`].  Indexing by the already-modeled root avoids repeating
+/-- Recover the modeled-type root and field index from either projection
+spelling.  Indexing by the already-modeled root avoids repeating
 the full declaration-name scan for every inductive type while retaining each
 name's original position and multiplicity.
 
@@ -676,10 +663,6 @@ def checkFamiliesWithIndex (x : Export) (index : SyntaxIndex)
   families.foldl (fun violations family =>
       violations ++ checkFamilyWithIndex x index family checkOrder) #[] ++
     index.globalExtras
-
-private def checkFamilies (x : Export) (families : Array Family)
-    (checkOrder : Bool) : Array Violation :=
-  checkFamiliesWithIndex x (.ofExport x) families checkOrder
 
 /-- Check order, independence, and every exact public declaration and statement,
 and report the exact number of model families inspected.  All comparisons are
