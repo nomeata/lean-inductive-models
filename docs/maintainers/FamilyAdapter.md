@@ -2,12 +2,13 @@
 
 `InductiveModels.FamilyAdapterPlan` is the source-derived representation for a
 future one-layer adapter. It replaces unary/binary, singleton, indexed, nested,
-and mutual shape cases with keyed finite arrays. `FamilyAdapterShadow` now
-derives this plan from every successfully generated exact source block and its
-existing kernel-checked private `Iso`. `Driver.serialiseIso` does not use the
-result for route selection, rejection, serialized output, logs, or normal
-reports. `runFilterWithFamilyAdapterShadow` is the test-only value observer;
-ordinary filtering retains no observations.
+and mutual shape cases with keyed finite arrays. `FamilyAdapterShadow` derives
+this plan from a successfully generated exact source block and its existing
+kernel-checked private `Iso`. `Driver.serialiseIso` does not use the result for
+route selection, rejection, serialized output, logs, or normal reports — so it
+derives one only when asked to observe it. `runFilterWithFamilyAdapterShadow`
+is the test-only value observer and the only entry point that asks; ordinary
+filtering derives and retains no observations.
 
 The shadow is deliberately incomplete for an exact nested block until its
 extra mimic recursors are represented as plan members. Every omitted exact

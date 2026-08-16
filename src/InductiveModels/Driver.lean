@@ -1552,12 +1552,14 @@ witnesses used for reporting and shared-support persistence. -/
 def serialiseIso (source : EDecl) (is : Iso)
     (exactTransform : EDecl → EDecl := id) (observeAdapter : Bool := false) :
     MetaM SerialisedIso := do
+  -- The shadow plan is observer scaffolding: nothing in serialization, route
+  -- selection, rejection, or reporting reads it. It is therefore derived only
+  -- when a test entry point asks to observe it; production walks no family and
+  -- opens no telescope here.
   let adapterShadow? ← if observeAdapter then do
       let report ← FamilyAdapter.deriveShadowPlan source is
       pure (some (FamilyAdapter.ShadowReport.observe report))
-    else do
-      let _ ← FamilyAdapter.deriveShadowPlan source is
-      pure none
+    else pure none
   let mut rawRecords : Array EDecl := #[]
   for declaration in is.decls do
     rawRecords := rawRecords ++ (← toEDecls declaration)
@@ -3021,9 +3023,9 @@ def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
     runFilterCore x checkRecursors generation .fullOutput
   return (decls, report)
 
-/-- Test-facing observer for generic family-adapter shadow validation. The
-ordinary filter still derives and validates every plan, but retains none of
-these compact observations and emits no trace or log output. -/
+/-- Test-facing observer for generic family-adapter shadow validation. This is
+the only entry point that derives a plan at all: the ordinary filter neither
+derives nor retains one, and emits no trace or log output. -/
 def runFilterWithFamilyAdapterShadow (x : Export) (checkRecursors : Bool)
     (generation : Cli.Config) :
     MetaM (Array EDecl × Report × Array FamilyAdapter.ShadowObservation) := do
