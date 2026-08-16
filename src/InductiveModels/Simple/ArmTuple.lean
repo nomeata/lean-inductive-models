@@ -66,7 +66,24 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
           if ← eq withOne w then return some (some (Level.succ .zero))
           if ← eq (mkLevelMax' withOne w) w then return some (some w)
           return none
-        -- bare first, then the same questions again on the boxed levels
+        -- **One tower, two storage vectors, and a level question that picks
+        -- between them.** This is not two constructions tried in turn: no
+        -- declaration is installed and no prelude is spliced by either branch
+        -- — `boxTyOf` builds a `PSigma'` *term* out of names `ensurePSigmaPrime`
+        -- and `ensureExactSortLift` already spliced above, and `dsingAt 1` is
+        -- `PUnit` — so the whole of the code below is the evaluation of a
+        -- predicate over levels, and the plan it returns is the one and only
+        -- thing afterwards constructs from.
+        --
+        -- The two vectors are not disjoint, so the order is the decision and
+        -- has to be stated: **store bare wherever bare lands on `w`.** Boxing
+        -- is not a repair for a failed attempt but the second half of one
+        -- statable rule — box exactly the fields whose level carries an
+        -- `imax`, which is exactly what no pad absorbs — and it is preferred
+        -- against only because a boxed field costs a `box`/`unbox` pair at
+        -- every use where a bare one costs nothing. Where no field's level
+        -- carries an `imax` the second vector does not exist and the bare
+        -- question is the only one there is.
         let attempt : (Level → Level → GenM Bool) → GenM (Option CPlan) := fun eq => do
           if let some pad? ← plan eq ℓs then
             return some { boxed := Array.replicate nf false, pad? }
@@ -96,12 +113,51 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
         -- every accepted declaration keeps the route chosen by the first
         -- procedure, and the complete procedure is consulted only where
         -- the alternative is a decline.
+        --
+        -- **What that leaves is a stated and accepted limitation, not a
+        -- silence.** A plan admitted only by the complete procedure is a plan
+        -- Lean's stock kernel may refuse, and the model then does not
+        -- typecheck *there*: `lean::is_equivalent` is structural equality of
+        -- normal forms (`level.cpp:518-520`), so a level equation that holds
+        -- at every assignment but not in normal form is no conversion for it.
+        -- The model is not thereby wrong — it is correct under a complete
+        -- level theory, and a checker with one accepts it — so the project's
+        -- decision is to keep the widening and to make every use of it
+        -- visible rather than to give up the coverage:
+        --
+        -- * `--type-check-generated` (on by default) is the gate that turns
+        --   such a plan into a reported generated-kernel rejection;
+        -- * `levels: N planner comparisons, M escapes` on stderr counts every
+        --   pair the widening decided and the elaborator would not, and the
+        --   Mathlib gate requires `M = 0` — the corpus condition under which
+        --   the limitation was accepted;
+        -- * `LEAN_INDUCTIVE_MODELS_PLANNER_LEVEL_TRACE=1` names each such pair,
+        --   and the line below names the *declaration* whose storage plan one
+        --   of them admitted, which the pair alone does not say;
+        -- * `LEAN_INDUCTIVE_MODELS_PLANNER_STOCK_LEVELS=1` is the control that
+        --   turns the widening off entirely.
         if let some p ← attempt (fun a b => isLevelDefEq a b) then return p
+        let escapesBefore ← LevelAlgebra.levelEscapes.get
         if let some p ← attempt (fun a b => LevelAlgebra.isLevelDefEqComplete a b) then
+          unless (← LevelAlgebra.levelEscapes.get) == escapesBefore do
+            IO.eprintln s!"level widening: {cn}'s storage plan holds only under the \
+              complete level procedure, so Lean's stock kernel may reject {tname}'s model \
+              on level conversion (--type-check-generated is the gate that says so)"
           return p
         let raw := if nf == 1 then ℓs[0]! else (ℓs.foldl mkLevelMax' .zero).normalize
-        badShape s!"{cn}'s fields reach Sort {raw} and the carrier is Sort {w}: no \
-          pad or recursive box closes the gap"
+        -- **The same fact three siblings already decline on, on one surface.**
+        -- No pad and no box closes this level gap, so the never-zero tuple
+        -- tower has no carrier to offer — exactly what `mkPrimSite`'s
+        -- direct-field route, and the two tight-pair guards in
+        -- `InductiveModels.Simple.Tight`, report as
+        -- `.shapeUnsupported .incomplete` from the maybe-zero side.
+        -- Nothing about the input is malformed and no construction invariant
+        -- has failed, so this is a gap in the arm and is reported as one
+        -- rather than aborting the stream as an internal tool error.
+        declineWith (.shapeUnsupported tname .incomplete
+          s!"{cn}'s fields reach Sort {raw} while the carrier inhabits Sort {w}, and \
+neither of the tower's two pads nor the recursive box closes the gap, so the never-zero \
+tuple tower has no storage for this constructor")
 
   -- A pad at a level `dsingOk` cannot build is discharged by transport
   -- along the lift's eta ([`InductiveModels.unitAtUniq`]) — a recursor call and

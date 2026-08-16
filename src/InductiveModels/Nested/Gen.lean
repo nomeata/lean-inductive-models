@@ -600,7 +600,21 @@ def familyFor (g : Gen) (grp : Array Nat) (ps : Array Expr) : GenM Family := do
       let .recInfo rj ← constInfo recs[j]! | badShape s!"{recs[j]!} is not a recursor"
       for rl in rj.rules do rules := rules.push (j, rl.ctor)
     return { recs, cls, qs, doms, fidx, mimic, rules }
-  badShape "a mutually recursive mimic group has no matching recursor family"
+  -- **This exit is an internal error on purpose, and the purpose is statable.**
+  -- The anchor loop is a *lookup* and not a search over constructions: nothing
+  -- is installed or spliced by an anchor that does not fit, and the five
+  -- `continue`s above are the one exactness criterion the docstring states,
+  -- asked once per candidate. What reaching here would mean is that a group
+  -- [`InductiveModels.mimicGroups`] calls mutually recursive has no Lean-generated
+  -- simultaneous recursion covering it — and a cycle among mimics exists only
+  -- when some container in it is *itself* a nested inductive, whose own block
+  -- is that recursion. So this is not a shape the arm declines to reach: it is
+  -- the claim that Lean already minted the recursors, failing. That is a fault
+  -- in this module's reading of the block, not an incompleteness to record
+  -- against the input, and it must stop the stream rather than be counted as a
+  -- decline beside the shapes the construction genuinely does not model.
+  badShape s!"a mutually recursive mimic group has no matching recursor family: \
+    no container of mimics {grp.toList} has a block covering exactly that group"
 
 /-- The minor types the family's recursors bind at this motive vector. They are
 the same for every component, so they are read off component 0 once. -/
