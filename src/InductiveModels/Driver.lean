@@ -2508,9 +2508,22 @@ private def sourceRecordUsesAliases (aliases : SourceReplayAliases)
   summary.introduced.any aliases.hasExact ||
     summary.referenced.any aliases.hasExact || bookkeepingUsesAlias
 
+/-! ### What the fold retains
+
+Every field below is either a value-level verdict the run has to end with, or a
+bound the fold cannot avoid. Nothing here is a view of the output: no source or
+generated declaration outlives the transition that produced it, with the single
+exception named in `legacyOut`. -/
+
 private structure FilterState (α : Type) where
   mainEnv : Environment
   persistentSyntax : Check.SyntaxIndex
+  /-- **The one place output declarations accumulate**, and only under
+  [`RetentionMode.fullOutput`]: the compatibility entry points hand a complete
+  `Array EDecl` back, and the final family-local statement aggregate they
+  cross-check the per-island reports against is a whole-export pass by
+  construction. Compact discard and declaration-wise output leave this empty,
+  and `finalize` fails rather than returning quietly if they did not. -/
   legacyOut : Array EDecl := #[]
   report : Report := {}
   /-- The compact structural check, as far as the stream has been consumed.
@@ -2533,10 +2546,21 @@ private structure FilterState (α : Type) where
   islandStatements : Check.StatementReport :=
     { statementsChecked := 0, violations := #[] }
   invalidBasis : Std.HashSet Name := {}
+  /-- Value-free boundary facts for the regression seam, and empty unless
+  `collectTrace` asked for them. `runFilterCore` requires that seam to be a
+  retained-output run, so a trace is never the largest thing a run is holding. -/
   sourceSteps : Array FilterSourceStep := #[]
   observations : Array α := #[]
   streamStats : StreamOutputStats := {}
-  inputFamilyCandidates : Array Name := #[]
+  /-- **Source owners that arrived with a model family of their own**, in the
+  order the stream reached them, with a set beside them so that recognising one
+  already seen costs a lookup rather than a scan of every owner accepted so
+  far. One name per input family and no record: an input which declares no
+  model — every export straight out of `lean4export` — accumulates nothing
+  here at all. `finalize` subtracts the owners the structural report faulted
+  and hands the rest to the decline classifier. -/
+  inputFamilyOwners : Array Name := #[]
+  inputFamilyOwnerSet : Std.HashSet Name := {}
   /-- **The canonical basis names generation has written into the output.**
   Exactly the names whose input-owned record is dropped when the stream reaches
   it. This is a record of what was emitted and not a question about the
@@ -2588,11 +2612,13 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
   let mut sourceSteps := state.sourceSteps
   let mut observations := state.observations
   let mut streamStats := state.streamStats
-  let mut inputFamilyCandidates := state.inputFamilyCandidates
+  let mut inputFamilyOwners := state.inputFamilyOwners
+  let mut inputFamilyOwnerSet := state.inputFamilyOwnerSet
   let mut canonicalBasisWritten := state.canonicalBasisWritten
   for family in sourceFamilyRecord do
-    unless inputFamilyCandidates.contains family.owner do
-      inputFamilyCandidates := inputFamilyCandidates.push family.owner
+    unless inputFamilyOwnerSet.contains family.owner do
+      inputFamilyOwnerSet := inputFamilyOwnerSet.insert family.owner
+      inputFamilyOwners := inputFamilyOwners.push family.owner
   -- Construction state is island-local. Nothing generated for an earlier
   -- owner remains in this buffer after that island has closed.
   let mut out : Array EDecl := #[]
@@ -2949,7 +2975,7 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
     mainEnv, persistentSyntax, legacyOut, report := rep, compactCheck,
     compactLocators, compactIslandCount, diagnosticOwners,
     sourceOrdinal := sourceOrdinal + 1, islandStatements, invalidBasis,
-    sourceSteps, observations, streamStats, inputFamilyCandidates,
+    sourceSteps, observations, streamStats, inputFamilyOwners, inputFamilyOwnerSet,
     canonicalBasisWritten }
 
 /-- Read out the verdicts once the logical source stream has been exhausted.
@@ -3014,7 +3040,7 @@ private def FilterState.finalize (state : FilterState α) (context : FilterConte
       let invalidOwners := compactCheckReport.violations.foldl
         (fun owners violation => owners.insert violation.familyOwner)
         ({} : Std.HashSet Name)
-      state.inputFamilyCandidates.filter fun owner => !invalidOwners.contains owner }
+      state.inputFamilyOwners.filter fun owner => !invalidOwners.contains owner }
   return (legacyOut, rep, compactPlan)
 
 /-- Shared generation loop. Compact modes summarize every accepted island at
@@ -3027,6 +3053,14 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     (outputEmitter? : Option StreamOutputEmitter := none) :
     MetaM (Array EDecl × Report × CompactPlan × Array FilterSourceStep ×
       Array α) := do
+  -- **The two per-record accumulators that are not part of a verdict** — the
+  -- observation array and the boundary trace — belong to the two regression
+  -- seams, and both of those are retained-output entry points, which already
+  -- hold every declaration. Asking for either from a compact or streaming run
+  -- would introduce a whole-run accumulator into exactly the modes whose
+  -- contract is that they have none, so it is refused rather than served.
+  unless retention.retainsOutput || (!collectTrace && observer?.isNone) do
+    throwError "declaration-wise generation has no whole-run trace or observation array"
   let sourceCensus := SourceCensus.ofSource x
   let plannedAliases ← match sourceCensus.replayAliases with
     | .ok aliases => pure aliases
