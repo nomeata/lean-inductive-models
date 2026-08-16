@@ -1085,6 +1085,45 @@ def main (args : List String) : IO UInt32 := do
     (nestedOnly.stderr.splitOn "input check:").length == 1 &&
       (nestedOnly.stderr.splitOn "output check:").length == 1
 
+  -- **Every committed fixture, through the complete process boundary.**
+  --
+  -- A route may decline an owner it does not model, and exit 2 says so; that
+  -- is a verdict about the fixture. Exit 1 and exit 3 are not: they say the
+  -- tool rejected or could not finish what it itself produced, which is a
+  -- defect of the route that produced it. So the sweep asks only that no
+  -- committed export makes the tool fail, and it asks it of every one of them
+  -- rather than of a list. A fixture is swept from the moment it is committed.
+  --
+  -- The generated-island kernel gate is what makes this end-to-end rather
+  -- than a repetition of the library suites: it replays each exact island in
+  -- its own emitted order, so an island that consumes support standing behind
+  -- it in the same island is rejected here and nowhere else.
+  --
+  -- `test/fixtures/rejected` is deliberately outside the sweep: those exports
+  -- exist to be refused, and `kernelchecktest` names each one directly.
+  let fixtureRoot : System.FilePath := s!"{root}/test/fixtures/inductive-models"
+  let mut fixtures : Array System.FilePath := #[]
+  for directory in #[fixtureRoot, fixtureRoot / "filtered"] do
+    for entry in ← directory.readDir do
+      if entry.path.extension == some "ndjson" then
+        fixtures := fixtures.push entry.path
+  let mut sweptAccepted := 0
+  let mut sweptDeclined := 0
+  let mut sweepFailures : Array String := #[]
+  for fixture in fixtures.qsort (·.toString < ·.toString) do
+    let sweepRun ← runInductiveModels binary [
+      "--inductives", "--check", "--type-check-generated", "--no-output", fixture.toString]
+    if sweepRun.exitCode == 0 then sweptAccepted := sweptAccepted + 1
+    else if sweepRun.exitCode == 2 then sweptDeclined := sweptDeclined + 1
+    else
+      let reported := (sweepRun.stderr.splitOn "\n").filter (!·.isEmpty)
+      sweepFailures := sweepFailures.push
+        s!"{fixture}: exit {sweepRun.exitCode}: {reported.getLast?.getD ""}"
+  for failure in sweepFailures do IO.eprintln s!"FAIL fixture sweep: {failure}"
+  state := state.check
+    s!"no committed fixture fails the complete tool ({sweptAccepted} accepted, \
+      {sweptDeclined} declined, {sweepFailures.size} failed)" sweepFailures.isEmpty
+
   IO.println s!"main CLI: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1

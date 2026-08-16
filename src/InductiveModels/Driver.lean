@@ -1370,17 +1370,23 @@ def checkGeneratedIn (base : Environment) (records : Array EDecl) :
     cursor := cursor + 1
   return .ok checked
 
+/-- **One record of reusable shared support a model spliced**, as opposed to a
+record of that model's own disposable implementation forest. The `Iso.spliced`
+witness is essential: namespace shape alone must never call a public model such
+as `Eq.Example._model` shared support. Local skeletons and per-model `funext`
+are spliced too and are deliberately not shared: they belong to the one model
+that built them. -/
+def splicedSupportRecord (spliced : Std.HashSet Name) (record : EDecl) : Bool :=
+  record.names.any spliced.contains &&
+    (record.names.any persistentSupportRoot || record.names.all persistentSupportName)
+
 /-- Persist the reusable subset of support explicitly recorded by an accepted
-model island. The `Iso.spliced` witness is essential: namespace shape alone
-must never copy a public model such as `Eq.Example._model` into the replay
-environment. Local skeletons and per-model `funext` remain disposable. -/
+model island. Local skeletons and per-model `funext` remain disposable. -/
 def generatedSupportRecords (records : Array EDecl) (models : Array PendingModel) :
     Array EDecl :=
   let spliced := models.foldl (init := ({} : Std.HashSet Name)) fun names model =>
     model.spliced.foldl (fun names name => names.insert name) names
-  records.filter fun record =>
-    record.names.any spliced.contains &&
-      (record.names.any persistentSupportRoot || record.names.all persistentSupportName)
+  records.filter (splicedSupportRecord spliced)
 
 def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
     (models : Array PendingModel) :
@@ -1422,9 +1428,10 @@ def closeModelIsland (template : Export) (main : Environment)
   -- when generated-declaration checking has been disabled by the caller.
   unless exactRecords.map sourceAliases.exactDerivedRecord == exactRecords do
     return .error "generated declaration retained an unregistered source replay alias"
-  -- Generation appends every declaration in dependency order. The island is
-  -- emitted exactly in that constructive order immediately before `owner`;
-  -- no additional island or stream ordering pass is part of the route.
+  -- Generation appends every declaration in dependency order, behind the
+  -- shared support each model spliced ([`InductiveModels.serialiseIso`]). The
+  -- island is emitted exactly in that constructive order immediately before
+  -- `owner`; no island or stream ordering pass runs here.
   let generated := exactRecords
   -- Statement correspondence is an export-syntax check, so it can run while
   -- the owner is still absent from the persistent replay environment. Source
@@ -1560,13 +1567,38 @@ def serialiseIso (source : EDecl) (is : Iso)
   let aliases := is.aliases.register names
   let renamed := rawRecords.map (·.renameAliases aliases)
   let spliced := is.spliced.map fun name => aliases.exact name
+  -- **Shared support opens the model's records.**
+  --
+  -- A model splices shared support where it first needs it, which can be
+  -- behind an inductive the model itself generated — the composition's
+  -- implementation tag and auxiliary, arm C's skeleton. Those inductives are
+  -- declarations of the output like any other, so the simple route runs on
+  -- them next and its island goes *in front of* the inductive it models. The
+  -- support is already installed by then, so the second model splices nothing
+  -- and simply names it — from a position ahead of where the record sits.
+  -- `mutual_structure_projections`' `MLeft._model._impl.tag._model` naming
+  -- `PSigma'` is the smallest instance, and the generated kernel gate replays
+  -- the island in its emitted order and rejects it.
+  --
+  -- Shared support is exactly the closed prelude interface this tool writes,
+  -- so it depends on nothing but itself and stays in the order it was spliced
+  -- ([`InductiveModels.splicedSupportRecord`]: `ensureEq` before the tight pair
+  -- that states its reduction rules at that `Eq`). Everything else keeps its
+  -- constructive position. Support that a *previous* island spliced is already
+  -- behind this one, and support the input itself declares is the input's own
+  -- record at the input's own position; neither is moved here.
+  let splicedNames := spliced.foldl (·.insert ·) ({} : Std.HashSet Name)
+  let support := renamed.filter (splicedSupportRecord splicedNames)
+  let ordered :=
+    if support.isEmpty then renamed
+    else support ++ renamed.filter (fun record => !splicedSupportRecord splicedNames record)
   -- `Iso` continues to name declarations in the disposable construction
   -- environment. Only serialized records take exact aliases; the completed
   -- map therefore remains available while the exact output identities of
   -- spliced support are recorded for persistence and reporting.
   let model := { is with aliases := aliases, spliced := spliced }
   return {
-    records := renamed
+    records := ordered
     exactBlocks := exactBlocks
     model := model
     adapterShadow? }
