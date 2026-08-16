@@ -177,7 +177,6 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
   let retainOutput := retention.retainsOutput
   let streamOutput := retention.streamsOutput
   let exactTransform := context.exactTransform
-  let sourceSyntax := context.sourceSyntax
   let constructionNormalizer := context.constructionNormalizer
   let sourceAliases := context.sourceAliases
   let sourceSummaries := context.sourceSummaries
