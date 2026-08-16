@@ -115,6 +115,11 @@ def reverseConstructorsFor (inputExport : InductiveModels.Export) (target : Lean
       else declaration
     | other => other }
 
+/-- The committed fixtures the complete tool declines (exit 2).  Every other
+fixture in the sweep below is expected to be accepted (exit 0), so this one
+list pins the disposition of all of them. -/
+def sweepDeclinedFixtures : Array String := #["w_dependent_field.ndjson"]
+
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let binary := s!"{root}/.lake/build/bin/lean-inductive-models"
@@ -1105,13 +1110,19 @@ def main (args : List String) : IO UInt32 := do
       if entry.path.extension == some "ndjson" then
         fixtures := fixtures.push entry.path
   let mut sweptAccepted := 0
-  let mut sweptDeclined := 0
+  let mut sweptDeclined : Array String := #[]
   let mut sweepFailures : Array String := #[]
   for fixture in fixtures.qsort (·.toString < ·.toString) do
     let sweepRun ← runInductiveModels binary [
       "--inductives", "--check", "--type-check-generated", "--no-output", fixture.toString]
     if sweepRun.exitCode == 0 then sweptAccepted := sweptAccepted + 1
-    else if sweepRun.exitCode == 2 then sweptDeclined := sweptDeclined + 1
+    else if sweepRun.exitCode == 2 then
+      -- `filtered/` repeats several base names of the directory above it, so
+      -- the label keeps the subdirectory.
+      let name := fixture.fileName.getD fixture.toString
+      sweptDeclined := sweptDeclined.push <|
+        if fixture.parent.any (·.fileName == some "filtered") then s!"filtered/{name}"
+        else name
     else
       let reported := (sweepRun.stderr.splitOn "\n").filter (!·.isEmpty)
       sweepFailures := sweepFailures.push
@@ -1119,7 +1130,25 @@ def main (args : List String) : IO UInt32 := do
   for failure in sweepFailures do IO.eprintln s!"FAIL fixture sweep: {failure}"
   state := state.check
     s!"no committed fixture fails the complete tool ({sweptAccepted} accepted, \
-      {sweptDeclined} declined, {sweepFailures.size} failed)" sweepFailures.isEmpty
+      {sweptDeclined.size} declined, {sweepFailures.size} failed)" sweepFailures.isEmpty
+  -- **Accepting and declining are different verdicts, so the sweep says which
+  -- one it expects.** Exit 0 and exit 2 were both waved through above and the
+  -- two counts were interpolated into a label rather than asserted, so a
+  -- fixture that flipped from accepted to declined passed the sweep, and this
+  -- sweep is the only thing covering `filtered/`. Naming the declines pins
+  -- both sides at once: a fixture is expected to be declined exactly when it
+  -- is on this list, and accepted otherwise.
+  --
+  -- `w_dependent_field` is the one decline, and it is deliberate:
+  -- `Decline.projectionCodomain` refuses a projection rule whose equation
+  -- would relate two terms of different types, because the field it selects
+  -- depends on an earlier field whose modeled projection reduces merely
+  -- propositionally. There is no proposition to state, so the owner is
+  -- declined rather than modelled wrongly.
+  state := state.check
+    s!"the sweep declines exactly {sweepDeclinedFixtures} (declined \
+      {sweptDeclined.qsort (· < ·)})"
+    (sweptDeclined.qsort (· < ·) == sweepDeclinedFixtures.qsort (· < ·))
 
   IO.println s!"main CLI: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
