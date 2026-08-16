@@ -224,7 +224,24 @@ Canonical generation retains compact structural certificates while model
 islands are live. Actual generated output receives the exact island and then
 its source owner at that transition and feeds each declaration into one
 persistent standard arena writer. The writer retains global interning maps but
-no cumulative output declaration array. Named output remains in a
+no cumulative output declaration array.
+
+Those interning maps are what the output path costs. The export format
+addresses names, levels and expressions by ID, and any record may back-
+reference a node emitted anywhere earlier in the file, so the writer must
+remember every node it has emitted for as long as it is writing. Measured on
+the pinned Mathlib export with generation disabled, that is **40.5 bytes per
+interned arena node** — 393 MB of peak resident set on a 10-million-line
+prefix, 856 MB on 20 million, growing linearly with the *output*. With
+generation enabled the maps additionally hold every generated island's
+expressions live for the rest of the file, where `--no-output` lets them die
+at island close; enabling output then costs 820 MB on the same 10-million-line
+prefix, against 864 MB for the whole rest of the pass. Nothing here can be
+pruned: forgetting an ID would re-emit its node under a fresh one, which is a
+valid export but not the same export. Making the map cheaper than a
+`Std.HashMap Expr Nat`, not making it smaller, is the available lever.
+
+Named output remains in a
 private sibling until the final compact semantic/structural verdict commits it;
 standard output is direct and can therefore contain a parseable declaration
 prefix after a late failure. When input kernel checking is disabled, both actual
