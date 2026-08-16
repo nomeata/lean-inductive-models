@@ -278,8 +278,32 @@ decision; it is no longer blocked by this repository's own output, and the
 commit that takes it deletes that assertion.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
-suites. The focused CI workflow splits the matrix across fixture, focused, and
-CLI jobs and sets no per-process memory limit of its own: the runner's 16 GiB
+suites. `.github/workflows/ci.yml` is the only workflow file, and it holds
+five jobs on one trigger set — push to `main`, every pull request, a Monday
+03:17 UTC cron, and manual dispatch. Four of them are fast: an Arena corpus job
+and a three-way `fixtures`/`focused`/`cli` matrix, each capped at 30 minutes.
+The fifth is the `mathlib` job, which runs `scripts/ci-mathlib.sh` and is
+budgeted at 50–70 minutes on a cold runner against an 8-hour cap. It runs on
+pull requests too, deliberately: the full corpus is the only place a
+regression that needs 100M interned nodes shows up, and generation's peak RSS
+sits 0.64 GiB under its budget, so a change that costs memory has to be caught
+while it is still a diff. Its concurrency group is per ref, so `main` and a
+pull request each keep one run and the newest run on a ref cancels the older.
+The four fast jobs report independently, so no pull request waits on the gate
+for its quick signal. If pull-request volume ever makes the hour unreasonable,
+gate the job on a label rather than dropping it to manual dispatch; the
+workflow comment carries the exact `if:` to use.
+
+The `LEAN_NUM_THREADS` bound is stated in each fast job rather than once at
+workflow level, and `test/scripts/check-ci-serialized-builds.sh` asserts that
+`ci.yml` has no workflow-level `env:` at all. A workflow-level `env:` is
+inherited by every job and cannot be unset by one, so hoisting the bound would
+push a thread ceiling onto the Mathlib gate's cache, export and generation
+phases — which run without one by design, and whose peak RSS figures below were
+measured that way. The same guard asserts that `ci.yml` is the sole workflow
+file and that it invokes the gate script exactly once.
+
+The fast jobs set no per-process memory limit of their own: the runner's 16 GiB
 and the job timeout are what bound it. It used to cap each process at 12 GiB
 with `ulimit -v`, which bounds **virtual address space** rather than resident
 memory. Those were always different quantities and since the v4.33.0 toolchain
@@ -290,7 +314,7 @@ is unchanged at roughly 2.0 GiB. Under a 12 GiB `ulimit -v` no module builds at
 all, aborting with `failed to create thread`; a cap high enough for `lean` to
 start no longer says anything about memory. **RSS is the quantity of interest.**
 
-The Mathlib workflow keeps per-phase budgets, and where the runner lets it,
+The Mathlib job keeps per-phase budgets, and where the runner lets it,
 enforces them as cgroup v2 `memory.max` limits — `systemd-run --scope
 -p MemoryMax=… -p MemorySwapMax=0` — rather than as address-space ceilings. `memory.max`
 accounts page cache as well as anonymous memory, but the kernel reclaims cache
@@ -351,5 +375,5 @@ test/scripts/export-inductive-models.sh prim_shapes
 ```
 
 `LEAN4EXPORT_DIFFERENTIAL=1 test/scripts/check-lean4export-patch.sh` compares a
-stock and patched small export byte for byte. The CI and Mathlib workflow files
-remain the authority for hosted-runner resource limits and artifact retention.
+stock and patched small export byte for byte. `.github/workflows/ci.yml`
+remains the authority for hosted-runner resource limits and artifact retention.

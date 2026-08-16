@@ -1,9 +1,14 @@
 name: CI
 
+# One workflow for the whole repository. The full-Mathlib gate used to live in
+# a second file, `mathlib.yml`, with its own trigger set; it is the `mathlib`
+# job below now, and the weekly cron it carried is the `schedule` entry here.
 on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -32,8 +37,16 @@ permissions:
 # this is set to). On a 2-4 core hosted runner the bound is at or above what
 # the runner can do anyway -- its value is making the ceiling the same on
 # every machine, including maintainer workstations.
-env:
-  LEAN_NUM_THREADS: "4"
+#
+# The bound is stated per job rather than once at workflow level, and that is
+# deliberate. The `mathlib` job runs `scripts/ci-mathlib.sh`, which applies this
+# same number itself to its two Lake build phases and leaves the cache, export
+# and generation phases without a thread ceiling -- a download and two single
+# measured workers, whose recorded peak RSS figures were taken that way. A
+# workflow-level `env:` is inherited by every job and a job cannot unset one, so
+# hoisting this would silently change the configuration those budgets were
+# measured against. The build-matrix guard asserts the value is stated
+# identically wherever it appears.
 
 jobs:
   arena:
@@ -41,6 +54,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
+      LEAN_NUM_THREADS: "4"
       TMPDIR: ${{ github.workspace }}/_tmp
 
     steps:
@@ -83,6 +97,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
+      LEAN_NUM_THREADS: "4"
       TMPDIR: ${{ github.workspace }}/_tmp
     strategy:
       fail-fast: false
@@ -221,3 +236,62 @@ jobs:
             echo "$SUITE suite did not report a positive check count" >&2
             exit 1
           fi
+
+  # The full-Mathlib gate, formerly the whole of `.github/workflows/mathlib.yml`.
+  #
+  # It runs on every event this workflow runs on, pull requests included. That
+  # is a deliberate choice and it is the expensive one: the harness takes about
+  # 36 minutes on a warm local tree and is budgeted at 50-70 on a cold runner
+  # that has to clone Mathlib and fetch its cache. The case for paying it on
+  # pull requests is that this repository's entire claim is over the full
+  # Mathlib corpus, and the gate is the only thing that checks that claim --
+  # nothing in the fixture, focused or CLI suites would notice a regression that
+  # only appears at 100M interned nodes, and the generation phase's peak RSS
+  # sits 0.64 GiB under its budget, so a change that costs memory needs to be
+  # caught while it is still a diff and not after it is on `main`. The other
+  # jobs finish in minutes and report independently, so a pull request is never
+  # waiting on this one for its fast signal.
+  #
+  # If pull-request volume ever makes that unreasonable, the alternative to
+  # reach for is a gate on the events -- `if: github.event_name != 'pull_request'
+  # || contains(github.event.pull_request.labels.*.name, 'full-mathlib')` --
+  # which keeps the push, cron and manual runs unconditional and makes the
+  # pull-request run opt-in per pull request. Do not simply drop the trigger to
+  # `workflow_dispatch`: that is the state where nobody runs it.
+  #
+  # The concurrency group is per ref rather than the single repository-wide
+  # `full-mathlib` group the separate workflow used. That group predates this
+  # job having a pull-request trigger; keeping it would mean any pull request's
+  # gate cancelled `main`'s, and two open pull requests cancelled each other.
+  # Per ref keeps the property that was actually wanted -- one full-Mathlib run
+  # per branch, newest wins -- and lets `main` and a pull request hold one each.
+  mathlib:
+    name: Full Mathlib (standard hosted trial)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 480
+    concurrency:
+      group: full-mathlib-${{ github.ref }}
+      cancel-in-progress: true
+    env:
+      TMPDIR: ${{ github.workspace }}/_tmp/tmp
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Prepare project-local temporary directories
+        run: mkdir -p _tmp/tmp _tmp/logs _tmp/perf
+
+      - name: Set up Lean
+        uses: leanprover/lean-action@v1
+        with:
+          auto-config: false
+          build: false
+          test: false
+          use-github-cache: false
+          use-mathlib-cache: false
+
+      # No `LEAN_NUM_THREADS` here; the script sets it on the phases it bounds.
+      # See the comment above the `jobs:` key.
+      - name: Export and check full Mathlib
+        shell: bash
+        run: bash scripts/ci-mathlib.sh

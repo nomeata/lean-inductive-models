@@ -27,6 +27,16 @@ if [[ ! "$workflow_bound" =~ ^[1-9][0-9]*$ ]]; then
   echo "CI does not set a single positive LEAN_NUM_THREADS build bound" >&2
   exit 1
 fi
+# The bound has to stay stated per job. A workflow-level `env:` is inherited by
+# every job and no job can unset one, so hoisting it would push a thread ceiling
+# into the Mathlib gate's cache, export and generation phases -- which the
+# harness deliberately runs without one, and whose recorded peak RSS figures
+# were taken that way. This is the only property keeping that from happening
+# silently, because the symptom would be different numbers, not an error.
+if grep -qE '^env:[[:space:]]*$' "$workflow"; then
+  echo "ci.yml sets a workflow-level env:, which the Mathlib gate job inherits" >&2
+  exit 1
+fi
 guide_bound="$(
   sed -nE 's/^export LEAN_NUM_THREADS=([0-9]+)$/\1/p' "$maintainer_guide" |
     LC_ALL=C sort -u
@@ -49,6 +59,32 @@ mathlib_bound="$(
 )"
 if [[ "$mathlib_bound" != "$workflow_bound" ]]; then
   echo "ci-mathlib.sh BUILD_THREADS ($mathlib_bound) differs from CI ($workflow_bound)" >&2
+  exit 1
+fi
+
+# One workflow, not two. The full-Mathlib gate was its own workflow file, with
+# a second copy of the trigger set, the runner image and the Lean setup step;
+# folding it into `ci.yml` as a job is only worth something if it stays folded
+# in, so assert both halves -- `ci.yml` is the only workflow file, and it is
+# what invokes the gate script.
+mapfile -t workflow_files < <(
+  find "$root/.github/workflows" -maxdepth 1 -type f \
+    \( -name '*.yml' -o -name '*.yaml' \) -printf '%f\n' | LC_ALL=C sort
+)
+if [[ "${#workflow_files[@]}" -ne 1 || "${workflow_files[0]}" != ci.yml ]]; then
+  printf '%s\n' "expected .github/workflows to hold ci.yml alone; found:" >&2
+  printf '  %s\n' "${workflow_files[@]}" >&2
+  exit 1
+fi
+gate_invocations="$(
+  grep -cE '^[[:space:]]*run:[[:space:]]+bash scripts/ci-mathlib\.sh$' "$workflow" || true
+)"
+if [[ "$gate_invocations" != 1 ]]; then
+  echo "CI does not invoke scripts/ci-mathlib.sh exactly once (found $gate_invocations)" >&2
+  exit 1
+fi
+if ! grep -Fq 'scripts/ci-mathlib.sh' "$maintainer_guide"; then
+  echo "maintainer guide does not name the full-Mathlib gate script" >&2
   exit 1
 fi
 
