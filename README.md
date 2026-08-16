@@ -159,6 +159,167 @@ produced; input declarations are trusted dependencies in that environment,
 not checked a second time. With either flag off, that declaration class is not
 kernel-checked.
 
+## Constructions
+
+Three constructions share one generator core, one decline vocabulary and one
+public correspondence. The driver picks one from the exported declaration's own
+shape; none of them calls the others, and they are not one construction at
+three settings.
+
+- **Nested** — a block the exporter marked nested. The model is a mutual block
+  with one extra member per nested occurrence, a `pack`/`unpack` pair per mimic
+  with both round trips as theorems, and one recursor and ι rule per member. It
+  removes nesting and keeps mutuality.
+- **Mutual** — a plain mutual block with no nesting. One *tag* enumeration
+  carrying each member's index telescope, one indexed auxiliary family over it,
+  and one carrier per member. It removes mutuality.
+- **Simple** — a single non-mutual inductive, reduced to the fixed basis. This
+  is the construction with the routes and arms below.
+
+`Eq`, `Nat`, `PUnit` and `PSigma'` are what the simple construction is
+*written in*, and `Quot` is the kernel's. They are not modelled. That is an
+exemption rather than a gap — it is what makes the construction well-founded —
+and it is reported in its own row, outside the decline count.
+
+### The universe route
+
+The simple construction first splits on the carrier's sort `w`, three ways,
+with no preference order between them:
+
+- `w` normalizes to zero — the **`Prop`** route;
+- `w` is never zero — the **`Type`** route;
+- otherwise — the **maybe-zero** route, a `Sort w` that is a proposition at some
+  instantiations of its level parameters and is not at others.
+
+The split is forced by what the two ends need. The Church encoding is
+impredicative and is well formed only at `Sort 0`, or at any `Sort w` under the
+derived exact-sort lift. The tuple tower needs the large eliminator the kernel
+mints for `Nat` only at a `Type`, and it pads its fields to land at exactly
+`Sort w`. A maybe-zero owner has neither, so it is its own route rather than an
+instance of one of the others.
+
+### The arms, in the order the route dispatcher tries them
+
+- **Direct** — field-preserving storage for a one-constructor nonrecursive
+  owner at a maybe-zero sort. Three cases, disjoint by their own guards, so this
+  is a selection and not a preference order: *identity* where the single field's
+  sort is already the carrier's, *prop lift* where it is exactly a proposition, a
+  right-nested `PSigma'` tower for two or more fields, and the *indexed* case,
+  which wraps that same tower in a `Prop`-valued packed Henry-Ford equation
+  saying which fibre the storage sits in.
+- **F** — the indexed subsingleton, for a large-eliminating one-constructor
+  nonrecursive indexed owner at a `Prop` or maybe-zero sort. The carrier is one
+  packed equation on the index positions that are not pivots; a *pivot* is an
+  index position that is literally one of the constructor's data fields, and the
+  arm recovers that field by **substituting** at it. It recovers data and cannot
+  store it.
+- **C** — an indexed family at a `Type` sort, carved out of its own index
+  erasure. A **stepping stone**: it splices the index-erased skeleton as a real
+  inductive, and that skeleton re-enters the pipeline and is modelled by **arm
+  W**. `Type` is intrinsic rather than incidental — the carve spends the
+  skeleton's large eliminator twice, and a maybe-zero skeleton has none to mint.
+  If the skeleton does not model, the whole island is withdrawn and the owner
+  declines.
+- **E** — every constructor has a *bare* recursive field, so no constructor can
+  be applied and the declaration is empty. Serves the `Type` and maybe-zero
+  routes. The carrier is the empty type at exactly `Sort w`, or — where
+  projections are wanted — a right-nested `PSigma'` tower over the non-recursive
+  fields ending at that emptiness, which is uninhabited because of its tail
+  while genuinely storing everything in front of it.
+- **W** — the tagged W construction, for a non-indexed recursive `Type` owner
+  whose recursion branches or is infinitary. It splices a `_wcore` fragment,
+  which is itself modelled by the same descent arm C's skeleton takes.
+- **Tuple** — the `Nat`-tagged tuple tower, the `Type` route's last arm. Its
+  spine is deliberately linear: one bare recursive field per constructor. That
+  is the whole of what separates it from arm W, and the two are split by cost
+  rather than by reach — the tower costs `Nat`, `PSigma'` and no axiom, and
+  every one of its ι rules is `Eq.refl`.
+- **Church**, with **G** inside it — the fallback for the `Prop` and maybe-zero
+  routes, which is why neither of those routes has an unreached shape. The
+  carrier is the impredicative Church encoding, under the derived lift at a
+  maybe-zero sort. Arm **G** replaces the fold with a recursion by its *graph*,
+  and it fires only at a literal `Prop` whose one-constructor recursive owner
+  the kernel granted a large eliminator; at a maybe-zero sort there is no such
+  grant, so the restriction is the kernel's and not a choice. G pays
+  `Classical.choice`, and function extensionality when a recursive field has a
+  binder.
+
+An inductive a construction splices — arm C's skeleton, arm W's `_wcore`
+fragment, the mutual construction's tag and auxiliary family — re-enters the
+simple pipeline under `--basic` and is modelled there. **A model may not leave
+an inductive it introduced unmodelled**: if a spliced inductive does not model,
+the island is withdrawn and the owner declines carrying that inner reason. With
+`--basic` on, the five-member basis is therefore the only unmodelled inductive
+residue in the output.
+
+Above the arms sit two **presentation adapters**. They change what the public
+interface looks like rather than how the shape is represented. A one-constructor
+recursive unindexed `Type` owner, none of whose recursive fields is named by a
+later field's type, is published as one constructor layer over a private
+fixpoint; the indexed bare-erasure case of the same owner is published as an
+indexed fibre. Both exist so that the intrinsic projections select literally.
+
+### What is covered, and what is not
+
+A decline is not a failure: the source declaration passes through unchanged and
+the run reaches exit code 2. What follows is the whole ledger.
+
+**Known gaps** — shapes an arm ought to reach and does not. There are five
+sites in the code, and four of them state one debt.
+
+- *Storage that does not land on the carrier's sort* (four sites). A field
+  whose level falls short of `Sort w` has to be padded or boxed into it. The
+  field-preserving Direct arm at a maybe-zero sort has no pad at all, so a
+  one-constructor maybe-zero owner whose single field, whose multi-field tower,
+  or whose indexed tower misses `Sort w` declines — three sites, one missing
+  pad. The `Type` route's tuple tower has two pads and the recursive box, and
+  declines on the fourth site when none of them closes the gap either.
+- *Arm W's guards* (one site). A non-indexed recursive owner at a never-zero
+  sort whose recursion is not linear is arm W's or it is nobody's, and arm W
+  refuses two things that are limits of the arm rather than boundaries of the
+  construction: a syntactic loose-variable test on a binder type inside a
+  recursive field's own telescope, and a carrier plan that could not put the W
+  core's `Type u` at the declared sort.
+
+These are gaps, in those words. Each message names the arm and the guard, so
+the gap stays addressable instead of being recorded and forgotten.
+
+**One stated boundary**, which is not a gap. A field mentioning the owner as
+anything other than `∀ z⃗, T p⃗ e⃗` after βζ head normalization is declined as
+out of scope: that is a *nested* occurrence, and nesting is the nested
+construction's business. Nothing is missing; a model built here would be the
+wrong layer's.
+
+**One projection decline.** A field whose type names an earlier field the model
+does not select definitionally has no well-formed intrinsic projection ι rule to
+state, so the owner declines that rule. The occupant is an owner with a field at
+an opaque `imax` level under a `max`-shaped carrier. This is a limit of **Lean's
+definitional equality on levels**, and not a gap in this tool's level procedure,
+which is strictly stronger. The inequality is not in doubt: the kernel admitted
+the input by `is_geq`, which splits an `imax` into a stronger `max`-shaped
+bound and so never reasons about `imax` at all. But level conversion is
+normal-form equality with no ordering test and no absorption across differing
+bases — `max (max u v) w` normalizes to `w` and `max (imax u v) w` does not,
+because an `imax` atom absorbs into no `max` — and the storing tower has to
+*land* at `Sort w` under that equality. The recursive box removes the `imax`
+wherever the field's type can be inspected; at an opaque atomic type nothing
+can. The model is otherwise complete for such an owner: carrier, constructors,
+recursor and every recursor ι rule are built and check. Only the intrinsic
+projection *rules* are unstatable.
+
+**One accepted limitation.** Where the alternative is a decline, the planner
+decides a level gap with a complete decision procedure for Lean's level
+algebra, used only to widen the elaborator's answer and never to narrow it. A
+model admitted on that basis can be one Lean's stock kernel will not verify,
+because the stock kernel's level conversion is the incomplete normal-form test
+above. That is accepted and it is not a wrong model — it is correct under a
+complete level theory, and a checker with one accepts it. Every use of the
+widening is made visible instead: `--type-check-generated` is the gate that
+turns such a plan into a reported generated-kernel rejection, the stderr line
+`levels: N planner comparisons, M escapes` counts every pair the widening
+decided and the elaborator would not, and the Mathlib gate requires `M = 0` —
+the corpus condition under which the limitation was accepted.
+
 ## Usage
 
 ```console
@@ -214,7 +375,8 @@ Exit codes follow the Lean Kernel Arena checker contract:
 ## Implementation notes
 
 Nested, mutual, simple, and basis generation are independent routes sharing
-one public correspondence. The generator keeps exact source records as the
+one public correspondence; [Constructions](#constructions) says what each of
+them represents and when it fires. The generator keeps exact source records as the
 syntax authority and uses installed kernel metadata only as a layout and proof
 oracle. Each accepted model island is appended immediately before its source
 owner, while all other source declarations retain input order. Input
@@ -258,9 +420,13 @@ then discarded without any kernel check, and no cumulative generated
 declaration array is retained. No-generation writing preserves the existing
 whole-export path.
 
-Unsupported shapes pass through unchanged and are reported as declines. A
-consumer using models as an inductive front end must implement the five-member
-basis and admit the standard axioms used by the selected generated route.
+Unsupported shapes pass through unchanged and are reported as declines;
+[Constructions](#constructions) is the complete ledger of which shapes those
+are. A consumer using models as an inductive front end must implement the
+five-member basis and admit the standard axioms used by the selected generated
+route. With `--basic` on, that basis is the only unmodelled inductive residue,
+because an inductive a construction splices is itself modelled or the island is
+withdrawn.
 
 ## Building
 
