@@ -112,9 +112,13 @@ def main : IO UInt32 := do
     (declarationValue? generated boxModel).any (containsConst `PSigma') &&
       (declarationValue? generated boxCtor).any (containsConst `PSigma'.mk) &&
       (declarationValue? generated boxRec).any (containsConst `PSigma'.rec')
+  -- `.any` rather than `.all`: `declarationValue?` answers only for a `.defn`,
+  -- so `Option.all` holds vacuously for a route that emitted an `.ax`, a
+  -- `.thm` or an `.opaq` under one of these names, and axiom-freedom would be
+  -- asserted of nothing.
   state := state.check "the representation adds no choice axiom dependency" <|
     #[boxModel, boxCtor, boxRec, boxProjection].all fun name =>
-      (declarationValue? generated name).all fun value =>
+      (declarationValue? generated name).any fun value =>
         !containsConst `Classical.choice value && !containsConst `Nonempty value
   state := state.check "BoxF projection iota stays literal and untransported" <|
     (declarationType? generated boxProjectionIota).any fun type =>
