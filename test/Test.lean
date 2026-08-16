@@ -656,6 +656,32 @@ def expectedPrim : List Row :=
        ("Dep", 12), ("Bad", 12), ("TwinInf", 23), ("Br", 12), ("Twin", 22),
        ("Prefix", 26), ("Quad", 26), ("Utd", 14), ("Mixed", 25), ("Trine", 27)],
       [ ("Eq", "prim model: a basis primitive")])
+  -- **The W arm reached without the one-layer adapter's reflexive selectors,
+  -- and what a dependent field costs there.** `prim_w`'s `Prefix` and `Wty`
+  -- are this shape *with* the adapter, so their projection rules are proved by
+  -- `Eq.refl` against a selector that reduces. `w_dependent_field` hides the
+  -- owner's result former behind a reducible definition — the same idiom
+  -- `HiddenIndexed` uses in `indexed_fibre_boundary` — so
+  -- [`InductiveModels.phase1DirectTypeOneLayerEligible`] refuses it and the
+  -- legacy W arm builds the model instead. Its selector is `WT.Wrec`, whose ι
+  -- rule is a theorem, so `WDep._model.proj_1`'s codomain
+  -- `Vec (WDep._model.proj_0 (WDep.mk._model …))` is not the field's own
+  -- `Vec a` and the literal rule has no proposition to state. That is the
+  -- decline below, and before it the run emitted the rule and Lean's kernel
+  -- refused it — silently, because nothing read the island verdict.
+  --
+  -- `WPlain` is the control on the same arm with no dependent field, and it
+  -- carries the fragment splice because `WDep` in front of it no longer does.
+  , ("w_dependent_field",
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6), ("WPlain", 219),
+       ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
+       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
+       ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9)],
+      [ ("Eq", "prim model: a basis primitive")
+      , ("WDep", "prim model shape: WDep's field 1 names an earlier field")])
   -- **The head-normalization sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
   -- `β k` as the redex `(fun _ => B₀) k` in the block — and the block is
@@ -884,6 +910,20 @@ def runOne (root : String) (a : TAcc) (r : Row)
     gotD.length == wantDeclined.length &&
     (gotD.zip wantDeclined).all fun ((gn, gw), (wn, ww)) => gn == wn && ww.isPrefixOf gw
   a := check a declinesMatch s!"{name}: declines are {gotD}, expected {wantDeclined}"
+  -- axis 2: the kernel's own verdict on this run.
+  --
+  -- `runFilter` above already submits every accepted island to
+  -- `checkGeneratedIn` — `legacyGenerationConfig` leaves `typeCheckGenerated`
+  -- at its default — but the verdict it records was never read here, so a
+  -- fixture whose model the kernel refused still matched its counts, its
+  -- declines, its statements and its round trip and this suite reported it
+  -- green. That is how a projection ι stating an equation between two terms of
+  -- different types stayed in the tree: the CLI rejects it, and the fixture
+  -- suite, which is what actually runs over the corpus, did not look.
+  a := check a rep.generatedKernelRejected.isNone
+    s!"{name}: the kernel rejected a generated island: {rep.generatedKernelRejected.getD "-"}"
+  a := check a rep.unreplayable.isNone
+    s!"{name}: an input declaration did not replay: {rep.unreplayable.getD "-"}"
   -- axis 3: exact serialized statements against the exported owner records
   a := check a rep.stmtErrors.isEmpty s!"{name}: {rep.stmtErrors}"
   -- A fixture whose only declarations are refusals has nothing to compare;
