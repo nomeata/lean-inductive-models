@@ -1141,12 +1141,17 @@ def main (args : List String) : IO UInt32 := do
   -- is on this list, and accepted otherwise.
   --
   -- `prim_shape_declines` is what the file exists to be.
-  -- `e_dependent_field` is the other: `Decline.projectionCodomain` refuses a
-  -- projection rule whose equation would relate two terms of different types,
-  -- because the field it selects depends on an earlier field whose modeled
-  -- projection does not select it definitionally. `EDep`'s carrier is empty
-  -- and arm E answers projections by eliminating the major, which is total but
-  -- is not a selector, so there is no proposition to state.
+  -- `e_dependent_field` is the other, and it is on this list for **one owner**
+  -- out of seven. `Decline.projectionCodomain` refuses a projection rule whose
+  -- equation would relate two terms of different types, because the field it
+  -- selects depends on an earlier field whose modeled projection does not
+  -- select it definitionally. Arm E's carrier stores its constructor's
+  -- non-recursive fields in a `PSigma'` tower ending at `emptyAt w` — empty
+  -- because of its tail, selecting because of its components — so `EDep`,
+  -- `EChain`, `EMid`, `ENon`, `EBare` and `EMulti` all model. `EOpaque` is the
+  -- one left: its first field is opaque at `Sort (imax u v)`, no `max` absorbs
+  -- an `imax` and no box can inspect an opaque type far enough to normalize its
+  -- level, so nothing stores it and field 2 names it.
   --
   -- `w_dependent_field` used to be on this list for the same verdict. Arm W
   -- now selects its *stored* fields definitionally — through `_wcore.WT.root`

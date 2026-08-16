@@ -47,13 +47,28 @@ argument above no codomain can name one.
 pins it — both instantiations, a child between the two fields, and a two-step
 dependency — with a control on the same arm.
 
-The empty-carrier route cannot, and that is a statement about storing nothing.
-Arm E's property is that every constructor has a *bare* recursive field, so no
-constructor can be applied and the carrier is `emptyAt`; a projection out of it
-is an *elimination* of the major, which is total but does not reduce to a
-field, because there is no field there to reduce to.
-`test/fixtures/inductive-models/e_dependent_field.lean` is that owner, and it
-is what keeps this decline a live verdict.
+The empty-carrier route selects too, and what makes it able to is that
+*empty* and *empty-handed* were never the same thing.  Arm E's property is that
+every constructor has a *bare* recursive field, so no constructor can be
+applied; a `PSigma'` tower ending at `emptyAt w` is uninhabited for exactly
+that reason — a pair needs both components — while storing every non-recursive
+field in front of it, and its tail is a constant, so the carrier is still a
+definition.  The stored fields' projections are the tower's own and reduce by
+π; the recursive fields', and the recursor, still eliminate, through the `snd`
+chain that reaches the tail.
+`test/fixtures/inductive-models/e_dependent_field.lean` is the family that pins
+it — a two-step dependency, several bare recursive fields, a non-bare one, two
+constructors, and both universe routes.
+
+What is left of this decline is the **level algebra**, and it is a live verdict
+because that algebra has a real gap.  A tower over a field at `Sort ℓ` lands at
+`Sort (max ℓ w)`, and the kernel's own acceptance of the input says
+`max ℓ w = w` only up to `is_geq`, which unfolds an `imax` on the right where
+`max` does not absorb one.  The recursive box closes that wherever the field's
+type can be inspected; where it cannot — an opaque atomic type at an `imax`
+level — nothing stores the field, its projection is an elimination again, and a
+later field naming it has no proposition to state.  `e_dependent_field`'s
+`EOpaque` is that owner.
 
 The predicates below still decide two things the contract does not: which
 construction a route is entitled to use, and — where the model is built from a

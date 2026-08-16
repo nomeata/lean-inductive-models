@@ -88,6 +88,11 @@ structure PrimSite where
   publicRecTy : Expr
   emptySlots : Array (Option Nat)
   armE : Bool
+  /-- **The constructor-0 field indices arm E stores**, in declaration order,
+  and empty exactly when arm E's carrier is the bare
+  [`InductiveModels.emptyAt`] `w`. Settled by `mkPrimSite` from the owner's
+  constructor count and one level question; see the decision there. -/
+  eStored : Array Nat
   directRoute? : Option DirectRoute
   armF : Bool
   armC : Bool
@@ -148,6 +153,31 @@ continuation's result, which is why it is a definition over the site rather
 than one more closure inside it. -/
 def PrimSite.withParams (site : PrimSite) (k : Array Expr → GenM α) : GenM α :=
   forallBoundedTelescope site.memberTy (some site.np) fun ps _ => k ps
+
+/-- **Arm E's stored-field variables**, out of constructor 0's shape telescope
+at `ps`. A definition rather than a closure on the site for the same reason
+`withParams` is: the continuation's result is universe-polymorphic. -/
+def PrimSite.withStored (site : PrimSite) (ps : Array Expr)
+    (k : Array Expr → GenM α) : GenM α := do
+  let tele ← instForall site.exportCtors[0]!.2 ps
+  forallBoundedTelescope tele (some (numForalls tele)) fun fs _ =>
+    k (site.eStored.map (fs[·]!))
+
+/-- **Arm E's carrier at `ps`**: the tower over the stored fields ending at
+[`InductiveModels.emptyAt`] `w`, or that emptiness bare where nothing is
+stored. -/
+def PrimSite.eCarrier (site : PrimSite) (ps : Array Expr) : GenM Expr := do
+  if site.eStored.isEmpty then return emptyAt site.w
+  site.withStored ps fun xs => eTowerTyOf site.w xs
+
+/-- **The descent out of arm E's carrier**: an inhabitant of the carrier taken
+back to the [`InductiveModels.emptyAt`] `w` it ends in. The identity where
+nothing is stored, and the `snd` chain past every stored component where
+something is — so every elimination the arm performs, and every elimination the
+common projection driver performs on its behalf, goes through one function. -/
+def PrimSite.eDrop (site : PrimSite) (ps : Array Expr) (e : Expr) : GenM Expr := do
+  if site.eStored.isEmpty then return e
+  site.withStored ps fun xs => eTowerTailOf site.w xs e
 
 set_option maxRecDepth 2048 in
 /-- Settle every fact the arms share, in the order the single definition
@@ -547,12 +577,14 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- underneath remembers only inhabitation — so a *recursive* one-constructor
   -- owner at a maybe-zero sort had no arm that could return its field, and its
   -- projections were emitted onto a subsingleton carrier and refused by the
-  -- kernel. An empty carrier owes no field back: `proj_j (mk f⃗) = f_j` is
-  -- vacuously provable by eliminating the major, which is one of the `f⃗` and
-  -- inhabits nothing. `maybe_zero_projection`'s `MZSelf` and `MZData` are that
-  -- corner and this is where they are decided; `MZOne` is `!isRec` and reaches
-  -- the direct route first, and `MZIdx`/`MZIdx2` are `ni > 0` and reach that
-  -- same route's indexed case.
+  -- kernel. The empty *tower* answers both halves: it stores the non-recursive
+  -- fields, so their projections select and their rules are `Eq.refl`, and it
+  -- owes nothing for the recursive one, whose rule `proj_j (mk f⃗) = f_j` is
+  -- vacuously provable by eliminating the emptiness the tower ends in.
+  -- `maybe_zero_projection`'s `MZSelf` and `MZData` are that corner and this is
+  -- where they are decided; `MZOne` is `!isRec` and reaches the direct route
+  -- first, and `MZIdx`/`MZIdx2` are `ni > 0` and reach that same route's
+  -- indexed case.
   --
   -- The literal `Prop` route is deliberately not included. Its own
   -- constructions already model every shape there, a `Prop` owner is asked for
@@ -896,6 +928,78 @@ tuple tower pads")
     return (nrs, rcs)
   let wRecCount : Nat → GenM Nat := fun k => return (← wShapeOf k).2.size
 
+  -- ════ arm E's storage decision ════
+  --
+  -- **An empty carrier is correct without storing anything; storing is what
+  -- makes its projections *selectors*.**  Arm E's carrier is empty because
+  -- every constructor has a bare recursive field, and that fact is untouched
+  -- by putting the constructor's other fields in front of the emptiness: a
+  -- right-nested `PSigma'` tower ending at [`InductiveModels.emptyAt`] `w` is
+  -- inhabited only if its tail is, so it is empty at every arity, every field
+  -- level and every constructor count, while its own `PSigma'` projections
+  -- select the stored fields by π alone.  The tail is a *constant* — it does
+  -- not mention the carrier — so the carrier stays a definition, which is what
+  -- self-reference blocked when the recursive field itself was the candidate
+  -- to store.
+  --
+  -- Two questions decide it, both asked here, before a single declaration is
+  -- installed, and both about the shape rather than about a failure:
+  --
+  -- * **One constructor.**  Intrinsic projections are demanded of a
+  --   one-constructor owner and of nothing else
+  --   ([`InductiveModels.addProjectionModels`]'s `nc == 1` gate), so at two or
+  --   more there is no reader for a stored field and no single telescope to
+  --   store: the arms at two tags would have to land in one tower with no
+  --   field to name it.  This is the gate
+  --   [`InductiveModels.wStoredFieldOverrides`] states for arm W, at the same
+  --   shape and for the same reason.
+  -- * **The tower is at `Sort w`.**  [`InductiveModels.wTowerLevel`] — the
+  --   same level question arm W and the tuple route ask, including the same
+  --   recursive box for a component whose level retains an `imax`.  A field of
+  --   an inductive at `Sort w` sits at `Sort ℓ` with `max ℓ w = w`, which is
+  --   the kernel's own `is_geq` on the input re-asked as a conversion; where
+  --   the two differ it is the documented `max`-does-not-absorb-`imax` gap on
+  --   an *opaque* atomic type, which no box can inspect far enough to
+  --   normalize.
+  --
+  -- **Where either answer is no, the carrier is the bare
+  -- [`InductiveModels.emptyAt`] `w` and nothing is lost that the arm ever
+  -- had.**  That is one decision with two total answers rather than an attempt
+  -- and a repair: both carriers are empty, both give the same constructors, the
+  -- same recursor at every result universe, and the same ι rules; what the
+  -- level question decides is whether the *projections select*, and where they
+  -- do not the driver says so with
+  -- [`InductiveModels.Decline.projectionCodomain`] at exactly the fields that
+  -- name an earlier one.  The tuple route and arm W hard-fail on this same
+  -- question because storage is the whole of their carrier; for arm E storage
+  -- is an addition to a carrier that is already correct.
+  let eStored : Array Nat ←
+    if armE && nc == 1 then
+      withParams fun ps => do
+        let (nrs, _) ← wShapeOf 0
+        if nrs.isEmpty then pure #[] else do
+          let tele ← instForall exportCtors[0]!.2 ps
+          forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+            let xs := nrs.map (fs[·]!)
+            -- **A stored field's type may name earlier *stored* fields and
+            -- nothing else**, which is Lean's positivity re-asked of the
+            -- expression rather than assumed: no spelling of a constructor
+            -- field type reads a recursive occurrence's value
+            -- (`test/fixtures/inductive-models/nested_value_dependency.lean`),
+            -- so every field a later type can name is one of these.  A stray
+            -- mention would abstract to a term with free variables, so this
+            -- fails closed as a construction fault instead of emitting one.
+            for q in [0:xs.size] do
+              let reachable := xs.extract 0 q
+              let stray := fs.filter fun f => !reachable.any fun x => x.fvarId! == f.fvarId!
+              if (← ityp xs[q]!).hasAnyFVar fun id => stray.any fun f => f.fvarId! == id then
+                badShape s!"{exportCtors[0]!.1}'s field {nrs[q]!} names a field arm E \
+does not store, which its positivity check should have made unspellable"
+            match ← wTowerLevelOf w xs with
+            | some _ => pure #[]
+            | none => pure nrs
+    else pure #[]
+
   -- The five definitions the core is instantiated at, as applications of the
   -- names declared in the arm. `D` and `Tel` are the towers; `B'`, `A` and
   -- `tg` are one line each and exist as declarations rather than as inlined
@@ -1157,7 +1261,7 @@ tuple tower pads")
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, interface?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armG, eqi, ctorPairs, tbl, installedRecTy, exactSource?, publicSource, publicRecTy, emptySlots, armE, directRoute?, armF, armC, wTagged, wPlan, armW, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
+  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, interface?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armG, eqi, ctorPairs, tbl, installedRecTy, exactSource?, publicSource, publicRecTy, emptySlots, armE, eStored, directRoute?, armF, armC, wTagged, wPlan, armW, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
           { out, requires, spliced, projectionOverrides })
 
 end InductiveModels

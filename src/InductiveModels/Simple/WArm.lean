@@ -66,20 +66,39 @@ as `((α → β) → β)` does not leave an `imax` hidden contravariantly. -/
 def wTowerBoxed (xs : Array Expr) : GenM (Array Bool) :=
   xs.mapM fun x => return levelHasIMax (← ilevel (← ityp x)).normalize
 
-/-- **One tower's type**, over the fields `xs⟦i…⟧` and ending at the unit at
-`Sort w`. `pre` are the unboxed values of earlier components. A boxed binder is
+/-! ### What a tower ends in
+
+`tail` is the type past a tower's last component. Both stored-tuple towers end
+at the singleton [`InductiveModels.unitAt`] `w` — a stored tuple is inhabited
+and its last fibre is the pad.
+
+**Arm E's ends at [`InductiveModels.emptyAt`] `w` instead**, and that one
+substitution is the whole of its storage. `PSigma'` is inhabited only when both
+components are, so a tower whose tail is empty is empty — however many fields
+sit in front of it, at whatever levels, and whatever the owner's constructor
+count. The fields are nevertheless *stored*, so the tower's own `PSigma'`
+projections select them by π alone. And the tail is a constant: it does not
+mention the carrier, so the carrier stays a definition, which is the thing
+self-reference blocked everywhere else.
+
+Both ends are at exactly `Sort w`, so the tower's level question is the same one
+either way ([`InductiveModels.wTowerLevel`]).
+-/
+
+/-- **One tower's type**, over the fields `xs⟦i…⟧` and ending at `tail`.
+`pre` are the unboxed values of earlier components. A boxed binder is
 unboxed before it is substituted into later component types, preserving the
 original dependent telescope. -/
-partial def wTowerTy (w : Level) (xs : Array Expr) (boxed : Array Bool)
+partial def wTowerTy (tail : Expr) (w : Level) (xs : Array Expr) (boxed : Array Bool)
     (i : Nat) (pre : Array Expr := #[]) : GenM Expr := do
-  if i == xs.size then return unitAt w
+  if i == xs.size then return tail
   let sub := fun (e : Expr) => e.replaceFVars (xs.extract 0 pre.size) pre
   let original := sub (← ityp xs[i]!)
   let stored ← if boxed[i]! then boxTyOf original else pure original
   let ℓ ← ilevel stored
   withLocalDeclD (← xs[i]!.fvarId!.getUserName) stored fun x => do
     let value ← if boxed[i]! then unboxValOf original x else pure x
-    let β ← mkLambdaFVars #[x] (← wTowerTy w xs boxed (i + 1) (pre.push value))
+    let β ← mkLambdaFVars #[x] (← wTowerTy tail w xs boxed (i + 1) (pre.push value))
     return psigmaT ℓ w stored β
 
 /-- **Is a tower over these fields at `Sort w`?** `max ℓᵢ w ≡ w` at every field,
@@ -109,7 +128,7 @@ function rather than two lines at each call site: `β` is `fun (x : Xᵢ) => …
 longer in scope. A tower whose fields do not depend on each other never notices;
 `test/fixtures/inductive-models/prim_w.lean`'s `Dep` is the occupant that does, and it found this as a
 kernel `declaration has free variables`. -/
-def wTowerAt (w : Level) (xs : Array Expr) (boxed : Array Bool) (i : Nat)
+def wTowerAt (tail : Expr) (w : Level) (xs : Array Expr) (boxed : Array Bool) (i : Nat)
     (pre : Array Expr) : GenM (Level × Expr × Expr × Expr) := do
   let sub := fun (vs : Array Expr) (e : Expr) => e.replaceFVars (xs.extract 0 vs.size) vs
   let original := sub pre (← ityp xs[i]!)
@@ -117,43 +136,78 @@ def wTowerAt (w : Level) (xs : Array Expr) (boxed : Array Bool) (i : Nat)
   let ℓ ← ilevel stored
   let β ← withLocalDeclD (← xs[i]!.fvarId!.getUserName) stored fun x => do
     let value ← if boxed[i]! then unboxValOf original x else pure x
-    mkLambdaFVars #[x] (← wTowerTy w xs boxed (i + 1) (pre.push value))
+    mkLambdaFVars #[x] (← wTowerTy tail w xs boxed (i + 1) (pre.push value))
   return (ℓ, original, stored, β)
 
 /-- **The components of a tower, read back out of it.** At step `i` the earlier
 fields are already projections, so the `α` and `β` this rebuilds are the ones
 `wTowerTy` wrote with those substituted in — which is what makes the projection
 well-typed when a later field's type mentions an earlier one. -/
-partial def wTowerProjs (w : Level) (xs : Array Expr) (boxed : Array Bool)
+partial def wTowerProjs (tail : Expr) (w : Level) (xs : Array Expr) (boxed : Array Bool)
     (i : Nat) (d : Expr)
     (acc : Array Expr) : GenM (Array Expr) := do
   if i == xs.size then return acc
-  let (ℓ, original, stored, β) ← wTowerAt w xs boxed i acc
+  let (ℓ, original, stored, β) ← wTowerAt tail w xs boxed i acc
   let fst := psigmaFst ℓ w stored β d
   let value ← if boxed[i]! then unboxValOf original fst else pure fst
-  wTowerProjs w xs boxed (i + 1) (psigmaSnd ℓ w stored β d) (acc.push value)
+  wTowerProjs tail w xs boxed (i + 1) (psigmaSnd ℓ w stored β d) (acc.push value)
 
 /-- **A tower built from field values** — the same `α` and `β` as
 [`InductiveModels.wTowerProjs`] rebuilds, so `⟨proj⃗ d⟩` and `d` are the same tower and
 structure eta closes the round trip with no transport. -/
-partial def wTowerMk (w : Level) (xs : Array Expr) (boxed : Array Bool)
+partial def wTowerMk (tail tailVal : Expr) (w : Level) (xs : Array Expr) (boxed : Array Bool)
     (i : Nat) (vals : Array Expr) : GenM Expr := do
-  if i == xs.size then return unitAtCanon w
-  let (ℓ, original, stored, β) ← wTowerAt w xs boxed i (vals.extract 0 i)
+  if i == xs.size then return tailVal
+  let (ℓ, original, stored, β) ← wTowerAt tail w xs boxed i (vals.extract 0 i)
   let value ← if boxed[i]! then boxValOf original vals[i]! else pure vals[i]!
-  return psigmaMk ℓ w stored β value (← wTowerMk w xs boxed (i + 1) vals)
+  return psigmaMk ℓ w stored β value (← wTowerMk tail tailVal w xs boxed (i + 1) vals)
 
 def wTowerTyOf (w : Level) (xs : Array Expr) : GenM Expr := do
-  wTowerTy w xs (← wTowerBoxed xs) 0
+  wTowerTy (unitAt w) w xs (← wTowerBoxed xs) 0
 
 def wTowerLevelOf (w : Level) (xs : Array Expr) : GenM (Option Level) := do
   wTowerLevel w xs (← wTowerBoxed xs)
 
 def wTowerProjsOf (w : Level) (xs : Array Expr) (d : Expr) : GenM (Array Expr) := do
-  wTowerProjs w xs (← wTowerBoxed xs) 0 d #[]
+  wTowerProjs (unitAt w) w xs (← wTowerBoxed xs) 0 d #[]
 
 def wTowerMkOf (w : Level) (xs vals : Array Expr) : GenM Expr := do
-  wTowerMk w xs (← wTowerBoxed xs) 0 vals
+  wTowerMk (unitAt w) (unitAtCanon w) w xs (← wTowerBoxed xs) 0 vals
+
+/-- **The tower's tail, read out of an inhabitant of it**: the `snd` chain past
+every stored component, at the same `α` and `β` [`InductiveModels.wTowerProjs`]
+rebuilds. Where the tail is [`InductiveModels.emptyAt`] this is the descent that
+turns any inhabitant of the carrier back into the emptiness it was built from,
+which is what every elimination out of arm E's carrier goes through. -/
+partial def wTowerTail (tail : Expr) (w : Level) (xs : Array Expr) (boxed : Array Bool)
+    (i : Nat) (d : Expr) (acc : Array Expr) : GenM Expr := do
+  if i == xs.size then return d
+  let (ℓ, original, stored, β) ← wTowerAt tail w xs boxed i acc
+  let fst := psigmaFst ℓ w stored β d
+  let value ← if boxed[i]! then unboxValOf original fst else pure fst
+  wTowerTail tail w xs boxed (i + 1) (psigmaSnd ℓ w stored β d) (acc.push value)
+
+/-! ### Arm E's tower
+
+The same tower, ending in [`InductiveModels.emptyAt`] `w` rather than the
+singleton. Nothing else differs, and nothing here is arm-E-specific beyond the
+end: the level question, the boxing, the dependent binder substitution and the
+selecting projections are the ones arm W already asks. -/
+
+def eTowerTyOf (w : Level) (xs : Array Expr) : GenM Expr := do
+  wTowerTy (emptyAt w) w xs (← wTowerBoxed xs) 0
+
+def eTowerProjsOf (w : Level) (xs : Array Expr) (d : Expr) : GenM (Array Expr) := do
+  wTowerProjs (emptyAt w) w xs (← wTowerBoxed xs) 0 d #[]
+
+def eTowerTailOf (w : Level) (xs : Array Expr) (d : Expr) : GenM Expr := do
+  wTowerTail (emptyAt w) w xs (← wTowerBoxed xs) 0 d #[]
+
+/-- The tower a constructor builds. `tailVal` is the emptiness the constructor
+already has in hand — the descent out of its own bare recursive field — so it
+manufactures nothing that was not handed to it. -/
+def eTowerMkOf (w : Level) (xs vals : Array Expr) (tailVal : Expr) : GenM Expr := do
+  wTowerMk (emptyAt w) tailVal w xs (← wTowerBoxed xs) 0 vals
 
 /-! ### Reading a stored field back out of a tag and its data
 

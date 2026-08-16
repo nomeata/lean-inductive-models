@@ -994,12 +994,14 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     -- in *which* recursor does it and in what its selected minor has in hand.
     let value ← match override?, emptyCarrier? with
       | some (_, _, value, _), _ => pure value
-      | none, some carrierLevel =>
+      | none, some (carrierLevel, descent) =>
         forallBoundedTelescope projectionType (some (ownerArity + 1))
             fun arguments result => do
+          let params := arguments.extract 0 type.numParams
           let self := arguments[ownerArity]!
           mkLambdaFVars arguments
-            (← emptyAtElim eqi (← ilevel result) carrierLevel result self)
+            (← emptyAtElim eqi (← ilevel result) carrierLevel result
+              (descent.beta (params.push self)))
       | none, none => do
         forallBoundedTelescope projectionType (some (ownerArity + 1))
             fun arguments result => do
@@ -1120,13 +1122,15 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           nestedProjectionProof eqi block us params packed? fieldLevel alpha lhs
             fields[fieldIndex]!
         | none, none =>
-          if let some carrierLevel := emptyCarrier? then
-            -- The major is `T._model.mk p⃗ f⃗`, which δβ-reduces to whichever
-            -- of `f⃗` is the bare recursive field the arm returned, and so
-            -- inhabits the empty carrier.  Eliminating it proves this
-            -- equation — and every other proposition — with no appeal to how
-            -- the selector above computes.
-            emptyAtElim eqi .zero carrierLevel (eqi.mk' fieldLevel alpha lhs rhs) major
+          if let some (carrierLevel, descent) := emptyCarrier? then
+            -- The major is `T._model.mk p⃗ f⃗`, which the route's own descent
+            -- takes back to the emptiness its carrier ends in — the bare
+            -- recursive field itself where nothing is stored, and the tower's
+            -- `snd` chain past the stored fields where something is.
+            -- Eliminating that proves this equation — and every other
+            -- proposition — with no appeal to how the selector above computes.
+            emptyAtElim eqi .zero carrierLevel (eqi.mk' fieldLevel alpha lhs rhs)
+              (descent.beta (params.push major))
           else if legacyLiteral then
             pure (eqi.refl' fieldLevel alpha lhs)
           else do

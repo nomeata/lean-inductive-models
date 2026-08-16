@@ -1,5 +1,6 @@
-/- **The dependent-field family on the empty-carrier route, and every refusal
-   it currently produces.**
+/- **Dependent ordinary fields on the empty-carrier route**, and the one
+   occupant left that keeps `InductiveModels.Decline.projectionCodomain` a live
+   verdict rather than dead code.
 
    The intrinsic projection ι contract is literal: `T._model.proj_j` at the
    modeled constructor *is* constructor field `j`, with no transport. For a
@@ -9,39 +10,57 @@
    **selects** — reduces to — its field on the modeled constructor.
 
    Arm E's property is that every constructor has a **bare** recursive field,
-   so no constructor can ever be applied and the carrier is `emptyAt w`, the
-   derived exact-sort lift of Church `⊥`. `mk` returns its own recursive field,
-   which already inhabits that carrier, and a projection out of it is an
-   *elimination* of the major: total at every codomain, and reducing to no
-   field because the carrier stores none. So `proj_0 (mk f⃗)` δβ-reduces to a
-   bare field — a variable — and stops, and a later field's codomain is not the
-   field's own type.
+   so no constructor can ever be applied and the carrier is empty. That used to
+   be read as "stores nothing, so cannot select", and it is not: what makes the
+   carrier empty is a single empty *component*, and a right-nested `PSigma'`
+   tower ending at `InductiveModels.emptyAt` `w` is empty for that reason while
+   holding every non-recursive field in front of it. The tail is a constant —
+   it does not mention the carrier — so the carrier is still a definition,
+   which is exactly what self-reference blocked when the recursive field itself
+   was the candidate to store. `mk` is then `⟨f⃗, drop t⟩`, where `t` is its own
+   bare recursive field and `drop` is the `snd` chain: it manufactures nothing
+   it was not handed. The stored fields' projections are the tower's own, so
+   they select by π and their ι rules are `Eq.refl`; the recursor and the
+   recursive fields' projections still eliminate, through the same `drop`, at
+   every result universe.
 
-   `w_dependent_field.lean` is the same question one construction earlier, and
-   arm W now answers it out of its data tower. This file pins the whole shape
-   family on arm E **before** anything answers it here, so that what the answer
-   has to survive is on record rather than reconstructed afterwards. Every
-   owner but `EMulti` declines today.
+   `w_dependent_field.lean` is the same closure one construction earlier: arm W
+   selects its stored fields through `_wcore.WT.root` and the data tower.
 
-   * `EDep` — the minimum: field 1 names field 0.
+   Seven owners, one per thing the storage has to survive.
+
+   * `EDep` — the original occupant, and the minimum: field 1 names field 0.
    * `EChain` — a **two-step** dependency, `Tag a v` naming fields 0 and 1
      while field 1 names field 0. A single layer does not exercise the nesting.
    * `EMid` — **several bare recursive fields**, with the dependent field
-     *between* two of them, so the constructor's field index and any storage
-     position would disagree.
+     *between* two of them, so the constructor's field index and the tower's
+     component position disagree.
    * `ENon` — a **non-bare** recursive field (`N → ENon`) beside a bare one.
-     No field type can name either, by the positivity fact
-     `nested_value_dependency.lean` writes out.
+     Both are excluded from the tower — a component whose type mentions the
+     carrier cannot be stored in a definition — and by positivity no field type
+     can name either, so nothing is lost.
    * `EBare` — the **maybe-zero** route at the same dependency. Arm E serves
-     `Sort u` on the same terms, so whatever answers this must too.
-   * `EMulti` — **two constructors**, each with a bare recursive field. It
-     models, and must keep modelling: intrinsic projections are asked of a
-     one-constructor owner and of nothing else, so nothing is asked back here.
-   * `EOpaque` — a field at an **opaque `imax` level**, `Sort (imax u v)`,
-     under a carrier at `Type (max 1 u v)`. This is the level algebra's own
-     gap — a `max` does not absorb an `imax`, and no recursive box can inspect
-     an opaque atomic type far enough to normalize its level — so it is the
-     one owner here whose refusal is not about the empty carrier at all.
+     `Sort u` on the same terms, and so does the tower: every component is a
+     field of an inductive at `Sort u`, hence at a level the kernel's own
+     acceptance of the input says `Sort u` absorbs.
+   * `EMulti` — **two constructors**, each with a bare recursive field. Nothing
+     is stored, because intrinsic projections are asked of a one-constructor
+     owner and of nothing else, so there is no reader for a stored field and no
+     single telescope to store; the carrier is the bare `emptyAt` and the owner
+     models exactly as it did.
+   * `EOpaque` — **the residual decline**, and the only one. Its first field is
+     an opaque parameter at `Sort (imax u v)`, and no tower over it lands at
+     the carrier's `Type (max 1 u v)`: level equality is normal-form equality
+     and a `max` does not absorb an `imax`, which is what the recursive box
+     exists to fix — and no box can inspect an opaque atomic type far enough to
+     normalize its level. So this owner stores nothing, its projections are
+     eliminations again, and field 2's codomain `Vec (proj_1 … (proj_0 …))` is
+     not the field's own `Vec (f x)`. It declines.
+
+     **This is the level algebra's limit and not the storage idea's**, and it
+     is the same one the tuple route and arm W hard-fail on. Arm E does not
+     hard-fail there only because it has a total alternative the other two do
+     not: emptiness alone is already a model.
 
    Every owner hides its result former behind a reducible definition — the same
    idiom `HiddenIndexed` uses in `indexed_fibre_boundary.lean` — so

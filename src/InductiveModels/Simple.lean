@@ -90,14 +90,27 @@ elimination the basis buys, and the reason `Nat` is in it — and then
 destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
 
 A recursive declaration **every one of whose constructors has a bare recursive
-field** is empty rather than a degenerate case of this tower. Its carrier is the
-derived lift of `⊥`; each constructor returns one such field, and the recursor,
-the ι theorems, and — at one constructor — the intrinsic projections and *their*
-ι rules all eliminate that empty value.  This is arm E below, and the class is
-not about linearity: a constructor with two bare recursive fields is exactly
-as unapplicable as one with a single one.  *Bare* is the boundary — a recursive
-occurrence under a binder whose domain is empty is inhabited vacuously, and
-whether a binder domain is empty is not a question the route analysis asks.
+field** is empty rather than a degenerate case of this tower. This is arm E
+below, and the class is not about linearity: a constructor with two bare
+recursive fields is exactly as unapplicable as one with a single one.  *Bare* is
+the boundary — a recursive occurrence under a binder whose domain is empty is
+inhabited vacuously, and whether a binder domain is empty is not a question the
+route analysis asks.
+
+**Empty is not empty-handed.**  What makes a `PSigma'` tower uninhabited is one
+uninhabited component, so a tower ending at the derived lift of `⊥` is empty
+whatever stands in front of it — and what stands in front of it is the one
+constructor's non-recursive fields, stored.  The tail is a *constant*: it does
+not mention the carrier, so the carrier is a plain definition, which is what
+self-reference blocked when the recursive field itself was the candidate to
+store.  So `mk` is `⟨f⃗, drop t⟩` for its own bare recursive field `t` and the
+`snd` chain `drop`, manufacturing nothing it was not handed; the stored fields'
+intrinsic projections are the tower's own and select by π, with `Eq.refl` ι
+rules; and the recursor, the ι theorems and the *recursive* fields' projections
+eliminate the same empty value as before, reached through `drop`.  Storage is
+asked for at one constructor — the only shape any projection is asked of — and
+only where the tower's level question closes; both answers are total, and the
+decision is written out at [`InductiveModels.mkPrimSite`].
 
 **Nor is the class about the sort.** Arm E serves the maybe-zero route on the
 same terms, because nothing in it is sort-specific: `emptyAt w` is
@@ -111,9 +124,10 @@ largeness test is an invariant of the never-zero route rather than a
 precondition of the arm.  That is what closes the maybe-zero route's
 field-retention corner: a *recursive* one-constructor owner there is asked for
 intrinsic projections, the direct routes below retain a field only at `!isRec`,
-and the Church encoding remembers only inhabitation — but an empty carrier owes
-no field back, because `proj_j (mk f⃗) = f_j` is proved by eliminating the
-major.  `maybe_zero_projection`'s `MZSelf` and `MZData` are that corner.
+and the Church encoding remembers only inhabitation — but the empty tower both
+stores the field and owes nothing for the recursive one.
+`maybe_zero_projection`'s `MZSelf` and `MZData` are that corner: `MZSelf` has no
+field to store and `MZData`'s one data field sits in a one-component tower.
 
 * **A pad** closes a level gap. At a `dsingOk` level it is `D`
   ([`InductiveModels.dsingAt`]); at any other level — a bare parameter in the gap,
@@ -341,18 +355,28 @@ W's guard refuses it; B factors through the tag: \
 
   let aliases := primAliasMap site.tname site.root site.model site.ern site.recN
     site.exportCtors site.ctorN site.iotaN ruleK? out2
+  -- **The one arm whose carrier is empty says so here**, at the place the arm
+  -- was chosen, so the common projection driver reads a stated property of the
+  -- emitted model rather than re-deriving one.  The entry carries the descent
+  -- as well as the level: arm E's carrier is
+  -- [`InductiveModels.emptyAt`] `w` bare where it stores nothing and a
+  -- `PSigma'` tower ending at that emptiness where it does, and
+  -- [`InductiveModels.PrimSite.eDrop`] is what makes the two one thing for a
+  -- consumer.  Every other arm's carrier is inhabited or its inhabitation is
+  -- not this file's claim.
+  let emptyCarriers : Array (Name × Level × Expr) ←
+    if site.armE then do
+      let descent ← site.withParams fun ps => do
+        withLocalDeclD `self (mkAppN (.const site.selfN site.us) ps) fun self => do
+          mkLambdaFVars (ps.push self) (← site.eDrop ps self)
+      pure #[(site.tname, site.w, descent)]
+    else pure #[]
   return { decls := out2, levelParams := site.lparams, members := #[]
            selfNames := #[site.selfN]
            numAll := 1, ctors := site.ctorPairs, recs := #[site.recN], iotas, ruleKs
            spliced := st.spliced
            projectionOverrides := st.projectionOverrides
-           -- **The one arm whose carrier is empty says so here**, at the place
-           -- the arm was chosen, so the common projection driver reads a stated
-           -- property of the emitted model rather than re-deriving one. Arm E's
-           -- `T._model.self` is [`InductiveModels.emptyAt`] `w` and nothing
-           -- else; every other arm's carrier is inhabited or its inhabitation
-           -- is not this file's claim.
-           emptyCarriers := if site.armE then #[(site.tname, site.w)] else #[]
+           emptyCarriers
            requires := if site.armC then #[site.skelN] else st.requires
            aliases }
 

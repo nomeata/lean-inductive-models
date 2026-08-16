@@ -136,7 +136,11 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
           else if armE then do
             let some k := emptySlots[j]!
               | badShape s!"{cn} has no recursive field in the empty route"
-            emptyAtElim eqi .zero w (eqi.mk' v α lhs rhs) fields[k]!
+            -- The bare recursive field inhabits the carrier, so dropping it to
+            -- the emptiness that carrier ends in proves this equation and every
+            -- other proposition.  With nothing stored the descent is the
+            -- identity and this is the field itself, as before.
+            emptyAtElim eqi .zero w (eqi.mk' v α lhs rhs) (← site.eDrop ps fields[k]!)
           else if !armG then pure (eqi.refl' v α lhs) else do
             let rsI := (Array.range gNf).filter fun i => gRecNb[i]!.isSome
             let atSlot := fun (nm : Name) => rsI.mapM fun i => do

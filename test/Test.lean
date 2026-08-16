@@ -834,29 +834,32 @@ def expectedPrim : List Row :=
        ("_wcore.HEq", 5), ("_wcore.PProd", 9),
        ("WTag", 16), ("WMid", 18), ("Tag", 6), ("WChain", 18), ("WPlain", 16)],
       [ ("Eq", "prim model: a basis primitive")])
-  -- **The same question at the one construction that still cannot answer it**,
-  -- pinned as the whole shape family rather than one occupant, so that what an
-  -- answer has to survive is on record before there is one. Every constructor
-  -- of these owners has a *bare* recursive occurrence, so arm E's property
-  -- holds and the carrier is `emptyAt w`; arm E then answers a projection by
-  -- eliminating the major, which is total but is not a selector.
-  -- `EDep._model.proj_0 (EDep.mk._model …)` δβ-reduces to the bare field — a
-  -- variable — and stops, so field 1's codomain is not its own `Vec a`.
+  -- **The same question at the empty carrier, and the family it now selects on
+  -- its own.** `EDep.mk`'s third field is a *bare* recursive occurrence, so arm
+  -- E's property holds and the carrier is empty — and an empty carrier was read
+  -- as one that stores nothing, so its projections were eliminations, total but
+  -- not selectors, and field 1's codomain was not its own `Vec a`. What makes
+  -- the carrier empty is a single empty *component*: a `PSigma'` tower ending
+  -- at `emptyAt w` is empty for that reason and stores every non-recursive
+  -- field in front of it, at a tail that mentions nothing recursive, so the
+  -- carrier stays a definition. Six owners therefore model — `EDep` the
+  -- minimum, `EChain` a two-step dependency, `EMid` several bare recursive
+  -- fields around the dependent one, `ENon` a non-bare recursive field beside a
+  -- bare one, `EBare` the maybe-zero route, and `EMulti` two constructors where
+  -- nothing is asked back and nothing is stored.
   --
-  -- `EMulti` is the control that must keep modelling: two constructors, so no
-  -- intrinsic projection is asked of it at all. `EOpaque`'s refusal is a
-  -- different one wearing the same verdict — a field at an opaque `imax` level
-  -- under a `max` carrier, which is the level algebra's gap and not the empty
-  -- carrier's.
+  -- `EOpaque` is what keeps `Decline.projectionCodomain` a verdict about a
+  -- shape rather than dead code, and it is the level algebra's limit rather
+  -- than the storage's: its first field is an opaque parameter at
+  -- `Sort (imax u v)`, a `max` does not absorb an `imax`, and no box can
+  -- inspect an opaque atomic type far enough to normalize its level. So that
+  -- owner stores nothing, its projections are eliminations again, and field 2
+  -- names two earlier fields.
   , ("e_dependent_field",
-      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6), ("Tag", 6),
-       ("Fib", 6), ("EMulti", 6)],
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6), ("EDep", 10),
+       ("Tag", 6), ("EChain", 12), ("EMid", 12), ("ENon", 12), ("Fib", 6),
+       ("EBare", 10), ("EMulti", 6)],
       [ ("Eq", "prim model: a basis primitive")
-      , ("EDep", "prim model shape: EDep's field 1 names an earlier field")
-      , ("EChain", "prim model shape: EChain's field 1 names an earlier field")
-      , ("EMid", "prim model shape: EMid's field 2 names an earlier field")
-      , ("ENon", "prim model shape: ENon's field 2 names an earlier field")
-      , ("EBare", "prim model shape: EBare's field 1 names an earlier field")
       , ("EOpaque", "prim model shape: EOpaque's field 2 names an earlier field")])
   -- **The head-normalization sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
@@ -1039,6 +1042,21 @@ partial def underLambdas : Expr → Expr
   | .lam _ _ body _ => underLambdas body
   | expression => expression
 
+/-- **How many components a carrier stores in front of the emptiness it ends
+in**, or `none` if it does not end in [`InductiveModels.emptyAt`] at `level`.
+
+Arm E's carrier is that emptiness bare where it stores nothing (`some 0`) and a
+right-nested `PSigma'` tower ending at it where it does. Walking the `snd`
+fibres is what tells the two apart from an *inhabited* tower, whose last fibre
+is a field or a pad and never `⊥`. -/
+partial def emptyTowerDepth (level : Level) : Expr → Option Nat
+  | expression =>
+    if expression == InductiveModels.emptyAt level then some 0
+    else match expression with
+      | .app (.app (.const `PSigma' _) _) (.lam _ _ fibre _) =>
+        (emptyTowerDepth level fibre).map (· + 1)
+      | _ => none
+
 /-- One fixture, all four axes. With `cross`, compare the generated declaration
 array with the committed filtered export and verify idempotence structurally. -/
 def runOne (root : String) (a : TAcc) (r : Row)
@@ -1180,18 +1198,27 @@ def runOne (root : String) (a : TAcc) (r : Row)
     -- inhabited, so a widening that swept one of them onto the empty carrier
     -- would be modelling an inhabited type by `⊥`, and this is where that is
     -- caught.
-    let carrierIsEmpty := fun (owner : Name) =>
-      decls.any fun declaration => match declaration with
+    let carrierDepth := fun (owner : Name) =>
+      decls.findSome? fun declaration => match declaration with
         | .defn declarationName [level] _ value _ _ _ =>
-          declarationName == Naming.modelName owner &&
-            underLambdas value == InductiveModels.emptyAt (.param level)
-        | _ => false
-    for owner in [`MZSelf, `MZData] do
-      a := check a (carrierIsEmpty owner)
-        s!"maybe_zero_projection: {owner}'s carrier is not the derived lift of ⊥ at its \
-           own sort, so the empty model no longer reaches the maybe-zero recursive corner"
+          if declarationName == Naming.modelName owner then
+            some (emptyTowerDepth (.param level) (underLambdas value))
+          else none
+        | _ => none
+    -- **`MZSelf` stores nothing and `MZData` stores its one data field**, and
+    -- both end in the same `⊥` at the same sort. The depth is the assertion:
+    -- it is what separates an empty carrier that *selects* — `MZData`'s field
+    -- 0 is a `PSigma'.fst` on the modeled constructor and its ι rule is
+    -- `Eq.refl` — from one that can only eliminate, and it is a value read out
+    -- of the emitted carrier rather than a name, a count or a shape guess.
+    a := check a (carrierDepth `MZSelf == some (some 0))
+      "maybe_zero_projection: MZSelf's carrier is not the derived lift of ⊥ at its \
+       own sort, so the empty model no longer reaches the maybe-zero recursive corner"
+    a := check a (carrierDepth `MZData == some (some 1))
+      "maybe_zero_projection: MZData's carrier is not a one-component tower ending at \
+       the derived lift of ⊥, so its data field is no longer stored or no longer empty"
     for owner in [`MZOne, `MZProof, `MZIdx, `MZIdx2] do
-      a := check a (!carrierIsEmpty owner)
+      a := check a (carrierDepth owner == some none)
         s!"maybe_zero_projection: {owner} is inhabited and its carrier became empty"
     -- The point of the arm is the field the contract asks back, so pin the
     -- projections by index rather than trusting the count: three eligible

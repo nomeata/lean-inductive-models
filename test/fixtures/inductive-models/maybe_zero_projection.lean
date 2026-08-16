@@ -69,6 +69,16 @@
    `emptyAt w = PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})` — the
    derived exact-sort lift of Church `⊥`.
 
+   **And the *non*-recursive field is stored after all.**  What makes a
+   `PSigma'` uninhabited is one uninhabited component, so
+   `Σ'(x : a), emptyAt u` is empty because of its tail while holding `MZData`'s
+   data field in front of it, and that tail is a constant — it does not mention
+   the carrier, so the carrier is still a definition.  `MZSelf` has no such
+   field and its carrier is the bare `emptyAt u`; `MZData`'s is a one-component
+   tower, its field 0 is the tower's own `PSigma'.fst`, and its ι rule is
+   `Eq.refl`.  Neither owner's *recursive* field is stored, and by positivity
+   no codomain can ever name one.
+
    **The universe question is the one the lift already answers.**  `∀ p : Sort u, p`
    is empty too, but it lives at `Sort (imax (u+1) u)` and so misses the
    declared sort; the lift instead puts an empty *proposition* at
@@ -81,8 +91,10 @@
    Everything the contract asks for then follows from emptiness, with no
    axiom:
 
-   * the carrier is `emptyAt u`;
-   * `mk` returns its own recursive field, which already inhabits that carrier;
+   * the carrier ends at `emptyAt u`, with the constructor's non-recursive
+     fields stored in front of it;
+   * `mk` is `⟨f⃗, drop t⟩` for its own bare recursive field `t`, whose descent
+     `drop` already carries that emptiness — so it manufactures nothing;
    * `rec` eliminates its major premise.  This is a genuine change of model —
      Church handled the recursor adequately and this replaces it — and it is
      adequate for the same interface and more: both owners' kernel recursors
@@ -92,16 +104,16 @@
      would deliver a large eliminator too if the kernel had minted one, which
      the Church fold could not.  Arm E's `large` guard is therefore an
      invariant of the never-zero route and not a precondition of the arm;
-   * every ι rule — the recursor's, and `proj_j (mk f⃗) = f_j` for each
-     projected field — is proved by eliminating the major, which δβ-reduces to
-     a bare recursive field and inhabits nothing.  The right-hand side is the
-     constructor's own binder, on the literal contract, exactly as everywhere
-     else.
+   * every ι rule is on the literal contract with the constructor's own binder
+     on the right, exactly as everywhere else — `Eq.refl` for a stored field,
+     whose projection is the tower's own and reduces by π, and an elimination
+     of the descended major for the recursor's and the recursive field's.
 
-   The carrier level travels from the arm to the common projection driver as
-   `Iso.emptyCarriers`, which is a stated property of the emitted model and not
-   a name, a count or a fixture: `Driver.addProjectionModels` reads it, and
-   where it is present the selector and the rule are eliminations and there is
+   The carrier level and the descent travel from the arm to the common
+   projection driver as `Iso.emptyCarriers`, which is a stated property of the
+   emitted model and not a name, a count or a fixture:
+   `Driver.addProjectionModels` reads it, and where it is present the recursive
+   fields' selector and rule are eliminations through that descent and there is
    no other route to fall back to. -/
 prelude
 

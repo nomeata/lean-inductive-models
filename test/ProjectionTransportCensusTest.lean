@@ -24,16 +24,19 @@ projection reduces merely propositionally, and generation no longer emits a
 rule in that case at all: the equation would relate two terms of different
 types, so the owner declines
 ([`InductiveModels.Decline.projectionCodomain`], and
-`test/fixtures/inductive-models/e_dependent_field.lean` is the owner it
-declines — an empty carrier, which stores no field to select).  Every rule
-that *is* emitted therefore has its field binder on the right, and the literal
-right-hand side is the only one the generator ever has to state.
+`test/fixtures/inductive-models/e_dependent_field.lean`'s `EOpaque` is the one
+owner it still declines — a field at an opaque `imax` level that no tower can
+store).  Every rule that *is* emitted therefore has its field binder on the
+right, and the literal right-hand side is the only one the generator ever has
+to state.
 
 `test/fixtures/inductive-models/w_dependent_field.lean` used to be that owner
 and is now a positive: arm W selects its stored fields through
 `_wcore.WT.root` and the data tower, so a dependent field on that arm states
 its rule by `Eq.refl` like every other route and is counted here rather than
-declined.
+declined.  `e_dependent_field` went the same way one construction later: arm
+E's carrier stores its constructor's non-recursive fields in a `PSigma'` tower
+ending at `emptyAt w`, so its projections are the tower's own and select by π.
 
 Recursion is a separate and stronger reason for the same thing on the routes
 that do reach a field definitionally: Lean's positivity and nesting rules
@@ -248,6 +251,13 @@ only owner mention is ζ-dead, so it is a one-constructor *nonrecursive*
 record and is asked for both of its fields back; a route that reads its field
 domain as written makes it recursive again and this row drops to eleven.
 
+`e_dependent_field` is 18 and not 0: `EDep`'s three fields, `EChain`'s,
+`EMid`'s and `ENon`'s four each and `EBare`'s three, every one of them stated
+by `Eq.refl` against arm E's stored tower.  `EMulti` contributes nothing — two
+constructors, so no intrinsic projection is asked — and neither does `EOpaque`,
+which declines.  `Tag` and `Fib` are indexed helpers whose only fields are
+their conclusion indices, exactly as in `w_dependent_field`.
+
 `prim_w` is 46 and not 35 because it gained `TripleInf`, `QuadInf` and
 `TrineInf` — three one-constructor arm-W owners at three and four recursive
 fields, restoring the one-layer adapter over a W carrier past the two
@@ -256,7 +266,7 @@ three, four and four fields are the whole of the difference. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 21),
     ("dead_owner_mention", 13), ("decline_no_eq", 11), ("default_ctor_iota", 0), ("degenerate_graph", 1),
-    ("dependent_fields", 11), ("e_dependent_field", 0), ("empty_no_base", 16),
+    ("dependent_fields", 11), ("e_dependent_field", 18), ("empty_no_base", 16),
     ("filtered/nat_char_equations", 3),
     ("filtered/nested_deep", 11), ("filtered/nested_iota", 13),
     ("filtered/nested_iota_arm", 11), ("filtered/nested_keying", 11),

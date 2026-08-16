@@ -100,11 +100,23 @@ inductive Decline where
   binder on the right ([`InductiveModels.addProjectionModels`]), so the two
   sides are a well-formed equation exactly when each earlier projection in
   field `j`'s dependency closure reduces to its field on the modeled
-  constructor. A route that reaches that field without *selecting* it — arm
-  E's carrier is empty, so its projection is an elimination of the major, which
-  is total but reduces to no field because none is stored — leaves the
-  left-hand side at `Aⱼ(proj⃗ (mk f⃗))` and the right at `Aⱼ(f⃗)`, which are
-  different types.
+  constructor. A route that reaches that field without *selecting* it — one
+  whose projection is an *elimination* of the major, total at every codomain
+  but reducing to no field because none is stored — leaves the left-hand side
+  at `Aⱼ(proj⃗ (mk f⃗))` and the right at `Aⱼ(f⃗)`, which are different types.
+
+  **What is left in that position is a level question, not a construction.**
+  Every arm now stores the fields a codomain can name — arm W in its data
+  tower, arm E in a `PSigma'` tower ending at [`InductiveModels.emptyAt`], which
+  is empty because of its tail and stores everything in front of it — and a
+  tower over a field at `Sort ℓ` reaches the carrier's `Sort w` exactly when
+  `max ℓ w ≡ w`. The kernel's own `is_geq` accepted the input on a weaker test:
+  it unfolds an `imax` on the right where `max` does not absorb one. The
+  recursive box closes that gap wherever the field's type can be inspected;
+  at an *opaque* atomic type at an `imax` level nothing can, so that field is
+  not stored and a later field naming it has no proposition to state.
+  `test/fixtures/inductive-models/e_dependent_field.lean`'s `EOpaque` is the
+  occupant.
 
   The transported right-hand side that used to bridge them is no longer part
   of the contract, and `test/ProjectionTransportCensusTest.lean` holds it out,

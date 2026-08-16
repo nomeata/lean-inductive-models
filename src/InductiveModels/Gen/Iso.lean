@@ -212,14 +212,20 @@ structure Iso where
   reduction-proof value.  The common driver remains responsible for the
   public types, names, collision checks and declaration ordering. -/
   projectionOverrides : Array (Name × Nat × Expr × Expr) := #[]
-  /-- **Owners whose model carrier is empty, with the sort it is empty at.**
+  /-- **Owners whose model carrier is empty, with the sort it is empty at and
+  the descent that reaches that emptiness.**
 
-  An entry says the emitted `T._model.self p⃗` δ-reduces to
-  [`InductiveModels.emptyAt`] at this level — the derived exact-sort lift of
-  Church `⊥`, which is empty at *every* level and sits at exactly that one.
-  The construction that puts it there is arm E, whose stated property is that
-  every constructor has a **bare** recursive field, so no constructor can ever
-  be applied.
+  An entry says the emitted `T._model.self p⃗` is empty and that
+  `descent p⃗ self` is an inhabitant of [`InductiveModels.emptyAt`] at this
+  level — the derived exact-sort lift of Church `⊥`, which is empty at *every*
+  level and sits at exactly that one. The construction that puts it there is
+  arm E, whose stated property is that every constructor has a **bare**
+  recursive field, so no constructor can ever be applied.
+
+  `descent` is a closed `fun p⃗ self => …` the route supplies. It is the
+  identity where the carrier *is* that emptiness, and the tower's `snd` chain
+  where arm E stores the constructor's fields in front of it — so a consumer
+  eliminates through one function and never has to know which.
 
   This is a fact about the carrier and not a projection implementation, which
   is why it is separate from `projectionOverrides` above: an override has to
@@ -230,7 +236,7 @@ structure Iso where
   every projection out of it, and every projection ι rule about it, is one
   elimination of the major, at whatever codomain the driver computed.  Empty
   for every other construction. -/
-  emptyCarriers : Array (Name × Level) := #[]
+  emptyCarriers : Array (Name × Level × Expr) := #[]
   /-- **Prelude constants the input did not declare and this model spliced in**
   — a subset of `Eq`, `Eq.refl`, the four quotient names, `Quot.sound` and
   `T._model.funext`, in the order they were emitted, and **empty** for every
