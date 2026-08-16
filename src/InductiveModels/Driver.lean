@@ -1005,23 +1005,44 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         badShape s!"{type.name}'s nested selector reduces definitionally but its \
           projection rules are not on the literal contract"
       -- The right-hand side is the constructor field binder on every route,
-      -- with no route left to choose between.  A transported right-hand side
-      -- would be needed only if field `fieldIndex` depended on the *value* of
-      -- an earlier recursive or nested occurrence field, whose modeled
-      -- projection reconstructs it merely propositionally.  Lean's positivity
-      -- and nesting rules leave no spelling of a constructor field type that
-      -- reads such a value at all
+      -- with no route left to choose between.  Lean's positivity and nesting
+      -- rules leave no spelling of a constructor field type that reads a
+      -- recursive or nested occurrence's *value* at all
       -- (`test/fixtures/inductive-models/nested_value_dependency.lean` writes
       -- out every attempt and the kernel rejects each one), so every field a
-      -- later field can depend on is non-recursive and is selected
-      -- definitionally.  The predicates above survive only where they still
-      -- decide something: the nested-selector agreement gate here, the proof
-      -- below, and the exact binder telescope of the closed statement.
+      -- later field can depend on is non-recursive — but non-recursive is not
+      -- the same as definitionally selected, which is what the guard below
+      -- asks.  The predicates above survive only where they still decide
+      -- something: the nested-selector agreement gate here, the proof below,
+      -- and the exact binder telescope of the closed statement.
       let rhs := fields[fieldIndex]!
       let some alpha := instantiateForallsExact? projectionType
           (params ++ indices ++ #[major])
         | badShape s!"{modelProjection}'s exact public type has the wrong arity"
       let fieldLevel ← ilevel alpha
+      -- **The one precondition the literal contract still has.**  `alpha` is
+      -- the kernel's intrinsic codomain for this projection: field
+      -- `fieldIndex`'s type with every earlier field replaced by that field's
+      -- own modeled projection at this major.  `rhs` is the constructor's own
+      -- binder, at the field's declared type.  For a field that names no
+      -- earlier one the two are the same expression and there is nothing to
+      -- ask.  For a dependent field they agree exactly when each earlier
+      -- projection in its dependency closure *selects* its field — reduces to
+      -- it — on the modeled constructor.
+      --
+      -- Every construction that reaches a field definitionally satisfies this:
+      -- the literal routes above by δι on the carrier's own selectors, the
+      -- direct/one-layer overrides by their reflexive projections, the nested
+      -- rung by the block's primitive ι rule, and the carved indexed routes by
+      -- unfolding onto the layer underneath.  The W arm does not: its selector
+      -- is `WT.Wrec`, whose ι rule is the theorem `WT.Wrec_iota`, so a
+      -- dependent field's two sides stay at different types and there is no
+      -- equation to state.  A transported right-hand side used to bridge them
+      -- and is no longer part of the contract
+      -- (`test/ProjectionTransportCensusTest.lean`), so the owner declines
+      -- rather than emitting a proposition the kernel refuses.
+      unless ← isDefEq alpha (← inferType rhs) do
+        declineWith (.projectionCodomain type.name fieldIndex)
       let proof ← match override?, nestedBlock? with
         | some (_, _, _, proof), _ => pure (proof.beta arguments)
         | none, some block => do

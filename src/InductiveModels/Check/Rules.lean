@@ -370,10 +370,10 @@ def checkProjection (x : Export) (structures : StructureOwners)
     (binder.value.fvarId!, binder.type)
   -- The expected right-hand side is the constructor field binder, on every
   -- route and with no predicate left to select it.  Generation states exactly
-  -- this ([`InductiveModels.addProjectionModels`]); a transported right-hand
-  -- side would require a field whose type reads the *value* of an earlier
-  -- recursive or nested occurrence field, and Lean's positivity and nesting
-  -- rules leave no spelling of one.
+  -- this ([`InductiveModels.addProjectionModels`]), and where the field's own
+  -- type and the projection's codomain are not the same type — so that only a
+  -- transport could bridge them — it declines the owner rather than stating a
+  -- rule at all ([`InductiveModels.Decline.projectionCodomain`]).
   let some rhs := fields[projection.fieldIndex]?
     | return violations.push (.declarationType projection.owner projection.iota)
   let some sourceEqLevel :=

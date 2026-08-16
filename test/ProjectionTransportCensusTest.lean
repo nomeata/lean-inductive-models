@@ -19,15 +19,22 @@ and nothing ever has to be.
 
 This is an invariant rather than a census because it cannot regress for a
 reason a maintainer would want to record.  A transported right-hand side is
-required only when field `j` depends on the *value* of an earlier field whose
-modeled projection reduces merely propositionally — that is, on a recursive or
-nested occurrence field.  Lean's positivity and nesting rules leave **no
-spelling** of a constructor field type that reads such a value;
+required only when field `j` depends on an earlier field whose modeled
+projection reduces merely propositionally, and generation no longer emits a
+rule in that case at all: the equation would relate two terms of different
+types, so the owner declines
+([`InductiveModels.Decline.projectionCodomain`], and
+`test/fixtures/inductive-models/w_dependent_field.lean` is the owner it
+declines).  Every rule that *is* emitted therefore has its field binder on the
+right, and the literal right-hand side is the only one the generator ever has
+to state.
+
+Recursion is a separate and stronger reason for the same thing on the routes
+that do reach a field definitionally: Lean's positivity and nesting rules
+leave **no spelling** of a constructor field type that reads a recursive or
+nested occurrence's *value*, and
 `test/fixtures/inductive-models/nested_value_dependency.lean` writes out every
-attempt and the kernel rejects each one.  So every field a later field can
-depend on is non-recursive, every non-recursive field is selected
-definitionally, and the literal right-hand side is the only one the generator
-ever has to state.
+attempt for the kernel to reject.
 
 There is therefore no allowlist here and no row to append.  A right-hand side
 that stops being its field binder is a defect in the route that produced it;

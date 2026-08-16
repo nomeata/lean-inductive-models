@@ -12,17 +12,33 @@ import InductiveModels.Format
 ```
 
 with the constructor's own field binder `fⱼ` on the right, on every route.
-Nothing selects that right-hand side and nothing can transport it.  A
-transported right-hand side would be needed only if field `j` depended on the
-*value* of an earlier recursive or nested occurrence field, whose modeled
-projection reconstructs it merely propositionally; Lean's positivity and
-nesting rules leave no spelling of a constructor field type that reads such a
-value at all, and
-`test/fixtures/inductive-models/nested_value_dependency.lean` writes out every
-attempt for the kernel to reject.  Every field a later field can depend on is
-therefore non-recursive, and a non-recursive field is selected definitionally.
+Nothing selects that right-hand side and nothing can transport it.
 `test/ProjectionTransportCensusTest.lean` re-derives this over the whole
 fixture corpus with no allowlist.
+
+**That contract carries one precondition rather than none.**  The left-hand
+side's type is the kernel's intrinsic projection codomain — field `j`'s type
+with each earlier field replaced by *its* modeled projection at the same major
+— so the equation is well formed exactly when each earlier projection in field
+`j`'s dependency closure reduces to its field on the modeled constructor.
+Where it does not, the two sides are terms of different types and there is no
+proposition to state; the transported right-hand side that used to bridge them
+is gone, so [`InductiveModels.addProjectionModels`] declines the owner
+([`InductiveModels.Decline.projectionCodomain`]) instead of emitting an
+equation the kernel refuses.
+
+The precondition is not vacuous, and it is not about recursion.  Lean's
+positivity and nesting rules do leave no spelling of a constructor field type
+that reads a *recursive or nested* occurrence's value —
+`test/fixtures/inductive-models/nested_value_dependency.lean` writes out every
+attempt for the kernel to reject — so every field a later field can depend on
+is non-recursive.  What that argument does not establish is that a
+non-recursive field is *selected* definitionally: the W arm reads its fields
+back through `WT.Wrec`, whose ι rule is the theorem `WT.Wrec_iota`, and at the
+untagged instantiation a child's binder names an earlier field, so a
+one-constructor owner on that arm always has a dependent projected field it
+cannot state.  `test/fixtures/inductive-models/w_dependent_field.lean` is that
+owner and its control.
 
 The predicates below still decide two things the contract does not: which
 construction a route is entitled to use, and — where the model is built from a

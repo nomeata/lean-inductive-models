@@ -55,6 +55,25 @@ inductive Decline where
   row ([`InductiveModels.Report.exempt`]) and the decline count can mean what it
   says. -/
   | basisExempt
+  /-- **A projected field whose type names an earlier field the model does not
+  select definitionally**, so the literal projection ι contract has no
+  proposition to state.
+
+  `T._model.proj_j` has the kernel's intrinsic codomain: field `j`'s type with
+  every earlier field replaced by that field's own modeled projection at the
+  major. The rule states `proj_j … (mk f⃗) = fⱼ` with the constructor's own
+  binder on the right ([`InductiveModels.addProjectionModels`]), so the two
+  sides are a well-formed equation exactly when each earlier projection in
+  field `j`'s dependency closure reduces to its field on the modeled
+  constructor. A route whose selector reconstructs that field only
+  propositionally — the W arm's is `WT.Wrec`, whose ι rule is a theorem —
+  leaves the left-hand side at `Aⱼ(proj⃗ (mk f⃗))` and the right at `Aⱼ(f⃗)`,
+  which are different types.
+
+  The transported right-hand side that used to bridge them is no longer part
+  of the contract, and `test/ProjectionTransportCensusTest.lean` holds it out,
+  so there is nothing left to emit: the owner declines. -/
+  | projectionCodomain (owner : Name) (field : Nat)
   deriving Inhabited
 
 /-- The word that reaches a report line, **under the construction's own name**.
@@ -73,6 +92,10 @@ def Decline.labelAs (what : String) : Decline → String
   | .basisExempt =>
     s!"{what} model: a basis primitive (the exemption that makes the construction \
 well-founded)"
+  | .projectionCodomain owner field =>
+    s!"{what} model shape: {owner}'s field {field} names an earlier field whose modeled \
+projection does not select it definitionally, so the literal projection rule for that \
+field would equate two terms of different types"
 
 /-- The word that reaches a report line for a **nested** declaration's model. -/
 def Decline.label : Decline → String := Decline.labelAs "nested"

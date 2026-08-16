@@ -167,6 +167,18 @@ consumed when `_tmp` is unusable. The snapshot exists only to preserve exact
 stdin/FIFO input for parser-compatible fallback; generated logical output is
 never serialized through it.
 
+`test` runs each fixture with `typeCheckGenerated` at its default, so every
+accepted island goes through `checkGeneratedIn`, and `runOne` reads the verdict
+(`Report.generatedKernelRejected`, and `Report.unreplayable` beside it). It did
+not always: for a while the suite compared counts, declines, statements,
+ordering and the round trip and dropped the kernel's answer on the floor, so a
+model Lean refused could match every other axis and be reported green. The
+fixture that found this is `w_dependent_field`, whose `WDep` is a
+one-constructor owner with a dependent ordinary field on the legacy W arm —
+its projection ι related two terms of different types, the CLI rejected it, and
+this suite did not look. If a fixture is ever expected to fail the kernel, it
+belongs in a diagnostic suite that says so, not in this table.
+
 `projectiontransportcensustest` checks the intrinsic projection contract as an
 invariant rather than as an allowlist. It generates every committed
 `test/fixtures/inductive-models` export with all generation branches enabled
