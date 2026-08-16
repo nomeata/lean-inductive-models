@@ -73,6 +73,48 @@ def makeRawFixture (corrupt? used? : Bool) (target : Name) : IO Export := do
   return { metaLine := .null, decls := selected.map fun record =>
     if corrupt? && record.names.contains target then corruptBasisRecord record else record }
 
+/-- One declaration of the W fragment, which is what this tool writes under the
+logical names it shares with the input. -/
+def wCoreRecord (name : Name) : IO EDecl := do
+  let .ok fragment := InductiveModels.parse wCoreText
+    | throw <| IO.userError "the W core fragment does not parse"
+  let some record := fragment.decls.find? (·.names.contains name)
+    | throw <| IO.userError s!"the W core fragment has no {name}"
+  return record
+
+/-- **The canonical `Iff` and `propext` are the fragment's own.**
+
+The W arm splices [`InductiveModels.wCoreText`] under the shared logical names, so
+that fragment *is* the declaration this tool writes under `Iff` and `propext`.
+The pre-install compares an input's record against `iffDecl` and `propextType`
+instead, because those are available before any fragment is parsed — which is
+sound only while the two agree. A Lean release that spelled either of them
+differently, down to the binder Lean gives an anonymous arrow argument, has to
+fail here rather than quietly stop installing any input's own copy.
+
+The third check is the other half of the contract: a record which is not the
+canonical declaration is not canonical, so it reserves its names and the owners
+in front of it decline. -/
+def runCanonicalLogicalChecks : IO (Bool × Bool × Bool) := do
+  let fragmentIff ← wCoreRecord `Iff
+  let fragmentPropext ← wCoreRecord `propext
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<basis-validation-logical>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let (result, _) ← Core.CoreM.toIO (MetaM.run' do
+    let canonicalIff ← isCanonicalInductiveRecord `Iff iffDecl fragmentIff
+    let noncanonicalIff ←
+      isCanonicalInductiveRecord `Iff iffDecl (corruptBasisRecord fragmentIff)
+    let _ ← addInductiveRecord eqDecl
+    let _ ← addInductiveRecord iffDecl
+    let expected ← propextType `Eq
+    let canonicalPropext ← match fragmentPropext with
+      | .ax _ [] type _ => isDefEq type expected
+      | _ => pure false
+    return (canonicalIff, canonicalPropext, !noncanonicalIff)) context { env }
+  return result
+
 def runRaw (input : Export) : IO (Array EDecl × Report) := do
   let env ← importModules #[] {}
   let context : Core.Context :=
@@ -135,6 +177,11 @@ def main : IO UInt32 := do
     basisNames.all fun target => !exactUsedReport.declined.any (·.1 == target)
   state := state.check "canonical consumed basis permits generation" <|
     exactUsedReport.generated.any (·.1 == `BasisConsumer)
+
+  let (canonicalIff, canonicalPropext, refusesNoncanonicalIff) ← runCanonicalLogicalChecks
+  state := state.check "the canonical Iff is the W fragment's own declaration" canonicalIff
+  state := state.check "the canonical propext is the W fragment's own statement" canonicalPropext
+  state := state.check "a noncanonical Iff record is not canonical" refusesNoncanonicalIff
 
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   IO.println s!"basis validation: {state.passed} passed, {state.failed.size} failed"

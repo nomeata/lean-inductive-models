@@ -1735,7 +1735,13 @@ They form one readiness class:
 `ensureWCore` refuses to splice any one of these when the input reserves it.
 They form a separate atomic readiness class so a failed W construction reports
 the complete Iff/propext prerequisite rather than conflating it with the
-quotient/choice support used by non-W routes. `w_late_iff` pins that distinction. -/
+quotient/choice support used by non-W routes.
+
+The class is only ever reached by an input whose own `Iff` or `propext` is not
+the canonical one: [`InductiveModels.installInputCanonicalBasis`] installs the
+canonical pair before the stream is consumed, so a reserved name that is still
+uninstalled here is a record this tool would not have written. `w_late_iff`
+declares Lean's own and its `LateW` therefore models in front of it. -/
 /-- [`InductiveModels.primReady`]'s question, asked of quotient/choice support after a
 construction has actually encountered one of those names. It is not folded
 into `primReady`: most simple models never use `funext` or choice. -/
@@ -2341,33 +2347,48 @@ def SourceCensus.ofSource (source : Export) : SourceCensus :=
     ({} : SourceCensus.Builder)).freeze
 
 /-- **The axioms this tool writes at a fixed canonical statement**, with the
-statement builders the input's own declaration is compared against. These are
-the same two builders [`InductiveModels.ensureFunext`] and
-[`InductiveModels.ensureChoice`] use, so an input axiom accepted here is exactly
-one those two would have accepted where it stands. -/
-def canonicalSpliceAxioms : List (Name × (Level → MetaM Expr)) :=
-  [(`Quot.sound, fun level => quotSoundType `Eq level),
-   (`Classical.choice, fun level => pure (choiceType level))]
+statement builders the input's own declaration is compared against, and the
+universe arity each statement is stated at. The first two builders are the
+ones [`InductiveModels.ensureFunext`] and [`InductiveModels.ensureChoice`] use, so
+an input axiom accepted here is exactly one those two would have accepted
+where it stands. `propext` is the W fragment's, and the fragment does not
+compare an input's own against anything — it simply keeps it. Requiring Lean's
+statement here is therefore strictly narrower than what the splice accepts,
+which is the direction this pass may err in: it never installs a record the
+fragment would have refused. -/
+def canonicalSpliceAxioms : List (Name × (List Name → MetaM Expr)) :=
+  [(`Quot.sound, fun levelParams => match levelParams with
+      | [u] => quotSoundType `Eq (.param u)
+      | _ => throwError "Quot.sound is stated at one universe parameter"),
+   (`Classical.choice, fun levelParams => match levelParams with
+      | [u] => pure (choiceType (.param u))
+      | _ => throwError "Classical.choice is stated at one universe parameter"),
+   (`propext, fun levelParams => match levelParams with
+      | [] => propextType `Eq
+      | _ => throwError "propext is stated at no universe parameter")]
 
 /-- **The input's own copies of the declarations this tool writes, installed
 before its stream is consumed.**
 
 Generation writes a small fixed set of declarations of its own: the four
-basis inductives, `Nonempty`, the kernel quotient, `Quot.sound` and
-`Classical.choice`. It splices the one it needs whenever the input declares
+basis inductives, `Nonempty`, `Iff`, the kernel quotient, `Quot.sound`,
+`Classical.choice` and `propext`. It splices the one it needs whenever the
+input declares
 none. When the input declares one *later* in the stream, the splice and the
 input's own replay would bind the same name twice and the kernel binds a
 constant once — so every owner standing in front of that record declined at
 `prim model name taken`, or waited for a prerequisite that never arrived in
 time, purely because of where the record physically sits. `arm_f_zip`'s
-`FTwo` and `prim_late_eq`'s `Cnt` are the smallest instances.
+`FTwo` and `prim_late_eq`'s `Cnt` are the smallest instances; the W arm's
+class is `w_late_iff`'s `LateW`, and the published Arena's `grind-ring-5`
+declares `Lean.Syntax` at record 248 with `Iff` at 315 and `propext` at 375.
 
 What makes the second copy redundant rather than merely inconvenient is that
 the input's record is required to be *the same declaration*:
 [`InductiveModels.validateBasisOwner`]'s comparison for an inductive — byte-identical
 to the declaration this kernel mints, in every field the export carries —
 [`InductiveModels.installedQuotRecord`]'s for the quotient's four records, and
-`ensureFunext`/`ensureChoice`'s own statement check for the two axioms. A
+`ensureFunext`/`ensureChoice`'s own statement check for the axioms. A
 record which does not pass is left alone: it still reserves its names, and
 the owners in front of it still decline.
 
@@ -2378,8 +2399,10 @@ records of one kernel quotient bundle already do
 not an ordering of the output, and it is confined to declarations this tool
 would otherwise have written itself.
 
-`read` is the raw-record reader for the stream about to be consumed; only the
-at most eleven ordinals the census already knows are read. -/
+`read` is the raw-record reader for the stream about to be consumed; the only
+ordinals read are the ones the census already knows for these fixed names, at
+most one per canonical declaration, and none at all for a name the input does
+not declare. -/
 structure CanonicalBasisInstall where
   /-- The replay environment with the accepted declarations already in it. -/
   env : Environment
@@ -2503,14 +2526,16 @@ def installInputCanonicalBasis (env0 : Environment) (census : SourceCensus)
         continue
     let .ax axiomName levelParams type isUnsafe := record | continue
     unless axiomName == name && !isUnsafe do continue
-    let [level] := levelParams | continue
-    -- The statements name `Eq`, `Quot` and `Nonempty`, so they can only be
-    -- read once those are installed; an input which does not supply them
-    -- canonically simply keeps its axiom to itself.
+    -- The statements name `Eq`, `Quot`, `Nonempty` and `Iff`, so they can only
+    -- be read — and the input's own compared against them — once those are
+    -- installed; an input which does not supply them canonically simply keeps
+    -- its axiom to itself.
     setEnv env
-    let expected? ← try pure (some (← statement (.param level))) catch _ => pure none
-    let some expected := expected? | continue
-    unless ← isDefEq type expected do continue
+    let canonical? ← try
+        let expected ← statement levelParams
+        pure (some (← isDefEq type expected))
+      catch _ => pure none
+    unless canonical? == some true do continue
     match env.addDeclCore 0
         (.axiomDecl { name, levelParams, type, isUnsafe }) none false with
     | .ok next =>

@@ -560,22 +560,73 @@ def choiceDecl : Declaration :=
   .axiomDecl { name := `Classical.choice, levelParams := [`u]
                type := choiceType (.param `u), isUnsafe := false }
 
+/-- **The binder Lean gives the argument of a non-dependent function type.**
+
+`a✝`, whose macro scopes serialize as `a._@._internal._hyg.0`. It is not a
+choice this tool gets to make: `Iff.intro`'s two fields *are* function types,
+so a canonical `Iff` which named those binders anything else would not be the
+declaration Lean's own export carries, and the comparison below is a byte
+comparison. `basisvalidationtest` pins the canonical record against the
+fragment the W arm actually splices, so a Lean release that spelled this
+differently fails there rather than silently declining every W target. -/
+def anonymousArrowBinder : Name :=
+  .num (.str (.str (.str (.str .anonymous "a") "_@") "_internal") "_hyg") 0
+
+/-- **Lean's `Iff`**, as `Init/Core.lean` declares it:
+`structure Iff (a b : Prop) : Prop where intro :: mp : a → b; mpr : b → a`.
+
+**It is not a basis primitive** and, like `Nonempty`, it does not need to be:
+it is a non-recursive, small-eliminating `Prop`, so an input that declares one
+is modelled like anything else. It is here because it is the only inductive in
+the exact logical interface the W fragment shares with the input
+([`InductiveModels.wCoreShared`]): `propext`'s statement names it, and standard-axiom
+recognition keys on `propext`'s exact name, so the fragment cannot rename
+either of them. -/
+def iffDecl : Declaration :=
+  let prop : Expr := .sort .zero
+  let arrow := fun (domain codomain : Expr) =>
+    Expr.forallE anonymousArrowBinder domain codomain .default
+  let iff := fun (a b : Expr) => mkAppN (.const `Iff []) #[a, b]
+  .inductDecl [] 2
+    [{ name := `Iff, type := .forallE `a prop (.forallE `b prop prop .default) .default,
+       ctors := [{ name := `Iff.intro,
+                   type := .forallE `a prop
+                     (.forallE `b prop
+                       (.forallE `mp (arrow (.bvar 1) (.bvar 1))
+                         (.forallE `mpr (arrow (.bvar 1) (.bvar 3))
+                           (iff (.bvar 3) (.bvar 2)) .default)
+                         .default)
+                       .implicit)
+                     .implicit }] }] false
+
+/-- `propext`'s statement, as `Init/Core.lean` declares it:
+`{a b : Prop} → Iff a b → Eq a b`. Stated at the `Eq` the caller names, the
+way [`InductiveModels.quotSoundType`] and [`InductiveModels.funextType`] are, and
+compared against the input's own with `isDefEq`. -/
+def propextType (eqN : Name) : MetaM Expr := do
+  let prop : Expr := .sort .zero
+  withLocalDecl `a .implicit prop fun a =>
+    withLocalDecl `b .implicit prop fun b =>
+      withLocalDeclD `h (mkAppN (.const `Iff []) #[a, b]) fun h =>
+        mkForallFVars #[a, b, h] (mkAppN (.const eqN [.succ .zero]) #[prop, a, b])
+
 /-- **The inductive declarations this tool writes at a fixed canonical shape.**
 
 Exactly the roots for which generation holds a `Declaration` of its own and
 splices it when the input declares none: the four of
-[`InductiveModels.inductiveBasis`], and `Nonempty`, which is not a basis primitive
+[`InductiveModels.inductiveBasis`]; `Nonempty`, which is not a basis primitive
 but is `Classical.choice`'s own domain and is spliced by the graph arm on the
-same terms. A name outside this list belongs to the input alone — there is no
-declaration to compare an input record against, so nothing may be written
-under it.
+same terms; and `Iff`, which is `propext`'s own domain and which the W
+fragment splices on those same terms. A name outside this list belongs to the
+input alone — there is no declaration to compare an input record against, so
+nothing may be written under it.
 
 The declaration and the root travel together because the comparison this list
 exists for is between a *declaration* and an input record, not between two
 names. -/
 def canonicalSpliceInductives : List (Name × Declaration) :=
   [(`Eq, eqDecl), (`Nat, natDecl), (`PUnit, punitDecl),
-   (`PSigma', psigmaPrimeDecl), (`Nonempty, nonemptyDecl)]
+   (`PSigma', psigmaPrimeDecl), (`Nonempty, nonemptyDecl), (`Iff, iffDecl)]
 
 def ensurePUnit (reserved : Std.HashSet Name) : GenM (Array Declaration) :=
   ensurePrim `PUnit [`PUnit, `PUnit.unit, `PUnit.rec] punitDecl checkPUnit reserved
