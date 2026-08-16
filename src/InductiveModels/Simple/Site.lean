@@ -581,7 +581,7 @@ tuple tower pads")
   -- fired — and a `Prop` owner is asked for no data projection in the first
   -- place ([`InductiveModels.eligibleProjectionFieldsM`]'s `ownerIsProp` gate),
   -- so there is nothing there for this route to retain.
-  let armS ← planIndexedStoreRoute
+  let armS ← planIndexedStoreRoute tname
     ((route matches PrimRoute.bare) && nc == 1 && !isRec && ni > 0 && !armF)
     np memberTy exportCtors w
 
@@ -617,42 +617,49 @@ tuple tower pads")
   -- cannot express, and a declaration it sends to the tower is one W would
   -- overcharge.
   --
-  -- Two further conditions on this side of the split, and neither is a shape
-  -- the arm silently hands back:
+  -- **What is *not* part of that decision** are the two conditions that turn
+  -- `armW` off below. Neither is a statement about the shape: they are gaps in
+  -- the arm as it stands, and [`InductiveModels.primIsoWithInterface`] reports
+  -- a declaration they stop as `.shapeUnsupported .incomplete`, naming the
+  -- guard, before anything is installed. That verdict is the whole point of the
+  -- separation — "no construction represents this" and "the construction that
+  -- owns this is short a piece" are different facts, and the tuple tower must
+  -- never be the place either of them is discovered.
   --
-  -- * **`isRec`.** A non-recursive declaration has no branching to be stopped
-  --   by, so it is not in this class at all.
   -- * **the internal carrier is `Type u`.** `WT.W.{u,w}` fixes `A` and `B'`
   --   at `Type u`. Ordinarily the public carrier already has that shape; at a
   --   never-zero carrier with no syntactic predecessor the arm runs the core
   --   at `Type` and stores that low carrier in a `PSigma'` whose second
   --   component is the derived lift of `True`, landing at the exact public
   --   `Sort w` with no cumulative definition conversion assumed. Where
-  --   *neither* is available the chosen construction cannot deliver, and
-  --   [`InductiveModels.primArmW`] says so and fails there — it is not routed
-  --   on to the tower, which cannot express the shape either and would decline
-  --   in W's name.
+  --   neither is available the core has no level to be written at.
+  -- * **`labelFactored`.** The core is generic in `K`, `B' : K → Type u` and
+  --   `tg : A → K`, and the arm runs it at **two** instantiations of one
+  --   construction. At `K := Nat`, `tg := PSigma'.fst` the branch type is a
+  --   function of the *tag* and cannot see the label's data, which is
+  --   [`InductiveModels.tagFactored`]; at `K := A`, `tg := id` it sees all of
+  --   it and only an earlier *recursive* field is out of reach, which is
+  --   [`InductiveModels.labelFactored`]. `tagFactored` picks the column — the
+  --   tagged instantiation takes `instDecidableEqNat` and stays at
+  --   `[propext, Quot.sound]`, the untagged one takes `WT.decEqAll` and pays
+  --   `Classical.choice`.
   --
-  -- **`labelFactored` is an assertion here and not a conjunct.** The core is
-  -- generic in `K`, `B' : K → Type u` and `tg : A → K`, and the arm runs it at
-  -- **two** instantiations of one construction. At `K := Nat`,
-  -- `tg := PSigma'.fst` the branch type is a function of the *tag* and cannot
-  -- see the label's data, which is [`InductiveModels.tagFactored`]; at
-  -- `K := A`, `tg := id` it sees all of it and only an earlier *recursive*
-  -- field is out of reach, which is [`InductiveModels.labelFactored`].
-  -- `tagFactored` still picks the column — the tagged instantiation takes
-  -- `instDecidableEqNat` and stays at `[propext, Quot.sound]`, the untagged one
-  -- takes `WT.decEqAll` and pays `Classical.choice` — but `labelFactored`'s
-  -- refusal class is **empty** for a kernel-accepted plain inductive: a
-  -- recursive field's binder type can only name an earlier recursive field by
-  -- applying a former to a value of the type being declared, which is the
-  -- shape Lean's positivity and nesting rules leave no spelling of at all
-  -- (`Projection.lean`'s argument, written out for the kernel to reject in
-  -- `test/fixtures/inductive-models/nested_value_dependency.lean`). As a
-  -- dispatch conjunct it therefore never fired, and a false answer would have
-  -- routed the declaration silently to the tuple tower, which declines it in
-  -- W's own words. Stated as an assertion, a false answer is what it actually
-  -- is: this construction's invariant broken, reported as such.
+  --   **It is not the dead guard it reads as, and the reason is worth
+  --   recording.** Its *semantic* content — a recursive field's binder type
+  --   naming an earlier recursive field — has an empty refusal class for a
+  --   kernel-accepted plain inductive: the binder would have to apply a type
+  --   former to a value of the type being declared, which Lean's positivity and
+  --   nesting rules leave no spelling of (`Projection.lean`'s argument, written
+  --   out for the kernel to reject in
+  --   `test/fixtures/inductive-models/nested_value_dependency.lean`). But the
+  --   test is `mentionsAny` on the field's domain **as written**, and that is
+  --   deliberate: [`InductiveModels.wShapeOf`] splits the two towers by exactly
+  --   the same written-domain test, so a field whose owner mention βζ discards
+  --   is a *branch* to the arm and must be one here too. Such a field makes
+  --   this answer `false` on a declaration the kernel accepts, and correctly:
+  --   arm W's own tower check refuses it a few lines later. So it is a live
+  --   guard on an over-approximated question, not an invariant — which is why
+  --   it stays a conjunct and is reported as `incomplete` rather than asserted.
   --
   -- **`!armE` is part of the decision and not part of the shape.** A branching
   -- declaration with no base constructor is in the W class by every question
@@ -666,15 +673,10 @@ tuple tower pads")
   -- happen to test in.
   let wTagged := tagFactored tname np exportCtors
   let wShapeEligible :=
-    (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear && !armE
-  if wShapeEligible && !labelFactored tname np exportCtors then
-    badShape s!"internal: {tname} reached the W construction with a recursive field whose \
-binder type names an earlier recursive field. No kernel-accepted plain inductive can spell \
-that — the binder would have to apply a type former to a value of {tname} while {tname} is \
-still being declared — so this is a broken construction invariant, not a shape the route \
-declines"
+    (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear && !armE &&
+    labelFactored tname np exportCtors
   let wPlan ← wCarrierPlan wShapeEligible w
-  let armW := wShapeEligible
+  let armW := wShapeEligible && (w.normalize.dec.isSome || wPlan.lifted)
   let wW := wPlan.coreLevel
   -- Arm W's **internal** names, guarded exactly like arm C's and arm G's, and
   -- only when the arm is taken.

@@ -179,24 +179,29 @@ Wrapping it in a `Prop`-valued index equation adds nothing to that level
 (`max ℓ 0` is `ℓ`), so the whole carrier lands at exactly `Sort w` precisely
 when the tower does.
 
-**A refusal here is a hard failure and not a decline, exactly as
-[`InductiveModels.planDirectTightRoute`]'s is.** The route is reached only
-after arm F has been ruled out, which means the constructor has a data field
-the conclusion's index vector does not carry; the model must therefore store
-it, and a maybe-zero carrier that cannot hold it has no model at all — the
-Church encoding underneath remembers inhabitation, and the intrinsic
-projection every one-constructor owner is asked for would state an equation
-the kernel refuses. Saying so with the levels named is the whole difference
-between "this construction does not deliver" and a rejected island. -/
-def planIndexedStoreRoute (eligible : Bool) (np : Nat) (memberTy : Expr)
+**A tower that misses the carrier's sort is `incomplete` and not
+`outOfScope`, exactly as [`InductiveModels.planDirectTightRoute`]'s is.** The
+route is reached only after arm F has been ruled out, which means the
+constructor has a data field the conclusion's index vector does not carry; the
+model must therefore store it, and the Church encoding underneath — which
+remembers only inhabitation — cannot, so the intrinsic projection every
+one-constructor owner is asked for would state an equation the kernel refuses.
+Nothing about the shape is out of bounds; the arm is short the pad the
+never-zero tuple tower has, and the message names both levels. Settled before
+anything is spliced, so the owner passes through unchanged.
+
+Zero fields is a different answer: every non-proof field is then vacuously one
+of the conclusion's indices, so the kernel minted the large eliminator and arm
+F fired. Reaching this with no fields is a route-classification fault. -/
+def planIndexedStoreRoute (tname : Name) (eligible : Bool) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (w : Level) : GenM Bool := do
   unless eligible do return false
   let (constructorName, constructorType) := exportCtors[0]!
   let nf := numForalls constructorType - np
   unless nf >= 1 do
-    badShape s!"{constructorName} has no fields, so its owner's every non-proof field is \
-vacuously one of the conclusion's indices and arm F, not this route, is the one that \
-models it"
+    badShape s!"internal: {constructorName} has no fields, so every non-proof field of \
+{tname} is vacuously one of the conclusion's indices and arm F, not the stored-index \
+route, is the one that models it"
   forallBoundedTelescope memberTy (some np) fun ps _ => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
@@ -204,9 +209,11 @@ models it"
       let towerLevel :=
         if nf == 1 then fieldLevels[0]! else (fieldLevels.foldl mkLevelMax' .zero).normalize
       unless ← isLevelDefEq towerLevel w do
-        badShape s!"{constructorName}'s field tower inhabits Sort {towerLevel}, not the \
-carrier's Sort {w}, so the model cannot store the data field the conclusion's index vector \
-does not carry, and no route retains it"
+        declineWith (.shapeUnsupported tname .incomplete
+          s!"{constructorName}'s field tower inhabits Sort {towerLevel} while the carrier \
+inhabits Sort {w}, so the stored-index arm cannot hold the data field the conclusion's \
+index vector does not carry, and the maybe-zero route has no pad for the level gap the \
+never-zero tuple tower pads")
       return true
 
 /-- Install tight-pair support and emit the complete exact-sort model branch.

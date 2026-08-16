@@ -227,7 +227,14 @@ no eligible one-constructor record, and a route that starts giving one of them
 a projection has to be looked at rather than absorbed.  `prim_shape_declines`
 is a zero of the other kind: its four one-constructor owners are exactly the
 shapes that decline, and its only model is a two-constructor enumeration, so a
-projection appearing there would mean one of the four had started modelling. -/
+projection appearing there would mean one of the four had started modelling.
+
+`mutual_one_layer_boundary` is 7 and not 18 because its only consumer of the W
+core was an index erasure with no base constructor: arm E models that skeleton
+by the lift of `⊥`, so the `_wcore` fragment is not spliced there at all and
+the eleven projection iotas its own records carried are gone with it. The
+fixture's public interfaces are unchanged; what left is a fragment it no longer
+needs. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 21),
     ("decline_no_eq", 11), ("default_ctor_iota", 0), ("degenerate_graph", 1),
@@ -242,7 +249,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("maybe_zero_projection", 8), ("maybe_zero_recursive", 0), ("mutual_index", 6),
     ("mutual_keying", 2),
     ("mutual_nonrec", 2), ("mutual_odd_shapes", 15),
-    ("mutual_one_layer_boundary", 18), ("mutual_prop", 1), ("mutual_shapes", 18),
+    ("mutual_one_layer_boundary", 7), ("mutual_prop", 1), ("mutual_shapes", 18),
     ("mutual_structure_projections", 3), ("nest_binder_cross", 23),
     ("nest_cycle_group", 13), ("nest_fam_arg", 39), ("nest_family_edges", 13),
     ("nest_index_cross", 14), ("nest_mutual_both", 13), ("nest_mutual_cycle", 11),

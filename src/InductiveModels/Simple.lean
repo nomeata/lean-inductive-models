@@ -90,10 +90,14 @@ The recursor destructs the pair, cases on the tag with `Nat.rec` — the large
 elimination the basis buys, and the reason `Nat` is in it — and then
 destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
 
-A linearly recursive declaration with **no base constructor** is empty rather
-than a degenerate case of this tower. Its carrier is the derived lift of `⊥`; each
-constructor returns its direct recursive field, and the recursor and ι theorems
-eliminate that empty value.  This is arm E below.
+A recursive declaration **every one of whose constructors has a bare recursive
+field** is empty rather than a degenerate case of this tower. Its carrier is the
+derived lift of `⊥`; each constructor returns one such field, and the recursor
+and ι theorems eliminate that empty value.  This is arm E below, and the class
+is not about linearity: a constructor with two bare recursive fields is exactly
+as unapplicable as one with a single one.  *Bare* is the boundary — a recursive
+occurrence under a binder whose domain is empty is inhabited vacuously, and
+whether a binder domain is empty is not a question the route analysis asks.
 
 * **A pad** closes a level gap. At a `dsingOk` level it is `D`
   ([`InductiveModels.dsingAt`]); at any other level — a bare parameter in the gap,
@@ -283,8 +287,14 @@ def primIsoWithInterface (tname : Name) (root : Name) (lparams : List Name) (np 
   -- could not put the core's `Type u` at the declared sort. Both are limits of
   -- the arm as it stands rather than a decision that the shape is
   -- unrepresentable, so the decline says `incomplete` and names the guard.
+  --
+  -- **`!armE` is in the test because arm E is in the chain.** A branching
+  -- declaration with no base constructor is in this class by every question
+  -- above and is *empty*; arm E models it exactly, by the lift of `⊥`, and
+  -- reaches it below. Leaving `armE` out here declined six of `prim_w`'s
+  -- occupants at the shape they are modelled at.
   if site.route matches PrimRoute.type then
-    if site.ni == 0 && site.isRec && !site.erasureLinear && !site.armW then
+    if site.ni == 0 && site.isRec && !site.erasureLinear && !site.armE && !site.armW then
       declineWith (.shapeUnsupported tname .incomplete
         s!"a non-indexed recursive declaration at a never-zero sort whose recursion is \
 not linear, so the tuple tower cannot hold it and arm W is the only arm left — and arm \

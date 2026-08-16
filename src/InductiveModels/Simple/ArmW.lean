@@ -73,22 +73,6 @@ def primArmW (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- projection, or the identity) and `DecidableEq K`. `D` and `A` are
   -- literally the same term.
   unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
-  -- **The carrier level, asked here because this is the arm that must deliver
-  -- it.** The dispatcher chose W on the shape question alone
-  -- ([`InductiveModels.mkPrimSite`]'s `wShapeEligible`), which is the honest
-  -- split: the tuple tower cannot express a branching or infinitary spine at
-  -- *any* level, so there is nowhere to route this declaration on to. Either
-  -- the public `Sort w` has a syntactic predecessor, and the core runs at it
-  -- directly, or `max 1 w ≡ w` and the plan runs the core at `Type` inside the
-  -- exact-sort `PSigma'`. Where neither holds `WT.W.{u,w}`'s `A` and `B'`
-  -- cannot be written at all, and this arm says so rather than handing the
-  -- shape to a construction that would decline it in W's name.
-  unless site.w.normalize.dec.isSome || wPlan.lifted do
-    badShape s!"{tname}'s carrier inhabits Sort {site.w}, which has no syntactic predecessor \
-and is not definitionally `max 1` of itself, so the W core's `A` and `B'` — which the core \
-fixes at `Type u` — have no level to be written at; the branching or infinitary \
-recursion this declaration has is outside the tuple tower at every level, so there is no \
-other construction for it"
   for n in [wDN, wTelN, wBN, wAN, wTgN, wFN] do taken n
 
   -- **The level question, before anything is spliced.** Both towers are
