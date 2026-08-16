@@ -85,7 +85,9 @@ jobs:
           # thread"; a cap high enough to let it start measures nothing.
           # RSS is the quantity of interest and the runner's own 16 GiB, with
           # the job timeout, is what bounds it here. scripts/ci-mathlib.sh
-          # carries the enforced per-phase budgets, as cgroup memory limits.
+          # carries per-phase budgets, which it measures and compares rather
+          # than imposes -- the runner already imposes a ceiling; what a
+          # budget adds is naming the phase that grew.
           PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
             python3 -m py_compile test/scripts/check_arena_corpus.py
           PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_arena_corpus_runner.py

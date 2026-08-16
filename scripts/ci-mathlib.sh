@@ -109,21 +109,49 @@ cleanup_tree() {
 # Every large process tree has an exact memory budget. Phases are serialized,
 # so the runner only has to hold the largest one at a time.
 #
-# These budgets bound RESIDENT memory. They used to be `ulimit -v` (RLIMIT_AS)
-# ceilings, which only ever proxied for that, and the v4.33.0 toolchain ended
-# even the proxy: a v4.33.0 `lean` frontend reserves about 12.8 GiB of virtual
-# address space at startup -- eleven-plus 1 GiB anonymous allocator arenas --
-# while its peak RSS is unchanged at roughly 2.0 GiB. An RLIMIT_AS small
-# enough to catch a runaway now aborts every `lean` at startup with "failed to
-# create thread", and one large enough to let `lean` start says nothing about
-# memory at all. `MIMALLOC_ARENA_RESERVE` does not change the reservation.
+# These budgets bound RESIDENT memory, and they are *observed and compared*,
+# not imposed: each phase runs under `TIME_BIN -v` and its reported peak RSS is
+# checked against the number below, failing the run when it is over. Nothing
+# here tries to be the thing that stops a runaway. The environment this runs in
+# -- a hosted runner, or any sandbox a maintainer reproduces it in -- already
+# has a hard memory ceiling and already kills a process tree that crosses it.
+# What that ceiling does not do is say *which phase* grew or by how much, and
+# an opaque OOM kill is a much worse bug report than "generate peak RSS
+# 12.40 GiB of 12.00 GiB budget". Regression detection is the whole job here.
 #
-# A cgroup v2 `memory.max` is the honest instrument. It accounts page cache as
-# well as anonymous memory, but the kernel *reclaims* cache under pressure and
-# only OOM-kills on genuine anonymous growth, so the ~5.9 GB output sibling the
-# generate phase streams does not trip a budget while a real leak does. It is
-# also the mechanism the host itself uses to kill oversized runs, so a phase is
-# tested against the real constraint rather than a proxy for it.
+# This deliberately replaced a three-way search for something that could
+# enforce the budgets -- a per-user `systemd-run --scope`, a `sudo` system
+# scope dropping back to the calling user, then this comparison as a fallback.
+# Every branch of it existed to re-impose a limit the environment imposes
+# anyway, and the branch that actually applied varied by machine, so the same
+# script measured different things in different places. One mechanism that
+# behaves identically everywhere is worth more than three that do not.
+#
+# Two honest limits of the comparison, which is why the budgets are set with
+# room rather than at the observed peak:
+#
+#   * `TIME_BIN -v` reports the largest single process in the tree, not the
+#     tree's sum. The build phases fan out into many `lean` children under
+#     Lake, so a build tree that sums past 6 GiB reports whichever child was
+#     biggest. Only the single-worker phases -- export, generate, check-input
+#     -- are measured by a number that means exactly what the budget says.
+#   * It is after the fact. A true runaway takes the runner down first and the
+#     comparison never runs; the job then fails as an OOM kill rather than as a
+#     budget verdict. That is the environment doing its job, and it is the
+#     failure mode this code is explicitly not trying to own.
+#
+# What it does catch, reliably and by name, is the regression that matters in
+# practice: a change that pushes a phase from under its budget to over it while
+# still fitting in the runner.
+#
+# It used to be `ulimit -v` (RLIMIT_AS), which only ever proxied for resident
+# memory, and the v4.33.0 toolchain ended even the proxy: a v4.33.0 `lean`
+# frontend reserves about 12.8 GiB of virtual address space at startup --
+# eleven-plus 1 GiB anonymous allocator arenas -- while its peak RSS is
+# unchanged at roughly 2.0 GiB. An RLIMIT_AS small enough to catch a runaway
+# aborts every `lean` at startup with "failed to create thread", and one large
+# enough to let `lean` start says nothing about memory at all.
+# `MIMALLOC_ARENA_RESERVE` does not change the reservation.
 #
 # Measured peak RSS against the pinned corpus, in phase order, from one
 # end-to-end run of this harness. build-generator is quoted from a cold build
@@ -158,114 +186,7 @@ cleanup_tree() {
 # compact certificates retained across the whole stream may grow into. See the
 # generate phase below for what does and does not influence them.
 
-# Pick the strongest memory-limiting mechanism this runner actually supports,
-# once, by running each candidate for real. Nothing is assumed available:
-#
-#   user-scope    `systemd-run --user --scope`. The payload is a child of this
-#                 shell, so environment, working directory, file descriptors
-#                 and namespaces are inherited unchanged. Preferred.
-#   system-scope  `sudo systemd-run --scope`, dropping straight back to the
-#                 calling user with setpriv and re-applying this shell's
-#                 environment. Hosted runners have passwordless sudo and a
-#                 system manager but often no per-user manager, so this is
-#                 usually the one that applies there.
-#   measure       No usable cgroup. Phases run unbudgeted and their peak RSS is
-#                 compared against the budget afterwards. That cannot prevent a
-#                 runaway, but it still fails the job on one.
-#
-# The peak-RSS comparison runs under every mechanism, so the budget is always
-# reported even when the kernel is also enforcing it. `TIME_BIN -v` reports the
-# largest single process in the tree rather than the tree's sum; the cgroup is
-# the accurate accountant and this is the backstop.
-#
-# `measure` is a weak backstop and should be read as one. Two ways it passes a
-# phase the cgroup would have killed:
-#
-#   * It measures the largest single process, not the tree. The build phases
-#     fan out into many `lean` children under Lake, so a tree that sums past
-#     6 GiB reports whichever child was biggest. Only the single-worker phases
-#     -- export, generate, check-input -- are measured by a number that means
-#     what the budget says.
-#   * It is after the fact. A runaway takes the whole runner down first; the
-#     comparison never runs and the job fails as an OOM kill or a lost runner,
-#     not as a budget verdict.
-#
-# The probes above decide which one applies, so this is not a switch to flip.
-# On a GitHub-hosted Ubuntu runner the expected outcome is `system-scope`: no
-# per-user manager for the `runner` user, but a system manager and passwordless
-# sudo, which is what `run_system_scope` needs. If a runner ever reports
-# `measure` in the job log, the budgets on that run were observations and not
-# limits, and the log says so on the line above.
-LIMIT_MECHANISM=measure
-SCOPE_ENV="$TMP_DIR/scope-env"
-
-run_user_scope() {
-  local limit_kib="$1"
-  shift
-  systemd-run --user --scope --quiet --collect \
-    -p MemoryMax="${limit_kib}K" -p MemorySwapMax=0 -- "$@"
-}
-
-run_system_scope() {
-  local limit_kib="$1"
-  shift
-  # `sudo` resets the environment and the scope would otherwise run as root.
-  # Carry this shell's environment across in a NUL-delimited dump and hand the
-  # payload back to the calling user before it starts. The dump is per-caller
-  # so nothing here assumes phases never overlap.
-  local scope_env="$SCOPE_ENV.$BASHPID"
-  env -0 > "$scope_env"
-  sudo -n systemd-run --scope --quiet --collect \
-    -p MemoryMax="${limit_kib}K" -p MemorySwapMax=0 \
-    -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups \
-      bash -c '
-        dump="$1"
-        shift
-        while IFS= read -r -d "" assignment; do
-          case "$assignment" in
-            [A-Za-z_]*=*) export "$assignment" ;;
-          esac
-        done < "$dump"
-        rm -f "$dump"
-        exec "$@"' bash "$scope_env" "$@"
-}
-
-# A candidate counts as working only if the payload really ran, as the calling
-# user, with this shell's environment.
-scope_probe_ok() {
-  local runner="$1" observed
-  observed="$(
-    export CI_MATHLIB_SCOPE_PROBE=marker
-    "$runner" $((1024 * 1024)) \
-      sh -c 'printf "%s %s\n" "$(id -u)" "${CI_MATHLIB_SCOPE_PROBE:-unset}"' \
-      2>/dev/null
-  )" || return 1
-  [[ "$observed" == "$(id -u) marker" ]]
-}
-
-if command -v systemd-run >/dev/null; then
-  if scope_probe_ok run_user_scope; then
-    LIMIT_MECHANISM=user-scope
-  elif command -v setpriv >/dev/null && scope_probe_ok run_system_scope; then
-    LIMIT_MECHANISM=system-scope
-  fi
-fi
-echo "memory budgets: enforced by $LIMIT_MECHANISM"
-if [[ "$LIMIT_MECHANISM" == measure ]]; then
-  echo "memory budgets: no cgroup available; budgets are checked after each phase"
-fi
-
-run_capped() (
-  limit_kib="$1"
-  limit_label="$2"
-  shift 2
-  case "$LIMIT_MECHANISM" in
-    user-scope) run_user_scope "$limit_kib" "$@" ;;
-    system-scope) run_system_scope "$limit_kib" "$@" ;;
-    measure) exec "$@" ;;
-    *) fail "unknown memory-limit mechanism for $limit_label: $LIMIT_MECHANISM" ;;
-  esac
-)
+echo "memory budgets: measured per phase and compared after it"
 
 # This report goes to stderr, never to stdout. `run_measured` is called from
 # inside pipelines whose stdout is *data*: the export phase pipes the exporter's
@@ -298,9 +219,8 @@ report_peak_rss() {
       "the $limit_label was never checked"
   fi
   awk -v kib="$peak_kib" -v budget="$limit_kib" -v phase="$label" \
-    -v mechanism="$LIMIT_MECHANISM" \
-    'BEGIN { printf "memory: %s peak RSS %.2f GiB of %.2f GiB budget (%s)\n",
-             phase, kib / 1048576, budget / 1048576, mechanism }' >&2
+    'BEGIN { printf "memory: %s peak RSS %.2f GiB of %.2f GiB budget\n",
+             phase, kib / 1048576, budget / 1048576 }' >&2
   if ((peak_kib > limit_kib)); then
     fail "$label exceeded the $limit_label: ${peak_kib} KiB peak RSS"
   fi
@@ -326,13 +246,11 @@ run_measured() {
   shift 3
   local status=0
   if [[ "$PERF_AVAILABLE" == true ]]; then
-    run_capped "$limit_kib" "$limit_label" \
-      "$TIME_BIN" -v -o "$PERF_DIR/$label.time" \
+    "$TIME_BIN" -v -o "$PERF_DIR/$label.time" \
       perf stat -e instructions -o "$PERF_DIR/$label.perf" -- "$@" || status=$?
   else
     echo "instructions: unavailable" > "$PERF_DIR/$label.perf"
-    run_capped "$limit_kib" "$limit_label" \
-      "$TIME_BIN" -v -o "$PERF_DIR/$label.time" "$@" || status=$?
+    "$TIME_BIN" -v -o "$PERF_DIR/$label.time" "$@" || status=$?
   fi
   report_peak_rss "$limit_kib" "$limit_label" "$label" "$status"
   return "$status"
@@ -440,8 +358,8 @@ disk_census mathlib-cached
 
 rm -f "$INPUT_GZ" "$INPUT_FIFO" "$OUTPUT"
 # Everything this subshell writes to stdout becomes part of the compressed
-# export. Only the exporter may write there: diagnostics inside `run_measured`,
-# `run_capped` and `report_peak_rss` go to stderr, `cd` is given an absolute
+# export. Only the exporter may write there: diagnostics inside `run_measured`
+# and `report_peak_rss` go to stderr, `cd` is given an absolute
 # path so no CDPATH echo can reach the stream, and nothing in here may call
 # `disk_census`, whose `tee` writes to stdout by construction.
 set +e

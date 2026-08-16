@@ -37,11 +37,10 @@ is the control that exists, and `LEAN_NUM_THREADS` sizes it. Measured on a
 | `LEAN_NUM_THREADS=1` | 164.8 s | 158.1 s | 1.08x | 1.92 GiB |
 
 Peak memory is the sum of proportional set sizes over the whole process tree,
-which is what a cgroup charges; summed RSS is far larger (13.7 GiB unbounded)
+which counts a shared page once; summed RSS is far larger (13.7 GiB unbounded)
 but nearly all of that is the same mapped `.olean` pages counted once per
 reader. **4 is the bound and 1 is not**: serializing costs 4.2x wall to save
-0.5 GiB out of the 6 GiB build budget, and the budget is enforced as a cgroup
-limit, so there is nothing left for serialization to protect. The variable
+0.5 GiB out of the 6 GiB build budget, which the phase is nowhere near. The variable
 bounds the Lean runtime as a whole, so it also caps each `lean` child's own
 threads — free here, since a single `lean` frontend on the heaviest module runs
 at 1.22x CPU/wall at every setting.
@@ -314,31 +313,40 @@ is unchanged at roughly 2.0 GiB. Under a 12 GiB `ulimit -v` no module builds at
 all, aborting with `failed to create thread`; a cap high enough for `lean` to
 start no longer says anything about memory. **RSS is the quantity of interest.**
 
-The Mathlib job keeps per-phase budgets, and where the runner lets it,
-enforces them as cgroup v2 `memory.max` limits — `systemd-run --scope
--p MemoryMax=… -p MemorySwapMax=0` — rather than as address-space ceilings. `memory.max`
-accounts page cache as well as anonymous memory, but the kernel reclaims cache
-under pressure and only OOM-kills on genuine anonymous growth, so streaming the
-~5.9 GB output sibling does not trip a budget while a real leak does. The
-budgets are 6 GiB for the build and cache phases (measured peak 2.91 GiB),
-12 GiB for the Mathlib export (measured peak 7.79 GiB), and 12 GiB for the
-model worker (measured peaks 11.36 GiB generating and 8.19 GiB rechecking). Its two Lake build phases now run under the same
-`LEAN_NUM_THREADS` bound as CI, so the build budget is met by a stated ceiling
-rather than by whatever parallelism the runner happened to offer; the cache,
-export and generation phases are left unbounded, being a download and two
-single measured workers. `scripts/ci-mathlib.sh` picks the strongest mechanism the runner
-actually supports by probing each one for real — a per-user scope, a `sudo`
-system scope dropping back to the calling user, or, where no cgroup can be
-created, running unbudgeted and failing the phase afterwards on peak RSS from
-`TIME_BIN -v`. Which one applied is printed as `memory budgets: enforced by …`,
-and every phase reports its peak RSS against its budget either way. Read that
-line before trusting a budget: only the two scope mechanisms *enforce*
-anything. The `measure` fallback compares after the fact, and `TIME_BIN -v`
-reports the largest single process rather than the process tree's sum, so it
-cannot catch a build phase whose Lake children only exceed 6 GiB together, and
-a genuine runaway takes the runner down before the comparison ever runs. A
-phase whose measurement cannot be read at all is now a hard failure rather than
-a skipped check.
+The Mathlib job keeps per-phase budgets, and it **measures and compares** them
+rather than imposing them. Each phase runs under `TIME_BIN -v`; its reported
+peak RSS is printed as `memory: PHASE peak RSS … GiB of … GiB budget` and the
+run fails when it is over. The budgets are 6 GiB for the build and cache phases
+(measured peak 2.91 GiB), 12 GiB for the Mathlib export (measured peak
+7.79 GiB), and 12 GiB for the model worker (measured peaks 11.36 GiB generating
+and 8.19 GiB rechecking). Its two Lake build phases run under the same
+`LEAN_NUM_THREADS` bound as the fast jobs, so the build budget is met by a
+stated ceiling rather than by whatever parallelism the runner happened to
+offer; the cache, export and generation phases have no thread ceiling, being a
+download and two single measured workers.
+
+`scripts/ci-mathlib.sh` used to search for a mechanism that could *enforce*
+these numbers — a per-user `systemd-run --scope`, then a `sudo` system scope
+dropping back to the calling user, then measurement as a fallback — and that
+search is gone. Enforcement is not this script's job: CI runs inside a sandbox
+that already has a hard memory ceiling and already kills a tree that crosses
+it. What the ceiling cannot do is name the phase that grew, and an opaque OOM
+kill is a far worse bug report than a budget line. Worse, the branch that
+applied varied by machine, so the same script measured different things in
+different places; one mechanism that behaves identically everywhere beats three
+that do not.
+
+Read the budget lines for what they are. `TIME_BIN -v` reports the largest
+single process rather than the process tree's sum, so a build phase whose Lake
+children only exceed 6 GiB together is not caught — only the single-worker
+export, generate and check-input phases are measured by a number that means
+exactly what the budget says. And the comparison is after the fact: a genuine
+runaway takes the runner down first and the job fails as an OOM kill, not as a
+budget verdict. What the comparison does catch, by name, is the regression that
+matters in practice — a change that pushes a phase over its budget while still
+fitting in the runner. A phase whose measurement cannot be read at all is a
+hard failure rather than a skipped check: a budget satisfied by failing to
+measure is worse than no budget.
 
 The generation pass uses transactional declaration-stream named output with
 the generated-island gate disabled; a separate artifact-validation invocation uses
