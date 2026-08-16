@@ -393,6 +393,50 @@ def expectedPrim : List Row :=
     -- pays for the `Eq` and tight-pair/PUnit support records.
   , ("maybe_zero_indexed", [("MI", 15)], [])
   , ("maybe_zero_recursive", [("MRI", 15), ("MR", 6)], [])
+  -- **RED, deliberately, and the point of the file.** The two maybe-zero rows
+  -- above are multi-constructor, so nothing asks their model for a field back.
+  -- `maybe_zero_projection` is the one-constructor family beside them, which
+  -- does ask: intrinsic projections are demanded of every one-constructor
+  -- owner and of nothing else (`Driver.lean:810-817`), while the direct
+  -- field/tight routes that retain a field are gated on
+  -- `nonrecursiveOneConstructor && ni == 0` (`Simple/Site.lean:469-471`).
+  -- Either excluded conjunct — recursion, or an index — drops the owner onto
+  -- the Church/lift route, whose carrier is a subsingleton and whose recursor
+  -- eliminates only into `Prop`, and the emitted projection is then refused by
+  -- Lean's kernel. `MZOne` (direct `.identity`) and `MZProof` (arm F proper)
+  -- are the controls and model.
+  --
+  -- The counts below are what the generator produces today, so the count axis
+  -- is green and exactly one axis is red: the kernel's verdict, read at
+  -- `runOne` since `701191c`. The run aborts at the first refusal, so the
+  -- message names one of `MZSelf`, `MZData`, `MZIdx`, `MZIdx2`; the family is
+  -- the four. Whichever way the split is decided — generalise the direct
+  -- routes past `ni == 0` and `!isRec`, or declare the projection contract
+  -- inapplicable at a maybe-zero recursive owner and decline hard — this row
+  -- moves, and that is what it is here to force.
+  , ("maybe_zero_projection",
+      [("Nt", 15), ("MZProof", 6), ("MZOne", 7), ("MZData", 8), ("MZSelf", 6),
+       ("MZIdx2", 8), ("MZIdx", 6)],
+      [("Eq", "prim model: a basis primitive")])
+  -- **Green, and evidence rather than a refusal.** Arm E models a recursive
+  -- declaration with no base constructor by the lift of `⊥`, exactly, with no
+  -- axiom — and only when the recursion is *linear*, because its slot analysis
+  -- is the tuple tower's (`Simple/Site.lean:446-456`). `NbLin` is that corner
+  -- at 23 declarations. `NbBr` differs from it by one recursive field, is just
+  -- as empty, and costs 225 declarations, the whole `_wcore` fragment and
+  -- `Classical.choice`, because arm E declines to look and arm W builds a
+  -- W-type with no leaves. `NbVac` is why the general statement is "every
+  -- constructor has a **bare** recursive field" and not "no base constructor":
+  -- its child binder's domain `E0` is empty, so `NbVac` is inhabited.
+  , ("empty_no_base",
+      [("NbLin", 23), ("Nt", 6), ("NbBr", 225), ("_wcore.Subtype", 9),
+       ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
+       ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
+       ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
+       ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
+       ("_wcore.PProd", 9), ("NbInf", 21), ("E0", 2), ("NbVac", 21)],
+      [("Eq", "prim model: a basis primitive")])
   -- Lifted arm F at its minimum: one proof field and one constant result
   -- index. The latter forces the packed equation; the existing one-field
   -- direct-carrier route is index-free. At positive `u`, forgetting the
