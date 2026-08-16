@@ -1,4 +1,4 @@
-import InductiveModels.FamilyAdapterPlan
+import FamilyAdapterPlan
 
 /-!
 # Shadow derivation of generic family-adapter plans
@@ -7,6 +7,11 @@ This module reads an exact source `EDecl` and an already kernel-checked `Iso`.
 It derives the generic keyed plan and compares every public/private interface
 name with installed metadata.  It does not select a route, emit a declaration,
 or reject a model; callers retain the report only as shadow evidence.
+
+Like `FamilyAdapterPlan` below it, this module lives under `test/` and has its
+own Lake target: `Driver` reaches an observation only through the opaque
+[`InductiveModels.IslandObserver`] callback, so nothing under `src/` names
+`ShadowObservation`, `deriveShadowPlan` or `ShadowReport.observe`.
 -/
 
 open Lean Meta

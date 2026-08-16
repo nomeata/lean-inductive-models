@@ -204,12 +204,21 @@ lean_lib FamilyAdapterGeneratedFixtures where
   srcDir := "test/fixtures/inductive-models"
   roots := #[`family_adapter_generated]
 
-/-- The family-adapter construction seam. It is test-only: no module under
-`src/` imports it, `buildFamilyPrototype` has no production caller, and the
-parked experiment it belongs to emits nothing. While it sat in `src/` the
-`InductiveModels` glob compiled it into the production library regardless, so
-it is declared here instead and only `familyadapterconstructiontest` builds
-it. -/
+/-- The parked family-adapter experiment, in its three layers. All three are
+test-only: no module under `src/` imports any of them, and the experiment emits
+nothing. `Driver` reaches an observation only through the opaque
+`IslandObserver` seam, so it names no type from these modules and the shipped
+executable's object closure contains none of them. Only
+`familyadapterplantest`, `familyadaptershadowtest` and
+`familyadapterconstructiontest` build them. -/
+lean_lib FamilyAdapterPlan where
+  srcDir := "test"
+  roots := #[`FamilyAdapterPlan]
+
+lean_lib FamilyAdapterShadow where
+  srcDir := "test"
+  roots := #[`FamilyAdapterShadow]
+
 lean_lib FamilyAdapterConstruction where
   srcDir := "test"
   roots := #[`FamilyAdapterConstruction]

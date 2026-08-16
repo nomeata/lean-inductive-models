@@ -11,6 +11,15 @@ no production route selects or emits from them yet.
 The keys below carry source identities instead of array positions.  Arrays are
 used only as finite ordered collections; none of the structures imposes a
 bound on members, constructors, indices, fields, or recursive occurrences.
+
+It lives under `test/` rather than `src/` because nothing under `src/` names
+anything in it: `Driver` observes islands through the opaque
+[`InductiveModels.IslandObserver`] callback, and only
+`test/FamilyAdapterShadowTest.lean` supplies one built from this experiment.
+Kept under `src/` it was swept into the `InductiveModels` library glob, so both
+the shipped library and the executable's object closure paid for compiling it.
+Its own Lake target, `FamilyAdapterPlan`, is what the family-adapter suites
+build; see `docs/maintainers/Testing.md`.
 -/
 
 open Lean

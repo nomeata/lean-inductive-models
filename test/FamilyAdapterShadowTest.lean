@@ -1,9 +1,23 @@
 import InductiveModels.Driver
+import FamilyAdapterShadow
 
 open Lean Meta InductiveModels
 
 def shadowGeneration : Cli.Config :=
   { nested := true, mutualModels := true, simple := true, basic := true }
+
+/-- The family-adapter island observer. `Driver` fixes no observation type and
+imports nothing that defines one; this is where the parked experiment is
+plugged into [`InductiveModels.runFilterWithIslandObserver`]. -/
+def observeFamilyAdapterShadow : IslandObserver FamilyAdapter.ShadowObservation :=
+  fun source is => return (← FamilyAdapter.deriveShadowPlan source is).observe
+
+/-- Test-facing driver run that derives a shadow plan beside every generated
+island. The ordinary filter supplies no observer and derives none. -/
+def runFilterWithFamilyAdapterShadow (x : Export) (checkRecursors : Bool)
+    (generation : Cli.Config) :
+    MetaM (Array EDecl × Report × Array FamilyAdapter.ShadowObservation) :=
+  runFilterWithIslandObserver x checkRecursors generation observeFamilyAdapterShadow
 
 def readFixture (path : String) : IO Export := do
   let .ok parsed := parse (← IO.FS.readFile path)

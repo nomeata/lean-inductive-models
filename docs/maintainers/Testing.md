@@ -60,26 +60,30 @@ build_bounded() {
 }
 ```
 
-The compile-only targets — two proof oracles and one test-only library — are:
+The compile-only targets — two proof oracles and three test-only libraries — are:
 
 ```bash
 compile_only_targets=(
   FamilyAdapterConstruction
+  FamilyAdapterPlan
+  FamilyAdapterShadow
   OneLayerProjectionPrototype
   OneLayerRecursorProof
 )
 ```
 
-`FamilyAdapterConstruction` is not an oracle: it is the parked family-adapter
-construction seam, which lives in `test/FamilyAdapterConstruction.lean` and is
-declared as its own `lean_lib` rather than as a module of `InductiveModels`.
-Nothing under `src/` imports it — `buildFamilyPrototype` has no production
-caller — so charging the shipped library and the `lean-inductive-models`
-executable for compiling it bought nothing. Only
-`familyadapterconstructiontest` builds it. `Driver` still reaches
-`InductiveModels.FamilyAdapterShadow` for `FamilyAdapter.ShadowObservation`,
-`deriveShadowPlan` and `ShadowReport.observe`, so `FamilyAdapterPlan` and
-`FamilyAdapterShadow` remain library modules.
+The three `FamilyAdapter*` libraries are not oracles: they are the parked
+family-adapter experiment, which lives in `test/FamilyAdapterPlan.lean`,
+`test/FamilyAdapterShadow.lean` and `test/FamilyAdapterConstruction.lean` and is
+declared as its own `lean_lib` per layer rather than as modules of
+`InductiveModels`. Nothing under `src/` imports any of them and the experiment
+emits nothing, so charging the shipped library and the `lean-inductive-models`
+executable for compiling them bought nothing. `Driver` reaches an observation
+only through `InductiveModels.IslandObserver`, an opaque `EDecl → Iso → MetaM α`
+callback: production supplies none, and `test/FamilyAdapterShadowTest.lean`
+supplies the one that calls `deriveShadowPlan` and `ShadowReport.observe`. So
+`Driver` names no adapter type, and only `familyadapterplantest`,
+`familyadaptershadowtest` and `familyadapterconstructiontest` build these.
 
 The executable correctness targets are:
 

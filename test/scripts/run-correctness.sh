@@ -25,6 +25,8 @@ build_bounded() {
 
 compile_only_targets=(
   FamilyAdapterConstruction
+  FamilyAdapterPlan
+  FamilyAdapterShadow
   OneLayerProjectionPrototype
   OneLayerRecursorProof
 )

@@ -1,14 +1,23 @@
 # Generic family-adapter design
 
-`InductiveModels.FamilyAdapterPlan` is the source-derived representation for a
-future one-layer adapter. It replaces unary/binary, singleton, indexed, nested,
-and mutual shape cases with keyed finite arrays. `FamilyAdapterShadow` derives
-this plan from a successfully generated exact source block and its existing
+`FamilyAdapterPlan` is the source-derived representation for a future
+one-layer adapter. It replaces unary/binary, singleton, indexed, nested, and
+mutual shape cases with keyed finite arrays. `FamilyAdapterShadow` derives this
+plan from a successfully generated exact source block and its existing
 kernel-checked private `Iso`. `Driver.serialiseIso` does not use the result for
 route selection, rejection, serialized output, logs, or normal reports — so it
-derives one only when asked to observe it. `runFilterWithFamilyAdapterShadow`
-is the test-only value observer and the only entry point that asks; ordinary
-filtering derives and retains no observations.
+does not name it at all. What `Driver` offers instead is
+`InductiveModels.IslandObserver α`, an opaque `EDecl → Iso → MetaM α` callback
+threaded through generation by `runFilterWithIslandObserver`; the driver never
+inspects a result and imports no module that defines one.
+
+`test/FamilyAdapterShadowTest.lean` supplies the family-adapter observer and
+keeps the `runFilterWithFamilyAdapterShadow` name for it. It is the only caller
+that asks; ordinary filtering supplies no observer and therefore runs none.
+Because the seam is opaque, all three experiment modules live under `test/` and
+are built by their own Lake targets — `FamilyAdapterPlan`, `FamilyAdapterShadow`
+and `FamilyAdapterConstruction` — so the shipped library and the
+`lean-inductive-models` executable compile none of them.
 
 The shadow is deliberately incomplete for an exact nested block until its
 extra mimic recursors are represented as plan members. Every omitted exact
@@ -42,9 +51,9 @@ rule are omitted from `ShadowCoverage` and a keyed minor-telescope reason is
 reported; a dummy ordinal never counts as covered evidence.
 
 The plan contains no fabricated proof names. `FamilyAdapterConstruction` is a
-disabled prototype seam — test-only, and since it has no `src/` caller it is
-built from `test/FamilyAdapterConstruction.lean` by its own Lake target rather
-than compiled into the `InductiveModels` library — that now builds
+disabled prototype seam — test-only like the two layers below it, built from
+`test/FamilyAdapterConstruction.lean` by its own Lake target rather than
+compiled into the `InductiveModels` library — that now builds
 `FamilyAdapterCertificate`: private
 member maps, dependent-telescope packers, `encode`/`decode`, both round trips,
 one packed result-index equality, exact installed minor/IH associations, and

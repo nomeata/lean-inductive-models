@@ -1,4 +1,4 @@
-import InductiveModels.FamilyAdapterPlan
+import FamilyAdapterPlan
 import family_adapter_generated
 
 open Lean InductiveModels

@@ -1,4 +1,4 @@
-import InductiveModels.FamilyAdapterShadow
+import FamilyAdapterShadow
 import InductiveModels.Simple
 
 /-!
