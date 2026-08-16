@@ -205,7 +205,7 @@ Asserting the counts per directory rather than in total means a directory that
 moves, empties or disappears fails here instead of quietly making the sweep
 below smaller. -/
 def fixtureDirectories : Array (String × Nat) :=
-  #[("test/fixtures/inductive-models", 73), ("test/fixtures/lean4export", 0),
+  #[("test/fixtures/inductive-models", 75), ("test/fixtures/lean4export", 0),
     ("test/fixtures/mono", 0), ("test/fixtures/rejected", 1)]
 
 /-- Assert environment/export shape agreement over every committed fixture.
