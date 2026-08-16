@@ -476,6 +476,29 @@ def overlayChainIsland (round count : Nat) : Array EDecl :=
   (Array.range count).map fun i =>
     EDecl.ax (((`_check.overlayChain).mkNum round).mkNum i) [] (.sort .zero) false
 
+/-- Chain `repetitions` island overlays onto `base`, each prepending an island
+of `islandSize` declarations onto the accumulated prefix its predecessors left
+behind.  Only chaining reaches the accumulating side of `prependRecords`:
+re-prepending from the same base index leaves `recordPrefix` empty every time.
+
+True when every round is accepted, every chained name is declared by the final
+index, and `raw`'s local family report for `families` equals `expected` both
+after the first overlay and after the whole chain. -/
+def chainedOverlaysPreserveReport (raw : Export) (base : SyntaxIndex)
+    (families : Array Family) (expected : StatementReport)
+    (islandSize repetitions : Nat) : Bool := Id.run do
+  unless checkStatementFamiliesLocalWithIndex raw base families == expected do
+    return false
+  let mut chained := base
+  for round in [0:repetitions] do
+    match chained.prependRecords (overlayChainIsland round islandSize) with
+    | .error _ => return false
+    | .ok next => chained := next
+  for round in [0:repetitions] do
+    for declaration in overlayChainIsland round islandSize do
+      unless declaration.names.all chained.declares do return false
+  return checkStatementFamiliesLocalWithIndex raw chained families == expected
+
 /-- Chain `repetitions` island overlays onto one retained source index: every
 prepend sees the record prefix its predecessors accumulated, which is the only
 way to reach the accumulating side of `SyntaxIndex.prependRecords`.  Repeating
@@ -692,13 +715,12 @@ def checkIslandOverlays (owner : Name) (raw valid : Export) (models : Array EDec
   let retainedFamilies := retainedIndex.sourceStatementFamilies owner
   let expectedRetainedReport :=
     checkStatementFamiliesLocalWithIndex raw overlaidIndex overlaidFamilies
-  state ← state.check "repeated overlays preserve a retained large source index" <|
-    (Array.range 32).all fun _ =>
-      match retainedIndex.prependRecords models with
-      | .error _ => false
-      | .ok overlay =>
-        checkStatementFamiliesLocalWithIndex raw overlay retainedFamilies ==
-          expectedRetainedReport
+  state ← state.check "chained overlays preserve a retained large source index" <|
+    match retainedIndex.prependRecords models with
+    | .error _ => false
+    | .ok overlay =>
+      chainedOverlaysPreserveReport raw overlay retainedFamilies
+        expectedRetainedReport models.size 32
   let duplicateIsland := models.push models[0]!
   state ← state.check "island overlay rejects duplicate declaration names" <|
     match sourceIndex.prependRecords duplicateIsland with
