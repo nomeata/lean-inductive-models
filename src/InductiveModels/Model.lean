@@ -1,4 +1,5 @@
 import Lean
+import InductiveModels.EqKit
 import InductiveModels.Naming
 import InductiveModels.Plan
 
@@ -12,7 +13,12 @@ mutuality; `src/InductiveModels/Simple.lean` reduces a single inductive to the f
 basis. These are not one construction at three settings. What they share
 is the interface, `Decline`, `EqInfo`, the
 prelude splice, [`InductiveModels.Iso`], [`InductiveModels.modelTable`] and
-[`InductiveModels.addChecked`], all of which live here.
+[`InductiveModels.addChecked`], all of which live here — except `EqInfo`, which
+lives in `src/InductiveModels/EqKit.lean` and is re-exported by this module's
+import of it. It is separate because it is pure name-and-`Expr` plumbing with
+no generator in it, and `src/InductiveModels/Projection.lean` needs that much
+and nothing else; the structural checker reaches `EqInfo` through `EqKit`
+without importing this file.
 
 Given a nested declaration and its specialisation ([`InductiveModels.plan`]), this
 emits ordinary Lean declarations —
@@ -138,48 +144,6 @@ well-founded)"
 
 /-- The word that reaches a report line for a **nested** declaration's model. -/
 def Decline.label : Decline → String := Decline.labelAs "nested"
-
-/-- `Eq`, `Eq.refl` and `Eq.rec` at the arities the round trips need. The
-input's own where it has them, and Lean's spliced in where it does not — see
-[`InductiveModels.ensureEq`]. -/
-structure EqInfo where
-  eqN : Name
-  reflN : Name
-  recN : Name
-  deriving Inhabited
-
-/-- Read the three constants and check the recursor is Lean's shape:
-`Eq.rec α a motive base b h`, two parameters and one index. The error says
-*which* of them is wrong, because a reason that names where a value stopped
-rather than why is the defect class this repository has paid for most. -/
-def EqInfo.check (env : Environment) : Except String EqInfo := do
-  let eq := `Eq
-  let some (.inductInfo iv) := env.constants.find? eq | throw "it is not an inductive type"
-  unless iv.numParams == 2 && iv.numIndices == 1 && iv.ctors.length == 1 do
-    throw s!"it has {iv.numParams} parameters, {iv.numIndices} indices and \
-      {iv.ctors.length} constructors, where Lean's has 2, 1 and 1"
-  let rc := Name.str eq "rec"
-  let some (.recInfo rv) := env.constants.find? rc | throw "Eq.rec is not a recursor"
-  unless rv.numParams == 2 && rv.numMotives == 1 && rv.numMinors == 1 && rv.numIndices == 1 do
-    throw s!"Eq.rec has {rv.numParams} parameters, {rv.numMotives} motives, {rv.numMinors} \
-      minors and {rv.numIndices} indices, where Lean's has 2, 1, 1 and 1"
-  let rf := Name.str eq "refl"
-  unless env.constants.contains rf do throw "Eq.refl is not declared"
-  return { eqN := eq, reflN := rf, recN := rc }
-
-/-- `Eq.{u} α a b`. -/
-def EqInfo.mk' (e : EqInfo) (u : Level) (α a b : Expr) : Expr :=
-  mkAppN (.const e.eqN [u]) #[α, a, b]
-
-/-- `Eq.refl.{u} α a`. -/
-def EqInfo.refl' (e : EqInfo) (u : Level) (α a : Expr) : Expr :=
-  mkAppN (.const e.reflN [u]) #[α, a]
-
-/-- `Eq.rec.{v,u} α a motive base b h`. The motive sits at `Prop` wherever an
-*equation* is transported and at the eliminator's own universe wherever a
-*value* is; each caller passes `v` explicitly for that reason. -/
-def EqInfo.recAt (e : EqInfo) (v u : Level) (α a motive base b h : Expr) : Expr :=
-  mkAppN (.const e.recN [v, u]) #[α, a, motive, base, b, h]
 
 /-! ## The prelude this construction depends on
 

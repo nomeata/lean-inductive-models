@@ -1,4 +1,5 @@
-import InductiveModels.Model
+import InductiveModels.EqKit
+import InductiveModels.Format
 
 /-!
 # Intrinsic projection shapes, and the transporter their minors use

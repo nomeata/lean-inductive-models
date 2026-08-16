@@ -1,5 +1,6 @@
 import InductiveModels.Format
 import InductiveModels.Naming
+import InductiveModels.Plan
 import InductiveModels.Projection
 
 /-!

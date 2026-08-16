@@ -105,6 +105,7 @@ test/scripts/check-hard-nested-c.sh
 test/scripts/check-mathlib-result.sh
 test/scripts/check-lean4export-patch.sh
 test/scripts/check-ci-serialized-builds.sh
+test/scripts/check-checker-imports.sh
 ```
 
 Two of those targets test the built binary rather than the library: `test`
@@ -115,6 +116,19 @@ and `lake exe mainclitest` rebuild the CLI before running and cannot assert the
 CLI contract against a stale executable. Do not remove those `needs`: without
 them the CLI checks silently pass or fail against whatever binary happens to be
 on disk.
+
+`check-checker-imports.sh` needs no build at all: it reads the `import` lines
+under `src/InductiveModels/` and fails if the structural checker
+(`InductiveModels.Check`) reaches the generator — `Gen`, `Nested`, `Simple`,
+`Mutual`, `Driver` or `Model` — transitively. `README.md` claims the
+correspondence check is independent of the kernel verdict, and independence is
+a claim about reach rather than about care: a checker that can call the
+generator has to be re-argued after every change, while one that cannot import
+it is settled. The script also pins the checker's whole transitive closure to
+its declared foundation, so a *new* generator module is caught on the day it is
+imported rather than on the day someone remembers to extend the list. Adding a
+genuinely new foundation module to `Check` therefore means editing
+`allowed_closure` in that script, on purpose.
 
 The out-of-process checks — `check_arena_corpus.py`,
 `check-hard-nested-a.sh`, `check-hard-nested-c.sh` — spawn the same binary but
