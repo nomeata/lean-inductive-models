@@ -493,6 +493,31 @@ def expectedPrim : List Row :=
       , ("Foreign0", "prim model shape (out of scope): Foreign0 reaches no generation arm")
       , ("PadOne", "prim model shape (incomplete): PadOne reaches no generation arm")
       , ("PadMany", "prim model shape (incomplete): PadMany reaches no generation arm")])
+  -- **A proposition's projectable field behind a field the kernel skips.**
+  -- `infer_proj` substitutes an earlier constructor field only where the rest
+  -- of the telescope still names it, and asks for that field to be
+  -- projectable only there; so a `Prop`-valued owner can carry a *data* field
+  -- and still project a later proof field that ignores it. The intrinsic
+  -- field list then has a hole in it — field 0 absent, field 1 present — and
+  -- reading the projected field's type by substituting every earlier
+  -- projection demanded one that does not exist, aborting the run at exit 3
+  -- on a declaration the kernel accepts.
+  --
+  -- The counts are the claim: `PropSkip` (the reported shape, recursive) and
+  -- `PropSkipFlat` (the same hole with no recursion, so the row cannot be
+  -- read as being about recursion) carry six declarations each — the four of
+  -- the model plus field 1's projection and its rule. `PropDep` is the
+  -- control on the other side of the loose-occurrence test: its proof field
+  -- *names* the data field, the kernel refuses that projection, and four
+  -- declarations is the whole of its model. `PropChain` keeps the
+  -- substituting branch honest: both its fields are proofs, the second names
+  -- the first, and its codomain is stated at the first's projection.
+  -- `test/fixtures/inductive-models/prim_prop_skipped_field.lean` is the
+  -- kernel loop this grid is read off.
+  , ("prim_prop_skipped_field",
+      [("N", 15), ("PropSkip", 6), ("PropSkipFlat", 6), ("PropDep", 4),
+       ("PropChain", 8)],
+      [ ("Eq", "prim model: a basis primitive")])
   -- **The index axis**, as the explicit grid documented by
   -- `test/fixtures/inductive-models/prim_idx.lean`.
   -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
@@ -983,6 +1008,27 @@ def runOne (root : String) (a : TAcc) (r : Row)
       ([`Foreign, `Foreign0, `PadOne, `PadMany].all fun owner =>
         emittedNames.contains owner && !emittedNames.contains (Naming.modelName owner))
       "prim_shape_declines: a declined owner did not pass through unchanged"
+  if name == "prim_prop_skipped_field" then
+    -- **The hole, by name rather than by count.** Six declarations would also
+    -- be six if the generator had projected field 0 and skipped field 1, and
+    -- four would also be four if `PropDep` had lost its model instead of its
+    -- projection. What the kernel's walk says is which *index* is projectable,
+    -- so that is what is asserted.
+    let emittedNames := decls.flatMap (·.names.toArray)
+    let projected := fun (owner : Name) (fieldIndex : Nat) =>
+      emittedNames.contains (Naming.projectionName owner fieldIndex) &&
+        emittedNames.contains (Naming.projectionIotaName owner fieldIndex)
+    a := check a
+      ([`PropSkip, `PropSkipFlat].all fun owner =>
+        projected owner 1 && !emittedNames.contains (Naming.projectionName owner 0))
+      "prim_prop_skipped_field: a skipped data field's projection is present or \
+       the proof field behind it is absent"
+    a := check a
+      (!emittedNames.contains (Naming.projectionName `PropDep 0) &&
+        !emittedNames.contains (Naming.projectionName `PropDep 1))
+      "prim_prop_skipped_field: PropDep projected a field the kernel refuses"
+    a := check a (projected `PropChain 0 && projected `PropChain 1)
+      "prim_prop_skipped_field: PropChain lost a projection the kernel allows"
   -- **Exempt then declined.** The basis primitives are their own row in the
   -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a
