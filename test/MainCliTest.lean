@@ -193,7 +193,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "in-memory output-check-off bypasses the generated kernel gate" <|
     uncheckedOutput.exitCode == 0 && uncheckedOutput.stdout.isEmpty &&
       uncheckedOutput.stderr.contains "model of" &&
-      !hasDiagnostic uncheckedOutput.stderr "input route: planned-census" &&
       hasDiagnostic uncheckedOutput.stderr "output backend: compact-discard" &&
       hasDiagnostic uncheckedOutput.stderr "generated kernel checks: 0"
 
@@ -608,7 +607,7 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "generation-disabled output selects the legacy backend" <|
     generationDisabled.exitCode == 0 && generationDisabled.stdout == stdoutRun.stdout &&
       hasDiagnostic generationDisabled.stderr "output backend: legacy"
-  let fallbackCwd := s!"{scratch}/main-cli-no-spool-root"
+  let fallbackCwd := s!"{scratch}/main-cli-no-workspace-root"
   IO.FS.createDirAll fallbackCwd
   let nestedPath : System.FilePath := nested
   let binaryPath : System.FilePath := binary
@@ -618,21 +617,19 @@ def main (args : List String) : IO UInt32 := do
   let fallbackRun ← runInductiveModelsAt binaryAbsolute.toString
     ["--no-check", "--quiet", nestedAbsolute.toString] fallbackCwd
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "planned actual output creates only a cleaned input workspace" <|
+  state := state.check "actual output creates no scratch directory beside the process" <|
     fallbackRun.exitCode == 0 && sameSemanticExport fallbackRun.stdout defaults.stdout &&
       hasDiagnostic fallbackRun.stderr "output backend: declaration-stream" &&
-      hasDiagnostic fallbackRun.stderr "input route: planned-census" &&
-      (← ((fallbackCwd : System.FilePath) / "_tmp").readDir).isEmpty
-  IO.FS.removeDir ((fallbackCwd : System.FilePath) / "_tmp")
+      !(← System.FilePath.pathExists ((fallbackCwd : System.FilePath) / "_tmp")) &&
+      (← ((fallbackCwd : System.FilePath)).readDir).isEmpty
   IO.FS.removeDir fallbackCwd
   -- Actual generated output is declaration-wise, independently of whether
   -- the generated-island kernel gate is enabled.
   let observedDefault ← runInductiveModelsWithEnv binary [nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "default output selects planned declaration streaming" <|
+  state := state.check "default output selects declaration streaming off the one parse" <|
     observedDefault.exitCode == defaults.exitCode &&
       hasDiagnostic observedDefault.stderr "output backend: declaration-stream" &&
-      hasDiagnostic observedDefault.stderr "input route: planned-census" &&
       observedDefault.stderr.contains "generated kernel checks:" &&
       !hasDiagnostic observedDefault.stderr "generated kernel checks: 0" &&
       sameSemanticExport observedDefault.stdout defaults.stdout
@@ -648,17 +645,16 @@ def main (args : List String) : IO UInt32 := do
   let observedLegacy ← runInductiveModelsWithEnv binary [nested] #[
     ("LEAN_INDUCTIVE_MODELS_LEGACY_OUTPUT", some "1"),
     ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "A/B override retains input but still streams output" <|
+  state := state.check "A/B override still streams output" <|
     observedLegacy.exitCode == defaults.exitCode &&
       hasDiagnostic observedLegacy.stderr "output backend: declaration-stream" &&
-      !hasDiagnostic observedLegacy.stderr "input route: planned-census" &&
       sameSemanticExport observedLegacy.stdout defaults.stdout
   let discardCwd := s!"{scratch}/main-cli-compact-discard-root"
   IO.FS.createDirAll discardCwd
   let discarded ← runInductiveModelsAt binaryAbsolute.toString
     ["--no-output", "--no-type-check-generated", nestedAbsolute.toString] discardCwd
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "generated no-output selects compact discard without a spool root" <|
+  state := state.check "generated no-output selects compact discard without a scratch root" <|
     discarded.exitCode == defaults.exitCode && discarded.stdout.isEmpty &&
       hasDiagnostic discarded.stderr "output backend: compact-discard" &&
       !(← System.FilePath.pathExists (discardCwd / "_tmp"))
@@ -711,7 +707,6 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "generated-kernel opt-out named output streams without a gate" <|
     fullNamed.exitCode == defaults.exitCode && fullNamed.stdout.isEmpty &&
       hasDiagnostic fullNamed.stderr "output backend: declaration-stream" &&
-      hasDiagnostic fullNamed.stderr "input route: planned-census" &&
       hasDiagnostic fullNamed.stderr "generated kernel checks: 0" &&
       sameSemanticExport fullNamedText defaults.stdout
   removeIfPresent fullNamedPath
@@ -733,7 +728,7 @@ def main (args : List String) : IO UInt32 := do
   let noncanonicalDiscard ← runInductiveModelsWithEnv binary
     ["--no-output", "--no-type-check-generated", "-"]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")] (some noncanonicalInput)
-  state := state.check "noncanonical no-output input needs no raw source certificate" <|
+  state := state.check "noncanonical no-output input is accepted unchanged" <|
     noncanonicalDiscard.exitCode == defaults.exitCode && noncanonicalDiscard.stdout.isEmpty &&
       hasDiagnostic noncanonicalDiscard.stderr "output backend: compact-discard"
   let noncanonicalKernelArgs :=
@@ -741,15 +736,15 @@ def main (args : List String) : IO UInt32 := do
   let noncanonicalKernelLegacy ← runInductiveModelsLegacy binary noncanonicalKernelArgs
     (some noncanonicalInput)
   let noncanonicalKernelBefore ← System.FilePath.readDir scratch
-  let noncanonicalKernelPlanned ← runInductiveModels binary noncanonicalKernelArgs
+  let noncanonicalKernelCompact ← runInductiveModels binary noncanonicalKernelArgs
     (some noncanonicalInput)
   let noncanonicalKernelAfter ← System.FilePath.readDir scratch
-  state := state.check "planned generated checking preserves noncanonical report and exit" <|
-    noncanonicalKernelPlanned.exitCode == noncanonicalKernelLegacy.exitCode &&
-      noncanonicalKernelPlanned.stdout.isEmpty && noncanonicalKernelLegacy.stdout.isEmpty &&
-      noncanonicalKernelPlanned.stderr == noncanonicalKernelLegacy.stderr &&
-      hasDiagnostic noncanonicalKernelPlanned.stderr "generated kernel check: accepted"
-  state := state.check "noncanonical planned generation cleans its input workspace" <|
+  state := state.check "generated checking preserves noncanonical report and exit" <|
+    noncanonicalKernelCompact.exitCode == noncanonicalKernelLegacy.exitCode &&
+      noncanonicalKernelCompact.stdout.isEmpty && noncanonicalKernelLegacy.stdout.isEmpty &&
+      noncanonicalKernelCompact.stderr == noncanonicalKernelLegacy.stderr &&
+      hasDiagnostic noncanonicalKernelCompact.stderr "generated kernel check: accepted"
+  state := state.check "noncanonical generation writes nothing under the scratch root" <|
     sameDirectoryEntries noncanonicalKernelBefore noncanonicalKernelAfter
 
   let traceMode ← runInductiveModelsWithEnv binary
@@ -773,9 +768,8 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "generated kernel checking selects declaration streaming" <|
     kernelOutputMode.exitCode == 0 &&
       hasDiagnostic kernelOutputMode.stderr "output backend: declaration-stream" &&
-      hasDiagnostic kernelOutputMode.stderr "input route: planned-census" &&
       !hasDiagnostic kernelOutputMode.stderr "generated kernel checks: 0"
-  let plannedSuccessBefore ← System.FilePath.readDir scratch
+  let checkedDiscardBefore ← System.FilePath.readDir scratch
   let kernelDiscardMode ← runInductiveModelsWithEnv binary
     ["--no-output", "--no-check", "--type-check-generated", nested]
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
@@ -783,39 +777,42 @@ def main (args : List String) : IO UInt32 := do
     kernelDiscardMode.exitCode == 0 && kernelDiscardMode.stdout.isEmpty &&
       hasDiagnostic kernelDiscardMode.stderr "output backend: compact-discard" &&
       hasDiagnostic kernelDiscardMode.stderr "generated kernel check: accepted"
-  let plannedSuccessAfter ← System.FilePath.readDir scratch
-  state := state.check "successful planned generated check cleans its input workspace" <|
-    sameDirectoryEntries plannedSuccessBefore plannedSuccessAfter
-  let plannedPlainArgs := ["--no-output", "--no-check", "--type-check-generated", nested]
-  let plannedPlain ← runInductiveModels binary plannedPlainArgs
-  let plannedPlainLegacy ← runInductiveModelsLegacy binary plannedPlainArgs
-  state := state.check "planned generated route preserves exact ordinary diagnostics" <|
-    plannedPlain.exitCode == plannedPlainLegacy.exitCode && plannedPlain.stdout.isEmpty &&
-      plannedPlainLegacy.stdout.isEmpty && plannedPlain.stderr == plannedPlainLegacy.stderr
+  let checkedDiscardAfter ← System.FilePath.readDir scratch
+  state := state.check "successful generated check writes nothing under the scratch root" <|
+    sameDirectoryEntries checkedDiscardBefore checkedDiscardAfter
+  let checkedDiscardArgs := ["--no-output", "--no-check", "--type-check-generated", nested]
+  let checkedDiscardPlain ← runInductiveModels binary checkedDiscardArgs
+  let checkedDiscardLegacy ← runInductiveModelsLegacy binary checkedDiscardArgs
+  state := state.check "checked generated no-output preserves exact ordinary diagnostics" <|
+    checkedDiscardPlain.exitCode == checkedDiscardLegacy.exitCode &&
+      checkedDiscardPlain.stdout.isEmpty &&
+      checkedDiscardLegacy.stdout.isEmpty &&
+      checkedDiscardPlain.stderr == checkedDiscardLegacy.stderr
   let outputMetadataCorruption := mapRecursor nestedExport `N.rec fun recursor =>
     { recursor with numMinors := recursor.numMinors + 1 }
   let metadataFallbackArgs :=
     ["--no-output", "--no-check", "--no-type-check-input", "--type-check-generated", "-"]
   let metadataFallbackLegacy ← runInductiveModelsLegacy binary metadataFallbackArgs
     (some outputMetadataCorruption.render)
-  let metadataFallbackPlanned ← runInductiveModels binary metadataFallbackArgs
+  let metadataFallbackCompact ← runInductiveModels binary metadataFallbackArgs
     (some outputMetadataCorruption.render)
   -- Exact source-layout validation precedes final output checking in both
-  -- routes. The planned route must preserve that ordinary generation failure,
-  -- including its diagnostic, rather than exposing a feed-order kernel error.
+  -- retention modes. The compact route must preserve that ordinary generation
+  -- failure, including its diagnostic, rather than exposing a feed-order
+  -- kernel error.
   let expectedMetadataFailure :=
     "-: internal error: N.rec's exact recursor layout differs from its installed metadata\n"
   let metadataFallbackParity :=
-    metadataFallbackPlanned.exitCode == metadataFallbackLegacy.exitCode &&
-      metadataFallbackPlanned.stdout.isEmpty && metadataFallbackLegacy.stdout.isEmpty &&
-      metadataFallbackPlanned.stderr == metadataFallbackLegacy.stderr &&
-      metadataFallbackPlanned.stderr == expectedMetadataFailure
+    metadataFallbackCompact.exitCode == metadataFallbackLegacy.exitCode &&
+      metadataFallbackCompact.stdout.isEmpty && metadataFallbackLegacy.stdout.isEmpty &&
+      metadataFallbackCompact.stderr == metadataFallbackLegacy.stderr &&
+      metadataFallbackCompact.stderr == expectedMetadataFailure
   unless metadataFallbackParity do
     IO.eprintln s!"metadata fallback legacy stderr: {repr metadataFallbackLegacy.stderr}"
-    IO.eprintln s!"metadata fallback planned stderr: {repr metadataFallbackPlanned.stderr}"
-  state := state.check "planned metadata rejection preserves ordinary generation diagnostic"
+    IO.eprintln s!"metadata fallback compact stderr: {repr metadataFallbackCompact.stderr}"
+  state := state.check "compact metadata rejection preserves ordinary generation diagnostic"
     metadataFallbackParity
-  let rootedPlannedCwd : System.FilePath := s!"{scratch}/main-cli-rooted-planned-cwd"
+  let rootedPlannedCwd : System.FilePath := s!"{scratch}/main-cli-rooted-discard-cwd"
   let rootedPlannedTmp : System.FilePath := s!"{scratch}/main-cli-rooted-external-tmp"
   let rootedPlannedScratch := rootedPlannedCwd / "_tmp"
   IO.FS.createDir rootedPlannedCwd
@@ -830,7 +827,7 @@ def main (args : List String) : IO UInt32 := do
     rootedPlannedCwd.toString #[
       ("TMPDIR", some rootedPlannedTmp.toString),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "planned discard roots input workspace independently of ambient TMPDIR" <|
+  state := state.check "generated no-output writes neither a cwd scratch file nor an ambient TMPDIR file" <|
     rootedPlannedRun.exitCode == 0 && rootedPlannedRun.stdout.isEmpty &&
       hasDiagnostic rootedPlannedRun.stderr "output backend: compact-discard" &&
       hasDiagnostic rootedPlannedRun.stderr "generated kernel check: accepted" &&
@@ -853,7 +850,7 @@ def main (args : List String) : IO UInt32 := do
     plannedCwd.toString #[
       ("TMPDIR", some externalPlannedTmp.toString),
       ("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
-  state := state.check "planned discard falls back before consuming an unusable input workspace" <|
+  state := state.check "generated no-output needs no scratch directory when _tmp is a plain file" <|
     plannedCwdRun.exitCode == 0 && plannedCwdRun.stdout.isEmpty &&
       hasDiagnostic plannedCwdRun.stderr "output backend: compact-discard" &&
       (← IO.FS.readFile plannedCwdScratch) == "not a directory\n" &&
@@ -867,7 +864,7 @@ def main (args : List String) : IO UInt32 := do
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
     (some lateReplayCorruption.render)
   let plannedFailureEntriesAfter ← System.FilePath.readDir scratch
-  state := state.check "unreplayable planned discard cleans its input workspace" <|
+  state := state.check "a kernel-rejected generated no-output run leaves the scratch root untouched" <|
     failedPlannedKernel.exitCode == 1 && failedPlannedKernel.stdout.isEmpty &&
       hasDiagnostic failedPlannedKernel.stderr "output backend: compact-discard" &&
       sameDirectoryEntries plannedFailureEntriesBefore plannedFailureEntriesAfter
@@ -913,12 +910,12 @@ def main (args : List String) : IO UInt32 := do
     plannedProvider.exitCode == plannedProviderLegacy.exitCode && plannedProvider.stdout.isEmpty &&
       plannedProviderLegacy.stdout.isEmpty && plannedProvider.stderr == plannedProviderLegacy.stderr &&
       hasDiagnostic plannedProvider.stderr "generated kernel check: accepted"
-  state := state.check "planned generated-provider run cleans its input workspace" <|
+  state := state.check "generated-provider run writes nothing under the scratch root" <|
     sameDirectoryEntries plannedProviderBefore plannedProviderAfter
   let tracedPlannedProvider ← runInductiveModelsWithEnv binary plannedProviderArgs
     #[("LEAN_INDUCTIVE_MODELS_OUTPUT_BACKEND_TRACE", some "1")]
     (some stabilityMiss.render)
-  state := state.check "generated-provider run stays on planned compact discard" <|
+  state := state.check "generated-provider run stays on compact discard" <|
     tracedPlannedProvider.exitCode == plannedProvider.exitCode &&
       tracedPlannedProvider.stdout.isEmpty &&
       hasDiagnostic tracedPlannedProvider.stderr "output backend: compact-discard"
