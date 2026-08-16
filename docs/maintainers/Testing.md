@@ -333,18 +333,28 @@ this writing, for the whole single-pass gate over the pinned export:
 | `lake build` in the patched lean4export | 1.46 GiB |
 | `lake exe cache get` | 0.95 GiB |
 | Mathlib export | 7.92 GiB |
-| generation (named output, no generated-island kernel gate) | 11.39 GiB |
+| generation, single pass | **7.39 GiB**, 11:49 wall |
 
-The generation figure predates the single-pass change, which drops the 5.9 GB
-output write and turns the generated-island kernel gate on, so expect it to
-move. To take the measurement deliberately, run the generation pipeline from
-`scripts/ci-mathlib.sh` by hand under `/usr/bin/time -v` against a saved
-`_tmp/mathlib.ndjson.gz`; nothing in CI will do it for you. Two things make the
-number narrower than it looks: a 16 GiB runner also holds the OS, the gzip
-feeder and page cache, and the interner's key array is a power-of-two table
-sitting at roughly 75% of a 134.2M-entry capacity at this corpus' ~99.9M
-interned nodes, so a corpus that crosses the load factor doubles the table and
-costs about 1.6 GB in one step.
+The single pass measures *lower* than the two-phase shape it replaced, which
+was 11.39 GiB generating plus 8.22 GiB rechecking, and faster than either. That
+is not a surprise once stated: `--no-output` takes the no-output compact path,
+which retains value-only verdict certificates and never opens a generated-output
+workspace, so the declaration-stream writer's persistent maps and the retained
+compact record arrays behind the old plateau are simply not allocated. Turning
+the generated-island kernel gate on costs less than they did. The tool now sits
+*under* `lean4checker`'s ~9 GB for this corpus while doing strictly more, which
+is the direction the criterion wants.
+
+Measured locally against the pinned export
+(`gzip -dc mathlib.ndjson.gz | lean-inductive-models - --no-output
+--no-type-check-input --type-check-generated`, `LEAN_NUM_THREADS=4`), reporting
+`generated kernel checks: 6639` and `output check: 6882 model families checked`.
+To take the measurement deliberately, run exactly that under `/usr/bin/time -v`;
+nothing in CI will do it for you. One thing keeps the number from being as
+roomy as it looks: the interner's key array is a power-of-two table sitting at
+roughly 75% of a 134.2M-entry capacity at this corpus' ~99.9M interned nodes, so
+a corpus that crosses the load factor doubles the table and costs about 1.6 GB
+in one step.
 
 The gate's two Lake build phases run under the same `LEAN_NUM_THREADS` bound as
 the fast jobs; the cache, export and generation phases have no thread ceiling,
