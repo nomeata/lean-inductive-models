@@ -34,8 +34,14 @@ driver_root=Driver
 
 # The modules the structural checker is entitled to reach. `EqKit` is the
 # equality plumbing carved out of `Model.lean` for exactly this reason: it is
-# `Name`/`Expr` construction with no generator monad in it.
-allowed_closure=(Check EqKit Format Naming Plan Projection)
+# `Name`/`Expr` construction with no generator monad in it. `Format` is a
+# facade over `Format.*`, so its six parts are named here too: the closure is
+# deliberately exact, and a split of an allowed module widens it.
+allowed_closure=(
+  Check EqKit Naming Plan Projection
+  Format Format.Types Format.Alias Format.Export Format.Exact Format.Parse
+  Format.Write
+)
 
 # The generator. `Check` may not reach any of these, directly or transitively.
 forbidden=(Gen Nested Simple Mutual Driver Model)
