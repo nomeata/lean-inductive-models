@@ -377,19 +377,28 @@ def run (root : String) : IO UInt32 := do
   -- **The branching SCC in the same fixture.** `MutualBranchA.mk` has three
   -- recursive fields and `MutualBranchB.wrap` one, so this pair is past the
   -- one-recursive-field bound the partial family adapter used to carry. Both
-  -- members still model — on the legacy mutual route — and the assertion is
-  -- that no partial one-layer certificate was written for either.
+  -- members take the adapter, and both halves of the boundary have to agree
+  -- about that: the generator writes the complete member certificate, and the
+  -- structural checker — which recomputes the same shape independently —
+  -- reports no violation against either owner.
   let branchImpl := `MutualBranchA._model._impl
-  let branchCertificate := #[`MutualBranchA, `MutualBranchB].flatMap fun owner =>
-    let root := Name.str branchImpl (lastStr owner)
-    #[Name.str root "self", Name.str root "rec", Name.str root "roll",
-      Name.str root "unroll", Name.str root "unroll_roll", Name.str root "roll_unroll"]
-  state := state.check "branching mutual SCC models without a one-layer certificate" <|
+  let branchCertificate := #[Name.str branchImpl "tag", Name.str branchImpl "aux"] ++
+    #[(`MutualBranchA, `mk), (`MutualBranchB, `wrap)].flatMap fun (owner, key) =>
+      let root := Name.str branchImpl (lastStr owner)
+      #[Name.str root "self", Name.str root "rec", Name.str root "roll",
+        Name.str root "unroll", Name.str root "unroll_roll", Name.str root "roll_unroll",
+        Name.str (Name.str root "ctor") (lastStr key),
+        Name.str (Name.str root "rec_iota") (lastStr key),
+        Name.str (Name.str root "rule") (lastStr key)]
+  state := state.check "branching mutual SCC carries the complete one-layer certificate" <|
     #[`MutualBranchA, `MutualBranchB].all (fun owner =>
         !report.declined.any (·.1 == owner) &&
           generatedNames.contains (Naming.modelName owner) &&
           generatedNames.contains (Naming.modelName (Name.str owner "rec"))) &&
-      branchCertificate.all fun name => !generatedNames.contains name
+      report.stmtErrors.isEmpty &&
+      branchCertificate.all generatedNames.contains &&
+      (Check.check generated).all fun violation =>
+        !#[`MutualBranchA, `MutualBranchB].contains violation.familyOwner
 
   IO.println s!"mutual one-layer diagnostic: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

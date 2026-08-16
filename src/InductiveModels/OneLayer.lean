@@ -13,191 +13,53 @@ open Lean Meta
 
 namespace InductiveModels
 
-/-- Nullary-recursion companion of [`oneLayerRecursorCompatibility`].  Ordinary
-constructor fields are already fixed in the surrounding generated telescope;
-this lemma accounts only for the private/public major conversion. -/
-theorem zeroFieldOneLayerRecursorCompatibility
-    {M P : Type u} {C : P → Sort v}
-    (roll : P → M) (unroll : M → P)
-    (unrollRoll : ∀ p, unroll (roll p) = p)
-    (privateCtor : M) (publicCtor : P)
-    (rollCtor : roll publicCtor = privateCtor)
-    (minor : C publicCtor) (core : ∀ q, C (unroll q))
-    (constructorAgreement : publicCtor = unroll privateCtor)
-    (coreIota : core privateCtor =
-      Eq.mp (congrArg C constructorAgreement) minor) :
-    let publicRec : ∀ p, C p := fun p =>
-      Eq.mp (congrArg C (unrollRoll p)) (core (roll p))
-    publicRec publicCtor = minor := by
-  intro publicRec
-  unfold publicRec
-  subst privateCtor
-  have paths : unrollRoll publicCtor = constructorAgreement.symm := by rfl
-  rw [paths, coreIota]
-  exact Eq.rec (motive := fun target equality =>
-      Eq.mp (congrArg C equality.symm)
-          (Eq.mp (congrArg C equality) minor) = minor)
-    rfl constructorAgreement
+/-! ## The two fixed-arity lemmas the compatibility construction is built from
 
-/-- Equality bookkeeping for the public recursor over an equivalent private
-carrier.  `q` and its private recursive result stay fixed while equality
-elimination changes only the public recursive field.  The generator inlines
-this proof term; generated output never refers to this implementation name. -/
-theorem oneLayerRecursorCompatibility
-    {M P : Type u} {Q R : Type w} {C : P → Sort v} {H : R → Sort x}
-    (roll : P → M) (unroll : M → P)
-    (unrollRoll : ∀ p, unroll (roll p) = p)
-    (rollField : R → Q) (unrollField : Q → R)
-    (unrollRollField : ∀ p, unrollField (rollField p) = p)
-    (privateCtor : Q → M) (publicCtor : R → P)
-    (rollCtor : ∀ p, roll (publicCtor p) = privateCtor (rollField p))
-    (privateIH : ∀ q, H (unrollField q)) (publicIH : ∀ p, H p)
-    (ihAgreement : ∀ q, publicIH (unrollField q) = privateIH q)
-    (minor : ∀ p, H p → C (publicCtor p))
-    (core : ∀ q, C (unroll q))
-    (constructorAgreement : ∀ q,
-      publicCtor (unrollField q) = unroll (privateCtor q))
-    (coreIota : ∀ q, core (privateCtor q) =
-      Eq.mp (congrArg C (constructorAgreement q))
-        (minor (unrollField q) (privateIH q))) :
-    let publicRec : ∀ p, C p := fun p =>
-      Eq.mp (congrArg C (unrollRoll p)) (core (roll p))
-    ∀ p, publicRec (publicCtor p) = minor p (publicIH p) := by
-  have cancel {a b : P} (h : a = b) (value : C a) :
-      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value := by
-    exact Eq.rec (motive := fun b h =>
-      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value) rfl h
-  intro publicRec p
-  unfold publicRec
-  have compat (q : Q) (r : M) (p : R)
-      (hp : unrollField q = p) (hc : r = privateCtor q)
-      (hout : unroll r = publicCtor p) :
-      Eq.mp (congrArg C hout) (core r) = minor p (publicIH p) := by
-    let afterCtor : ∀ (r : M), r = privateCtor q →
-        ∀ (p : R) (hp : unrollField q = p)
-          (hout : unroll r = publicCtor p),
-          Eq.mp (congrArg C hout) (core r) = minor p (publicIH p) :=
-      fun r hc => Eq.rec (motive := fun r _ =>
-          ∀ (p : R) (hp : unrollField q = p)
-            (hout : unroll r = publicCtor p),
-            Eq.mp (congrArg C hout) (core r) = minor p (publicIH p))
-        (fun p hp => Eq.rec (motive := fun p _ =>
-            ∀ hout : unroll (privateCtor q) = publicCtor p,
-              Eq.mp (congrArg C hout) (core (privateCtor q)) =
-                minor p (publicIH p))
-          (fun hout => by
-            let move := fun value : C (unroll (privateCtor q)) =>
-              Eq.mp (congrArg C hout) value
-            let first := congrArg move (coreIota q)
-            let privateResult := minor (unrollField q) (privateIH q)
-            let middle : move (Eq.mp (congrArg C (constructorAgreement q)) privateResult) =
-                privateResult := by
-              exact cancel (constructorAgreement q) _
-            let last := congrArg (minor (unrollField q)) (ihAgreement q)
-            exact first.trans (middle.trans last.symm))
-          hp)
-        hc.symm
-    exact afterCtor r hc p hp hout
-  exact compat (rollField p) (roll (publicCtor p)) p
-    (unrollRollField p) (rollCtor p) (unrollRoll (publicCtor p))
+A one-layer ι rule has to move `n` public recursive fields from
+`unrollField (rollField p)` back to `p`, one equality elimination each, while
+the private constructor, the private computation and every private induction
+hypothesis stay fixed.  Writing that as a *lemma* would need `n` independent
+field universes, so there is no n-ary statement to write; the generator
+**constructs** the proof instead, from these two statements and nothing else.
 
-/-- Two-field companion of [`oneLayerRecursorCompatibility`].  The recursive
-fields are independent in the source telescope, so equality induction can
-hold both private fields and both private induction hypotheses fixed while it
-changes the two public endpoints in source order. -/
-theorem twoFieldOneLayerRecursorCompatibility
-    {M P : Type u} {Q₁ R₁ : Type w₁} {Q₂ R₂ : Type w₂}
-    {C : P → Sort v} {H₁ : R₁ → Sort x₁} {H₂ : R₂ → Sort x₂}
-    (roll : P → M) (unroll : M → P)
-    (unrollRoll : ∀ p, unroll (roll p) = p)
-    (rollField₁ : R₁ → Q₁) (unrollField₁ : Q₁ → R₁)
-    (unrollRollField₁ : ∀ p, unrollField₁ (rollField₁ p) = p)
-    (rollField₂ : R₂ → Q₂) (unrollField₂ : Q₂ → R₂)
-    (unrollRollField₂ : ∀ p, unrollField₂ (rollField₂ p) = p)
-    (privateCtor : Q₁ → Q₂ → M) (publicCtor : R₁ → R₂ → P)
-    (rollCtor : ∀ p₁ p₂,
-      roll (publicCtor p₁ p₂) = privateCtor (rollField₁ p₁) (rollField₂ p₂))
-    (privateIH₁ : ∀ q, H₁ (unrollField₁ q)) (publicIH₁ : ∀ p, H₁ p)
-    (ihAgreement₁ : ∀ q, publicIH₁ (unrollField₁ q) = privateIH₁ q)
-    (privateIH₂ : ∀ q, H₂ (unrollField₂ q)) (publicIH₂ : ∀ p, H₂ p)
-    (ihAgreement₂ : ∀ q, publicIH₂ (unrollField₂ q) = privateIH₂ q)
-    (minor : ∀ p₁ p₂, H₁ p₁ → H₂ p₂ → C (publicCtor p₁ p₂))
-    (core : ∀ q, C (unroll q))
-    (constructorAgreement : ∀ q₁ q₂,
-      publicCtor (unrollField₁ q₁) (unrollField₂ q₂) =
-        unroll (privateCtor q₁ q₂))
-    (coreIota : ∀ q₁ q₂, core (privateCtor q₁ q₂) =
-      Eq.mp (congrArg C (constructorAgreement q₁ q₂))
-        (minor (unrollField₁ q₁) (unrollField₂ q₂)
-          (privateIH₁ q₁) (privateIH₂ q₂))) :
-    let publicRec : ∀ p, C p := fun p =>
-      Eq.mp (congrArg C (unrollRoll p)) (core (roll p))
-    ∀ p₁ p₂, publicRec (publicCtor p₁ p₂) =
-      minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂) := by
-  have cancel {a b : P} (h : a = b) (value : C a) :
-      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value := by
-    exact Eq.rec (motive := fun b h =>
-      Eq.mp (congrArg C h.symm) (Eq.mp (congrArg C h) value) = value) rfl h
-  intro publicRec p₁ p₂
-  unfold publicRec
-  have compat (q₁ : Q₁) (q₂ : Q₂) (r : M) (p₁ : R₁) (p₂ : R₂)
-      (hp₁ : unrollField₁ q₁ = p₁) (hp₂ : unrollField₂ q₂ = p₂)
-      (hc : r = privateCtor q₁ q₂) (hout : unroll r = publicCtor p₁ p₂) :
-      Eq.mp (congrArg C hout) (core r) =
-        minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂) := by
-    let afterCtor : ∀ (r : M), r = privateCtor q₁ q₂ →
-        ∀ (p₁ : R₁) (hp₁ : unrollField₁ q₁ = p₁)
-          (p₂ : R₂) (hp₂ : unrollField₂ q₂ = p₂)
-          (hout : unroll r = publicCtor p₁ p₂),
-          Eq.mp (congrArg C hout) (core r) =
-            minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂) :=
-      fun r hc => Eq.rec (motive := fun r _ =>
-          ∀ (p₁ : R₁) (hp₁ : unrollField₁ q₁ = p₁)
-            (p₂ : R₂) (hp₂ : unrollField₂ q₂ = p₂)
-            (hout : unroll r = publicCtor p₁ p₂),
-            Eq.mp (congrArg C hout) (core r) =
-              minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂))
-        (fun p₁ hp₁ => Eq.rec (motive := fun p₁ _ =>
-            ∀ (p₂ : R₂) (hp₂ : unrollField₂ q₂ = p₂)
-              (hout : unroll (privateCtor q₁ q₂) = publicCtor p₁ p₂),
-              Eq.mp (congrArg C hout) (core (privateCtor q₁ q₂)) =
-                minor p₁ p₂ (publicIH₁ p₁) (publicIH₂ p₂))
-          (fun p₂ hp₂ => Eq.rec (motive := fun p₂ _ =>
-              ∀ hout : unroll (privateCtor q₁ q₂) =
-                  publicCtor (unrollField₁ q₁) p₂,
-                Eq.mp (congrArg C hout) (core (privateCtor q₁ q₂)) =
-                  minor (unrollField₁ q₁) p₂
-                    (publicIH₁ (unrollField₁ q₁)) (publicIH₂ p₂))
-            (fun hout => by
-              let move := fun value : C (unroll (privateCtor q₁ q₂)) =>
-                Eq.mp (congrArg C hout) value
-              let first := congrArg move (coreIota q₁ q₂)
-              let privateResult := minor (unrollField₁ q₁) (unrollField₂ q₂)
-                (privateIH₁ q₁) (privateIH₂ q₂)
-              have paths : hout = (constructorAgreement q₁ q₂).symm := by rfl
-              have middle : move
-                    (Eq.mp (congrArg C (constructorAgreement q₁ q₂)) privateResult) =
-                  privateResult := by
-                exact Eq.rec (motive := fun h _ =>
-                    Eq.mp (congrArg C h)
-                        (Eq.mp (congrArg C (constructorAgreement q₁ q₂)) privateResult) =
-                      privateResult)
-                  (cancel (constructorAgreement q₁ q₂) _) paths.symm
-              let firstIH := congrArg
-                (fun ih => minor (unrollField₁ q₁) (unrollField₂ q₂)
-                  ih (privateIH₂ q₂)) (ihAgreement₁ q₁)
-              let secondIH := congrArg
-                (minor (unrollField₁ q₁) (unrollField₂ q₂)
-                  (publicIH₁ (unrollField₁ q₁))) (ihAgreement₂ q₂)
-              exact first.trans (middle.trans (firstIH.symm.trans secondIH.symm)))
-            hp₂)
-          hp₁)
-        hc.symm
-    exact afterCtor r hc p₁ hp₁ p₂ hp₂ hout
-  exact compat (rollField₁ p₁) (rollField₂ p₂)
-    (roll (publicCtor p₁ p₂)) p₁ p₂
-    (unrollRollField₁ p₁) (unrollRollField₂ p₂)
-    (rollCtor p₁ p₂) (unrollRoll (publicCtor p₁ p₂))
+Both quantify the transported path rather than fixing it.  That is the whole
+trick: after the last field has been eliminated the remaining path proves an
+equation between two syntactically equal endpoints, and definitional proof
+irrelevance plus `Eq`'s K-like reduction collapse the transport to the
+identity — so the base case is `Eq.refl` and no path bookkeeping survives.
+-/
+
+/-- **One recursive field's equality induction.**  `layer` is the public
+constructor with every other field held fixed and `result` the public minor at
+the same hole; `roundTrip` is that field's `unroll_roll`.  Exactly one field
+universe occurs, which is what makes the construction n-ary: the generator
+applies this once per recursive field instead of asking for a lemma with `n`
+of them. -/
+theorem oneLayerFieldStep {P : Sort u} {C : P → Sort v} {A : Sort w}
+    (source : P) (value : C source)
+    (layer : A → P) (result : (x : A) → C (layer x))
+    (before after : A) (roundTrip : before = after)
+    (previous : ∀ path : source = layer before,
+      Eq.mp (congrArg C path) value = result before) :
+    ∀ path : source = layer after,
+      Eq.mp (congrArg C path) value = result after :=
+  Eq.rec (motive := fun after _ =>
+      ∀ path : source = layer after,
+        Eq.mp (congrArg C path) value = result after)
+    previous roundTrip
+
+/-- **The base of that chain.**  Transporting back along *any* proof of the
+reversed constructor agreement undoes the transport along it: the two proofs of
+one equation are definitionally equal, so the eliminated path is reflexivity.
+At zero recursive fields this lemma is the whole compatibility proof. -/
+theorem oneLayerTransportCancel {P : Sort u} {C : P → Sort v}
+    (source target : P) (equality : source = target) (value : C source) :
+    ∀ inverse : target = source,
+      Eq.mp (congrArg C inverse) (Eq.mp (congrArg C equality) value) = value :=
+  Eq.rec (motive := fun target equality =>
+      ∀ inverse : target = source,
+        Eq.mp (congrArg C inverse) (Eq.mp (congrArg C equality) value) = value)
+    (fun _ => rfl) equality
 
 /-- The pointwise induction hypothesis presented by the public recursor is the
 private recursive result.  Equality induction holds the private computation
@@ -305,57 +167,36 @@ private partial def inlineCompatibilityConstants (expression : Expr) : MetaM Exp
       return Expr.proj typeName index (← inlineCompatibilityConstants subject)
   | other => return other
 
-open Elab Term in
-elab "zeroFieldOneLayerCompatibilityProof%" : term => do
-  let info ← getConstInfo ``zeroFieldOneLayerRecursorCompatibility
-  let .thmInfo theoremInfo := info
-    | throwError "zeroFieldOneLayerRecursorCompatibility is not a theorem"
+/-- Read one closed oracle theorem as data: inline every constant it names
+until nothing but `Eq`, `Eq.refl` and `Eq.rec` is left.  A theorem that keeps
+any other constant is refused here rather than silently exported. -/
+private def inlinedOracleValue (name : Name) (universes : List Name) : MetaM Expr := do
+  let .thmInfo theoremInfo ← getConstInfo name
+    | throwError "{name} is not a theorem"
   let value ← inlineCompatibilityConstants theoremInfo.value
-  let extra := value.getUsedConstants.filter fun name =>
-    name != ``Eq && name != ``Eq.refl && name != ``Eq.rec
+  let extra := value.getUsedConstants.filter fun used =>
+    used != ``Eq && used != ``Eq.refl && used != ``Eq.rec
   unless extra.isEmpty do
-    throwError "embedded zero-field one-layer compatibility proof retains {extra}"
-  return quoteClosedExprValue value
+    throwError "embedded {name} proof retains {extra}"
+  let parameters := (collectLevelParams {} value).params
+  unless parameters.size == universes.length && universes.all parameters.contains do
+    throwError "embedded {name} proof has universes {parameters}, expected {universes}"
+  return value
 
 open Elab Term in
-elab "oneLayerCompatibilityProof%" : term => do
-  let info ← getConstInfo ``oneLayerRecursorCompatibility
-  let .thmInfo theoremInfo := info
-    | throwError "oneLayerRecursorCompatibility is not a theorem"
-  let value ← inlineCompatibilityConstants theoremInfo.value
-  let extra := value.getUsedConstants.filter fun name =>
-    name != ``Eq && name != ``Eq.refl && name != ``Eq.rec
-  unless extra.isEmpty do
-    throwError "embedded one-layer compatibility proof retains {extra}"
-  return quoteClosedExprValue value
+elab "oneLayerFieldStepProof%" : term => do
+  return quoteClosedExprValue (← inlinedOracleValue ``oneLayerFieldStep [`u, `v, `w])
 
 open Elab Term in
-elab "twoFieldOneLayerCompatibilityProof%" : term => do
-  let info ← getConstInfo ``twoFieldOneLayerRecursorCompatibility
-  let .thmInfo theoremInfo := info
-    | throwError "twoFieldOneLayerRecursorCompatibility is not a theorem"
-  let value ← inlineCompatibilityConstants theoremInfo.value
-  let extra := value.getUsedConstants.filter fun name =>
-    name != ``Eq && name != ``Eq.refl && name != ``Eq.rec
-  unless extra.isEmpty do
-    throwError "embedded two-field one-layer compatibility proof retains {extra}"
-  return quoteClosedExprValue value
+elab "oneLayerTransportCancelProof%" : term => do
+  return quoteClosedExprValue (← inlinedOracleValue ``oneLayerTransportCancel [`u, `v])
 
 open Elab Term in
 elab "oneLayerIHCompatibilityProof%" : term => do
-  let info ← getConstInfo ``oneLayerIHCompatibility
-  let .thmInfo theoremInfo := info
-    | throwError "oneLayerIHCompatibility is not a theorem"
-  let value ← inlineCompatibilityConstants theoremInfo.value
-  let extra := value.getUsedConstants.filter fun name =>
-    name != ``Eq && name != ``Eq.refl && name != ``Eq.rec
-  unless extra.isEmpty do
-    throwError "embedded one-layer IH compatibility proof retains {extra}"
-  return quoteClosedExprValue value
+  return quoteClosedExprValue (← inlinedOracleValue ``oneLayerIHCompatibility [`u, `v])
 
-private def zeroFieldOneLayerCompatibilityProof : Expr := zeroFieldOneLayerCompatibilityProof%
-private def oneLayerCompatibilityProof : Expr := oneLayerCompatibilityProof%
-private def twoFieldOneLayerCompatibilityProof : Expr := twoFieldOneLayerCompatibilityProof%
+private def oneLayerFieldStepProof : Expr := oneLayerFieldStepProof%
+private def oneLayerTransportCancelProof : Expr := oneLayerTransportCancelProof%
 private def oneLayerIHCompatibilityProof : Expr := oneLayerIHCompatibilityProof%
 
 private partial def firstDifferencePath? (actual expected : Expr)
@@ -381,72 +222,36 @@ private partial def firstDifferencePath? (actual expected : Expr)
       firstDifferencePath? av ev s!"{path}.subject"
   | _, _ => some path
 
-def applyZeroFieldOneLayerCompatibility (levels : List Level) (arguments : Array Expr)
-    (expected : Expr) : MetaM (Except String Expr) := do
-  unless arguments.size == 13 do
-    return .error s!"zero-field compatibility needs 13 arguments, got {arguments.size}"
-  let levelParams := (collectLevelParams {} zeroFieldOneLayerCompatibilityProof).params
-  unless levels.length == levelParams.size do
-    return .error s!"zero-field compatibility needs {levelParams.size} universes, got {levels.length}"
-  let template := zeroFieldOneLayerCompatibilityProof.instantiateLevelParams
-    levelParams.toList levels
-  let proof ← instantiateMVars (mkAppN template arguments)
+/-- [`oneLayerFieldStep`]'s embedded proof at the public carrier's, the
+motive's and this field's universes.  The three are supplied by *name*, so a
+later edit to the proof term cannot silently permute them. -/
+def oneLayerFieldStepAt (carrier motive field : Level) : Expr :=
+  oneLayerFieldStepProof.instantiateLevelParams [`u, `v, `w] [carrier, motive, field]
+
+/-- [`oneLayerTransportCancel`]'s embedded proof, likewise. -/
+def oneLayerTransportCancelAt (carrier motive : Level) : Expr :=
+  oneLayerTransportCancelProof.instantiateLevelParams [`u, `v] [carrier, motive]
+
+/-- Validate a completed compatibility proof: no metavariables, no reference to
+the tool-side oracle declarations, kernel-checked, and definitionally the
+expected statement.  The construction that builds the proof is n-ary, so this
+is the one place the result is confronted with the exact source statement. -/
+def checkOneLayerCompatibility (what : String) (proof expected : Expr) :
+    MetaM (Except String Expr) := do
+  let proof ← instantiateMVars proof
   let actual ← inferType proof
   unless ← withTransparency .all <| isDefEq actual expected do
-    return .error s!"zero-field compatibility result differs at \
+    return .error s!"{what} result differs at \
       {(firstDifferencePath? actual expected).getD "definitionally unequal subterm"}: \
       {actual}, expected {expected}"
   let proof ← instantiateMVars proof
   if proof.hasExprMVar || proof.hasLevelMVar then
-    return .error "zero-field compatibility proof retains metavariables"
-  if proof.getUsedConstants.contains ``zeroFieldOneLayerRecursorCompatibility then
-    return .error "zero-field compatibility proof refers to the tool-side oracle declaration"
-  check proof
-  return .ok proof
-
-/-- Instantiate the embedded oracle after all semantic arguments are known.
-The first six entries are `M, P, Q, R, C, H`; spelling them explicitly avoids
-asking application synthesis to infer universes through higher-order families. -/
-def applyOneLayerCompatibility (levels : List Level) (arguments : Array Expr) (expected : Expr) :
-    MetaM (Except String Expr) := do
-  unless arguments.size == 22 || arguments.size == 23 do
-    return .error s!"one-layer compatibility needs 22 arguments and an optional field, got {arguments.size}"
-  let levelParams := (collectLevelParams {} oneLayerCompatibilityProof).params
-  unless levels.length == levelParams.size do
-    return .error s!"one-layer compatibility needs {levelParams.size} universes, got {levels.length}"
-  let template := oneLayerCompatibilityProof.instantiateLevelParams
-    levelParams.toList levels
-  let proof := mkAppN template arguments
-  let proof ← instantiateMVars proof
-  let actual ← inferType proof
-  unless ← withTransparency .all <| isDefEq actual expected do
-    return .error s!"compatibility result differs at {(firstDifferencePath? actual expected).getD "definitionally unequal subterm"}: {actual}, expected {expected}"
-  let proof ← instantiateMVars proof
-  if proof.hasExprMVar || proof.hasLevelMVar then
-    return .error "compatibility proof retains metavariables"
-  if proof.getUsedConstants.contains ``oneLayerRecursorCompatibility then
-    return .error "compatibility proof refers to the tool-side oracle declaration"
-  check proof
-  return .ok proof
-
-def applyTwoFieldOneLayerCompatibility (levels : List Level) (arguments : Array Expr)
-    (expected : Expr) : MetaM (Except String Expr) := do
-  unless arguments.size == 31 || arguments.size == 33 do
-    return .error s!"two-field compatibility needs 31 arguments and two optional fields, got {arguments.size}"
-  let levelParams := (collectLevelParams {} twoFieldOneLayerCompatibilityProof).params
-  unless levels.length == levelParams.size do
-    return .error s!"two-field compatibility needs {levelParams.size} universes, got {levels.length}"
-  let template := twoFieldOneLayerCompatibilityProof.instantiateLevelParams
-    levelParams.toList levels
-  let proof ← instantiateMVars (mkAppN template arguments)
-  let actual ← inferType proof
-  unless ← withTransparency .all <| isDefEq actual expected do
-    return .error s!"two-field compatibility result differs at {(firstDifferencePath? actual expected).getD "definitionally unequal subterm"}: {actual}, expected {expected}"
-  let proof ← instantiateMVars proof
-  if proof.hasExprMVar || proof.hasLevelMVar then
-    return .error "two-field compatibility proof retains metavariables"
-  if proof.getUsedConstants.contains ``twoFieldOneLayerRecursorCompatibility then
-    return .error "two-field compatibility proof refers to the tool-side oracle declaration"
+    return .error s!"{what} proof retains metavariables"
+  let oracles := proof.getUsedConstants.filter fun name =>
+    name == ``oneLayerFieldStep || name == ``oneLayerTransportCancel ||
+      name == ``oneLayerIHCompatibility
+  unless oracles.isEmpty do
+    return .error s!"{what} proof refers to the tool-side oracle declarations {oracles}"
   check proof
   return .ok proof
 
@@ -454,11 +259,9 @@ def applyOneLayerIHCompatibility (levels : List Level) (arguments : Array Expr)
     (expected : Expr) : MetaM (Except String Expr) := do
   unless arguments.size == 9 do
     return .error s!"one-layer IH compatibility needs 9 arguments, got {arguments.size}"
-  let levelParams := (collectLevelParams {} oneLayerIHCompatibilityProof).params
-  unless levels.length == levelParams.size do
-    return .error s!"one-layer IH compatibility needs {levelParams.size} universes, got {levels.length}"
-  let template := oneLayerIHCompatibilityProof.instantiateLevelParams
-    levelParams.toList levels
+  unless levels.length == 2 do
+    return .error s!"one-layer IH compatibility needs 2 universes, got {levels.length}"
+  let template := oneLayerIHCompatibilityProof.instantiateLevelParams [`u, `v] levels
   let proof ← instantiateMVars (mkAppN template arguments)
   let actual ← inferType proof
   unless ← isDefEq actual expected do
@@ -850,6 +653,136 @@ private def transportOneLayerMotiveAlong (eqi : EqInfo) (v ℓ : Level)
     withLocalDeclD `h (eqi.mk' (.succ v) (.sort v) source targetType) fun h =>
       mkLambdaFVars #[targetType, h] targetType
   return eqi.recAt v (.succ v) (.sort v) source castMotive base target congruence
+
+/-- An `Eq.trans` chain with one `congrArg` per slot, over a family whose step
+is monadic.  This is [`InductiveModels.congrChain`] at a `GenM` step, which the
+induction-hypothesis congruence below needs because its step builds a
+transport. -/
+private def oneLayerSlotChain (eqi : EqInfo) (v : Level) (α : Expr)
+    (mkStep : Array Expr → GenM Expr) (before after proofs : Array Expr) :
+    GenM Expr := do
+  let n := before.size
+  unless after.size == n && proofs.size == n do
+    badShape "a one-layer slot chain has inconsistent cardinalities"
+  let mixed := fun (j : Nat) => (Array.range n).map fun m =>
+    if m < j then after[m]! else before[m]!
+  let base ← mkStep before
+  let mut acc := eqi.refl' v α base
+  for j in [0:n] do
+    let slotType ← ityp before[j]!
+    let slotLevel ← ilevel slotType
+    let famAt := fun (x : Expr) => mkStep ((mixed j).set! j x)
+    let atBefore ← famAt before[j]!
+    let factor ← transportAlong eqi .zero slotLevel slotType before[j]! after[j]! proofs[j]!
+      (eqi.refl' v α atBefore) fun z => do pure (eqi.mk' v α atBefore (← famAt z))
+    acc ← transOf eqi v α base (← mkStep (mixed j)) (← mkStep (mixed (j + 1))) acc factor
+  return acc
+
+/-- **The compatibility proof for one one-layer ι rule, at any number of
+recursive fields.**
+
+The route's public recursor is `publicRec p = Eq.mp (congrArg C (unroll_roll p))
+(core (roll p))`, and `roll (publicCtor p⃗)` is *definitionally* the private
+constructor at the rolled fields `q⃗`.  So the rule to prove reads
+
+```text
+Eq.mp (congrArg C hout) (core (privateCtor q⃗))  =  minor p⃗ (publicIH⃗ p⃗)
+```
+
+and it is assembled in two halves.
+
+**The bridge** rewrites the left transport's payload.  The private ι rule says
+`core (privateCtor q⃗) = Eq.mp (congrArg C agreement) (minor m⃗ (privateIH⃗ q⃗))`
+where `mᵢ = unrollFieldᵢ qᵢ`; one `congrArg` per field replaces each private
+induction hypothesis by the public one at `mᵢ`, and the whole congruence is
+lifted through the agreement transport.  What is left is the *same* minor the
+goal names, but at `m⃗` rather than at `p⃗`.
+
+**The chain** closes that gap, one field at a time.  It starts at
+[`oneLayerTransportCancel`] — which is already the complete proof when there
+are no recursive fields — and applies [`oneLayerFieldStep`] once per field,
+each time replacing `mᵢ` by `pᵢ` along that field's `unroll_roll`.  Because
+both lemmas quantify the transported path instead of fixing it, each step
+eliminates exactly one field equation and nothing accumulates: the path is
+supplied only at the end, as the major's own `unroll_roll`.
+
+There is no arity anywhere in this: `n = 0`, `1`, `2` and `n > 2` are the same
+loop, and the caller passes the field data as arrays. -/
+def oneLayerNaryCompatibility (eqi : EqInfo) (carrierLevel motiveLevel : Level)
+    (publicCarrier publicMotive unrolledMajor agreement : Expr)
+    (coreAtPrivate coreIota roundTripMajor : Expr)
+    (fieldTypes sources targets roundTrips privateIHs ihAgreements : Array Expr)
+    (layerAt : Array Expr → GenM Expr)
+    (minorAt : Array Expr → Array Expr → GenM Expr)
+    (publicIHAt : Nat → Expr → GenM Expr) : GenM Expr := do
+  let n := fieldTypes.size
+  unless sources.size == n && targets.size == n && roundTrips.size == n &&
+      privateIHs.size == n && ihAgreements.size == n do
+    badShape "a one-layer compatibility construction has inconsistent field cardinalities"
+  let mixed := fun (j : Nat) => (Array.range n).map fun i =>
+    if i < j then targets[i]! else sources[i]!
+  let publicMotiveAt := fun (value : Expr) => pure (mkApp publicMotive value)
+  -- The minor at the unrolled fields, with the public induction hypotheses …
+  let sourceFields := mixed 0
+  let sourceLayer ← layerAt sourceFields
+  let sourceAlpha := mkApp publicMotive sourceLayer
+  let publicIHsAtSource ← (Array.range n).mapM fun i => publicIHAt i sourceFields[i]!
+  let publicBase ← minorAt sourceFields publicIHsAtSource
+  -- … and the same minor with the private ones, which is what the private ι
+  -- rule actually produces.
+  let privateBase ← minorAt sourceFields privateIHs
+  let alongAgreement := fun (base : Expr) =>
+    transportOneLayerMotiveAlong eqi motiveLevel carrierLevel publicCarrier
+      sourceLayer unrolledMajor agreement base publicMotiveAt
+  let value ← alongAgreement publicBase
+  let privateValue ← alongAgreement privateBase
+  let unrolledAlpha := mkApp publicMotive unrolledMajor
+  -- The bridge: one `congrArg` per induction hypothesis, lifted through the
+  -- constructor agreement, composed after the private ι rule.
+  let ihChain ← oneLayerSlotChain eqi motiveLevel sourceAlpha
+    (fun ihs => minorAt sourceFields ihs) privateIHs publicIHsAtSource
+    (← (Array.range n).mapM fun i => do
+      let hypothesisType ← ityp privateIHs[i]!
+      symmOf eqi (← ilevel hypothesisType) hypothesisType
+        publicIHsAtSource[i]! privateIHs[i]! ihAgreements[i]!)
+  let liftedChain ← transportAlong eqi .zero motiveLevel sourceAlpha
+    privateBase publicBase ihChain
+    (eqi.refl' motiveLevel unrolledAlpha privateValue)
+    fun z => do pure (eqi.mk' motiveLevel unrolledAlpha privateValue (← alongAgreement z))
+  let bridge ← transOf eqi motiveLevel unrolledAlpha coreAtPrivate privateValue value
+    coreIota liftedChain
+  -- The chain: `cancel` once, then one `step` per recursive field.
+  let mut chain := mkAppN (oneLayerTransportCancelAt carrierLevel motiveLevel)
+    #[publicCarrier, publicMotive, sourceLayer, unrolledMajor, agreement, publicBase]
+  for j in [0:n] do
+    let fieldType := fieldTypes[j]!
+    let fieldLevel ← ilevel fieldType
+    let layer ← withLocalDeclD `field fieldType fun hole => do
+      mkLambdaFVars #[hole] (← layerAt ((mixed j).set! j hole))
+    let result ← withLocalDeclD `field fieldType fun hole => do
+      let values := (mixed j).set! j hole
+      let hypotheses ← (Array.range n).mapM fun i => publicIHAt i values[i]!
+      mkLambdaFVars #[hole] (← minorAt values hypotheses)
+    chain := mkAppN (oneLayerFieldStepAt carrierLevel motiveLevel fieldLevel)
+      #[publicCarrier, publicMotive, fieldType, unrolledMajor, value, layer, result,
+        sources[j]!, targets[j]!, roundTrips[j]!, chain]
+  let chained := mkApp chain roundTripMajor
+  -- Both halves live under the major's own round trip.
+  let publicMajor ← layerAt (mixed n)
+  let majorAlpha := mkApp publicMotive publicMajor
+  let alongMajor := fun (base : Expr) =>
+    transportOneLayerMotiveAlong eqi motiveLevel carrierLevel publicCarrier
+      unrolledMajor publicMajor roundTripMajor base publicMotiveAt
+  let recursorSide ← alongMajor coreAtPrivate
+  let bridgedSide ← alongMajor value
+  let liftedBridge ← transportAlong eqi .zero motiveLevel unrolledAlpha
+    coreAtPrivate value bridge (eqi.refl' motiveLevel majorAlpha recursorSide)
+    fun z => do pure (eqi.mk' motiveLevel majorAlpha recursorSide (← alongMajor z))
+  let targetFields := mixed n
+  let publicResult ← minorAt targetFields
+    (← (Array.range n).mapM fun i => publicIHAt i targetFields[i]!)
+  transOf eqi motiveLevel majorAlpha recursorSide bridgedSide publicResult
+    liftedBridge chained
 
 /-- The private recursion shared by the public recursor definition and its
 compatibility proof.  Factoring it keeps the theorem arguments literally
@@ -1266,209 +1199,92 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
         | badShape s!"{sourceRecursor.name}'s exact prefix is too short"
       let recursiveFields := (Array.range fields.size).filter fun index =>
         fieldShape[index]!.rec?.isSome
-      if recursiveFields.isEmpty then
-        badShape s!"{tname}'s phase-1 one-layer family has no recursive fields"
-      if recursiveFields.size > 1 then do
-        unless recursiveFields.size == 2 do
-          badShape s!"{tname}'s multi-field one-layer family does not have exactly two recursive fields"
-        let i₁ := recursiveFields[0]!
-        let i₂ := recursiveFields[1]!
-        let p₁ := fields[i₁]!
-        let p₂ := fields[i₂]!
-        let R₁ ← inferType p₁
-        let R₂ ← inferType p₂
-        let mkMap := fun owner operation type => withLocalDeclD `field type fun field => do
-          mkLambdaFVars #[field] (← mapOneLayerOccurrence owner np operation us type field)
-        let roll₁ ← mkMap names.publicNames.self names.roll R₁
-        let roll₂ ← mkMap names.publicNames.self names.roll R₂
-        let q₁ := mkApp roll₁ p₁
-        let q₂ := mkApp roll₂ p₂
-        let Q₁ ← inferType q₁
-        let Q₂ ← inferType q₂
-        let unroll₁ ← mkMap names.implementation.self names.unroll Q₁
-        let unroll₂ ← mkMap names.implementation.self names.unroll Q₂
-        let mkSection := fun type => withLocalDeclD `field type fun field => do
-          mkLambdaFVars #[field] (← oneLayerOccurrenceRoundTrip names.publicNames.self
-            names.implementation.self np names.roll names.unroll names.unrollRoll
-            publicFields.fx? us type field)
-        let section₁ ← mkSection R₁
-        let section₂ ← mkSection R₂
-        let plan ← oneLayerRecursorPlan tname lparams np parameters motive pre[np + 1]!
-          (← ilevel alpha) level privateConstructorType privateRecursorType privateRecursorInfo
-          fieldShape eqi base publicFields
-        let publicRec := plan.publicRec
-        let mkH := fun type => withLocalDeclD `field type fun field => do
-          mkLambdaFVars #[field] (← oneLayerHypothesisType names.publicNames.self np motive type field)
-        let H₁ ← mkH R₁
-        let H₂ ← mkH R₂
-        let mkIH := fun owner rec type => withLocalDeclD `field type fun field => do
-          mkLambdaFVars #[field] (← oneLayerHypothesisValue owner np rec type field)
-        let privateIH₁ ← mkIH names.implementation.self plan.core Q₁
-        let privateIH₂ ← mkIH names.implementation.self plan.core Q₂
-        let publicIH₁ ← mkIH names.publicNames.self publicRec R₁
-        let publicIH₂ ← mkIH names.publicNames.self publicRec R₂
-        let mkIHAgreement := fun type => withLocalDeclD `field type fun field => do
-          mkLambdaFVars #[field] (← oneLayerHypothesisAgreement names.implementation.self np eqi
-            publicFields.fx? names us parameters motive plan.core publicRec type field)
-        let ihAgreement₁ ← mkIHAgreement Q₁
-        let ihAgreement₂ ← mkIHAgreement Q₂
-        let publicCtor ← withLocalDeclD `p₁ R₁ fun a => withLocalDeclD `p₂ R₂ fun b =>
-          mkLambdaFVars #[a,b] (mkAppN (.const names.publicNames.ctors[0]! us)
-            (parameters ++ (fields.set! i₁ a |>.set! i₂ b)))
-        let mut stored := fields
-        stored := stored.set! i₁ q₁ |>.set! i₂ q₂
-        let privateCtor ← withLocalDeclD `q₁ Q₁ fun a => withLocalDeclD `q₂ Q₂ fun b =>
-          mkLambdaFVars #[a,b] (mkAppN (.const names.implementation.ctors[0]! us)
-            (parameters ++ (stored.set! i₁ a |>.set! i₂ b)))
-        let rollCtor ← withLocalDeclD `p₁ R₁ fun a => withLocalDeclD `p₂ R₂ fun b => do
-          let lhs := mkAppN (.const names.roll us) (parameters.push (mkApp2 publicCtor a b))
-          let rhs := mkApp2 privateCtor (mkApp roll₁ a) (mkApp roll₂ b)
-          unless ← isDefEq lhs rhs do badShape "two-field roll compatibility is not definitional"
-          mkLambdaFVars #[a,b] (eqi.refl' level
-            (mkAppN (.const names.implementation.self us) parameters) lhs)
-        let minor ← withLocalDeclD `p₁ R₁ fun a => withLocalDeclD `p₂ R₂ fun b =>
-          withLocalDeclD `ih₁ (mkApp H₁ a) fun ha => withLocalDeclD `ih₂ (mkApp H₂ b) fun hb =>
-            mkLambdaFVars #[a,b,ha,hb] (mkAppN pre[np+1]!
-              ((fields.set! i₁ a |>.set! i₂ b) ++ #[ha,hb]))
-        let recLevels := if privateRecursorInfo.levelParams.length == lparams.length + 1 then level :: us else us
-        let agreement ← withLocalDeclD `q₁ Q₁ fun a => withLocalDeclD `q₂ Q₂ fun b => do
-          let (_, proof) ← oneLayerConstructorAgreement "two-field iota" np names eqi
-            publicFields.fx? us recLevels level parameters (stored.set! i₁ a |>.set! i₂ b)
-            fieldShape privateConstructorType privateRecursorType
-          mkLambdaFVars #[a,b] proof
-        let coreIota ← withLocalDeclD `q₁ Q₁ fun a => withLocalDeclD `q₂ Q₂ fun b => do
-          let fs := stored.set! i₁ a |>.set! i₂ b
-          let proof := mkAppN (.const names.implementation.iotas[0]! plan.recLevels)
-            (parameters ++ #[plan.privateMotive, plan.privateMinor] ++ fs)
-          unless (← inferType proof) == (← instantiateForall plan.coreIotaProposition fs) do
-            badShape "two-field private iota changed syntax"
-          mkLambdaFVars #[a,b] proof
-        let localRhs := rhs.replace fun sub => Id.run do
-          unless sub.getAppFn.constName? == some names.publicNames.recursor do return none
-          let args := sub.getAppArgs
-          unless args.size == pre.size + 1 do return none
-          for j in [:pre.size] do unless args[j]! == pre[j]! do return none
-          return some (mkApp publicRec args[pre.size]!)
-        unless recursorApplicationCount names.publicNames.recursor none rhs == 2 &&
-            recursorApplicationCount names.publicNames.recursor (some publicRec) localRhs == 0 do
-          badShape "two-field source rule has unexpected recursive calls"
-        let localProp := eqi.mk' equalityLevel alpha (mkApp publicRec major) localRhs
-        let args := #[mkAppN (.const names.implementation.self us) parameters,
-          mkAppN (.const names.publicNames.self us) parameters, Q₁, R₁, Q₂, R₂,
-          motive, H₁, H₂, mkAppN (.const names.roll us) parameters,
-          mkAppN (.const names.unroll us) parameters, mkAppN (.const names.unrollRoll us) parameters,
-          roll₁, unroll₁, section₁, roll₂, unroll₂, section₂,
-          privateCtor, publicCtor, rollCtor, privateIH₁, publicIH₁, ihAgreement₁,
-          privateIH₂, publicIH₂, ihAgreement₂, minor, plan.core, agreement, coreIota, p₁, p₂]
-        let levels := [level.normalize.dec.getD .zero, (← ilevel R₁).normalize.dec.getD .zero,
-          (← ilevel R₂).normalize.dec.getD .zero, ← ilevel alpha,
-          ← ilevel (mkApp H₁ p₁), ← ilevel (mkApp H₂ p₂)]
-        let proof ← match ← applyTwoFieldOneLayerCompatibility levels args localProp with
-          | .ok proof => pure proof | .error message => badShape message
-        unless ← withTransparency .all <| isDefEq (← inferType proof) proposition do
-          badShape "two-field proof does not unfold to exact source statement"
-        return Declaration.thmDecl
-          { name := names.publicNames.iotas[0]!, levelParams := sourceRecursor.levelParams
-            type := theoremType, value := ← mkLambdaFVars (pre ++ fields) proof }
-      let recursiveIndex := recursiveFields[0]!
-      let publicField := fields[recursiveIndex]!
-      let publicFieldType ← inferType publicField
-      let rollField ← withLocalDeclD `field publicFieldType fun field => do
-        mkLambdaFVars #[field] (← mapOneLayerOccurrence names.publicNames.self np names.roll
-          us publicFieldType field)
-      let privateField := mkApp rollField publicField
-      let privateFieldType ← inferType privateField
-      let unrollField ← withLocalDeclD `field privateFieldType fun field => do
-        mkLambdaFVars #[field] (← mapOneLayerOccurrence names.implementation.self np names.unroll
-          us privateFieldType field)
-      let unrollRollField ← withLocalDeclD `field publicFieldType fun field => do
-        mkLambdaFVars #[field] (← oneLayerOccurrenceRoundTrip
-          names.publicNames.self names.implementation.self np names.roll names.unroll
-          names.unrollRoll publicFields.fx? us publicFieldType field)
-
       let plan ← oneLayerRecursorPlan tname lparams np parameters motive pre[np + 1]!
         (← ilevel alpha) level privateConstructorType privateRecursorType privateRecursorInfo
         fieldShape eqi base publicFields
       let publicRec := plan.publicRec
-      let hypothesisFamily ← withLocalDeclD `field publicFieldType fun field => do
-        let type ← oneLayerHypothesisType names.publicNames.self np motive publicFieldType field
-        mkLambdaFVars #[field] type
-      let privateIH ← withLocalDeclD `field privateFieldType fun field => do
-        mkLambdaFVars #[field] (← oneLayerHypothesisValue names.implementation.self np
-          plan.core privateFieldType field)
-      let publicIH ← withLocalDeclD `field publicFieldType fun field => do
-        mkLambdaFVars #[field] (← oneLayerHypothesisValue names.publicNames.self np
-          publicRec publicFieldType field)
-      let ihAgreement ← withLocalDeclD `field privateFieldType fun field => do
-        let proof ← oneLayerHypothesisAgreement names.implementation.self np eqi
-          publicFields.fx? names us parameters motive plan.core publicRec privateFieldType field
-        mkLambdaFVars #[field] proof
-
-      let publicCtor ← withLocalDeclD `field publicFieldType fun field =>
-        mkLambdaFVars #[field] (mkAppN (.const names.publicNames.ctors[0]! us)
-          (parameters ++ fields.set! recursiveIndex field))
+      let motiveLevel ← ilevel alpha
+      -- `q⃗`: every recursive field rolled into the private carrier, and `m⃗`:
+      -- the same fields unrolled again.  Both are pointwise through the
+      -- field's own binders, so an infinitary field is no different here.
       let mut storedFields := fields
-      for index in [0:fields.size] do
-        if fieldShape[index]!.rec?.isSome then
-          storedFields := storedFields.set! index (← mapOneLayerOccurrence
-            names.publicNames.self np names.roll us (← inferType fields[index]!) fields[index]!)
-      let privateCtor ← withLocalDeclD `field privateFieldType fun field =>
-        mkLambdaFVars #[field] (mkAppN (.const names.implementation.ctors[0]! us)
-          (parameters ++ storedFields.set! recursiveIndex field))
-      let rollCtor ← withLocalDeclD `field publicFieldType fun field => do
-        let lhs := mkAppN (.const names.roll us)
-          (parameters.push (mkApp publicCtor field))
-        let rhs := mkApp privateCtor (mkApp rollField field)
-        unless ← isDefEq lhs rhs do
-          badShape s!"{names.publicNames.ctors[0]!}'s roll compatibility is not definitional"
-        let proof := eqi.refl' level
-          (mkAppN (.const names.implementation.self us) parameters) lhs
-        mkLambdaFVars #[field] proof
-
-      let minor ← withLocalDeclD `field publicFieldType fun field => do
-        let hypothesisType := mkApp hypothesisFamily field
-        withLocalDeclD `ih hypothesisType fun ih =>
-          mkLambdaFVars #[field, ih]
-            (mkAppN pre[np + 1]! (fields.set! recursiveIndex field ++ #[ih]))
-      let constructorAgreement ← withLocalDeclD `field privateFieldType fun field => do
-        let privateFields := storedFields.set! recursiveIndex field
-        let layerRecLevels :=
-          if privateRecursorInfo.levelParams.length == lparams.length + 1 then
-            level :: us
-          else us
-        let (_, agreement) ← oneLayerConstructorAgreement "public iota" np names eqi publicFields.fx?
-          us layerRecLevels level parameters privateFields fieldShape
+      for index in recursiveFields do
+        storedFields := storedFields.set! index (← mapOneLayerOccurrence
+          names.publicNames.self np names.roll us (← inferType fields[index]!) fields[index]!)
+      let mut unrolledFields := fields
+      for index in recursiveFields do
+        unrolledFields := unrolledFields.set! index (← mapOneLayerOccurrence
+          names.implementation.self np names.unroll us
+          (← inferType storedFields[index]!) storedFields[index]!)
+      let privateMajor := mkAppN (.const names.implementation.ctors[0]! us)
+        (parameters ++ storedFields)
+      let rolledMajor := mkAppN (.const names.roll us) (parameters.push major)
+      unless ← isDefEq rolledMajor privateMajor do
+        badShape s!"{names.publicNames.ctors[0]!}'s roll compatibility is not definitional"
+      let layerRecLevels :=
+        if privateRecursorInfo.levelParams.length == lparams.length + 1 then
+          level :: us
+        else us
+      -- Both the layer congruence and the private ι rule are read at *fresh*
+      -- locals in the recursive slots and applied at `q⃗` afterwards: the
+      -- congruence reads its independence invariant off the slots themselves,
+      -- and the ι rule's exact statement is compared where no substitution has
+      -- had a chance to reassociate it.  This is also how the private minor
+      -- built the copy the private ι rule carries.
+      let privateFieldTypes ← recursiveFields.mapM fun index =>
+        inferType storedFields[index]!
+      let storedRecursive := recursiveFields.map fun index => storedFields[index]!
+      let holeTypes := privateFieldTypes.map fun type => (`q, type)
+      let atHoles := fun (values : Array Expr) => Id.run do
+        let mut holeFields := storedFields
+        for slot in [0:recursiveFields.size] do
+          holeFields := holeFields.set! recursiveFields[slot]! values[slot]!
+        return holeFields
+      let agreementFamily ← withLocalsD holeTypes 0 #[] fun holes => do
+        let (_, proof) ← oneLayerConstructorAgreement "public iota" np names eqi
+          publicFields.fx? us layerRecLevels level parameters (atHoles holes) fieldShape
           privateConstructorType privateRecursorType
-        mkLambdaFVars #[field] agreement
-      let coreIota ← withLocalDeclD `field privateFieldType fun field => do
-        let privateFields := storedFields.set! recursiveIndex field
-        let target ← instantiateForall plan.coreIotaProposition privateFields
-        let proof := mkAppN (.const names.implementation.iotas[0]! plan.recLevels)
-          (parameters ++ #[plan.privateMotive, plan.privateMinor] ++ privateFields)
-        let actual ← inferType proof
-        unless actual == target do
+        mkLambdaFVars holes proof
+      let coreIotaFamily ← withLocalsD holeTypes 0 #[] fun holes => do
+        let holeFields := atHoles holes
+        let rule := mkAppN (.const names.implementation.iotas[0]! plan.recLevels)
+          (parameters ++ #[plan.privateMotive, plan.privateMinor] ++ holeFields)
+        unless (← inferType rule) ==
+            (← instantiateForall plan.coreIotaProposition holeFields) do
           badShape s!"{names.implementation.iotas[0]!}'s exact instantiated rule changed syntax"
-        mkLambdaFVars #[field] proof
-
-      let carrierUniverse := level.normalize.dec.getD .zero
-      let fieldLevel ← ilevel publicFieldType
-      let fieldUniverse := fieldLevel.normalize.dec.getD .zero
-      let hypothesisLevel ← ilevel (mkApp hypothesisFamily publicField)
-      let arguments := #[mkAppN (.const names.implementation.self us) parameters,
-        mkAppN (.const names.publicNames.self us) parameters,
-        privateFieldType, publicFieldType, motive, hypothesisFamily,
-        mkAppN (.const names.roll us) parameters,
-        mkAppN (.const names.unroll us) parameters,
-        mkAppN (.const names.unrollRoll us) parameters,
-        rollField, unrollField, unrollRollField,
-        privateCtor, publicCtor, rollCtor,
-        privateIH, publicIH, ihAgreement,
-        minor, plan.core, constructorAgreement, coreIota]
+        mkLambdaFVars holes rule
+      let agreement := agreementFamily.beta storedRecursive
+      let coreIota := coreIotaFamily.beta storedRecursive
+      let fieldTypes ← recursiveFields.mapM fun index => inferType fields[index]!
+      let sources := recursiveFields.map fun index => unrolledFields[index]!
+      let targets := recursiveFields.map fun index => fields[index]!
+      let roundTrips ← recursiveFields.mapM fun index => do
+        oneLayerOccurrenceRoundTrip names.publicNames.self names.implementation.self np
+          names.roll names.unroll names.unrollRoll publicFields.fx? us
+          (← inferType fields[index]!) fields[index]!
+      let privateIHs ← recursiveFields.mapM fun index => do
+        oneLayerHypothesisValue names.implementation.self np plan.core
+          (← inferType storedFields[index]!) storedFields[index]!
+      let ihAgreements ← recursiveFields.mapM fun index => do
+        oneLayerHypothesisAgreement names.implementation.self np eqi publicFields.fx?
+          names us parameters motive plan.core publicRec
+          (← inferType storedFields[index]!) storedFields[index]!
+      let substitute := fun (values : Array Expr) => Id.run do
+        let mut result := fields
+        for slot in [0:recursiveFields.size] do
+          result := result.set! recursiveFields[slot]! values[slot]!
+        return result
+      let layerAt := fun (values : Array Expr) =>
+        pure (mkAppN (.const names.publicNames.ctors[0]! us) (parameters ++ substitute values))
+      let minorAt := fun (values hypotheses : Array Expr) =>
+        pure (mkAppN pre[np + 1]! (substitute values ++ hypotheses))
+      let publicIHAt := fun (_ : Nat) (value : Expr) => do
+        oneLayerHypothesisValue names.publicNames.self np publicRec (← inferType value) value
       -- The exported rule is restored with the public declaration table, so
       -- its recursive hypotheses still call the installed public recursor.
-      -- The compatibility theorem is applied before that declaration is
-      -- unfolded: replace only calls with this exact parameter/motive/minor
-      -- prefix by the local recursor body used on the left-hand side.
+      -- The compatibility proof is built before that declaration is unfolded:
+      -- replace only calls with this exact parameter/motive/minor prefix by the
+      -- local recursor body used on the left-hand side.
       let localRhs := rhs.replace fun subexpression => Id.run do
         let .const name _ := subexpression.getAppFn | return none
         unless name == names.publicNames.recursor do return none
@@ -1478,33 +1294,44 @@ def buildOneLayerPublicRecursor (tname : Name) (lparams : List Name) (np : Nat)
           unless arguments[index]! == pre[index]! do return none
         return some (mkApp publicRec arguments[pre.size]!)
       let sourceCalls := recursorApplicationCount names.publicNames.recursor none rhs
-      unless sourceCalls == 1 do
-        badShape s!"{names.publicNames.iotas[0]!}'s phase-1 source rule has {sourceCalls} recursive public calls"
+      unless sourceCalls == recursiveFields.size do
+        badShape s!"{names.publicNames.iotas[0]!}'s source rule has {sourceCalls} recursive \
+          public calls, expected {recursiveFields.size}"
       let unmatchedCalls := recursorApplicationCount names.publicNames.recursor
         (some publicRec) localRhs
       unless unmatchedCalls == 0 do
-        badShape s!"{names.publicNames.iotas[0]!}'s source rule retains {unmatchedCalls} unmatched public recursor calls"
-      let theoremLhs := mkApp publicRec (mkApp publicCtor publicField)
-      let theoremRhs := mkApp2 minor publicField (mkApp publicIH publicField)
-      unless ← withTransparency .all <| isDefEq theoremLhs (mkApp publicRec major) do
-        badShape s!"{names.publicNames.iotas[0]!}'s local constructor does not match its exact source major"
+        badShape s!"{names.publicNames.iotas[0]!}'s source rule retains {unmatchedCalls} \
+          unmatched public recursor calls"
+      let theoremLhs ← layerAt targets
+      let theoremRhs ← minorAt targets
+        (← (Array.range recursiveFields.size).mapM fun slot =>
+          publicIHAt slot targets[slot]!)
+      unless ← withTransparency .all <| isDefEq (mkApp publicRec theoremLhs)
+          (mkApp publicRec major) do
+        badShape s!"{names.publicNames.iotas[0]!}'s local constructor does not match its \
+          exact source major"
       unless ← withTransparency .all <| isDefEq theoremRhs localRhs do
-        badShape s!"{names.publicNames.iotas[0]!}'s local minor does not match its exact source rule"
-      -- Type inference beta-reduces the local constructor/minor/IH arguments
-      -- when it instantiates the embedded theorem.  Use their already-checked
-      -- exact source forms as the expected result, while the same stored
-      -- `publicRec` remains opaque in both sides.
-      let localProposition := eqi.mk' equalityLevel alpha
-        (mkApp publicRec major) localRhs
-      let proof ← match ← applyOneLayerCompatibility
-          [carrierUniverse, fieldUniverse, ← ilevel alpha, hypothesisLevel]
-          (arguments.push publicField) localProposition with
+        badShape s!"{names.publicNames.iotas[0]!}'s local minor does not match its exact \
+          source rule"
+      let proof ← oneLayerNaryCompatibility eqi level motiveLevel
+        (mkAppN (.const names.publicNames.self us) parameters) motive
+        (mkAppN (.const names.unroll us) (parameters.push privateMajor)) agreement
+        (mkApp plan.core privateMajor) coreIota
+        (mkAppN (.const names.unrollRoll us) (parameters.push major))
+        fieldTypes sources targets roundTrips privateIHs ihAgreements
+        layerAt minorAt publicIHAt
+      -- Type inference beta-reduces the local constructor/minor/IH arguments,
+      -- so the already-checked exact source forms are the expected result while
+      -- the same stored `publicRec` remains opaque on both sides.
+      let localProposition := eqi.mk' equalityLevel alpha (mkApp publicRec major) localRhs
+      let proof ← match ← checkOneLayerCompatibility
+          s!"{names.publicNames.iotas[0]!}'s compatibility" proof localProposition with
         | .ok proof => pure proof
-        | .error message => badShape s!"{names.publicNames.iotas[0]!}'s compatibility failed: {message}"
+        | .error message => badShape message
       let actual ← inferType proof
       unless ← withTransparency .all <| isDefEq actual proposition do
-        badShape s!"{names.publicNames.iotas[0]!}'s local compatibility proof does not unfold to its public statement: {actual} != {proposition}"
-      check proof
+        badShape s!"{names.publicNames.iotas[0]!}'s local compatibility proof does not unfold \
+          to its public statement: {actual} != {proposition}"
       pure <| Declaration.thmDecl
         { name := names.publicNames.iotas[0]!, levelParams := sourceRecursor.levelParams
           type := theoremType, value := ← mkLambdaFVars (pre ++ fields) proof }

@@ -276,7 +276,10 @@ def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
       let fields := binders.extract constructor.numParams binders.size
       let fieldTypes := fields.map (·.type)
       let fieldValues := fields.map (·.value)
-      let mut recursiveFields := 0
+      -- No count of recursive fields is asked: the generator proves a rule
+      -- with as many equality eliminations as the constructor has recursive
+      -- fields.  What is still required of them is independence, checked one
+      -- field at a time immediately below.
       for fieldIndex in [:fields.size] do
         let normalized := normalizer.whnf fieldTypes[fieldIndex]!
         let target? := all.find? fun candidate =>
@@ -285,15 +288,12 @@ def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
         if target?.isNone && all.any (fieldTypes[fieldIndex]!.getUsedConstants.contains ·) then
           return .malformed (privateConstructor ownerType.name constructor.name)
         if target?.isSome then
-          recursiveFields := recursiveFields + 1
           edges := edges.push (ownerType.name, target?.get!)
           let fieldId := fieldValues[fieldIndex]!.fvarId!
           for later in [fieldIndex + 1:fields.size] do
             if fieldTypes[later]!.containsFVar fieldId then
               return .malformed (privateConstructor ownerType.name constructor.name)
           changed := true
-      unless recursiveFields ≤ 1 do
-        return .malformed (privateConstructor ownerType.name constructor.name)
     anyChanged := anyChanged || (ownerType.ctors.length == 1 && changed)
   unless anyChanged do return .malformed root
   for source in all do

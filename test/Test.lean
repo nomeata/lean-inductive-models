@@ -639,10 +639,11 @@ def expectedPrim : List Row :=
   -- the section carries: these three at `[propext, Classical.choice,
   -- Quot.sound]` against every other target's `[propext, Quot.sound]`.
   -- `Twin`, `Mixed`, `TwinInf`, and `Prefix` are the binary one-layer
-  -- public-carrier tranche. `Triple`, `Quad` and `Trine` are three and four
-  -- recursive fields, and past two the route declines: their rows are present,
-  -- while the assertion in `runOne` requires the one-layer private certificate
-  -- to be absent. They are the guard-rail on the arity restriction.
+  -- public-carrier tranche, and `Triple`, `Quad` and `Trine` are the same
+  -- route at three and four recursive fields. The assertion in `runOne`
+  -- requires the complete one-layer private certificate for each of the three:
+  -- nothing counts fields, so an arity restriction reintroduced anywhere shows
+  -- up here as a missing certificate.
   , ("prim_w",
       [("Tree", 225), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
@@ -651,9 +652,9 @@ def expectedPrim : List Row :=
        ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Wty", 23),
-       ("Triple", 16), ("P", 6), ("Q", 8), ("Wt", 20),
+       ("Triple", 24), ("P", 6), ("Q", 8), ("Wt", 20),
        ("Dep", 12), ("Bad", 12), ("TwinInf", 23), ("Br", 12), ("Twin", 22),
-       ("Prefix", 26), ("Quad", 18), ("Utd", 14), ("Mixed", 25), ("Trine", 18)],
+       ("Prefix", 26), ("Quad", 26), ("Utd", 14), ("Mixed", 25), ("Trine", 27)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The head-normalization sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
@@ -851,8 +852,8 @@ def runOne (root : String) (a : TAcc) (r : Row)
       a := check a
         (rep.generated.any (·.1 == owner) &&
           emittedNames.contains (Naming.modelName owner) &&
-          (certificate owner).all fun name => !emittedNames.contains name)
-        s!"prim_w: {owner} did not generate on the legacy route without a one-layer certificate"
+          (certificate owner).all emittedNames.contains)
+        s!"prim_w: {owner} did not generate with the complete one-layer certificate"
   if name == "prim_carve" then
     -- `IBox` is the indexed-fibre occupant in this mixed route fixture.  Its
     -- count grew from the eight public/implementation records to sixteen only

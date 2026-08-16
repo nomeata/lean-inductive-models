@@ -807,14 +807,16 @@ def main : IO UInt32 := do
     #[wtyProjection0, wtyProjection1, wtyRule0, wtyRule1].all fun name =>
       !noOneLayerCertificate.any (hasTypeViolation `Wty name)
 
-  -- The next production tranche folds the same private/public compatibility
-  -- proof once per recursive constructor field.  These owners differ only in
-  -- the recursive suffix: direct/direct, direct/infinitary,
-  -- infinitary/infinitary, and an ordinary dependent prefix followed by two
-  -- direct fields.  Every public proposition remains the literal name-only
-  -- source rewrite; transports are confined to proof values.
+  -- The same private/public compatibility proof, folded once per recursive
+  -- constructor field.  These owners differ only in the recursive suffix:
+  -- direct/direct, direct/infinitary, infinitary/infinitary, an ordinary
+  -- dependent prefix followed by two direct fields, and then *three* and
+  -- *four* recursive fields — past any fixed-arity lemma, and folded by the
+  -- same loop.  Every public proposition remains the literal name-only source
+  -- rewrite; transports are confined to proof values.
   let multiFieldOwners : Array (Name × Nat) :=
-    #[(`Twin, 2), (`Mixed, 3), (`TwinInf, 2), (`Prefix, 4)]
+    #[(`Twin, 2), (`Mixed, 3), (`TwinInf, 2), (`Prefix, 4),
+      (`Triple, 3), (`Quad, 4), (`Trine, 4)]
   for (owner, fieldCount) in multiFieldOwners do
     let privateRoot := Name.str (Naming.modelName owner) "_impl"
     let certificate := #[Name.str privateRoot "self", Name.str privateRoot "ctor_0",
@@ -848,15 +850,6 @@ def main : IO UInt32 := do
       #[Naming.modelName `TwinInf.rec, Naming.iotaName `TwinInf.rec 0,
         `TwinInf._model._impl.rec, `TwinInf._model._impl.rec_iota_0].all fun name =>
         (declarationType? twinAuthoredGenerated name).any (containsConst ``Eq.rec)
-  let tripleCertificateRoot := `Triple._model._impl
-  let tripleCertificate := #[Name.str tripleCertificateRoot "self",
-    Name.str tripleCertificateRoot "ctor_0", Name.str tripleCertificateRoot "rec",
-    Name.str tripleCertificateRoot "rec_iota_0", Name.str tripleCertificateRoot "roll",
-    Name.str tripleCertificateRoot "unroll", Name.str tripleCertificateRoot "unroll_roll",
-    Name.str tripleCertificateRoot "roll_unroll"]
-  state := state.check "three recursive fields remain on the legacy route" <|
-    wReport.generated.any (·.1 == `Triple) && tripleCertificate.all fun name => !wNames.contains name
-
   let (wrapperDeclarations, wrapperReport) ← runExport wrapperRaw
   let wrapperGenerated := outputExport wrapperRaw wrapperDeclarations
   let wrapperNames := wrapperDeclarations.flatMap (·.names.toArray)

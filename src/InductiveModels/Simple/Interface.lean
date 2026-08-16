@@ -51,7 +51,13 @@ def PrimInterfaceNames.oneLayerImplementation (root : Name)
 
 /-- Source/kernel metadata boundary for the first one-layer production route.
 Capability checks which can fail (support, exact recursor layout and carrier
-level) still run before this predicate is committed to emission. -/
+level) still run before this predicate is committed to emission.
+
+**No count of recursive fields is asked.**  The remaining condition on them is
+the one the layer's storage tower needs and not an arity: a recursive field may
+not occur in a *later* field's type, because the congruence that rebuilds the
+layer changes those fields one at a time.  `type.isRec` at one constructor is
+what says the constructor has recursive occurrences at all. -/
 def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr))
     (sourceRecursor? : Option ERec) : MetaM Bool := do
@@ -68,7 +74,6 @@ def phase1DirectTypeOneLayerEligible (tname : Name) (np : Nat) (memberTy : Expr)
           let shape : Array PField ← classifyCtor tname (numForalls telescope) telescope
           let recursive := (Array.range shape.size).filter fun index =>
             (PField.rec? shape[index]!).isSome
-          if recursive.isEmpty || recursive.size > 2 then return false
           forallBoundedTelescope telescope (some shape.size) fun fields _ => do
             for recursiveIndex in recursive do
               let .fvar recursiveId := fields[recursiveIndex]!
