@@ -1,5 +1,5 @@
-import InductiveModels.Mutual
 import InductiveModels.Naming
+import InductiveModels.Gen
 
 /-!
 # The simple route's alias table and its K theorem

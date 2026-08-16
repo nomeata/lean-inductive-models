@@ -1,4 +1,5 @@
 import InductiveModels.OneLayer
+import InductiveModels.Mutual
 
 /-!
 # Partial one-layer adapter for plain mutual families

@@ -1,6 +1,7 @@
-import InductiveModels.Model
 import InductiveModels.LevelAlgebra
 import InductiveModels.Naming
+import InductiveModels.Plan
+import InductiveModels.Gen
 
 /-!
 # The model of a **plain mutual block**, generated
@@ -118,14 +119,6 @@ What is
 open Lean Meta
 
 namespace InductiveModels
-
-/-- How many leading `∀` binders an expression has, **syntactically**. No
-`whnf`: every telescope peeled here is one the export wrote as a literal
-`Π`-nest, and unfolding a carrier to find another binder would be a different
-question. -/
-def numForalls : Expr → Nat
-  | .forallE _ _ b _ => numForalls b + 1
-  | _ => 0
 
 /-- Open one member's **index** telescope at the block's parameter `fvar`s.
 

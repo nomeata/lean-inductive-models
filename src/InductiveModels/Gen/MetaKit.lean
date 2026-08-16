@@ -38,6 +38,14 @@ partial def headNorm (e : Expr) : Expr :=
   | .app .. => let e' := e.headBeta; if e' == e then e else headNorm e'
   | _ => e
 
+/-- How many leading `∀` binders an expression has, **syntactically**. No
+`whnf`: every telescope peeled here is one the export wrote as a literal
+`Π`-nest, and unfolding a carrier to find another binder would be a different
+question. -/
+def numForalls : Expr → Nat
+  | .forallE _ _ b _ => numForalls b + 1
+  | _ => 0
+
 /-- **A constructor field's type**, with any leading `let` gone. Every place in
 this module that asks which member a field sits at reads it through here. -/
 def ftyp (e : Expr) : GenM Expr := return zetaHead (← inferType e)

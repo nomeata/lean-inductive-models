@@ -1,4 +1,3 @@
-import InductiveModels.Mutual
 import InductiveModels.Naming
 import InductiveModels.Projection
 

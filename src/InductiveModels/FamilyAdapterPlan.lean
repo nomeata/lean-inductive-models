@@ -1,4 +1,4 @@
-import InductiveModels.Model
+import InductiveModels.Gen.Iso
 
 /-!
 # Generic private/public family-adapter plans

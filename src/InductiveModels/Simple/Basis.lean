@@ -1,6 +1,8 @@
-import InductiveModels.Mutual
+import InductiveModels.LevelAlgebra
 import InductiveModels.Naming
+import InductiveModels.Plan
 import InductiveModels.Projection
+import InductiveModels.Gen
 
 /-!
 # The trusted basis, its owners' exact declarations, and their splices

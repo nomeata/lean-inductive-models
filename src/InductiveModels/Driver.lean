@@ -1,4 +1,5 @@
 import InductiveModels.MutualOneLayer
+import InductiveModels.Model
 import InductiveModels.Cli
 import InductiveModels.Naming
 import InductiveModels.Projection
