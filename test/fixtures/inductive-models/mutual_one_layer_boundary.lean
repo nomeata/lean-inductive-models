@@ -35,7 +35,22 @@ end
 The same boundary at more than one recursive field per constructor.
 `MutualBranchA.mk` crosses to the sibling twice and recurses into itself once,
 so its ι rule needs three independent equality eliminations while the sibling
-needs one.  A count anywhere in the compatibility construction shows up here.
+needs one.
+
+**This pair does not pin the arity of that construction, and the claim that it
+does was never true.**  `InductiveModels.oneLayerNaryCompatibility` is reached
+here at three fields — but the mutual adapter requires its `roll` to agree with
+the private constructor *definitionally*
+(`MutualOneLayer.lean`'s "roll compatibility is not definitional"), so every
+field step in the chain collapses and a chain capped at two fields still checks.
+Reinstating an arity cap in that chain leaves this fixture, and
+`mutualonelayerdiagnostictest` with it, green; what goes red is `prim_w`, whose
+one-layer owners roll through a real private carrier.  So what this pair pins is
+the *adapter* past one recursive field per constructor — the member certificate,
+the checker's independent agreement — and not the compatibility proof's arity.
+That is a gap in this fixture rather than in the construction, and it is
+unrelated to `MutualBranchA`'s erasure skeleton having moved from arm W to arm E
+(the same cap is accepted with arm E disabled).
 -/
 mutual
 inductive MutualBranchA : Type where

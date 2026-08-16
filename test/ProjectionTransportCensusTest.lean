@@ -234,7 +234,13 @@ core was an index erasure with no base constructor: arm E models that skeleton
 by the lift of `⊥`, so the `_wcore` fragment is not spliced there at all and
 the eleven projection iotas its own records carried are gone with it. The
 fixture's public interfaces are unchanged; what left is a fragment it no longer
-needs. -/
+needs.
+
+`prim_w` is 46 and not 35 because it gained `TripleInf`, `QuadInf` and
+`TrineInf` — three one-constructor arm-W owners at three and four recursive
+fields, restoring the one-layer adapter over a W carrier past the two
+`TwinInf` has.  Each is one-constructor and so projection-eligible, and their
+three, four and four fields are the whole of the difference. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 21),
     ("decline_no_eq", 11), ("default_ctor_iota", 0), ("degenerate_graph", 1),
@@ -262,7 +268,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("prim_declines", 16), ("prim_graph", 8), ("prim_graph_pre", 2), ("prim_idx", 19),
     ("prim_late_basis", 14), ("prim_late_eq", 1),
     ("prim_prop_skipped_field", 4), ("prim_shape_declines", 0),
-    ("prim_shapes", 22), ("prim_w", 35),
+    ("prim_shapes", 22), ("prim_w", 46),
     ("private_constructor", 1), ("prop_projection_boundaries", 12),
     ("prop_recursive_projections", 3), ("source_structure_syntax", 5),
     ("structure_eta", 12), ("structure_projections", 17),
