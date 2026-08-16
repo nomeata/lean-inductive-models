@@ -77,8 +77,15 @@ def main : IO UInt32 := do
       hasName simple.output (Naming.ruleKName recursor.name))
   state := state.check "every modeled K recursor has exactly named metadata"
     (positive.all fun recursor => hasName simple.output (Naming.ruleKName recursor.name))
+  -- Every `.all` below quantifies over recursors the *generator* modeled, so
+  -- each carries its own non-emptiness floor: a route that stops modelling
+  -- recursors empties the list and satisfies the quantifier rather than
+  -- failing it. The `positive` floor above is the same guard; these are the
+  -- other three lists it was never applied to.
+  let simpleNonK := modeledNonK simple
+  state := state.check "simple route has modeled non-K recursors" (!simpleNonK.isEmpty)
   state := state.check "non-K recursors have no rule-K metadata"
-    ((modeledNonK simple).all fun recursor =>
+    (simpleNonK.all fun recursor =>
       !hasName simple.output (Naming.ruleKName recursor.name))
   state := state.check "generated rule-K statements pass literal checking"
     (!(baseViolations.any (literalRuleKViolation theoremNames)))
@@ -95,7 +102,7 @@ def main : IO UInt32 := do
     state := state.check "the exact rule-K role is recorded"
       (roles[theoremName]?.any fun entry => entry.role == .ruleK)
 
-  if let some recursor := (modeledNonK simple)[0]? then
+  if let some recursor := simpleNonK[0]? then
     let theoremName := Naming.ruleKName recursor.name
     let extra : EDecl := .thm theoremName [] (.sort .zero) (.sort .zero) [theoremName]
     let violations := Check.check { simple.output with decls := simple.output.decls.push extra }
@@ -104,17 +111,34 @@ def main : IO UInt32 := do
 
   let mutualFixture ← runFixture "test/fixtures/inductive-models/mutual_prop.ndjson"
     { noGeneration with mutualModels := true }
+  let mutualNonK := modeledNonK mutualFixture
+  state := state.check "mutual route has modeled non-K recursors" (!mutualNonK.isEmpty)
   state := state.check "mutual route never invents K metadata"
-    ((modeledNonK mutualFixture).all fun recursor =>
+    (mutualNonK.all fun recursor =>
       !hasName mutualFixture.output (Naming.ruleKName recursor.name))
 
   let nested ← runFixture "test/fixtures/inductive-models/nested_iota.ndjson"
     { noGeneration with nested := true }
+  let nestedK := modeledK nested
+  let nestedNonK := modeledNonK nested
+  -- The floor this one gets is on the *input* side, not the modeled side.
+  -- `nested_iota`'s only literal K flag is `Eq.rec`'s; `Eq` is a basis
+  -- primitive that every configuration declines, and no committed fixture
+  -- changes its modeled-K set when the nested stage is toggled, so there is
+  -- no witness anywhere in the corpus for a K recursor the *nested* route
+  -- models. What can be pinned is that the fixture still presents a K flag
+  -- for the route to follow: without it the quantifier below would have
+  -- nothing to range over for the additional reason that nothing carries the
+  -- flag at all, and the route claim would lose even its subject.
+  let nestedInputK := (recursors nested.input).filter (·.k)
+  state := state.check "nested fixture still carries a literal K flag"
+    (!nestedInputK.isEmpty)
   state := state.check "nested route follows every literal K flag"
-    ((modeledK nested).all fun recursor =>
+    (nestedK.all fun recursor =>
       hasName nested.output (Naming.ruleKName recursor.name))
+  state := state.check "nested route has modeled non-K recursors" (!nestedNonK.isEmpty)
   state := state.check "nested route omits metadata when K is false"
-    ((modeledNonK nested).all fun recursor =>
+    (nestedNonK.all fun recursor =>
       !hasName nested.output (Naming.ruleKName recursor.name))
 
   IO.println s!"rule-K: {state.passed} passed, {state.failed.size} failed"
