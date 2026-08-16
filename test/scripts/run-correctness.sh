@@ -24,6 +24,7 @@ correctness_targets=(
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
   composedrecursorsyntaxtest mainclitest projectiontest projectiontransportcensustest
+  emissionordercensustest
   indexedfibrediagnostictest
   mutualonelayerdiagnostictest structureetatest
   deepimaxboxtest psigmaprimetest exactsortlifttest
@@ -58,6 +59,7 @@ lake exe composedrecursorsyntaxtest "$root"
 lake exe mainclitest "$root"
 lake exe projectiontest
 lake exe projectiontransportcensustest "$root"
+lake exe emissionordercensustest "$root"
 lake exe indexedfibrediagnostictest "$root"
 lake exe mutualonelayerdiagnostictest "$root"
 lake exe structureetatest

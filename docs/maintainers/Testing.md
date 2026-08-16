@@ -41,6 +41,7 @@ correctness_targets=(
   incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
   simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
   composedrecursorsyntaxtest mainclitest projectiontest projectiontransportcensustest
+  emissionordercensustest
   indexedfibrediagnostictest
   mutualonelayerdiagnostictest structureetatest
   deepimaxboxtest psigmaprimetest exactsortlifttest
@@ -82,6 +83,7 @@ lake exe composedrecursorsyntaxtest "$PWD"
 lake exe mainclitest "$PWD"
 lake exe projectiontest
 lake exe projectiontransportcensustest "$PWD"
+lake exe emissionordercensustest "$PWD"
 lake exe indexedfibrediagnostictest "$PWD"
 lake exe mutualonelayerdiagnostictest "$PWD"
 lake exe structureetatest
@@ -152,6 +154,44 @@ constructor telescope or projection codomain is unrelated syntax the model
 reproduces exactly, and is counted rather than restricted. The suite still
 pins the fixtures that the maximal configuration cannot run today, so the
 invariant cannot silently stop being exhaustive.
+
+`emissionordercensustest` bounds a **known defect**: generated output is not
+currently guaranteed to be replayable in record order. Lean's kernel starts
+from an empty environment and adds one declaration at a time, but
+`Driver.installInputCanonicalBasis` installs an input's own canonical-basis
+records (`Eq`, `Nat`, `PUnit`, the `PSigma'` bundle, `Nonempty`, the `Quot`
+bundle with `Quot.sound`, `Classical.choice`, `Iff`, `propext`) into the replay
+environment *before* the stream is consumed, so a generated island can be
+emitted against a basis member that the output only declares later. An output
+is dirty exactly when its input declares a canonical-basis member after the
+first owner that consumes it; every genuine input fixture is itself clean, so
+this is a property of what the filter emits rather than of what it reads.
+Today that is **1143 records across 15 of the 78 committed fixtures** —
+`arm_f_zip`, `mutual_structure_projections`, `prim_carve`, `prim_graph`,
+`prim_graph_pre`, `prim_idx`, `prim_late_eq`, `prim_shapes`, `prim_w`,
+`private_constructor`, `tight_prop_field_late`, `w_core`, `w_late_iff`, and the
+filtered `nested_iota` and `nested_shapes` — reaching `Eq`, `Eq.refl`,
+`PSigma'`, `PUnit` and the `Quot` bundle ahead of the record that declares them.
+The suite walks each generated stream in record order from an empty
+declared-name set, using `KernelCheck.inputReferences` as the dependency set,
+and pins the exact per-fixture counts in `expectedForwardReferences`. It fails
+both when a fixture becomes dirty and when a listed fixture becomes clean or
+changes count without the list being updated: the list is a progress meter
+toward zero, not an exemption.
+
+**The fix is pending a contract decision the project owner has not made** —
+either the filter emits every island after everything that island consumes, or
+the output contract states that the stream is a set of records carrying a
+dependency schedule rather than a replayable sequence — so nothing in the test
+tree works around the defect and no existing gate is relaxed for it.
+`--type-check-input` does not detect it: `typeCheckExport` replays in
+`KernelCheck.replayOrder`, a depth-first topological sort, so record order never
+reaches Lean's kernel. The same suite therefore also asserts that a deliberately
+order-broken export is still *accepted*. That assertion is the weaker property
+on purpose and is not an endorsement — it records that acceptance by
+`--type-check-input` is no evidence that an output replays in record order, and
+it fails the moment replay is made order-sensitive, which forces the allowlist
+above to be driven to empty before such a change can land.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and

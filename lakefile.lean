@@ -125,6 +125,11 @@ lean_exe projectiontransportcensustest where
   root := `ProjectionTransportCensusTest
   supportInterpreter := true
 
+lean_exe emissionordercensustest where
+  srcDir := "test"
+  root := `EmissionOrderCensusTest
+  supportInterpreter := true
+
 lean_exe indexedfibrediagnostictest where
   srcDir := "test"
   root := `IndexedFibreDiagnosticTest

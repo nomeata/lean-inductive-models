@@ -116,6 +116,7 @@ jobs:
                 drivernamingtest privatealiastest sourcereplayaliastest simplenamingtest rulektest \
                 defaultctoriotatest sourcestructuresyntaxtest composedrecursorsyntaxtest \
                 projectiontest projectiontransportcensustest \
+                emissionordercensustest \
                 indexedfibrediagnostictest mutualonelayerdiagnostictest \
                 structureetatest deepimaxboxtest \
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
@@ -141,6 +142,7 @@ jobs:
               lake exe composedrecursorsyntaxtest "$GITHUB_WORKSPACE"
               lake exe projectiontest
               lake exe projectiontransportcensustest "$GITHUB_WORKSPACE"
+              lake exe emissionordercensustest "$GITHUB_WORKSPACE"
               lake exe indexedfibrediagnostictest "$GITHUB_WORKSPACE"
               lake exe mutualonelayerdiagnostictest "$GITHUB_WORKSPACE"
               lake exe structureetatest
@@ -156,7 +158,7 @@ jobs:
               PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
               python3 test/scripts/generate_family_adapter_fixtures.py \
                 --output test/fixtures/inductive-models/family_adapter_generated.lean --check
-              count=32
+              count=33
               ;;
             cli)
               build_serially lean-inductive-models mainclitest
