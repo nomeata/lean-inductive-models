@@ -232,8 +232,12 @@ sweep: it holds malformed exports that exist to be *refused*, so no generation
 or census target should attempt to model them. `kernelchecktest` names each one
 directly. `const_universe_arity.ndjson` is the published Arena corpus'
 `bad/constlevels`, reduced to the records its crashing theorem needs; its
-`Eq.casesOn` occurrence carries no universe levels, which used to reach Lean's
-kernel and kill the process with SIGSEGV rather than be rejected.
+`Eq.casesOn` occurrence carries no universe levels. Under Lean 4.29.1 that
+occurrence reached `type_checker::whnf_core` through a `let` value the kernel
+only ever reduces, and killed the process with SIGSEGV. Lean 4.30.0 taught
+`type_checker::is_delta` to check a constant's universe-level arity, so from
+4.33.0 the kernel itself refuses the record — reporting a `let-declaration
+type mismatch 'x'` rather than crashing. `kernelchecktest` pins that message.
 
 ```console
 test/scripts/export-inductive-models.sh prim_shapes

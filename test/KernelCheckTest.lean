@@ -214,7 +214,8 @@ def run (root : String) : IO UInt32 := do
     .ax `ArityConsumer [] (.const `ArityProvider []) false]
   state := state.check "constant occurrences with the wrong universe arity are rejected" <|
     errorSatisfies (← runCheck wrongArity) fun message =>
-      message.contains "ArityProvider is used with 0 universe levels but is declared with 1"
+      message.contains
+        "incorrect number of universe levels parameters for 'ArityProvider', #1 expected, #0 provided"
   let rightArity := exportOf #[
     .defn `ArityProvider [`u] (.sort (.succ (.param `u))) (.sort (.param `u)) (.regular 1) "safe" [],
     .ax `ArityConsumer [] (.const `ArityProvider [.zero]) false]
@@ -223,13 +224,14 @@ def run (root : String) : IO UInt32 := do
 
   -- `bad/constlevels` from the published Lean Kernel Arena corpus, reduced to
   -- the records its crashing theorem needs. Its `Eq.casesOn` occurrence carries
-  -- no universe levels at all, and reaches the kernel only through positions
-  -- the kernel never infers; before the arity gate existed, replaying it killed
-  -- this process with SIGSEGV instead of rejecting it.
+  -- no universe levels at all and sits in a `let` value that only reduction
+  -- looks at, so no arity message is ever produced for it; the kernel refuses
+  -- the record when the `let` value fails to check against its ascribed type.
+  -- Under Lean 4.29.1 the same record killed this process with SIGSEGV.
   let constLevels ← readRejectedFixture root "const_universe_arity.ndjson"
   state := state.check "the arena constant-level crasher is rejected, not fatal" <|
     errorSatisfies (← runCheck constLevels) fun message =>
-      message.contains "Eq.casesOn is used with 0 universe levels but is declared with 2"
+      message.contains "let-declaration type mismatch 'x'"
 
   let duplicateType : EIndType :=
     { name := `DuplicateMember, levelParams := [], type := .sort (.succ .zero)

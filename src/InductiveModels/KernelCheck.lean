@@ -259,32 +259,6 @@ private def introducedUniverseArities : Declaration → Array (Name × Nat)
       #[(type.name, levelParams.length)] ++
         type.ctors.toArray.map fun constructor => (constructor.name, levelParams.length)
 
-/-- Reject a declaration that names a constant with the wrong number of
-universe levels, before it is submitted to Lean's kernel.
-
-Lean's kernel requires every `Expr.const` to carry exactly one level per level
-parameter of the declaration it names, and `infer_constant` rejects a mismatch
-wherever it infers the occurrence's type. An occurrence that reaches reduction
-instead of inference is not covered: `test/fixtures/rejected/const_universe_arity.ndjson`
-puts one in a `let` value that only `whnf` ever looks at, and Lean 4.29.1
-dereferences a null expression in `type_checker::whnf_core`, so the process
-dies of SIGSEGV rather than reporting anything. The arity is a kernel
-precondition, so it is established here rather than discovered there. -/
-def universeArityMismatch? (env : Kernel.Environment) (declaration : Declaration) :
-    Option String := Id.run do
-  let mut introduced : Std.HashMap Name Nat := {}
-  for (name, arity) in introducedUniverseArities declaration do
-    introduced := introduced.insert name arity
-  for (name, supplied) in constantUniverseArities (declarationExpressions declaration) do
-    let expected? := match introduced[name]? with
-      | some arity => some arity
-      | none => (env.find? name).map (·.levelParams.length)
-    if let some expected := expected? then
-      unless supplied == expected do
-        return some s!"{name} is used with {supplied} universe levels but is \
-          declared with {expected}"
-  return none
-
 private abbrev ReplayMarks := Array UInt8
 
 private partial def visitRecord (x : Export) (ownership : Std.HashMap Name Nat)
@@ -409,8 +383,6 @@ def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
       | .error message => return .error message
       | .ok replay => pure replay
     if let some declaration := replay then
-      if let some message := KernelCheck.universeArityMismatch? checked declaration then
-        return .error s!"{record.names}: {message}"
       match checked.addDeclCore 0 0 declaration none with
       | .error exception =>
         return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
