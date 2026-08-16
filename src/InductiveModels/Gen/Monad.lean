@@ -1,0 +1,163 @@
+import Lean
+import InductiveModels.Format.Types
+
+/-!
+# The generator's monad, and the shapes it can decline
+
+`Decline` is the vocabulary every one of the three constructions reports in,
+and `GenM` is the monad all three are written in. Neither knows anything about
+nesting: this is the bottom of the shared generator core, imported by the
+simple construction and by the nested one alike.
+
+`addChecked` is here rather than beside the constructions because installing a
+declaration in the disposable construction environment — and noticing when the
+environment loses it — is the same operation for all three.
+-/
+
+open Lean Meta
+
+namespace InductiveModels
+
+/-- A positively recognized reason not to emit a requested public interface.
+
+Construction-invariant failures do not belong here; [`InductiveModels.badShape`]
+raises an internal tool error for those. -/
+inductive Decline where
+  /-- **A prelude constant the input declares at something other than Lean's
+  statement.** Absence is not this: a prelude constant the input simply does
+  not have is *spliced* ([`InductiveModels.ensureEq`], [`InductiveModels.ensureFunext`]).
+  This is the case a splice cannot reach, because the name is already bound —
+  by the input, in the output, and in every one of the input's own terms — and
+  Lean's `Environment` has no way to rebind a constant, so replacing it would
+  mean replaying the whole file a second time. The message names the constant
+  and what is wrong with it. -/
+  | notLeans (n : Name) (why : String)
+  | nameTaken (n : Name)
+  /-- **The construction environment installed the declaration and then lost it.**
+  Distinct from [`InductiveModels.Decline.nameTaken`], which is the input already
+  holding the name, because the two want opposite responses. This one is
+  Lean's `AsyncConsts.add` refusing a *normalized* duplicate — an export
+  flattens many modules, so it holds both `_private.M.0.X` and a public `X`,
+  we model both, and `privateToUserName` makes the two model names one. The
+  name is ours, nothing in the input is using it,
+  and the fix is therefore ours too: regenerate under exact collision-safe
+  aliases and translate those names on the way out. The driver does exactly
+  that for nested, mutual, and simple generation, and only on this constructor.
+  -/
+  | nameLost (n : Name)
+  /-- **A basis primitive, which is exempt rather than declined.** `Eq`,
+  `Nat`, `PSigma'`, and `PUnit` are what the third construction is *written
+  in*; modelling one of them would either be circular or would put a second
+  `Eq` in the output. Their absence from the models is what makes the
+  construction well-founded, so it is not a gap and a census that counts it as
+  one is misleading. It is its own constructor so that the *report* can keep it
+  in its own
+  row ([`InductiveModels.Report.exempt`]) and the decline count can mean what it
+  says. -/
+  | basisExempt
+  deriving Inhabited
+
+/-- The word that reaches a report line, **under the construction's own name**.
+
+There are two models in this package and they share every guard below the
+driver — the name reservation, the prelude splice, `constInfo`, `instForall` —
+so a decline raised in shared code has to be able to say which construction was
+being built. `nested` is the model of a nested declaration
+([`InductiveModels.iso`]) and `mutual` is the model of a plain mutual block
+([`InductiveModels.mutualIso`]); the prefix is a parameter rather than a second copy of
+the enumeration, because a second copy is a second thing to keep in step. -/
+def Decline.labelAs (what : String) : Decline → String
+  | .notLeans n why => s!"{what} model: the input's {n} is not Lean's ({why})"
+  | .nameTaken n => s!"{what} model name taken ({n})"
+  | .nameLost n => s!"{what} model name lost to a normalized-name collision ({n})"
+  | .basisExempt =>
+    s!"{what} model: a basis primitive (the exemption that makes the construction \
+well-founded)"
+
+/-- The word that reaches a report line for a **nested** declaration's model. -/
+def Decline.label : Decline → String := Decline.labelAs "nested"
+
+/-- The generator's monad: `MetaM`, with an explicit non-emission result as its
+own error. Internal construction failures remain exceptions in the underlying
+`MetaM` and are therefore never reported as deliberate declines. -/
+abbrev GenM := ExceptT Decline MetaM
+
+def declineWith (d : Decline) : GenM α := throwThe Decline d
+/-- Abort generation after an internal construction invariant has failed.
+
+This is deliberately *not* a [`Decline`]. A decline says that the generator
+positively recognized a valid shape it has chosen not to support. Once a route
+has committed to constructing declarations, malformed intermediate syntax or
+missing metadata is a tool failure and must reach the CLI's exit-3 containment
+boundary. Optional exact generated kernel rejection is recorded by the
+Driver as `Report.generatedKernelRejected` and reaches the CLI's rejection exit;
+it is not raised through this trusted construction helper. -/
+def badShape (msg : String) : GenM α :=
+  ExceptT.lift (show MetaM α from Lean.throwError msg)
+
+/-- Fail closed unless exact exported syntax and installed kernel metadata
+describe the same recursor slots. Literal types and rule RHSs may differ: the
+former supplies public syntax while the latter supplies checked proofs. -/
+def validateExactRecursorLayout (expected : ERec) (actual : RecursorVal) : GenM Unit := do
+  unless expected.name == actual.name &&
+      expected.levelParams == actual.levelParams && expected.all == actual.all &&
+      expected.numParams == actual.numParams && expected.numIndices == actual.numIndices &&
+      expected.numMotives == actual.numMotives && expected.numMinors == actual.numMinors &&
+      expected.k == actual.k && expected.isUnsafe == actual.isUnsafe &&
+      expected.rules.length == actual.rules.length do
+    badShape s!"{expected.name}'s exact recursor layout differs from its installed metadata"
+  for index in [0:expected.rules.length] do
+    let exported := expected.rules[index]!
+    let installed := actual.rules[index]!
+    unless exported.ctor == installed.ctor && exported.nfields == installed.nfields do
+      badShape s!"{expected.name}'s exact rule {index} layout differs from its installed metadata"
+
+def hintsFor (v : Expr) : GenM ReducibilityHints := do
+  return .regular (getMaxHeight (← getEnv) v + 1)
+
+/-- Trusted-install a generated declaration in the disposable construction
+environment. Exact serialized records cross the optional kernel boundary only
+once, when their completed island closes.
+
+**A declaration the construction environment accepts but then loses is a
+decline.** `Environment.addDeclCore` installs the declaration and afterwards
+registers each name in the *async* constant map, which keys on
+`privateToUserName` — the name with its private prefix stripped.
+`AsyncConsts.add` `panic!`s on a duplicate normalized name and returns the map
+**unchanged**, so the constant is in the trusted construction map and invisible to
+`Environment.find?`. That is not survivable here: `MetaM`'s `inferType` goes
+through `find?`, so the very next declaration that names the lost one dies with
+`Unknown constant` — an exit 3, the tool's own failure, with nothing emitted.
+
+It is our own names that collide. An export is many modules flattened into one
+file, so it can hold both `_private.M.0.X` and a public `X`; we model both, and
+`_private.M.0.X._model.self` and `X._model.self` normalize alike. Checking
+membership *after* the add catches it however the two are ordered, which no
+check on the name alone can do — neither ordering has the other's name in hand
+at the time. Costs one map lookup per emitted name.
+
+`Declaration.getNames` omits the auxiliary recursors the kernel computes for
+nested inductives, which are legitimately absent from `find?`; that is exactly
+the set this must not ask about, and it is why the loop is over `getNames`
+rather than over the environment's diff. -/
+def addChecked (d : Declaration) : GenM Unit := do
+  -- This is the disposable construction view, not the generated kernel gate.
+  -- Exact emitted records are checked once at the island boundary when
+  -- `typeCheckGenerated` is enabled; construction declarations are otherwise
+  -- trusted in exactly the same way as replayed input declarations.
+  match (← getEnv).addDeclCore 0 0 d none false with
+  | .ok e =>
+    setEnv e
+    -- **`find?`, not `constants`.** `Environment.constants` is the trusted
+    -- construction kernel map; `Environment.find?` also consults the async
+    -- map used by MetaM, so it is the visibility boundary generation needs.
+    -- The test suite's `runEnvProbe` pins the same distinction from the other
+    -- side.
+    for n in d.getNames do
+      if ((← getEnv).find? n).isNone then
+        declineWith (.nameLost n)
+  | .error ex =>
+    badShape s!"{d.getTopLevelNames} could not be installed for construction: \
+      {← (ex.toMessageData {}).toString}"
+
+end InductiveModels
