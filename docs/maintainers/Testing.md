@@ -212,14 +212,39 @@ commit that takes it deletes that assertion.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and
-CLI jobs and limits each process to 12 GiB. The Mathlib workflow
-uses its separately documented 10/12 GiB phase envelopes and artifact gates.
-Its generation pass uses transactional declaration-stream named output with
+CLI jobs and sets no per-process memory limit of its own: the runner's 16 GiB
+and the job timeout are what bound it. It used to cap each process at 12 GiB
+with `ulimit -v`, which bounds **virtual address space** rather than resident
+memory. Those were always different quantities and since the v4.33.0 toolchain
+they are unrelated: a v4.33.0 `lean` frontend reserves about 12.8 GiB of
+address space at startup for allocator arenas — eleven-plus 1 GiB anonymous
+mappings, and `MIMALLOC_ARENA_RESERVE` does not change it — while its peak RSS
+is unchanged at roughly 2.0 GiB. Under a 12 GiB `ulimit -v` no module builds at
+all, aborting with `failed to create thread`; a cap high enough for `lean` to
+start no longer says anything about memory. **RSS is the quantity of interest.**
+
+The Mathlib workflow keeps enforced per-phase budgets, and enforces them as
+cgroup v2 `memory.max` limits — `systemd-run --scope -p MemoryMax=…
+-p MemorySwapMax=0` — rather than as address-space ceilings. `memory.max`
+accounts page cache as well as anonymous memory, but the kernel reclaims cache
+under pressure and only OOM-kills on genuine anonymous growth, so streaming the
+~5.9 GB output sibling does not trip a budget while a real leak does. The
+budgets are 6 GiB for the build and cache phases (measured peak 2.91 GiB),
+12 GiB for the Mathlib export (measured peak 7.80 GiB), and 12 GiB for the
+model worker. `scripts/ci-mathlib.sh` picks the strongest mechanism the runner
+actually supports by probing each one for real — a per-user scope, a `sudo`
+system scope dropping back to the calling user, or, where no cgroup can be
+created, running unbudgeted and failing the phase afterwards on peak RSS from
+`TIME_BIN -v`. Which one applied is printed as `memory budgets: enforced by …`,
+and every phase reports its peak RSS against its budget either way.
+
+The generation pass uses transactional declaration-stream named output with
 the generated-island gate disabled; a separate artifact-validation invocation uses
 `--type-check-input --no-output` to check the serialized export as input after
-generation exits. The existing 10 GiB generation cap is
-unchanged; the streamed generation and serialized input validation remain
-strictly separate processes.
+generation exits. Generation's measured 13.91 GiB peak RSS does not yet fit the
+12 GiB worker budget — that budget is the target it has to reach, not a
+description of what it costs today. The streamed generation and serialized
+input validation remain strictly separate processes.
 
 ## Fixture regeneration
 

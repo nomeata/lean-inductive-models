@@ -30,24 +30,32 @@ printf '%s\n' \
 checker="$ROOT/scripts/check-mathlib-result.sh"
 ci_harness="$ROOT/scripts/ci-mathlib.sh"
 
-# The native compiler needs more address space than either authoritative model
-# worker. Keep both exact envelopes and their phase assignments explicit.
-grep -Fq 'BUILD_LIMIT_KIB=$((12 * 1024 * 1024))' "$ci_harness"
+# The three phase budgets bound RESIDENT memory through a cgroup, not virtual
+# address space: since the v4.33.0 toolchain a `lean` frontend reserves about
+# 12.8 GiB of address space at startup against an unchanged 2.0 GiB peak RSS,
+# so `ulimit -v` can no longer express either quantity. Keep all three exact
+# budgets and their phase assignments explicit.
+grep -Fq 'BUILD_LIMIT_KIB=$((6 * 1024 * 1024))' "$ci_harness"
 grep -Fq 'EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))' "$ci_harness"
-grep -Fq 'WORKER_LIMIT_KIB=$((10 * 1024 * 1024))' "$ci_harness"
+grep -Fq 'WORKER_LIMIT_KIB=$((12 * 1024 * 1024))' "$ci_harness"
+grep -Fq 'MemoryMax="${limit_kib}K"' "$ci_harness"
+if grep -Eq '^[[:space:]]*ulimit[[:space:]]+.*-v' "$ci_harness"; then
+  echo "mathlib CI still bounds virtual address space instead of memory" >&2
+  exit 1
+fi
 for phase in build-generator build-exporter mathlib-cache; do
   grep -Eq "run_build_measured([[:space:]]+|.* )$phase" "$ci_harness" || {
-    echo "mathlib CI does not use the 12 GiB envelope for $phase" >&2
+    echo "mathlib CI does not use the 6 GiB budget for $phase" >&2
     exit 1
   }
 done
 grep -Eq 'run_export_measured([[:space:]]+|.* )export' "$ci_harness" || {
-  echo "mathlib CI does not use the 12 GiB envelope for export" >&2
+  echo "mathlib CI does not use the 12 GiB budget for export" >&2
   exit 1
 }
 for phase in generate check-input; do
   grep -Eq "run_worker_measured([[:space:]]+|.* )$phase" "$ci_harness" || {
-    echo "mathlib CI does not use the 10 GiB envelope for $phase" >&2
+    echo "mathlib CI does not use the 12 GiB worker budget for $phase" >&2
     exit 1
   }
 done

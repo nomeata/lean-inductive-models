@@ -24,8 +24,8 @@ MATHLIB_REV="5e932f97dd25535344f80f9dd8da3aab83df0fe6"
 EXPORTER_REV="caccfbebbc99077962b3321125b2375bb3fa22db"
 EXPORTER_PATCH="$ROOT/vendor/lean4export/compact-expr-interner.patch"
 EXPORTER_PATCH_SHA="151c25f6adbfd915ce62786da33352c089653f62d5d3445cc3b38879de19deeb"
-WORKER_LIMIT_KIB=$((10 * 1024 * 1024))
-BUILD_LIMIT_KIB=$((12 * 1024 * 1024))
+WORKER_LIMIT_KIB=$((12 * 1024 * 1024))
+BUILD_LIMIT_KIB=$((6 * 1024 * 1024))
 EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))
 # Keep the conservative generation-phase disk guard for the named-output
 # transaction's private sibling. This is
@@ -103,42 +103,156 @@ cleanup_tree() {
   fi
 }
 
-# Every large process tree has an exact address-space ceiling. Phases are
-# serialized, so the runner only has to hold the largest one at a time.
+# Every large process tree has an exact memory budget. Phases are serialized,
+# so the runner only has to hold the largest one at a time.
+#
+# These budgets bound RESIDENT memory. They used to be `ulimit -v` (RLIMIT_AS)
+# ceilings, which only ever proxied for that, and the v4.33.0 toolchain ended
+# even the proxy: a v4.33.0 `lean` frontend reserves about 12.8 GiB of virtual
+# address space at startup -- eleven-plus 1 GiB anonymous allocator arenas --
+# while its peak RSS is unchanged at roughly 2.0 GiB. An RLIMIT_AS small
+# enough to catch a runaway now aborts every `lean` at startup with "failed to
+# create thread", and one large enough to let `lean` start says nothing about
+# memory at all. `MIMALLOC_ARENA_RESERVE` does not change the reservation.
+#
+# A cgroup v2 `memory.max` is the honest instrument. It accounts page cache as
+# well as anonymous memory, but the kernel *reclaims* cache under pressure and
+# only OOM-kills on genuine anonymous growth, so the ~5.9 GB output sibling the
+# generate phase streams does not trip a budget while a real leak does. It is
+# also the mechanism the host itself uses to kill oversized runs, so a phase is
+# tested against the real constraint rather than a proxy for it.
+#
 # Measured peak RSS against the pinned corpus, in phase order:
 #
-#   build-generator  2.91 GiB   under BUILD_LIMIT_KIB  (12 GiB)
-#   build-exporter   1.43 GiB   under BUILD_LIMIT_KIB  (12 GiB)
-#   mathlib-cache    0.91 GiB   under BUILD_LIMIT_KIB  (12 GiB)
+#   build-generator  2.91 GiB   under BUILD_LIMIT_KIB  ( 6 GiB)
+#   build-exporter   1.43 GiB   under BUILD_LIMIT_KIB  ( 6 GiB)
+#   mathlib-cache    0.91 GiB   under BUILD_LIMIT_KIB  ( 6 GiB)
 #   export           7.80 GiB   under EXPORT_LIMIT_KIB (12 GiB)
-#   generate        13.91 GiB   under WORKER_LIMIT_KIB (10 GiB) -- exceeds it
+#   generate        13.91 GiB   under WORKER_LIMIT_KIB (12 GiB) -- exceeds it
 #
-# The build ceiling is no longer set by any single translation unit: splitting
-# the simple construction route dropped build-generator to 2.91 GiB, about a
-# quarter of this cap. 12 GiB is now sized by the exporter phase, whose 7.80
-# GiB the pinned compact-interner patch already buys, leaving 4 GiB of the
-# standard runner's 16 GiB for gzip and runner services.
+# The build budget is no longer set by any single translation unit: splitting
+# the simple construction route dropped build-generator to 2.91 GiB, so 6 GiB
+# leaves it a factor of two and still fails a runaway well before the runner
+# does. The export budget is sized by the exporter phase, whose 7.80 GiB the
+# pinned compact-interner patch already buys, leaving 4 GiB of the standard
+# runner's 16 GiB for gzip and runner services.
 #
-# The 10 GiB worker ceiling is the authoritative one for the public generator
+# The 12 GiB worker budget is the authoritative one for the public generator
 # and the serialized kernel reread, and generation currently does not fit under
 # it. Raising it is not a fix: 13.91 GiB of resident working set leaves under
 # 2 GiB on a 16 GiB runner for the OS, the gzip feeder and the page cache
-# backing the ~5.9 GB output sibling, so no cap in the 10-14 GiB range makes
-# this phase fit. The compact certificates retained across the whole stream
-# have to shrink instead; see the generate phase below for what does and does
-# not influence them.
+# backing the output sibling. 12 GiB is the number generation has to reach, not
+# a description of what it costs today; the compact certificates retained
+# across the whole stream have to shrink to get there. See the generate phase
+# below for what does and does not influence them.
+
+# Pick the strongest memory-limiting mechanism this runner actually supports,
+# once, by running each candidate for real. Nothing is assumed available:
+#
+#   user-scope    `systemd-run --user --scope`. The payload is a child of this
+#                 shell, so environment, working directory, file descriptors
+#                 and namespaces are inherited unchanged. Preferred.
+#   system-scope  `sudo systemd-run --scope`, dropping straight back to the
+#                 calling user with setpriv and re-applying this shell's
+#                 environment. Hosted runners have passwordless sudo and a
+#                 system manager but often no per-user manager, so this is
+#                 usually the one that applies there.
+#   measure       No usable cgroup. Phases run unbudgeted and their peak RSS is
+#                 compared against the budget afterwards. That cannot prevent a
+#                 runaway, but it still fails the job on one.
+#
+# The peak-RSS comparison runs under every mechanism, so the budget is always
+# reported even when the kernel is also enforcing it. `TIME_BIN -v` reports the
+# largest single process in the tree rather than the tree's sum; the cgroup is
+# the accurate accountant and this is the backstop.
+LIMIT_MECHANISM=measure
+SCOPE_ENV="$TMP_DIR/scope-env"
+
+run_user_scope() {
+  local limit_kib="$1"
+  shift
+  systemd-run --user --scope --quiet --collect \
+    -p MemoryMax="${limit_kib}K" -p MemorySwapMax=0 -- "$@"
+}
+
+run_system_scope() {
+  local limit_kib="$1"
+  shift
+  # `sudo` resets the environment and the scope would otherwise run as root.
+  # Carry this shell's environment across in a NUL-delimited dump and hand the
+  # payload back to the calling user before it starts. The dump is per-caller
+  # so nothing here assumes phases never overlap.
+  local scope_env="$SCOPE_ENV.$BASHPID"
+  env -0 > "$scope_env"
+  sudo -n systemd-run --scope --quiet --collect \
+    -p MemoryMax="${limit_kib}K" -p MemorySwapMax=0 \
+    -- setpriv --reuid="$(id -u)" --regid="$(id -g)" --init-groups \
+      bash -c '
+        dump="$1"
+        shift
+        while IFS= read -r -d "" assignment; do
+          case "$assignment" in
+            [A-Za-z_]*=*) export "$assignment" ;;
+          esac
+        done < "$dump"
+        rm -f "$dump"
+        exec "$@"' bash "$scope_env" "$@"
+}
+
+# A candidate counts as working only if the payload really ran, as the calling
+# user, with this shell's environment.
+scope_probe_ok() {
+  local runner="$1" observed
+  observed="$(
+    export CI_MATHLIB_SCOPE_PROBE=marker
+    "$runner" $((1024 * 1024)) \
+      sh -c 'printf "%s %s\n" "$(id -u)" "${CI_MATHLIB_SCOPE_PROBE:-unset}"' \
+      2>/dev/null
+  )" || return 1
+  [[ "$observed" == "$(id -u) marker" ]]
+}
+
+if command -v systemd-run >/dev/null; then
+  if scope_probe_ok run_user_scope; then
+    LIMIT_MECHANISM=user-scope
+  elif command -v setpriv >/dev/null && scope_probe_ok run_system_scope; then
+    LIMIT_MECHANISM=system-scope
+  fi
+fi
+echo "memory budgets: enforced by $LIMIT_MECHANISM"
+if [[ "$LIMIT_MECHANISM" == measure ]]; then
+  echo "memory budgets: no cgroup available; budgets are checked after each phase"
+fi
+
 run_capped() (
   limit_kib="$1"
   limit_label="$2"
   shift 2
-  ulimit -S -v "$limit_kib"
-  ulimit -H -v "$limit_kib"
-  [[ "$(ulimit -S -v)" == "$limit_kib" ]] ||
-    fail "could not set the $limit_label soft RLIMIT_AS"
-  [[ "$(ulimit -H -v)" == "$limit_kib" ]] ||
-    fail "could not set the $limit_label hard RLIMIT_AS"
-  exec "$@"
+  case "$LIMIT_MECHANISM" in
+    user-scope) run_user_scope "$limit_kib" "$@" ;;
+    system-scope) run_system_scope "$limit_kib" "$@" ;;
+    measure) exec "$@" ;;
+    *) fail "unknown memory-limit mechanism for $limit_label: $LIMIT_MECHANISM" ;;
+  esac
 )
+
+report_peak_rss() {
+  local limit_kib="$1" limit_label="$2" label="$3"
+  local peak_kib
+  peak_kib="$(awk -F': ' '/Maximum resident set size/ { print $2 }' \
+    "$PERF_DIR/$label.time" 2>/dev/null || true)"
+  if [[ -z "$peak_kib" ]]; then
+    echo "memory: $label peak RSS unavailable"
+    return 0
+  fi
+  awk -v kib="$peak_kib" -v budget="$limit_kib" -v phase="$label" \
+    -v mechanism="$LIMIT_MECHANISM" \
+    'BEGIN { printf "memory: %s peak RSS %.2f GiB of %.2f GiB budget (%s)\n",
+             phase, kib / 1048576, budget / 1048576, mechanism }'
+  if ((peak_kib > limit_kib)); then
+    fail "$label exceeded the $limit_label: ${peak_kib} KiB peak RSS"
+  fi
+}
 
 PERF_AVAILABLE=false
 if command -v perf >/dev/null &&
@@ -158,27 +272,30 @@ fi
 run_measured() {
   local limit_kib="$1" limit_label="$2" label="$3"
   shift 3
+  local status=0
   if [[ "$PERF_AVAILABLE" == true ]]; then
     run_capped "$limit_kib" "$limit_label" \
       "$TIME_BIN" -v -o "$PERF_DIR/$label.time" \
-      perf stat -e instructions -o "$PERF_DIR/$label.perf" -- "$@"
+      perf stat -e instructions -o "$PERF_DIR/$label.perf" -- "$@" || status=$?
   else
     echo "instructions: unavailable" > "$PERF_DIR/$label.perf"
     run_capped "$limit_kib" "$limit_label" \
-      "$TIME_BIN" -v -o "$PERF_DIR/$label.time" "$@"
+      "$TIME_BIN" -v -o "$PERF_DIR/$label.time" "$@" || status=$?
   fi
+  report_peak_rss "$limit_kib" "$limit_label" "$label"
+  return "$status"
 }
 
 run_build_measured() {
-  run_measured "$BUILD_LIMIT_KIB" "12 GiB build/cache" "$@"
+  run_measured "$BUILD_LIMIT_KIB" "6 GiB build/cache budget" "$@"
 }
 
 run_export_measured() {
-  run_measured "$EXPORT_LIMIT_KIB" "12 GiB Mathlib export" "$@"
+  run_measured "$EXPORT_LIMIT_KIB" "12 GiB Mathlib export budget" "$@"
 }
 
 run_worker_measured() {
-  run_measured "$WORKER_LIMIT_KIB" "10 GiB model worker" "$@"
+  run_measured "$WORKER_LIMIT_KIB" "12 GiB model worker budget" "$@"
 }
 
 # Hosted runners normally have no configured swap. Try the standard
@@ -299,8 +416,8 @@ feeder_job="$feeder_pid"
 # the structural gate on the committed artifact and break
 # check-mathlib-result.sh's required `output check:` line while saving nothing.
 #
-# Measured A/B over the pinned Mathlib export, same binary, RLIMIT_AS raised to
-# 32 GiB so neither arm is cut off:
+# Measured A/B over the pinned Mathlib export, same binary, run with the phase
+# budget lifted so neither arm is cut off:
 #
 #                     wall        peak RSS     output bytes
 #   default          31:17.86     13.91 GiB    5937056185

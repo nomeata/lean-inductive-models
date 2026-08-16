@@ -36,10 +36,16 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Each process is capped at 12 GiB and cannot raise its own limit.
-          ulimit -Sv 12582912
-          ulimit -Hv 12582912
-
+          # No `ulimit -v` here. That bounds VIRTUAL ADDRESS SPACE, never
+          # resident memory, and since the v4.33.0 toolchain the two have
+          # nothing to do with each other: a v4.33.0 `lean` reserves about
+          # 12.8 GiB of address space at startup for allocator arenas while
+          # its peak RSS is unchanged at roughly 2.0 GiB. A cap low enough to
+          # catch a runaway aborts every `lean` with "failed to create
+          # thread"; a cap high enough to let it start measures nothing.
+          # RSS is the quantity of interest and the runner's own 16 GiB, with
+          # the job timeout, is what bounds it here. scripts/ci-mathlib.sh
+          # carries the enforced per-phase budgets, as cgroup memory limits.
           PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
             python3 -m py_compile test/scripts/check_arena_corpus.py
           PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_arena_corpus_runner.py
@@ -78,9 +84,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Each process is capped at 12 GiB and cannot raise its own limit.
-          ulimit -Sv 12582912
-          ulimit -Hv 12582912
+          # No `ulimit -v` here; see the Arena job for why. It bounds virtual
+          # address space, which a v4.33.0 `lean` reserves about 12.8 GiB of
+          # at startup against an unchanged 2.0 GiB peak RSS, so no value of
+          # it both lets `lean` start and catches a runaway. RSS is the
+          # quantity of interest; the runner's 16 GiB bounds it here.
 
           # A single `lake build` with several roots may schedule the roots'
           # final native links together even with `-Kjobs=1`. Build each root
