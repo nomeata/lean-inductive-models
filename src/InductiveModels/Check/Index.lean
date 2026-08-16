@@ -57,8 +57,17 @@ structure SyntaxIndex where
   private records : Std.HashMap Name (Array Nat)
   /-- Sparse occurrences introduced in front of `records` by island overlays.
   Base occurrences are interpreted after `recordOffset`; keeping both axes
-  separate avoids copying the whole source map whenever support is prepended. -/
-  private recordPrefix : Std.HashMap Name (Array Nat) := {}
+  separate avoids copying the whole source map whenever support is prepended.
+
+  An overlay occurrence is stored *back-to-front*, as its distance
+  `recordOffset - ordinal` from the front of the combined stream at the time it
+  was prepended.  That distance is invariant under every later prepend, because
+  a prepend of `k` records raises both `recordOffset` and the occurrence's
+  ordinal by the same `k`.  Prepending support therefore only inserts the new
+  names instead of rewriting every occurrence already recorded here, which is
+  what keeps an overlaid index linear in the records it is handed rather than
+  in the support accumulated by all earlier islands. -/
+  private recordPrefix : Lean.PersistentHashMap Name (Array Nat) := {}
   private recordOffset : Nat := 0
   globalExtras : Array Violation := #[]
   private sourceFamilies : Std.HashMap Name (Array Family) := {}
@@ -293,16 +302,16 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
     if let .defn name levelParams _ value .. := declaration then
       normalizer := normalizer.insertDefinition name { levelParams, value }
   -- `discoverWithIndex` may consume the resulting index together with the
-  -- literal combined view `records ++ source`. Shift only the sparse existing
-  -- overlay; base source occurrences retain their map and acquire one offset.
+  -- literal combined view `records ++ source`. Base source occurrences retain
+  -- their map and acquire one offset; existing overlay occurrences are already
+  -- stored as distances from the front and need no shift at all, so only the
+  -- names this call introduces are inserted.
   -- Collision rejection above guarantees new prefix entries cannot hide one.
-  let mut recordPrefix : Std.HashMap Name (Array Nat) := {}
-  for (name, occurrences) in source.recordPrefix do
-    recordPrefix := recordPrefix.insert name
-      (occurrences.map fun ordinal => records.size + ordinal)
+  let recordOffset := source.recordOffset + records.size
+  let mut recordPrefix := source.recordPrefix
   for ordinal in [0:records.size] do
     for name in records[ordinal]!.names do
-      recordPrefix := recordPrefix.insert name #[ordinal]
+      recordPrefix := recordPrefix.insert name #[recordOffset - ordinal]
   return .ok {
     declarations := declarations
     constructors := constructors
@@ -311,7 +320,7 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
     normalizer := normalizer
     records := source.records
     recordPrefix := recordPrefix
-    recordOffset := source.recordOffset + records.size
+    recordOffset := recordOffset
     globalExtras := source.globalExtras
     sourceFamilies := source.sourceFamilies
     names := names }
@@ -364,7 +373,7 @@ def SyntaxIndex.intrinsicProjectionFields (index : SyntaxIndex)
   intrinsicProjectionFieldsWithIndex index type constructors
 
 private def SyntaxIndex.recordOccurrences (index : SyntaxIndex) (name : Name) : Array Nat :=
-  index.recordPrefix.getD name #[] ++
+  (index.recordPrefix.findD name #[]).map (fun distance => index.recordOffset - distance) ++
     (index.records.getD name #[]).map fun ordinal => index.recordOffset + ordinal
 
 /-! ## Indexed family discovery
