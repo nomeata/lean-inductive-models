@@ -616,16 +616,20 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- identity first: `PI.{0}` has a proposition-valued instantiation, but its
   -- polymorphic field sort is the carrier's `u`, not the constant level zero.
   --
-  -- **A third case is a gap rather than a boundary.** A field at `Sort u`
-  -- under a carrier at `Sort (max u v)` is retained by neither, and the
-  -- declaration reaches this arm and no other: the guard above has already
-  -- decided that a nonrecursive one-constructor maybe-zero owner is Direct's,
-  -- and the Church fallback below would record only inhabitation and lose the
-  -- field. The never-zero route closes exactly this level gap with a pad
-  -- ([`InductiveModels.unitAt`], [`InductiveModels.dsingAt`]) and this arm has
-  -- no pad, so what stops the model is an unfinished arm rather than a shape
-  -- the construction decided against. It used to be an internal tool error,
-  -- which aborted the stream at an owner the contract says passes through.
+  -- **The third case is the tower's, and it is a pad rather than a gap.** A
+  -- field at `Sort u` under a carrier at `Sort (max u v)` is retained by
+  -- neither of the two answers here, and the declaration reaches this arm and
+  -- no other: the guard above has already decided that a nonrecursive
+  -- one-constructor maybe-zero owner is Direct's, and the Church fallback below
+  -- would record only inhabitation and lose the field. What retains it is the
+  -- storage tower ending at [`InductiveModels.unitAt`] `w`, which lands at
+  -- `Sort (max u (max u v)) = Sort (max u v)` — the never-zero tuple tower's
+  -- pad at the one sort it had not been taken to, and correct there because
+  -- the derived exact-sort lift is a `PSigma'.{0,w}` and `max 0 w` is `w` for a
+  -- bare `w` too. So this answers `none` where neither exact case applies and
+  -- lets [`InductiveModels.planDirectTightRoute`] take the owner with a pad;
+  -- the decline that used to stand here has moved there, and is now the
+  -- `outOfScope` residue rather than an unfinished arm.
   let directFieldRoute? : Option DirectFieldRoute ←
     if (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
         numForalls exportCtors[0]!.2 - np == 1 then
@@ -636,17 +640,20 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         let fieldLevel ← ilevel fieldType
         if ← isLevelDefEq fieldLevel w then return some .identity
         if fieldLevel.normalize.isZero then return some .propLift
-        declineWith (.shapeUnsupported tname .incomplete
-          s!"{exportCtors[0]!.1}'s only field inhabits Sort {fieldLevel} while the carrier \
-inhabits Sort {w}, so neither identity nor the exact-sort lift retains it, and the \
-field-preserving arm at a maybe-zero sort has no pad for the level gap the never-zero \
-tuple tower pads")
+        pure none
     else
       pure none
 
-  -- Two or more exact-sort fields are retained by a right-nested `PSigma'`.
-  let directTightRoute ← planDirectTightRoute tname (route matches PrimRoute.bare)
-    nonrecursiveOneConstructor np ni memberTy exportCtors w
+  -- Fields the two exact one-field answers do not retain are retained by a
+  -- right-nested `PSigma'` — at **any** field count, with the pad as its tail
+  -- where the fields' own levels do not reach the carrier's sort. The
+  -- `directFieldRoute?.isNone` conjunct is what keeps the two exact answers
+  -- first: where one of them applies it is the model, and the tower is not
+  -- consulted at all.
+  let directTightRoute ← planDirectTightRoute tname
+    ((route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
+      directFieldRoute?.isNone)
+    np memberTy exportCtors w
 
   -- **The direct routes' indexed case**, and the whole of why it is a case of
   -- them rather than an arm beside them.
@@ -706,12 +713,17 @@ tuple tower pads")
     ((route matches PrimRoute.bare) && nc == 1 && !isRec && ni > 0 && !armFNonRec)
     np memberTy exportCtors w
 
-  -- The three cases are disjoint by their own guards — one field or two-plus at
-  -- `ni == 0`, any field count at `ni > 0` — so this is a selection and not a
-  -- preference order.
+  -- The indexed case is disjoint from the other two by its own guard —
+  -- `ni > 0` against their `ni == 0` — so it is a selection. The first two are
+  -- **ordered**, and deliberately: the tower with a pad would model everything
+  -- the two exact one-field answers model, and taking them first is what keeps
+  -- `.identity`'s carrier the field itself and `.propLift`'s the bare lift,
+  -- rather than wrapping either in a pair nothing needs. The tower's guard
+  -- carries `directFieldRoute?.isNone`, so the order is stated in the guard and
+  -- not only in this `<|>`.
   let directRoute? : Option DirectRoute := directFieldRoute?.map DirectRoute.field <|>
-    (if directTightRoute then some .tight else none) <|>
-    (if directIndexedRoute then some .indexed else none)
+    directTightRoute.map DirectRoute.tight <|>
+    directIndexedRoute.map DirectRoute.indexed
 
   -- The indexed subsingleton has a different carrier from the Church routes —
   -- a packed index equation, not a fold — so it branches before them. At a

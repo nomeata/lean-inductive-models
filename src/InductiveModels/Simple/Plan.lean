@@ -56,20 +56,30 @@ inductive PrimRoute | type | prop | bare
 `propLift` lifts an exactly proposition-valued field to that sort. -/
 inductive DirectFieldRoute | identity | propLift
 
-/-- The complete field-preserving direct routes. The one-field cases share
-[`InductiveModels.directFieldModel`]; `tight` is the multi-field `PSigma'`
-tower; `indexed` is that same storage with the conclusion's index telescope
-discharged by one packed equation over it.
+/-- The complete field-preserving direct routes. The two exact-sort one-field
+shapes are [`InductiveModels.directFieldModel`]'s; `tight` is the `PSigma'`
+tower over the constructor's fields; `indexed` is that same storage with the
+conclusion's index telescope discharged by one packed equation over it.
 
-`indexed` is not a fourth construction. It stores the constructor's fields in
-the very tower `tight` stores them in — [`InductiveModels.tightTowerTy`], which
-at one field *is* that field's type and therefore *is* `field .identity`'s
-carrier — and then says which fibre of the family that storage sits in. What
-distinguishes the cases is the index telescope, not the storage, which is why
-they are one route with three shapes rather than separate arms. -/
+`indexed` is not a third construction. It stores the constructor's fields in
+the very tower `tight` stores them in — [`InductiveModels.tightTowerTy`] — and
+then says which fibre of the family that storage sits in. What distinguishes
+the cases is the index telescope, not the storage, which is why they are one
+route with several shapes rather than separate arms.
+
+**`pad?` is the tower's tail and the whole of the level gap it closes.** With
+`none` the tower ends at its last field and lands at `Sort (max ℓ⃗)`, which is
+the carrier's sort only when the fields' levels already reach it. With
+`some w` it ends at [`InductiveModels.unitAt`] `w` — the derived exact-sort
+lift of `⊤`, `PSigma'.{0,w} ⊤ (fun _ => PUnit.{w})`, which sits at exactly
+`Sort w` for a **bare, maybe-zero** `w` exactly as for a never-zero one — so
+the tower lands at `Sort (max ℓ⃗ w)`. That is `Sort w` whenever the kernel's
+own `is_geq(w, ℓᵢ)` on the input survives being re-asked as a *conversion*,
+which is the never-zero tuple tower's pad at the one sort it could not be
+taken to ([`InductiveModels.padsAt`]). -/
 inductive DirectRoute
   | field (route : DirectFieldRoute)
-  | tight
-  | indexed
+  | tight (pad? : Option Level)
+  | indexed (pad? : Option Level)
 
 end InductiveModels

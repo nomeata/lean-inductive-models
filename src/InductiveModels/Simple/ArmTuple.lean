@@ -145,19 +145,34 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
               on level conversion (--type-check-generated is the gate that says so)"
           return p
         let raw := if nf == 1 then ℓs[0]! else (ℓs.foldl mkLevelMax' .zero).normalize
-        -- **The same fact three siblings already decline on, on one surface.**
-        -- No pad and no box closes this level gap, so the never-zero tuple
-        -- tower has no carrier to offer — exactly what `mkPrimSite`'s
-        -- direct-field route, and the two tight-pair guards in
-        -- `InductiveModels.Simple.Tight`, report as
-        -- `.shapeUnsupported .incomplete` from the maybe-zero side.
-        -- Nothing about the input is malformed and no construction invariant
-        -- has failed, so this is a gap in the arm and is reported as one
-        -- rather than aborting the stream as an internal tool error.
-        declineWith (.shapeUnsupported tname .incomplete
+        -- **A boundary the arm states, and no longer a gap in it.** This used
+        -- to read `.incomplete` and to name the maybe-zero siblings —
+        -- `mkPrimSite`'s direct-field route and the two tight-pair guards in
+        -- `InductiveModels.Simple.Tight` — as declining the same fact. They no
+        -- longer decline it: their tower ends at [`InductiveModels.unitAt`] `w`
+        -- and their level gap is closed ([`InductiveModels.planTightTower`]).
+        -- What is left on both sides is the same *impossibility*, and it is
+        -- this one.
+        --
+        -- Reaching here means both pads and the recursive box have been asked
+        -- and refused, which — since `is_geq(w, ℓᵢ)` admitted the declaration —
+        -- says a field's level retains an `imax` that no `max`-shaped carrier
+        -- absorbs. Conversion on levels is normal-form equality
+        -- (`level.cpp:518-520`), so no pad can close it: a pad only adds `max ·
+        -- w` and the `imax` term survives in the normal form. And no box can
+        -- either: [`InductiveModels.boxTyOf`] removes an `imax` exposed by a Π,
+        -- and what is left after it is an **opaque atomic** type whose own
+        -- level carries one, which no term-level operation can lower without
+        -- discarding the field. There is no third construction to write, so the
+        -- verdict is `outOfScope`: saying `incomplete` here would name an arm
+        -- nobody can finish. Still a decline and not an internal tool error —
+        -- nothing about the input is malformed — so the run keeps going.
+        declineWith (.shapeUnsupported tname .outOfScope
           s!"{cn}'s fields reach Sort {raw} while the carrier inhabits Sort {w}, and \
-neither of the tower's two pads nor the recursive box closes the gap, so the never-zero \
-tuple tower has no storage for this constructor")
+neither of the tower's two pads nor the recursive box closes the gap: the level retains \
+an imax a max-shaped carrier does not absorb, and after boxing what carries it is an \
+opaque atomic type no box can lower, so the never-zero tuple tower has no storage for \
+this constructor")
 
   -- A pad at a level `dsingOk` cannot build is discharged by transport
   -- along the lift's eta ([`InductiveModels.unitAtUniq`]) — a recursor call and

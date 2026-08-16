@@ -143,6 +143,15 @@ field to store and `MZData`'s one data field sits in a one-component tower.
   Direct kernel checks pin both claims and the gap between them. The `False`-Π
   singleton this replaced was not canonical in *either*
   sense and cost a `funext`.
+  **The lift pad is not sort-specific and serves the maybe-zero routes too.**
+  `unitAt w` is a `PSigma'.{0,w}` of a proposition, so it lands at
+  `Sort (max 0 w) = Sort w` for a **bare** `w` exactly as for a never-zero one —
+  the same fact that makes arm E's `emptyAt w` an exact empty carrier at every
+  route's sort. It is what the direct routes' storage tower ends at where the
+  fields' own levels do not reach the carrier
+  ([`InductiveModels.planTightTower`]), and `maybe_zero_pad.lean` is that
+  family. `dsingAt`'s `D` is *not* available there: every level it builds
+  carries a `succ`, and no such level is a maybe-zero `w`.
 * **A recursive box** ([`InductiveModels.boxTyOf`]) absorbs an `imax`: a Π-typed
   field's level is an `imax` chain (`Trans.mk`'s shape), and no pad subsumes
   an `imax` under a `max`.  Every exposed Π domain and codomain is recursively
@@ -207,8 +216,9 @@ T._model.self p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pa
 ```
 
 `Store` is the right-nested `PSigma'` tower over the fields
-([`InductiveModels.tightTowerTy`], at one field the field's own type — so the
-unindexed `.identity`, `.tight` and this share one storage function), and it is
+([`InductiveModels.tightTowerTy`], at one field and no pad the field's own type
+— so the unindexed `.identity`, `.tight` and this share one storage function,
+and one pad decision with it), and it is
 a **definition**: arm C's erase-and-carve is the same idea but splices its
 skeleton as an inductive so the kernel mints the large eliminator it needs
 twice, and a maybe-zero skeleton has no large eliminator to mint. The pair sits

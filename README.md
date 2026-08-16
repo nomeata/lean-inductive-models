@@ -201,12 +201,15 @@ instance of one of the others.
 ### The arms, in the order the route dispatcher tries them
 
 - **Direct** — field-preserving storage for a one-constructor nonrecursive
-  owner at a maybe-zero sort. Three cases, disjoint by their own guards, so this
-  is a selection and not a preference order: *identity* where the single field's
-  sort is already the carrier's, *prop lift* where it is exactly a proposition, a
-  right-nested `PSigma'` tower for two or more fields, and the *indexed* case,
-  which wraps that same tower in a `Prop`-valued packed Henry-Ford equation
-  saying which fibre the storage sits in.
+  owner at a maybe-zero sort. The two exact one-field answers come first —
+  *identity* where the single field's sort is already the carrier's, *prop lift*
+  where it is exactly a proposition — and everything else is stored in a
+  right-nested `PSigma'` tower at any field count, ending at the exact-sort pad
+  where the fields' own levels do not reach the carrier's sort. The *indexed*
+  case wraps that same tower in a `Prop`-valued packed Henry-Ford equation
+  saying which fibre the storage sits in, and is disjoint from the other two by
+  its own guard; the two exact answers are taken before the tower so that their
+  carriers stay the field itself and the bare lift.
 - **F** — the indexed subsingleton, for a large-eliminating one-constructor
   nonrecursive indexed owner at a `Prop` or maybe-zero sort. The carrier is one
   packed equation on the index positions that are not pivots; a *pivot* is an
@@ -264,31 +267,41 @@ indexed fibre. Both exist so that the intrinsic projections select literally.
 A decline is not a failure: the source declaration passes through unchanged and
 the run reaches exit code 2. What follows is the whole ledger.
 
-**Known gaps** — shapes an arm ought to reach and does not. There are five
-sites in the code, and four of them state one debt.
+**One known gap** — a shape an arm ought to reach and does not. There is one
+site in the code.
 
-- *Storage that does not land on the carrier's sort* (four sites). A field
-  whose level falls short of `Sort w` has to be padded or boxed into it. The
-  field-preserving Direct arm at a maybe-zero sort has no pad at all, so a
-  one-constructor maybe-zero owner whose single field, whose multi-field tower,
-  or whose indexed tower misses `Sort w` declines — three sites, one missing
-  pad. The `Type` route's tuple tower has two pads and the recursive box, and
-  declines on the fourth site when none of them closes the gap either.
-- *Arm W's guards* (one site). A non-indexed recursive owner at a never-zero
-  sort whose recursion is not linear is arm W's or it is nobody's, and arm W
-  refuses two things that are limits of the arm rather than boundaries of the
-  construction: a syntactic loose-variable test on a binder type inside a
-  recursive field's own telescope, and a carrier plan that could not put the W
-  core's `Type u` at the declared sort.
+- *Arm W's guards*. A non-indexed recursive owner at a never-zero sort whose
+  recursion is not linear is arm W's or it is nobody's, and arm W refuses two
+  things that are limits of the arm rather than boundaries of the construction:
+  a syntactic loose-variable test on a binder type inside a recursive field's
+  own telescope, and a carrier plan that could not put the W core's `Type u` at
+  the declared sort.
 
-These are gaps, in those words. Each message names the arm and the guard, so
-the gap stays addressable instead of being recorded and forgotten.
+That is a gap, in those words. The message names the arm and the guard, so the
+gap stays addressable instead of being recorded and forgotten.
 
-**One stated boundary**, which is not a gap. A field mentioning the owner as
-anything other than `∀ z⃗, T p⃗ e⃗` after βζ head normalization is declined as
-out of scope: that is a *nested* occurrence, and nesting is the nested
-construction's business. Nothing is missing; a model built here would be the
-wrong layer's.
+**Two stated boundaries**, which are not gaps.
+
+- *A nested occurrence*. A field mentioning the owner as anything other than
+  `∀ z⃗, T p⃗ e⃗` after βζ head normalization is declined as out of scope: that
+  is nesting, and nesting is the nested construction's business. Nothing is
+  missing; a model built here would be the wrong layer's.
+- *Storage that no pad or box can land on the carrier's sort*. A field whose
+  level falls short of `Sort w` has to be padded into it, and the pad is the
+  derived exact-sort lift of `⊤` — a `PSigma'.{0,w}`, so it sits at exactly
+  `Sort w` at every `w`, maybe-zero included. The storing towers end there and
+  land at `Sort (max ℓ⃗ w)`, which is `Sort w` whenever the kernel's own
+  `is_geq(w, ℓᵢ)` on the input survives being re-asked as a *conversion*. Where
+  it does not, the field's level retains an `imax` that no `max`-shaped carrier
+  absorbs, and neither side can close it: the recursive box that removes an
+  `imax` exposed by a Π leaves an opaque atomic type carrying one, and at a
+  maybe-zero sort the box is unavailable outright, because every boxed level
+  carries a `max 1 ·` floor and no `max 1 ·` is ever `Prop`. There is no third
+  pad to build — one that cleared the `imax` would miss `Prop`, one that
+  reached `Prop` would not clear the `imax` — so this is a limit of Lean's
+  definitional equality on levels and not an unfinished arm. It is the same
+  fact as the projection decline below, met where storage is the whole carrier
+  rather than an addition to one.
 
 **One projection decline.** A field whose type names an earlier field the model
 does not select definitionally has no well-formed intrinsic projection ι rule to

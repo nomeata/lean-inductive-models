@@ -519,14 +519,9 @@ def expectedPrim : List Row :=
   -- exact one-field answers, which still run before the tower and are still
   -- the field itself and the bare lift.
   , ("maybe_zero_pad",
-      [("Nt", 15), ("PropOne", 7), ("IdOne", 7), ("PadNone", 9)],
-      [ ("Eq", "prim model: a basis primitive")
-      , ("PadDep", "prim model shape (incomplete): PadDep reaches no generation arm")
-      , ("PadMix", "prim model shape (incomplete): PadMix reaches no generation arm")
-      , ("PadOne", "prim model shape (incomplete): PadOne reaches no generation arm")
-      , ("PadIdx2", "prim model shape (incomplete): PadIdx2 reaches no generation arm")
-      , ("PadMany", "prim model shape (incomplete): PadMany reaches no generation arm")
-      , ("PadIdx", "prim model shape (incomplete): PadIdx reaches no generation arm")])
+      [("PadDep", 18), ("PadMix", 9), ("PadOne", 7), ("Nt", 7), ("PadIdx2", 8),
+       ("PropOne", 7), ("IdOne", 7), ("PadNone", 9), ("PadMany", 9), ("PadIdx", 6)],
+      [("Eq", "prim model: a basis primitive")])
   -- **The shapes that still reach no arm**, and the claim of this row is the
   -- *word in the parenthesis* rather than the count. Each of these four
   -- aborted the run until the dispatcher classified them: an unsupported owner
@@ -552,9 +547,9 @@ def expectedPrim : List Row :=
       [ ("Eq", "prim model: a basis primitive")
       , ("Foreign", "prim model shape (out of scope): Foreign reaches no generation arm")
       , ("Foreign0", "prim model shape (out of scope): Foreign0 reaches no generation arm")
-      , ("PadImax", "prim model shape (incomplete): PadImax reaches no generation arm")
+      , ("PadImax", "prim model shape (out of scope): PadImax reaches no generation arm")
       , ("PadImaxIdx",
-          "prim model shape (incomplete): PadImaxIdx reaches no generation arm")])
+          "prim model shape (out of scope): PadImaxIdx reaches no generation arm")])
   -- **A proposition's projectable field behind a field the kernel skips.**
   -- `infer_proj` substitutes an earlier constructor field only where the rest
   -- of the telescope still names it, and asks for that field to be
@@ -1191,8 +1186,8 @@ def runOne (root : String) (a : TAcc) (r : Row)
       (rep.shapeScopes.toList ==
         [(`Foreign, InductiveModels.ShapeScope.outOfScope),
          (`Foreign0, InductiveModels.ShapeScope.outOfScope),
-         (`PadImax, InductiveModels.ShapeScope.incomplete),
-         (`PadImaxIdx, InductiveModels.ShapeScope.incomplete)])
+         (`PadImax, InductiveModels.ShapeScope.outOfScope),
+         (`PadImaxIdx, InductiveModels.ShapeScope.outOfScope)])
       s!"prim_shape_declines: the shape scopes are {repr rep.shapeScopes}"
     -- Every declined owner is still in the output, at its own record, with no
     -- model family in front of it: that is the contract an abort broke.

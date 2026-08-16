@@ -280,7 +280,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("hard_nested_mutual_index", 11), ("imax_box", 3), ("indexed_container", 11),
     ("indexed_decl", 11), ("indexed_fibre_boundary", 57),
     ("indexed_hidden_erasure", 11), ("infinitary", 23), ("maybe_zero_indexed", 0),
-    ("maybe_zero_pad", 4),
+    ("maybe_zero_pad", 14),
     ("maybe_zero_projection", 8), ("maybe_zero_recursive", 0), ("mutual_index", 6),
     ("mutual_keying", 2),
     ("mutual_nonrec", 2), ("mutual_odd_shapes", 15),

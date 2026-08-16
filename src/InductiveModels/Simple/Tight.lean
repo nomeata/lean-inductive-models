@@ -12,24 +12,58 @@ so intrinsic projections could not satisfy their constructor rules.  A
 right-nested `PSigma'` retains the fields at the exact maximum of their
 universes.  Its named, projection-derived `rec'` is deliberately used rather
 than the kernel's small recursor, so the storage interface itself has no
-elimination-universe restriction. -/
+elimination-universe restriction.
 
-partial def tightTowerTy (fields : Array Expr) (i : Nat) : GenM Expr := do
-  if i + 1 == fields.size then return ← ityp fields[i]!
+### What the tower ends in, and the level gap the end closes
+
+With **no pad** the tower ends at its last field, so it lands at
+`Sort (max ℓ⃗)` and models only a carrier whose own sort the fields' levels
+already reach.  A field at `Sort u` under a carrier at `Sort (max u v)` is the
+shape that misses: the kernel admitted the declaration by `is_geq(max u v, u)`,
+but conversion on levels is normal-form equality and `u` is not `max u v`.
+
+With a **pad** the tower ends at [`InductiveModels.unitAt`] `w` instead — the
+derived exact-sort lift of `⊤`, `PSigma'.{0,w} ⊤ (fun _ => PUnit.{w})`, which
+is at `Sort (max 0 w) = Sort w` for a **bare, maybe-zero** `w` exactly as for a
+never-zero one.  The tower then lands at `Sort (max ℓ⃗ w)`, and `max ℓᵢ w ≡ w`
+is precisely the kernel's own `is_geq` on the input re-asked as a conversion.
+This is the never-zero tuple tower's pad ([`InductiveModels.padsAt`]) at the
+one sort it had never been taken to, and it costs nothing beyond the tail: the
+lift's inhabitant is *definitionally* canonical (tight-pair and `PUnit`
+structure eta, proof irrelevance on `⊤`), so `mk (proj⃗ t) ≡ t` still holds,
+the recursor still discards the pad by ι alone, and every rule is `Eq.refl`.
+
+A padded tower exists at every field count, including one, where an unpadded
+tower is the bare field type. -/
+
+/-- Has the tower reached its tail?  A padded tower runs past its last field
+and ends at the pad; an unpadded one ends *at* its last field. -/
+def tightTowerDone (fields : Array Expr) (i : Nat) (pad? : Option Level) : Bool :=
+  if pad?.isSome then i == fields.size else i + 1 == fields.size
+
+/-- The type the tower ends in: the pad, or the last field's own type. -/
+def tightTowerTail (fields : Array Expr) (i : Nat) (pad? : Option Level) : GenM Expr :=
+  match pad? with
+  | some w => pure (unitAt w)
+  | none => ityp fields[i]!
+
+partial def tightTowerTy (fields : Array Expr) (i : Nat)
+    (pad? : Option Level := none) : GenM Expr := do
+  if tightTowerDone fields i pad? then return ← tightTowerTail fields i pad?
   let α ← ityp fields[i]!
   let u ← ilevel α
-  let rest ← tightTowerTy fields (i + 1)
+  let rest ← tightTowerTy fields (i + 1) pad?
   let v ← ilevel rest
   let β ← mkLambdaFVars #[fields[i]!] rest
   return mkAppN (.const `PSigma' [u, v]) #[α, β]
 
-def tightTowerAt (fields : Array Expr) (i : Nat) (pre : Array Expr) : GenM
-    (Level × Level × Expr × Expr) := do
+def tightTowerAt (fields : Array Expr) (i : Nat) (pre : Array Expr)
+    (pad? : Option Level := none) : GenM (Level × Level × Expr × Expr) := do
   let substitute := fun (expression : Expr) =>
     expression.replaceFVars (fields.extract 0 pre.size) pre
   let α := substitute (← ityp fields[i]!)
   let u ← ilevel α
-  let rest ← tightTowerTy fields (i + 1)
+  let rest ← tightTowerTy fields (i + 1) pad?
   let (v, β) ← withLocalDeclD (← fields[i]!.fvarId!.getUserName) α fun value => do
     let rest := rest.replaceFVars
       (fields.extract 0 (pre.size + 1)) (pre.push value)
@@ -37,48 +71,67 @@ def tightTowerAt (fields : Array Expr) (i : Nat) (pre : Array Expr) : GenM
     return (v, ← mkLambdaFVars #[value] rest)
   return (u, v, α, β)
 
-partial def tightTowerMk (fields : Array Expr) (i : Nat) : GenM Expr := do
-  if i + 1 == fields.size then return fields[i]!
+partial def tightTowerMk (fields : Array Expr) (i : Nat)
+    (pad? : Option Level := none) : GenM Expr := do
+  if tightTowerDone fields i pad? then
+    return match pad? with
+      | some w => unitAtCanon w
+      | none => fields[i]!
   let pre := fields.extract 0 i
-  let (u, v, α, β) ← tightTowerAt fields i pre
+  let (u, v, α, β) ← tightTowerAt fields i pre pad?
   return mkAppN (.const `PSigma'.mk [u, v])
-    #[α, β, fields[i]!, ← tightTowerMk fields (i + 1)]
+    #[α, β, fields[i]!, ← tightTowerMk fields (i + 1) pad?]
 
 partial def tightTowerProjs (fields : Array Expr) (i : Nat) (value : Expr)
-    (pre : Array Expr := #[]) : GenM (Array Expr) := do
-  if i + 1 == fields.size then return pre.push value
-  let (_, _, _, _) ← tightTowerAt fields i pre
+    (pre : Array Expr := #[]) (pad? : Option Level := none) : GenM (Array Expr) := do
+  if tightTowerDone fields i pad? then
+    return if pad?.isSome then pre else pre.push value
+  let (_, _, _, _) ← tightTowerAt fields i pre pad?
   let first := .proj `PSigma' 0 value
-  tightTowerProjs fields (i + 1) (.proj `PSigma' 1 value) (pre.push first)
+  tightTowerProjs fields (i + 1) (.proj `PSigma' 1 value) (pre.push first) pad?
 
-partial def tightTowerPrepend (fields pre : Array Expr) (i : Nat) (tail : Expr) :
-    GenM Expr := do
+partial def tightTowerPrepend (fields pre : Array Expr) (i : Nat) (tail : Expr)
+    (pad? : Option Level := none) : GenM Expr := do
   if i == pre.size then return tail
-  let (u, v, α, β) ← tightTowerAt fields i (pre.extract 0 i)
+  let (u, v, α, β) ← tightTowerAt fields i (pre.extract 0 i) pad?
   return mkAppN (.const `PSigma'.mk [u, v])
-    #[α, β, pre[i]!, ← tightTowerPrepend fields pre (i + 1) tail]
+    #[α, β, pre[i]!, ← tightTowerPrepend fields pre (i + 1) tail pad?]
 
+/-- **The tower taken apart**, one `PSigma'.rec'` per stored field.
+
+At a padded tower the last call arrives with every field already bound and the
+pad in hand; the minor premise is applied to the fields alone and the pad is
+dropped.  That is well typed and not a coincidence: the branch owes
+`motive ⟨f⃗, t⟩` for the bound pad `t`, the minor delivers
+`motive ⟨f⃗, canon⟩`, and `t ≡ canon` is a conversion the kernel performs —
+tight-pair and `PUnit` structure eta expand `t` against the literal pair
+`canon` is, and proof irrelevance closes its `⊤` component.  No transport
+rides along and the recursor's ι rule stays `Eq.refl`. -/
 partial def tightTowerRec (s : Level) (fields : Array Expr) (motive minor value : Expr)
-    (i : Nat := 0) (pre : Array Expr := #[]) : GenM Expr := do
-  if i + 1 == fields.size then return mkAppN minor (pre.push value)
-  let (u, v, α, β) ← tightTowerAt fields i pre
+    (i : Nat := 0) (pre : Array Expr := #[])
+    (pad? : Option Level := none) : GenM Expr := do
+  if tightTowerDone fields i pad? then
+    return mkAppN minor (if pad?.isSome then pre else pre.push value)
+  let (u, v, α, β) ← tightTowerAt fields i pre pad?
   let tailType := mkAppN (.const `PSigma' [u, v]) #[α, β]
   let targetMotive ← withLocalDeclD `tail tailType fun tail => do
-    let full ← tightTowerPrepend fields pre 0 tail
+    let full ← tightTowerPrepend fields pre 0 tail pad?
     mkLambdaFVars #[tail] (mkApp motive full)
   let branch ← withLocalDeclD `fst α fun fst =>
     withLocalDeclD `snd (mkApp β fst).headBeta fun snd => do
       mkLambdaFVars #[fst, snd]
-        (← tightTowerRec s fields motive minor snd (i + 1) (pre.push fst))
+        (← tightTowerRec s fields motive minor snd (i + 1) (pre.push fst) pad?)
   return mkAppN (.const `PSigma'.rec' [u, v, s])
     #[α, β, targetMotive, branch, value]
 
-/-- Emit an exact-sort model for a non-recursive, unindexed,
-one-constructor family with at least two fields. -/
+/-- Emit an exact-sort model for a non-recursive, unindexed, one-constructor
+family, storing its fields in the tower.  `pad?` is that tower's tail: `none`
+where the fields' own levels already reach the carrier's sort, `some w` where
+the pad is what takes them there. -/
 def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (v : Level) :
+    (recursorProofType recursorPublicType : Expr) (v : Level) (pad? : Option Level) :
     GenM (Array Declaration × Array (Name × Nat × Expr × Expr)) := do
   let us := lparams.map Level.param
   let nf := numForalls constructorType - np
@@ -90,7 +143,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
   let selfValue ← withParams fun ps => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
-      mkLambdaFVars ps (← tightTowerTy fields 0)
+      mkLambdaFVars ps (← tightTowerTy fields 0 pad?)
   let selfDecl := Declaration.defnDecl
     { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfValue
       hints := ← hintsFor selfValue, safety := .safe }
@@ -100,7 +153,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
   let constructorValue ← withParams fun ps => do
     let tele ← instForall modelConstructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
-      mkLambdaFVars (ps ++ fields) (← tightTowerMk fields 0)
+      mkLambdaFVars (ps ++ fields) (← tightTowerMk fields 0 pad?)
   let constructorDecl := Declaration.defnDecl
     { name := constructorN, levelParams := lparams, type := modelConstructorType,
       value := constructorValue, hints := ← hintsFor constructorValue, safety := .safe }
@@ -115,7 +168,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let ps := binders.extract 0 np
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
-      mkLambdaFVars binders (← tightTowerRec v fields motive minor self)
+      mkLambdaFVars binders (← tightTowerRec v fields motive minor self 0 #[] pad?)
   let recursorDecl := Declaration.defnDecl
     { name := recursorN, levelParams := recursorLevelParams, type := recursorPublicType,
       value := recursorValue, hints := ← hintsFor recursorValue, safety := .safe }
@@ -126,7 +179,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       withLocalDeclD `self (selfAt ps) fun self => do
-        let projections ← tightTowerProjs fields 0 self
+        let projections ← tightTowerProjs fields 0 self #[] pad?
         (Array.range nf).mapM fun fieldIndex => do
           let selector ← mkLambdaFVars (ps.push self) projections[fieldIndex]!
           let proof ← do
@@ -147,19 +200,20 @@ tower, with the conclusion's index telescope discharged by one packed equation.
     T p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗
 
 `Store` is [`InductiveModels.tightTowerTy`] over the constructor's fields — at
-one field that *is* the field's type, so this is `.identity`'s carrier and the
-`tight` tower written by one function — and a **definition** rather than a
-spliced inductive. The equation is stated once at the whole index telescope
-packed into a `PSigma'`, because a later index's type may mention an earlier
-one; it is the same Henry-Ford equation arm F discharges its non-pivot indices
-with, which is why the two are the storage half and the substitution half of
-one axis rather than two ideas.
+one field and no pad that *is* the field's type, so this is `.identity`'s
+carrier and the `tight` tower written by one function — and a **definition**
+rather than a spliced inductive. The equation is stated once at the whole index
+telescope packed into a `PSigma'`, because a later index's type may mention an
+earlier one; it is the same Henry-Ford equation arm F discharges its non-pivot
+indices with, which is why the two are the storage half and the substitution
+half of one axis rather than two ideas.
 
 **Why the pair is at exactly the carrier's sort.** The tower lands at
-`max ℓ⃗`, which the route guard has already equated with `w`
-([`InductiveModels.planDirectIndexedRoute`]), and the equation is a `Prop`, so
-the pair is at `max w 0` — literally `w` after normalization, with no lift and
-no pad.
+`max ℓ⃗` unpadded and at `max ℓ⃗ w` padded, and the route guard has already
+equated whichever one it plans with `w`
+([`InductiveModels.planDirectIndexedRoute`]); the equation is a `Prop`, so the
+pair is at `max w 0` — literally `w` after normalization. The pad is inside
+the storage and never around it, which is why an index costs the plan nothing.
 
 **Why every rule reduces.** `proj⃗` and the tower are `PSigma'` projections and
 a `PSigma'.mk`, so `proj⃗ (mk f⃗) ≡ f⃗` by ι and `mk (proj⃗ t) ≡ t` by structure
@@ -181,7 +235,7 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
     (constructorName : Name)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (w v : Level) :
+    (recursorProofType recursorPublicType : Expr) (w v : Level) (pad? : Option Level) :
     GenM (Array Declaration × Array (Name × Nat × Expr × Expr)) := do
   let us := lparams.map Level.param
   let nf := numForalls constructorType - np
@@ -195,12 +249,13 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
   -- unindexed `.identity` route's carrier written by the same function.
   let storeAt : Array Expr → GenM Expr := fun ps => do
     let tele ← instForall constructorType ps
-    forallBoundedTelescope tele (some nf) fun fields _ => tightTowerTy fields 0
+    forallBoundedTelescope tele (some nf) fun fields _ => tightTowerTy fields 0 pad?
   let projsAt : Array Expr → Expr → GenM (Array Expr) := fun ps value => do
     let tele ← instForall constructorType ps
-    forallBoundedTelescope tele (some nf) fun fields _ => tightTowerProjs fields 0 value
+    forallBoundedTelescope tele (some nf) fun fields _ =>
+      tightTowerProjs fields 0 value #[] pad?
   let towerOf : Array Expr → Array Expr → GenM Expr := fun _ fs =>
-    tightTowerMk fs 0
+    tightTowerMk fs 0 pad?
 
   -- **`Pk`, the whole index telescope packed.** Closed over the parameters
   -- alone: [`InductiveModels.packTyOf`] abstracts every selected index, and
@@ -320,33 +375,88 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
           return (tname, fieldIndex, selector, proof)
   return (declarations, overrides)
 
-/-- Decide whether the exact-sort multi-field route applies, and check its
-right-nested tight-pair carrier level before any support is installed. Kept
-outside [`InductiveModels.primIso`] so the route dispatcher does not elaborate this
+/-- **Where must the tower end so that it lands on the carrier's sort?** — the
+one level question both unindexed and indexed direct storage asks, asked once.
+
+The answer is a *pad*, and there are exactly two of them because there are
+exactly two shapes of answer:
+
+* **`none`** — the fields' own levels already reach the carrier's,
+  `max ℓ⃗ ≡ w`, and the tower ends at its last field. Every model this route
+  built before a pad existed is this answer, unchanged.
+* **`some w`** — they do not, but `max ℓ⃗ w ≡ w` does, and the tower ends at
+  [`InductiveModels.unitAt`] `w`. That equation is Lean's own `is_geq(w, ℓᵢ)`
+  on the input re-asked as a *conversion*, and the pad exists at a maybe-zero
+  `w` for the same reason arm E's `emptyAt` does: the derived exact-sort lift
+  is `PSigma'.{0,w}` of a proposition, so `max 0 w` is `w` for a bare `w`
+  exactly as for a never-zero one.
+
+**Stock `isLevelDefEq`, deliberately**, exactly as
+[`InductiveModels.wTowerLevel`] and for the same reason.
+[`InductiveModels.LevelAlgebra.isLevelDefEqComplete`] is strictly stronger and
+the extra strength is *useless* here rather than merely unused: the tower is a
+term whose type the kernel must accept against `Sort w`, and the kernel decides
+that by normal-form equality (`level.cpp:518-520`). Admitting a plan the
+elaborator refuses would not widen coverage, it would turn a decline into a
+kernel rejection at `addChecked`. So no widening is reachable from this
+question and none is counted.
+
+**What is left is `outOfScope` and no longer `incomplete`.** With the pad in
+place, `max ℓ⃗ w ≢ w` says a field's level retains an `imax` that a `max`-shaped
+`w` does not absorb, and at a **maybe-zero** carrier that is closed on both
+sides at once. Conversion will not equate them, which is the documented
+`max`-does-not-absorb-`imax` gap and a property of Lean's conversion rather
+than of our normaliser. And the recursive box that removes an `imax` elsewhere
+([`InductiveModels.boxTyOf`]) cannot be used, because every boxed level carries
+a `max 1 ·` floor and no `max 1 ·` is ever a maybe-zero `w` — at `w := 0` the
+carrier is `Prop` and a boxed field is not a proof. There is no third pad to
+build: any pad that raised the tower above `Sort 0` would miss `Prop`, and any
+that did not would not absorb the `imax`. That is a stated boundary and not an
+unfinished arm. -/
+def planTightTower (tname constructorName : Name) (fieldLevels : Array Level) (w : Level)
+    (what : String) : GenM (Option Level) := do
+  let raw :=
+    if fieldLevels.size == 1 then fieldLevels[0]!
+    else (fieldLevels.foldl mkLevelMax' .zero).normalize
+  if ← isLevelDefEq raw w then return none
+  let padded := (mkLevelMax' raw w).normalize
+  if ← isLevelDefEq padded w then return some w
+  declineWith (.shapeUnsupported tname .outOfScope
+    s!"{constructorName}'s {what} reaches Sort {raw} and pads to Sort {padded} while the \
+carrier inhabits Sort {w}, so neither the bare tower nor the exact-sort pad lands on the \
+declared sort; the level retains an imax a max-shaped carrier does not absorb, and at a \
+maybe-zero sort no box closes it either, since every boxed level carries a max 1 floor \
+and no max 1 is Prop")
+
+/-- Decide whether the exact-sort unindexed storage route applies, and settle
+its tower's pad before any support is installed. Kept outside
+[`InductiveModels.primIso`] so the route dispatcher does not elaborate this
 telescope walk as another large inline branch.
 
-A tower that does not land on the carrier's sort is the multi-field half of the
-gap the one-field route's own comment describes: the arm has no pad, the owner
-reaches no other arm, and the answer is therefore a decline naming the arm
-rather than an internal tool error that stops the stream. -/
-def planDirectTightRoute (tname : Name) (bare nonrecursiveOneConstructor : Bool) (np ni : Nat)
-    (memberTy : Expr) (exportCtors : Array (Name × Expr)) (w : Level) : GenM Bool := do
-  unless bare && nonrecursiveOneConstructor && ni == 0 do return false
+`none` is *the route does not apply*; `some pad?` is *it does, with this tail*.
+The two are not the same answer and the caller may not collapse them: a route
+that does not apply leaves the owner to the next one, and a route that applies
+with a pad is the model.
+
+**Any field count, including one.** The guard used to be `>= 2`, with the
+one-field shapes belonging to [`InductiveModels.directFieldModel`]'s two exact
+answers. Those two still run first and are still byte for byte what they were;
+what changed is that a one-field owner they *both* refuse now reaches this
+tower with a pad instead of a decline, because a one-field padded tower —
+`Σ'(f : F), unitAt w` — is a tower like any other and the storage, its
+projection and its rule are the ones this file already writes. -/
+def planDirectTightRoute (tname : Name) (eligible : Bool) (np : Nat)
+    (memberTy : Expr) (exportCtors : Array (Name × Expr)) (w : Level) :
+    GenM (Option (Option Level)) := do
+  unless eligible do return none
   let (constructorName, constructorType) := exportCtors[0]!
-  unless numForalls constructorType - np >= 2 do return false
+  unless numForalls constructorType - np >= 1 do return none
   forallBoundedTelescope memberTy (some np) fun ps _ => do
     let tele ← instForall constructorType ps
     let nf := numForalls tele
     forallBoundedTelescope tele (some nf) fun fields _ => do
       let fieldLevels ← fields.mapM fun field => do ilevel (← ityp field)
-      let towerLevel := fieldLevels.foldl mkLevelMax' .zero |>.normalize
-      unless ← isLevelDefEq towerLevel w do
-        declineWith (.shapeUnsupported tname .incomplete
-          s!"{constructorName}'s tight field tower inhabits Sort {towerLevel} while the \
-carrier inhabits Sort {w}, so the right-nested tight pair does not land on the declared \
-sort, and the field-preserving arm at a maybe-zero sort has no pad for the level gap the \
-never-zero tuple tower pads")
-      return true
+      return some (← planTightTower tname constructorName fieldLevels w "tight field tower")
 
 /-- **Can an indexed one-constructor owner's fields be stored at the carrier's
 exact sort?** — the question that decides the direct routes' *indexed* case,
@@ -362,29 +472,27 @@ answer settles both. Keeping the indexed case as a separate construction would
 have been two copies of that question, free to drift apart, and would have hid
 that the direct guard's `ni == 0` was a narrowness rather than a boundary.
 
-The tower's level is the max of the field levels at any field count: at one
-field the tower *is* that field's type, at two or more the right-nested
-`PSigma'` over them. Wrapping it in the index equation adds nothing to that
-level (`max ℓ 0` is `ℓ`), so the whole carrier lands at exactly `Sort w`
-precisely when the tower does.
+The tower's level is the max of the field levels at any field count, plus the
+pad's own `w` where a pad is planned. Wrapping it in the index equation adds
+nothing to that level (`max ℓ 0` is `ℓ`), so the whole carrier lands at exactly
+`Sort w` precisely when the tower does.
 
-**A tower that misses the carrier's sort is `incomplete` and not
-`outOfScope`, exactly as [`InductiveModels.planDirectTightRoute`]'s is.** The
-case is reached only after arm F has been ruled out, which means the
-constructor has a data field the conclusion's index vector does not carry; the
-model must therefore store it, and the Church encoding underneath — which
-remembers only inhabitation — cannot, so the intrinsic projection every
-one-constructor owner is asked for would state an equation the kernel refuses.
-Nothing about the shape is out of bounds; the route is short the pad the
-never-zero tuple tower has, and the message names both levels. Settled before
-anything is spliced, so the owner passes through unchanged.
+**A tower that misses the carrier's sort is the same answer
+[`InductiveModels.planTightTower`] gives everywhere else**, and for the same
+reason: the case is reached only after arm F has been ruled out, which means
+the constructor has a data field the conclusion's index vector does not carry,
+so the model must store it and the Church encoding underneath — which remembers
+only inhabitation — cannot. The pad is what takes that storage to the declared
+sort, and where even the pad misses, the boundary is stated rather than
+recorded as an unfinished arm. Settled before anything is spliced, so the owner
+passes through unchanged.
 
 Zero fields is a different answer: every non-proof field is then vacuously one
 of the conclusion's indices, so the kernel minted the large eliminator and arm
 F fired. Reaching this with no fields is a route-classification fault. -/
 def planDirectIndexedRoute (tname : Name) (eligible : Bool) (np : Nat) (memberTy : Expr)
-    (exportCtors : Array (Name × Expr)) (w : Level) : GenM Bool := do
-  unless eligible do return false
+    (exportCtors : Array (Name × Expr)) (w : Level) : GenM (Option (Option Level)) := do
+  unless eligible do return none
   let (constructorName, constructorType) := exportCtors[0]!
   let nf := numForalls constructorType - np
   unless nf >= 1 do
@@ -395,15 +503,7 @@ indexed case, is the one that models it"
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       let fieldLevels ← fields.mapM fun field => do ilevel (← ityp field)
-      let towerLevel :=
-        if nf == 1 then fieldLevels[0]! else (fieldLevels.foldl mkLevelMax' .zero).normalize
-      unless ← isLevelDefEq towerLevel w do
-        declineWith (.shapeUnsupported tname .incomplete
-          s!"{constructorName}'s field tower inhabits Sort {towerLevel} while the carrier \
-inhabits Sort {w}, so the direct routes' indexed case cannot hold the data field the \
-conclusion's index vector does not carry, and the maybe-zero route has no pad for the \
-level gap the never-zero tuple tower pads")
-      return true
+      return some (← planTightTower tname constructorName fieldLevels w "field tower")
 
 /-- Install tight-pair support and emit the complete exact-sort model branch.
 The caller only merges the returned declarations, splice witnesses, and
@@ -411,29 +511,30 @@ projection overrides into its route state. -/
 def emitDirectTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (v : Level) :
+    (recursorProofType recursorPublicType : Expr) (v : Level) (pad? : Option Level) :
     GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
-  let support ← ensurePSigmaPrime
+  let support ← if pad?.isSome then ensureExactSortLift else ensurePSigmaPrime
   let (declarations, overrides) ← directTightModel eqi tname lparams np memberTy
     constructorType modelConstructorType declaredMemberTy selfN constructorN recursorN
-    recursorLevelParams recursorProofType recursorPublicType v
+    recursorLevelParams recursorProofType recursorPublicType v pad?
   let spliced := support.flatMap fun declaration => declaration.getNames.toArray
   return (support ++ declarations, spliced, overrides)
 
 /-- Install tight-pair support and emit the indexed exact-sort model branch.
 The same support as the unindexed tower — the storage is that tower — plus the
 `PSigma'` the index equation's own pair is built from, which is the same
-record. -/
+record. A padded tower additionally ends at the derived exact-sort lift, whose
+`PUnit` is the one further constant either branch splices. -/
 def emitDirectIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name)
     (np ni : Nat) (constructorName : Name)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (w v : Level) :
+    (recursorProofType recursorPublicType : Expr) (w v : Level) (pad? : Option Level) :
     GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
-  let support ← ensurePSigmaPrime
+  let support ← if pad?.isSome then ensureExactSortLift else ensurePSigmaPrime
   let (declarations, overrides) ← directIndexedModel eqi tname lparams np ni constructorName
     memberTy constructorType modelConstructorType declaredMemberTy selfN constructorN
-    recursorN recursorLevelParams recursorProofType recursorPublicType w v
+    recursorN recursorLevelParams recursorProofType recursorPublicType w v pad?
   let spliced := support.flatMap fun declaration => declaration.getNames.toArray
   return (support ++ declarations, spliced, overrides)
 
@@ -529,13 +630,13 @@ def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
       recursorN recursorLevelParams recursorProofType recursorPublicType w v
     let spliced := support.flatMap fun declaration => declaration.getNames.toArray
     return (support ++ declarations, spliced, #[override])
-  | .tight =>
+  | .tight pad? =>
     emitDirectTightModel eqi tname lparams np memberTy constructorType modelConstructorType
       declaredMemberTy selfN constructorN recursorN recursorLevelParams
-      recursorProofType recursorPublicType v
-  | .indexed =>
+      recursorProofType recursorPublicType v pad?
+  | .indexed pad? =>
     emitDirectIndexedModel eqi tname lparams np ni constructorName memberTy constructorType
       modelConstructorType declaredMemberTy selfN constructorN recursorN recursorLevelParams
-      recursorProofType recursorPublicType w v
+      recursorProofType recursorPublicType w v pad?
 
 end InductiveModels
