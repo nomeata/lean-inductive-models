@@ -33,12 +33,24 @@ partial def fibreTower (w : Level) (cs : Array PCtor) (j : Nat) (scrut : Expr) :
 /-- The recursor's cases tower over the tag: at level `j` the zero case is
 constructor `j`'s destructor and the successor case descends; past the last
 constructor the fibre is empty and [`InductiveModels.emptyAtElim`] closes it. `scrut`
-is the level's own binder; the original tag is `succ^j scrut`. -/
+is the level's own binder; the original tag is `succ^j scrut`.
+
+**At `cs.size = 0` every tag is already past the last constructor**, so the
+tower is that closing case alone with no `Nat.rec` over it at all — which is
+the same term the caller used to build beside this function for a
+constructorless declaration, and the same term a tag tower with no base
+constructor needs. Writing it here rather than at the call site is what makes
+this function total: the `cs[j]!` below is otherwise a partial index whose
+out-of-range case is a native panic, and "this tower has no constructors" is a
+shape, not a fault. -/
 partial def stepTower (v w : Level) (eqi : EqInfo) (fib : Expr)
     (tgt : Expr → Expr) (minorOf : Nat → Array Expr → Expr)
     (cs : Array PCtor) (j : Nat) (scrut : Expr) : GenM Expr := do
   let natT : Expr := .const `Nat []
   let mkAt := fun (tag tup : Expr) => psigmaMk (.succ .zero) w natT fib tag tup
+  if cs.isEmpty then
+    return ← withLocalDeclD `f (emptyAt w) fun f => do
+      mkLambdaFVars #[f] (← emptyAtElim eqi v w (tgt (mkAt scrut f)) f)
   let mot ← withLocalDeclD `m natT fun m => do
     let tag := natSuccs j m
     withLocalDeclD `f (mkApp fib tag).headBeta fun f => do

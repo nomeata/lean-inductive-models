@@ -282,6 +282,40 @@ W/path construction (plan B){bill}"
     cur := b
   return slot
 
+/-- **A constructor's first bare recursive field**, or `none` where it has
+none. Bare means what it means everywhere else in this file: after βζ head
+normalization the field's domain is an application of the owner itself, with no
+binder over that occurrence.
+
+This is [`InductiveModels.recSlotOf`]'s question with its two refusals dropped
+rather than raised, and the two are separate functions because they answer for
+two different constructions. The tower needs *the* recursive field — its spine
+is one `Nat` and a step constructor takes exactly one predecessor — so a
+constructor with two of them is a shape it cannot express, and saying so is the
+dispatcher signal that selects W. The empty route needs only *a* recursive
+field, because all it does with it is return it: a constructor whose every
+inhabitant would have to supply an inhabitant of the carrier cannot be applied
+at all, however many such fields it has.
+
+**Bare is load-bearing and not an approximation.** A recursive occurrence under
+a binder is a field `∀ z⃗, T p⃗`, which is inhabited whenever the binder's domain
+is empty — `test/fixtures/inductive-models/empty_no_base.lean`'s `NbVac`
+recurses under an empty domain and is therefore *inhabited*. Emptiness of a
+binder domain is not a question this analysis can ask, so the shape class stops
+at the occurrences that carry an inhabitant of the owner directly. Non-throwing,
+because it is asked of every recursive declaration and its answer selects a
+route rather than refusing one. -/
+def bareRecSlotOf (tname : Name) (np ni : Nat) (nf : Nat) (tele : Expr) :
+    GenM (Option Nat) := do
+  let mut cur := tele
+  for i in [0:nf] do
+    let .forallE _ d b _ := cur | badShape "field telescope shorter than its field count"
+    let d := erasureFieldDomain tname d
+    if mentionsAny #[tname] d then
+      if (← ownerAppArgs? tname np ni d).isSome then return some i
+    cur := b
+  return none
+
 /-- A recursive field's domain with the **occurrence** replaced by `Vn` and the
 binders it sits under kept verbatim: `T p⃗ e⃗` becomes `Vn` and `∀ z⃗, T p⃗ e⃗`
 becomes `∀ z⃗, Vn`.

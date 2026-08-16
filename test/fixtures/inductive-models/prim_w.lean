@@ -113,7 +113,21 @@ inductive Wty (α : Type u) (β : α → Type u) : Type u where
    constructor, unindexed and unnested, but its constructor has more than one
    recursive occurrence.  Their four shapes keep the proof fold honest:
    direct/direct, direct/infinitary, infinitary/infinitary, and a dependent
-   *ordinary* prefix before the recursive suffix. -/
+   *ordinary* prefix before the recursive suffix.
+
+   **They are also all uninhabited, and six of them are no longer arm W's.**
+   Each is a single constructor with no base, so every constructor has a bare
+   recursive field, and arm E — which reaches that whole shape class rather
+   than its linear corner — models `Twin`, `Mixed`, `Prefix`, `Triple`, `Quad`
+   and `Trine` by the lift of `⊥`, exactly and with no axiom.  `TwinInf` has no
+   bare occurrence and stays on W.  The one-layer public-carrier claim these
+   were written for survives the move (the adapter is chosen on the
+   declaration's shape, not on the arm, and `runOne` still requires the
+   complete private certificate for `Triple`, `Quad` and `Trine`); what does
+   not is **the W construction itself at three and four recursive fields**,
+   which no occupant of this file now exercises.  Giving these six a base
+   constructor is what would restore it, and that is a source change with a
+   regenerated export behind it. -/
 inductive Twin : Type where
   | mk : Twin → Twin → Twin
 

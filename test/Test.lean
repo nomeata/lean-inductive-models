@@ -419,23 +419,29 @@ def expectedPrim : List Row :=
        ("MZIdx2", 8), ("MZIdx", 6)],
       [("Eq", "prim model: a basis primitive")])
   -- **Green, and evidence rather than a refusal.** Arm E models a recursive
-  -- declaration with no base constructor by the lift of `⊥`, exactly, with no
-  -- axiom — and only when the recursion is *linear*, because its slot analysis
-  -- is the tuple tower's (`Simple/Site.lean:446-456`). `NbLin` is that corner
-  -- at 23 declarations. `NbBr` differs from it by one recursive field, is just
-  -- as empty, and costs 225 declarations, the whole `_wcore` fragment and
-  -- `Classical.choice`, because arm E declines to look and arm W builds a
-  -- W-type with no leaves. `NbVac` is why the general statement is "every
+  -- declaration every one of whose constructors has a **bare** recursive field
+  -- by the lift of `⊥`, exactly, with no axiom. Its guard used to ask the tuple
+  -- tower's own slot analysis, so it reached only the *linear* corner of a
+  -- shape class linearity has nothing to do with; it now asks
+  -- `bareRecSlotOf` (`Simple/Site.lean`'s `emptySlots`) and reaches the class.
+  -- `NbLin` is 23 as before. **`NbBr` moved from 225 to 16**: one recursive
+  -- field more than `NbLin`, exactly as empty, and it no longer pays the whole
+  -- `_wcore` fragment and `Classical.choice` for a carrier that is `⊥`. The
+  -- fragment does not disappear — `NbInf` recurses under an *inhabited* binder,
+  -- has no bare occurrence, and is still arm W's, so it carries the core now
+  -- (224) instead of `NbBr` carrying it. `NbVac` is why the statement is "every
   -- constructor has a **bare** recursive field" and not "no base constructor":
-  -- its child binder's domain `E0` is empty, so `NbVac` is inhabited.
+  -- its child binder's domain `E0` is empty, so `NbVac` is inhabited, and it
+  -- stays on arm W at 21.
   , ("empty_no_base",
-      [("NbLin", 23), ("Nt", 6), ("NbBr", 225), ("_wcore.Subtype", 9),
+      [("NbLin", 23), ("Nt", 6), ("NbBr", 16), ("NbInf", 224),
+       ("_wcore.Subtype", 9),
        ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
        ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
-       ("_wcore.PProd", 9), ("NbInf", 21), ("E0", 2), ("NbVac", 21)],
+       ("_wcore.PProd", 9), ("E0", 2), ("NbVac", 21)],
       [("Eq", "prim model: a basis primitive")])
   -- Lifted arm F at its minimum: one proof field and one constant result
   -- index. The latter forces the packed equation; the existing one-field
@@ -735,6 +741,23 @@ def expectedPrim : List Row :=
   -- requires the complete one-layer private certificate for each of the three:
   -- nothing counts fields, so an arity restriction reintroduced anywhere shows
   -- up here as a missing certificate.
+  --
+  -- **Six of that tranche are no longer on arm W, and the reason is that they
+  -- are empty.** `Twin`, `Mixed`, `Prefix`, `Triple`, `Quad` and `Trine` were
+  -- each written with a single constructor and no base, so every one of them
+  -- has a bare recursive field in every constructor and is uninhabited; arm E
+  -- now reaches that whole shape class rather than its linear corner and takes
+  -- them, at 16/19/20/18/20/21 declarations against the W construction's
+  -- 22/25/26/24/26/27. The models are exact and cheaper — the carrier really
+  -- is `⊥` — and the one-layer certificate assertion below still holds for
+  -- `Triple`, `Quad` and `Trine`, because the adapter is chosen on the
+  -- declaration's shape and not on the arm. What no longer has an occupant
+  -- here is **the W construction itself at three and four recursive fields**:
+  -- `TwinInf` (two infinitary children, no bare occurrence) is the only member
+  -- of the tranche still on W, and the remaining W branching in this file is
+  -- binary (`Tree.bin`, `Wt.two`, `Dep.mk`, `Utd.mk`). Giving these six a base
+  -- constructor would put them back on W at their own arities, and that is a
+  -- source change plus a regenerated export rather than a table edit.
   , ("prim_w",
       [("Tree", 225), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
@@ -743,9 +766,9 @@ def expectedPrim : List Row :=
        ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Wty", 23),
-       ("Triple", 24), ("P", 6), ("Q", 8), ("Wt", 20),
-       ("Dep", 12), ("Bad", 12), ("TwinInf", 23), ("Br", 12), ("Twin", 22),
-       ("Prefix", 26), ("Quad", 26), ("Utd", 14), ("Mixed", 25), ("Trine", 27)],
+       ("Triple", 18), ("P", 6), ("Q", 8), ("Wt", 20),
+       ("Dep", 12), ("Bad", 12), ("TwinInf", 23), ("Br", 12), ("Twin", 16),
+       ("Prefix", 20), ("Quad", 20), ("Utd", 14), ("Mixed", 19), ("Trine", 21)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The W arm reached without the one-layer adapter's reflexive selectors,
   -- and what a dependent field costs there.** `prim_w`'s `Prefix` and `Wty`

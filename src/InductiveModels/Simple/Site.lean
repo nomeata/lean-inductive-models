@@ -435,22 +435,39 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     | none => restore tbl expression
   let publicRecTy := publicSource (sourceRecursor?.map (·.type) |>.getD rv.type)
 
-  -- **Arm E**: a linearly recursive, non-indexed `Type` with no base
-  -- constructor is empty.  The tuple tower below deliberately starts from a
-  -- base-constructor fibre, so this shape is not a degenerate tower: its exact
-  -- model is the empty carrier already provided by the derived lift of `False`. Every
-  -- constructor has one direct recursive field (linearity plus the absence of
-  -- a base constructor), hence maps to that field; the recursor and its iota
-  -- rules eliminate the same empty value.  Compute the slots here so the
-  -- route branches before the tuple tower asks for its nonexistent fibre.
+  -- **Arm E**: a non-indexed `Type` every one of whose constructors has a
+  -- **bare** recursive field is empty. The tuple tower below deliberately
+  -- starts from a base-constructor fibre, so this shape is not a degenerate
+  -- tower: its exact model is the empty carrier already provided by the derived
+  -- lift of `False`. Each constructor maps to its own recursive field — an
+  -- argument of the empty carrier is what it would have to be applied to — and
+  -- the recursor and its ι rules eliminate that same empty value. Compute the
+  -- slots here so the route branches before the tuple tower asks for its
+  -- nonexistent fibre.
+  --
+  -- **The class is not about linearity, and the guard no longer says it is.**
+  -- It used to ask [`InductiveModels.recSlotOf`], which is the *tuple tower's*
+  -- question — one recursive field per constructor, that occurrence bare — so
+  -- arm E reached only the linear corner of a shape class linearity has nothing
+  -- to do with. A constructor with two bare recursive fields is exactly as
+  -- unapplicable as one with a single one, and `empty_no_base`'s `NbBr` was
+  -- paying a two-hundred-declaration W core and `Classical.choice` for a
+  -- carrier that is `⊥`, with `NbLin` beside it paying neither.
+  --
+  -- **Bare, and not "no base constructor", is the sound statement.**
+  -- `empty_no_base`'s `NbVac` recurses under a binder whose domain is empty, so
+  -- `E0 → NbVac` is inhabited vacuously and `NbVac` is *inhabited*; a guard
+  -- reading "no base constructor" would model it by `⊥`. Whether a binder
+  -- domain is empty is not a question available here, so the class stops at the
+  -- occurrences that carry an inhabitant of the owner directly, which is
+  -- [`InductiveModels.bareRecSlotOf`]. `NbInf` and `NbVac` stay on arm W, and
+  -- the file records both counts.
   let emptySlots : Array (Option Nat) ←
-    if (route matches PrimRoute.type) && ni == 0 && isRec && erasureLinear then
+    if (route matches PrimRoute.type) && ni == 0 && isRec then
       withParams fun ps =>
-        exportCtors.mapM fun (cn, cty) => do
+        exportCtors.mapM fun (_, cty) => do
           let tele ← instForall cty ps
-          recSlotOf tname np ni cn (numForalls tele) tele
-            (tagFactored tname np exportCtors)
-            w.normalize.dec.isSome (labelFactored tname np exportCtors)
+          bareRecSlotOf tname np ni (numForalls tele) tele
     else
       pure #[]
   let armE := emptySlots.size == nc && nc > 0 && emptySlots.all Option.isSome
@@ -562,8 +579,18 @@ tuple tower pads")
   -- * **`isRec`.** A non-recursive declaration has no branching to be stopped
   --   by, so it never reaches here.
   let wTagged := tagFactored tname np exportCtors
+  -- **`!armE` is part of the decision and not part of the shape.** A branching
+  -- declaration with no base constructor is in the W class by every question
+  -- above and is *empty*, and W would duly build a W-type with no leaves — a
+  -- spliced core, `Classical.choice`, two hundred declarations, for a carrier
+  -- that is `⊥`. Arm E's carrier *is* `⊥`, at the declaration's own sort, with
+  -- no axiom. Where both apply the exact model wins, and saying so here rather
+  -- than in the dispatcher's `if`-order is what makes these booleans mutually
+  -- exclusive *facts* of the site: the arms and [`InductiveModels.primIotaRules`]
+  -- read the same decision instead of each re-deriving it from the order they
+  -- happen to test in.
   let wShapeEligible := (route matches PrimRoute.type) && ni == 0 && isRec &&
-    !erasureLinear && labelFactored tname np exportCtors
+    !erasureLinear && !armE && labelFactored tname np exportCtors
   let wPlan ← wCarrierPlan wShapeEligible w
   let armW := wShapeEligible && (w.normalize.dec.isSome || wPlan.lifted)
   let wW := wPlan.coreLevel

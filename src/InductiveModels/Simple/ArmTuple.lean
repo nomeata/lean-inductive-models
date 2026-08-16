@@ -124,9 +124,15 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
         w.normalize.dec.isSome (labelFactored tname np exportCtors)
   let baseJ := (Array.range nc).filter fun j => slots[j]!.isNone
   let stepJ := (Array.range nc).filter fun j => slots[j]!.isSome
-  -- Arm E has already taken every recursive declaration without a base
-  -- constructor.  Keep this assertion beside the sole `baseJ[0]` consumer:
-  -- reaching it would be an internal route-classification error.
+  -- **Arm E has already taken every recursive declaration without a base
+  -- constructor**, and now takes the whole of that shape class rather than its
+  -- linear corner: reaching the tuple tower at all means `recSlotOf` accepted
+  -- every constructor, so each has exactly one recursive field and that
+  -- occurrence is bare — which is precisely arm E's guard once `baseJ` is
+  -- empty. This is therefore an assertion about the route classification and
+  -- not a shape the tower declines; the tower below would in fact build the
+  -- zero-base spine, and it must not, because the exact model of an empty
+  -- carrier is the empty carrier and not a tower over it.
   if isRec && baseJ.isEmpty then
     badShape s!"internal: {tname}'s empty recursive shape missed the empty route"
   -- export constructor index ↦ its tag *within its own tower*
@@ -233,18 +239,19 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
     let major := bs[bs.size - 1]!
     if !isRec then
       let (cs, fib) ← fibreAt ps
+      -- One call at every constructor count, including zero: at zero
+      -- constructors `fib` is [`InductiveModels.emptyAt`] `w` at every tag and
+      -- [`InductiveModels.stepTower`] is its eliminator, which is exactly the
+      -- term the special case beside this one used to build. `headBeta` is
+      -- what keeps that term the same term: the tower returns a `Nat.rec`
+      -- application wherever there is a constructor to case on, so the
+      -- reduction only ever fires on the constructorless tower's own lambda.
       let minor ←
-        if nc == 0 then
-          withLocalDeclD `n natT fun n => do
-            withLocalDeclD `f (emptyAt w) fun f => do
-              mkLambdaFVars #[n, f] (← emptyAtElim eqi v w
-                (mkApp motive (psigmaMk (.succ .zero) w natT fib n f)) f)
-        else
-          withLocalDeclD `n natT fun n => do
-            withLocalDeclD `f (mkApp fib n).headBeta fun f => do
-              mkLambdaFVars #[n, f]
-                (mkApp (← stepTower v w eqi fib (fun z => mkApp motive z)
-                  (fun j vs => mkAppN minors[j]! vs) cs 0 n) f)
+        withLocalDeclD `n natT fun n => do
+          withLocalDeclD `f (mkApp fib n).headBeta fun f => do
+            mkLambdaFVars #[n, f]
+              (mkApp (← stepTower v w eqi fib (fun z => mkApp motive z)
+                (fun j vs => mkAppN minors[j]! vs) cs 0 n) f).headBeta
       mkLambdaFVars bs (psigmaRec v (.succ .zero) w natT fib motive minor major)
     else do
       -- `PSigma'.rec'` on the outer pair, `Nat.rec` on the spine, the tag

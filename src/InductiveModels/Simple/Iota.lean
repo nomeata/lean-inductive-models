@@ -121,6 +121,11 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
         --
         -- The *statement* is the shared one in all three cases, which is what
         -- keeps the oracle's syntactic comparison honest across the arms.
+        --
+        -- The site's route booleans are mutually exclusive by construction
+        -- ([`InductiveModels.mkPrimSite`] settles `armW` against `armE`
+        -- explicitly), so the order of the tests below carries no decision:
+        -- reading them in a different order would select the same arm.
         let proof ←
           if armW then do
             let (a, disp) ← wCtorParts ps j fields
