@@ -1,10 +1,56 @@
 #!/usr/bin/env bash
+# CI / maintainer-guide build and correctness matrix guard.
+#
+# The file name is historical. Builds here are *bounded*, not serialized: the
+# one-root-per-Lake-invocation loop this script pins keeps at most one target
+# link live, but inside a single invocation Lake still runs several jobs at
+# once. What bounds that is `LEAN_NUM_THREADS`, which this script also pins --
+# Lake 5.0.0 has no job-count flag at all, and the `-Kjobs=1` that used to
+# stand in for one only set an unread configuration key. The last assertion
+# below keeps that inert option from coming back.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 workflow="$root/.github/workflows/ci.yml"
 maintainer_guide="$root/docs/maintainers/Testing.md"
 lakefile="$root/lakefile.lean"
+
+# Lake's build parallelism bound, asserted to be one positive number stated
+# identically by the workflow and the maintainer guide. A guard that only
+# checked the shape of the build loop would pass just as happily with no bound
+# at all, which is exactly the state this replaces.
+workflow_bound="$(
+  sed -nE 's/^[[:space:]]*LEAN_NUM_THREADS:[[:space:]]*"?([0-9]+)"?[[:space:]]*$/\1/p' \
+    "$workflow" | LC_ALL=C sort -u
+)"
+if [[ ! "$workflow_bound" =~ ^[1-9][0-9]*$ ]]; then
+  echo "CI does not set a single positive LEAN_NUM_THREADS build bound" >&2
+  exit 1
+fi
+guide_bound="$(
+  sed -nE 's/^export LEAN_NUM_THREADS=([0-9]+)$/\1/p' "$maintainer_guide" |
+    LC_ALL=C sort -u
+)"
+if [[ "$guide_bound" != "$workflow_bound" ]]; then
+  echo "maintainer guide LEAN_NUM_THREADS ($guide_bound) differs from CI ($workflow_bound)" >&2
+  exit 1
+fi
+runner_bound="$(
+  sed -nE 's/^export LEAN_NUM_THREADS="\$\{LEAN_NUM_THREADS:-([0-9]+)\}"$/\1/p' \
+    "$root/test/scripts/run-correctness.sh" | LC_ALL=C sort -u
+)"
+if [[ "$runner_bound" != "$workflow_bound" ]]; then
+  echo "run-correctness.sh LEAN_NUM_THREADS default ($runner_bound) differs from CI ($workflow_bound)" >&2
+  exit 1
+fi
+mathlib_bound="$(
+  sed -nE 's/^BUILD_THREADS=([0-9]+)$/\1/p' "$root/scripts/ci-mathlib.sh" |
+    LC_ALL=C sort -u
+)"
+if [[ "$mathlib_bound" != "$workflow_bound" ]]; then
+  echo "ci-mathlib.sh BUILD_THREADS ($mathlib_bound) differs from CI ($workflow_bound)" >&2
+  exit 1
+fi
 
 # Keep the retired project name out of both tracked text and tracked paths.
 # Construct it from separate fragments so this guard does not exempt itself.
@@ -26,8 +72,8 @@ mapfile -t direct_builds < <(
   sed -nE 's/^[[:space:]]*(lake .*build .*)$/\1/p' "$workflow"
 )
 expected_direct_builds=(
-  'lake -Kjobs=1 build lean-inductive-models'
-  'lake -Kjobs=1 build "$target"'
+  'lake build lean-inductive-models'
+  'lake build "$target"'
 )
 
 arena_script="$root/test/scripts/check_arena_corpus.py"
@@ -49,42 +95,54 @@ sorted_expected_builds="$(
 if [[ "$sorted_direct_builds" != "$sorted_expected_builds" ]]; then
   printf '%s\n' "CI contains a Lake build outside the one-target loop:" >&2
   printf '  %s\n' "${direct_builds[@]}" >&2
-  printf '%s\n' "Expected only the serialized Arena build and target loop:" >&2
+  printf '%s\n' "Expected only the bounded Arena build and target loop:" >&2
   printf '  %s\n' "${expected_direct_builds[@]}" >&2
   exit 1
 fi
 
+# No tracked Lake invocation may carry a `-K` configuration option. Lake 5.0.0
+# reads `-K` only as a key for the configuration file to consume via
+# `get_config?`, and this lakefile consumes none, so every such option here has
+# been a silent no-op pretending to control the build. Prose may name the
+# option; a command line may not. Case matters: an invocation is lowercase.
+config_opt="$(printf '%s%s' '-' 'K')"
+if git -C "$root" grep -nE "(^|[[:space:]])lake[[:space:]][^#]*$config_opt" \
+    -- '*.sh' '*.yml' '*.md'; then
+  echo "a Lake invocation passes a $config_opt option; it does not bound the build" >&2
+  exit 1
+fi
+
 function_source="$({
-  sed -n '/^          build_serially() {$/,/^          }$/p' "$workflow"
+  sed -n '/^          build_bounded() {$/,/^          }$/p' "$workflow"
 } | sed 's/^          //')"
 if [[ -z "$function_source" ]]; then
-  echo "CI build_serially function is missing" >&2
+  echo "CI build_bounded function is missing" >&2
   exit 1
 fi
 
 actual="$({
   eval "$function_source"
   lake() { printf '%s\n' "$*"; }
-  build_serially alpha beta gamma
+  build_bounded alpha beta gamma
 })"
-expected=$'-Kjobs=1 build alpha\n-Kjobs=1 build beta\n-Kjobs=1 build gamma'
+expected=$'build alpha\nbuild beta\nbuild gamma'
 if [[ "$actual" != "$expected" ]]; then
-  printf 'CI build_serially did not issue one Lake root per invocation:\n%s\n' "$actual" >&2
+  printf 'CI build_bounded did not issue one Lake root per invocation:\n%s\n' "$actual" >&2
   exit 1
 fi
 
 readme_function_source="$(
-  sed -n '/^build_serially() {$/,/^}$/p' "$maintainer_guide"
+  sed -n '/^build_bounded() {$/,/^}$/p' "$maintainer_guide"
 )"
 if [[ -z "$readme_function_source" ]]; then
-  echo "maintainer guide build_serially function is missing" >&2
+  echo "maintainer guide build_bounded function is missing" >&2
   exit 1
 fi
 mapfile -t readme_direct_builds < <(
   sed -nE 's/^[[:space:]]*(TMPDIR="[^\"]+" )?(lake .*build .*)$/\2/p' "$maintainer_guide"
 )
 if [[ "${#readme_direct_builds[@]}" -ne 1 ||
-      "${readme_direct_builds[0]}" != 'lake -Kjobs=1 build "$target"' ]]; then
+      "${readme_direct_builds[0]}" != 'lake build "$target"' ]]; then
   printf '%s\n' "maintainer guide contains a Lake build outside the one-target loop:" >&2
   printf '  %s\n' "${readme_direct_builds[@]}" >&2
   exit 1
@@ -93,10 +151,10 @@ fi
 readme_actual="$({
   eval "$readme_function_source"
   lake() { printf '%s\n' "$*"; }
-  build_serially alpha beta gamma
+  build_bounded alpha beta gamma
 })"
 if [[ "$readme_actual" != "$expected" ]]; then
-  printf 'maintainer guide build_serially did not issue one Lake root per invocation:\n%s\n' \
+  printf 'maintainer guide build_bounded did not issue one Lake root per invocation:\n%s\n' \
     "$readme_actual" >&2
   exit 1
 fi
@@ -231,4 +289,4 @@ for matrix_name in readme_check_scripts ci_check_scripts; do
   fi
 done
 
-echo "CI/maintainer-guide serialized builds and correctness matrix: ${#lake_test_targets[@]} targets, ${#check_scripts[@]} scripts"
+echo "CI/maintainer-guide build matrix: LEAN_NUM_THREADS=$workflow_bound, ${#lake_test_targets[@]} targets, ${#check_scripts[@]} scripts"

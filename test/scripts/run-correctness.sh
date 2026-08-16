@@ -7,10 +7,19 @@ cd "$root"
 mkdir -p "$root/_tmp/build-tmp"
 export TMPDIR="${TMPDIR:-$root/_tmp/build-tmp}"
 
-build_serially() {
+# Bound Lake's build parallelism. Lake 5.0.0 has no job-count flag -- `-j` is
+# gone and `-K` only sets a configuration key no lakefile here reads -- so the
+# `-Kjobs=1` this loop used to pass did nothing at all. Lake schedules build
+# jobs as Lean tasks, so the runtime thread pool is the bound that exists.
+# See docs/maintainers/Testing.md for the measurements behind the value.
+export LEAN_NUM_THREADS="${LEAN_NUM_THREADS:-4}"
+
+# One root per invocation: at most one target link live, and a named target on
+# failure. Not serialization; Lake still runs up to LEAN_NUM_THREADS jobs.
+build_bounded() {
   local target
   for target in "$@"; do
-    lake -Kjobs=1 build "$target"
+    lake build "$target"
   done
 }
 
@@ -34,9 +43,9 @@ correctness_targets=(
   basisvalidationtest sourcespooltest
 )
 
-build_serially lean-inductive-models
-build_serially "${compile_only_targets[@]}"
-build_serially "${correctness_targets[@]}"
+build_bounded lean-inductive-models
+build_bounded "${compile_only_targets[@]}"
+build_bounded "${correctness_targets[@]}"
 
 lake exe test "$root"
 lake exe clitest

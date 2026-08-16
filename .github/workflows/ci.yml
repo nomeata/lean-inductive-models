@@ -9,6 +9,32 @@ on:
 permissions:
   contents: read
 
+# Bound Lake's build parallelism. Lake 5.0.0 has no job-count flag: `-j`
+# was dropped and `-K key=value` only sets a *configuration file* option
+# that this lakefile never reads, so the `-Kjobs=1` this workflow used to
+# pass was inert -- byte-for-byte the same build as passing nothing.
+#
+# Lake schedules its build jobs as Lean tasks, so the Lean runtime's thread
+# pool is the real control, and `LEAN_NUM_THREADS` sizes it. Measured on a
+# 96-core host, clean `lake build lean-inductive-models`:
+#
+#   setting     wall     user     CPU/wall   peak summed PSS
+#   (none)      39.4 s   160.5 s   4.58x      3.00 GiB
+#   -Kjobs=1    39.3 s   160.1 s   4.59x      2.96 GiB   <- inert
+#   =4          54.0 s   155.8 s   3.25x      2.41 GiB
+#   =2          89.7 s   156.8 s   1.97x      1.90 GiB
+#   =1         164.8 s   158.1 s   1.08x      1.92 GiB
+#
+# 4 is the bound, not 1: full serialization costs 4.2x wall to save 0.5 GiB
+# of a 6 GiB budget. The variable is a Lean-runtime-wide bound, so it also
+# caps each `lean` child's own threads; that costs nothing here (a single
+# `lean` frontend on the heaviest module runs at 1.22x CPU/wall whatever
+# this is set to). On a 2-4 core hosted runner the bound is at or above what
+# the runner can do anyway -- its value is making the ceiling the same on
+# every machine, including maintainer workstations.
+env:
+  LEAN_NUM_THREADS: "4"
+
 jobs:
   arena:
     name: Arena corpus with model generation
@@ -49,7 +75,7 @@ jobs:
           PYTHONPYCACHEPREFIX="$TMPDIR/pycache" \
             python3 -m py_compile test/scripts/check_arena_corpus.py
           PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_arena_corpus_runner.py
-          lake -Kjobs=1 build lean-inductive-models
+          lake build lean-inductive-models
           test/scripts/check_arena_corpus.py
 
   test:
@@ -90,13 +116,16 @@ jobs:
           # it both lets `lean` start and catches a runaway. RSS is the
           # quantity of interest; the runner's 16 GiB bounds it here.
 
-          # A single `lake build` with several roots may schedule the roots'
-          # final native links together even with `-Kjobs=1`. Build each root
-          # in its own Lake invocation so at most one target link is live.
-          build_serially() {
+          # `LEAN_NUM_THREADS` (workflow env) is what bounds parallelism; see
+          # the comment on it for why the `-Kjobs=1` that used to appear here
+          # was inert. One root per Lake invocation is a separate and weaker
+          # property: it keeps at most one *target link* live and names the
+          # target that failed. Within one invocation Lake still runs up to
+          # LEAN_NUM_THREADS jobs at once, so this loop is not serialization.
+          build_bounded() {
             local target
             for target in "$@"; do
-              lake -Kjobs=1 build "$target"
+              lake build "$target"
             done
           }
           compile_only_targets=(
@@ -110,7 +139,7 @@ jobs:
 
           case "$SUITE" in
             fixtures)
-              build_serially lean-inductive-models test
+              build_bounded lean-inductive-models test
               lake exe test "$GITHUB_WORKSPACE" | tee _tmp/fixtures.log
               test/scripts/check-hard-nested-a.sh
               test/scripts/check-hard-nested-c.sh
@@ -118,8 +147,8 @@ jobs:
               ;;
             focused)
               test/scripts/check-mathlib-result.sh
-              build_serially "${compile_only_targets[@]}"
-              build_serially \
+              build_bounded "${compile_only_targets[@]}"
+              build_bounded \
                 clitest generationflagstest checktest kernelchecktest \
                 familyadapterplantest familyadaptershadowtest familyadapterconstructiontest \
                 ordertest incrementalordertest namingtest \
@@ -171,7 +200,7 @@ jobs:
               count=33
               ;;
             cli)
-              build_serially lean-inductive-models mainclitest
+              build_bounded lean-inductive-models mainclitest
               lake exe mainclitest "$GITHUB_WORKSPACE" | tee _tmp/maincli.log
               cli_count="$(sed -nE 's/^main CLI: ([0-9]+) passed, 0 failed$/\1/p' _tmp/maincli.log | tail -n1)"
               if [[ -z "$cli_count" ]]; then

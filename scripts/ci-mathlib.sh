@@ -27,6 +27,9 @@ EXPORTER_PATCH_SHA="151c25f6adbfd915ce62786da33352c089653f62d5d3445cc3b38879de19
 WORKER_LIMIT_KIB=$((12 * 1024 * 1024))
 BUILD_LIMIT_KIB=$((6 * 1024 * 1024))
 EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))
+# Lake's build parallelism bound; see the build phases below and
+# docs/maintainers/Testing.md for the measurements.
+BUILD_THREADS=4
 # Keep the conservative generation-phase disk guard for the named-output
 # transaction's private sibling. This is
 # applied after all disposable builds and checkouts are gone; it is not a
@@ -329,10 +332,28 @@ checkout_pinned() {
   git -C "$directory" checkout --detach FETCH_HEAD
 }
 
-# Build one root per Lake invocation. Copy the standalone executables out of
-# their build trees so every build artifact can be reclaimed before generation.
+# Build one root per Lake invocation, with Lake's parallelism bounded.
+#
+# The bound is `LEAN_NUM_THREADS`, not a Lake flag: Lake 5.0.0 dropped `-j` and
+# `-K` only sets a configuration key a lakefile may read back, which neither
+# this package nor lean4export does. The `-Kjobs=1` these phases used to pass
+# was inert, so this budget was previously being met by an unbounded build that
+# happened to fit. Lake schedules its build jobs as Lean tasks, so sizing the
+# Lean runtime's thread pool is what bounds them. Measured on a 96-core host,
+# clean `lake build lean-inductive-models`: unbounded 39.4 s wall at 4.58x
+# CPU/wall and 3.00 GiB peak summed PSS; at 4, 54.0 s and 2.41 GiB; at 1,
+# 164.8 s and 1.92 GiB. Four keeps the ceiling the same on every machine at a
+# third of the cost of serializing, and leaves the 6 GiB budget a factor of two.
+#
+# The bound is applied to the Lake *builds* only. The cache phase below is a
+# download, peaks at 0.91 GiB, and has nothing to gain from a thread ceiling;
+# the export and generation phases are single measured workers whose numbers
+# above were taken without one.
+#
+# Copy the standalone executables out of their build trees so every build
+# artifact can be reclaimed before generation.
 (cd "$ROOT" && run_build_measured build-generator \
-  lake -Kjobs=1 build lean-inductive-models)
+  env LEAN_NUM_THREADS="$BUILD_THREADS" lake build lean-inductive-models)
 cp "$ROOT/.lake/build/bin/lean-inductive-models" \
   "$BIN_DIR/lean-inductive-models"
 [[ -x "$BIN_DIR/lean-inductive-models" ]] || fail "model generator was not built"
@@ -354,7 +375,8 @@ git -C "$EXPORTER_DIR" apply "$EXPORTER_PATCH"
 # repository targets and break the gate. `scripts/export-fixture.sh` pins the
 # same literal for the same reason.
 echo "leanprover/lean4:v4.29.1" > "$EXPORTER_DIR/lean-toolchain"
-(cd "$EXPORTER_DIR" && run_build_measured build-exporter lake -Kjobs=1 build)
+(cd "$EXPORTER_DIR" && run_build_measured build-exporter \
+  env LEAN_NUM_THREADS="$BUILD_THREADS" lake build)
 cp "$EXPORTER_DIR/.lake/build/bin/lean4export" "$BIN_DIR/lean4export"
 [[ -x "$BIN_DIR/lean4export" ]] || fail "exporter binary was not built"
 cleanup_tree "$EXPORTER_DIR"
@@ -363,7 +385,7 @@ disk_census exporter-built
 checkout_pinned \
   https://github.com/leanprover-community/mathlib4.git \
   "$MATHLIB_REV" "$MATHLIB_DIR"
-(cd "$MATHLIB_DIR" && run_build_measured mathlib-cache lake -Kjobs=1 exe cache get)
+(cd "$MATHLIB_DIR" && run_build_measured mathlib-cache lake exe cache get)
 cleanup_tree "$MATHLIB_CACHE_DIR"
 disk_census mathlib-cached
 

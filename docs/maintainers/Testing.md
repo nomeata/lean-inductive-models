@@ -11,14 +11,51 @@ mkdir -p _tmp/build-tmp
 export TMPDIR="$PWD/_tmp/build-tmp"
 ```
 
-Build targets serially. Even with `-Kjobs=1`, passing several roots to one Lake
-invocation can overlap their final native links.
+Bound Lake's build parallelism:
+
+```console
+export LEAN_NUM_THREADS=4
+```
+
+**Lake 5.0.0 has no job-count flag.** `-j/--jobs` was dropped in the toolchain
+bump, and `-K key=value` only sets a configuration-file option for a lakefile to
+read back with `get_config?` — this lakefile reads none. The `-Kjobs=1` that
+scripts, CI and this guide used to pass was therefore inert: it produced a
+byte-for-byte identical, fully parallel build. Any instruction to build "with
+one job" that relied on it had no effect.
+
+Lake schedules its build jobs as Lean tasks, so the Lean runtime's thread pool
+is the control that exists, and `LEAN_NUM_THREADS` sizes it. Measured on a
+96-core host, clean `lake build lean-inductive-models`:
+
+| setting | wall | user | CPU/wall | peak summed PSS |
+| --- | --- | --- | --- | --- |
+| none | 39.4 s | 160.5 s | 4.58x | 3.00 GiB |
+| `-Kjobs=1` | 39.3 s | 160.1 s | 4.59x | 2.96 GiB |
+| `LEAN_NUM_THREADS=4` | 54.0 s | 155.8 s | 3.25x | 2.41 GiB |
+| `LEAN_NUM_THREADS=2` | 89.7 s | 156.8 s | 1.97x | 1.90 GiB |
+| `LEAN_NUM_THREADS=1` | 164.8 s | 158.1 s | 1.08x | 1.92 GiB |
+
+Peak memory is the sum of proportional set sizes over the whole process tree,
+which is what a cgroup charges; summed RSS is far larger (13.7 GiB unbounded)
+but nearly all of that is the same mapped `.olean` pages counted once per
+reader. **4 is the bound and 1 is not**: serializing costs 4.2x wall to save
+0.5 GiB out of the 6 GiB build budget, and the budget is enforced as a cgroup
+limit, so there is nothing left for serialization to protect. The variable
+bounds the Lean runtime as a whole, so it also caps each `lean` child's own
+threads — free here, since a single `lean` frontend on the heaviest module runs
+at 1.22x CPU/wall at every setting.
+
+One root per Lake invocation is a separate, weaker property, and worth keeping
+for what it actually gives: at most one target *link* live, and a named target
+when a build fails. It is not serialization — inside one invocation Lake still
+runs up to `LEAN_NUM_THREADS` jobs at once.
 
 ```bash
-build_serially() {
+build_bounded() {
   local target
   for target in "$@"; do
-    lake -Kjobs=1 build "$target"
+    lake build "$target"
   done
 }
 ```
@@ -255,7 +292,11 @@ under pressure and only OOM-kills on genuine anonymous growth, so streaming the
 ~5.9 GB output sibling does not trip a budget while a real leak does. The
 budgets are 6 GiB for the build and cache phases (measured peak 2.91 GiB),
 12 GiB for the Mathlib export (measured peak 7.80 GiB), and 12 GiB for the
-model worker. `scripts/ci-mathlib.sh` picks the strongest mechanism the runner
+model worker. Its two Lake build phases now run under the same
+`LEAN_NUM_THREADS` bound as CI, so the build budget is met by a stated ceiling
+rather than by whatever parallelism the runner happened to offer; the cache,
+export and generation phases are left unbounded, being a download and two
+single measured workers. `scripts/ci-mathlib.sh` picks the strongest mechanism the runner
 actually supports by probing each one for real — a per-user scope, a `sudo`
 system scope dropping back to the calling user, or, where no cgroup can be
 created, running unbudgeted and failing the phase afterwards on peak RSS from

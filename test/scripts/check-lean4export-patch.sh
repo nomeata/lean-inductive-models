@@ -70,8 +70,8 @@ run_capped() (
   exec "$@"
 )
 
-(cd "$stock" && run_capped lake -Kjobs=1 build lean4export)
-(cd "$patched" && run_capped lake -Kjobs=1 build lean4export)
+(cd "$stock" && run_capped lake build lean4export)
+(cd "$patched" && run_capped lake build lean4export)
 
 mapfile -t fixture_args < "$root/test/fixtures/lean4export/compact_interner.args"
 (cd "$stock" && run_capped lake env .lake/build/bin/lean4export \
