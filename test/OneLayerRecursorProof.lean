@@ -73,6 +73,11 @@ axiom coreIota : ∀ q, core (privateCtor q) =
   Eq.mp (congrArg C (constructorAgreement q))
     (minor (unrollField q) (privateIH q))
 
+-- Lean 4.33.0's `linter.defProp` wants a `theorem` here, but `theorem` demands
+-- the statement be written out and the point of this declaration is that the
+-- statement is whatever `oneLayerRecursorCompatibility` says it is -- the
+-- `run_meta` below reads it back with `inferType`.
+set_option linter.defProp false in
 def expected := InductiveModels.oneLayerRecursorCompatibility roll unroll unrollRoll
   rollField unrollField unrollRollField privateCtor publicCtor rollCtor
   privateIH publicIH ihAgreement minor core constructorAgreement coreIota

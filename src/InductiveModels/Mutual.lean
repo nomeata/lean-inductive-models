@@ -480,7 +480,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
     let v := if large then Level.param rv.levelParams[0]! else Level.zero
     unless (if large then rv.levelParams.tail! else rv.levelParams) == lparams do
       badShape s!"{ern} carries the level parameters {rv.levelParams}"
-    let installedTy := restore tbl rv.type
+    let _installedTy := restore tbl rv.type
     let publicTy := restore tbl (sourceRecursor?.map (·.type) |>.getD rv.type)
     -- The installed recursor remains the metadata/layout oracle, but these
     -- locals must be introduced from the literal public telescope. Otherwise

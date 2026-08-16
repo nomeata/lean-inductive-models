@@ -1,5 +1,5 @@
 import InductiveModels.Spool
-import Std.Internal.Async.System
+import Std.Async.System
 
 open Lean InductiveModels
 
@@ -22,12 +22,12 @@ def removeIfPresent (path : String) : IO Unit := do
 def withAmbientTmp (path : System.FilePath) (action : IO α) : IO α := do
   let previous ← IO.getEnv "TMPDIR"
   try
-    Std.Internal.IO.Async.System.setEnvVar "TMPDIR" path.toString
+    Std.Async.System.setEnvVar "TMPDIR" path.toString
     action
   finally
     match previous with
-    | some value => Std.Internal.IO.Async.System.setEnvVar "TMPDIR" value
-    | none => Std.Internal.IO.Async.System.unsetEnvVar "TMPDIR"
+    | some value => Std.Async.System.setEnvVar "TMPDIR" value
+    | none => Std.Async.System.unsetEnvVar "TMPDIR"
 
 def parseHandleAt (path : String) : IO (Except String Export) :=
   IO.FS.withFile path .read fun handle => InductiveModels.parseHandle handle

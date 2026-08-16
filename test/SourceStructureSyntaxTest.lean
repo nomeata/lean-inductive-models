@@ -235,7 +235,7 @@ def collectEvidence (path : String) : IO Evidence := do
     let mut checked := base
     for declaration in ordered.decls do
       if let some replay := toDeclaration checked declaration then
-        match checked.addDeclCore 0 replay none false with
+        match checked.addDeclCore 0 0 replay none false with
         | .ok next => checked := next
         | .error exception =>
           throwError "kernel replay rejected {declaration.names}: {
@@ -259,7 +259,7 @@ def collectEvidence (path : String) : IO Evidence := do
     for declaration in input.decls do
       unless declaration.names.contains `SourceStructure do
         if let some replay := toDeclaration sourceBase declaration then
-          match sourceBase.addDeclCore 0 replay none false with
+          match sourceBase.addDeclCore 0 0 replay none false with
           | .ok next => sourceBase := next
           | .error _ => pure ()
     let ownerFreeAccepted := match ← checkGeneratedIn sourceBase generatedRecords with

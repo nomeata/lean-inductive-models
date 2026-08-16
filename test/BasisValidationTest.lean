@@ -13,7 +13,7 @@ def TestState.check (state : TestState) (label : String) (condition : Bool) : Te
 def addInductiveRecord (declaration : Declaration) : MetaM EDecl := do
   let .inductDecl _ _ types _ := declaration
     | throwError "test declaration is not inductive"
-  match (← getEnv).addDeclCore 0 declaration none true with
+  match (← getEnv).addDeclCore 0 0 declaration none true with
   | .error exception =>
     throwError "cannot mint test declaration: {← (exception.toMessageData {}).toString}"
   | .ok env =>

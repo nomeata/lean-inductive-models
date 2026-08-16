@@ -41,7 +41,7 @@ def probeA (x : Export) (names : Array Name) (env0 : Environment) : IO Unit := d
   let mut env := env0
   for d in x.decls do
     if let some dcl := toDeclaration env d then
-      match env.addDeclCore 0 dcl none false with
+      match env.addDeclCore 0 0 dcl none false with
       | .ok e => env := e
       | .error _ => pure ()
   let kenv := env.toKernelEnv
@@ -59,7 +59,7 @@ def probeC (x : Export) (env0 : Environment) : IO Unit := do
   let mut bad : Array String := #[]
   for d in x.decls do
     if let some dcl := toDeclaration env d then
-      match env.addDeclCore 0 dcl none true with
+      match env.addDeclCore 0 0 dcl none true with
       | .ok e => env := e; ok := ok + 1
       | .error ex =>
         bad := bad.push s!"{dcl.getTopLevelNames}: {← (ex.toMessageData {}).toString}"
@@ -78,7 +78,7 @@ def probeW (x : Export) (env0 : Environment) : IO Unit := do
   let mut env := env0
   for d in x.decls do
     if let some dcl := toDeclaration env d then
-      match env.addDeclCore 0 dcl none false with
+      match env.addDeclCore 0 0 dcl none false with
       | .ok e => env := e
       | .error _ => pure ()
   let reserved : Std.HashSet Name :=

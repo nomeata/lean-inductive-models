@@ -358,7 +358,7 @@ def iotaSchemasComplete (plan : FamilyAdapterPlan)
       schema.owner == rule.key.recursorOwner && schema.constructor == rule.key.constructor &&
         schema.implementationIota == rule.implementationIota &&
         schema.telescope.constructor == rule.key.constructor &&
-        (plan.members.find? (·.key == rule.key.recursorOwner)).any fun member =>
+        (plan.members.find? (·.key == rule.key.recursorOwner)).any fun _member =>
           schema.implementationIotaInputs == rule.implementationEvidence.application &&
           compatibility.any fun compatibility =>
             schema.minorCompatibility == compatibility.compatibility &&

@@ -2391,7 +2391,7 @@ def addChecked (d : Declaration) : GenM Unit := do
   -- Exact emitted records are checked once at the island boundary when
   -- `typeCheckGenerated` is enabled; construction declarations are otherwise
   -- trusted in exactly the same way as replayed input declarations.
-  match (← getEnv).addDeclCore 0 d none false with
+  match (← getEnv).addDeclCore 0 0 d none false with
   | .ok e =>
     setEnv e
     -- **`find?`, not `constants`.** `Environment.constants` is the trusted

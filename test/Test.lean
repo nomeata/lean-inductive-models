@@ -1022,7 +1022,7 @@ def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
   let mut env := env0
   for d in x.decls do
     if let some dcl := toDeclaration env d then
-      if let .ok e := env.addDeclCore 0 dcl none false then env := e
+      if let .ok e := env.addDeclCore 0 0 dcl none false then env := e
   let reserved : Std.HashSet Name :=
     x.decls.foldl (fun s d => d.names.foldl (·.insert ·) s) {}
   -- **The compiled-in fragment against the one on disk.**
@@ -1113,7 +1113,7 @@ def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
   let mut env := env0
   for d in x.decls do
     if let some dcl := toDeclaration env d then
-      if let .ok e := env.addDeclCore 0 dcl none false then env := e
+      if let .ok e := env.addDeclCore 0 0 dcl none false then env := e
   let kenv := env.toKernelEnv
   let mut a := a
   a := check a ((kenv.find? `Tree.rec_1).isSome && (env.find? `Tree.rec_1).isNone)
@@ -1288,7 +1288,7 @@ def runCollisionProbe (a : TAcc) : IO TAcc := do
      now land in `map₁` and `Environment.find?`'s base probe would see them without the async \
      map; the normalized-name collision may no longer be structural"
   let mut env := env0
-  let some env1 := (env.addDeclCore 0 probeNatDecl none true).toOption
+  let some env1 := (env.addDeclCore 0 0 probeNatDecl none true).toOption
     | return check a false "the collision probe cannot install Nat"
   env := env1
   a := check a (env.constants.map₁.isEmpty)
@@ -1300,8 +1300,8 @@ def runCollisionProbe (a : TAcc) : IO TAcc := do
   a := check a (privateToUserName priv == publ)
     "privateToUserName no longer strips the private prefix, so this probe measures nothing"
   let secondIsLost := fun (first second : Name) => Id.run do
-    let some e1 := (env.addDeclCore 0 (probeIdDecl first) none true).toOption | return false
-    let some e2 := (e1.addDeclCore 0 (probeIdDecl second) none true).toOption | return false
+    let some e1 := (env.addDeclCore 0 0 (probeIdDecl first) none true).toOption | return false
+    let some e2 := (e1.addDeclCore 0 0 (probeIdDecl second) none true).toOption | return false
     -- the kernel took it; the environment lost it; and the first one survives
     return e2.constants.contains second && (e2.find? second).isNone && (e2.find? first).isSome
   a := check a (secondIsLost priv publ)
@@ -1316,8 +1316,8 @@ def runCollisionProbe (a : TAcc) : IO TAcc := do
   a := check a (privateToUserName al != publ)
     "the alias root no longer normalizes away from the contract name, so it is not an escape"
   let aliasWorks := Id.run do
-    let some e1 := (env.addDeclCore 0 (probeIdDecl publ) none true).toOption | return false
-    let some e2 := (e1.addDeclCore 0 (probeIdDecl al) none true).toOption | return false
+    let some e1 := (env.addDeclCore 0 0 (probeIdDecl publ) none true).toOption | return false
+    let some e2 := (e1.addDeclCore 0 0 (probeIdDecl al) none true).toOption | return false
     return (e2.find? al).isSome && (e2.find? publ).isSome
   a := check a aliasWorks
     "a second declaration under a differently-normalizing root is no longer visible either — \

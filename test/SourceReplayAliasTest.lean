@@ -140,13 +140,13 @@ def completeWrappedBox (wrapper dependency : Name) : IO EDecl := do
     for source in #[typeAxiom dependency, wrapperDecl] do
       let some declaration := toDeclaration replayEnv source
         | throwError "cannot reconstruct wrapped-box prerequisite"
-      replayEnv ← match replayEnv.addDeclCore 0 declaration none true with
+      replayEnv ← match replayEnv.addDeclCore 0 0 declaration none true with
         | .ok next => pure next
         | .error exception =>
           throwError "wrapped-box prerequisite failed: {← (exception.toMessageData {}).toString}"
     let some declaration := toDeclaration replayEnv (wrappedBox wrapper)
       | throwError "cannot reconstruct wrapped-box owner"
-    replayEnv ← match replayEnv.addDeclCore 0 declaration none true with
+    replayEnv ← match replayEnv.addDeclCore 0 0 declaration none true with
       | .ok next => pure next
       | .error exception =>
         throwError "wrapped-box owner failed: {← (exception.toMessageData {}).toString}"

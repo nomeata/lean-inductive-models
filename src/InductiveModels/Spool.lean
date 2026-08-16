@@ -1,5 +1,5 @@
 import InductiveModels.Format
-import Std.Internal.Async.System
+import Std.Async.System
 import Std.Sync.Mutex
 
 namespace InductiveModels.Spool
@@ -127,12 +127,12 @@ private def createTempDirIn (root : System.FilePath) : IO System.FilePath := do
   tempRootMutex.atomically fun _ => do
     let previous ← IO.getEnv "TMPDIR"
     try
-      Std.Internal.IO.Async.System.setEnvVar "TMPDIR" root.toString
+      Std.Async.System.setEnvVar "TMPDIR" root.toString
       IO.FS.createTempDir
     finally
       match previous with
-      | some value => Std.Internal.IO.Async.System.setEnvVar "TMPDIR" value
-      | none => Std.Internal.IO.Async.System.unsetEnvVar "TMPDIR"
+      | some value => Std.Async.System.setEnvVar "TMPDIR" value
+      | none => Std.Async.System.unsetEnvVar "TMPDIR"
 
 def Workspace.create (root : System.FilePath) : IO Workspace := do
   unless root.fileName == some "_tmp" do

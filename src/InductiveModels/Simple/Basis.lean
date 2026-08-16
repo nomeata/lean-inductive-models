@@ -189,7 +189,7 @@ private def canonicalInductiveRecord (root : Name) (canonical : Declaration)
   let canonical := alignBasisLevelParams canonical levelParams
   let alias := freshBasisAlias env root canonical
   let canonical := aliasBasisDeclaration root alias canonical
-  let expectedEnv ← match env.addDeclCore 0 canonical none true with
+  let expectedEnv ← match env.addDeclCore 0 0 canonical none true with
     | .ok next => pure next
     | .error exception =>
       return .error s!"cannot mint the canonical {root} interface: \

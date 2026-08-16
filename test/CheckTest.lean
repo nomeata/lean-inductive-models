@@ -507,6 +507,12 @@ def runOverlayOwnershipProbe (root : String) (size := 32768)
     IO.eprintln "overlay-ownership-probe: report mismatch"
     return 1
 
+-- One `do` block of several hundred checks, elaborated as a single declaration,
+-- so the heartbeat budget is shared by all of them. Lean 4.29.1 fitted inside
+-- the default 200000; 4.33.0 does not fit inside 1000000, timing out in
+-- `isDefEq`. The budget is removed rather than raised because no finite value
+-- here is more than a guess at the next toolchain's cost.
+set_option maxHeartbeats 0 in
 def run (root : String) : IO UInt32 := do
   let path := s!"{root}/test/fixtures/inductive-models/nested_iota_arm.ndjson"
   let text ← IO.FS.readFile path

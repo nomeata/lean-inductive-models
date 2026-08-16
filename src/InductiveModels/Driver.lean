@@ -1343,7 +1343,7 @@ def checkGeneratedIn (base : Environment) (records : Array EDecl) :
           return .error s!"generated quotient bundle would shadow existing {name}"
       unless cursor + 4 <= records.size do
         return .error "quotient declaration does not have four consecutive export records"
-      let quotientEnv ← match checked.addDeclCore 0 .quotDecl none true with
+      let quotientEnv ← match checked.addDeclCore 0 0 .quotDecl none true with
         | .error exception =>
           return .error s!"cannot reconstruct quotient declaration: \
             {← (exception.toMessageData {}).toString}"
@@ -1358,7 +1358,7 @@ def checkGeneratedIn (base : Environment) (records : Array EDecl) :
       continue
     let some declaration := toDeclaration checked record | do
       return .error s!"{record.names}: cannot reconstruct a kernel declaration"
-    match checked.addDeclCore 0 declaration none true with
+    match checked.addDeclCore 0 0 declaration none true with
     | .error exception =>
       return .error s!"{record.names}: \
         {← (exception.toMessageData {}).toString}"
@@ -1398,7 +1398,7 @@ def installGeneratedSupportIn (base : Environment) (records : Array EDecl)
       return .error s!"{record.names}: cannot reconstruct shared support"
     -- Reusable support belongs to the construction view. The complete exact
     -- emitted island is checked once, separately, when generated checking is on.
-    match main.addDeclCore 0 declaration none false with
+    match main.addDeclCore 0 0 declaration none false with
     | .error exception =>
       return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
     | .ok next => main := next
@@ -2620,7 +2620,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
     -- emitted either.
     replayedOwnerEnv? := some (← getEnv)
   else if let some dcl := toDeclaration (← getEnv) replayD then
-    match (← getEnv).addDeclCore 0 dcl none false with
+    match (← getEnv).addDeclCore 0 0 dcl none false with
     | .ok e =>
       replayedOwnerEnv? := some e
       setEnv e
@@ -2767,7 +2767,7 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
         -- installed a second time here either.
         mainEnv := mainWithSupport
       else if let some ownerDeclaration := toDeclaration mainWithSupport replayD then
-        match mainWithSupport.addDeclCore 0 ownerDeclaration none false with
+        match mainWithSupport.addDeclCore 0 0 ownerDeclaration none false with
         | .ok env =>
           mainEnv := env
           setEnv env

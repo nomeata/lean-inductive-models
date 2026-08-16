@@ -334,7 +334,7 @@ def ownerDependentRecordIsRejected : IO Bool := do
       (.forallE `x (.const `ForkOwner []) (.sort (.succ .zero)) .default)
     let rejected ← checkGeneratedIn env #[dependent]
     let some ownerDeclaration := toDeclaration env owner | return false
-    let ownerEnv ← match env.addDeclCore 0 ownerDeclaration none true with
+    let ownerEnv ← match env.addDeclCore 0 0 ownerDeclaration none true with
       | .ok result => pure result
       | .error _ => return false
     let accepted ← checkGeneratedIn ownerEnv #[dependent]
@@ -509,9 +509,9 @@ def run (root : String) : IO UInt32 := do
   -- environment lacks that declaration, which `mkEmptyEnvironment` models.
   -- The quotient's kernel declaration itself depends on exact `Eq` support.
   let empty ← mkEmptyEnvironment
-  let .ok quotientBase := empty.addDeclCore 0 eqDecl none true
+  let .ok quotientBase := empty.addDeclCore 0 0 eqDecl none true
     | throw <| IO.userError "the kernel rejected exact Eq support"
-  let .ok quotientEnv := quotientBase.addDeclCore 0 .quotDecl none true
+  let .ok quotientEnv := quotientBase.addDeclCore 0 0 .quotDecl none true
     | throw <| IO.userError "the kernel rejected its quotient declaration"
   let some quotientRecords := installedQuotRecords? quotientEnv
     | throw <| IO.userError "the kernel did not expose all four quotient records"

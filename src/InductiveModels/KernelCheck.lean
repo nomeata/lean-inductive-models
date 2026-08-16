@@ -411,7 +411,7 @@ def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
     if let some declaration := replay then
       if let some message := KernelCheck.universeArityMismatch? checked declaration then
         return .error s!"{record.names}: {message}"
-      match checked.addDeclCore 0 declaration none with
+      match checked.addDeclCore 0 0 declaration none with
       | .error exception =>
         return .error s!"{record.names}: {← (exception.toMessageData {}).toString}"
       | .ok next => checked := next

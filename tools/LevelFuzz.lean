@@ -161,7 +161,7 @@ def run (n depth nvars wide : Nat) : Tally := Id.run do
 
 /-- Zero-padded 16-digit lowercase hex, to match `%016llx`. -/
 def hex16 (x : UInt64) : String :=
-  let ds := (Nat.toDigits 16 x.toNat).asString
+  let ds := String.ofList (Nat.toDigits 16 x.toNat)
   "".pushn '0' (16 - ds.length) ++ ds
 
 def report (n depth nvars wide : Nat) (t : Tally) : String :=

@@ -2842,7 +2842,7 @@ private def privateMinorValue (plan : FamilyAdapterPlan)
         | failConstruction (.malformedRecursorMinor shape.key minorIndex)
       unless telescope == constructorAdapter.telescope do
         failConstruction (.malformedRecursorMinor shape.key minorIndex)
-      let privatePackageType ← liftGen <| packedTelescopeType privateFields
+      let _privatePackageType ← liftGen <| packedTelescopeType privateFields
       let privatePackage ← liftGen <| packTelescopeValue privateFields privateFields
       let some owner := plan.members.find? (·.key == constructor.key.owner)
         | failConstruction (.malformedRecursorMinor shape.key minorIndex)
@@ -2871,7 +2871,7 @@ already checked family/container equivalence. -/
 private def mapSpecialisedMajorToPublic (plan : FamilyAdapterPlan)
     (memberCertificates : Array MemberCertificate) (parameters : Array Expr)
     (fallback : RecursorCarrierBoundary) (publicFields : Array Expr)
-    (publicMajor : Expr) (privateFields privateValues : Array Expr)
+    (publicMajor : Expr) (_privateFields privateValues : Array Expr)
     (privateMajor : Expr) : ConstructionM (Expr × Expr) := do
   let mut publicValues := #[]
   for fieldIndex in [:privateValues.size] do

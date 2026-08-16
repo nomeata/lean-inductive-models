@@ -89,7 +89,7 @@ def makeUnsafeInductive (name : Name) : IO EDecl := do
     [{ name, type := .sort (.succ .zero),
        ctors := [{ name := Name.str name "mk", type := .const name [] }] }] true
   return (← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' (do
-    match (← getEnv).addDeclCore 0 declaration none false with
+    match (← getEnv).addDeclCore 0 0 declaration none false with
     | .error exception => throwError (exception.toMessageData {})
     | .ok next =>
       setEnv next
