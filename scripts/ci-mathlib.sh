@@ -89,6 +89,10 @@ if ! (cd "$MATHLIB_DIR" && lake env "$EXPORTER_DIR/.lake/build/bin/lean4export" 
   echo "mathlib gate: export failed, (exporter gzip) = (${PIPESTATUS[*]})" >&2
   exit 1
 fi
+# The exporter writes nothing to the job log, so this line is the only mark
+# between the cache phase and generation, and the only report of the export's
+# size. Both are worth one line when reading a 7,000-line log after the fact.
+echo "compressed Mathlib export bytes: $(stat -c '%s' "$EXPORT_GZ")"
 rm -rf -- "$MATHLIB_DIR"
 
 # One pass, reading the exact exported byte stream from stdin so the
