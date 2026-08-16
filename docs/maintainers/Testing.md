@@ -139,16 +139,19 @@ consumed when `_tmp` is unusable. The snapshot exists only to preserve exact
 stdin/FIFO input for parser-compatible fallback; generated logical output is
 never serialized through it.
 
-`projectiontransportcensustest` is the progress meter for removing dependent
-transport from intrinsic projection rules. It generates every committed
+`projectiontransportcensustest` checks the intrinsic projection contract as an
+invariant rather than as an allowlist. It generates every committed
 `test/fixtures/inductive-models` export with all generation branches enabled
-and pins, exhaustively, each `T._model.proj_j.iota` whose statement mentions
-`Eq.rec` — separating the generator's canonical right-hand-side transport from
-`Eq.rec` the source itself authored in the constructor telescope. A new row is
-a regression; a missing row is progress and the maintainer deletes it from
-`expectedCensus` by hand. It also pins the fixtures that the maximal
-configuration cannot run today, so the census cannot silently stop being
-exhaustive.
+and requires, of every `T._model.proj_j.iota` without exception, that its
+right-hand side is the constructor's field-`j` binder — the loose `Expr.bvar`
+that the modeled constructor's `numParams + numFields` telescope binds at
+position `numParams + j`. There is no table to append a row to: a right-hand
+side that is anything else is a defect in the route that produced it, and the
+suite names the fixture, owner and field. Source-authored `Eq.rec` in a
+constructor telescope or projection codomain is unrelated syntax the model
+reproduces exactly, and is counted rather than restricted. The suite still
+pins the fixtures that the maximal configuration cannot run today, so the
+invariant cannot silently stop being exhaustive.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. The focused CI workflow splits the matrix across fixture, focused, and

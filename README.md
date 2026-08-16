@@ -69,7 +69,7 @@ exported kernel metadata makes them applicable:
 | `T` is kernel-unit-like: nonrecursive, unindexed, with one zero-field constructor | `T._model.unitlike` | Any two inhabitants of the modeled `T` are equal. |
 | exported recursor `R` has literal `k = true` (with its one zero-field rule) | `R._model.ruleK` | The K-like reduction at the constructor-result fibre; indexed results retain that exact fibre. |
 | `T` is non-propositional and kernel-structure-like: nonrecursive, unindexed, with one constructor | `T._model.eta` | Reconstruct an inhabitant with the modeled constructor and every intrinsic modeled projection in field order. |
-| eligible field `j` of `T` | `T._model.proj_j.iota` | The intrinsic modeled projection reduces on the modeled constructor. |
+| eligible field `j` of `T` | `T._model.proj_j.iota` | The intrinsic modeled projection applied to the modeled constructor equals constructor field `j`. The right-hand side is that field binder itself, never a transported term. |
 
 Generation consumes source declarations in their original order. At an
 accepted inductive owner it emits the complete generated island immediately
@@ -108,8 +108,9 @@ family and checks:
   slots at their exact names;
 - matching universe arities and literal declaration types after simultaneous
   source-to-model renaming;
-- exact recursor-iota and projection-iota propositions, including dependent
-  transport syntax where the route requires it;
+- exact recursor-iota and projection-iota propositions; every projection-iota
+  right-hand side is the constructor field binder itself, on every route, and
+  the checker recomputes exactly that;
 - safe definitions in implementation slots and theorem declarations in proof
   slots.
 

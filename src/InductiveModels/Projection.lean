@@ -1,26 +1,56 @@
 import InductiveModels.Model
 
 /-!
-# Canonical transport for dependent intrinsic projections
+# Intrinsic projection shapes, and the transporter their minors use
 
-An intrinsic projection for field `j` has the constructor field telescope on
-the right and the earlier intrinsic projections on the left.  Those types are
-literally different when field `j` depends on an earlier field whose modeled
-projection has only a propositional iota rule.  This module builds the one
-canonical `Eq.rec` term used to put the constructor field in the projection's
-codomain.
+**The projection ι contract is literal, unconditionally.** Every generated
+`T._model.proj_j.iota` states
 
-The builder is deliberately expression-only.  Generation and export checking
-must construct exactly the same right-hand side; neither side unfolds a
-definition or asks for definitional equality here.
+```
+∀ (constructor telescope), T._model.proj_j … (T._model.mk …) = fⱼ
+```
+
+with the constructor's own field binder `fⱼ` on the right, on every route.
+Nothing selects that right-hand side and nothing can transport it.  A
+transported right-hand side would be needed only if field `j` depended on the
+*value* of an earlier recursive or nested occurrence field, whose modeled
+projection reconstructs it merely propositionally; Lean's positivity and
+nesting rules leave no spelling of a constructor field type that reads such a
+value at all, and
+`test/fixtures/inductive-models/nested_value_dependency.lean` writes out every
+attempt for the kernel to reject.  Every field a later field can depend on is
+therefore non-recursive, and a non-recursive field is selected definitionally.
+`test/ProjectionTransportCensusTest.lean` re-derives this over the whole
+fixture corpus with no allowlist.
+
+The predicates below still decide two things the contract does not: which
+construction a route is entitled to use, and — where the model is built from a
+generic recursor rather than a definitionally reducing selector — the exact
+binder telescope of the closed statement.
+
+The `Eq.rec` builder at the bottom of this module survives for the one
+remaining consumer, which is not the ι contract: a projection *value* built
+through a model recursor gets its selected minor at the type obtained by
+substituting the earlier projections, while the minor has the constructor's
+own field in hand.  Those two types differ syntactically for a dependent
+field, and the transporter is the one canonical term bridging them.  It is
+deliberately expression-only; it never unfolds a definition or asks for
+definitional equality.
 -/
 
 open Lean
 
 namespace InductiveModels
 
-/-- Whether a one-constructor owner's projection rules can use each constructor
-field literally, including dependent fields.
+/-- Whether a one-constructor owner's modeled selector reaches each constructor
+field **definitionally**, including a dependent field.
+
+The projection rule's *statement* no longer asks: its right-hand side is the
+constructor field binder either way.  What this decides is the rule's proof —
+a definitional selector proves it by `Eq.refl`, and everything else has to go
+through the model recursor's own ι theorem — together with the exact binder
+telescope the closed statement is stated over, and the agreement gate on the
+nested rung's selector.
 
 For a plain-mutual member the auxiliary inductive supplies primitive
 constructor reduction, **whether or not the member is indexed**.  The mutual
@@ -49,8 +79,9 @@ route supplies explicit reflexive projection overrides; there is no auxiliary
 inductive underneath, so that disjunct still needs its own shape conditions.
 
 Plain recursive owners without nesting reconstruct a field only
-propositionally, so their dependent rules retain the canonical transport below.
-Callers establish the one-constructor precondition while discovering intrinsic
+propositionally, so their rules are proved through the model recursor's ι
+theorem rather than by `Eq.refl` — at the same literal statement.  Callers
+establish the one-constructor precondition while discovering intrinsic
 projections. -/
 def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType) : Bool :=
   type.ctors.length == 1 &&
@@ -138,11 +169,14 @@ private partial def occursIn (needle : Expr) : Expr → Bool
 intervening binder types, in telescope order.  `values` are the opened binder
 locals and `types` their opened types.
 
-This is the one dependency closure the module owns.  The literal projection
-contract and the canonical transport are two readings of the same set: a rule
-is transport-free exactly when nothing in this closure has a merely
-propositional projection rule, and the transport otherwise eliminates along
-exactly these positions. -/
+This is the one dependency closure the module owns.  Two consumers read it:
+[`InductiveModels.recursiveIndexedFibreOneLayerShape`] uses it as a capability
+guard, refusing a constructor in which a projected field depends on a
+recursive occurrence; and the transporter at the bottom of this module
+eliminates along exactly these positions when a *minor* has to carry a
+dependent field into the codomain the earlier projections produce.  Projection
+ι statements do not consult it — their right-hand side is the field binder
+unconditionally. -/
 def dependencyClosure (values types : Array Expr) (target : Nat) : Array Nat := Id.run do
   if target >= values.size || target >= types.size then return #[]
   let mut needed := Array.replicate target false
@@ -434,7 +468,12 @@ earlier intrinsic projections.
 
 If the field is independent of every earlier field, this returns the field
 itself.  Otherwise it emits one nested `Eq.rec` for each member of the
-transitive dependency closure and no recursor for an irrelevant field. -/
+transitive dependency closure and no recursor for an irrelevant field.
+
+The one caller is the selected minor of a projection *value* built through a
+model recursor ([`InductiveModels.structureRecursorPreArguments`]).  No
+projection ι statement passes through here: those state the constructor field
+binder itself. -/
 def normalizeProjectionField (eqi : EqInfo) (tag : Name)
     (fields : Array ProjectionField) (target : Nat) : Except String Expr := do
   if target >= fields.size then throw s!"projection field {target} is absent"
