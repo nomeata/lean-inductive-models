@@ -23,7 +23,6 @@ import InductiveModels.Simple.Interface
 import InductiveModels.Simple.Site
 import InductiveModels.Simple.Direct
 import InductiveModels.Simple.ArmF
-import InductiveModels.Simple.ArmS
 import InductiveModels.Simple.ArmC
 import InductiveModels.Simple.ArmE
 import InductiveModels.Simple.ArmW
@@ -161,27 +160,32 @@ Three recursors:
   At a maybe-zero sort, that proposition is carried under the derived lift and the
   same recursor uses `down` before extraction and `up` in its motive.
 
-**The other half of that index axis is arm S**, and it is not a Church route at
-all. A maybe-zero one-constructor owner whose constructor has a data field the
+**The other half of that index axis is not a Church route at all**, and it is
+not a separate arm either: it is the **direct routes' indexed case**. A
+maybe-zero one-constructor owner whose constructor has a data field the
 conclusion's index vector does *not* carry gets a **small** eliminator from the
 kernel — its subsingleton rule is exactly "every non-proof field is one of the
 conclusion's indices" — so arm F's substitution has nothing to substitute and
 the Church encoding, which remembers only inhabitation, cannot return the field
-either. The model has to store it, which is what the direct routes above do at
-`ni == 0`, and the index telescope is discharged the way arm F discharges its
-non-pivots:
+either. The model has to store it, which is precisely what the direct routes
+do; an index does not change the storage, it only says which fibre the stored
+value sits in, and it says it the way arm F discharges its non-pivots:
 
 ```text
 T._model.self p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗
 ```
 
 `Store` is the right-nested `PSigma'` tower over the fields
-([`InductiveModels.tightTowerTy`], at one field the field's own type), and it is
+([`InductiveModels.tightTowerTy`], at one field the field's own type — so the
+unindexed `.identity`, `.tight` and this share one storage function), and it is
 a **definition**: arm C's erase-and-carve is the same idea but splices its
 skeleton as an inductive so the kernel mints the large eliminator it needs
 twice, and a maybe-zero skeleton has no large eliminator to mint. The pair sits
-at `max w 0`, the intrinsic projections are the tower's own, and every rule is
-`Eq.refl`.
+at `max w 0` — a `Prop` costs no level, which is why one guard
+([`InductiveModels.planDirectIndexedRoute`]) asks the unindexed tower's own
+question — the intrinsic projections are the tower's own, and every rule is
+`Eq.refl`. Arm F keeps its shapes: the direct guard carries `!armFNonRec`, and
+Direct is the first guard in the dispatch chain.
 
 **Why the maybe-zero collapse is a model and not a cheat.** At a maybe-zero
 sort the contract never forces two provably distinct elements: zero
@@ -306,7 +310,6 @@ W's guard refuses it; B factors through the tag: \
   let st ←
     if let some directRoute := site.directRoute? then primDirect site directRoute st
     else if site.armF then primArmF site st
-    else if site.armS then primArmS site st
     else if site.armC then primArmC site st
     else if site.armE then primArmE site st
     else if site.armW then primArmW site st

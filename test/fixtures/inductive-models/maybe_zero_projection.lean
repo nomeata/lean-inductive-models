@@ -20,16 +20,18 @@
    field is exactly a proposition, and the right-nested `PSigma'` tower for two
    or more.
 
-   Those routes are gated on `nonrecursiveOneConstructor && ni == 0`.
+   Those routes were gated on `nonrecursiveOneConstructor && ni == 0`.
    **The projection contract is not.**  The two excluded conjuncts are this
-   file, and the index one is closed:
+   file, and the index one is closed — by widening the direct routes rather
+   than by putting a construction beside them:
 
    * `MZSelf` — recursion alone, and the minimum of the whole family.  The one
      projected field *is* the carrier, at `Sort u`, and the Church recursor
      eliminates only into `Prop`.
    * `MZData` — the same with a data field in front of the child.
    * `MZIdx` — no recursion; an **index**, and a data field.  **Green now, on
-     arm S.**  The route that was supposed to cover it is arm F, whose guard
+     the direct routes' indexed case.**  The route that was supposed to cover
+     it is arm F, whose guard
      carries `large`; `Site.lean` argued that a data field which is not a
      conclusion index is unreachable there, "because the kernel mints that
      recursor only when every non-proof field is literally recoverable as a
@@ -39,27 +41,29 @@
      to Church.  `MZIdx.rec`'s motive really is `Prop`-valued; read the export.
      What arm F cannot do here is *store* the field — its carrier is a Church
      conjunction of proofs, and it recovers data only by substituting at a
-     pivot — so the shape is not arm F's after all.  Arm S is arm F's packed
-     Henry-Ford equation over the direct routes' exact-sort storage:
+     pivot — so the shape is not arm F's after all.  Storing it is what the
+     direct routes already do, and the index is discharged by arm F's packed
+     Henry-Ford equation over that same storage:
      `T p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, with `Store`
      the tight `PSigma'` tower as a **definition**.  The projection is the
      tower's own, so it selects definitionally and its rule is `Eq.refl`.
    * `MZIdx2` — the same at two data fields, which is the tight tower's own
-     shape with an index in front of it.  **Green, on the same arm and the
+     shape with an index in front of it.  **Green, on the same route and the
      same tower.**
 
    `MZOne` and `MZProof` are the controls on either side: the first is the
    direct `.identity` route (`ni == 0`, not recursive), the second is arm F
    proper (every field a proof, so the kernel does mint the large eliminator).
-   Both model, and both are untouched by arm S — arm F is tried first, and
-   `ni == 0` never reaches arm S at all.
+   Both model, and both are untouched by the widening: the indexed case's guard
+   carries `!armFNonRec`, so every shape whose data the index vector *does*
+   carry stays arm F's, and `ni == 0` selects one of the two unindexed cases.
 
    **`MZSelf` and `MZData` are still red, deliberately.**  They are Direct's
    `isRec` corner: the projected field of `MZSelf` *is* the carrier at
    `Sort u`, `MZData` has a data field in front of that child, and the Church
    recursor eliminates only into `Prop`.  Nothing here stores a recursive
    field — the tight tower would have to hold an inhabitant of the type being
-   declared — so neither the direct routes nor arm S reaches them, and whether
+   declared — so no direct route, indexed or not, reaches them, and whether
    a maybe-zero *recursive* one-constructor owner should be asked for a
    projection at all is a contract question rather than a construction one.
    The generator emits the projection anyway and Lean's kernel refuses it:

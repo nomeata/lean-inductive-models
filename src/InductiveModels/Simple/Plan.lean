@@ -57,9 +57,19 @@ inductive PrimRoute | type | prop | bare
 inductive DirectFieldRoute | identity | propLift
 
 /-- The complete field-preserving direct routes. The one-field cases share
-[`InductiveModels.directFieldModel`]; `tight` is the multi-field `PSigma'` tower. -/
+[`InductiveModels.directFieldModel`]; `tight` is the multi-field `PSigma'`
+tower; `indexed` is that same storage with the conclusion's index telescope
+discharged by one packed equation over it.
+
+`indexed` is not a fourth construction. It stores the constructor's fields in
+the very tower `tight` stores them in — [`InductiveModels.tightTowerTy`], which
+at one field *is* that field's type and therefore *is* `field .identity`'s
+carrier — and then says which fibre of the family that storage sits in. What
+distinguishes the cases is the index telescope, not the storage, which is why
+they are one route with three shapes rather than separate arms. -/
 inductive DirectRoute
   | field (route : DirectFieldRoute)
   | tight
+  | indexed
 
 end InductiveModels

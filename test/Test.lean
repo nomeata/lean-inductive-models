@@ -404,14 +404,18 @@ def expectedPrim : List Row :=
   -- route, whose carrier is a subsingleton and whose recursor eliminates only
   -- into `Prop`, and the emitted projection was then refused by Lean's kernel.
   --
-  -- **The index conjunct is closed.** `MZIdx` and `MZIdx2` are arm S's: arm
-  -- F's packed Henry-Ford equation over the direct routes' exact-sort storage,
+  -- **The index conjunct is closed.** `MZIdx` and `MZIdx2` are the direct
+  -- routes' **indexed case**: the very storage tower `.identity` and `.tight`
+  -- use, with arm F's packed Henry-Ford equation over it saying which fibre
+  -- the stored value sits in,
   -- `Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, whose projections are
   -- the storage tower's own and therefore select definitionally. Their counts
   -- do not move — six and eight are the same public interface either way —
   -- so what says they moved is the kernel's verdict, not this table.
   -- `MZOne` (direct `.identity`) and `MZProof` (arm F proper) are the controls
-  -- and are untouched: arm F is tried first and `ni == 0` never reaches arm S.
+  -- and are untouched: the indexed guard carries `!armFNonRec`, so arm F keeps
+  -- every shape whose data the index vector does carry, and `ni == 0` selects
+  -- one of the two unindexed cases.
   --
   -- **`MZSelf` and `MZData` remain red on purpose.** They are Direct's `isRec`
   -- corner: nothing stores a recursive field, because the tower would have to
