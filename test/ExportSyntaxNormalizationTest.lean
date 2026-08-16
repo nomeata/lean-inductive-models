@@ -110,7 +110,8 @@ structure AgreementCount where
   a replay that stops installing declarations empties `compared` instead of
   disagreeing, and the suite would be green with nothing behind it. -/
   skippedRecords : Nat := 0
-  /-- Fixture directories in `fixtureDirectories` that are not directories. -/
+  /-- Directories in `fixtureDirectoryFloors` that are not directories on disk.
+  Printed rather than asserted: see `fixtureDirectoryFloors`. -/
   missingDirectories : Nat := 0
   /-- Committed `.ndjson` files that do not parse. -/
   unparsable : Nat := 0
@@ -178,11 +179,19 @@ own, so a block whose kernel recursor is named differently — nested and mutual
 inputs, mostly — has a name the environment never receives and is compared on
 neither side.
 
-It is pinned rather than merely printed because the skip is invisible from the
+It is bounded rather than merely printed because the skip is invisible from the
 other direction: a replay that stopped installing declarations, or a
 `toDeclaration` that stopped producing them, would raise this number and lower
-`compared` without a single disagreement to report. -/
-def skippedRecordsExpectation : Nat := 182
+`compared` without a single disagreement to report.
+
+The bound is a *ceiling*, not a pin and not a floor.  Skips only ever go wrong
+upwards — zero skips would be ideal — so a floor would assert nothing, while an
+exact pin breaks whenever a nested or mutual fixture is legitimately added.  A
+ceiling with headroom over today's 182 catches the replay collapsing without
+failing on corpus growth; raising it is then a deliberate statement that more
+silent skipping has been accepted, which is exactly the decision worth
+noticing. -/
+def skippedRecordsCeiling : Nat := 220
 
 /-- Fixtures the driver declines or cannot generate from, and which are
 therefore compared once rather than twice.  Every committed fixture generates
@@ -192,19 +201,35 @@ def ungeneratedExpectation : Nat := 0
 /-- A floor under the sweep's total comparison count.  The exact number moves
 whenever a fixture is added or a shape query gains a root, so it is a floor
 rather than a pin; what it excludes is the sweep quietly shrinking towards
-nothing while every assertion above it stays green. -/
-def comparisonFloor : Nat := 200000
+nothing while every assertion above it stays green.  Today's sweep compares
+213904, so the floor is set below that with room for ordinary churn. -/
+def comparisonFloor : Nat := 210000
 
-/-- The directories swept, and the number of committed `.ndjson` exports each
-one holds.  `test/fixtures/lean4export` holds `compact_interner.args` and no
-export; `test/fixtures/mono` is *not a committed directory at all* and is
-swept as zero — it was passed over by `unless ← path.isDir` without a word,
-which is exactly the shape of skip this table exists to make visible.
+/-- The directories swept, and a *floor* under the number of committed
+`.ndjson` exports each one holds.  `test/fixtures/lean4export` holds
+`compact_interner.args` and no export; `test/fixtures/mono` is *not a committed
+directory at all* and is swept as zero — it was passed over by
+`unless ← path.isDir` without a word, which is exactly the shape of skip this
+table exists to make visible.
 
-Asserting the counts per directory rather than in total means a directory that
-moves, empties or disappears fails here instead of quietly making the sweep
-below smaller. -/
-def fixtureDirectories : Array (String × Nat) :=
+The counts are floors rather than exact numbers deliberately.  The failure mode
+this table exists for is a directory moving, emptying or disappearing and so
+making the sweep below silently *smaller*; a floor catches all three.  An exact
+per-directory count would additionally fail on every legitimate fixture
+addition, which is friction with no safety behind it — a whole-directory count
+moving upwards is not signal.  (Per-*fixture* tables like `Test.expectedPrim`
+and `ProjectionTransportCensusTest.expectedProjectionIotas` stay exact: there a
+number moving does mean something.)
+
+The directory *names* are still matched exactly, so a renamed directory fails
+here rather than being swept as zero.
+
+`missingDirectories` is printed but deliberately *not* asserted.  Its value is
+a property of the checkout rather than of the repository: `test/fixtures/mono`
+is an empty directory, git does not track those, so it is absent in a fresh
+clone and present in any tree where something once created it.  Pinning it
+would be pinning local state. -/
+def fixtureDirectoryFloors : Array (String × Nat) :=
   #[("test/fixtures/inductive-models", 75), ("test/fixtures/lean4export", 0),
     ("test/fixtures/mono", 0), ("test/fixtures/rejected", 1)]
 
@@ -218,7 +243,7 @@ def environmentAgreement (root : String) :
   let base ← importModules #[] {}
   let mut count : AgreementCount := {}
   let mut perDirectory : Array (String × Nat) := #[]
-  for (directory, _) in fixtureDirectories do
+  for (directory, _) in fixtureDirectoryFloors do
     let path : System.FilePath := root / directory
     unless ← path.isDir do
       count := { count with missingDirectories := count.missingDirectories + 1 }
@@ -336,19 +361,21 @@ def run (root : String) : IO UInt32 := do
   -- and leaves the assertion above green with nothing behind it.  The skips
   -- are counted and asserted rather than passed over.
   state := state.check
-    s!"each fixture directory holds the exports it is expected to \
-      ({perDirectory} against {fixtureDirectories})"
-    (perDirectory == fixtureDirectories)
+    s!"each fixture directory holds at least the exports expected of it \
+      ({perDirectory} against floors {fixtureDirectoryFloors})"
+    (perDirectory.size == fixtureDirectoryFloors.size &&
+      (perDirectory.zip fixtureDirectoryFloors).all
+        fun ((directory, found), (expected, floor)) =>
+          directory == expected && found >= floor)
   state := state.check
     s!"every committed fixture parses ({agreement.unparsable} do not)"
     (agreement.unparsable == 0)
-  -- These two are current reality, not a target: they are pinned so that a
-  -- *new* silent skip is a failure rather than a smaller number in the line
-  -- below.
+  -- A ceiling, not a pin: see `skippedRecordsCeiling`.  A *new* silent skip at
+  -- scale is a failure here rather than a smaller number in the line below.
   state := state.check
-    s!"records the replay did not install stay at \
-      {skippedRecordsExpectation} ({agreement.skippedRecords} skipped)"
-    (agreement.skippedRecords == skippedRecordsExpectation)
+    s!"records the replay did not install stay under \
+      {skippedRecordsCeiling} ({agreement.skippedRecords} skipped)"
+    (agreement.skippedRecords <= skippedRecordsCeiling)
   state := state.check
     s!"fixtures compared once rather than twice stay at \
       {ungeneratedExpectation} ({agreement.ungenerated} ungenerated)"
