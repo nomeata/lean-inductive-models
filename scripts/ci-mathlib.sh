@@ -64,6 +64,7 @@ LEAN_NUM_THREADS="$BUILD_THREADS" lake build lean-inductive-models
 
 checkout_pinned https://github.com/leanprover/lean4export.git "$EXPORTER_REV" "$EXPORTER_DIR"
 echo "$EXPORTER_PATCH_SHA  $EXPORTER_PATCH" | sha256sum --check --strict
+git -C "$EXPORTER_DIR" apply --check "$EXPORTER_PATCH"
 git -C "$EXPORTER_DIR" apply "$EXPORTER_PATCH"
 # Deliberately a literal, not a copy of `$ROOT/lean-toolchain`: the NDJSON export
 # is the interface between the two, and the exporter has to load Mathlib's oleans
