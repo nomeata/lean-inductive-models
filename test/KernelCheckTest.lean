@@ -101,6 +101,12 @@ def readFixture (root file : String) : IO Export := do
     | throw <| IO.userError s!"kernelchecktest: cannot parse {file}"
   return parsed
 
+def readRejectedFixture (root file : String) : IO Export := do
+  let text ← IO.FS.readFile s!"{root}/test/fixtures/rejected/{file}"
+  let .ok parsed := InductiveModels.parse text
+    | throw <| IO.userError s!"kernelchecktest: cannot parse {file}"
+  return parsed
+
 def run (root : String) : IO UInt32 := do
   let mut state : TestState := {}
 
@@ -202,6 +208,28 @@ def run (root : String) : IO UInt32 := do
   state := state.check "input dependency cycle is rejected before insertion" <|
     errorSatisfies (← runCheck cycle)
       (fun message => message.contains "cyclic kernel declaration dependencies")
+
+  let wrongArity := exportOf #[
+    .defn `ArityProvider [`u] (.sort (.succ (.param `u))) (.sort (.param `u)) (.regular 1) "safe" [],
+    .ax `ArityConsumer [] (.const `ArityProvider []) false]
+  state := state.check "constant occurrences with the wrong universe arity are rejected" <|
+    errorSatisfies (← runCheck wrongArity) fun message =>
+      message.contains "ArityProvider is used with 0 universe levels but is declared with 1"
+  let rightArity := exportOf #[
+    .defn `ArityProvider [`u] (.sort (.succ (.param `u))) (.sort (.param `u)) (.regular 1) "safe" [],
+    .ax `ArityConsumer [] (.const `ArityProvider [.zero]) false]
+  state := state.check "matching universe arities still reach the kernel" <|
+    accepted (← runCheck rightArity)
+
+  -- `bad/constlevels` from the published Lean Kernel Arena corpus, reduced to
+  -- the records its crashing theorem needs. Its `Eq.casesOn` occurrence carries
+  -- no universe levels at all, and reaches the kernel only through positions
+  -- the kernel never infers; before the arity gate existed, replaying it killed
+  -- this process with SIGSEGV instead of rejecting it.
+  let constLevels ← readRejectedFixture root "const_universe_arity.ndjson"
+  state := state.check "the arena constant-level crasher is rejected, not fatal" <|
+    errorSatisfies (← runCheck constLevels) fun message =>
+      message.contains "Eq.casesOn is used with 0 universe levels but is declared with 2"
 
   let duplicateType : EIndType :=
     { name := `DuplicateMember, levelParams := [], type := .sort (.succ .zero)

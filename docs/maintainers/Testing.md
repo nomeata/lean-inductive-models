@@ -167,6 +167,14 @@ Human-readable sources and committed exports live in
 `test/fixtures/inductive-models/`. Regenerate them
 with the pinned exporter:
 
+`test/fixtures/rejected/` is separate and deliberately outside every fixture
+sweep: it holds malformed exports that exist to be *refused*, so no generation
+or census target should attempt to model them. `kernelchecktest` names each one
+directly. `const_universe_arity.ndjson` is the published Arena corpus'
+`bad/constlevels`, reduced to the records its crashing theorem needs; its
+`Eq.casesOn` occurrence carries no universe levels, which used to reach Lean's
+kernel and kill the process with SIGSEGV rather than be rejected.
+
 ```console
 test/scripts/export-inductive-models.sh prim_shapes
 ```
