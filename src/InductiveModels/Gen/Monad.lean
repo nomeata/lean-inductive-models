@@ -100,10 +100,11 @@ inductive Decline where
   binder on the right ([`InductiveModels.addProjectionModels`]), so the two
   sides are a well-formed equation exactly when each earlier projection in
   field `j`'s dependency closure reduces to its field on the modeled
-  constructor. A route whose selector reconstructs that field only
-  propositionally — the W arm's is `WT.Wrec`, whose ι rule is a theorem —
-  leaves the left-hand side at `Aⱼ(proj⃗ (mk f⃗))` and the right at `Aⱼ(f⃗)`,
-  which are different types.
+  constructor. A route that reaches that field without *selecting* it — arm
+  E's carrier is empty, so its projection is an elimination of the major, which
+  is total but reduces to no field because none is stored — leaves the
+  left-hand side at `Aⱼ(proj⃗ (mk f⃗))` and the right at `Aⱼ(f⃗)`, which are
+  different types.
 
   The transported right-hand side that used to bridge them is no longer part
   of the contract, and `test/ProjectionTransportCensusTest.lean` holds it out,

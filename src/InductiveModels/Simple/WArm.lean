@@ -155,6 +155,74 @@ def wTowerProjsOf (w : Level) (xs : Array Expr) (d : Expr) : GenM (Array Expr) :
 def wTowerMkOf (w : Level) (xs vals : Array Expr) : GenM Expr := do
   wTowerMk w xs (← wTowerBoxed xs) 0 vals
 
+/-! ### Reading a stored field back out of a tag and its data
+
+The data tower is reached from a node by [`InductiveModels.wCoreRootFn`] and the
+label's two `PSigma'` projections, which leaves a *tag* — a `Nat` the tower's
+type is indexed by — and the data at it. Neither is a redex at an opaque node,
+so a stored field is read by one `Nat.rec` cascade over that tag whose arm at
+the owner's single constructor is [`InductiveModels.wTowerProjs`] and whose junk
+arm eliminates the emptiness of `D` past the last tag.
+
+**The two below are mutually recursive because a stored field's type may name
+an earlier stored field**, and the earlier field is not in hand as a variable:
+what stands in its place is the reader for *that* field at the same tag and
+data. The cascade for field `q` is therefore written at a motive that already
+contains the cascades for every field in `q`'s dependency prefix, and the
+resulting selector is definitionally the tower projection on the modeled
+constructor for the whole prefix at once. A single layer of dependency does not
+exercise the nesting; `w_dependent_field.lean`'s `WChain` does.
+
+`xs` is the constructor's non-recursive field subsequence in declaration order
+— *not* its whole telescope. A field's type may name only earlier members of
+`xs`, and the caller checks that before either of these is entered: Lean's
+positivity and nesting rules leave no spelling of a constructor field type that
+reads a recursive occurrence's value at all
+(`test/fixtures/inductive-models/nested_value_dependency.lean`). -/
+
+mutual
+
+  /-- **Stored field `q`'s type at a tag and its data**, with every earlier
+  stored field replaced by that field's own reader. This is the arm's mirror of
+  the intrinsic projection codomain the common driver assembles, and the two
+  agree by δ on the emitted selectors. -/
+  partial def wStoredFieldType (eqi : EqInfo) (w : Level) (xs : Array Expr)
+      (dAt : Expr → Expr) (q : Nat) (t d : Expr) : GenM Expr := do
+    let mut pre : Array Expr := #[]
+    for earlier in [0:q] do
+      pre := pre.push (← wStoredFieldRead eqi w xs dAt earlier t d)
+    return (← ityp xs[q]!).replaceFVars (xs.extract 0 q) pre
+
+  /-- **Stored field `q`'s value at a tag and its data.** -/
+  partial def wStoredFieldRead (eqi : EqInfo) (w : Level) (xs : Array Expr)
+      (dAt : Expr → Expr) (q : Nat) (t d : Expr) : GenM Expr := do
+    let natT : Expr := .const `Nat []
+    let motAt : Nat → GenM Expr := fun k =>
+      withLocalDeclD `t natT fun tag => do
+        let at' := natSuccs k tag
+        let body ← withLocalDeclD `d (dAt at') fun data => do
+          mkForallFVars #[data] (← wStoredFieldType eqi w xs dAt q at' data)
+        mkLambdaFVars #[tag] body
+    let armAt : Nat → GenM Expr := fun k =>
+      withLocalDeclD `d (dAt (natNumeral k)) fun data => do
+        let projections ← wTowerProjsOf w xs data
+        mkLambdaFVars #[data] projections[q]!
+    -- Past the owner's one tag `D` is [`InductiveModels.emptyAt`], so the arm
+    -- that would have to invent a field instead eliminates its own datum.
+    let junkAt : Expr → GenM Expr := fun tag => do
+      let at' := natSuccs 1 tag
+      withLocalDeclD `d (dAt at') fun data => do
+        let ty ← wStoredFieldType eqi w xs dAt q at' data
+        mkLambdaFVars #[data] (← emptyAtElim eqi (← ilevel ty) w ty data)
+    let s ← withLocalDeclD `t natT fun tag => do ilevel ((← motAt 0).beta #[tag])
+    -- **One**, and it is the caller's gate rather than a simplification:
+    -- intrinsic projections exist only at a one-constructor owner, and at two
+    -- or more the arms would have to land in one codomain with no field to
+    -- name it ([`InductiveModels.wStoredFieldOverrides`]).
+    return mkApp (← natCascade s 1 motAt armAt junkAt 0 t) d
+
+end
+
 /-- The two universe levels at which arm W exposes and builds its carrier.
 
 Most declarations expose the W core directly, so both levels are the public

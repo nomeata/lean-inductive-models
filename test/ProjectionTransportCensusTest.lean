@@ -24,10 +24,16 @@ projection reduces merely propositionally, and generation no longer emits a
 rule in that case at all: the equation would relate two terms of different
 types, so the owner declines
 ([`InductiveModels.Decline.projectionCodomain`], and
-`test/fixtures/inductive-models/w_dependent_field.lean` is the owner it
-declines).  Every rule that *is* emitted therefore has its field binder on the
-right, and the literal right-hand side is the only one the generator ever has
-to state.
+`test/fixtures/inductive-models/e_dependent_field.lean` is the owner it
+declines — an empty carrier, which stores no field to select).  Every rule
+that *is* emitted therefore has its field binder on the right, and the literal
+right-hand side is the only one the generator ever has to state.
+
+`test/fixtures/inductive-models/w_dependent_field.lean` used to be that owner
+and is now a positive: arm W selects its stored fields through
+`_wcore.WT.root` and the data tower, so a dependent field on that arm states
+its rule by `Eq.refl` like every other route and is counted here rather than
+declined.
 
 Recursion is a separate and stronger reason for the same thing on the routes
 that do reach a field definitionally: Lean's positivity and nesting rules
@@ -250,7 +256,7 @@ three, four and four fields are the whole of the difference. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 21),
     ("dead_owner_mention", 13), ("decline_no_eq", 11), ("default_ctor_iota", 0), ("degenerate_graph", 1),
-    ("dependent_fields", 11), ("empty_no_base", 16),
+    ("dependent_fields", 11), ("e_dependent_field", 0), ("empty_no_base", 16),
     ("filtered/nat_char_equations", 3),
     ("filtered/nested_deep", 11), ("filtered/nested_iota", 13),
     ("filtered/nested_iota_arm", 11), ("filtered/nested_keying", 11),
@@ -280,7 +286,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("structure_eta", 12), ("structure_projections", 17),
     ("tight_prop_field_late", 1), ("tight_psigma_prime", 4),
     ("transparent_owner_aliases", 1), ("unitlike", 6), ("w_alias", 11),
-    ("w_core", 11), ("w_dependent_field", 14), ("w_imax", 11), ("w_late_iff", 11),
+    ("w_core", 11), ("w_dependent_field", 28), ("w_imax", 11), ("w_late_iff", 11),
     ("w_max", 11)]
 
 def main (args : List String) : IO UInt32 := do

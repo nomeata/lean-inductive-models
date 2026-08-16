@@ -199,6 +199,18 @@ def persistentSupportName (name : Name) : Bool :=
     wCoreRoot.isPrefixOf name
 /-- `WT.sup` under the prefix — the node former. -/
 def wCoreSup : Name := wCoreRoot ++ `WT.sup
+/-- **`WT.root` under the prefix — the node's label, and the one part of a `W`
+node that comes back out of it definitionally.**
+
+`root w` is `(w.1 []).get (isSome_root w)`, and on a node it reduces by βιπ
+alone: `(sup a f).1 []` is `mk tg a _ []`, whose `[]` arm is literally
+`some a`, and `Option.get (some a) _` selects `a`. So `root (sup a f) ≡ a`
+with no appeal to `WT.Wrec` and no transport — `test/fixtures/inductive-models/w_dependent_field.lean`
+is the family that rests on it. The sibling `WT.kids` does **not** reduce this
+way (`WT.kids_sup` is a theorem carrying a `cast`), which is exactly why arm W
+selects its *stored* fields definitionally and its *children* through the
+recursor. -/
+def wCoreRootFn : Name := wCoreRoot ++ `WT.root
 /-- `WT.Wrec` under the prefix — the large recursor. -/
 def wCoreRec : Name := wCoreRoot ++ `WT.Wrec
 /-- `WT.Wrec_iota` under the prefix — its one ι rule. -/

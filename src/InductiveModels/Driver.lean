@@ -1095,12 +1095,19 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       -- Every construction that reaches a field definitionally satisfies this:
       -- the literal routes above by δι on the carrier's own selectors, the
       -- direct/one-layer overrides by their reflexive projections, the nested
-      -- rung by the block's primitive ι rule, and the carved indexed routes by
-      -- unfolding onto the layer underneath.  The W arm does not: its selector
-      -- is `WT.Wrec`, whose ι rule is the theorem `WT.Wrec_iota`, so a
-      -- dependent field's two sides stay at different types and there is no
-      -- equation to state.  A transported right-hand side used to bridge them
-      -- and is no longer part of the contract
+      -- rung by the block's primitive ι rule, the carved indexed routes by
+      -- unfolding onto the layer underneath, and **arm W** by
+      -- [`InductiveModels.wStoredFieldRead`] — `_wcore.WT.root`, the label's
+      -- two `PSigma'` projections and the data tower, none of which is
+      -- `WT.Wrec`.  Its children keep `WT.Wrec` and nothing can depend on one.
+      --
+      -- **What is left is a real question and not a formality.**  A route may
+      -- state that its carrier is empty and answer every projection by
+      -- eliminating the major (the `emptyCarrier?` branch below): that
+      -- elimination is total but it is not a *selector*, so at such an owner
+      -- `proj_j (mk f⃗)` does not reduce to `f_j` and a dependent field's two
+      -- sides stay at different types.  A transported right-hand side used to
+      -- bridge them and is no longer part of the contract
       -- (`test/ProjectionTransportCensusTest.lean`), so the owner declines
       -- rather than emitting a proposition the kernel refuses.
       unless ← isDefEq alpha (← inferType rhs) do

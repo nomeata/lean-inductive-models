@@ -799,31 +799,54 @@ def expectedPrim : List Row :=
        ("QuadInf", 27), ("TripleInf", 25), ("Twin", 16), ("Prefix", 20)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The W arm reached without the one-layer adapter's reflexive selectors,
-  -- and what a dependent field costs there.** `prim_w`'s `Prefix` and `Wty`
-  -- are this shape *with* the adapter, so their projection rules are proved by
-  -- `Eq.refl` against a selector that reduces. `w_dependent_field` hides the
-  -- owner's result former behind a reducible definition — the same idiom
-  -- `HiddenIndexed` uses in `indexed_fibre_boundary` — so
+  -- and the family of dependent fields it now selects on its own.** `prim_w`'s
+  -- `Prefix` and `Wty` are this shape *with* the adapter, so their projection
+  -- rules are proved by `Eq.refl` against a selector the adapter supplies.
+  -- Every owner in `w_dependent_field` hides its result former behind a
+  -- reducible definition — the same idiom `HiddenIndexed` uses in
+  -- `indexed_fibre_boundary` — so
   -- [`InductiveModels.phase1DirectTypeOneLayerEligible`] refuses it and the
-  -- legacy W arm builds the model instead. Its selector is `WT.Wrec`, whose ι
-  -- rule is a theorem, so `WDep._model.proj_1`'s codomain
-  -- `Vec (WDep._model.proj_0 (WDep.mk._model …))` is not the field's own
-  -- `Vec a` and the literal rule has no proposition to state. That is the
-  -- decline below, and before it the run emitted the rule and Lean's kernel
-  -- refused it — silently, because nothing read the island verdict.
+  -- legacy W arm builds the model instead.
   --
-  -- `WPlain` is the control on the same arm with no dependent field, and it
-  -- carries the fragment splice because `WDep` in front of it no longer does.
+  -- The arm's *recursor* is `WT.Wrec`, whose ι rule is a theorem, and while
+  -- that was also its selector `WDep._model.proj_1`'s codomain
+  -- `Vec (WDep._model.proj_0 (WDep.mk._model …))` was not the field's own
+  -- `Vec a` and the literal rule had no proposition to state. It declined; and
+  -- before that the run emitted the rule and Lean's kernel refused it —
+  -- silently, because nothing read the island verdict. The arm now reads its
+  -- **stored** fields through `_wcore.WT.root`, the label's two `PSigma'`
+  -- projections, one `Nat.rec` cascade on the tag and the data tower, none of
+  -- which is `WT.Wrec`, and publishes them as
+  -- [`InductiveModels.Iso.projectionOverrides`]. By positivity nothing can
+  -- depend on a *child*, so those are exactly the fields a codomain can name.
+  --
+  -- All five owners therefore model: `WDep` untagged, `WTag` tagged at the same
+  -- dependency, `WMid` with a child between the two fields, `WChain` with a
+  -- two-step dependency, and `WPlain` the control with none. `WDep` is first,
+  -- so it is the one that carries the fragment splice.
   , ("w_dependent_field",
-      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6), ("WPlain", 219),
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6), ("WDep", 219),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
        ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9)],
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9),
+       ("WTag", 16), ("WMid", 18), ("Tag", 6), ("WChain", 18), ("WPlain", 16)],
+      [ ("Eq", "prim model: a basis primitive")])
+  -- **The same question at the one construction that still cannot answer it**,
+  -- so that `Decline.projectionCodomain` stays a verdict about a shape rather
+  -- than dead code. `EDep.mk`'s third field is a *bare* recursive occurrence,
+  -- so arm E's property holds and the carrier is empty; arm E then answers a
+  -- projection by eliminating the major, which is total but is not a selector.
+  -- `EDep._model.proj_0 (EDep.mk._model …)` δβ-reduces to the bare field — a
+  -- variable — and stops, so field 1's codomain is not its own `Vec a`. An
+  -- empty carrier stores nothing, so this is a property of the construction
+  -- and not a gap in it.
+  , ("e_dependent_field",
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6)],
       [ ("Eq", "prim model: a basis primitive")
-      , ("WDep", "prim model shape: WDep's field 1 names an earlier field")])
+      , ("EDep", "prim model shape: EDep's field 1 names an earlier field")])
   -- **The head-normalization sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
   -- `β k` as the redex `(fun _ => B₀) k` in the block — and the block is

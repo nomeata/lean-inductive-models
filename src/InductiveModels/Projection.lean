@@ -33,12 +33,27 @@ that reads a *recursive or nested* occurrence's value —
 `test/fixtures/inductive-models/nested_value_dependency.lean` writes out every
 attempt for the kernel to reject — so every field a later field can depend on
 is non-recursive.  What that argument does not establish is that a
-non-recursive field is *selected* definitionally: the W arm reads its fields
-back through `WT.Wrec`, whose ι rule is the theorem `WT.Wrec_iota`, and at the
-untagged instantiation a child's binder names an earlier field, so a
-one-constructor owner on that arm always has a dependent projected field it
-cannot state.  `test/fixtures/inductive-models/w_dependent_field.lean` is that
-owner and its control.
+non-recursive field is *selected* definitionally, and the two constructions
+that reach a field without selecting it answer differently.
+
+The W arm's *recursor* is `WT.Wrec`, whose ι rule is the theorem
+`WT.Wrec_iota`, but its carrier is not opaque: a node is `WT.sup ⟨t, d⟩ f` and
+`_wcore.WT.root` takes it back to the label by βιπ alone, so the stored
+non-recursive fields come out through the data tower with no appeal to the
+recursor at all ([`InductiveModels.wStoredFieldRead`], published as projection
+overrides).  Only the *children* keep the recursor, and by the positivity
+argument above no codomain can name one.
+`test/fixtures/inductive-models/w_dependent_field.lean` is the family that
+pins it — both instantiations, a child between the two fields, and a two-step
+dependency — with a control on the same arm.
+
+The empty-carrier route cannot, and that is a statement about storing nothing.
+Arm E's property is that every constructor has a *bare* recursive field, so no
+constructor can be applied and the carrier is `emptyAt`; a projection out of it
+is an *elimination* of the major, which is total but does not reduce to a
+field, because there is no field there to reduce to.
+`test/fixtures/inductive-models/e_dependent_field.lean` is that owner, and it
+is what keeps this decline a live verdict.
 
 The predicates below still decide two things the contract does not: which
 construction a route is entitled to use, and — where the model is built from a

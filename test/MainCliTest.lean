@@ -119,7 +119,7 @@ def reverseConstructorsFor (inputExport : InductiveModels.Export) (target : Lean
 fixture in the sweep below is expected to be accepted (exit 0), so this one
 list pins the disposition of all of them. -/
 def sweepDeclinedFixtures : Array String :=
-  #["prim_shape_declines.ndjson", "w_dependent_field.ndjson"]
+  #["e_dependent_field.ndjson", "prim_shape_declines.ndjson"]
 
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
@@ -1140,12 +1140,18 @@ def main (args : List String) : IO UInt32 := do
   -- both sides at once: a fixture is expected to be declined exactly when it
   -- is on this list, and accepted otherwise.
   --
-  -- `w_dependent_field` is the one decline, and it is deliberate:
-  -- `Decline.projectionCodomain` refuses a projection rule whose equation
-  -- would relate two terms of different types, because the field it selects
-  -- depends on an earlier field whose modeled projection reduces merely
-  -- propositionally. There is no proposition to state, so the owner is
-  -- declined rather than modelled wrongly.
+  -- `prim_shape_declines` is what the file exists to be.
+  -- `e_dependent_field` is the other: `Decline.projectionCodomain` refuses a
+  -- projection rule whose equation would relate two terms of different types,
+  -- because the field it selects depends on an earlier field whose modeled
+  -- projection does not select it definitionally. `EDep`'s carrier is empty
+  -- and arm E answers projections by eliminating the major, which is total but
+  -- is not a selector, so there is no proposition to state.
+  --
+  -- `w_dependent_field` used to be on this list for the same verdict. Arm W
+  -- now selects its *stored* fields definitionally — through `_wcore.WT.root`
+  -- and the data tower rather than through `WT.Wrec` — and by positivity those
+  -- are exactly the fields a codomain can name, so the whole file is accepted.
   state := state.check
     s!"the sweep declines exactly {sweepDeclinedFixtures} (declined \
       {sweptDeclined.qsort (· < ·)})"

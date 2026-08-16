@@ -8,6 +8,90 @@ open Lean Meta
 
 namespace InductiveModels
 
+/-- **Arm W's intrinsic projections for the fields it stores.**
+
+The common driver's projection-ι contract is literal — `T._model.proj_j` at the
+modeled constructor *is* the constructor's own field binder, with no transport
+— and for a field whose type names an earlier field that is a statable
+proposition only if the earlier field's selector **reduces** on the modeled
+constructor. Arm W's recursor cannot do it: `WT.Wrec` is a well-founded
+recursion whose ι rule is the theorem `WT.Wrec_iota`.
+
+**Its carrier can, for exactly the fields it stores.** A node is
+`WT.sup ⟨t, d⟩ dispatch` (under the constrained lift, wrapped in a `PSigma'`
+whose projection reduces), and [`InductiveModels.wCoreRootFn`] takes it back to
+the label `⟨t, d⟩` by βιπ alone — `root (sup a f) ≡ a`. The label's two
+`PSigma'` projections give the tag and the data, one `Nat.rec` cascade over the
+tag lands on the owner's single constructor, and the data tower's own
+`PSigma'` projections select the field. No step of that is `WT.Wrec`, and
+`unbox (box v) ≡ v` closes the boxed components, so the selector reduces to the
+constructor's binder and the rule is `Eq.refl`.
+
+**And the fields it stores are exactly the fields anything can depend on.**
+The branch positions have no definitional selector — `WT.kids_sup` carries a
+`cast` — but Lean's positivity and nesting rules leave no spelling of a
+constructor field type that reads a recursive occurrence's *value*
+(`test/fixtures/inductive-models/nested_value_dependency.lean` writes out every
+attempt and the kernel refuses each), so no codomain ever names one. The
+children keep the recursor's selector and that is a decision, not a shortfall:
+nothing is stated about them that `WT.Wrec_iota` does not prove.
+
+**Only at a one-constructor owner**, because that is the whole of what
+`infer_proj` — and therefore [`InductiveModels.addProjectionModels`] — asks
+about. The cascade above would run at any constructor count, but at two or more
+the arm at tag `k` and the arm at tag `k'` would have to land in one codomain
+and there is no field to name; the driver never asks, and this declines to
+answer rather than publishing an override nothing can consume. -/
+private def wStoredFieldOverrides (site : PrimSite) :
+    GenM (Array (Name × Nat × Expr × Expr)) := do
+  unless site.nc == 1 do return #[]
+  let (nrs, _) ← site.wShapeOf 0
+  if nrs.isEmpty then return #[]
+  let us := site.us
+  let w := site.wW
+  let eqi := site.eqi
+  let natT := site.wNatT
+  let modelCtorTy := site.publicSource site.sourceCtors[0]!.2
+  let mut overrides : Array (Name × Nat × Expr × Expr) := #[]
+  for q in [0:nrs.size] do
+    let selector ← site.withParams fun ps => do
+      let dAt : Expr → Expr := fun t => mkAppN (.const site.wDN us) (ps.push t)
+      let tele ← instForall site.exportCtors[0]!.2 ps
+      forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+        let xs := nrs.map (fs[·]!)
+        -- **The stored field's type may name earlier *stored* fields and
+        -- nothing else.** That is the positivity fact above, re-asked of the
+        -- expression rather than assumed: a type that named a child or a later
+        -- field would abstract to a term with free variables, and this fails
+        -- closed as a construction fault rather than emitting one.
+        let reachable := xs.extract 0 q
+        let stray := fs.filter fun f => !reachable.any fun x => x.fvarId! == f.fvarId!
+        let fieldType ← ityp xs[q]!
+        if fieldType.hasAnyFVar fun id => stray.any fun f => f.fvarId! == id then
+          badShape s!"{site.exportCtors[0]!.1}'s field {nrs[q]!} names a field arm W \
+does not store, which its positivity check should have made unspellable"
+        withLocalDeclD `self (mkAppN (.const site.selfN us) ps) fun self => do
+          let label := mkAppN (.const wCoreRootFn [site.uL, site.wKL])
+            #[site.wKTy ps, site.wAAt ps, site.wBFn ps, site.wDecEq ps, site.wTgAt ps,
+              site.wPlan.unwrap (site.wLowSelfAt ps) self]
+          let tag := psigmaFst (.succ .zero) w natT (site.wDAt ps) label
+          let data := psigmaSnd (.succ .zero) w natT (site.wDAt ps) label
+          mkLambdaFVars (ps.push self)
+            (← wStoredFieldRead eqi w xs dAt q tag data)
+    -- The rule is reflexivity **at the constructor's own field and its own
+    -- declared type**. The driver states it at the intrinsic codomain and at
+    -- `proj_j` applied to the modeled constructor; the selector above reduces
+    -- to this field, so the two statements are the same one.
+    let proof ← site.withParams fun ps => do
+      let tele ← instForall modelCtorTy ps
+      forallBoundedTelescope tele (some (numForalls tele)) fun fields _ => do
+        let selected := fields[nrs[q]!]!
+        let fieldType ← ityp selected
+        mkLambdaFVars (ps ++ fields)
+          (eqi.refl' (← ilevel fieldType) fieldType selected)
+    overrides := overrides.push (site.tname, nrs[q]!, selector, proof)
+  return overrides
+
 def primArmW (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- The site, under the names this arm has always read it by.
   let tname := site.tname
@@ -307,6 +391,9 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
   addChecked dRec
   out := out.push dRec
   requires := wRequires
-  return { st with out, spliced, requires }
+  -- **Last**, because the selectors name the carrier and the tag cascade is
+  -- typed against `D`: both are in the environment only now.
+  let projectionOverrides := st.projectionOverrides ++ (← wStoredFieldOverrides site)
+  return { st with out, spliced, requires, projectionOverrides }
 
 end InductiveModels
