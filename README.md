@@ -134,9 +134,19 @@ family and checks:
 - safe definitions in implementation slots and theorem declarations in proof
   slots.
 
-These checks intentionally do not unfold definitions, use proof irrelevance,
-ask Lean for definitional equality, or inspect arbitrary declaration values.
-That makes the correspondence check independent of the kernel verdict.
+The checker is a pure function of the export text: it never asks Lean for
+definitional equality, never appeals to proof irrelevance, and never compares a
+declaration's value. Every correspondence verdict is literal syntactic equality
+of declaration types after simultaneous source-to-model renaming, so an
+accepted slot is exact rather than merely definitionally right, and the verdict
+is independent of the kernel's.
+
+Deciding what to compare against is a separate matter. Enumerating a
+constructor's parameters and fields, deciding whether an owner or a field type
+is a proposition, and deciding which fields admit an intrinsic projection apply
+the kernel's own projection rules; that shape analysis does unfold transparent
+definitions and read their values. It settles which slots must exist and how
+their statements are spelled. It never loosens the comparison itself.
 
 `--check-input` runs it on models already in the input. `--check-output` runs
 it on the final transformed stream. An input with no model slots is not
