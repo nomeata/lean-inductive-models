@@ -236,6 +236,12 @@ the eleven projection iotas its own records carried are gone with it. The
 fixture's public interfaces are unchanged; what left is a fragment it no longer
 needs.
 
+`dead_owner_mention` is 13: the eleven the spliced `_wcore` fragment always
+carries plus `DeadStruct`'s two.  `DeadStruct` is the fixture's owner whose
+only owner mention is ζ-dead, so it is a one-constructor *nonrecursive*
+record and is asked for both of its fields back; a route that reads its field
+domain as written makes it recursive again and this row drops to eleven.
+
 `prim_w` is 46 and not 35 because it gained `TripleInf`, `QuadInf` and
 `TrineInf` — three one-constructor arm-W owners at three and four recursive
 fields, restoring the one-layer adapter over a W carrier past the two
@@ -243,7 +249,7 @@ fields, restoring the one-layer adapter over a W carrier past the two
 three, four and four fields are the whole of the difference. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 21),
-    ("decline_no_eq", 11), ("default_ctor_iota", 0), ("degenerate_graph", 1),
+    ("dead_owner_mention", 13), ("decline_no_eq", 11), ("default_ctor_iota", 0), ("degenerate_graph", 1),
     ("dependent_fields", 11), ("empty_no_base", 16),
     ("filtered/nat_char_equations", 3),
     ("filtered/nested_deep", 11), ("filtered/nested_iota", 13),

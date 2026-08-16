@@ -17,6 +17,7 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let np := site.np
   let memberTy := site.memberTy
   let exportCtors := site.exportCtors
+  let sourceCtors := site.sourceCtors
   let us := site.us
   let selfN := site.selfN
   let ern := site.ern
@@ -276,7 +277,7 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
 
   -- ── the constructors ──
   for j in [0:nc] do
-    let ty := publicSource exportCtors[j]!.2
+    let ty := publicSource sourceCtors[j]!.2
     let val ← site.withParams fun ps => do
       let (pk, ℓpk) ← pkAt ps
       let rtele ← instForall ty ps

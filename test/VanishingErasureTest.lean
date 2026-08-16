@@ -78,6 +78,14 @@ def constructorTypes (input : Export) (owner : Name) : Array Expr :=
       else result
     | _ => result
 
+/-- One generated definition or theorem's type, by name. -/
+def declaredType? (input : Export) (name : Name) : Option Expr :=
+  input.decls.findSome? fun declaration => match declaration with
+    | .defn n _ type _ _ _ _ => if n == name then some type else none
+    | .thm n _ type _ _ => if n == name then some type else none
+    | .ax n _ type _ => if n == name then some type else none
+    | _ => none
+
 def ownerPasses (input : Export) (owner : Name) : Bool :=
   (Check.check input).all (·.familyOwner != owner)
 
@@ -155,6 +163,58 @@ def main : IO UInt32 := do
     ownerPasses hiddenGenerated `Hidden && ownerPasses hiddenGenerated hiddenSkeleton &&
       hiddenReport.stmtErrors.isEmpty
 
+  -- **The ζ spelling, at the four routes that read the field domain as
+  -- written.**  Every owner in `dead_owner_mention` carries one data field
+  -- whose `let` binding names the type being declared; before the site
+  -- normalised its telescope once, `DeadLabel` declined
+  -- `.shapeUnsupported .incomplete` on `labelFactored` and the other three
+  -- aborted the run outright.  What is asserted here is the pair of facts the
+  -- normalisation has to keep apart: the **public** constructor still spells
+  -- the dead mention exactly as the source does, and the **private** carrier
+  -- does not mention the source owner at all.
+  let deadRaw ← readExport "test/fixtures/inductive-models/dead_owner_mention.ndjson"
+  let (deadGenerated, deadReport) ← runExport deadRaw
+  let deadOwners : Array Name := #[`DeadLabel, `DeadBranch, `DeadStruct, `DeadProp]
+  state := state.check "every ζ-dead source constructor mentions its own owner" <|
+    deadOwners.all fun owner =>
+      (constructorTypes deadRaw owner).any (hasVanishingDomain owner)
+  state := state.check "all four ζ-dead owners model rather than declining or aborting" <|
+    deadOwners.all fun owner =>
+      deadReport.generated.any (·.1 == owner) &&
+        !deadReport.declined.any fun (declined, _) => declined == owner
+  state := state.check "each public ζ-dead constructor keeps the source spelling" <|
+    deadOwners.all fun owner =>
+      let model := Naming.modelName owner
+      (deadRaw.decls.foldl (init := #[]) fun result declaration =>
+        match declaration with
+        | .induct types constructors _ =>
+          if types.any (·.name == owner) then result ++ constructors.map (·.name)
+          else result
+        | _ => result).any fun constructor =>
+          (declaredType? deadGenerated (Naming.modelName constructor)).any
+            (hasVanishingDomain model)
+  state := state.check "no private carrier mentions the ζ-dead source owner" <|
+    deadOwners.all fun owner =>
+      let private_ := Name.str (Naming.modelName owner) "_impl"
+      deadGenerated.decls.all fun declaration =>
+        !(declaration.names.any fun n => private_.isPrefixOf n) ||
+          match declaration with
+          | .defn _ _ type value _ _ _ =>
+            !containsConst owner type && !containsConst owner value
+          | .thm _ _ type value _ => !containsConst owner type && !containsConst owner value
+          | _ => true
+  -- `DeadStruct` is the one whose *only* owner mention is ζ-dead, so after the
+  -- reduction it is a plain nonrecursive one-constructor record and is asked
+  -- for both of its fields back.  A route that reads its domain as written
+  -- calls it recursive and emits no projection at all.
+  state := state.check "the wholly ζ-dead owner is a nonrecursive record with both fields" <|
+    #[`DeadStruct._model.proj_0, `DeadStruct._model.proj_0.iota,
+      `DeadStruct._model.proj_1, `DeadStruct._model.proj_1.iota].all fun n =>
+      (declaredType? deadGenerated n).isSome
+  state := state.check "the ζ-dead output passes exact model checking" <|
+    deadOwners.all (ownerPasses deadGenerated) && deadReport.stmtErrors.isEmpty &&
+      deadReport.stmtChecked == 86
+
   -- Unit-level boundary controls.  These expressions need not elaborate: the
   -- erasure helper is intentionally raw syntax surgery over exported Exprs.
   let owner := `Boundary.Owner
@@ -174,6 +234,36 @@ def main : IO UInt32 := do
   state := state.check "a surviving nested occurrence remains on the nested path" <|
     erasureFieldDomain owner nested == headNorm nested && erasureRecursive owner nested &&
       !(headNorm nested).getAppFn.isConstOf owner
+
+  -- **What the one normalisation reaches, and what it deliberately does not.**
+  -- `shapeCtorTy` reduces a *field domain* whose owner mention βζ disappears
+  -- and nothing else, so `labelFactored`'s `recAt` stops calling such a field
+  -- an earlier recursive one.  A binder type *inside* a recursive field's own
+  -- telescope is one level deeper and is left as written; the guard therefore
+  -- stays a live conjunct rather than becoming an assertion, and these two
+  -- constructor types are the two sides of that line.
+  let family := fun (argument : Expr) => Expr.app (Expr.const `Boundary.Fam []) argument
+  let deadThenChild :=
+    Expr.forallE `k dead
+      (Expr.forallE `f (Expr.forallE `z (family (.bvar 0)) ownerT .default) ownerT .default)
+      .default
+  let childBinderRedex :=
+    Expr.forallE `c ownerT
+      (Expr.forallE `f
+        (Expr.forallE `z (Expr.app (Expr.lam `x ownerT natT .default) (.bvar 0)) ownerT .default)
+        ownerT .default)
+      .default
+  state := state.check "a dead field domain stops being an earlier recursive field" <|
+    !labelFactored owner 0 #[(`Boundary.lim, deadThenChild)] &&
+      labelFactored owner 0 (shapeCtors owner 0 #[(`Boundary.lim, deadThenChild)])
+  state := state.check "a dead mention inside a child's binder is still refused" <|
+    shapeCtorTy owner 0 childBinderRedex == childBinderRedex &&
+      !labelFactored owner 0 (shapeCtors owner 0 #[(`Boundary.lim, childBinderRedex)])
+  state := state.check "normalization is the identity on a live occurrence and on parameters" <|
+    shapeCtorTy owner 0 (Expr.forallE `f hidden ownerT .default)
+        == Expr.forallE `f hidden ownerT .default &&
+      shapeCtorTy owner 1 (Expr.forallE `p dead (Expr.forallE `k dead ownerT .default) .default)
+        == Expr.forallE `p dead (Expr.forallE `k natT ownerT .default) .default
 
   IO.println s!"vanishing erasure: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

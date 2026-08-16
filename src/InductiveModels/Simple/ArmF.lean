@@ -17,6 +17,7 @@ def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let np := site.np
   let memberTy := site.memberTy
   let exportCtors := site.exportCtors
+  let sourceCtors := site.sourceCtors
   let selfN := site.selfN
   let recN := site.recN
   let ctorN := site.ctorN
@@ -172,7 +173,7 @@ def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- Its own index vector is `ι⃗_ctor` at its own fields, so the pivots the
   -- carrier substitutes come back as exactly those fields and the stored
   -- equation is `Eq.refl`.
-  let ty := publicSource cty0
+  let ty := publicSource sourceCtors[0]!.2
   let cval ← site.withParams fun ps => do
     let rtele ← instForall ty ps
     let nf := numForalls rtele

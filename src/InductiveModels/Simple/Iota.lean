@@ -17,7 +17,7 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
   -- The site, under the names this arm has always read it by.
   let tname := site.tname
   let np := site.np
-  let exportCtors := site.exportCtors
+  let sourceCtors := site.sourceCtors
   let sourceRecursor? := site.sourceRecursor?
   let interface? := site.interface?
   let us := site.us
@@ -70,7 +70,7 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
     -- the kernel may βζ-normalise a field domain while storing it. The public
     -- constructor declaration still carries the exported redex literally, and
     -- the iota theorem's telescope is part of the same literal interface.
-    let modelCTy := publicSource exportCtors[j]!.2
+    let modelCTy := publicSource sourceCtors[j]!.2
     let d ← forallBoundedTelescope installedRecTy (some (np + 1 + nc)) fun pre _ => do
       let ps := pre.extract 0 np
       let motive := pre[np]!

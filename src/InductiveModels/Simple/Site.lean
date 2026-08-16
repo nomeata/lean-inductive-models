@@ -28,7 +28,21 @@ structure PrimSite where
   lparams : List Name
   np : Nat
   memberTy : Expr
+  /-- **The constructor types every shape question is asked of**: the export's,
+  with each field domain's βζ-*dead* owner mention discarded once by
+  [`InductiveModels.shapeCtors`]. Identical to `sourceCtors` for a declaration that
+  has none, which is all but a handful. Nothing built from this array is ever
+  emitted; see `sourceCtors`. -/
   exportCtors : Array (Name × Expr)
+  /-- **The exported constructor types, byte for byte**, and the only array a
+  public statement may be spelled from — the output contract requires the
+  emitted constructor to be the exact source syntax under the simultaneous
+  public-name rewrite, and the structural checker compares it literally.
+
+  It is definitionally equal to `exportCtors` by βζ alone, which is what lets
+  the carrier be planned from the reduced array and the constructor still be
+  emitted, and typecheck, at the written one. -/
+  sourceCtors : Array (Name × Expr)
   reserved : Std.HashSet Name
   sourceRecursor? : Option ERec
   interface? : Option PrimInterfaceNames
@@ -144,6 +158,26 @@ def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (me
     (sourceRecursor? : Option ERec := none)
     (interface? : Option PrimInterfaceNames := none) : GenM (PrimSite × PrimOut) := do
   let us := lparams.map Level.param
+  -- **βζ-dead owner mentions leave the telescope here, and nowhere else.**
+  --
+  -- A field written `(fun _ : T => N) k` or `let _u := T; N` mentions the owner
+  -- and reduces to a domain that does not. Every recursion question below —
+  -- `analysePrim`'s `isRec`, [`InductiveModels.wShapeOf`]'s two towers,
+  -- [`InductiveModels.labelFactored`], [`InductiveModels.tagFactored`],
+  -- [`InductiveModels.eraseCtorTy`], [`InductiveModels.classifyCtor`],
+  -- [`InductiveModels.churchSwapAt`], [`InductiveModels.pairArm`] — asked
+  -- `mentionsAny` of the domain *as written*, so such a field was a recursive
+  -- child to all of them and to none of the constructions that then had to
+  -- represent one. Teaching each test to reduce first is a synchronisation
+  -- problem; reducing once, before the first of them runs, is not.
+  --
+  -- **This is an analysis-only reduct.** `sourceCtors` keeps the export byte
+  -- for byte and is what every emitted constructor, ι rule and recursor
+  -- statement is spelled from; the two are βζ-equal, so the carrier planned
+  -- from the reduced array is a carrier the written statement typechecks
+  -- against, with no unfolding and no transport.
+  let sourceCtors := exportCtors
+  let exportCtors := shapeCtors tname np exportCtors
   -- **Where the model is built and where it is emitted can differ.** `root` is
   -- the former and `tname` the latter; they are the same name for every
   -- declaration but the handful whose model name is lost to a normalized-name
@@ -223,6 +257,34 @@ def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (me
   -- is deliberately not the default — every shape that worked before this
   -- reaches the same `memberTy` object it always did, so nothing that was
   -- measured moves.
+  -- **The normalisation is complete, asserted rather than trusted.**
+  --
+  -- Downstream of this line, `mentionsAny #[tname] dom` and
+  -- [`InductiveModels.erasureRecursive`] `tname dom` are the *same* question of a field
+  -- domain — that is exactly what `shapeCtors` above bought, and it is what
+  -- lets `wShapeOf`'s two towers, `labelFactored`'s `recAt`, `eraseCtorTy`'s
+  -- replacement and `analysePrim`'s `isRec` keep asking the cheap syntactic
+  -- form and still agree. The disagreement between the two used to be a live
+  -- possibility and is now impossible, so it is stated as a construction
+  -- invariant instead of being re-tested at each consumer: a future edit that
+  -- routes a raw export past `shapeCtors` fails here, loudly and at the site,
+  -- rather than silently splitting a telescope on an answer no arm can build.
+  --
+  -- An internal tool error and not a decline, for the reason
+  -- [`InductiveModels.withRecSlot`]'s stated refusal is one: it is a property of
+  -- this function's own output, not of the declaration.
+  for (cn, cty) in exportCtors do
+    let mut t := cty
+    for _ in [0:np] do
+      match t with
+      | .forallE _ _ b _ => t := b
+      | _ => pure ()
+    while t matches .forallE .. do
+      let .forallE _ dom b _ := t | unreachable!
+      if mentionsAny #[tname] dom && !erasureRecursive tname dom then
+        badShape s!"{cn} still carries a βζ-dead mention of {tname} in a field domain \
+after normalisation"
+      t := b
   let analysis ← analysePrim tname lparams np memberTy exportCtors
   let declaredMemberTy := analysis.declaredMemberTy
   let memberTy := analysis.memberTy
@@ -698,22 +760,37 @@ tuple tower pads")
   --   `[propext, Quot.sound]`, the untagged one takes `WT.decEqAll` and pays
   --   `Classical.choice`.
   --
-  --   **It is not the dead guard it reads as, and the reason is worth
-  --   recording.** Its *semantic* content — a recursive field's binder type
+  --   **It is not the dead guard it reads as, and what keeps it alive has
+  --   changed.** Its *semantic* content — a recursive field's binder type
   --   naming an earlier recursive field — has an empty refusal class for a
   --   kernel-accepted plain inductive: the binder would have to apply a type
   --   former to a value of the type being declared, which Lean's positivity and
   --   nesting rules leave no spelling of (`Projection.lean`'s argument, written
   --   out for the kernel to reject in
-  --   `test/fixtures/inductive-models/nested_value_dependency.lean`). But the
-  --   test is `mentionsAny` on the field's domain **as written**, and that is
-  --   deliberate: [`InductiveModels.wShapeOf`] splits the two towers by exactly
-  --   the same written-domain test, so a field whose owner mention βζ discards
-  --   is a *branch* to the arm and must be one here too. Such a field makes
-  --   this answer `false` on a declaration the kernel accepts, and correctly:
-  --   arm W's own tower check refuses it a few lines later. So it is a live
-  --   guard on an over-approximated question, not an invariant — which is why
-  --   it stays a conjunct and is reported as `incomplete` rather than asserted.
+  --   `test/fixtures/inductive-models/nested_value_dependency.lean`).
+  --
+  --   It used to over-approximate that question at the **field domain**: the
+  --   `recAt` vector was `mentionsAny` on the domain as written, so a field
+  --   whose owner mention βζ discards counted as an earlier *recursive* field
+  --   and a later child's binder naming it was refused. That is the
+  --   over-approximation `shapeCtors` removed at the top of this function, and
+  --   `dead_owner_mention`'s `DeadLabel` is the declaration it used to decline
+  --   `incomplete` for.
+  --
+  --   What survives is one level deeper and is **not** normalised: the
+  --   `hasLooseBVar` test is asked of a binder type *inside* a recursive
+  --   field's own telescope, and such a binder may itself be a redex that
+  --   discards the field it names. Lean's elaborator contracts that redex, but
+  --   this tool's input is an arbitrary export and
+  --   `test/fixtures/inductive-models/nonindexed_vanishing.ndjson` is a
+  --   committed one that carries an uncontracted redex a field domain, so the
+  --   shape is reachable. Refusing it is right — `wRecDom` substitutes only
+  --   *non-recursive* fields, so the branch tower would carry a dangling
+  --   local — and refusing it is a gap in the arm rather than a boundary of
+  --   the construction. So it stays a conjunct and is reported as
+  --   `incomplete` rather than asserted. `VanishingErasureTest` pins both
+  --   halves at unit level: the field-domain question now passes and the
+  --   binder-type one still fails.
   --
   -- **`!armE` is part of the decision and not part of the shape.** A branching
   -- declaration with no base constructor is in the W class by every question
@@ -790,6 +867,15 @@ tuple tower pads")
   -- `Plan.plan`, whose `mimicFor` repeats that constructor-local check before
   -- specialising the block. The former `hasLooseBVar` refusal here was thus a
   -- guard for metadata the replaying kernel cannot install, not a model shape.
+  --
+  -- **`mentionsAny` and not `erasureRecursive`, and that is now the same
+  -- test.** The array this reads came through [`InductiveModels.shapeCtors`] and the
+  -- assertion above says so, so a field whose owner mention βζ discards is
+  -- already spelled at its reduct and lands in the *data* tower — where it
+  -- belongs, since `wDataTy` stores it and the emitted constructor binds it at
+  -- the written spelling, which is βζ-equal to what was stored.
+  -- `dead_owner_mention`'s `DeadBranch` is the constructor this used to put in
+  -- the branch tower beside two real children.
   let wShapeOf : Nat → GenM (Array Nat × Array Nat) := fun k => do
     let (cn, cty) := exportCtors[k]!
     let mut t := cty
@@ -1071,7 +1157,7 @@ tuple tower pads")
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  return ({ tname, root, lparams, np, memberTy, exportCtors, reserved, sourceRecursor?, interface?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armG, eqi, ctorPairs, tbl, installedRecTy, exactSource?, publicSource, publicRecTy, emptySlots, armE, directRoute?, armF, armC, wTagged, wPlan, armW, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
+  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, interface?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armG, eqi, ctorPairs, tbl, installedRecTy, exactSource?, publicSource, publicRecTy, emptySlots, armE, directRoute?, armF, armC, wTagged, wPlan, armW, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
           { out, requires, spliced, projectionOverrides })
 
 end InductiveModels

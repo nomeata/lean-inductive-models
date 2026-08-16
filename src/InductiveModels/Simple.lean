@@ -303,11 +303,13 @@ def primIsoWithInterface (tname : Name) (root : Name) (lparams : List Name) (np 
   --
   -- **A gap in arm W, not a boundary of the construction.** The two things that
   -- turn `armW` off here are [`InductiveModels.labelFactored`] — a syntactic
-  -- loose-bvar test which, unlike every other recursion question this file
-  -- asks, does not first discard a βζ-dead mention — and a carrier plan that
-  -- could not put the core's `Type u` at the declared sort. Both are limits of
-  -- the arm as it stands rather than a decision that the shape is
-  -- unrepresentable, so the decline says `incomplete` and names the guard.
+  -- loose-bvar test, asked of a binder type *inside* a recursive field's own
+  -- telescope, which is the one place [`InductiveModels.shapeCtorTy`] does not reach
+  -- and so the one place a βζ-dead mention can still be read as live — and a
+  -- carrier plan that could not put the core's `Type u` at the declared sort.
+  -- Both are limits of the arm as it stands rather than a decision that the
+  -- shape is unrepresentable, so the decline says `incomplete` and names the
+  -- guard.
   --
   -- **`!armE` is in the test because arm E is in the chain.** A branching
   -- declaration with no base constructor is in this class by every question
@@ -320,8 +322,8 @@ def primIsoWithInterface (tname : Name) (root : Name) (lparams : List Name) (np 
         s!"a non-indexed recursive declaration at a never-zero sort whose recursion is \
 not linear, so the tuple tower cannot hold it and arm W is the only arm left — and arm \
 W's guard refuses it; B factors through the tag: \
-{if tagFactored tname np exportCtors then "yes" else "no"}\
-; through the label: {if labelFactored tname np exportCtors then "yes" else "no"}\
+{if tagFactored tname np site.exportCtors then "yes" else "no"}\
+; through the label: {if labelFactored tname np site.exportCtors then "yes" else "no"}\
 ; carrier is Type u: {if site.w.normalize.dec.isSome then "yes" else "no"}\
 ; constrained lift available: {if site.wPlan.lifted then "yes" else "no"}")
   let st ←

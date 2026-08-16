@@ -14,6 +14,7 @@ def primArmW (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let lparams := site.lparams
   let np := site.np
   let exportCtors := site.exportCtors
+  let sourceCtors := site.sourceCtors
   let reserved := site.reserved
   let us := site.us
   let selfN := site.selfN
@@ -250,7 +251,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
 
   -- ── the constructors ──
   for j in [0:nc] do
-    let ty := publicSource exportCtors[j]!.2
+    let ty := publicSource sourceCtors[j]!.2
     let val ← site.withParams fun ps => do
       let rtele ← instForall ty ps
       forallBoundedTelescope rtele (some (numForalls rtele)) fun fs _ => do

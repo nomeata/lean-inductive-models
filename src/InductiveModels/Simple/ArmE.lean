@@ -28,6 +28,7 @@ def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let lparams := site.lparams
   let np := site.np
   let exportCtors := site.exportCtors
+  let sourceCtors := site.sourceCtors
   let selfN := site.selfN
   let ern := site.ern
   let recN := site.recN
@@ -79,7 +80,7 @@ def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- field already inhabits the empty carrier, so return it.
   for j in [0:nc] do
     let (_, cty) := exportCtors[j]!
-    let ty := publicSource cty
+    let ty := publicSource sourceCtors[j]!.2
     let nfj ← site.withParams fun ps => do pure (numForalls (← instForall cty ps))
     let val ← site.withParams fun ps => do
       let rtele ← instForall ty ps

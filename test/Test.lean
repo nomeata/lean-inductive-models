@@ -967,6 +967,28 @@ def expectedPrim : List Row :=
       [("Cnt", 16), ("Use", 6)],
       [ ("Nat", "prim model: a basis primitive")
       , ("Eq", "prim model: a basis primitive")])
+  -- **The βζ-dead owner mention, at the four routes that read the field
+  -- domain as written.** Each owner in `dead_owner_mention` carries one data
+  -- field whose `let` binding names the type being declared and whose ζ
+  -- reduct does not, and each was a different failure before the site
+  -- normalised its telescope once: `DeadLabel` declined
+  -- `.shapeUnsupported .incomplete` on `labelFactored`, and `DeadBranch`,
+  -- `DeadStruct` and `DeadProp` each aborted the run with an internal tool
+  -- error from arm W's tower split, the one-layer adapter and the Church
+  -- classification respectively. The counts are the ordinary ones for their
+  -- shapes: `DeadLabel` is arm W untagged and carries the core splice,
+  -- `DeadBranch` is arm W tagged behind it, `DeadStruct` is the one-layer
+  -- structure with both intrinsic projections and their ι rules, `DeadProp`
+  -- is the Church route's six.
+  , ("dead_owner_mention",
+      [("P", 15), ("Q", 8), ("DeadLabel", 215), ("_wcore.Subtype", 9), ("_wcore.List", 6),
+       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
+       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
+       ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9),
+       ("DeadBranch", 12), ("DeadStruct", 16), ("DeadProp", 6)],
+      [("Eq", "prim model: a basis primitive")])
   ]
 
 structure TAcc where

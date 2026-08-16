@@ -14,6 +14,7 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let lparams := site.lparams
   let np := site.np
   let exportCtors := site.exportCtors
+  let sourceCtors := site.sourceCtors
   let selfN := site.selfN
   let ern := site.ern
   let recN := site.recN
@@ -188,8 +189,7 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
 
   -- ── the constructors ──
   for j in [0:nc] do
-    let (_, cty) := exportCtors[j]!
-    let ty := publicSource cty
+    let ty := publicSource sourceCtors[j]!.2
     let val ← site.withParams fun ps => do
       if !isRec then
         let (cs, fib) ← fibreAt ps

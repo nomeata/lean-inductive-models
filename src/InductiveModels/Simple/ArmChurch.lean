@@ -16,6 +16,7 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let np := site.np
   let memberTy := site.memberTy
   let exportCtors := site.exportCtors
+  let sourceCtors := site.sourceCtors
   let reserved := site.reserved
   let us := site.us
   let impl := site.impl
@@ -128,7 +129,7 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- read off the export's telescope.
   for j in [0:nc] do
     let (_, cty) := exportCtors[j]!
-    let ty := publicSource cty
+    let ty := publicSource sourceCtors[j]!.2
     let nfj ← site.withParams fun ps => do pure (numForalls (← instForall cty ps))
     let flds ← site.withParams fun ps => do classifyCtor tname nfj (← instForall cty ps)
     let val ← site.withParams fun ps => do
@@ -301,7 +302,7 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
         grInvTN := Name.str impl "graph_inv_ty", grInvN := Name.str impl "graph_inv"
         grUniqN := Name.str impl "graph_unique", grExN := Name.str impl "graph_exists"
         recGrN := Name.str impl "rec_graph"
-        memberTy, ctorTy := publicSource exportCtors[0]!.2
+        memberTy, ctorTy := publicSource sourceCtors[0]!.2
         isData := gIsData, idxPos := gIdxPos, nonPiv := gNonPiv
         recNb := gRecNb, eqi, fx? := gFx? }
     for d in ← graphArm ctx publicRecTy do out := out.push d

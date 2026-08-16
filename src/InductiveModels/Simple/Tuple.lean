@@ -160,9 +160,11 @@ def labelFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr))
       | .forallE _ _ b _ => t := b
       | _ => return false
     -- Which of this constructor's own fields are recursive, by position. The
-    -- test is `mentionsAny` on the *written* domain, exactly as
-    -- [`InductiveModels.eraseCtorTy`] and `wShapeOf` ask it, so all three agree about
-    -- which fields the two towers split the telescope into.
+    -- test is the plain `mentionsAny`, exactly as [`InductiveModels.eraseCtorTy`] and
+    -- `wShapeOf` ask it, and all three agree because the telescope reached them
+    -- through [`InductiveModels.shapeCtorTy`]: on that array a βζ-dead mention is
+    -- already gone, so the cheap syntactic test *is* the reduced one
+    -- ([`InductiveModels.mkPrimSite`] asserts as much).
     let mut recAt : Array Bool := #[]
     let mut u := t
     while u matches .forallE .. do
@@ -203,6 +205,58 @@ def erasureFieldDomain (tname : Name) (dom : Expr) : Expr :=
 must be replaced, after exposing its βζ head and discarding dead mentions. -/
 def erasureRecursive (tname : Name) (dom : Expr) : Bool :=
   mentionsAny #[tname] (erasureFieldDomain tname dom)
+
+/-- **A field domain with a βζ-*dead* owner mention discarded, and nothing
+else touched.**
+
+`(fun _ : T => N) k` and `let _u : Type := T; N` both mention `T` as written
+and reduce to a domain that does not mention it at all; this returns that
+reduct. Every other domain — including one whose reduct still mentions the
+owner, such as the redex hiding `∀ z, T i` — is returned **byte for byte**,
+because exposing a live occurrence is the internal erasure's business
+([`InductiveModels.erasureFieldDomain`]) and not this normalisation's.
+
+The distinction matters because this one *is* applied to the constructor
+telescope every shape question is then asked of. Reducing only the domains
+whose owner mention disappears is what makes the operation invisible: a
+declaration with no dead mention gets the identical array back. -/
+def shapeFieldDomain (tname : Name) (dom : Expr) : Expr :=
+  if erasureRecursive tname dom then dom else erasureFieldDomain tname dom
+
+/-- One constructor type with every βζ-dead owner mention discarded from a
+**field** domain, its `np` parameter binders and its conclusion untouched.
+
+**This is the whole of the normalisation, and it happens once.** The three
+questions the W arm splits its telescope by — [`InductiveModels.wShapeOf`],
+[`InductiveModels.labelFactored`] and [`InductiveModels.eraseCtorTy`] — used to test
+`mentionsAny` on the domain *as written*, so a field whose owner mention βζ
+discards was a recursive *branch* to all three, and to
+[`InductiveModels.analysePrim`]'s `isRec` and [`InductiveModels.classifyCtor`] besides.
+Teaching each of them to reduce first is five tests that must then agree
+forever. Normalising the telescope once, before any of them runs, is one.
+
+Sound because it is a **βζ reduct**: the reduced domain and the written one
+are definitionally equal with no unfolding and no proof, so a carrier built
+from this array is a carrier the written constructor type typechecks against.
+The written array is retained beside it ([`InductiveModels.PrimSite.sourceCtors`])
+and is what every emitted statement is spelled from; nothing this returns ever
+reaches the output. -/
+def shapeCtorTy (tname : Name) (np : Nat) (cty : Expr) : Expr :=
+  let rec fields (t : Expr) : Expr :=
+    match t with
+    | .forallE x dom b bi => .forallE x (shapeFieldDomain tname dom) (fields b) bi
+    | _ => t
+  let rec params (k : Nat) (t : Expr) : Expr :=
+    if k == np then fields t else
+    match t with
+    | .forallE x dom b bi => .forallE x dom (params (k + 1) b) bi
+    | _ => t
+  params 0 cty
+
+/-- [`InductiveModels.shapeCtorTy`] at a whole constructor array, names kept. -/
+def shapeCtors (tname : Name) (np : Nat) (cs : Array (Name × Expr)) :
+    Array (Name × Expr) :=
+  cs.map fun (cn, cty) => (cn, shapeCtorTy tname np cty)
 
 /-- Explain why the index erasure cannot replace every recursive occurrence
 by its bare skeleton owner.  This walk is monadic solely because a transparent
@@ -353,13 +407,23 @@ partial def spineSwap (tname : Name) (Vn : Expr) (nf : Nat) (tele : Expr) :
 
 /-- The same classification as [`InductiveModels.churchSwapAt`] makes, without the
 rewrite — used where the *values* are built, since those are bound at the
-model's restored telescope and not at the export's. -/
+model's restored telescope and not at the export's.
+
+**Classified through [`InductiveModels.erasureFieldDomain`]**, exactly as
+[`InductiveModels.recSlotOf`], [`InductiveModels.bareRecSlotOf`] and
+[`InductiveModels.spineSwap`] are. This is the one field walk that is *not* reached
+by [`InductiveModels.shapeCtorTy`]'s normalisation, because the one-layer adapter
+runs it on the already public-name-rewritten constructor type
+(`OneLayer.lean`'s `fieldShape`) rather than on the site's array; a βζ-dead
+owner mention there made a plain data field a recursive one and the adapter's
+pointwise recursor walk then aborted on it. The **binder** the walk introduces
+is still the domain as written: only the classification reduces. -/
 partial def classifyCtor (tname : Name) (nf : Nat) (tele : Expr)
     (acc : Array PField := #[]) : GenM (Array PField) := do
   if nf == 0 then return acc
   let .forallE x d b bi := tele | badShape "telescope shorter than its field count"
   let fld : PField ←
-    if mentionsAny #[tname] d then
+    if erasureRecursive tname d then
       forallTelescope d fun zs _ => pure { rec? := some zs.size }
     else pure { rec? := none }
   withLocalDecl x bi d fun xv =>
