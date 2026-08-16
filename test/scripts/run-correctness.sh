@@ -15,6 +15,7 @@ build_serially() {
 }
 
 compile_only_targets=(
+  FamilyAdapterConstruction
   OneLayerProjectionPrototype
   OneLayerRecursorProof
 )

@@ -42,7 +42,10 @@ rule are omitted from `ShadowCoverage` and a keyed minor-telescope reason is
 reported; a dummy ordinal never counts as covered evidence.
 
 The plan contains no fabricated proof names. `FamilyAdapterConstruction` is a
-disabled prototype seam that now builds `FamilyAdapterCertificate`: private
+disabled prototype seam — test-only, and since it has no `src/` caller it is
+built from `test/FamilyAdapterConstruction.lean` by its own Lake target rather
+than compiled into the `InductiveModels` library — that now builds
+`FamilyAdapterCertificate`: private
 member maps, dependent-telescope packers, `encode`/`decode`, both round trips,
 one packed result-index equality, exact installed minor/IH associations, and
 one finite IH-transport compatibility theorem per exact rule.

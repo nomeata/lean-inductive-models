@@ -1,5 +1,5 @@
 import InductiveModels.Driver
-import InductiveModels.FamilyAdapterConstruction
+import FamilyAdapterConstruction
 import family_adapter_generated
 
 open Lean Meta InductiveModels InductiveModels.FamilyAdapter
@@ -1337,7 +1337,7 @@ def runSamples : MetaM Result := do
 def runMain : IO UInt32 := do
   initSearchPath (← findSysroot)
   let environment ← importModules
-    #[`InductiveModels.FamilyAdapterConstruction, `family_adapter_generated] {}
+    #[`FamilyAdapterConstruction, `family_adapter_generated] {}
   let context : Core.Context :=
     { fileName := "<family-adapter-construction-test>", fileMap := default,
       options := {}, maxHeartbeats := 0, maxRecDepth := 8192 }

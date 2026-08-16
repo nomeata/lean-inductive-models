@@ -23,14 +23,26 @@ build_serially() {
 }
 ```
 
-The compile-only proof oracles are:
+The compile-only targets — two proof oracles and one test-only library — are:
 
 ```bash
 compile_only_targets=(
+  FamilyAdapterConstruction
   OneLayerProjectionPrototype
   OneLayerRecursorProof
 )
 ```
+
+`FamilyAdapterConstruction` is not an oracle: it is the parked family-adapter
+construction seam, which lives in `test/FamilyAdapterConstruction.lean` and is
+declared as its own `lean_lib` rather than as a module of `InductiveModels`.
+Nothing under `src/` imports it — `buildFamilyPrototype` has no production
+caller — so charging the shipped library and the `lean-inductive-models`
+executable for compiling it bought nothing. Only
+`familyadapterconstructiontest` builds it. `Driver` still reaches
+`InductiveModels.FamilyAdapterShadow` for `FamilyAdapter.ShadowObservation`,
+`deriveShadowPlan` and `ShadowReport.observe`, so `FamilyAdapterPlan` and
+`FamilyAdapterShadow` remain library modules.
 
 The executable correctness targets are:
 

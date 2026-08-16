@@ -8,6 +8,13 @@ This module is the disabled construction seam behind `FamilyAdapterPlan`.
 It reads exact finite telescope dimensions from the plan and installed
 declaration metadata.  It does not select a production route or emit a public
 declaration.
+
+It lives under `test/` rather than `src/` because nothing under `src/` calls
+it: `buildFamilyPrototype` and every primitive below it have no production
+caller, and the experiment they belong to emits nothing. Kept under `src/` it
+was still swept into the `InductiveModels` library glob, so the shipped library
+paid for compiling it. Its own Lake target, `FamilyAdapterConstruction`, is
+what `familyadapterconstructiontest` builds; see `docs/maintainers/Testing.md`.
 -/
 
 open Lean Meta
