@@ -30,15 +30,35 @@ printf '%s\n' \
 checker="$ROOT/scripts/check-mathlib-result.sh"
 ci_harness="$ROOT/scripts/ci-mathlib.sh"
 
-# The three phase budgets bound RESIDENT memory through a cgroup, not virtual
-# address space: since the v4.33.0 toolchain a `lean` frontend reserves about
-# 12.8 GiB of address space at startup against an unchanged 2.0 GiB peak RSS,
-# so `ulimit -v` can no longer express either quantity. Keep all three exact
-# budgets and their phase assignments explicit.
-grep -Fq 'BUILD_LIMIT_KIB=$((6 * 1024 * 1024))' "$ci_harness"
-grep -Fq 'EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))' "$ci_harness"
-grep -Fq 'WORKER_LIMIT_KIB=$((12 * 1024 * 1024))' "$ci_harness"
-grep -Fq 'MemoryMax="${limit_kib}K"' "$ci_harness"
+# The three phase budgets bound RESIDENT memory, not virtual address space:
+# since the v4.33.0 toolchain a `lean` frontend reserves about 12.8 GiB of
+# address space at startup against an unchanged 2.0 GiB peak RSS, so `ulimit -v`
+# can no longer express either quantity. Keep all three exact budgets and their
+# phase assignments explicit.
+#
+# Each of these is a pin on the harness, so each carries its own message. A bare
+# `grep -Fq` under `set -e` fails the whole suite with no output at all, which is
+# how a pin left behind by a harness change reads as an unexplained exit 1.
+require_harness() {
+  grep -Fq "$1" "$ci_harness" || {
+    echo "mathlib CI harness no longer contains: $1" >&2
+    exit 1
+  }
+}
+require_harness 'BUILD_LIMIT_KIB=$((6 * 1024 * 1024))'
+require_harness 'EXPORT_LIMIT_KIB=$((12 * 1024 * 1024))'
+require_harness 'WORKER_LIMIT_KIB=$((12 * 1024 * 1024))'
+# The budgets are observed and compared, not imposed: the harness reads GNU
+# time's peak RSS for each phase and fails the run when it is over. This pair
+# replaces a pin on `MemoryMax="${limit_kib}K"`, the cgroup ceiling the harness
+# used to try to impose; what has to stay true is that every budget above is
+# read against a resident-memory measurement and that exceeding one is fatal,
+# not which mechanism produces the number.
+require_harness 'Maximum resident set size'
+grep -Eq 'fail "\$label exceeded the \$limit_label' "$ci_harness" || {
+  echo "mathlib CI does not fail a phase that exceeds its budget" >&2
+  exit 1
+}
 if grep -Eq '^[[:space:]]*ulimit[[:space:]]+.*-v' "$ci_harness"; then
   echo "mathlib CI still bounds virtual address space instead of memory" >&2
   exit 1
