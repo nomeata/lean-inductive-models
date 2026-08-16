@@ -380,12 +380,17 @@ exported owner interface, and universe planning never escapes.
 What it deliberately does not prove, and what covers those properties instead:
 
 * **The input export's own kernel validity** — `--no-type-check-input`. The
-  pinned Mathlib export is an assumption of this gate, not a claim of it.
+  pinned Mathlib export is an assumption of this gate, not a claim of it. The
+  flag is still exercised on a real corpus elsewhere:
+  `test/scripts/check_arena_corpus.py` runs every published Lean Kernel Arena
+  case with `--type-check-input --type-check-generated`.
 * **Serialization round-tripping** — `--no-output`. The gate used to write a
   5.9 GB artifact and re-read it under `--type-check-input`, at 19:44 and
-  8.22 GiB. Round-tripping is covered by `lake exe test`'s fixture sweep and
-  `lake exe mainclitest`, which write and re-read real exports, and by
-  `test/scripts/check_arena_corpus.py`.
+  8.22 GiB. Round-tripping is covered by axis 4 of `lake exe test`'s fixture
+  sweep — `parse (render (parse t)) = parse t`, structurally — and by
+  `lake exe mainclitest`, which writes exports to real paths and reads them
+  back. Note that `check_arena_corpus.py` does *not* cover this: it runs with
+  `--no-output` too.
 
 That trade is not a reduction in kernel coverage. The old artifact re-read was
 the *only* kernel check in the run — generation ran with
