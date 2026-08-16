@@ -113,14 +113,22 @@ private def compactReport (records : Array CompactCheckRecord)
   let orderedGlobals := records.map (·.globalExtra)
   let orderedNames := orderedGlobals.flatMap (·.names)
   let mut declared : Std.HashSet Name := {}
-  let mut declaringRecord : Std.HashMap Name (Array Name) := {}
+  -- Every declared name is bound to the record that declares it together with
+  -- its position in the flattened record-major name stream.  The duplicate
+  -- rejection in this same pass makes that binding single-valued, so the two
+  -- checks below can look a name up instead of re-walking every record: the
+  -- record ordinal answers the model-order question, and the flat ordinal
+  -- restores the historical record-major diagnostic order.
+  let mut declaringSlot : Std.HashMap Name (Nat × Nat) := {}
+  let mut nameOrdinal := 0
   for recordIndex in [:records.size] do
     let record := records[recordIndex]!
     for name in record.globalExtra.names do
       if declared.contains name then
         throw s!"duplicate compact declaration name {name}"
       declared := declared.insert name
-      declaringRecord := declaringRecord.insert name record.globalExtra.names
+      declaringSlot := declaringSlot.insert name (recordIndex, nameOrdinal)
+      nameOrdinal := nameOrdinal + 1
   let ruleSlots := orderedNames.foldl (init :=
       ({} : Std.HashMap Name (Array (Name × Nat)))) fun slots name =>
     match iotaSlot? name with
@@ -143,14 +151,37 @@ private def compactReport (records : Array CompactCheckRecord)
       unless family.publicNames.any declared.contains do continue
       familiesChecked := familiesChecked + 1
       if checkSourceOrder then
-        for modelDecl in [:records.size] do
-          unless modelDecl < recordIndex do
-            for name in records[modelDecl]!.globalExtra.names do
-              if let some (owner, _) := family.publicOwners.find? (fun pair => pair.2 == name) then
-                violations := violations.push
-                  (.modelNotBefore owner name modelDecl recordIndex)
-      let familyNames := family.publicNames.foldl (init := #[]) fun names publicName =>
-        appendUnique names (declaringRecord.getD publicName #[]).toList
+        -- The historical form scanned every record at or after the owner's and
+        -- kept each of its names that is a public slot of this family, reporting
+        -- the *first* `publicOwners` pair spelling that name.  Names are unique
+        -- across records, so visiting each public slot once finds exactly the
+        -- same (owner, name, modelDecl) triples; ordering the survivors by the
+        -- flat name ordinal reproduces the record-major emission order.
+        let mut visited : Std.HashSet Name := {}
+        let mut late : Array (Nat × Name × Name × Nat) := #[]
+        for (owner, publicName) in family.publicOwners do
+          unless visited.contains publicName do
+            visited := visited.insert publicName
+            if let some (modelDecl, ordinal) := declaringSlot[publicName]? then
+              unless modelDecl < recordIndex do
+                late := late.push (ordinal, owner, publicName, modelDecl)
+        for (_, owner, name, modelDecl) in late.qsort (fun left right => left.1 < right.1) do
+          violations := violations.push (.modelNotBefore owner name modelDecl recordIndex)
+      -- `appendUnique` over each public slot's whole declaring record, without
+      -- the quadratic membership scan and without revisiting a record already
+      -- contributed by an earlier slot: a repeat contributes nothing new
+      -- because record names are globally unique.
+      let mut familyNames : Array Name := #[]
+      let mut familyNameSet : Std.HashSet Name := {}
+      let mut familyRecords : Std.HashSet Nat := {}
+      for publicName in family.publicNames do
+        if let some (declIndex, _) := declaringSlot[publicName]? then
+          unless familyRecords.contains declIndex do
+            familyRecords := familyRecords.insert declIndex
+            for name in records[declIndex]!.globalExtra.names do
+              unless familyNameSet.contains name do
+                familyNameSet := familyNameSet.insert name
+                familyNames := familyNames.push name
       if let some (owner, target) :=
           ownerBackreferenceFromCertificate? family.ownerReferences familyNames then
         violations := violations.push (.ownerBackreference owner target)
