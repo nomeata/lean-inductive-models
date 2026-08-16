@@ -28,19 +28,165 @@ its two consumers, which is what keeps them byte-identical rather than merely
 intended to be.
 -/
 
+/-! ## Interning
+
+The writer holds one table entry per emitted arena node for the whole length of
+the export — nothing may be forgotten, because any later record may
+back-reference any earlier ID — so the *per-entry* cost of these tables is the
+writer's entire memory profile.  On Mathlib that is ~10^8 entries, and the
+difference between a cheap entry and an expensive one is gigabytes.
+
+A `Std.HashMap` spends a three-word `AssocList.cons` cell (32 bytes with its
+header) on every entry, plus a machine word per bucket at a 3/4 load factor:
+about 40 bytes to record that a pointer we are already holding was given a
+small integer.  Measured on a 10M-line Mathlib prefix, that is 40.5 bytes per
+interned node.
+
+[`Interner`] stores the same fact in two much smaller pieces:
+
+* the key, once, in a **dense array in insertion order** — and insertion order
+  *is* arena-ID order, because the writer interns a node exactly when it hands
+  out the next ID, so the node at index `i` has ID `base + i` and no side table
+  of values is needed at all; and
+* an **open-addressed probe table** of indices into that array, packed two
+  31-bit slots to a machine word, so a probe slot costs four bytes rather than
+  the eight an `Array Nat` would spend or the 32 + 8 the hash map does.
+
+The key array is a plain `Array`, whose `push` doubles capacity and so sits on
+up to twice the bytes it uses.  Holding the keys in fixed-size chunks instead
+removes that slack on paper — 274 MB of it at Mathlib's 99.9M expressions — but
+was measured *raising* the whole-export peak from 11.37 GiB to 11.52 GiB, so
+the peak is not where the slack is.  The simpler array stays.
+
+Replacing the map is sound only because `Expr`, `Level` and `Name` all hash
+consistently with their `BEq`: equal keys always have equal hashes (`Expr.eqv`
+ignores binder names and annotations, and `Expr.hash` excludes both).  A table
+built by lookup-then-insert therefore never holds two equal keys, and linear
+probing from a key's home slot — which passes over no empty slot before
+reaching an entry inserted from the same home slot — finds exactly the entry
+bucketing would have found.  The IDs handed out, and so the emitted bytes, are
+unchanged.
+-/
+
+/-- The width of one packed probe slot.  Two fit in a machine word with the
+tag bit to spare, so `Nat` slots stay unboxed scalars. -/
+@[inline] private def probeBits : Nat := 31
+
+/-- One past the largest index a probe slot can hold.  A table storing this
+many nodes would be an export of some 10^11 lines. -/
+@[inline] private def probeLimit : Nat := 1 <<< probeBits
+
+/-- The low slot of a packed word. -/
+@[inline] private def probeMask : Nat := probeLimit - 1
+
+/-- A dense arena interning table: keys in ID order, plus an open-addressed
+index into them.  See the section comment for why this is not a `Std.HashMap`. -/
+structure Interner (α : Type) where
+  /-- The arena ID of `keys[0]`.  The node at index `i` has ID `base + i`. -/
+  base : Nat := 0
+  /-- The interned nodes, in insertion order, which is arena-ID order. -/
+  keys : Array α := #[]
+  /-- An open-addressed index into [`keys`], two 31-bit slots per element: slot
+  `k` is the low field of `probe[k / 2]` when `k` is even and the high field
+  when it is odd.  A slot is `0` when empty and `i + 1` for `keys[i]`
+  otherwise.  The slot count is a power of two and always exceeds `keys.size`,
+  so a probe always meets an empty slot. -/
+  probe : Array Nat := Array.replicate 8 0
+
+instance : Inhabited (Interner α) := ⟨{}⟩
+
+namespace Interner
+
+/-- An empty table whose first node will be given arena ID `base`, sized to
+hold `capacity` nodes without rehashing. -/
+def empty (base capacity : Nat) : Interner α :=
+  { base, probe := Array.replicate (max 16 (capacity * 4 / 3).nextPowerOfTwo / 2) 0 }
+
+/-- The arena ID the next interned node will receive.  The three counters the
+writer used to carry alongside its maps are this, and cannot drift from it. -/
+@[inline] def next (t : Interner α) : Nat := t.base + t.keys.size
+
+@[inline] private def slotAt (probe : Array Nat) (k : Nat) : Nat :=
+  let w := probe[k >>> 1]!
+  if k &&& 1 == 0 then w &&& probeMask else w >>> probeBits
+
+@[inline] private def setSlotAt (probe : Array Nat) (k v : Nat) : Array Nat :=
+  let j := k >>> 1
+  let w := probe[j]!
+  probe.set! j <| if k &&& 1 == 0 then ((w >>> probeBits) <<< probeBits) ||| v
+    else (w &&& probeMask) ||| (v <<< probeBits)
+
+/-- Write `v` into the first empty slot at or after `k`.  `fuel` is the slot
+count, which strictly exceeds the number of occupied slots, so the scan always
+finds one and never runs out. -/
+private def place (probe : Array Nat) (k mask v : Nat) : Nat → Array Nat
+  | 0 => probe
+  | fuel + 1 =>
+    if slotAt probe k == 0 then setSlotAt probe k v
+    else place probe ((k + 1) &&& mask) mask v fuel
+
+/-- The arena ID `a` was interned under, if it was. -/
+@[specialize] def find? [BEq α] [Hashable α] [Inhabited α] (t : Interner α) (a : α) :
+    Option Nat :=
+  let slots := t.probe.size * 2
+  go ((hash a).toUInt32.toNat &&& (slots - 1)) (slots - 1) slots
+where
+  go (k mask : Nat) : Nat → Option Nat
+    | 0 => none
+    | fuel + 1 =>
+      let s := slotAt t.probe k
+      if s == 0 then none
+      else if t.keys[s - 1]! == a then some (t.base + (s - 1))
+      else go ((k + 1) &&& mask) mask fuel
+
+/-- Rebuild the probe table at twice the slot count once it passes the standard
+3/4 load factor.  The table is derived from [`keys`], so it is rebuilt rather
+than copied and the old one is released first: the two are never live at once,
+which is what keeps the rehash from being the run's peak. -/
+@[specialize] private def grow [Hashable α] [Inhabited α] (t : Interner α) : Interner α :=
+  if (t.keys.size + 1) * 4 ≤ t.probe.size * 2 * 3 then t else
+  match t with
+  | { base, keys, probe } =>
+    let slots := probe.size * 4
+    let words := probe.size * 2
+    let fresh := Array.replicate words 0
+    let mask := slots - 1
+    let probe := Id.run do
+      let mut probe := fresh
+      for i in [0 : keys.size] do
+        probe := place probe ((hash keys[i]!).toUInt32.toNat &&& mask) mask (i + 1) slots
+      return probe
+    { base, keys, probe }
+
+/-- Intern `a` under the next arena ID and return that ID.  `a` must be absent:
+the writer only ever calls this after [`find?`] has missed. -/
+@[specialize] def insert [BEq α] [Hashable α] [Inhabited α] (t : Interner α) (a : α) :
+    Interner α × Nat :=
+  match t.grow with
+  | { base, keys, probe } =>
+    let id := base + keys.size
+    if keys.size + 1 ≥ probeLimit then
+      panic! "arena interning table exhausted: more than 2^31 - 1 nodes"
+    else
+      let slots := probe.size * 2
+      let mask := slots - 1
+      let probe := place probe ((hash a).toUInt32.toNat &&& mask) mask (keys.size + 1) slots
+      ({ base, keys := keys.push a, probe }, id)
+
+end Interner
+
 structure Writer where
   /-- The lines of the record being written. Drained by [`Export.stream`] after
   each record — do not accumulate a file here. -/
   out : Array String := #[]
-  names : Std.HashMap Name Nat := Std.HashMap.emptyWithCapacity 1024 |>.insert .anonymous 0
-  levels : Std.HashMap Level Nat := Std.HashMap.emptyWithCapacity 64 |>.insert .zero 0
-  exprs : Std.HashMap Expr Nat := Std.HashMap.emptyWithCapacity 4096
-  /-- The next arena IDs.  They are counters rather than table sizes so a
-  fresh island-local writer can continue after an earlier island while
-  deliberately forgetting its structural interning tables. -/
-  nextName : Nat := 1
-  nextLevel : Nat := 1
-  nextExpr : Nat := 0
+  /-- Interned names.  The format's distinguished anonymous name is *not* in
+  here: [`Writer.name`] answers `0` for it directly, which is what keeps the
+  table's IDs contiguous from [`Interner.base`]. -/
+  names : Interner Name := Interner.empty 1 1024
+  /-- Interned levels.  As with [`names`], the distinguished zero level is
+  answered directly rather than interned. -/
+  levels : Interner Level := Interner.empty 1 64
+  exprs : Interner Expr := Interner.empty 0 4096
   deriving Inhabited
 
 namespace Writer
@@ -57,40 +203,69 @@ Only the format's distinguished anonymous name and zero level remain shared
 at index zero.  Equal nontrivial nodes written by another island are therefore
 allowed to receive fresh IDs. -/
 def fromCursor (cursor : Cursor) : Writer :=
-  { nextName := cursor.nextName, nextLevel := cursor.nextLevel,
-    nextExpr := cursor.nextExpr }
+  { names := Interner.empty cursor.nextName 1024,
+    levels := Interner.empty cursor.nextLevel 64,
+    exprs := Interner.empty cursor.nextExpr 4096 }
 
+/-- The next arena IDs.  They are the interning tables' own dense extents,
+so a fresh island-local writer continues after an earlier island simply by
+starting its tables at the cursor. -/
 def cursor (w : Writer) : Cursor :=
-  { nextName := w.nextName, nextLevel := w.nextLevel, nextExpr := w.nextExpr }
+  { nextName := w.names.next, nextLevel := w.levels.next, nextExpr := w.exprs.next }
 
 private def esc (s : String) : String := (Json.str s).compress
 
-private def push (w : Writer) (line : String) : Writer := { w with out := w.out.push line }
+/-! The four writer updates below all rebuild the record from its destructured
+fields rather than using `{ w with … }`.  That is deliberate and load-bearing:
+`{ w with f := g w.f }` leaves `w` holding a sibling reference to the field
+while `g` runs, which sends every array push and every table insertion down a
+copy-on-write path. -/
+
+private def push (w : Writer) (line : String) : Writer :=
+  match w with
+  | { out, names, levels, exprs } => { out := out.push line, names, levels, exprs }
+
+@[inline] private def internName (w : Writer) (n : Name) : Writer × Nat :=
+  match w with
+  | { out, names, levels, exprs } =>
+    let (names, i) := names.insert n
+    ({ out, names, levels, exprs }, i)
+
+@[inline] private def internLevel (w : Writer) (l : Level) : Writer × Nat :=
+  match w with
+  | { out, names, levels, exprs } =>
+    let (levels, i) := levels.insert l
+    ({ out, names, levels, exprs }, i)
+
+@[inline] private def internExpr (w : Writer) (e : Expr) : Writer × Nat :=
+  match w with
+  | { out, names, levels, exprs } =>
+    let (exprs, i) := exprs.insert e
+    ({ out, names, levels, exprs }, i)
 
 partial def name (w : Writer) (n : Name) : Writer × Nat :=
-  match w.names[n]? with
+  match w.names.find? n with
   | some i => (w, i)
   | none =>
     match n with
-    | .anonymous => (w, 0)
+    | .anonymous => (w, 0)  -- distinguished, never interned
     | .str p s =>
       let (w, pi) := w.name p
-      let i := w.nextName
-      let w := (w.push s!"\{\"in\":{i},\"str\":\{\"pre\":{pi},\"str\":{esc s}}}")
-      ({ w with names := w.names.insert n i, nextName := i + 1 }, i)
+      let (w, i) := w.internName n
+      (w.push s!"\{\"in\":{i},\"str\":\{\"pre\":{pi},\"str\":{esc s}}}", i)
     | .num p k =>
       let (w, pi) := w.name p
-      let i := w.nextName
-      let w := (w.push s!"\{\"in\":{i},\"num\":\{\"i\":{k},\"pre\":{pi}}}")
-      ({ w with names := w.names.insert n i, nextName := i + 1 }, i)
+      let (w, i) := w.internName n
+      (w.push s!"\{\"in\":{i},\"num\":\{\"i\":{k},\"pre\":{pi}}}", i)
 
 partial def level (w : Writer) (l : Level) : Writer × Nat :=
-  match w.levels[l]? with
+  if l matches .zero then (w, 0) else  -- distinguished, never interned
+  match w.levels.find? l with
   | some i => (w, i)
   | none =>
     let (w, body) :=
       match l with
-      | .zero => (w, "")  -- unreachable: seeded at 0
+      | .zero => (w, "")  -- unreachable: answered above
       | .succ a => let (w, ai) := w.level a; (w, s!"\"succ\":{ai}")
       | .param p => let (w, pi) := w.name p; (w, s!"\"param\":{pi}")
       | .max a b =>
@@ -102,9 +277,8 @@ partial def level (w : Writer) (l : Level) : Writer × Nat :=
         let (w, bi) := w.level b
         (w, s!"\"imax\":[{ai},{bi}]")
       | .mvar _ => (w, "\"param\":0")  -- cannot occur in an export
-    let i := w.nextLevel
-    let w := w.push s!"\{\"il\":{i},{body}}"
-    ({ w with levels := w.levels.insert l i, nextLevel := i + 1 }, i)
+    let (w, i) := w.internLevel l
+    (w.push s!"\{\"il\":{i},{body}}", i)
 
 private def levelsJ (w : Writer) (ls : List Level) : Writer × String :=
   let (w, idxs) := ls.foldl (fun (w, acc) l => let (w, i) := w.level l; (w, acc.push i)) (w, #[])
@@ -121,7 +295,7 @@ private def binderStr : BinderInfo → String
   | .instImplicit => "instImplicit"
 
 partial def expr (w : Writer) (e : Expr) : Writer × Nat :=
-  match w.exprs[e]? with
+  match w.exprs.find? e with
   | some i => (w, i)
   | none =>
     if let .mdata _ b := e then w.expr b else
@@ -160,9 +334,8 @@ partial def expr (w : Writer) (e : Expr) : Writer × Nat :=
       | .lit (.natVal k) => (w, s!"\"natVal\":\"{k}\"")
       | .lit (.strVal s) => (w, s!"\"strVal\":{esc s}")
       | _ => (w, "\"bvar\":0")  -- mdata/fvar/mvar cannot occur in an export
-    let i := w.nextExpr
-    let w := w.push s!"\{\"ie\":{i},{body}}"
-    ({ w with exprs := w.exprs.insert e i, nextExpr := i + 1 }, i)
+    let (w, i) := w.internExpr e
+    (w.push s!"\{\"ie\":{i},{body}}", i)
 
 private def hintsJ : EHints → String
   | .abbrev => "\"abbrev\""
@@ -270,17 +443,17 @@ separate.  The returned writer retains only this island's interning maps, but
 its line buffer is empty and ready for the next declaration in the island. -/
 def splitDecl (w : Writer) (d : EDecl) : Writer × DeclSplit :=
   match w with
-  | { names, levels, exprs, nextName, nextLevel, nextExpr, .. } =>
-    let before := { nextName, nextLevel, nextExpr : Cursor }
-    let completed :=
-      ({ out := #[], names, levels, exprs, nextName, nextLevel, nextExpr } : Writer).decl d
+  | { names, levels, exprs, .. } =>
+    let before :=
+      { nextName := names.next, nextLevel := levels.next, nextExpr := exprs.next : Cursor }
+    let completed := ({ out := #[], names, levels, exprs } : Writer).decl d
     match completed with
-    | { out, names, levels, exprs, nextName, nextLevel, nextExpr } =>
+    | { out, names, levels, exprs } =>
       let declaration := out.back!
       let arena := out.pop
-      let after := { nextName, nextLevel, nextExpr : Cursor }
-      ({ out := #[], names, levels, exprs, nextName, nextLevel, nextExpr },
-        { before, arena, declaration, after })
+      let after :=
+        { nextName := names.next, nextLevel := levels.next, nextExpr := exprs.next : Cursor }
+      ({ out := #[], names, levels, exprs }, { before, arena, declaration, after })
 
 end Writer
 
@@ -332,10 +505,9 @@ def writeDeclaration (state : DeclarationStreamWriter) (h : IO.FS.Stream)
   -- alive across `Writer.decl` would retain a sibling reference to its maps
   -- and could force every declaration insertion down a copy-on-write path.
   let { writer, buffer, bufferedBytes, declarationsWritten, maxRecordLines } := state
-  let { out := lines, names, levels, exprs, nextName, nextLevel, nextExpr } :=
-    writer.decl declaration
+  let { out := lines, names, levels, exprs } := writer.decl declaration
   let state : DeclarationStreamWriter := {
-    writer := { out := #[], names, levels, exprs, nextName, nextLevel, nextExpr }
+    writer := { out := #[], names, levels, exprs }
     buffer, bufferedBytes, declarationsWritten, maxRecordLines }
   let nextState ← state.emitLines h lines
   let nextState := { nextState with
