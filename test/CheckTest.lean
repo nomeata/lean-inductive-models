@@ -464,18 +464,36 @@ def propertyGlobalExtraRecords (seed : Nat) : Array GlobalExtraRecord :=
 /-- A retained source-index shape for ownership profiling.  The declarations
 are deliberately irrelevant to the checked family: they enlarge only the
 source tables which `prependRecords` must share with each disposable island
-overlay.  Keeping the size and repetition count here makes the semantic test
-below a useful `perf stat -e instructions` regression fixture as well. -/
+overlay. -/
 def overlayOwnershipSource (x : Export) (size : Nat := 4096) : Export :=
   { x with decls := x.decls ++ ((Array.range size).map fun i =>
       EDecl.ax ((`_check.overlayOwnership).mkNum i) [] (.sort .zero) false) }
 
-/-- Run only the retained-source overlay fixture at a scale where
-`perf stat -e instructions` can distinguish path copying from a whole-table
-copy.  This remains a semantic test: every disposable overlay must produce the
-same exact local report while the shared source index survives. -/
+/-- One island for chained round `round`: `count` declarations whose names
+cannot collide with the fixture, with the model island, or with any other
+round, so `prependRecords` cannot reject the repeat. -/
+def overlayChainIsland (round count : Nat) : Array EDecl :=
+  (Array.range count).map fun i =>
+    EDecl.ax (((`_check.overlayChain).mkNum round).mkNum i) [] (.sort .zero) false
+
+/-- Chain `repetitions` island overlays onto one retained source index: every
+prepend sees the record prefix its predecessors accumulated, which is the only
+way to reach the accumulating side of `SyntaxIndex.prependRecords`.  Repeating
+the same prepend from the same base index instead — as this probe used to do —
+leaves the prefix empty on every call and measures nothing but path copying of
+the already-persistent source tables, so it cannot see a regression in the
+overlay path itself.
+
+The assertions stay structural rather than timing-based: the first island's
+local family report must equal the whole-export reference report, every chained
+island must be accepted and still be declared by the accumulated index, and the
+first island's report must survive the whole chain unchanged.  Wall time and
+`perf stat -e instructions` over the run remain the profiling signal, now over
+a chain whose cost is linear in `repetitions` only if the overlay path is: the
+chain is long enough that a per-prepend rescan of the accumulated prefix shows
+up as super-linear growth when `repetitions` is doubled. -/
 def runOverlayOwnershipProbe (root : String) (size := 32768)
-    (repetitions := 256) : IO UInt32 := do
+    (repetitions := 4096) : IO UInt32 := do
   let path := s!"{root}/test/fixtures/inductive-models/nested_iota_arm.ndjson"
   let text ← IO.FS.readFile path
   let .ok raw := InductiveModels.parse text
@@ -496,23 +514,662 @@ def runOverlayOwnershipProbe (root : String) (size := 32768)
   let expected := checkStatementFamiliesLocalWithIndex raw reference
     (referenceSource.sourceStatementFamilies owner)
   let semantic := checkStatementFamiliesLocalWithIndex raw first families == expected
-  let overlaysAccepted := (Array.range repetitions).all fun _ =>
-    match source.prependRecords models with
-    | .error _ => false
-    | .ok _ => true
-  if semantic && overlaysAccepted then
-    IO.println s!"overlay-ownership-probe: {size} source rows, {repetitions} overlays passed"
+  let mut chained := first
+  let mut chainAccepted := true
+  for round in [0:repetitions] do
+    match chained.prependRecords (overlayChainIsland round models.size) with
+    | .error _ => chainAccepted := false
+    | .ok next => chained := next
+  let chainDeclared := (Array.range repetitions).all fun round =>
+    (overlayChainIsland round models.size).all fun declaration =>
+      declaration.names.all chained.declares
+  let chainSemantic :=
+    checkStatementFamiliesLocalWithIndex raw chained families == expected
+  if semantic && chainAccepted && chainDeclared && chainSemantic then
+    IO.println
+      s!"overlay-ownership-probe: {size} source rows, {repetitions} chained overlays passed"
     return 0
   else
     IO.eprintln "overlay-ownership-probe: report mismatch"
     return 1
 
--- One `do` block of several hundred checks, elaborated as a single declaration,
--- so the heartbeat budget is shared by all of them. Lean 4.29.1 fitted inside
--- the default 200000; 4.33.0 does not fit inside 1000000, timing out in
--- `isDefEq`. The budget is removed rather than raised because no finite value
--- here is more than a guess at the next toolchain's cost.
-set_option maxHeartbeats 0 in
+/-! ## The checks
+
+The checks are grouped by the invariant they exercise, one `def` per group,
+each threading the same `TestState` and returning `none` once a fixture
+precondition fails so `run` can stop exactly where the single block used to.
+
+They are separate declarations because Lean's `do` elaborator is superlinear in
+block length: as one several-hundred-statement block these checks needed
+`maxHeartbeats 0` and minutes of elaboration, while the same statements in
+short blocks elaborate in seconds. -/
+
+def checkDiscovery (valid : Export) (families : Array Family)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  state ← state.check "indexed family discovery equals the former implementation" <|
+    families == referenceDiscover valid
+  state ← state.check "indexed discovery preserves randomized adversarial families" <|
+    (Array.range 128).all fun seed =>
+      let candidate := propertyDiscoveryExport valid seed
+      let index := SyntaxIndex.ofSource candidate
+      discoverWithIndex candidate index == referenceDiscover candidate &&
+        discover candidate == referenceDiscover candidate
+  return some state
+
+def checkGlobalExtraRecords (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let interleavedAProjection := Naming.projectionName `Interleave.A 3
+  let interleavedBProjection := Naming.projectionName `Interleave.B 7
+  let interleavedGlobal : Array GlobalExtraRecord := #[
+    { names := #[`Interleave.A]
+      templates := #[.type `Interleave.A #[] true true] },
+    { names := #[interleavedBProjection], templates := #[] },
+    { names := #[`Interleave.B]
+      templates := #[.type `Interleave.B #[] true true] },
+    { names := #[interleavedAProjection], templates := #[] }]
+  state ← state.check "bound global-extra records preserve interleaved owner order" <|
+    globalExtrasFromRecords interleavedGlobal == #[
+      .extraProjection `Interleave.A interleavedAProjection,
+      .extraProjection `Interleave.B interleavedBProjection]
+  let duplicateProjection := Naming.projectionName `Interleave.A 9
+  let duplicateMetadata := Naming.unitlikeName `Interleave.A
+  let duplicateGlobal : Array GlobalExtraRecord := #[
+    { names := #[duplicateProjection, duplicateMetadata, duplicateProjection]
+      templates := #[] },
+    { names := #[Naming.projectionIotaName `Interleave.A 9]
+      templates := #[.type `Interleave.A #[] false true,
+        .type `Interleave.A #[9] false false] }]
+  state ← state.check "global-extra index preserves duplicate names and templates" <|
+    globalExtrasFromRecords duplicateGlobal ==
+      referenceGlobalExtrasFromRecords duplicateGlobal
+  state ← state.check "linear global extras equal the quadratic specification" <|
+    (Array.range 128).all fun seed =>
+      let records := propertyGlobalExtraRecords seed
+      globalExtrasFromRecords records == referenceGlobalExtrasFromRecords records
+  let onlyB := ({} : Std.HashSet Name).insert `Interleave.B
+  let lateFiltered := (globalExtrasFromRecords interleavedGlobal).filter fun violation =>
+    onlyB.contains violation.familyOwner
+  state ← state.check "owner-filtered global extras equal the historical late filter" <|
+    globalExtrasFromRecordsFor interleavedGlobal onlyB == lateFiltered &&
+      lateFiltered == #[.extraProjection `Interleave.B interleavedBProjection]
+  state ← state.check "empty owner selection skips every global-extra template" <|
+    (globalExtrasFromRecordsFor interleavedGlobal {}).isEmpty
+  return some state
+
+def checkFamilyIdentity (owner modelRoot carrier helper : Name)
+    (table : Correspondence) (models : Array EDecl) (validOwnerDecl : Nat)
+    (families : Array Family) (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  state ← state.check "one public family discovered" (families.size == 1)
+  if let some family := families[0]? then
+    state ← state.check "family key" <|
+      family.owner == owner && family.modelRoot == modelRoot &&
+        family.carrier == carrier && family.ownerDecl == validOwnerDecl &&
+        family.correspondence == table
+    state ← state.check "only exact public records establish the family" <|
+      family.decls.size + 1 == models.size &&
+        !family.names.contains helper && family.names.contains carrier
+  else
+    state ← state.check "family key" false
+    state ← state.check "only exact public records establish the family" false
+  return some state
+
+def checkValidReport (valid : Export) (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  state ← state.check "valid ordering and independence" (check valid).isEmpty
+  state ← state.check "compact ordered report equals the valid full checker" <|
+    compactMatches valid
+  return some state
+
+def checkCompactCertificates (owner : Name) (valid : Export)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let compactIndex := SyntaxIndex.ofSource valid
+  let compactFamilyRows := compactFamilyCertificateRecordsWithIndex
+    valid compactIndex (discover valid)
+  let compactRows := (globalExtraRecordsWithIndex compactIndex valid.decls).mapIdx
+    fun i globalExtra =>
+      { owner := match valid.decls[i]! with
+          | .induct (type :: _) _ _ => some type.name
+          | _ => none
+        globalExtra, families := compactFamilyRows[i]! : CompactCheckRecord }
+  let some ownerRow := compactRows.findIdx? (fun row => row.owner == some owner) | do
+    IO.eprintln "checktest: compact owner row missing"
+    return none
+  let ownerCertificate := compactRows[ownerRow]!.families[0]!
+  let compactRows := compactRows.set! ownerRow
+    { compactRows[ownerRow]! with modelSlots := ownerCertificate.publicNames }
+  state ← state.check "duplicate compact family certificates fail closed" <|
+    compactRejected <| compactOrderedReport (compactRows.set! ownerRow
+      { compactRows[ownerRow]! with families := #[ownerCertificate, ownerCertificate] })
+  state ← state.check "misbound compact family certificates fail closed" <|
+    compactRejected <| compactOrderedReport (compactRows.set! ownerRow
+      { compactRows[ownerRow]! with owner := some `Wrong.Owner })
+  state ← state.check "missing active compact family certificates fail closed" <|
+    compactRejected <| compactOrderedReport (compactRows.set! ownerRow
+      { compactRows[ownerRow]! with families := #[] })
+  return some state
+
+def checkIndexedStatementViews (owner : Name) (valid : Export)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  state ← state.check "indexed one-family statements equal the aggregate checker" <|
+    indexedFamilyStatements? valid owner == some (checkStatements valid)
+  let treeOwners := ({} : Std.HashSet Name).insert owner
+  state ← state.check "indexed nested generated view equals aggregate selection" <|
+    indexedFamilyUnionFor valid treeOwners == checkStatementsFor valid treeOwners
+  state ← state.check "compact nested generated view equals aggregate selection" <|
+    compactIndexedStatementsFor valid treeOwners == checkStatementsFor valid treeOwners
+  let invalidProjection := Naming.projectionName owner 99
+  let duplicateInvalidProjection := insertBeforeOwner
+    (insertBeforeOwner valid owner (.ax invalidProjection [] (.sort .zero) false))
+    owner (.ax invalidProjection [] (.sort .zero) false)
+  state ← state.check "compact projection extras retain duplicate order and multiplicity" <|
+    compactIndexedStatementsFor duplicateInvalidProjection treeOwners ==
+      checkStatementsFor duplicateInvalidProjection treeOwners
+  state ← state.check "compact ordered report rejects duplicate declaration names" <|
+    compactRejected (compactOrderedCheckReport duplicateInvalidProjection)
+  return some state
+
+def checkIslandOverlays (owner : Name) (raw valid : Export) (models : Array EDecl)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let treeOwners := ({} : Std.HashSet Name).insert owner
+  let sourceIndex := SyntaxIndex.ofSource raw
+  let .ok overlaidIndex := sourceIndex.prependRecords models | do
+    IO.eprintln "checktest: valid island overlay was rejected"
+    return none
+  let overlaidFamilies := sourceIndex.sourceStatementFamilies owner
+  let combinedView := { raw with decls := models ++ raw.decls }
+  state ← state.check "island overlay exposes generated family occurrences" <|
+    discoverWithIndex combinedView overlaidIndex == discover combinedView
+  state ← state.check "persistent source index plus island overlay equals whole-export indexing" <|
+    checkStatementFamiliesLocalWithIndex raw overlaidIndex overlaidFamilies ==
+      checkStatementFamiliesLocalWithIndex valid (.ofExport valid)
+        (statementFamiliesFor valid treeOwners)
+  let retainedIndex := SyntaxIndex.ofSourceIncremental (overlayOwnershipSource raw)
+  let retainedFamilies := retainedIndex.sourceStatementFamilies owner
+  let expectedRetainedReport :=
+    checkStatementFamiliesLocalWithIndex raw overlaidIndex overlaidFamilies
+  state ← state.check "repeated overlays preserve a retained large source index" <|
+    (Array.range 32).all fun _ =>
+      match retainedIndex.prependRecords models with
+      | .error _ => false
+      | .ok overlay =>
+        checkStatementFamiliesLocalWithIndex raw overlay retainedFamilies ==
+          expectedRetainedReport
+  let duplicateIsland := models.push models[0]!
+  state ← state.check "island overlay rejects duplicate declaration names" <|
+    match sourceIndex.prependRecords duplicateIsland with
+    | .error _ => true
+    | .ok _ => false
+  return some state
+
+def checkModelSafety (owner carrier : Name) (valid : Export) (validOwnerDecl : Nat)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  state ← state.check "unsafe owner may have an independently safe model" <|
+    (check (withUnsafeOwner valid validOwnerDecl)).isEmpty
+  let unsafeModel := withDefinitionSafety valid carrier "unsafe"
+  state ← state.check "indexed family preserves corrupted statement diagnostics" <|
+    indexedFamilyStatements? unsafeModel owner == some (checkStatements unsafeModel)
+  state ← state.check "unsafe model implementation is rejected" <|
+    (check unsafeModel).any
+      (isSafetyMismatch owner carrier "unsafe")
+  state ← state.check "compact ordered report retains local interface failures" <|
+    compactMatches unsafeModel
+  state ← state.check "partial model implementation is rejected" <|
+    (check (withDefinitionSafety valid carrier "partial")).any
+      (isSafetyMismatch owner carrier "partial")
+  state ← state.check "axiom model implementation is rejected" <|
+    (check (withImplementationAxiom valid carrier)).any
+      (isKindMismatch owner carrier .defn .axiom)
+  return some state
+
+def checkEqUniverses (path : String) (raw : Export)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let eqOwner := `Eq
+  let some rawEqDecl := ownerIndex? raw eqOwner | do
+    IO.eprintln s!"checktest: {path} does not declare {eqOwner}"
+    return none
+  let some eqTable := correspondenceAt? raw rawEqDecl | do
+    IO.eprintln s!"checktest: no correspondence table for {eqOwner}"
+    return none
+  let eqModels := modelDeclarations raw eqTable `Eq._model.helper
+  let validEq := withValidModel raw rawEqDecl eqModels
+  state ← state.check "universe parameters align positionally" <|
+    (discover validEq).any (·.owner == eqOwner) &&
+      (check validEq).all (·.familyOwner != eqOwner)
+  state ← state.check "modeling Eq retains ambient equality" <|
+    eqTable.iotas[0]?.bind (fun rule =>
+      exportDeclarationType? validEq rule.name |>.map fun (_, type) =>
+        match (forallBody type).getAppFn with
+        | .const name _ => name == ``Eq
+        | _ => false) |>.getD false
+  return some state
+
+def checkCarrierOrder (owner carrier : Name) (raw : Export) (rawOwnerDecl : Nat)
+    (models : Array EDecl) (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let late := withLateCarrier raw rawOwnerDecl models carrier
+  let lateViolations := check late
+  state ← state.check "carrier after owner is rejected" <|
+    lateViolations.any (isLateCarrier owner carrier)
+  return some state
+
+def checkOwnerBackreferences (owner carrier : Name) (valid : Export)
+    (validOwnerDecl : Nat) (table : Correspondence) (families : Array Family)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let constantBackref := withOwnerType valid validOwnerDecl (.const carrier [])
+  state ← state.check "constant backreference is rejected" <|
+    (check constantBackref).any (isBackreference owner carrier)
+  state ← state.check "constant backreference survives a name-only owner certificate" <|
+    ownerBackreferenceFromCertificate?
+        (ownerReferenceCertificate constantBackref.decls[validOwnerDecl]!) families[0]!.names ==
+      some (owner, carrier)
+  state ← state.check "compact report retains constant backreferences" <|
+    compactMatches constantBackref
+
+  -- `Expr.getUsedConstants` does not include this name: it lives in the
+  -- projection node's `typeName` field, so this pins the checker's explicit
+  -- projection traversal.
+  let some firstCtor := table.constructors[0]? | do
+    IO.eprintln "checktest: Tree has no constructor correspondence"
+    return none
+  let projectionBackref :=
+    withOwnerType valid validOwnerDecl (.proj firstCtor.model 0 (.bvar 0))
+  state ← state.check "projection type-name public backreference is rejected" <|
+    (check projectionBackref).any (isBackreference owner firstCtor.model)
+  state ← state.check "projection backreference survives a name-only owner certificate" <|
+    ownerBackreferenceFromCertificate?
+        (ownerReferenceCertificate projectionBackref.decls[validOwnerDecl]!)
+        families[0]!.names == some (owner, firstCtor.model)
+  state ← state.check "compact report retains projection type-name backreferences" <|
+    compactMatches projectionBackref
+  return some state
+
+def checkMissingSlots (owner carrier : Name) (valid : Export) (table : Correspondence)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let some firstCtor := table.constructors[0]? | do
+    IO.eprintln "checktest: Tree has no constructor correspondence"
+    return none
+  let missingCtor := withoutDeclaration valid firstCtor.model
+  state ← state.check "missing constructor slot is rejected" <|
+    (check missingCtor).any (isMissing firstCtor.owner firstCtor.model)
+  state ← state.check "compact ordered report retains missing slots" <|
+    compactMatches missingCtor
+
+  -- Constructor slots still claim the family when the carrier is missing,
+  -- so exactness cannot disappear with the declaration it must diagnose.
+  let missingCarrier := withoutDeclaration valid carrier
+  state ← state.check "missing carrier slot is rejected" <|
+    (check missingCarrier).any (isMissing owner carrier)
+  return some state
+
+def checkRecursorSlots (owner : Name) (valid : Export) (table : Correspondence)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let some firstRec := table.recursors[0]? | do
+    IO.eprintln "checktest: Tree has no recursor correspondence"
+    return none
+  let some secondRec := table.recursors[1]? | do
+    IO.eprintln "checktest: Tree has no second recursor correspondence"
+    return none
+  state ← state.check "missing recursor is rejected" <|
+    (check (withoutDeclaration valid firstRec.model)).any
+      (isMissing firstRec.owner firstRec.model)
+  let some firstRecDecl := exportDeclaration? valid firstRec.model | do
+    IO.eprintln "checktest: modeled recursor declaration missing"
+    return none
+  let duplicateRec := insertBeforeOwner valid owner firstRecDecl
+  state ← state.check "extra recursor occurrence is rejected" <|
+    (check duplicateRec).any (isDuplicate firstRec.owner firstRec.model)
+  state ← state.check "compact ordered report rejects duplicate public slots" <|
+    compactRejected (compactOrderedCheckReport duplicateRec)
+  let some (_, firstRecType) := exportDeclarationType? valid firstRec.model | do
+    IO.eprintln "checktest: modeled recursor type missing"
+    return none
+  let some (_, secondRecType) := exportDeclarationType? valid secondRec.model | do
+    IO.eprintln "checktest: second modeled recursor type missing"
+    return none
+  let swappedRecs := withDeclarationType
+    (withDeclarationType valid firstRec.model secondRecType) secondRec.model firstRecType
+  state ← state.check "swapped recursors are rejected" <|
+    (check swappedRecs).any (isTypeMismatch firstRec.owner firstRec.model) &&
+      (check swappedRecs).any (isTypeMismatch secondRec.owner secondRec.model)
+  let defeqRecType :=
+    .letE `recType (.sort (.succ (.succ .zero))) firstRecType (.bvar 0) false
+  state ← state.check "definitionally equal recursor syntax is rejected" <|
+    (check (withDeclarationType valid firstRec.model defeqRecType)).any
+      (isTypeMismatch firstRec.owner firstRec.model)
+  return some state
+
+def checkIotaSlots (owner : Name) (valid : Export) (table : Correspondence)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let some firstRec := table.recursors[0]? | do
+    IO.eprintln "checktest: Tree has no recursor correspondence"
+    return none
+  let firstRules := table.iotas.filter (·.recursor == firstRec.owner)
+  let some firstRule := firstRules[0]? | do
+    IO.eprintln "checktest: Tree recursor has no first rule"
+    return none
+  let some secondRule := firstRules[1]? | do
+    IO.eprintln "checktest: Tree recursor has no second rule"
+    return none
+  state ← state.check "missing iota theorem is rejected" <|
+    (check (withoutDeclaration valid firstRule.name)).any
+      (isMissing firstRule.recursor firstRule.name)
+  state ← state.check "non-theorem iota proof slot is rejected" <|
+    (check (withProofDefinition valid firstRule.name)).any
+      (isKindMismatch firstRule.recursor firstRule.name .thm .defn)
+  let some firstRuleDecl := exportDeclaration? valid firstRule.name | do
+    IO.eprintln "checktest: first iota declaration missing"
+    return none
+  state ← state.check "extra iota occurrence is rejected" <|
+    (check (insertBeforeOwner valid owner firstRuleDecl)).any
+      (isDuplicate firstRule.recursor firstRule.name)
+  let extraRuleName := Naming.iotaName firstRec.owner firstRules.size
+  let extraRule := insertBeforeOwner valid owner
+    (.ax extraRuleName [] (.sort .zero) false)
+  state ← state.check "out-of-range iota theorem is rejected" <|
+    (check extraRule).any (isExtraRule firstRec.owner extraRuleName)
+  state ← state.check "compact ordered report recomputes extra rules" <|
+    compactMatches extraRule
+  let some (_, firstRuleType) := exportDeclarationType? valid firstRule.name | do
+    IO.eprintln "checktest: first iota type missing"
+    return none
+  let some (_, secondRuleType) := exportDeclarationType? valid secondRule.name | do
+    IO.eprintln "checktest: second iota type missing"
+    return none
+  let swappedRules := withDeclarationType
+    (withDeclarationType valid firstRule.name secondRuleType) secondRule.name firstRuleType
+  state ← state.check "swapped iota statements are rejected" <|
+    (check swappedRules).any (isTypeMismatch firstRule.recursor firstRule.name) &&
+      (check swappedRules).any (isTypeMismatch secondRule.recursor secondRule.name)
+  let defeqRuleType := .letE `ruleType (.sort .zero) firstRuleType (.bvar 0) false
+  state ← state.check "definitionally equal iota syntax is rejected" <|
+    (check (withDeclarationType valid firstRule.name defeqRuleType)).any
+      (isTypeMismatch firstRule.recursor firstRule.name)
+  return some state
+
+def checkExactNames (root : String) (owner modelRoot : Name) (valid : Export)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let legacySlot := Name.str modelRoot "ctor_99"
+  let unrelatedLegacyName := insertBeforeOwner valid owner
+    (.ax legacySlot [] (.sort (.succ .zero)) false)
+  state ← state.check "legacy numbered name is not a public slot" <|
+    (discover unrelatedLegacyName).all fun family => !family.names.contains legacySlot
+
+  -- `IdxP.at_a` and `IdxP.at_b` have the same binder shape and differ only
+  -- in their result indices.  Exact declaration-local names must prevent a
+  -- type-shape heuristic from pairing them interchangeably.
+  let shapesPath := s!"{root}/test/fixtures/inductive-models/prim_shapes.ndjson"
+  let shapesText ← IO.FS.readFile shapesPath
+  match InductiveModels.parse shapesText with
+  | .error error =>
+      IO.eprintln s!"checktest: could not parse {shapesPath}: {error}"
+      state ← state.check "swapped equal-looking constructors" false
+  | .ok shapes =>
+    let idxOwner := `IdxP
+    match ownerIndex? shapes idxOwner with
+    | none => state ← state.check "swapped equal-looking constructors" false
+    | some idxOwnerDecl =>
+      match correspondenceAt? shapes idxOwnerDecl with
+      | none => state ← state.check "swapped equal-looking constructors" false
+      | some idxTable =>
+        let idxModels := modelDeclarations shapes idxTable `IdxP._model.helper
+        let idxValid := withValidModel shapes idxOwnerDecl idxModels
+        match idxTable.constructors[0]?, idxTable.constructors[1]? with
+        | some first, some second =>
+          match exportDeclarationType? idxValid first.model,
+              exportDeclarationType? idxValid second.model with
+          | some (_, firstType), some (_, secondType) =>
+            let swapped := withDeclarationType
+              (withDeclarationType idxValid first.model secondType) second.model firstType
+            state ← state.check "swapped equal-looking constructors" <|
+              (check swapped).any (isTypeMismatch first.owner first.model) &&
+                (check swapped).any (isTypeMismatch second.owner second.model)
+          | _, _ => state ← state.check "swapped equal-looking constructors" false
+        | _, _ => state ← state.check "swapped equal-looking constructors" false
+  return some state
+
+def checkRenamedOwners (owner carrier : Name) (raw valid : Export)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let some (_, carrierType) := exportDeclarationType? valid carrier | do
+    IO.eprintln s!"checktest: no declaration for {carrier}"
+    return none
+  -- `let x : Type 1 := carrierType; x` is definitionally equal to the
+  -- universe-free fixture's carrier type (`Type`) but not syntactically the
+  -- same exported expression.
+  let defeqCarrierType :=
+    .letE `x (.sort (.succ (.succ .zero))) carrierType (.bvar 0) false
+  let defeqCarrier := withDeclarationType valid carrier defeqCarrierType
+  state ← state.check "definitionally equal carrier syntax is rejected" <|
+    (check defeqCarrier).any (isTypeMismatch owner carrier)
+
+  let modelNamedOwner := `Tree._model
+  let modelNamedRaw := renameExportRoot raw owner modelNamedOwner
+  let some modelNamedOwnerDecl := ownerIndex? modelNamedRaw modelNamedOwner | do
+    IO.eprintln "checktest: renamed _model owner missing"
+    return none
+  let some modelNamedTable := correspondenceAt? modelNamedRaw modelNamedOwnerDecl | do
+    IO.eprintln "checktest: renamed _model correspondence missing"
+    return none
+  let modelNamedModels := modelDeclarations modelNamedRaw modelNamedTable
+    `Tree._model._model._impl.helper
+  let modelNamedValid := withValidModel modelNamedRaw modelNamedOwnerDecl modelNamedModels
+  state ← state.check "original _model component is preserved exactly" <|
+    modelNamedTable.typeFormers[0]?.map (·.model) == some `Tree._model._model &&
+      (discover modelNamedValid).any (·.owner == modelNamedOwner) &&
+      (check modelNamedValid).isEmpty
+  return some state
+
+def checkPrivateAliases (owner : Name) (raw : Export)
+    (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let privateOwner := (`_private.CheckTest).mkNum 0 |>.str "Tree"
+  let privateRaw := renameExportRoot raw owner privateOwner
+  let some privateOwnerDecl := ownerIndex? privateRaw privateOwner | do
+    IO.eprintln "checktest: private owner missing"
+    return none
+  let some privateTable := correspondenceAt? privateRaw privateOwnerDecl | do
+    IO.eprintln "checktest: private correspondence missing"
+    return none
+  let privateModels := modelDeclarations privateRaw privateTable
+    (Name.str (Naming.modelName privateOwner) "_impl")
+  let privateValid := withValidModel privateRaw privateOwnerDecl privateModels
+  state ← state.check "private originals retain raw correspondence names" <|
+    privateTable.typeFormers[0]?.map (·.model) == some (Naming.modelName privateOwner) &&
+      (discover privateValid).any (·.owner == privateOwner) &&
+      (check privateValid).isEmpty
+  let privateOwners := ({} : Std.HashSet Name).insert privateOwner
+  state ← state.check "indexed private-alias family equals aggregate selection" <|
+    indexedFamilyUnionFor privateValid privateOwners ==
+      checkStatementsFor privateValid privateOwners
+  state ← state.check "compact private-alias family equals aggregate selection" <|
+    compactIndexedStatementsFor privateValid privateOwners ==
+      checkStatementsFor privateValid privateOwners
+  let privateSourceIndex := SyntaxIndex.ofSource privateRaw
+  let .ok privateOverlay := privateSourceIndex.prependRecords privateModels | do
+    IO.eprintln "checktest: private-alias island overlay was rejected"
+    return none
+  state ← state.check "private-alias island overlay equals whole-export indexing" <|
+    checkStatementFamiliesLocalWithIndex privateRaw privateOverlay
+        (privateSourceIndex.sourceStatementFamilies privateOwner) ==
+      checkStatementFamiliesLocalWithIndex privateValid (.ofExport privateValid)
+        (statementFamiliesFor privateValid privateOwners)
+  return some state
+
+def checkMutualMembers (root : String) (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let mutualPath := s!"{root}/test/fixtures/inductive-models/mutual_shapes.ndjson"
+  let mutualText ← IO.FS.readFile mutualPath
+  match InductiveModels.parse mutualText with
+  | .error error =>
+      IO.eprintln s!"checktest: could not parse {mutualPath}: {error}"
+      state ← state.check "valid exact mutual family" false
+  | .ok mutualExport =>
+    let some mutualOwnerDecl := ownerIndex? mutualExport `A | do
+      IO.eprintln "checktest: mutual owner missing"
+      return none
+    let some mutualTable := correspondenceAt? mutualExport mutualOwnerDecl | do
+      IO.eprintln "checktest: mutual correspondence missing"
+      return none
+    let mutualModels := modelDeclarations mutualExport mutualTable `A._model._impl.helper
+    let mutualValid := withValidModel mutualExport mutualOwnerDecl mutualModels
+    let mutualViolations := check mutualValid
+    let bProjection := Naming.projectionName `B 0
+    let bProjectionIota := Naming.projectionIotaName `B 0
+    let mutualNonProjectionViolations := mutualViolations.filter fun violation =>
+      match violation with
+      | .missingPublic `B declaration =>
+        declaration != bProjection && declaration != bProjectionIota
+      | _ => true
+    state ← state.check "mutual correspondence is declaration-local" <|
+      mutualTable.typeFormers.any (fun pair =>
+        pair.owner == `B && pair.model == Naming.modelName `B) &&
+      mutualTable.constructors.any (fun pair =>
+        pair.owner == `B.bC && pair.model == Naming.modelName `B.bC) &&
+      mutualTable.recursors.any (fun pair =>
+        pair.owner == `C.rec && pair.model == Naming.modelName `C.rec) &&
+      mutualTable.iotas.any (fun rule =>
+        rule.recursor == `C.rec && rule.ruleIndex == 2 &&
+          rule.name == Naming.iotaName `C.rec 2)
+    state ← state.check "valid exact mutual non-projection family" <|
+      (discover mutualValid).any (fun family =>
+        family.owner == `A && family.correspondence == mutualTable) &&
+      mutualNonProjectionViolations.isEmpty
+    let generatedMutualOwners := ({} : Std.HashSet Name).insert `A
+    let mutualStatements := checkStatementsFor mutualValid generatedMutualOwners
+    state ← state.check "mutual statement count uses the complete root family" <|
+      mutualStatements.statementsChecked == mutualTable.statementCount
+    state ← state.check "indexed mutual/member diagnostics equal aggregate selection" <|
+      indexedFamilyUnionFor mutualValid generatedMutualOwners == mutualStatements
+    state ← state.check "compact mutual/member diagnostics equal aggregate selection" <|
+      compactIndexedStatementsFor mutualValid generatedMutualOwners == mutualStatements
+    let mutualPublicNames := mutualTable.publicNames
+    let missingMutualInterface : Export := { mutualValid with
+      decls := mutualValid.decls.filter fun declaration =>
+        !declaration.names.any mutualPublicNames.contains }
+    let missingMutualStatements :=
+      checkStatementsFor missingMutualInterface generatedMutualOwners
+    state ← state.check "a generated family cannot disappear from discovery" <|
+      missingMutualStatements.statementsChecked == mutualTable.statementCount &&
+        missingMutualStatements.violations.any
+          (isMissing `A (Naming.modelName `A))
+    state ← state.check "indexed missing whole family equals aggregate selection" <|
+      indexedFamilyUnionFor missingMutualInterface generatedMutualOwners ==
+        missingMutualStatements
+    state ← state.check "compact missing whole family equals aggregate selection" <|
+      compactIndexedStatementsFor missingMutualInterface generatedMutualOwners ==
+        missingMutualStatements
+    let some bCtor := mutualTable.constructors.find? (·.owner == `B.bC) | do
+      IO.eprintln "checktest: B.bC correspondence missing"
+      return none
+    state ← state.check "mutual diagnostic belongs to exact constructor" <|
+      (check (withoutDeclaration mutualValid bCtor.model)).any
+        (isMissing bCtor.owner bCtor.model)
+    let wrongMutualConstructor := withDeclarationType mutualValid bCtor.model (.sort .zero)
+    state ← state.check "root-selected statements retain member diagnostics" <|
+      (checkStatementsFor wrongMutualConstructor generatedMutualOwners).violations.any
+        (isTypeMismatch bCtor.owner bCtor.model)
+  return some state
+
+def checkUnitlikeMetadata (root : String) (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let unitlikePath := s!"{root}/test/fixtures/inductive-models/unitlike.ndjson"
+  let unitlikeText ← IO.FS.readFile unitlikePath
+  match InductiveModels.parse unitlikeText with
+  | .error error =>
+      IO.eprintln s!"checktest: could not parse {unitlikePath}: {error}"
+      state ← state.check "unit-like metadata fixture" false
+  | .ok unitlikeExport =>
+    for owner in [`UnitType, `UnitProp, `MU] do
+      let some ownerDecl := ownerIndex? unitlikeExport owner | do
+        IO.eprintln s!"checktest: unit-like owner {owner} missing"
+        return none
+      let some ownerTable := correspondenceAt? unitlikeExport ownerDecl | do
+        IO.eprintln s!"checktest: unit-like correspondence for {owner} missing"
+        return none
+      let ownerModels := modelDeclarations unitlikeExport ownerTable
+        (Name.str (Naming.modelName owner) "helper")
+      let ownerValid := withValidModel unitlikeExport ownerDecl ownerModels
+      state ← state.check s!"valid unit-like family {owner}" <|
+        ownerTable.metadata.any (·.kind == .unitlike) && (check ownerValid).isEmpty
+    -- Several indexed family reports share one SyntaxIndex.  Put a global
+    -- extra-slot diagnostic on the last selected owner so concatenating the
+    -- per-family reports has exactly the aggregate order and multiplicity.
+    let mut multiValid := unitlikeExport
+    let mut multiOwners : Std.HashSet Name := {}
+    for owner in [`UnitType, `UnitProp] do
+      let some ownerDecl := ownerIndex? multiValid owner | do return none
+      let some ownerTable := correspondenceAt? multiValid ownerDecl | do return none
+      multiValid := withValidModel multiValid ownerDecl
+        (modelDeclarations multiValid ownerTable (Name.str (Naming.modelName owner) "helper"))
+      multiOwners := multiOwners.insert owner
+    let extraOwner := `WithField
+    let extraName := Naming.unitlikeName extraOwner
+    multiValid := insertBeforeOwner multiValid extraOwner
+      (.ax extraName [] (.sort .zero) false)
+    multiOwners := multiOwners.insert extraOwner
+    state ← state.check "multi-family indexed union equals aggregate with one global extra" <|
+      indexedFamilyUnionFor multiValid multiOwners ==
+        checkStatementsFor multiValid multiOwners
+    state ← state.check "compact global-extra templates equal aggregate with one global extra" <|
+      compactIndexedStatementsFor multiValid multiOwners ==
+        checkStatementsFor multiValid multiOwners
+    let some mutualDecl := ownerIndex? unitlikeExport `MU | do return none
+    let some mutualUnitlike := correspondenceAt? unitlikeExport mutualDecl | do return none
+    state ← state.check "unit-like is per mutual member" <|
+      (mutualUnitlike.metadata.filter (·.kind == .unitlike)).map (·.owner) == #[`MU, `MV]
+
+    let some positiveDecl := ownerIndex? unitlikeExport `UnitType | do return none
+    let some positiveTable := correspondenceAt? unitlikeExport positiveDecl | do return none
+    let positiveModels := modelDeclarations unitlikeExport positiveTable `UnitType._model.helper
+    let positiveValid := withValidModel unitlikeExport positiveDecl positiveModels
+    let positiveTheorem := Naming.unitlikeName `UnitType
+    state ← state.check "missing unit-like theorem is rejected" <|
+      (check (withoutDeclaration positiveValid positiveTheorem)).any
+        (isMissing `UnitType positiveTheorem)
+    state ← state.check "malformed unit-like theorem is rejected" <|
+      (check (withDeclarationType positiveValid positiveTheorem (.sort .zero))).any
+        (isTypeMismatch `UnitType positiveTheorem)
+
+    for owner in [`WithField, `Indexed, `Recursive, `TwoCtor, `MR] do
+      let some nearDecl := ownerIndex? unitlikeExport owner | do return none
+      let some nearTable := correspondenceAt? unitlikeExport nearDecl | do return none
+      state ← state.check s!"near miss has no unit-like slot {owner}" <|
+        (nearTable.metadata.filter (·.kind == .unitlike)).isEmpty
+      let nearModels := modelDeclarations unitlikeExport nearTable
+        (Name.str (Naming.modelName owner) "helper")
+      let extraName := Naming.unitlikeName owner
+      let extra := withValidModel unitlikeExport nearDecl
+        (nearModels.push (.ax extraName [] (.sort .zero) false))
+      state ← state.check s!"extra unit-like theorem rejected {owner}" <|
+        (check extra).any (isExtraUnitlike owner extraName)
+      if owner == `WithField then
+        let bareExtra := insertBeforeOwner unitlikeExport owner
+          (.ax extraName [] (.sort .zero) false)
+        let extraOwners := ({} : Std.HashSet Name).insert owner
+        state ← state.check "bare extra unit-like theorem is rejected" <|
+          (check bareExtra).any (isExtraUnitlike owner extraName)
+        state ← state.check "indexed extra-slot sweep equals aggregate selection" <|
+          indexedFamilyUnionFor bareExtra extraOwners ==
+            checkStatementsFor bareExtra extraOwners
+        state ← state.check "compact bare extra-slot sweep equals aggregate selection" <|
+          compactIndexedStatementsFor bareExtra extraOwners ==
+            checkStatementsFor bareExtra extraOwners
+  return some state
+
+/-- Build the shared `Tree` baseline and run every group of checks against it,
+stopping at the first group whose fixture preconditions fail. -/
 def run (root : String) : IO UInt32 := do
   let path := s!"{root}/test/fixtures/inductive-models/nested_iota_arm.ndjson"
   let text ← IO.FS.readFile path
@@ -536,542 +1193,27 @@ def run (root : String) : IO UInt32 := do
     let valid := withValidModel raw rawOwnerDecl models
     let validOwnerDecl := rawOwnerDecl + models.size
     let families := discover valid
-    let mut state : TestState := {}
-    state ← state.check "indexed family discovery equals the former implementation" <|
-      families == referenceDiscover valid
-    state ← state.check "indexed discovery preserves randomized adversarial families" <|
-      (Array.range 128).all fun seed =>
-        let candidate := propertyDiscoveryExport valid seed
-        let index := SyntaxIndex.ofSource candidate
-        discoverWithIndex candidate index == referenceDiscover candidate &&
-          discover candidate == referenceDiscover candidate
-    let interleavedAProjection := Naming.projectionName `Interleave.A 3
-    let interleavedBProjection := Naming.projectionName `Interleave.B 7
-    let interleavedGlobal : Array GlobalExtraRecord := #[
-      { names := #[`Interleave.A]
-        templates := #[.type `Interleave.A #[] true true] },
-      { names := #[interleavedBProjection], templates := #[] },
-      { names := #[`Interleave.B]
-        templates := #[.type `Interleave.B #[] true true] },
-      { names := #[interleavedAProjection], templates := #[] }]
-    state ← state.check "bound global-extra records preserve interleaved owner order" <|
-      globalExtrasFromRecords interleavedGlobal == #[
-        .extraProjection `Interleave.A interleavedAProjection,
-        .extraProjection `Interleave.B interleavedBProjection]
-    let duplicateProjection := Naming.projectionName `Interleave.A 9
-    let duplicateMetadata := Naming.unitlikeName `Interleave.A
-    let duplicateGlobal : Array GlobalExtraRecord := #[
-      { names := #[duplicateProjection, duplicateMetadata, duplicateProjection]
-        templates := #[] },
-      { names := #[Naming.projectionIotaName `Interleave.A 9]
-        templates := #[.type `Interleave.A #[] false true,
-          .type `Interleave.A #[9] false false] }]
-    state ← state.check "global-extra index preserves duplicate names and templates" <|
-      globalExtrasFromRecords duplicateGlobal ==
-        referenceGlobalExtrasFromRecords duplicateGlobal
-    state ← state.check "linear global extras equal the quadratic specification" <|
-      (Array.range 128).all fun seed =>
-        let records := propertyGlobalExtraRecords seed
-        globalExtrasFromRecords records == referenceGlobalExtrasFromRecords records
-    let onlyB := ({} : Std.HashSet Name).insert `Interleave.B
-    let lateFiltered := (globalExtrasFromRecords interleavedGlobal).filter fun violation =>
-      onlyB.contains violation.familyOwner
-    state ← state.check "owner-filtered global extras equal the historical late filter" <|
-      globalExtrasFromRecordsFor interleavedGlobal onlyB == lateFiltered &&
-        lateFiltered == #[.extraProjection `Interleave.B interleavedBProjection]
-    state ← state.check "empty owner selection skips every global-extra template" <|
-      (globalExtrasFromRecordsFor interleavedGlobal {}).isEmpty
-    state ← state.check "one public family discovered" (families.size == 1)
-    if let some family := families[0]? then
-      state ← state.check "family key" <|
-        family.owner == owner && family.modelRoot == modelRoot &&
-          family.carrier == carrier && family.ownerDecl == validOwnerDecl &&
-          family.correspondence == table
-      state ← state.check "only exact public records establish the family" <|
-        family.decls.size + 1 == models.size &&
-          !family.names.contains helper && family.names.contains carrier
-    else
-      state ← state.check "family key" false
-      state ← state.check "only exact public records establish the family" false
-    state ← state.check "valid ordering and independence" (check valid).isEmpty
-    state ← state.check "compact ordered report equals the valid full checker" <|
-      compactMatches valid
-    let compactIndex := SyntaxIndex.ofSource valid
-    let compactFamilyRows := compactFamilyCertificateRecordsWithIndex
-      valid compactIndex (discover valid)
-    let compactRows := (globalExtraRecordsWithIndex compactIndex valid.decls).mapIdx
-      fun i globalExtra =>
-        { owner := match valid.decls[i]! with
-            | .induct (type :: _) _ _ => some type.name
-            | _ => none
-          globalExtra, families := compactFamilyRows[i]! : CompactCheckRecord }
-    let some ownerRow := compactRows.findIdx? (fun row => row.owner == some owner) | do
-      IO.eprintln "checktest: compact owner row missing"
-      return 1
-    let ownerCertificate := compactRows[ownerRow]!.families[0]!
-    let compactRows := compactRows.set! ownerRow
-      { compactRows[ownerRow]! with modelSlots := ownerCertificate.publicNames }
-    state ← state.check "duplicate compact family certificates fail closed" <|
-      compactRejected <| compactOrderedReport (compactRows.set! ownerRow
-        { compactRows[ownerRow]! with families := #[ownerCertificate, ownerCertificate] })
-    state ← state.check "misbound compact family certificates fail closed" <|
-      compactRejected <| compactOrderedReport (compactRows.set! ownerRow
-        { compactRows[ownerRow]! with owner := some `Wrong.Owner })
-    state ← state.check "missing active compact family certificates fail closed" <|
-      compactRejected <| compactOrderedReport (compactRows.set! ownerRow
-        { compactRows[ownerRow]! with families := #[] })
-    state ← state.check "indexed one-family statements equal the aggregate checker" <|
-      indexedFamilyStatements? valid owner == some (checkStatements valid)
-    let treeOwners := ({} : Std.HashSet Name).insert owner
-    state ← state.check "indexed nested generated view equals aggregate selection" <|
-      indexedFamilyUnionFor valid treeOwners == checkStatementsFor valid treeOwners
-    state ← state.check "compact nested generated view equals aggregate selection" <|
-      compactIndexedStatementsFor valid treeOwners == checkStatementsFor valid treeOwners
-    let invalidProjection := Naming.projectionName owner 99
-    let duplicateInvalidProjection := insertBeforeOwner
-      (insertBeforeOwner valid owner (.ax invalidProjection [] (.sort .zero) false))
-      owner (.ax invalidProjection [] (.sort .zero) false)
-    state ← state.check "compact projection extras retain duplicate order and multiplicity" <|
-      compactIndexedStatementsFor duplicateInvalidProjection treeOwners ==
-        checkStatementsFor duplicateInvalidProjection treeOwners
-    state ← state.check "compact ordered report rejects duplicate declaration names" <|
-      compactRejected (compactOrderedCheckReport duplicateInvalidProjection)
-    let sourceIndex := SyntaxIndex.ofSource raw
-    let .ok overlaidIndex := sourceIndex.prependRecords models | do
-      IO.eprintln "checktest: valid island overlay was rejected"
-      return 1
-    let overlaidFamilies := sourceIndex.sourceStatementFamilies owner
-    let combinedView := { raw with decls := models ++ raw.decls }
-    state ← state.check "island overlay exposes generated family occurrences" <|
-      discoverWithIndex combinedView overlaidIndex == discover combinedView
-    state ← state.check "persistent source index plus island overlay equals whole-export indexing" <|
-      checkStatementFamiliesLocalWithIndex raw overlaidIndex overlaidFamilies ==
-        checkStatementFamiliesLocalWithIndex valid (.ofExport valid)
-          (statementFamiliesFor valid treeOwners)
-    let retainedIndex := SyntaxIndex.ofSourceIncremental (overlayOwnershipSource raw)
-    let retainedFamilies := retainedIndex.sourceStatementFamilies owner
-    let expectedRetainedReport :=
-      checkStatementFamiliesLocalWithIndex raw overlaidIndex overlaidFamilies
-    state ← state.check "repeated overlays preserve a retained large source index" <|
-      (Array.range 32).all fun _ =>
-        match retainedIndex.prependRecords models with
-        | .error _ => false
-        | .ok overlay =>
-          checkStatementFamiliesLocalWithIndex raw overlay retainedFamilies ==
-            expectedRetainedReport
-    let duplicateIsland := models.push models[0]!
-    state ← state.check "island overlay rejects duplicate declaration names" <|
-      match sourceIndex.prependRecords duplicateIsland with
-      | .error _ => true
-      | .ok _ => false
-    state ← state.check "unsafe owner may have an independently safe model" <|
-      (check (withUnsafeOwner valid validOwnerDecl)).isEmpty
-    let unsafeModel := withDefinitionSafety valid carrier "unsafe"
-    state ← state.check "indexed family preserves corrupted statement diagnostics" <|
-      indexedFamilyStatements? unsafeModel owner == some (checkStatements unsafeModel)
-    state ← state.check "unsafe model implementation is rejected" <|
-      (check unsafeModel).any
-        (isSafetyMismatch owner carrier "unsafe")
-    state ← state.check "compact ordered report retains local interface failures" <|
-      compactMatches unsafeModel
-    state ← state.check "partial model implementation is rejected" <|
-      (check (withDefinitionSafety valid carrier "partial")).any
-        (isSafetyMismatch owner carrier "partial")
-    state ← state.check "axiom model implementation is rejected" <|
-      (check (withImplementationAxiom valid carrier)).any
-        (isKindMismatch owner carrier .defn .axiom)
-
-    let eqOwner := `Eq
-    let some rawEqDecl := ownerIndex? raw eqOwner | do
-      IO.eprintln s!"checktest: {path} does not declare {eqOwner}"
-      return 1
-    let some eqTable := correspondenceAt? raw rawEqDecl | do
-      IO.eprintln s!"checktest: no correspondence table for {eqOwner}"
-      return 1
-    let eqModels := modelDeclarations raw eqTable `Eq._model.helper
-    let validEq := withValidModel raw rawEqDecl eqModels
-    state ← state.check "universe parameters align positionally" <|
-      (discover validEq).any (·.owner == eqOwner) &&
-        (check validEq).all (·.familyOwner != eqOwner)
-    state ← state.check "modeling Eq retains ambient equality" <|
-      eqTable.iotas[0]?.bind (fun rule =>
-        exportDeclarationType? validEq rule.name |>.map fun (_, type) =>
-          match (forallBody type).getAppFn with
-          | .const name _ => name == ``Eq
-          | _ => false) |>.getD false
-
-    let late := withLateCarrier raw rawOwnerDecl models carrier
-    let lateViolations := check late
-    state ← state.check "carrier after owner is rejected" <|
-      lateViolations.any (isLateCarrier owner carrier)
-
-    let constantBackref := withOwnerType valid validOwnerDecl (.const carrier [])
-    state ← state.check "constant backreference is rejected" <|
-      (check constantBackref).any (isBackreference owner carrier)
-    state ← state.check "constant backreference survives a name-only owner certificate" <|
-      ownerBackreferenceFromCertificate?
-          (ownerReferenceCertificate constantBackref.decls[validOwnerDecl]!) families[0]!.names ==
-        some (owner, carrier)
-    state ← state.check "compact report retains constant backreferences" <|
-      compactMatches constantBackref
-
-    -- `Expr.getUsedConstants` does not include this name: it lives in the
-    -- projection node's `typeName` field, so this pins the checker's explicit
-    -- projection traversal.
-    let some firstCtor := table.constructors[0]? | do
-      IO.eprintln "checktest: Tree has no constructor correspondence"
-      return 1
-    let projectionBackref :=
-      withOwnerType valid validOwnerDecl (.proj firstCtor.model 0 (.bvar 0))
-    state ← state.check "projection type-name public backreference is rejected" <|
-      (check projectionBackref).any (isBackreference owner firstCtor.model)
-    state ← state.check "projection backreference survives a name-only owner certificate" <|
-      ownerBackreferenceFromCertificate?
-          (ownerReferenceCertificate projectionBackref.decls[validOwnerDecl]!)
-          families[0]!.names == some (owner, firstCtor.model)
-    state ← state.check "compact report retains projection type-name backreferences" <|
-      compactMatches projectionBackref
-
-    let missingCtor := withoutDeclaration valid firstCtor.model
-    state ← state.check "missing constructor slot is rejected" <|
-      (check missingCtor).any (isMissing firstCtor.owner firstCtor.model)
-    state ← state.check "compact ordered report retains missing slots" <|
-      compactMatches missingCtor
-
-    -- Constructor slots still claim the family when the carrier is missing,
-    -- so exactness cannot disappear with the declaration it must diagnose.
-    let missingCarrier := withoutDeclaration valid carrier
-    state ← state.check "missing carrier slot is rejected" <|
-      (check missingCarrier).any (isMissing owner carrier)
-
-    let some firstRec := table.recursors[0]? | do
-      IO.eprintln "checktest: Tree has no recursor correspondence"
-      return 1
-    let some secondRec := table.recursors[1]? | do
-      IO.eprintln "checktest: Tree has no second recursor correspondence"
-      return 1
-    state ← state.check "missing recursor is rejected" <|
-      (check (withoutDeclaration valid firstRec.model)).any
-        (isMissing firstRec.owner firstRec.model)
-    let some firstRecDecl := exportDeclaration? valid firstRec.model | do
-      IO.eprintln "checktest: modeled recursor declaration missing"
-      return 1
-    let duplicateRec := insertBeforeOwner valid owner firstRecDecl
-    state ← state.check "extra recursor occurrence is rejected" <|
-      (check duplicateRec).any (isDuplicate firstRec.owner firstRec.model)
-    state ← state.check "compact ordered report rejects duplicate public slots" <|
-      compactRejected (compactOrderedCheckReport duplicateRec)
-    let some (_, firstRecType) := exportDeclarationType? valid firstRec.model | do
-      IO.eprintln "checktest: modeled recursor type missing"
-      return 1
-    let some (_, secondRecType) := exportDeclarationType? valid secondRec.model | do
-      IO.eprintln "checktest: second modeled recursor type missing"
-      return 1
-    let swappedRecs := withDeclarationType
-      (withDeclarationType valid firstRec.model secondRecType) secondRec.model firstRecType
-    state ← state.check "swapped recursors are rejected" <|
-      (check swappedRecs).any (isTypeMismatch firstRec.owner firstRec.model) &&
-        (check swappedRecs).any (isTypeMismatch secondRec.owner secondRec.model)
-    let defeqRecType :=
-      .letE `recType (.sort (.succ (.succ .zero))) firstRecType (.bvar 0) false
-    state ← state.check "definitionally equal recursor syntax is rejected" <|
-      (check (withDeclarationType valid firstRec.model defeqRecType)).any
-        (isTypeMismatch firstRec.owner firstRec.model)
-
-    let firstRules := table.iotas.filter (·.recursor == firstRec.owner)
-    let some firstRule := firstRules[0]? | do
-      IO.eprintln "checktest: Tree recursor has no first rule"
-      return 1
-    let some secondRule := firstRules[1]? | do
-      IO.eprintln "checktest: Tree recursor has no second rule"
-      return 1
-    state ← state.check "missing iota theorem is rejected" <|
-      (check (withoutDeclaration valid firstRule.name)).any
-        (isMissing firstRule.recursor firstRule.name)
-    state ← state.check "non-theorem iota proof slot is rejected" <|
-      (check (withProofDefinition valid firstRule.name)).any
-        (isKindMismatch firstRule.recursor firstRule.name .thm .defn)
-    let some firstRuleDecl := exportDeclaration? valid firstRule.name | do
-      IO.eprintln "checktest: first iota declaration missing"
-      return 1
-    state ← state.check "extra iota occurrence is rejected" <|
-      (check (insertBeforeOwner valid owner firstRuleDecl)).any
-        (isDuplicate firstRule.recursor firstRule.name)
-    let extraRuleName := Naming.iotaName firstRec.owner firstRules.size
-    let extraRule := insertBeforeOwner valid owner
-      (.ax extraRuleName [] (.sort .zero) false)
-    state ← state.check "out-of-range iota theorem is rejected" <|
-      (check extraRule).any (isExtraRule firstRec.owner extraRuleName)
-    state ← state.check "compact ordered report recomputes extra rules" <|
-      compactMatches extraRule
-    let some (_, firstRuleType) := exportDeclarationType? valid firstRule.name | do
-      IO.eprintln "checktest: first iota type missing"
-      return 1
-    let some (_, secondRuleType) := exportDeclarationType? valid secondRule.name | do
-      IO.eprintln "checktest: second iota type missing"
-      return 1
-    let swappedRules := withDeclarationType
-      (withDeclarationType valid firstRule.name secondRuleType) secondRule.name firstRuleType
-    state ← state.check "swapped iota statements are rejected" <|
-      (check swappedRules).any (isTypeMismatch firstRule.recursor firstRule.name) &&
-        (check swappedRules).any (isTypeMismatch secondRule.recursor secondRule.name)
-    let defeqRuleType := .letE `ruleType (.sort .zero) firstRuleType (.bvar 0) false
-    state ← state.check "definitionally equal iota syntax is rejected" <|
-      (check (withDeclarationType valid firstRule.name defeqRuleType)).any
-        (isTypeMismatch firstRule.recursor firstRule.name)
-
-    let legacySlot := Name.str modelRoot "ctor_99"
-    let unrelatedLegacyName := insertBeforeOwner valid owner
-      (.ax legacySlot [] (.sort (.succ .zero)) false)
-    state ← state.check "legacy numbered name is not a public slot" <|
-      (discover unrelatedLegacyName).all fun family => !family.names.contains legacySlot
-
-    -- `IdxP.at_a` and `IdxP.at_b` have the same binder shape and differ only
-    -- in their result indices.  Exact declaration-local names must prevent a
-    -- type-shape heuristic from pairing them interchangeably.
-    let shapesPath := s!"{root}/test/fixtures/inductive-models/prim_shapes.ndjson"
-    let shapesText ← IO.FS.readFile shapesPath
-    match InductiveModels.parse shapesText with
-    | .error error =>
-        IO.eprintln s!"checktest: could not parse {shapesPath}: {error}"
-        state ← state.check "swapped equal-looking constructors" false
-    | .ok shapes =>
-      let idxOwner := `IdxP
-      match ownerIndex? shapes idxOwner with
-      | none => state ← state.check "swapped equal-looking constructors" false
-      | some idxOwnerDecl =>
-        match correspondenceAt? shapes idxOwnerDecl with
-        | none => state ← state.check "swapped equal-looking constructors" false
-        | some idxTable =>
-          let idxModels := modelDeclarations shapes idxTable `IdxP._model.helper
-          let idxValid := withValidModel shapes idxOwnerDecl idxModels
-          match idxTable.constructors[0]?, idxTable.constructors[1]? with
-          | some first, some second =>
-            match exportDeclarationType? idxValid first.model,
-                exportDeclarationType? idxValid second.model with
-            | some (_, firstType), some (_, secondType) =>
-              let swapped := withDeclarationType
-                (withDeclarationType idxValid first.model secondType) second.model firstType
-              state ← state.check "swapped equal-looking constructors" <|
-                (check swapped).any (isTypeMismatch first.owner first.model) &&
-                  (check swapped).any (isTypeMismatch second.owner second.model)
-            | _, _ => state ← state.check "swapped equal-looking constructors" false
-          | _, _ => state ← state.check "swapped equal-looking constructors" false
-
-    let some (_, carrierType) := exportDeclarationType? valid carrier | do
-      IO.eprintln s!"checktest: no declaration for {carrier}"
-      return 1
-    -- `let x : Type 1 := carrierType; x` is definitionally equal to the
-    -- universe-free fixture's carrier type (`Type`) but not syntactically the
-    -- same exported expression.
-    let defeqCarrierType :=
-      .letE `x (.sort (.succ (.succ .zero))) carrierType (.bvar 0) false
-    let defeqCarrier := withDeclarationType valid carrier defeqCarrierType
-    state ← state.check "definitionally equal carrier syntax is rejected" <|
-      (check defeqCarrier).any (isTypeMismatch owner carrier)
-
-    let modelNamedOwner := `Tree._model
-    let modelNamedRaw := renameExportRoot raw owner modelNamedOwner
-    let some modelNamedOwnerDecl := ownerIndex? modelNamedRaw modelNamedOwner | do
-      IO.eprintln "checktest: renamed _model owner missing"
-      return 1
-    let some modelNamedTable := correspondenceAt? modelNamedRaw modelNamedOwnerDecl | do
-      IO.eprintln "checktest: renamed _model correspondence missing"
-      return 1
-    let modelNamedModels := modelDeclarations modelNamedRaw modelNamedTable
-      `Tree._model._model._impl.helper
-    let modelNamedValid := withValidModel modelNamedRaw modelNamedOwnerDecl modelNamedModels
-    state ← state.check "original _model component is preserved exactly" <|
-      modelNamedTable.typeFormers[0]?.map (·.model) == some `Tree._model._model &&
-        (discover modelNamedValid).any (·.owner == modelNamedOwner) &&
-        (check modelNamedValid).isEmpty
-
-    let privateOwner := (`_private.CheckTest).mkNum 0 |>.str "Tree"
-    let privateRaw := renameExportRoot raw owner privateOwner
-    let some privateOwnerDecl := ownerIndex? privateRaw privateOwner | do
-      IO.eprintln "checktest: private owner missing"
-      return 1
-    let some privateTable := correspondenceAt? privateRaw privateOwnerDecl | do
-      IO.eprintln "checktest: private correspondence missing"
-      return 1
-    let privateModels := modelDeclarations privateRaw privateTable
-      (Name.str (Naming.modelName privateOwner) "_impl")
-    let privateValid := withValidModel privateRaw privateOwnerDecl privateModels
-    state ← state.check "private originals retain raw correspondence names" <|
-      privateTable.typeFormers[0]?.map (·.model) == some (Naming.modelName privateOwner) &&
-        (discover privateValid).any (·.owner == privateOwner) &&
-        (check privateValid).isEmpty
-    let privateOwners := ({} : Std.HashSet Name).insert privateOwner
-    state ← state.check "indexed private-alias family equals aggregate selection" <|
-      indexedFamilyUnionFor privateValid privateOwners ==
-        checkStatementsFor privateValid privateOwners
-    state ← state.check "compact private-alias family equals aggregate selection" <|
-      compactIndexedStatementsFor privateValid privateOwners ==
-        checkStatementsFor privateValid privateOwners
-    let privateSourceIndex := SyntaxIndex.ofSource privateRaw
-    let .ok privateOverlay := privateSourceIndex.prependRecords privateModels | do
-      IO.eprintln "checktest: private-alias island overlay was rejected"
-      return 1
-    state ← state.check "private-alias island overlay equals whole-export indexing" <|
-      checkStatementFamiliesLocalWithIndex privateRaw privateOverlay
-          (privateSourceIndex.sourceStatementFamilies privateOwner) ==
-        checkStatementFamiliesLocalWithIndex privateValid (.ofExport privateValid)
-          (statementFamiliesFor privateValid privateOwners)
-
-    let mutualPath := s!"{root}/test/fixtures/inductive-models/mutual_shapes.ndjson"
-    let mutualText ← IO.FS.readFile mutualPath
-    match InductiveModels.parse mutualText with
-    | .error error =>
-        IO.eprintln s!"checktest: could not parse {mutualPath}: {error}"
-        state ← state.check "valid exact mutual family" false
-    | .ok mutualExport =>
-      let some mutualOwnerDecl := ownerIndex? mutualExport `A | do
-        IO.eprintln "checktest: mutual owner missing"
-        return 1
-      let some mutualTable := correspondenceAt? mutualExport mutualOwnerDecl | do
-        IO.eprintln "checktest: mutual correspondence missing"
-        return 1
-      let mutualModels := modelDeclarations mutualExport mutualTable `A._model._impl.helper
-      let mutualValid := withValidModel mutualExport mutualOwnerDecl mutualModels
-      let mutualViolations := check mutualValid
-      let bProjection := Naming.projectionName `B 0
-      let bProjectionIota := Naming.projectionIotaName `B 0
-      let mutualNonProjectionViolations := mutualViolations.filter fun violation =>
-        match violation with
-        | .missingPublic `B declaration =>
-          declaration != bProjection && declaration != bProjectionIota
-        | _ => true
-      state ← state.check "mutual correspondence is declaration-local" <|
-        mutualTable.typeFormers.any (fun pair =>
-          pair.owner == `B && pair.model == Naming.modelName `B) &&
-        mutualTable.constructors.any (fun pair =>
-          pair.owner == `B.bC && pair.model == Naming.modelName `B.bC) &&
-        mutualTable.recursors.any (fun pair =>
-          pair.owner == `C.rec && pair.model == Naming.modelName `C.rec) &&
-        mutualTable.iotas.any (fun rule =>
-          rule.recursor == `C.rec && rule.ruleIndex == 2 &&
-            rule.name == Naming.iotaName `C.rec 2)
-      state ← state.check "valid exact mutual non-projection family" <|
-        (discover mutualValid).any (fun family =>
-          family.owner == `A && family.correspondence == mutualTable) &&
-        mutualNonProjectionViolations.isEmpty
-      let generatedMutualOwners := ({} : Std.HashSet Name).insert `A
-      let mutualStatements := checkStatementsFor mutualValid generatedMutualOwners
-      state ← state.check "mutual statement count uses the complete root family" <|
-        mutualStatements.statementsChecked == mutualTable.statementCount
-      state ← state.check "indexed mutual/member diagnostics equal aggregate selection" <|
-        indexedFamilyUnionFor mutualValid generatedMutualOwners == mutualStatements
-      state ← state.check "compact mutual/member diagnostics equal aggregate selection" <|
-        compactIndexedStatementsFor mutualValid generatedMutualOwners == mutualStatements
-      let mutualPublicNames := mutualTable.publicNames
-      let missingMutualInterface : Export := { mutualValid with
-        decls := mutualValid.decls.filter fun declaration =>
-          !declaration.names.any mutualPublicNames.contains }
-      let missingMutualStatements :=
-        checkStatementsFor missingMutualInterface generatedMutualOwners
-      state ← state.check "a generated family cannot disappear from discovery" <|
-        missingMutualStatements.statementsChecked == mutualTable.statementCount &&
-          missingMutualStatements.violations.any
-            (isMissing `A (Naming.modelName `A))
-      state ← state.check "indexed missing whole family equals aggregate selection" <|
-        indexedFamilyUnionFor missingMutualInterface generatedMutualOwners ==
-          missingMutualStatements
-      state ← state.check "compact missing whole family equals aggregate selection" <|
-        compactIndexedStatementsFor missingMutualInterface generatedMutualOwners ==
-          missingMutualStatements
-      let some bCtor := mutualTable.constructors.find? (·.owner == `B.bC) | do
-        IO.eprintln "checktest: B.bC correspondence missing"
-        return 1
-      state ← state.check "mutual diagnostic belongs to exact constructor" <|
-        (check (withoutDeclaration mutualValid bCtor.model)).any
-          (isMissing bCtor.owner bCtor.model)
-      let wrongMutualConstructor := withDeclarationType mutualValid bCtor.model (.sort .zero)
-      state ← state.check "root-selected statements retain member diagnostics" <|
-        (checkStatementsFor wrongMutualConstructor generatedMutualOwners).violations.any
-          (isTypeMismatch bCtor.owner bCtor.model)
-
-    let unitlikePath := s!"{root}/test/fixtures/inductive-models/unitlike.ndjson"
-    let unitlikeText ← IO.FS.readFile unitlikePath
-    match InductiveModels.parse unitlikeText with
-    | .error error =>
-        IO.eprintln s!"checktest: could not parse {unitlikePath}: {error}"
-        state ← state.check "unit-like metadata fixture" false
-    | .ok unitlikeExport =>
-      for owner in [`UnitType, `UnitProp, `MU] do
-        let some ownerDecl := ownerIndex? unitlikeExport owner | do
-          IO.eprintln s!"checktest: unit-like owner {owner} missing"
-          return 1
-        let some ownerTable := correspondenceAt? unitlikeExport ownerDecl | do
-          IO.eprintln s!"checktest: unit-like correspondence for {owner} missing"
-          return 1
-        let ownerModels := modelDeclarations unitlikeExport ownerTable
-          (Name.str (Naming.modelName owner) "helper")
-        let ownerValid := withValidModel unitlikeExport ownerDecl ownerModels
-        state ← state.check s!"valid unit-like family {owner}" <|
-          ownerTable.metadata.any (·.kind == .unitlike) && (check ownerValid).isEmpty
-      -- Several indexed family reports share one SyntaxIndex.  Put a global
-      -- extra-slot diagnostic on the last selected owner so concatenating the
-      -- per-family reports has exactly the aggregate order and multiplicity.
-      let mut multiValid := unitlikeExport
-      let mut multiOwners : Std.HashSet Name := {}
-      for owner in [`UnitType, `UnitProp] do
-        let some ownerDecl := ownerIndex? multiValid owner | do return 1
-        let some ownerTable := correspondenceAt? multiValid ownerDecl | do return 1
-        multiValid := withValidModel multiValid ownerDecl
-          (modelDeclarations multiValid ownerTable (Name.str (Naming.modelName owner) "helper"))
-        multiOwners := multiOwners.insert owner
-      let extraOwner := `WithField
-      let extraName := Naming.unitlikeName extraOwner
-      multiValid := insertBeforeOwner multiValid extraOwner
-        (.ax extraName [] (.sort .zero) false)
-      multiOwners := multiOwners.insert extraOwner
-      state ← state.check "multi-family indexed union equals aggregate with one global extra" <|
-        indexedFamilyUnionFor multiValid multiOwners ==
-          checkStatementsFor multiValid multiOwners
-      state ← state.check "compact global-extra templates equal aggregate with one global extra" <|
-        compactIndexedStatementsFor multiValid multiOwners ==
-          checkStatementsFor multiValid multiOwners
-      let some mutualDecl := ownerIndex? unitlikeExport `MU | do return 1
-      let some mutualUnitlike := correspondenceAt? unitlikeExport mutualDecl | do return 1
-      state ← state.check "unit-like is per mutual member" <|
-        (mutualUnitlike.metadata.filter (·.kind == .unitlike)).map (·.owner) == #[`MU, `MV]
-
-      let some positiveDecl := ownerIndex? unitlikeExport `UnitType | do return 1
-      let some positiveTable := correspondenceAt? unitlikeExport positiveDecl | do return 1
-      let positiveModels := modelDeclarations unitlikeExport positiveTable `UnitType._model.helper
-      let positiveValid := withValidModel unitlikeExport positiveDecl positiveModels
-      let positiveTheorem := Naming.unitlikeName `UnitType
-      state ← state.check "missing unit-like theorem is rejected" <|
-        (check (withoutDeclaration positiveValid positiveTheorem)).any
-          (isMissing `UnitType positiveTheorem)
-      state ← state.check "malformed unit-like theorem is rejected" <|
-        (check (withDeclarationType positiveValid positiveTheorem (.sort .zero))).any
-          (isTypeMismatch `UnitType positiveTheorem)
-
-      for owner in [`WithField, `Indexed, `Recursive, `TwoCtor, `MR] do
-        let some nearDecl := ownerIndex? unitlikeExport owner | do return 1
-        let some nearTable := correspondenceAt? unitlikeExport nearDecl | do return 1
-        state ← state.check s!"near miss has no unit-like slot {owner}" <|
-          (nearTable.metadata.filter (·.kind == .unitlike)).isEmpty
-        let nearModels := modelDeclarations unitlikeExport nearTable
-          (Name.str (Naming.modelName owner) "helper")
-        let extraName := Naming.unitlikeName owner
-        let extra := withValidModel unitlikeExport nearDecl
-          (nearModels.push (.ax extraName [] (.sort .zero) false))
-        state ← state.check s!"extra unit-like theorem rejected {owner}" <|
-          (check extra).any (isExtraUnitlike owner extraName)
-        if owner == `WithField then
-          let bareExtra := insertBeforeOwner unitlikeExport owner
-            (.ax extraName [] (.sort .zero) false)
-          let extraOwners := ({} : Std.HashSet Name).insert owner
-          state ← state.check "bare extra unit-like theorem is rejected" <|
-            (check bareExtra).any (isExtraUnitlike owner extraName)
-          state ← state.check "indexed extra-slot sweep equals aggregate selection" <|
-            indexedFamilyUnionFor bareExtra extraOwners ==
-              checkStatementsFor bareExtra extraOwners
-          state ← state.check "compact bare extra-slot sweep equals aggregate selection" <|
-            compactIndexedStatementsFor bareExtra extraOwners ==
-              checkStatementsFor bareExtra extraOwners
+    let some state ← checkDiscovery valid families {} | return 1
+    let some state ← checkGlobalExtraRecords state | return 1
+    let some state ← checkFamilyIdentity owner modelRoot carrier helper table models
+      validOwnerDecl families state | return 1
+    let some state ← checkValidReport valid state | return 1
+    let some state ← checkCompactCertificates owner valid state | return 1
+    let some state ← checkIndexedStatementViews owner valid state | return 1
+    let some state ← checkIslandOverlays owner raw valid models state | return 1
+    let some state ← checkModelSafety owner carrier valid validOwnerDecl state | return 1
+    let some state ← checkEqUniverses path raw state | return 1
+    let some state ← checkCarrierOrder owner carrier raw rawOwnerDecl models state | return 1
+    let some state ← checkOwnerBackreferences owner carrier valid validOwnerDecl table
+      families state | return 1
+    let some state ← checkMissingSlots owner carrier valid table state | return 1
+    let some state ← checkRecursorSlots owner valid table state | return 1
+    let some state ← checkIotaSlots owner valid table state | return 1
+    let some state ← checkExactNames root owner modelRoot valid state | return 1
+    let some state ← checkRenamedOwners owner carrier raw valid state | return 1
+    let some state ← checkPrivateAliases owner raw state | return 1
+    let some state ← checkMutualMembers root state | return 1
+    let some state ← checkUnitlikeMetadata root state | return 1
 
     if state.failed == 0 then
       IO.println s!"checktest: {state.passed} tests passed"
