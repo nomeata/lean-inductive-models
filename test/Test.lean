@@ -835,18 +835,29 @@ def expectedPrim : List Row :=
        ("WTag", 16), ("WMid", 18), ("Tag", 6), ("WChain", 18), ("WPlain", 16)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The same question at the one construction that still cannot answer it**,
-  -- so that `Decline.projectionCodomain` stays a verdict about a shape rather
-  -- than dead code. `EDep.mk`'s third field is a *bare* recursive occurrence,
-  -- so arm E's property holds and the carrier is empty; arm E then answers a
-  -- projection by eliminating the major, which is total but is not a selector.
+  -- pinned as the whole shape family rather than one occupant, so that what an
+  -- answer has to survive is on record before there is one. Every constructor
+  -- of these owners has a *bare* recursive occurrence, so arm E's property
+  -- holds and the carrier is `emptyAt w`; arm E then answers a projection by
+  -- eliminating the major, which is total but is not a selector.
   -- `EDep._model.proj_0 (EDep.mk._model …)` δβ-reduces to the bare field — a
-  -- variable — and stops, so field 1's codomain is not its own `Vec a`. An
-  -- empty carrier stores nothing, so this is a property of the construction
-  -- and not a gap in it.
+  -- variable — and stops, so field 1's codomain is not its own `Vec a`.
+  --
+  -- `EMulti` is the control that must keep modelling: two constructors, so no
+  -- intrinsic projection is asked of it at all. `EOpaque`'s refusal is a
+  -- different one wearing the same verdict — a field at an opaque `imax` level
+  -- under a `max` carrier, which is the level algebra's gap and not the empty
+  -- carrier's.
   , ("e_dependent_field",
-      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6)],
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6), ("Tag", 6),
+       ("Fib", 6), ("EMulti", 6)],
       [ ("Eq", "prim model: a basis primitive")
-      , ("EDep", "prim model shape: EDep's field 1 names an earlier field")])
+      , ("EDep", "prim model shape: EDep's field 1 names an earlier field")
+      , ("EChain", "prim model shape: EChain's field 1 names an earlier field")
+      , ("EMid", "prim model shape: EMid's field 2 names an earlier field")
+      , ("ENon", "prim model shape: ENon's field 2 names an earlier field")
+      , ("EBare", "prim model shape: EBare's field 1 names an earlier field")
+      , ("EOpaque", "prim model shape: EOpaque's field 2 names an earlier field")])
   -- **The head-normalization sweep, run through all three layers.** `RB α β`'s second
   -- parameter is a family, so specialising it leaves the constructor field
   -- `β k` as the redex `(fun _ => B₀) k` in the block — and the block is
