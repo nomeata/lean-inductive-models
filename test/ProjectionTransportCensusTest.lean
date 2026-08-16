@@ -1,7 +1,7 @@
 import InductiveModels.Driver
 
 /-!
-# The projection-iota transport census, pinned exhaustively
+# The intrinsic projection contract, checked as an invariant
 
 Run from the repository root: `lake exe projectiontransportcensustest [ROOT]`.
 
@@ -11,126 +11,44 @@ Every intrinsic projection rule `T._model.proj_j.iota` is stated as
 ∀ (constructor telescope), @Eq α (T._model.proj_j … (T._model.mk …)) rhs
 ```
 
-and the goal is that no such **statement** mentions `Eq.rec`.  It is met: the
-`.transport` set below is **empty**, and this file separates the two reasons a
-statement can still mention `Eq.rec` so that it stays empty:
+over the modeled constructor's own `numParams + numFields` telescope, and the
+invariant this suite pins is that `rhs` is **the constructor's field-`j`
+binder itself**: the loose `Expr.bvar` the telescope binds at position
+`numParams + j`.  Nothing is transported into a projection right-hand side,
+and nothing ever has to be.
 
-* **`.transport`** — the right-hand side is
-  [`InductiveModels.ProjectionField.normalizeProjectionField`]'s nested
-  `Eq.rec`, emitted because field `j` transitively depends on an earlier field
-  and the owner reaches [`InductiveModels.addProjectionModels`] on none of the
-  literal routes (`projectionIotaUsesLiteralField`,
-  `propositionProjectionIotaUsesLiteralField`, or a phase-1 one-layer
-  certificate).  **This set is empty and must stay empty.**
-* **`.authored`** — the statement mentions `Eq.rec` only in the constructor
-  telescope or the projection codomain, i.e. it is source syntax the model is
-  required to reproduce exactly.  Generalizing the literal route neither adds
-  to nor removes from this set.
+This is an invariant rather than a census because it cannot regress for a
+reason a maintainer would want to record.  A transported right-hand side is
+required only when field `j` depends on the *value* of an earlier field whose
+modeled projection reduces merely propositionally — that is, on a recursive or
+nested occurrence field.  Lean's positivity and nesting rules leave **no
+spelling** of a constructor field type that reads such a value;
+`test/fixtures/inductive-models/nested_value_dependency.lean` writes out every
+attempt and the kernel rejects each one.  So every field a later field can
+depend on is non-recursive, every non-recursive field is selected
+definitionally, and the literal right-hand side is the only one the generator
+ever has to state.
 
-The expected table below is the whole committed fixture corpus, not a sample.
-A **new** row means a route regressed or a new fixture introduced a
-transported projection; a **missing** row means the literal route grew and the
-table is stale.  Both fail, and a missing row is the one a human is meant to
-delete by hand — the number in the summary line is the progress meter.
+There is therefore no allowlist here and no row to append.  A right-hand side
+that stops being its field binder is a defect in the route that produced it;
+this suite names the fixture, the owner and the field so it is fixed there.
+
+`expectedUnrunnable` remains, because it is about *exhaustiveness* rather than
+about transport: a fixture that starts or stops running under the maximal
+generation configuration has to be noticed, or the invariant would quietly
+stop covering the corpus.
+
+Source-authored `Eq.rec` in a constructor telescope or a projection codomain
+is a different matter: it is the source's own syntax, the model reproduces it
+exactly, and it is counted below rather than restricted.
 -/
 
 set_option maxRecDepth 4096
 
 open Lean Meta InductiveModels
 
-/-- Where an intrinsic projection rule's statement mentions `Eq.rec`. -/
-inductive TransportKind where
-  /-- In the right-hand side: the generator's canonical dependency transport. -/
-  | transport
-  /-- Only in the telescope or codomain: exact source syntax. -/
-  | authored
-  deriving BEq, Repr, Inhabited
-
-def TransportKind.label : TransportKind → String
-  | .transport => "transport"
-  | .authored => "authored"
-
-/-- One census row: fixture path below `test/fixtures/inductive-models`, owner
-type former, zero-based field. -/
-structure CensusRow where
-  fixture : String
-  owner : Name
-  field : Nat
-  kind : TransportKind
-  deriving BEq, Inhabited
-
-def CensusRow.key (row : CensusRow) : String :=
-  s!"{row.fixture}\t{row.owner}\t{row.field}\t{row.kind.label}"
-
-/-- **The census, as of the current generator.**  Sorted by `CensusRow.key`.
-
-Every row is `.authored`: the generator emits no dependency transport into any
-projection rule in the corpus.  A `.transport` row would be a regression, not a
-row to add. -/
-def expectedCensus : Array CensusRow :=
-  #[ { fixture := "indexed_fibre_boundary", owner := `IndexedRecursiveLayer,
-       field := 0, kind := .authored }
-   , { fixture := "indexed_fibre_boundary", owner := `IndexedRecursiveLayer,
-       field := 1, kind := .authored }
-   , { fixture := "indexed_fibre_boundary", owner := `IndexedRecursiveLayer,
-       field := 2, kind := .authored }
-   , { fixture := "indexed_fibre_boundary", owner := `IndexedRecursiveLayer,
-       field := 3, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `IndexedRecursiveLayer._model._impl.skel, field := 0, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `IndexedRecursiveLayer._model._impl.skel, field := 1, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `IndexedRecursiveLayer._model._impl.skel, field := 2, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `IndexedRecursiveLayer._model._impl.skel, field := 3, kind := .authored }
-   , { fixture := "indexed_fibre_boundary", owner := `TwoRecursiveDependentResults,
-       field := 0, kind := .authored }
-   , { fixture := "indexed_fibre_boundary", owner := `TwoRecursiveDependentResults,
-       field := 1, kind := .authored }
-   , { fixture := "indexed_fibre_boundary", owner := `TwoRecursiveDependentResults,
-       field := 2, kind := .authored }
-   , { fixture := "indexed_fibre_boundary", owner := `TwoRecursiveDependentResults,
-       field := 3, kind := .authored }
-   , { fixture := "indexed_fibre_boundary", owner := `TwoRecursiveDependentResults,
-       field := 4, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `TwoRecursiveDependentResults._model._impl.skel, field := 0, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `TwoRecursiveDependentResults._model._impl.skel, field := 1, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `TwoRecursiveDependentResults._model._impl.skel, field := 2, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `TwoRecursiveDependentResults._model._impl.skel, field := 3, kind := .authored }
-   , { fixture := "indexed_fibre_boundary",
-       owner := `TwoRecursiveDependentResults._model._impl.skel, field := 4, kind := .authored }
-   , { fixture := "mutual_one_layer_boundary", owner := `MutualLayerA,
-       field := 0, kind := .authored }
-   , { fixture := "mutual_one_layer_boundary", owner := `MutualLayerA,
-       field := 1, kind := .authored }
-   , { fixture := "mutual_one_layer_boundary", owner := `MutualLayerA,
-       field := 2, kind := .authored }
-   , { fixture := "prop_recursive_projections", owner := `PropRecIdx,
-       field := 0, kind := .authored }
-   , { fixture := "prop_recursive_projections", owner := `PropRecIdx,
-       field := 1, kind := .authored }
-   , { fixture := "prop_recursive_projections", owner := `PropRecIdx,
-       field := 2, kind := .authored } ]
-
-/-- Fixtures the maximal generation configuration below cannot run to
-completion.  It is empty: `hard_nested_mutual_index`, `indexed_decl`,
-`infinitary` and `nest_index_cross` all raised `Unknown constant` for a member
-of their own input block, because the shadow derivation opened a raw source
-telescope through `MetaM` while that member was deliberately not installed;
-every source telescope now has its exact domains installed directly instead.
-
-The list is pinned so that the census above cannot silently stop being
-exhaustive: a fixture that starts running must be censused, and a fixture that
-stops running must be noticed. -/
-def expectedUnrunnable : Array String := #[]
-
-/-- Every generation branch on, so the census sees the maximal set of modeled
-owners rather than one suite's slice. -/
+/-- Every generation branch on, so the invariant sees the maximal set of
+modeled owners rather than one suite's slice. -/
 def censusGeneration : Cli.Config :=
   { nested := true, mutualModels := true, simple := true, basic := true }
 
@@ -143,11 +61,6 @@ partial def containsEqRec : Expr → Bool
       containsEqRec type || containsEqRec value || containsEqRec body
   | .mdata _ body => containsEqRec body
   | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => false
-
-/-- The right-hand side of the outermost equality of a projection rule. -/
-partial def ruleRhs? : Expr → Option Expr
-  | .forallE _ _ body _ => ruleRhs? body
-  | body => body.getAppArgs[2]?
 
 /-- `T._model.proj_j.iota` ⇒ `(T, j)`.  The owner may itself be generated, as
 for the erasure skeleton `T._model._impl.skel`. -/
@@ -163,11 +76,63 @@ def theoremStatements : EDecl → Array (Name × Expr)
   | .thm name _ type .. => #[(name, type)]
   | _ => #[]
 
+/-- The exported parameter and field counts of a one-constructor owner.  A
+projection rule is stated over exactly `numParams + numFields` binders of the
+modeled constructor's telescope, so these two numbers locate the field binder
+in the closed statement. -/
+structure OwnerArity where
+  numParams : Nat
+  numFields : Nat
+  deriving Inhabited
+
+/-- Every one-constructor inductive owner in the output stream, source and
+generated alike.  A projection owner is always an exported inductive record,
+so a missing entry is a failure below rather than a reason to skip. -/
+def ownerArities (decls : Array EDecl) : Array (Name × OwnerArity) := Id.run do
+  let mut result : Array (Name × OwnerArity) := #[]
+  for declaration in decls do
+    if let .induct types constructors _ := declaration then
+      for type in types do
+        if let [constructorName] := type.ctors then
+          if let some constructor := constructors.find? fun constructor =>
+              constructor.name == constructorName && constructor.induct == type.name then
+            result := result.push (type.name,
+              { numParams := type.numParams, numFields := constructor.numFields })
+  return result
+
+/-- Peel exactly `count` `∀` binders.  A short telescope yields `none`, which
+is a failure rather than a skip. -/
+def peelForalls : Nat → Expr → Option Expr
+  | 0, body => some body
+  | count + 1, .forallE _ _ body _ => peelForalls count body
+  | _, _ => none
+
+/-- The outermost equality's right-hand side under a telescope of exactly
+`binders` binders. -/
+def closedRuleRhs? (binders : Nat) (statement : Expr) : Option Expr := do
+  let body ← peelForalls binders statement
+  let .const equality _ := body.getAppFn | none
+  unless equality == ``Eq do none
+  let arguments := body.getAppArgs
+  unless arguments.size == 3 do none
+  return arguments[2]!
+
 structure FixtureCensus where
-  rows : Array CensusRow := #[]
-  /-- Every projection iota seen, transported or not. -/
+  failures : Array String := #[]
+  /-- Projection iotas whose right-hand side is their constructor field
+  binder. -/
+  literal : Nat := 0
+  /-- Every projection iota seen. -/
   projectionIotas : Nat := 0
+  /-- Statements mentioning `Eq.rec`; with the invariant met these are exactly
+  source-authored telescopes and codomains. -/
+  authoredEqRec : Nat := 0
   ran : Bool := true
+
+/-- Record one failed projection rule.  Every failure names the fixture, the
+rule and what it states instead. -/
+def FixtureCensus.fail (result : FixtureCensus) (message : String) : FixtureCensus :=
+  { result with failures := result.failures.push message }
 
 def censusFixture (fixture path : String) : IO FixtureCensus := do
   let .ok x := parse (← IO.FS.readFile path)
@@ -181,14 +146,37 @@ def censusFixture (fixture path : String) : IO FixtureCensus := do
       pure (some decls)
     catch _ => pure none
   let some decls := decls? | return { ran := false }
+  let arities := ownerArities decls
   let mut result : FixtureCensus := {}
   for declaration in decls do
     for (name, statement) in theoremStatements declaration do
       let some (owner, field) := projectionIotaOwner? name | continue
       result := { result with projectionIotas := result.projectionIotas + 1 }
-      unless containsEqRec statement do continue
-      let kind := if (ruleRhs? statement).any containsEqRec then .transport else .authored
-      result := { result with rows := result.rows.push { fixture, owner, field, kind } }
+      if containsEqRec statement then
+        result := { result with authoredEqRec := result.authoredEqRec + 1 }
+      match arities.find? (·.1 == owner) with
+      | none =>
+        result := result.fail
+          s!"{fixture}: {name} has no one-constructor record for owner {owner}"
+      | some (_, arity) =>
+        if field >= arity.numFields then
+          result := result.fail s!"{fixture}: {name} selects field {field} of a \
+            {arity.numFields}-field constructor"
+        else
+          match closedRuleRhs? (arity.numParams + arity.numFields) statement with
+          | none =>
+            result := result.fail s!"{fixture}: {name} is not an equation under \
+              {owner}'s {arity.numParams}+{arity.numFields} constructor telescope"
+          | some rhs =>
+            -- The telescope binds parameters and then fields, so constructor
+            -- field `j` is the de Bruijn index `numFields - 1 - j` at the
+            -- equation.
+            if rhs == Expr.bvar (arity.numFields - 1 - field) then
+              result := { result with literal := result.literal + 1 }
+            else
+              result := result.fail s!"{fixture}: {name} states a right-hand side \
+                that is not constructor field {field}: dependent transport has \
+                returned to the projection contract"
   return result
 
 /-- The committed corpus, as (label prefix, directory) pairs.  The filtered
@@ -197,6 +185,18 @@ label keeps the subdirectory. -/
 def fixtureDirectories : Array (String × String) :=
   #[("", "test/fixtures/inductive-models"),
     ("filtered/", "test/fixtures/inductive-models/filtered")]
+
+/-- Fixtures the maximal generation configuration cannot run to completion.
+It is empty: `hard_nested_mutual_index`, `indexed_decl`, `infinitary` and
+`nest_index_cross` all raised `Unknown constant` for a member of their own
+input block, because the shadow derivation opened a raw source telescope
+through `MetaM` while that member was deliberately not installed; every source
+telescope now has its exact domains installed directly instead.
+
+The list is pinned so that the invariant above cannot silently stop being
+exhaustive: a fixture that starts running must be checked, and a fixture that
+stops running must be noticed. -/
+def expectedUnrunnable : Array String := #[]
 
 def main (args : List String) : IO UInt32 := do
   initSearchPath (← findSysroot)
@@ -207,41 +207,28 @@ def main (args : List String) : IO UInt32 := do
       if entry.path.extension == some "ndjson" then
         paths := paths.push (prefix_ ++ entry.path.fileStem.getD "", entry.path.toString)
   paths := paths.qsort (fun left right => left.1 < right.1)
-  let mut rows : Array CensusRow := #[]
+  let mut failures : Array String := #[]
   let mut unrunnable : Array String := #[]
+  let mut literal := 0
   let mut projectionIotas := 0
+  let mut authoredEqRec := 0
   for (fixture, path) in paths do
     let result ← censusFixture fixture path
-    rows := rows ++ result.rows
+    failures := failures ++ result.failures
+    literal := literal + result.literal
     projectionIotas := projectionIotas + result.projectionIotas
+    authoredEqRec := authoredEqRec + result.authoredEqRec
     unless result.ran do unrunnable := unrunnable.push fixture
-  rows := rows.qsort (fun left right => left.key < right.key)
   unrunnable := unrunnable.qsort (· < ·)
-
-  let expected := expectedCensus.qsort (fun left right => left.key < right.key)
-  let added := rows.filter fun row => !expected.contains row
-  let removed := expected.filter fun row => !rows.contains row
-  let transported := rows.filter (·.kind == .transport)
-  let expectedTransported := expected.filter (·.kind == .transport)
-
-  let mut failures : Array String := #[]
-  for row in added do
-    failures := failures.push
-      s!"NEW {row.kind.label} projection iota {row.owner}._model.proj_{row.field}.iota \
-         in {row.fixture}: a route regressed, or add this row to expectedCensus"
-  for row in removed do
-    failures := failures.push
-      s!"GONE {row.kind.label} projection iota {row.owner}._model.proj_{row.field}.iota \
-         in {row.fixture}: progress — delete this row from expectedCensus"
   if unrunnable != expectedUnrunnable.qsort (· < ·) then
     failures := failures.push
       s!"unrunnable fixtures are {unrunnable}, expected {expectedUnrunnable}: \
          update expectedUnrunnable"
 
-  IO.println s!"projection iota transport census: \
-    {transported.size} transported of {projectionIotas} projection iotas \
-    ({rows.size} statements mention Eq.rec, {rows.size - transported.size} of them \
-    source-authored) over {paths.size - unrunnable.size} fixtures"
-  IO.println s!"  expected transported: {expectedTransported.size}"
+  IO.println s!"intrinsic projection contract: \
+    {literal} of {projectionIotas} projection iotas state their constructor \
+    field binder literally ({authoredEqRec} statements carry source-authored \
+    Eq.rec in the telescope or codomain) over \
+    {paths.size - unrunnable.size} fixtures"
   for failure in failures do IO.eprintln s!"FAIL: {failure}"
   return if failures.isEmpty then 0 else 1
