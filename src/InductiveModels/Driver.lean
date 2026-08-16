@@ -1611,6 +1611,21 @@ def closeModelIsland (template : Export) (main : Environment)
       sourceFamilies := sourceFamilyCertificates
       sourceGlobalExtra?
       diagnosticOwners }
+  -- An owner this island reported as generated but for which family discovery
+  -- produced nothing would be checked by nobody: both local reports would be
+  -- built from an empty family array, so the island would report
+  -- `statementsChecked = 0, violations = #[]` and be indistinguishable from one
+  -- that compared clean. Only the summed run total is inspected downstream, and
+  -- it cannot see one silent owner among hundreds of thousands. So require it
+  -- here, per island: every owner this island claims to have modeled must have
+  -- yielded a discovered family carrying at least one statement comparison.
+  let uncompared := generatedOwners.toArray.filter fun owner =>
+    !allFamilies.any fun family =>
+      family.owner == owner && family.correspondence.statementCount > 0
+  unless uncompared.isEmpty do
+    let names := (uncompared.qsort (toString · < toString ·)).map toString
+    return .error s!"generated owner produced no statement comparison: \
+      {String.intercalate ", " names.toList}"
   let statementReport :=
     if generatedOwners.isEmpty then
       { statementsChecked := 0, violations := #[] }
