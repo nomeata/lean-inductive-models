@@ -978,8 +978,24 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
             | badShape s!"{constructorName} has too few fields"
           if earlier == fieldIndex then
             let selfType ← mkForallFVars #[self] fieldType
-            return (closeForallsExact? modelTypeInfo.type ownerArguments selfType).getD
-              (← mkForallFVars ownerArguments selfType)
+            -- `ownerArguments` was opened from this very expression, so closing
+            -- over it is total: `forallBoundedTelescope` binds the leading `∀`s
+            -- left to right and never binds more than there are, and
+            -- `closeForallsExact?` walks the same expression with the same
+            -- instantiation. It can only answer `none` if the walk runs out of
+            -- `∀`s first, which would mean the telescope opened a binder that
+            -- is not syntactically there — `modelTypeInfo.type` is a generated
+            -- model type former's declared type, built by `mkForallFVars` over
+            -- params and indices, so its leading `ownerArity` binders are
+            -- written. This is the same statement the other eight call sites
+            -- make, and it fails the same way rather than quietly rebuilding
+            -- the type from the local context and losing the exact binder
+            -- syntax the retention exists for.
+            let some projectionType :=
+                closeForallsExact? modelTypeInfo.type ownerArguments selfType
+              | badShape s!"{modelType}'s public type does not open as \
+                {ownerArguments.size} written binders"
+            return projectionType
           if rest.hasLooseBVar 0 then
             let some (_, _, earlierProjection, _) := projectionModels.find? fun entry =>
                 entry.1 == type.name && entry.2.1 == earlier
@@ -1153,8 +1169,23 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           -- routes continue to use their beta-only constructor telescope.
           let telescope := if phase1OneLayer || propositionLiteral then modelConstructorType
             else betaForallDomains normalizer modelConstructorType
-          let fallback ← mkForallFVars arguments body
-          pure ((closeForallsExact? telescope arguments body).getD fallback)
+          --
+          -- Total, and hard-failing for the same reason as the eight other
+          -- call sites. `arguments` was opened from `modelConstructorType` by
+          -- `forallBoundedTelescope`, which binds its leading `∀`s left to
+          -- right and no more of them than are there; `betaForallDomains`
+          -- rewrites domains only and leaves the `∀`-spine's length and order
+          -- exactly as it found them, so both branches hand
+          -- `closeForallsExact?` a telescope with the spine the values came
+          -- from. Falling back to `mkForallFVars` here would silently drop the
+          -- retention this branch exists for — the ι statement would come out
+          -- elaborator-normalised, and the statement checker would compare a
+          -- shape nobody asked for — so the retention either happens or the
+          -- run says it could not.
+          let some retained := closeForallsExact? telescope arguments body
+            | badShape s!"{modelConstructor}'s exact constructor telescope does not open as \
+              {arguments.size} written binders"
+          pure retained
         | none => mkForallFVars arguments body
       let value ← mkLambdaFVars arguments proof
       return Declaration.thmDecl
