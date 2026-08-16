@@ -50,7 +50,12 @@ checkout_pinned() {
   git -C "$directory" fetch --depth=1 origin "$revision"
   git -C "$directory" checkout --detach --force FETCH_HEAD
   git -C "$directory" clean -ffd
-  cp "$root/lean-toolchain" "$directory/lean-toolchain"
+  # Deliberately a literal, not a copy of `$root/lean-toolchain`. This check
+  # builds the pinned exporter revision the Mathlib gate builds, and that
+  # revision's Lean version is independent of ours -- see the matching comment
+  # in `scripts/ci-mathlib.sh`. Keep it in step with that file and with
+  # `scripts/export-fixture.sh`, which pins the same literal.
+  echo "leanprover/lean4:v4.29.1" > "$directory/lean-toolchain"
 }
 
 checkout_pinned "$stock"

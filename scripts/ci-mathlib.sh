@@ -229,7 +229,14 @@ checkout_pinned \
   fail "lean4export compact-interner patch SHA-256 mismatch"
 git -C "$EXPORTER_DIR" apply --check "$EXPORTER_PATCH"
 git -C "$EXPORTER_DIR" apply "$EXPORTER_PATCH"
-cp "$ROOT/lean-toolchain" "$EXPORTER_DIR/lean-toolchain"
+# Deliberately a literal, not a copy of `$ROOT/lean-toolchain`. The exporter's
+# Lean version is independent of ours: the NDJSON export is the interface
+# between them. `$EXPORTER_REV` (caccfbe) ships v4.29.0 and `$MATHLIB_REV`
+# (5e932f97) was built by v4.29.1, so the exporter must load those oleans under
+# v4.29.1. Copying our pin here would rebuild the exporter under whatever this
+# repository targets and break the gate. `scripts/export-fixture.sh` pins the
+# same literal for the same reason.
+echo "leanprover/lean4:v4.29.1" > "$EXPORTER_DIR/lean-toolchain"
 (cd "$EXPORTER_DIR" && run_build_measured build-exporter lake -Kjobs=1 build)
 cp "$EXPORTER_DIR/.lake/build/bin/lean4export" "$BIN_DIR/lean4export"
 [[ -x "$BIN_DIR/lean4export" ]] || fail "exporter binary was not built"
