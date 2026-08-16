@@ -44,7 +44,17 @@ inductive ShapeScope where
   The route selected an arm — or would have, but for a guard that is narrower
   than the arm's actual reach — and no representation came out. This is a gap
   in the arm, and the message names which arm and which guard so that the gap
-  is addressable rather than merely recorded. -/
+  is addressable rather than merely recorded.
+
+  **Nothing produces this today**, and `test/scripts/check-no-known-gap.sh` is
+  what says so mechanically, beside `README`'s ledger. The last producer was
+  arm W's eligibility test, whose two remaining guards turned out to refuse
+  empty classes and are now invariants asserted at
+  [`InductiveModels.mkPrimSite`]. The constructor stays because the distinction
+  it draws is the point: a future guard narrower than its arm must be
+  recordable as a gap rather than dressed up as a boundary, and a vocabulary
+  that has to be reinvented at that moment is a vocabulary that will not
+  be. -/
   | incomplete
   deriving Inhabited, Repr, BEq, DecidableEq
 

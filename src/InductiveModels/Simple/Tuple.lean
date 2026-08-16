@@ -151,6 +151,23 @@ refuses is modelled at `[propext, Classical.choice, Quot.sound]`, because
 `WT.decEqAll` is `Classical.propDecidable`; one it admits *and* `tagFactored`
 admits keeps `instDecidableEqNat` and stays at `[propext, Quot.sound]`.
 
+**This is an invariant, not a route condition.** It was a conjunct of `armW`
+until its refusal class was shown empty, and [`InductiveModels.mkPrimSite`]
+now asserts it — a hard failure — where it used to test it. The argument is
+written out there; in one line: everything reaching the assertion has passed
+[`InductiveModels.erasureBareFailure?`], so every recursive field domain is
+`∀ z⃗, T p⃗ e⃗` with no binder type mentioning `T`, and a binder can then name
+an earlier *recursive* field only through a type former whose domain mentions
+the type being declared — which no constant, parameter or surviving earlier
+field can be. The uncontracted-redex spelling that would name one without a
+former is a non-positive occurrence to Lean's kernel, because positivity tests
+a Π domain syntactically. `VanishingErasureTest` pins both halves.
+
+It stays a computed predicate rather than becoming `True` because it is also a
+*report* column: the census prints it beside `tagFactored` at the shape
+declines, where the telescope has not passed `erasureBare` and the answer can
+still be no.
+
 Non-throwing, for the same reason `tagFactored` is. -/
 def labelFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) : Bool :=
   exportCtors.all fun (_, cty) => Id.run do
@@ -307,13 +324,17 @@ def recSlotOf (tname : Name) (np ni : Nat) (cn : Name) (nf : Nat) (tele : Expr)
     GenM (Option Nat) := do
   -- **The W arm's bill, printed at the decline that names W**, and it is two
   -- questions because the arm runs the one core at two
-  -- instantiations. `labelled` is [`InductiveModels.labelFactored`] and is the one
-  -- that decides *whether* W reaches the declaration; `tagged` is
-  -- [`InductiveModels.tagFactored`] and decides only *what it costs* — yes and the
-  -- model is `[propext, Quot.sound]`, which is covered; no and it spends
+  -- instantiations. `labelled` is [`InductiveModels.labelFactored`] and `tagged`
+  -- is [`InductiveModels.tagFactored`], which decides what the model *costs* —
+  -- yes and it is `[propext, Quot.sound]`, which is covered; no and it spends
   -- `Classical.choice` on top. Two populations, so the census counts two
-  -- numbers, and a decline that reads `through the tag: no` alone is a model
-  -- rather than a gap.
+  -- numbers.
+  --
+  -- Neither column can now read `no` at a declaration arm W would otherwise
+  -- have taken: `labelled` is an invariant asserted at
+  -- [`InductiveModels.mkPrimSite`] rather than a route condition. It is printed
+  -- here because *this* decline is reached before `erasureBare` holds, where
+  -- the answer is still informative about the telescope that was rejected.
   let bill := s!"; B factors through the tag: {if tagged then "yes" else "no"}\
 ; through the label: {if labelled then "yes" else "no"}\
 ; carrier is Type u: {if typeU then "yes" else "no"}"

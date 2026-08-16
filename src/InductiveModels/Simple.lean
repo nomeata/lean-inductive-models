@@ -313,43 +313,35 @@ def primIsoWithInterface (tname : Name) (root : Name) (lparams : List Name) (np 
     (interface? : Option PrimInterfaceNames := none) : GenM Iso := do
   let (site, st) ← mkPrimSite tname root lparams np memberTy exportCtors reserved
     sourceRecursor? interface?
-  -- **The one shape the chain below has no last resort for.**
+  -- **The chain is total on the never-zero route, and this is where that used
+  -- to be false.**
   --
   -- `primArmChurch` is the chain's fallback and reaches every `Prop` and
   -- maybe-zero shape, so a declaration that satisfies none of the earlier
   -- conditions there still models. The never-zero route has no such fallback:
   -- `primArmTuple` is its last arm and the tower is deliberately *linear*, so a
   -- non-indexed recursive declaration whose recursion is branching or
-  -- infinitary is arm W's or it is nobody's. When arm W's guard says no, the
-  -- chain used to fall into the tower anyway and the tower raised an internal
-  -- tool error carrying arm W's own bill — an abort, at a shape the dispatcher
-  -- had already decided no arm would take.
+  -- infinitary is arm W's or it is nobody's. When arm W's guard said no, the
+  -- chain fell into the tower anyway and the tower raised an internal tool
+  -- error carrying arm W's own bill — an abort, at a shape the dispatcher had
+  -- already decided no arm would take. A `.shapeUnsupported .incomplete`
+  -- decline stood here to stop that, and it was the tool's only one.
   --
-  -- **A gap in arm W, not a boundary of the construction.** The two things that
-  -- turn `armW` off here are [`InductiveModels.labelFactored`] — a syntactic
-  -- loose-bvar test, asked of a binder type *inside* a recursive field's own
-  -- telescope, which is the one place [`InductiveModels.shapeCtorTy`] does not reach
-  -- and so the one place a βζ-dead mention can still be read as live — and a
-  -- carrier plan that could not put the core's `Type u` at the declared sort.
-  -- Both are limits of the arm as it stands rather than a decision that the
-  -- shape is unrepresentable, so the decline says `incomplete` and names the
-  -- guard.
+  -- **It is gone because `armW` now *is* that class.** The two conditions that
+  -- could turn the arm off for a declaration in it —
+  -- [`InductiveModels.labelFactored`] and a carrier plan with no level to write
+  -- the core at — refuse classes that are empty, for reasons written out at
+  -- [`InductiveModels.mkPrimSite`], and are asserted there rather than tested.
+  -- So `site.armW` holds for exactly the declarations this decline described
+  -- (`ni == 0 && isRec && !erasureLinear && !armE` on the never-zero route),
+  -- the test below would be `false` by construction, and an unreachable
+  -- decline is a worse record of the situation than none.
   --
-  -- **`!armE` is in the test because arm E is in the chain.** A branching
-  -- declaration with no base constructor is in this class by every question
+  -- **`!armE` remains part of that class because arm E is in the chain.** A
+  -- branching declaration with no base constructor is in it by every question
   -- above and is *empty*; arm E models it exactly, by the lift of `⊥`, and
-  -- reaches it below. Leaving `armE` out here declined six of `prim_w`'s
-  -- occupants at the shape they are modelled at.
-  if site.route matches PrimRoute.type then
-    if site.ni == 0 && site.isRec && !site.erasureLinear && !site.armE && !site.armW then
-      declineWith (.shapeUnsupported tname .incomplete
-        s!"a non-indexed recursive declaration at a never-zero sort whose recursion is \
-not linear, so the tuple tower cannot hold it and arm W is the only arm left — and arm \
-W's guard refuses it; B factors through the tag: \
-{if tagFactored tname np site.exportCtors then "yes" else "no"}\
-; through the label: {if labelFactored tname np site.exportCtors then "yes" else "no"}\
-; carrier is Type u: {if site.w.normalize.dec.isSome then "yes" else "no"}\
-; constrained lift available: {if site.wPlan.lifted then "yes" else "no"}")
+  -- reaches it below. Leaving `armE` out declined six of `prim_w`'s occupants
+  -- at the shape they are modelled at.
   let st ←
     if let some directRoute := site.directRoute? then primDirect site directRoute st
     else if site.armF then primArmF site st

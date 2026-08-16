@@ -777,22 +777,34 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- cannot express, and a declaration it sends to the tower is one W would
   -- overcharge.
   --
-  -- **What is *not* part of that decision** are the two conditions that turn
-  -- `armW` off below. Neither is a statement about the shape: they are gaps in
-  -- the arm as it stands, and [`InductiveModels.primIsoWithInterface`] reports
-  -- a declaration they stop as `.shapeUnsupported .incomplete`, naming the
-  -- guard, before anything is installed. That verdict is the whole point of the
-  -- separation — "no construction represents this" and "the construction that
-  -- owns this is short a piece" are different facts, and the tuple tower must
-  -- never be the place either of them is discovered.
+  -- **The two conditions the arm used to add to that decision are gone, and
+  -- both were dead.** They used to sit in the conjunction below and a
+  -- declaration they stopped was reported `.shapeUnsupported .incomplete` —
+  -- the one such verdict the tool had. Each is now an **invariant asserted
+  -- here**, because the class each refuses is empty and a hard failure is the
+  -- honest reading of an impossible state. The separation the verdict marked
+  -- is still real and still matters — "no construction represents this" and
+  -- "the construction that owns this is short a piece" are different facts —
+  -- but this arm has no instance of the second.
   --
   -- * **the internal carrier is `Type u`.** `WT.W.{u,w}` fixes `A` and `B'`
   --   at `Type u`. Ordinarily the public carrier already has that shape; at a
   --   never-zero carrier with no syntactic predecessor the arm runs the core
   --   at `Type` and stores that low carrier in a `PSigma'` whose second
   --   component is the derived lift of `True`, landing at the exact public
-  --   `Sort w` with no cumulative definition conversion assumed. Where
-  --   neither is available the core has no level to be written at.
+  --   `Sort w` with no cumulative definition conversion assumed.
+  --
+  --   **One of the two always applies, at every never-zero `w`.** The lift is
+  --   taken when `max 1 w` converts to `w`, and that conversion succeeds
+  --   exactly when `w` is never-zero: Lean's level normal form drops an
+  --   explicit numeral `k` from a `max` whenever a sibling argument has offset
+  --   at least `k`, a normalized never-zero level has such a sibling by
+  --   definition, and `mkLevelIMax'` has already rewritten an `imax` with a
+  --   never-zero second argument into a `max`. Since this arm is only reached
+  --   on the never-zero route, `wCarrierPlan` cannot come back empty-handed.
+  --   `ExactSortLiftTest` enumerates the depth-two level grammar over two
+  --   parameters and asserts it at all 234 never-zero levels in it — and
+  --   asserts that the lift is taken at none of the others.
   -- * **`labelFactored`.** The core is generic in `K`, `B' : K → Type u` and
   --   `tg : A → K`, and the arm runs it at **two** instantiations of one
   --   construction. At `K := Nat`, `tg := PSigma'.fst` the branch type is a
@@ -804,37 +816,45 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --   `[propext, Quot.sound]`, the untagged one takes `WT.decEqAll` and pays
   --   `Classical.choice`.
   --
-  --   **It is not the dead guard it reads as, and what keeps it alive has
-  --   changed.** Its *semantic* content — a recursive field's binder type
-  --   naming an earlier recursive field — has an empty refusal class for a
-  --   kernel-accepted plain inductive: the binder would have to apply a type
-  --   former to a value of the type being declared, which Lean's positivity and
-  --   nesting rules leave no spelling of (`Projection.lean`'s argument, written
-  --   out for the kernel to reject in
-  --   `test/fixtures/inductive-models/nested_value_dependency.lean`).
+  --   **Its refusal class is empty, and `erasureBare` is what makes the
+  --   argument short.** By the time this line runs, `analysePrim` has already
+  --   declined `.outOfScope` unless every recursive field domain is
+  --   `∀ z⃗, T p⃗ e⃗` with **no binder type `z` mentioning `T`** — that is
+  --   exactly [`InductiveModels.erasureBareFailure?`]'s two refusals. So a
+  --   binder inside a recursive field's telescope can name an earlier
+  --   *recursive* field only through a type former applied to it, and that
+  --   former's own domain would have to mention the type being declared: no
+  --   constant can (`T` does not exist yet), no parameter can (its type is
+  --   fixed before `T`), and an earlier field that did would itself be a
+  --   recursive field with an owner-mentioning binder and would have been
+  --   declined. `nested_value_dependency.lean` writes out every attempt from
+  --   the source side and the kernel refuses each.
   --
-  --   It used to over-approximate that question at the **field domain**: the
-  --   `recAt` vector was `mentionsAny` on the domain as written, so a field
-  --   whose owner mention βζ discards counted as an earlier *recursive* field
-  --   and a later child's binder naming it was refused. That is the
-  --   over-approximation `shapeCtors` removed at the top of this function, and
-  --   `dead_owner_mention`'s `DeadLabel` is the declaration it used to decline
-  --   `incomplete` for.
+  --   **The syntactic residue is empty too, which is the part that changed.**
+  --   The guard used to over-approximate at the **field domain** — `recAt` was
+  --   `mentionsAny` on the domain as written, so a field whose owner mention
+  --   βζ discards counted as an earlier recursive field and a later child's
+  --   binder naming it was refused; that is what `shapeCtors` removed at the
+  --   top of this function, and `dead_owner_mention`'s `DeadLabel` is the
+  --   declaration it used to decline for. What was then said to survive is one
+  --   level deeper: a binder type inside a recursive field's telescope which is
+  --   *itself* an uncontracted redex discarding the field it names. That
+  --   spelling does not exist. A redex discarding a value of the owner carries
+  --   the owner in its own binder annotation, and Lean's positivity check tests
+  --   `has_ind_occ` on a Π domain **syntactically** — so `(fun _ : T => N) c`
+  --   and `let _ : T := c; N` in a child's binder are both a non-positive
+  --   occurrence, while the identical redex as a whole field domain is
+  --   `whnf`-ed first and is accepted, which is `nonindexed_vanishing`'s shape.
+  --   And an export that spelled it anyway would not get here: it is
+  --   `erasureBareFailure?`'s "binder mention" and is declined `.outOfScope`
+  --   two hundred lines earlier. `VanishingErasureTest` asserts both spellings
+  --   against the kernel's own message and against that decline.
   --
-  --   What survives is one level deeper and is **not** normalised: the
-  --   `hasLooseBVar` test is asked of a binder type *inside* a recursive
-  --   field's own telescope, and such a binder may itself be a redex that
-  --   discards the field it names. Lean's elaborator contracts that redex, but
-  --   this tool's input is an arbitrary export and
-  --   `test/fixtures/inductive-models/nonindexed_vanishing.ndjson` is a
-  --   committed one that carries an uncontracted redex a field domain, so the
-  --   shape is reachable. Refusing it is right — `wRecDom` substitutes only
-  --   *non-recursive* fields, so the branch tower would carry a dangling
-  --   local — and refusing it is a gap in the arm rather than a boundary of
-  --   the construction. So it stays a conjunct and is reported as
-  --   `incomplete` rather than asserted. `VanishingErasureTest` pins both
-  --   halves at unit level: the field-domain question now passes and the
-  --   binder-type one still fails.
+  --   So the guard becomes the invariant [`InductiveModels.wRecDom`] needs:
+  --   that builder substitutes only *non-recursive* fields, and a recursive
+  --   field's domain naming an earlier child would leave a dangling local in
+  --   the branch tower. Asserting it is a hard failure at an impossible state
+  --   rather than a decline at a reachable one.
   --
   -- **`!armE` is part of the decision and not part of the shape.** A branching
   -- declaration with no base constructor is in the W class by every question
@@ -847,11 +867,23 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- read the same decision instead of each re-deriving it from the order they
   -- happen to test in.
   let wTagged := tagFactored tname np exportCtors
-  let wShapeEligible :=
-    (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear && !armE &&
-    labelFactored tname np exportCtors
-  let wPlan ← wCarrierPlan wShapeEligible w
-  let armW := wShapeEligible && (w.normalize.dec.isSome || wPlan.lifted)
+  let armW :=
+    (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear && !armE
+  let wPlan ← wCarrierPlan armW w
+  -- **The two invariants the arm stands on, stated where the arm is chosen.**
+  -- Both were conjuncts of `armW` until the classes they refuse were shown
+  -- empty; neither can be re-derived from the booleans above, so each is a
+  -- hard failure here rather than a silent route change.
+  if armW then
+    unless labelFactored tname np exportCtors do
+      badShape s!"{tname} reaches arm W with a recursive field whose binder type names \
+an earlier recursive field, which `erasureBare` and Lean's positivity check between them \
+leave no spelling of; `wRecDom` substitutes only non-recursive fields and would leave a \
+dangling local in the branch tower"
+    unless w.normalize.dec.isSome || wPlan.lifted do
+      badShape s!"{tname} reaches arm W at the never-zero sort {w}, whose carrier plan \
+delivered neither a syntactic predecessor for the `Type u` core nor the constrained lift; \
+`max 1 w` converts to `w` at every never-zero `w`, so this state is unreachable"
   let wW := wPlan.coreLevel
   -- Arm W's **internal** names, guarded exactly like arm C's and arm G's, and
   -- only when the arm is taken.
@@ -1084,6 +1116,10 @@ does not store, which its positivity check should have made unspellable"
   -- `β a → WType β` is the shape — and what stands in their place is whatever
   -- the caller has: the fields themselves inside the constructor, the label's
   -- projections inside `F`.
+  --
+  -- **A mention of an earlier *recursive* field would leave a dangling local**,
+  -- since only `nrs` is substituted. That is exactly `labelFactored`, asserted
+  -- where `armW` is decided; the assertion is what this line stands on.
   let wRecDom : Array Expr → Nat → Nat → Array Expr → GenM Expr := fun ps k r nrv => do
     let (nrs, rcs) ← wShapeOf k
     let tele ← instForall exportCtors[k]!.2 ps

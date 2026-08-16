@@ -267,18 +267,37 @@ indexed fibre. Both exist so that the intrinsic projections select literally.
 A decline is not a failure: the source declaration passes through unchanged and
 the run reaches exit code 2. What follows is the whole ledger.
 
-**One known gap** — a shape an arm ought to reach and does not. There is one
-site in the code.
+**No known gap** — no shape an arm ought to reach and does not. There is no
+decline site in the code that says `incomplete`, and
+`test/scripts/check-no-known-gap.sh` is what keeps that sentence honest: it
+fails the build the day one is added without this ledger being rewritten.
 
-- *Arm W's guards*. A non-indexed recursive owner at a never-zero sort whose
-  recursion is not linear is arm W's or it is nobody's, and arm W refuses two
-  things that are limits of the arm rather than boundaries of the construction:
-  a syntactic loose-variable test on a binder type inside a recursive field's
-  own telescope, and a carrier plan that could not put the W core's `Type u` at
-  the declared sort.
+The last one was arm W's eligibility test. A non-indexed recursive owner at a
+never-zero sort whose recursion is not linear is arm W's or it is nobody's, and
+the arm used to refuse two further things — a loose-variable test on a binder
+type inside a recursive field's own telescope, and a carrier plan that could not
+put the W core's `Type u` at the declared sort. Both refuse classes that are
+empty, so both are now invariants the arm asserts rather than conditions it
+tests:
 
-That is a gap, in those words. The message names the arm and the guard, so the
-gap stays addressable instead of being recorded and forgotten.
+- A binder inside a recursive field's telescope cannot name an earlier
+  *recursive* field. Everything reaching that arm has already passed the
+  nested-occurrence boundary below, so every recursive field is `∀ z⃗, T p⃗ e⃗`
+  with no binder mentioning `T`; naming an earlier child then needs a type
+  former whose own domain mentions the type being declared, and no constant,
+  parameter or surviving earlier field is one. The redex spelling that would
+  name a child without a former — `(fun _ : T => N) c` — is a non-positive
+  occurrence to Lean's kernel, which tests a `Π` domain syntactically; the same
+  redex as a whole *field domain* is `whnf`-ed first and is accepted, which is
+  the shape the tool does support.
+- The W core needs `Type u`, and gets it at every never-zero sort: either the
+  level is a syntactic successor, or `max 1 w` converts to `w` and the core runs
+  at `Type` under the exact-sort lift. That conversion succeeds exactly when the
+  level is never-zero, which is the route's own condition.
+
+The `incomplete` verdict itself is kept, with nothing producing it, because the
+distinction it draws is worth having ready: a guard narrower than its arm must
+be recordable as a gap rather than dressed up as a boundary.
 
 **Two stated boundaries**, which are not gaps.
 

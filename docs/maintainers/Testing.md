@@ -158,6 +158,7 @@ test/scripts/check-mathlib-result.sh
 test/scripts/check-lean4export-patch.sh
 test/scripts/check-ci-serialized-builds.sh
 test/scripts/check-checker-imports.sh
+test/scripts/check-no-known-gap.sh
 ```
 
 Two of those targets test the built binary rather than the library: `test`
@@ -181,6 +182,18 @@ its declared foundation, so a *new* generator module is caught on the day it is
 imported rather than on the day someone remembers to extend the list. Adding a
 genuinely new foundation module to `Check` therefore means editing
 `allowed_closure` in that script, on purpose.
+
+`check-no-known-gap.sh` reads the same tree for a different claim.  `README.md`
+says the coverage ledger has **no known gap**: no shape an arm ought to reach
+and does not.  The mechanical form of that is that no decline site names
+`Decline.ShapeScope.incomplete`, so the script reads every `.shapeUnsupported`
+site in `src/InductiveModels/` and fails if one does.  It counts the
+`.outOfScope` sites too, so a refactor that moved the scope off the
+constructor's own line makes the script fail rather than silently forbid
+nothing.  The verdict itself is deliberately kept in the type: a future guard
+narrower than its arm must be recordable as a gap, and the day that happens the
+right edit is to rewrite the ledger and this check together, not to reach for
+`outOfScope` because it is the one the build accepts.
 
 The out-of-process checks — `check_arena_corpus.py`,
 `check-hard-nested-a.sh`, `check-hard-nested-c.sh` — spawn the same binary but
