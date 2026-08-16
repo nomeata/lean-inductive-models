@@ -3,8 +3,7 @@ import InductiveModels.Format.Parse
 # Writing an export
 
 Fresh dense interning in dependency order with the exporter's key order and
-spacing. `Writer.Cursor.ofRaw` consumes the parser's certified
-`RawArenaCursor`, which is the one reason this module sits above the reader.
+spacing.
 -/
 open Lean
 
@@ -52,12 +51,6 @@ structure Cursor where
   nextLevel : Nat := 1
   nextExpr : Nat := 0
   deriving Inhabited, Repr, BEq
-
-/-- Exact handoff from a validated raw input arena to a generated writer. No
-table size or inferred count is substituted for the certified next IDs. -/
-def Cursor.ofRaw (cursor : RawArenaCursor) : Cursor :=
-  { nextName := cursor.nextName, nextLevel := cursor.nextLevel,
-    nextExpr := cursor.nextExpr }
 
 /-- Start a structurally fresh writer at explicit, non-overlapping arena IDs.
 Only the format's distinguished anonymous name and zero level remain shared
@@ -256,8 +249,8 @@ def decl (w : Writer) (d : EDecl) : Writer :=
       \"recs\":[{String.intercalate "," rsj.toList}],\
       \"types\":[{String.intercalate "," tsj.toList}]}}"
 
-/-- One declaration split into the arena definitions which must precede every
-declaration spool, and its single reorderable declaration line. -/
+/-- One declaration split into the arena definitions which must precede it,
+and its single reorderable declaration line. -/
 structure DeclSplit where
   before : Cursor
   arena : Array String
@@ -265,9 +258,9 @@ structure DeclSplit where
   after : Cursor
   deriving Inhabited, Repr, BEq
 
-/-- Fail closed when a spool segment was produced for a different arena
-cursor.  The reader accepts sparse arenas for compatibility, so composition
-must enforce the writer's stronger continuous-ID contract itself. -/
+/-- Fail closed when a segment was produced for a different arena cursor. The
+reader accepts sparse arenas for compatibility, so composition must enforce
+the writer's stronger continuous-ID contract itself. -/
 def DeclSplit.validateStart (split : DeclSplit) (expected : Cursor) : Except String Unit :=
   if split.before == expected then .ok ()
   else .error s!"arena segment starts at {repr split.before}, expected {repr expected}"

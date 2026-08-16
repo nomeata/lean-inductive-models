@@ -42,6 +42,5 @@ This file is a facade: it only re-exports the six modules below, so
 * [`InductiveModels.Format.Write`] — the writer
 
 `Types` is imported by everything; `Alias`, `Exact` and `Write` are leaves.
-Only `Write` depends on `Parse`, and only for the certified `RawArenaCursor`
-handoff in `Writer.Cursor.ofRaw`.
+`Write` imports `Parse` only to sit above it in the module order.
 -/
