@@ -1342,36 +1342,13 @@ private def checkProjection (x : Export) (structures : StructureOwners)
     | return violations.push (.declarationType projection.owner projection.iota)
   let sourceLocals := sourceBinders.map fun (binder : OpenBinder) =>
     (binder.value.fvarId!, binder.type)
-  let mut normalizedFields : Array ProjectionField := #[]
-  for index in [:fields.size] do
-    let some mappedField := constructorBinders[constructor.numParams + index]?
-      | return violations.push (.declarationType projection.owner projection.iota)
-    let some sourceFieldAtIndex := sourceBinders[constructor.numParams + index]?
-      | return violations.push (.declarationType projection.owner projection.iota)
-    let some sourceLevel := inferExactSortLevel? structures normalizer declarations sourceLocals
-        sourceFieldAtIndex.type
-      | return violations.push (.declarationType projection.owner projection.iota)
-    let level := renameLevelParamNamesExact constructor.levelParams model.levelParams sourceLevel
-    let projected := mkAppN
-      (.const (Naming.projectionName projection.owner index) levels)
-      (params ++ constructorIndices ++ #[major])
-    let iota? := if index < projection.fieldIndex then
-      some (mkAppN (.const (Naming.projectionIotaName projection.owner index) levels)
-        constructorArgs)
-    else none
-    normalizedFields := normalizedFields.push
-      { name := Name.mkSimple s!"field_{index}", info := .default,
-        value := fields[index]!, type := mappedField.type, level, projected, iota? }
-  let rhs? := if projectionIotaUsesLiteralField ownerTypes.toArray ownerType ||
-      propositionLiteral || oneLayerCertificate matches .valid then
-      fields[projection.fieldIndex]?
-    else
-      let eqi : EqInfo := { eqN := ``Eq, reflN := ``Eq.refl, recN := ``Eq.rec }
-      match ProjectionField.normalizeProjectionField eqi projection.name
-          normalizedFields projection.fieldIndex with
-        | .ok rhs => some rhs
-        | .error _ => none
-  let some rhs := rhs?
+  -- The expected right-hand side is the constructor field binder, on every
+  -- route and with no predicate left to select it.  Generation states exactly
+  -- this ([`InductiveModels.addProjectionModels`]); a transported right-hand
+  -- side would require a field whose type reads the *value* of an earlier
+  -- recursive or nested occurrence field, and Lean's positivity and nesting
+  -- rules leave no spelling of one.
+  let some rhs := fields[projection.fieldIndex]?
     | return violations.push (.declarationType projection.owner projection.iota)
   let some sourceEqLevel :=
       inferExactSortLevel? structures normalizer declarations sourceLocals sourceField.type

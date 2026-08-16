@@ -791,9 +791,16 @@ def main : IO UInt32 := do
       (.sort (.succ .zero))
   state := state.check "malformed one-layer map is rejected structurally" <|
     malformedOneLayerMap.any (hasTypeViolation `Wty (Name.str wtyPrivateRoot "roll"))
-  let noOneLayerCertificate := wtyCertificate.foldl withoutDeclaration wGenerated
-  state := state.check "literal recursive rules require the complete certificate" <|
-    (Check.check noOneLayerCertificate).any (hasTypeViolation `Wty wtyRule1)
+  -- A projection rule's *proposition* is certificate-independent: its
+  -- right-hand side is the constructor field binder on every route, so
+  -- deleting the whole one-layer certificate cannot change the statement the
+  -- checker rebuilds.  The certificate is still required to be exact where it
+  -- is present, which the partial and malformed cases above pin.
+  let noOneLayerCertificate :=
+    Check.check (wtyCertificate.foldl withoutDeclaration wGenerated)
+  state := state.check "literal recursive rules are certificate-independent" <|
+    #[wtyProjection0, wtyProjection1, wtyRule0, wtyRule1].all fun name =>
+      !noOneLayerCertificate.any (hasTypeViolation `Wty name)
 
   -- The next production tranche folds the same private/public compatibility
   -- proof once per recursive constructor field.  These owners differ only in

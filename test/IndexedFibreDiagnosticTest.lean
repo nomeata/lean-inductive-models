@@ -416,9 +416,15 @@ def run (root : String) : IO UInt32 := do
       (.sort (.succ .zero))
   state := state.check "malformed indexed fibre map fails closed" <|
     malformedMap.any (hasTypeViolation `IndexedDep (Name.str privateRoot "roll"))
-  let noCertificate := certificate.foldl withoutDeclaration generated
-  state := state.check "literal indexed rule requires the complete certificate" <|
-    (Check.check noCertificate).any (hasTypeViolation `IndexedDep payloadRule)
+  -- The rule's *proposition* is certificate-independent: its right-hand side
+  -- is the constructor field binder on every route, so removing the whole
+  -- certificate cannot change the statement the checker rebuilds.  What the
+  -- certificate is still required for is its own exactness, which the partial
+  -- and malformed cases immediately above pin.
+  let noCertificate := Check.check (certificate.foldl withoutDeclaration generated)
+  state := state.check "the literal indexed rule is certificate-independent" <|
+    #[payloadProjection, payloadRule, keyProjection, keyRule].all fun name =>
+      !noCertificate.any (hasTypeViolation `IndexedDep name)
 
   let currentPayloadRule := actual payloadRule
   let transportedCandidate := if currentPayloadRule.any (containsConst ``Eq.rec) then

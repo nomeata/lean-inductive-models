@@ -996,22 +996,6 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         badShape s!"{modelConstructor}'s result has {majorArguments.size} arguments, expected {ownerArity}"
       let indices := majorArguments.extract type.numParams ownerArity
       let lhs := mkAppN (.const modelProjection us) (params ++ indices ++ #[major])
-      let mut normalizedFields : Array ProjectionField := #[]
-      for index in [:fields.size] do
-        let value := fields[index]!
-        let fieldType ← inferType value
-        let level ← getLevel fieldType
-        let prior? := projectionModels.find? fun entry =>
-          entry.1 == type.name && entry.2.1 == index
-        let projected := if index == fieldIndex then lhs else match prior? with
-          | some (_, _, projection, _) =>
-            mkAppN (.const projection us) (params ++ indices ++ #[major])
-          | none => value
-        let iota? := prior?.map fun (_, _, _, iota) =>
-          mkAppN (.const iota us) arguments
-        normalizedFields := normalizedFields.push
-          { name := Name.mkSimple s!"field_{index}", info := .default,
-            value, type := fieldType, level, projected, iota? }
       let propositionLiteral := propositionProjectionIotaUsesLiteralField type
       let legacyLiteral := projectionIotaUsesLiteralField types type || propositionLiteral
       unless nestedBlock?.isSome == types.any (·.numNested > 0) do
@@ -1019,14 +1003,20 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       if nestedBlock?.isSome && !legacyLiteral then
         badShape s!"{type.name}'s nested selector reduces definitionally but its \
           projection rules are not on the literal contract"
-      let rhs ←
-        if legacyLiteral || phase1OneLayer then
-          pure fields[fieldIndex]!
-        else
-          match ProjectionField.normalizeProjectionField eqi
-            publicProjection normalizedFields fieldIndex with
-          | .ok value => pure value
-          | .error message => badShape message
+      -- The right-hand side is the constructor field binder on every route,
+      -- with no route left to choose between.  A transported right-hand side
+      -- would be needed only if field `fieldIndex` depended on the *value* of
+      -- an earlier recursive or nested occurrence field, whose modeled
+      -- projection reconstructs it merely propositionally.  Lean's positivity
+      -- and nesting rules leave no spelling of a constructor field type that
+      -- reads such a value at all
+      -- (`test/fixtures/inductive-models/nested_value_dependency.lean` writes
+      -- out every attempt and the kernel rejects each one), so every field a
+      -- later field can depend on is non-recursive and is selected
+      -- definitionally.  The predicates above survive only where they still
+      -- decide something: the nested-selector agreement gate here, the proof
+      -- below, and the exact binder telescope of the closed statement.
+      let rhs := fields[fieldIndex]!
       let some alpha := instantiateForallsExact? projectionType
           (params ++ indices ++ #[major])
         | badShape s!"{modelProjection}'s exact public type has the wrong arity"
