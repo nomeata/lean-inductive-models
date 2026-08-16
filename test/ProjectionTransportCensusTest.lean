@@ -234,9 +234,15 @@ the positive counts — `arm_f_guards`, `arm_f_zip`, `default_ctor_iota`,
 `maybe_zero_indexed`, `maybe_zero_recursive` and `nonindexed_vanishing` model
 no eligible one-constructor record, and a route that starts giving one of them
 a projection has to be looked at rather than absorbed.  `prim_shape_declines`
-is a zero of the other kind: its four one-constructor owners are exactly the
-shapes that decline, and its only model is a two-constructor enumeration, so a
+is a zero of the other kind: its four declining owners are exactly the shapes
+that reach no arm, and its only model is a two-constructor enumeration, so a
 projection appearing there would mean one of the four had started modelling.
+`maybe_zero_pad` is the complement and is 14: every one of its ten owners but
+the two-constructor `Nt` is a projection-eligible one-constructor record, and
+the count is their fields — one each for `IdOne`, `PropOne`, `PadOne` and
+`PadIdx`, two each for `PadNone`, `PadMany`, `PadMix`, `PadDep` and `PadIdx2`.
+Four of those are the pad's own occupants, and a route that stopped padding
+would drop them out of this row rather than merely change a carrier.
 
 `mutual_one_layer_boundary` is 7 and not 18 because its only consumer of the W
 core was an index erasure with no base constructor: arm E models that skeleton
@@ -274,6 +280,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("hard_nested_mutual_index", 11), ("imax_box", 3), ("indexed_container", 11),
     ("indexed_decl", 11), ("indexed_fibre_boundary", 57),
     ("indexed_hidden_erasure", 11), ("infinitary", 23), ("maybe_zero_indexed", 0),
+    ("maybe_zero_pad", 4),
     ("maybe_zero_projection", 8), ("maybe_zero_recursive", 0), ("mutual_index", 6),
     ("mutual_keying", 2),
     ("mutual_nonrec", 2), ("mutual_odd_shapes", 15),

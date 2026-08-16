@@ -492,6 +492,41 @@ def expectedPrim : List Row :=
        ("_wcore.PProd", 9), ("MixI", 4), ("Inf.below", 18), ("Binder", 12),
        ("BoxF", 7), ("SvIx", 4)],
       [ ("Eq", "prim model: a basis primitive")])
+  -- **The exact-sort pad at a maybe-zero sort**, and the one level relation
+  -- the whole row is. A nonrecursive one-constructor owner at a maybe-`Prop`
+  -- sort must *store* its fields — the Church encoding behind the route keeps
+  -- only inhabitation and every one-constructor owner is asked for its fields
+  -- back — and the storage tower lands at `Sort (max ℓ⃗)`, which is the
+  -- carrier's sort only when the fields' own levels already reach it. A field
+  -- at `Sort u` under a carrier at `Sort (max u v)` does not, and that was
+  -- three separate `incomplete` declines: the one-field route's, the tight
+  -- tower's, and the indexed case's.
+  --
+  -- **One debt and one pad.** The tower now ends at
+  -- [`InductiveModels.unitAt`] `w`, the derived exact-sort lift of `⊤`, which
+  -- is at `Sort (max 0 w) = Sort w` for a bare `w` exactly as for a never-zero
+  -- one — the same fact that lets arm E's `emptyAt w` be an exact empty
+  -- carrier at every route's sort. The tower then lands at `Sort (max ℓ⃗ w)`,
+  -- and `max ℓᵢ w ≡ w` is Lean's own `is_geq` on the input re-asked as a
+  -- conversion. Nothing new was built: this is the never-zero tuple tower's
+  -- own pad at the one sort nobody had taken it to.
+  --
+  -- `PadOne`, `PadMany`, `PadMix` and `PadDep` are the unindexed shapes at one
+  -- field, several, several levels and dependent fields; `PadIdx`/`PadIdx2`
+  -- are the indexed case over the same storage. `PadNone` is the control whose
+  -- fields already reach `max u v`, so it is planned with **no** pad and its
+  -- carrier is the bare tower it always was; `IdOne` and `PropOne` are the two
+  -- exact one-field answers, which still run before the tower and are still
+  -- the field itself and the bare lift.
+  , ("maybe_zero_pad",
+      [("Nt", 15), ("PropOne", 7), ("IdOne", 7), ("PadNone", 9)],
+      [ ("Eq", "prim model: a basis primitive")
+      , ("PadDep", "prim model shape (incomplete): PadDep reaches no generation arm")
+      , ("PadMix", "prim model shape (incomplete): PadMix reaches no generation arm")
+      , ("PadOne", "prim model shape (incomplete): PadOne reaches no generation arm")
+      , ("PadIdx2", "prim model shape (incomplete): PadIdx2 reaches no generation arm")
+      , ("PadMany", "prim model shape (incomplete): PadMany reaches no generation arm")
+      , ("PadIdx", "prim model shape (incomplete): PadIdx reaches no generation arm")])
   -- **The shapes that still reach no arm**, and the claim of this row is the
   -- *word in the parenthesis* rather than the count. Each of these four
   -- aborted the run until the dispatcher classified them: an unsupported owner
@@ -499,12 +534,17 @@ def expectedPrim : List Row :=
   -- messages below are that report. `N` is the control that keeps a run which
   -- declined everything from passing.
   --
-  -- `Foreign`/`Foreign0` say **out of scope** — a recursive occurrence under a
-  -- foreign type former is nesting and belongs to layer 1 — and `PadOne`/
-  -- `PadMany` say **incomplete**, because the field-preserving arm at a
-  -- maybe-zero sort is missing the pad its never-zero counterpart has. A fix
-  -- that made every one of these read the same word would put a gap and a
-  -- boundary in one bucket, which is how a gap stops being visible;
+  -- **All four now say out of scope, and the second pair is the one that
+  -- moved.** `Foreign`/`Foreign0` always did — a recursive occurrence under a
+  -- foreign type former is nesting and belongs to layer 1. Where `PadOne` and
+  -- `PadMany` stood and said `incomplete`, `PadImax` and `PadImaxIdx` now say
+  -- `out of scope`: the pad closed the level gap those two named, and what
+  -- survives it is a field whose level retains an `imax`, which no pad can
+  -- reach at a maybe-zero sort in either direction — `max (imax u v) (max u v)`
+  -- is not `max u v` in normal form, and the recursive box that clears an
+  -- `imax` elsewhere costs a `max 1 ·` floor that is never `Prop`. Saying
+  -- `incomplete` there would name an arm nobody can finish, which is the
+  -- mirror image of the mistake this row exists to prevent;
   -- `test/fixtures/inductive-models/prim_shape_declines.lean` is the argument
   -- for each verdict.
   , ("prim_shape_declines",
@@ -512,8 +552,9 @@ def expectedPrim : List Row :=
       [ ("Eq", "prim model: a basis primitive")
       , ("Foreign", "prim model shape (out of scope): Foreign reaches no generation arm")
       , ("Foreign0", "prim model shape (out of scope): Foreign0 reaches no generation arm")
-      , ("PadOne", "prim model shape (incomplete): PadOne reaches no generation arm")
-      , ("PadMany", "prim model shape (incomplete): PadMany reaches no generation arm")])
+      , ("PadImax", "prim model shape (incomplete): PadImax reaches no generation arm")
+      , ("PadImaxIdx",
+          "prim model shape (incomplete): PadImaxIdx reaches no generation arm")])
   -- **A proposition's projectable field behind a field the kernel skips.**
   -- `infer_proj` substitutes an earlier constructor field only where the rest
   -- of the telescope still names it, and asks for that field to be
@@ -1150,14 +1191,14 @@ def runOne (root : String) (a : TAcc) (r : Row)
       (rep.shapeScopes.toList ==
         [(`Foreign, InductiveModels.ShapeScope.outOfScope),
          (`Foreign0, InductiveModels.ShapeScope.outOfScope),
-         (`PadOne, InductiveModels.ShapeScope.incomplete),
-         (`PadMany, InductiveModels.ShapeScope.incomplete)])
+         (`PadImax, InductiveModels.ShapeScope.incomplete),
+         (`PadImaxIdx, InductiveModels.ShapeScope.incomplete)])
       s!"prim_shape_declines: the shape scopes are {repr rep.shapeScopes}"
     -- Every declined owner is still in the output, at its own record, with no
     -- model family in front of it: that is the contract an abort broke.
     let emittedNames := decls.flatMap (·.names.toArray)
     a := check a
-      ([`Foreign, `Foreign0, `PadOne, `PadMany].all fun owner =>
+      ([`Foreign, `Foreign0, `PadImax, `PadImaxIdx].all fun owner =>
         emittedNames.contains owner && !emittedNames.contains (Naming.modelName owner))
       "prim_shape_declines: a declined owner did not pass through unchanged"
   if name == "prim_prop_skipped_field" then

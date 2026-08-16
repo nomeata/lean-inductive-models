@@ -3,15 +3,16 @@
 
    `prim_declines.lean` is the *former* refusal boundaries, kept as positives
    for the routes that replaced them. This file is the complement: four owners
-   the simple construction still does not model, each of which **aborted the
-   run** until the route dispatcher learned to classify them. An abort is the
-   wrong answer for all four — the output contract says an unsupported owner
-   passes through unchanged and is reported, and exit `2` says so — and for a
+   the simple construction does not model, each of which **aborted the run**
+   until the route dispatcher learned to classify them. An abort is the wrong
+   answer for all four — the output contract says an unsupported owner passes
+   through unchanged and is reported, and exit `2` says so — and for a
    thirty-minute stream it is the difference between a decline row and a run
    that stops in the middle.
 
    The four split two-and-two across the distinction the report line carries,
-   and pinning *which* verdict each one gets is the point of the file:
+   and pinning *which* verdict each one gets is the point of the file. **Both
+   halves now read `out of scope`, and the second half is the one that moved.**
 
    * **out of scope** — the construction looked at the shape and decided
      against it. `Foreign` and `Foreign0` are the two: a field mentioning the
@@ -35,23 +36,37 @@
      check unfolds `idf` and finds no occurrence at all, so neither is routed
      to `Plan.plan` and both arrive here.
 
-   * **incomplete** — the arm that owns the shape ought to reach it and does
-     not. `PadOne` and `PadMany` are the two. A nonrecursive one-constructor
-     owner at a **maybe-zero** sort is the field-preserving arm's, decided
-     before any arm runs, and the Church fallback behind it would record only
-     inhabitation and lose the field. That arm retains a field at exactly the
-     carrier's sort (`prim_shapes`' `PI`) or a field that is exactly a
-     proposition (`PF`), and a field at `Sort u` under a carrier at
-     `Sort (max u v)` is neither — one field (`PadOne`) or several
-     (`PadMany`), the same missing piece either way. The never-zero tuple
-     tower closes precisely this level gap with a pad
-     ([`InductiveModels.unitAt`]); this arm has none. Nothing about the shape
-     is out of bounds, so the verdict says so, and says which arm to finish.
+   * **out of scope, and it used to say incomplete** — `PadImax` and
+     `PadImaxIdx`. A nonrecursive one-constructor owner at a **maybe-zero**
+     sort is the field-preserving arm's, decided before any arm runs, and the
+     Church fallback behind it would record only inhabitation and lose the
+     field; the arm must therefore *store* the field at exactly `Sort w`.
+     `PadOne` and `PadMany` used to stand here and said `incomplete`, because
+     a field at `Sort u` under a carrier at `Sort (max u v)` was retained by
+     neither exact one-field answer and the tower had no pad. **They model**
+     now — the tower ends at [`InductiveModels.unitAt`] `w` and lands at
+     `Sort (max ℓ⃗ w)` — and `maybe_zero_pad.lean` is that whole family.
+
+     What is left here is not the same shape. `PadImax`'s field is a Π, so its
+     level is `imax u v`, and `max (imax u v) (max u v)` is not `max u v` in
+     normal form however the pad is placed: Lean's conversion on levels is
+     normal-form equality (`level.cpp:518-520`) and admits no absorption of an
+     `imax` into a `max`, even though `is_geq` proved the bound by splitting
+     the `imax` into a stronger `max`-shaped one. The recursive box that
+     removes an exposed `imax` for the never-zero tuple tower
+     ([`InductiveModels.boxTyOf`]) is unavailable here for a reason that is
+     also a statement: every boxed level carries a `max 1 ·` floor and no
+     `max 1 ·` is ever a maybe-zero `w`, since at `w := 0` the carrier is
+     `Prop` and a boxed field is not a proof. There is no third pad to build —
+     one that cleared the `imax` would miss `Prop`, one that reached `Prop`
+     would not clear the `imax` — so this is a boundary the construction
+     states, not an arm anyone can finish. `PadImaxIdx` is the indexed half,
+     which reaches the same question through the indexed case's own guard.
 
    `N` is the control: an ordinary owner in the same file that models, so a
    run which declined everything could not pass this row.
 
-   The **fifth** hole the audit named — arm W's `labelFactored` guard refusing
+   The **third** hole the audit named — arm W's `labelFactored` guard refusing
    a shape at a never-zero non-indexed sort — has no occupant here, and not
    for want of trying. It needs a recursive field one of whose *binder types*
    depends on an earlier recursive field, and the kernel rejects an owner
@@ -82,7 +97,7 @@ foreign type former: `idf (T → Type) (fun _ => N) child` mentions `T`, reduces
 to `N`, and needs δ to get there. -/
 def idf (α : Sort u) (a : α) : α := a
 
---#export Eq N idf Foreign Foreign0 PadOne PadMany
+--#export Eq N idf Foreign Foreign0 PadImax PadImaxIdx
 
 inductive Foreign : N → Type where
   | base : Foreign N.z
@@ -93,8 +108,8 @@ inductive Foreign0 : Type where
   | base : Foreign0
   | step (child : Foreign0) (tag : idf (Foreign0 → Type) (fun _ => N) child) : Foreign0
 
-inductive PadOne (α : Sort u) (β : Sort v) : Sort (max u v) where
-  | mk : α → PadOne α β
+inductive PadImax (α : Sort u) (β : Sort v) : Sort (max u v) where
+  | mk : (α → β) → PadImax α β
 
-inductive PadMany (α : Sort u) (β : Sort v) : Sort (max u v) where
-  | mk : α → α → PadMany α β
+inductive PadImaxIdx (α : Sort u) (β : Sort v) (n : N) : N → Sort (max u v) where
+  | mk : (α → β) → PadImaxIdx α β n n
