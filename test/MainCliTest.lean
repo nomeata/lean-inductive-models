@@ -262,22 +262,33 @@ def main (args : List String) : IO UInt32 := do
   IO.FS.removeFile replayTarget
   IO.FS.removeFile invalidPath
 
-  -- Kernel replay uses declaration dependencies internally, without applying
-  -- the model-before-owner output policy or changing the stream's bytes.
+  -- Kernel replay follows the stream and does not change the stream's bytes.
+  -- The same two records either way round separate the two halves of that: in
+  -- dependency order they replay and are republished verbatim; reversed, the
+  -- record which names a constant the stream has not declared is rejected,
+  -- where the former private dependency schedule reordered around it.
   let dependency := `ArenaDependency
   let dependent := `ArenaDependent
   let dependencyDecl : InductiveModels.EDecl :=
     .ax dependency [] (.sort (.succ .zero)) false
   let dependentDecl : InductiveModels.EDecl :=
     .ax dependent [] (.const dependency []) false
+  let orderedDependencies : InductiveModels.Export :=
+    { nestedExport with decls := #[dependencyDecl, dependentDecl] }
+  let orderedText := orderedDependencies.render
+  let orderedReplay ← runInductiveModelsStdin binary [
+    "--no-inductives", "--no-check", "--type-check-input", "--type-check-generated",
+    "--quiet", "-"] orderedText
   let reversedDependencies : InductiveModels.Export :=
     { nestedExport with decls := #[dependentDecl, dependencyDecl] }
-  let reversedText := reversedDependencies.render
   let reversedReplay ← runInductiveModelsStdin binary [
-    "--no-inductives", "--no-check", "--type-check-input", "--type-check-generated",
-    "--quiet", "-"] reversedText
-  state := state.check "kernel replay dependency-orders without transforming output" <|
-    reversedReplay.exitCode == 0 && reversedReplay.stdout == reversedText
+    "--no-inductives", "--no-check", "--type-check-input", "--no-output", "-"]
+    reversedDependencies.render
+  state := state.check "kernel replay follows the stream without transforming output" <|
+    orderedReplay.exitCode == 0 && orderedReplay.stdout == orderedText &&
+      reversedReplay.exitCode == 1 &&
+      (reversedReplay.stderr.splitOn "input kernel check rejected:").length > 1 &&
+      (reversedReplay.stderr.splitOn "unknown constant 'ArenaDependency'").length > 1
 
   let missingDependency : InductiveModels.Export :=
     { nestedExport with decls := #[dependentDecl] }
@@ -395,7 +406,13 @@ def main (args : List String) : IO UInt32 := do
   let theoremName := `ArenaTheorem
   let definitionName := `ArenaDefinition
   let opaqueName := `ArenaOpaque
+  -- The records stand in dependency order, because replay follows the stream.
+  -- The `all` fields deliberately do not: they are mutual-block bookkeeping
+  -- rather than dependencies, and naming a declaration that comes later must
+  -- not make the stream unreplayable.
   let generalMetadata : InductiveModels.Export := { nestedExport with decls := #[
+    .ax proposition [] (.sort .zero) false,
+    .ax proof [] (.const proposition []) false,
     .thm theoremName [] (.const proposition []) (.const proof [])
       [theoremName, proof],
     .opaq opaqueName [universeName] (.sort (.succ (.param universeName)))
@@ -403,8 +420,6 @@ def main (args : List String) : IO UInt32 := do
     .defn definitionName [universeName] (.sort (.succ (.param universeName)))
       (.sort (.param universeName)) (.regular 17) "safe"
       [definitionName, opaqueName],
-    .ax proof [] (.const proposition []) false,
-    .ax proposition [] (.sort .zero) false,
     -- Invalid bodies and dependencies remain outside the arena verdict when
     -- their safety says that Lean itself cannot kernel-check them.
     .defn `ArenaPartial [] (.sort .zero) (.const `ArenaMissing []) .opaque "partial"

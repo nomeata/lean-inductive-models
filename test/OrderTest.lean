@@ -129,6 +129,17 @@ def kernelAccepts (x : Export) : IO Bool := do
     (Lean.Meta.MetaM.run' (typeCheckExport x)) context { env }
   return result matches .ok ()
 
+/-- Kernel-replay an export **through a computed record order**.
+
+`typeCheckExport` replays a stream in the order it is written, so asking it
+about a raw export whose records are known to be out of dependency order asks
+the wrong question. The claim these tests make about such an export is about
+the order `Order.recordOrder` computes for it, so that is the stream submitted.
+An ordering failure is a failure here. -/
+def orderedKernelAccepts (x : Export) : IO Bool := do
+  let .ok order := Order.recordOrder x | return false
+  kernelAccepts { x with decls := order.map fun index => x.decls[index]! }
+
 structure FilterRun where
   input : Export
   output : Export
@@ -551,7 +562,7 @@ def run (root : String) : IO UInt32 := do
     isExactRecordOrder (Order.recordOrder grouped) #[1, 0] &&
       isExactRecordOrder
         (Order.summaryRecordOrderPrioritizing (Order.summaries grouped)) #[1, 0] &&
-      (← kernelAccepts grouped)
+      (← orderedKernelAccepts grouped) && !(← kernelAccepts grouped)
 
   let independentA := EDecl.opaq `IndependentGroupedA [] (.sort (.succ .zero))
     (.sort .zero) false [`IndependentGroupedA, `IndependentGroupedB]

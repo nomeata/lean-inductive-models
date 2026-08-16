@@ -197,38 +197,6 @@ def inputReferences (declaration : EDecl) : Std.HashSet Name := Id.run do
   if let .quot .. := declaration then references := references.insert `Eq
   return references
 
-private abbrev ReplayMarks := Array UInt8
-
-private partial def visitRecord (x : Export) (ownership : Std.HashMap Name Nat)
-    (index : Nat) (marks : ReplayMarks) (order : Array Nat) :
-    Except String (ReplayMarks × Array Nat) := do
-  match marks[index]! with
-  | 2 => return (marks, order)
-  | 1 => throw s!"cyclic kernel declaration dependencies at record {index}: {x.decls[index]!.names}"
-  | _ => pure ()
-  let mut marks := marks.set! index 1
-  let mut order := order
-  for name in inputReferences x.decls[index]! do
-    if let some dependency := ownership[name]? then
-      if dependency != index then
-        (marks, order) ← visitRecord x ownership dependency marks order
-  marks := marks.set! index 2
-  return (marks, order.push index)
-
-/-- Stable input-independent dependency schedule for batch kernel replay. -/
-def replayOrder (x : Export) : Except String (Array Nat) := do
-  let mut ownership : Std.HashMap Name Nat := {}
-  for index in [:x.decls.size] do
-    for name in x.decls[index]!.names do
-      if let some first := ownership[name]? then
-        throw s!"duplicate declaration {name} in records {first} and {index}"
-      ownership := ownership.insert name index
-  let mut marks : ReplayMarks := Array.replicate x.decls.size 0
-  let mut order : Array Nat := #[]
-  for index in [:x.decls.size] do
-    (marks, order) ← visitRecord x ownership index marks order
-  return order
-
 private def findInductiveType (types : List EIndType) (name : Name) : Except String EIndType :=
   match types.find? (·.name == name) with
   | some type => .ok type
@@ -305,18 +273,26 @@ end KernelCheck
 def Export.constantInfos (x : Export) : Except String (Std.HashMap Name ConstantInfo) :=
   KernelCheck.constantInfos x
 
-/-- Check a complete input export in its private dependency schedule. -/
+/-- Check a complete input export **in the order it is written**.
+
+This used to replay in a private depth-first dependency schedule, which meant
+`--type-check-input` could not see an emission-order defect at all: it computed
+its way around one. An export is a stream, Lean's kernel builds an environment
+one declaration at a time, and a record that names a constant no earlier record
+declares is not replayable — so that is now what happens to it, at the record
+which does it. `test/EmissionOrderCensusTest.lean` measures the same property
+directly and reports zero forward references across the committed corpus, in
+the inputs as well as in the generated output.
+
+A dependency cycle needs no separate pass either: the record which closes it
+mentions a constant the stream has not declared, and the kernel says so. -/
 def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   let base ← getEnv
   let constants ← match x.constantInfos with
     | .error message => return .error message
     | .ok constants => pure constants
-  let order ← match KernelCheck.replayOrder x with
-    | .error message => return .error message
-    | .ok order => pure order
   let mut checked := base.toKernelEnv
-  for index in order do
-    let record := x.decls[index]!
+  for record in x.decls do
     let replay ← match KernelCheck.replayDeclaration record with
       | .error message => return .error message
       | .ok replay => pure replay

@@ -110,10 +110,18 @@ def readRejectedFixture (root file : String) : IO Export := do
 def run (root : String) : IO UInt32 := do
   let mut state : TestState := {}
 
+  -- **Replay follows the stream.** An export is a sequence of records and
+  -- Lean's kernel builds an environment one declaration at a time, so a record
+  -- which names a constant no earlier record declares is not replayable. This
+  -- used to be accepted, because replay ran a private depth-first dependency
+  -- schedule and reordered around it; the same two records in the order that
+  -- states the dependency first are the positive control.
   let provider : EDecl := .ax `Provider [] (.sort (.succ .zero)) false
   let consumer : EDecl := .ax `Consumer [] (.const `Provider []) false
-  state := state.check "batch replay accepts valid reversed dependencies" <|
-    accepted (← runCheck (exportOf #[consumer, provider]))
+  state := state.check "batch replay rejects a record which names an undeclared constant" <|
+    errorSatisfies (← runCheck (exportOf #[consumer, provider])) (fun message =>
+      message.contains "unknown constant 'Provider'" && message.contains "Consumer") &&
+      accepted (← runCheck (exportOf #[provider, consumer]))
 
   let publicName : Name := `Collision.foo
   let privateName : Name := (`_private.KernelCheck).mkNum 0 |>.str "Collision" |>.str "foo"
@@ -202,12 +210,16 @@ def run (root : String) : IO UInt32 := do
     errorSatisfies (← runCheck <| exportOf #[emptyInductive])
       (fun message => message == "empty inductive declaration")
 
+  -- Replay follows the stream, so a cycle needs no separate pass: the first
+  -- record of one necessarily names a constant no earlier record declares, and
+  -- the kernel refuses it there. The rejection is reported against that exact
+  -- record rather than against an abstract set of them.
   let cycle := exportOf #[
     .ax `CycleA [] (.const `CycleB []) false,
     .ax `CycleB [] (.const `CycleA []) false]
-  state := state.check "input dependency cycle is rejected before insertion" <|
-    errorSatisfies (← runCheck cycle)
-      (fun message => message.contains "cyclic kernel declaration dependencies")
+  state := state.check "input dependency cycle is rejected at the forward reference" <|
+    errorSatisfies (← runCheck cycle) fun message =>
+      message.contains "unknown constant 'CycleB'" && message.contains "CycleA"
 
   let wrongArity := exportOf #[
     .defn `ArityProvider [`u] (.sort (.succ (.param `u))) (.sort (.param `u)) (.regular 1) "safe" [],

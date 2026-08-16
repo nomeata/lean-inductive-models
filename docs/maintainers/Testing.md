@@ -266,15 +266,17 @@ that same declaration; a record which is *not* that declaration rejects the run
 rather than being silently replaced. `basisvalidationtest` covers both halves,
 including the rejection.
 
-`--type-check-input` still does not see record order at all: `typeCheckExport`
-replays in `KernelCheck.replayOrder`, a depth-first topological sort. The same
-suite therefore also asserts that a deliberately order-broken export is still
-*accepted*. That assertion is the weaker property on purpose and is not an
-endorsement — it records that acceptance by `--type-check-input` is no evidence
-that an export replays in record order, which is why the invariant above has to
-be checked directly. Making replay order-sensitive is a separate contract
-decision; it is no longer blocked by this repository's own output, and the
-commit that takes it deletes that assertion.
+`--type-check-input` sees record order. `typeCheckExport` used to replay in
+`KernelCheck.replayOrder`, a depth-first topological sort, so it computed its
+way around every emission-order defect, and the same suite pinned that by
+requiring a deliberately order-broken export to still be *accepted*. With the
+census at zero that schedule is gone: replay follows the stream, Lean's kernel
+rejects the record which names a constant no earlier record declares, and the
+weaker assertion was deleted in the commit which made it false. A dependency
+cycle is rejected the same way, at the record which closes it, so there is no
+separate cycle pass either. The census stays, because it covers the generated
+output under the maximal configuration whether or not `--type-check-input` is
+passed, and reports every offending record rather than the first.
 
 `memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
 suites. `.github/workflows/ci.yml` is the only workflow file, and it holds

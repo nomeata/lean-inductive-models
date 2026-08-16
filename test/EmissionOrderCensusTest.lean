@@ -46,27 +46,24 @@ covering the corpus. The input exports are checked to be clean too — a dirty
 input is a separate defect in the fixture or its exporter, not something this
 suite may absorb.
 
-## Why the second half is here
+## What `--type-check-input` now sees
 
-`--type-check-input` does *not* see record order at all, because
-`InductiveModels.typeCheckExport` does not replay in it: it replays in
-`KernelCheck.replayOrder`, a depth-first topological sort of the same
-`inputReferences` edges. `orderInsensitiveReplayAccepts` pins that, by taking a
-genuine input fixture, reversing it, and requiring the reversal to be both
-order-broken and accepted.
+It used to see nothing about order: `InductiveModels.typeCheckExport` replayed
+in `KernelCheck.replayOrder`, a depth-first topological sort of the same
+`inputReferences` edges, so it computed its way around every emission-order
+defect. This file used to end by *pinning* that, taking a genuine fixture,
+reversing it, and requiring the reversal to be both order-broken and still
+accepted — the weaker property, recorded so that acceptance would not be read
+as evidence of replayability.
 
-That assertion is deliberately the *weaker* property and it is still not an
-endorsement. It says that acceptance of any export by `--type-check-input` is
-**no evidence** that the export is replayable in record order — which is why the
-invariant above has to be checked separately and directly. It is kept, rather
-than deleted along with the allowlist it used to protect, because that
-distinction is exactly as true now as it was before: the two halves of this file
-assert two different things about the same stream.
-
-Making replay order-sensitive is a separate contract decision. With the census
-above at zero it is no longer blocked by this repository's own output; a
-maintainer who takes it should expect this assertion to fail, which is the
-intended signal, and should delete it in that same commit.
+With the census at zero, replay follows the stream, and that assertion has been
+deleted in the commit which made it false. `--type-check-input` and this suite
+now measure the same property by two different routes: Lean's kernel rejects the
+record which names a constant no earlier record declares, and
+`forwardReferences` names it. The census stays, because it covers the generated
+output under the maximal configuration whether or not anyone passes
+`--type-check-input`, and because it reports every offending record rather than
+stopping at the first.
 -/
 
 set_option maxRecDepth 4096
@@ -171,57 +168,6 @@ pinned for the same reason as in `ProjectionTransportCensusTest`: the invariant
 must not silently stop being exhaustive. -/
 def expectedUnrunnable : Array String := #[]
 
-/-- A deliberately order-broken export: the same records, emitted back to
-front.
-
-Reversal is used rather than a hand-written stream because it is derived from a
-committed fixture, so this assertion cannot drift away from the real format. -/
-def orderBroken (x : Export) : Export := { x with decls := x.decls.reverse }
-
-/-- `--type-check-input` replays via `KernelCheck.replayOrder`, a depth-first
-topological sort, so record order does not reach Lean's kernel.
-
-This asserts the *weaker* property on purpose — see the header. It first
-establishes that the reversed export really is order-broken (otherwise the
-acceptance below would say nothing), then that `typeCheckExport` accepts it
-anyway. If replay is ever made order-sensitive this assertion fails, which is
-the intended signal, and the maintainer making that change deletes it. -/
-def orderInsensitiveReplayAccepts (root : String) : IO (Array String) := do
-  let path := s!"{root}/test/fixtures/inductive-models/prim_shapes.ndjson"
-  let .ok x := parse (← IO.FS.readFile path)
-    | throw <| IO.userError s!"cannot parse {path}"
-  let mut failures : Array String := #[]
-  let straight := (forwardReferences x.decls).size
-  unless straight == 0 do
-    failures := failures.push
-      s!"prim_shapes.ndjson is itself order-broken in {straight} records: \
-         a genuine input fixture is the control for this assertion"
-  let broken := orderBroken x
-  let brokenCount := (forwardReferences broken.decls).size
-  if brokenCount == 0 then
-    failures := failures.push
-      "reversing prim_shapes.ndjson produced no forward reference, so the \
-       acceptance below would not witness order-insensitivity: pick an input \
-       whose reversal is genuinely order-broken"
-  let env ← importModules #[] {}
-  let context : Core.Context :=
-    { fileName := "<emission-order-census-test>", fileMap := default,
-      maxHeartbeats := 0, maxRecDepth := 8192 }
-  let (result, _) ← Core.CoreM.toIO (MetaM.run' (typeCheckExport broken)) context { env }
-  match result with
-  | .ok () => pure ()
-  | .error message =>
-    failures := failures.push
-      s!"typeCheckExport rejected an order-broken export: {message}. Replay has \
-         become order-sensitive, so this assertion no longer states a property \
-         of this tool and the commit that made replay order-sensitive should \
-         delete it"
-  unless failures.isEmpty do return failures
-  IO.println s!"order-insensitive replay: an export reversed into \
-    {brokenCount} forward-referencing records is still accepted by \
-    typeCheckExport (this pins today's weaker property, not an endorsement)"
-  return #[]
-
 def main (args : List String) : IO UInt32 := do
   initSearchPath (← findSysroot)
   let root := args.head?.getD "."
@@ -262,8 +208,6 @@ def main (args : List String) : IO UInt32 := do
     failures := failures.push
       s!"unrunnable fixtures are {unrunnable}, expected {expectedUnrunnable}: \
          update expectedUnrunnable"
-
-  failures := failures ++ (← orderInsensitiveReplayAccepts root)
 
   IO.println s!"emission order: {records - forwardReferencing} of {records} \
     generated records declare every name they reference before referencing it, \
