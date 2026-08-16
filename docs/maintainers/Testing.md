@@ -96,7 +96,7 @@ correctness_targets=(
   deepimaxboxtest psigmaprimetest exactsortlifttest
   tightpsigmaprimeroutetest vanishingerasuretest
   transparentowneraliasestest exportsyntaxnormalizationtest
-  basisvalidationtest sourcespooltest
+  basisvalidationtest arenaformattest
 )
 ```
 
@@ -144,7 +144,7 @@ lake exe vanishingerasuretest
 lake exe transparentowneraliasestest
 lake exe exportsyntaxnormalizationtest
 lake exe basisvalidationtest
-lake exe sourcespooltest "$PWD"
+lake exe arenaformattest "$PWD"
 PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
 python3 test/scripts/generate_family_adapter_fixtures.py \
   --output test/fixtures/inductive-models/family_adapter_generated.lean --check
@@ -193,16 +193,18 @@ at the documented internal-invariant boundary; unsupported exit 2 is a corpus
 failure.
 
 `ordertest` compares the compatibility retained-array path, declaration-event
-collection, and sink-free compact discard over the
-same generation fixtures and exercises planned declaration-wise source
-replay. `mainclitest` selects compact discard explicitly with `--no-output`;
+collection, and sink-free compact discard over the same generation fixtures.
+`mainclitest` selects compact discard explicitly with `--no-output`;
 `--type-check-generated` checks each exact generated island directly in process,
-while `--no-type-check-generated` invokes no generated checker. It pins exit-2 precedence,
-noncanonical parser fallback equivalence, cleanup of the
-input-only source snapshot workspace, and ordinary fallback before input is
-consumed when `_tmp` is unusable. The snapshot exists only to preserve exact
-stdin/FIFO input for parser-compatible fallback; generated logical output is
-never serialized through it.
+while `--no-type-check-generated` invokes no generated checker. It pins exit-2
+precedence, noncanonical input equivalence, and — in every mode, including with
+a hostile `_tmp` and an ambient `TMPDIR` — that the run opens no file it was not
+given on the command line.
+
+`arenaformattest` pins the export format itself: both readers agree on every
+record spelling the Kernel Arena accepts, sparse and repeated arena IDs behave
+as the exporter's parser does, and the persistent declaration-stream writer is
+byte-identical to whole-export rendering.
 
 `test` runs each fixture with `typeCheckGenerated` at its default, so every
 accepted island goes through `checkGeneratedIn`, and `runOne` reads the verdict

@@ -231,19 +231,14 @@ prefix after a late failure. When input kernel checking is disabled, both actual
 output and eligible checked no-output generation first build a compact source
 census; each exact source declaration is trusted-installed for construction,
 and each generated island is optionally checked directly in process while its
-compact certificate is live. The parser transfers one declaration replay arena instead of reparsing; at parse
-completion its dense expression-ID table is replaced by the exact expression
-roots referenced by declarations, while the expression DAGs and name/level
-tables needed for declaration replay remain available. An input-only
-project-local snapshot preserves stdin/FIFO bytes for parser-compatible
-fallback and is released once that compact arena is replay-certified; it is
-not a generated-output representation. Generated logical declarations are
-checked directly as values, never through JSON, an output parser, a writer, or
-a spool. With both `--no-output` and `--no-type-check-generated`, accepted islands
-are summarized while live and then discarded without any kernel check: no
-workspace is opened and no cumulative generated declaration array is retained.
-Input kernel checking may retain the parsed source, but generated actual output
-still uses the declaration stream. No-generation writing preserves the existing
+compact certificate is live. The input is parsed exactly once and the parsed
+declarations are kept, so nothing is ever re-read, re-parsed or spooled to
+disk: the tool opens no file it was not given on the command line. Generated
+logical declarations are checked directly as values, never through JSON, an
+output parser or a writer. With both `--no-output` and
+`--no-type-check-generated`, accepted islands are summarized while live and
+then discarded without any kernel check, and no cumulative generated
+declaration array is retained. No-generation writing preserves the existing
 whole-export path.
 
 Unsupported shapes pass through unchanged and are reported as declines. A

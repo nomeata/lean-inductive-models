@@ -160,7 +160,7 @@ jobs:
                 structureetatest deepimaxboxtest \
                 psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
                 vanishingerasuretest transparentowneraliasestest \
-                exportsyntaxnormalizationtest basisvalidationtest sourcespooltest
+                exportsyntaxnormalizationtest basisvalidationtest arenaformattest
               lake exe clitest
               lake exe generationflagstest
               lake exe checktest "$GITHUB_WORKSPACE"
@@ -193,7 +193,7 @@ jobs:
               lake exe transparentowneraliasestest
               lake exe exportsyntaxnormalizationtest
               lake exe basisvalidationtest
-              lake exe sourcespooltest "$GITHUB_WORKSPACE"
+              lake exe arenaformattest "$GITHUB_WORKSPACE"
               PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
               python3 test/scripts/generate_family_adapter_fixtures.py \
                 --output test/fixtures/inductive-models/family_adapter_generated.lean --check

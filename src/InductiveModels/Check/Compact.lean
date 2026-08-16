@@ -67,26 +67,6 @@ def compactFamilyCertificateRecordsWithIndex (x : Export) (index : SyntaxIndex)
         (compactFamilyCertificateWithIndex x index family))
   return records
 
-/-- Capture the frozen source-family template while its exact owner record is
-live.  The singleton *record view* still contains the complete mutual block;
-all declaration types, constructors, public-slot occurrences, transparent
-definitions, and rule slots come from `index`. Rebasing only the record ordinal
-therefore avoids retaining unrelated `EDecl` values without synthesizing or
-splitting the owner. -/
-def SyntaxIndex.sourceFamilyCertificatesForRecord (index : SyntaxIndex)
-    (template : Export) (owner : EDecl) : Array CompactFamilyCertificate :=
-  let root? := match owner with
-    | .induct (type :: _) _ _ => some type.name
-    | _ => none
-  root?.elim #[] fun root =>
-    let view := { template with decls := #[owner] }
-    (index.sourceStatementFamilies root).filterMap fun family =>
-      -- Match indexed discovery exactly: an expected family becomes an input
-      -- family only when at least one exact public slot occurs in the source.
-      if family.correspondence.publicNames.any index.names.contains then
-        some (compactFamilyCertificateWithIndex view index { family with ownerDecl := 0 })
-      else none
-
 /-- Capture every currently discoverable family in owner-record order. This is
 the full-export convenience form; compact generation captures source and island
 families separately through `compactFamilyCertificateWithIndex`. -/

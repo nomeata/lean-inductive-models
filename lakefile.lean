@@ -110,9 +110,9 @@ lean_exe memoryprobe where
   root := `MemoryProbe
   supportInterpreter := true
 
-lean_exe sourcespooltest where
+lean_exe arenaformattest where
   srcDir := "test"
-  root := `SourceSpoolTest
+  root := `ArenaFormatTest
   supportInterpreter := true
 
 lean_exe projectiontest where

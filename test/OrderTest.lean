@@ -3,18 +3,6 @@ import InductiveModels.Order
 
 set_option maxRecDepth 8192
 
-/--
-error: Unknown constant `InductiveModels.Spool.ParseTee.mk`
--/
-#guard_msgs in
-#check InductiveModels.Spool.ParseTee.mk
-
-/--
-error: Unknown constant `InductiveModels.Spool.PlannedSourceReader.mk`
--/
-#guard_msgs in
-#check InductiveModels.Spool.PlannedSourceReader.mk
-
 /-!
 # Focused tests for record-level model ordering
 
@@ -157,9 +145,6 @@ structure DiscardedFilterRun where
 structure StreamedFilterRun extends DiscardedFilterRun where
   output : Export
 
-structure PlannedCensusFilterRun extends DiscardedFilterRun where
-  input : PlannedSourceInput
-
 def runFilterState (input : Export) (generation : InductiveModels.Cli.Config)
     (checkRecursors : Bool := false) : IO FilterRun := do
   let env ← importModules #[] {}
@@ -213,98 +198,6 @@ def runFilterStreamedState (input : Export)
     (Lean.Meta.MetaM.run'
       (runFilterStreaming input checkRecursors generation emit)) context { env }
   return { report, plan, output := { input with decls := ← collected.get } }
-
-def runFilterPlannedDiscardedState (scratch : String) (input : Export)
-    (generation : InductiveModels.Cli.Config)
-    (checkRecursors : Bool := false) : IO DiscardedFilterRun :=
-  Spool.withWorkspace scratch fun workspace => do
-    let inputFile ← workspace.createFile "planned-input.ndjson"
-    discard <| inputFile.append input.render.toUTF8
-    discard <| inputFile.finish
-    let tee ← Spool.ParseTee.create workspace
-    let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
-      parseHandleWithSink handle tee.sink
-        (options := { allowDuplicateNames := true })
-    let (parsed, certificate) ← match parsedResult with
-      | .ok parsed => pure parsed
-      | .error error => throw <| IO.userError s!"planned source parse failed: {error}"
-    let sizes ← tee.finish
-    let reader ← match ← Spool.PlannedSourceReader.create tee certificate sizes parsed.decls.size with
-      | .ok reader => pure reader
-      | .error error => throw <| IO.userError s!"planned source reader failed: {error}"
-    let env ← importModules #[] {}
-    let context : Core.Context :=
-      { fileName := "<planned-order-test>", fileMap := default,
-        maxHeartbeats := 0, maxRecDepth := 8192 }
-    let ((report, plan), _) ← Lean.Core.CoreM.toIO
-      (Lean.Meta.MetaM.run'
-        (runFilterDiscardingPlanned parsed reader checkRecursors generation)) context { env }
-    return { report, plan }
-
-def runFilterPlannedCensusState (scratch : String) (input : Export)
-    (generation : InductiveModels.Cli.Config)
-    (checkRecursors : Bool := false) : IO PlannedCensusFilterRun :=
-  Spool.withWorkspace scratch fun workspace => do
-    let inputFile ← workspace.createFile "planned-census-input.ndjson"
-    discard <| inputFile.append input.render.toUTF8
-    discard <| inputFile.finish
-    let tee ← Spool.ParseTee.create workspace
-    let parsedResult ← IO.FS.withFile inputFile.path .read fun handle =>
-      parsePlannedSourceWithTee handle tee
-        (options := { allowDuplicateNames := true })
-    let parsed ← match parsedResult with
-      | .ok parsed => pure parsed
-      | .error error => throw <| IO.userError s!"planned census parse failed: {error}"
-    let sizes ← tee.finish
-    let reader ← match ← Spool.PlannedSourceReader.create tee parsed.certificate sizes
-        parsed.envelope.declarationCount (some parsed.envelope.arena) with
-      | .ok reader => pure reader
-      | .error error => throw <| IO.userError s!"planned census reader failed: {error}"
-    let env ← importModules #[] {}
-    let context : Core.Context :=
-      { fileName := "<planned-census-order-test>", fileMap := default,
-        maxHeartbeats := 0, maxRecDepth := 8192 }
-    let ((report, plan), _) ← Lean.Core.CoreM.toIO
-      (Lean.Meta.MetaM.run'
-        (runFilterDiscardingPlannedCensus parsed reader checkRecursors generation)) context { env }
-    return { report, plan, input := parsed }
-
-def preparePlannedCensus (workspace : Spool.Workspace) (input : Export) :
-    IO (PlannedSourceInput × Spool.PlannedSourceReader) := do
-  let inputFile ← workspace.createFile "planned-provenance-input.ndjson"
-  discard <| inputFile.append input.render.toUTF8
-  discard <| inputFile.finish
-  let tee ← Spool.ParseTee.create workspace
-  let parsed ← IO.FS.withFile inputFile.path .read fun handle => do
-    match ← parsePlannedSourceWithTee handle tee
-        (options := { allowDuplicateNames := true }) with
-    | .ok parsed => pure parsed
-    | .error error => throw <| IO.userError s!"planned provenance parse failed: {error}"
-  let sizes ← tee.finish
-  let reader ← match ← Spool.PlannedSourceReader.create tee parsed.certificate sizes
-      parsed.envelope.declarationCount (some parsed.envelope.arena) with
-    | .ok reader => pure reader
-    | .error error => throw <| IO.userError s!"planned provenance reader failed: {error}"
-  return (parsed, reader)
-
-def swappedPlannedReaderRejected (scratch : String) (left right : Export) : IO Bool :=
-  Spool.withWorkspace scratch fun leftWorkspace => do
-    let (leftInput, _) ← preparePlannedCensus leftWorkspace left
-    Spool.withWorkspace scratch fun rightWorkspace => do
-      let (_, rightReader) ← preparePlannedCensus rightWorkspace right
-      let env ← importModules #[] {}
-      let context : Core.Context :=
-        { fileName := "<planned-provenance-test>", fileMap := default,
-          maxHeartbeats := 0, maxRecDepth := 8192 }
-      try
-        let _ ← Lean.Core.CoreM.toIO
-          (Lean.Meta.MetaM.run'
-            (runFilterDiscardingPlannedCensus leftInput rightReader false
-              { nested := false, mutualModels := false, simple := false, basic := false }))
-          context { env }
-        return false
-      catch error =>
-        return (toString error).contains "different raw provenance"
 
 def generatedFixtureState (path : String) (generation : InductiveModels.Cli.Config) :
     IO FilterRun := do
@@ -736,16 +629,14 @@ def run (root : String) : IO UInt32 := do
       neutralStreamed.plan.streamStats.maxIslandRecords == 0
 
   -- The declaration-wise filter consumes source records in raw order. Use an
-  -- already-valid dependency stream so both retained and planned paths can
-  -- pin the identity ordinal mapping.
+  -- already-valid dependency stream so both the full and compact retention
+  -- modes can pin the identity ordinal mapping.
   let feedConsumer := axDecl `FeedConsumer (.const `FeedProvider [])
   let feedProvider := axDecl `FeedProvider
   let feedInput := exportOf #[feedProvider, feedConsumer]
   let feedRun ← runFilterState feedInput noGeneration
   let feedTrace ← runFilterTraceState feedInput noGeneration
   let feedDiscarded ← runFilterDiscardedState feedInput noGeneration
-  let feedPlanned ← runFilterPlannedDiscardedState s!"{root}/_tmp" feedInput noGeneration
-  let feedCensus ← runFilterPlannedCensusState s!"{root}/_tmp" feedInput noGeneration
   state := state.check "filter consumes one raw-order source record at a time" <|
     feedRun.output.decls == feedInput.decls &&
       feedRun.report == ({} : Report) &&
@@ -759,26 +650,10 @@ def run (root : String) : IO UInt32 := do
       feedTrace.steps.all fun step =>
         !step.sourceIsInductive && step.sourceInstalled &&
           step.generated.isEmpty && step.generatedRecords == 0
-  state := state.check "planned source spans drive the same frozen raw order" <|
-    feedPlanned.report == feedDiscarded.report &&
-      feedPlanned.plan.declarations == feedDiscarded.plan.declarations &&
-      feedPlanned.plan.checkReport == feedDiscarded.plan.checkReport &&
-      feedPlanned.plan.retainedGeneratedRecords ==
-        feedDiscarded.plan.retainedGeneratedRecords &&
-      feedPlanned.plan.declarations == #[.source 0, .source 1] &&
-      feedPlanned.plan.retainedGeneratedRecords == 0
-  state := state.check "planned census releases source records and preserves dependency replay" <|
-    feedCensus.input.envelope.retainedDeclarations == 0 &&
-      feedCensus.input.envelope.declarationCount == feedInput.decls.size &&
-      feedCensus.report == feedDiscarded.report &&
-      feedCensus.plan.declarations == feedDiscarded.plan.declarations &&
-      feedCensus.plan.checkReport == feedDiscarded.plan.checkReport &&
-      feedCensus.plan.retainedGeneratedRecords == feedDiscarded.plan.retainedGeneratedRecords
-  let alteredFeedInput := exportOf #[
-    axDecl `FeedConsumer (.sort .zero),
-    axDecl `FeedProvider]
-  state := state.check "planned census rejects a same-count same-name reader from another source" <|
-    ← swappedPlannedReaderRejected s!"{root}/_tmp" feedInput alteredFeedInput
+  state := state.check "compact discard plans the frozen raw source order" <|
+    feedDiscarded.report == feedRun.report &&
+      feedDiscarded.plan.declarations == #[.source 0, .source 1] &&
+      feedDiscarded.plan.retainedGeneratedRecords == 0
 
   -- This real mutual output has three members, unequal constructor counts,
   -- parameters and levels. Discovery must use each declaration's exact name,
@@ -897,8 +772,7 @@ def run (root : String) : IO UInt32 := do
           family.correspondence.iotas.any (fun rule =>
             rule.recursor == `IdxP.rec && rule.name == Naming.iotaName `IdxP.rec 1))
 
-  -- Compare full output, compact discard, and the planned source reader across
-  -- each generation route.
+  -- Compare full output against compact discard across each generation route.
   let compactMatrix : Array (String × String × InductiveModels.Cli.Config × Bool) := #[
     ("nested", "nested_iota.ndjson", { noGeneration with nested := true }, false),
     ("mutual", "mutual_shapes.ndjson", { noGeneration with mutualModels := true }, false),
@@ -915,32 +789,11 @@ def run (root : String) : IO UInt32 := do
       continue
     let legacy ← runFilterState input generation checkRecursors
     let discarded ← runFilterDiscardedState input generation checkRecursors
-    let plannedCensus ←
-      runFilterPlannedCensusState s!"{root}/_tmp" input generation checkRecursors
     state := state.check s!"compact-discard {label} equals full output" <|
       discarded.report == legacy.report &&
         discarded.plan.checkReport == Check.checkReport legacy.output &&
         discarded.plan.declarations.size == legacy.output.decls.size &&
         discarded.plan.retainedGeneratedRecords == 0
-    state := state.check s!"planned-census {label} equals compact full output" <|
-      plannedCensus.input.envelope.retainedDeclarations == 0 &&
-        plannedCensus.input.envelope.declarationCount == input.decls.size &&
-        plannedCensus.report == discarded.report &&
-        plannedCensus.plan.checkReport == discarded.plan.checkReport &&
-        plannedCensus.plan.declarations == discarded.plan.declarations &&
-        plannedCensus.plan.retainedGeneratedRecords == discarded.plan.retainedGeneratedRecords
-
-  let existingDiscarded ← runFilterDiscardedState nestedRun.output
-    { noGeneration with nested := true }
-  let existingPlanned ← runFilterPlannedCensusState s!"{root}/_tmp" nestedRun.output
-    { noGeneration with nested := true }
-  state := state.check "planned-census existing model preserves family/check certificates" <|
-    existingPlanned.input.envelope.retainedDeclarations == 0 &&
-      existingPlanned.report == existingDiscarded.report &&
-      existingPlanned.plan.checkReport == existingDiscarded.plan.checkReport &&
-      existingPlanned.plan.declarations == existingDiscarded.plan.declarations &&
-      existingPlanned.plan.retainedGeneratedRecords ==
-        existingDiscarded.plan.retainedGeneratedRecords
 
   -- A malformed later inductive preserves the completed trace prefix and
   -- returns an empty compact plan.

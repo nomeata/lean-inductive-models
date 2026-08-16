@@ -6,7 +6,6 @@ import InductiveModels.Projection
 import InductiveModels.Check
 import InductiveModels.KernelCheck
 import InductiveModels.FamilyAdapterShadow
-import InductiveModels.Spool
 
 /-!
 # The filter
@@ -2332,54 +2331,6 @@ def sourceReplayInductiveDerivations (roles : SourceReplayRoles)
     aliases ← aliases.replace recursor buildRecursor
   return aliases
 
-/-- Declaration-discarding parser result for the internal planned route. The
-raw certificate is not an eligibility promise: callers must still finish the
-tee and construct a `PlannedSourceReader`. Generic raw composition requires a
-canonical stream; declaration-wise output and checked no-output generation need
-only a progressive arena and fall back to the exact input snapshot when
-declaration replay is unsafe. -/
-structure PlannedSourceInput where private mk ::
-  envelope : ParsedEnvelope
-  census : SourceCensus
-  certificate : RawCertificate
-  private provenance : Spool.SourceProvenance
-
-private def parsePlannedSourceWithSink (stream : IO.FS.Stream) (sink : RawSink)
-    (provenance : Spool.SourceProvenance)
-    (options : ParseOptions := {}) :
-    IO (Except String PlannedSourceInput) := do
-  let builder ← IO.mkRef ({} : SourceCensus.Builder)
-  let result ← parseStreamDiscardingDeclarations stream sink
-    { emit := fun declaration => builder.modify (·.push declaration) }
-    options
-  match result with
-  | .error error => return .error error
-  | .ok (envelope, certificate) =>
-    let census := (← builder.get).freeze
-    unless census.summaries.size == envelope.declarationCount do
-      return .error "planned source census cardinality disagrees with parser"
-    return .ok (.mk envelope census certificate provenance)
-
-def parsePlannedSourceWithTee (handle : IO.FS.Handle) (tee : Spool.ParseTee)
-    (options : ParseOptions := {}) :
-    IO (Except String PlannedSourceInput) :=
-  parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
-    options
-
-/-- Parse planned CLI input into a frozen census plus one exact raw fallback
-snapshot and declaration spans. Generated values are never written here. -/
-def parsePlannedSourceWithInputTee (handle : IO.FS.Handle)
-    (tee : Spool.PlannedInputTee) (options : ParseOptions := {}) :
-    IO (Except String PlannedSourceInput) :=
-  parsePlannedSourceWithSink (IO.FS.Stream.ofHandle handle) tee.sink tee.sourceProvenance
-    options
-
-def parsePlannedSourceStreamWithInputTee (stream : IO.FS.Stream)
-    (tee : Spool.PlannedInputTee) (options : ParseOptions := {}) :
-    IO (Except String PlannedSourceInput) :=
-  parsePlannedSourceWithSink stream tee.sink tee.sourceProvenance
-    options
-
 /-- Build source-family certificate rows in raw declaration order. -/
 def SourceCensus.familyCertificateRecords (census : SourceCensus)
     (source : Export) : Array (Array Check.CompactFamilyCertificate) := Id.run do
@@ -2405,8 +2356,8 @@ private structure FilterContext where
   constructionNormalizer : ExactNormalizationEnv
   sourceAliases : SourceReplayAliases
   sourceSummaries : Array Order.DeclSummary
-  sourceGlobalExtras? : Option (Array Check.GlobalExtraRecord)
-  sourceFamilyRecords? : Option (Array (Array Check.CompactFamilyCertificate))
+  sourceGlobalExtras : Array Check.GlobalExtraRecord
+  sourceFamilyRecords : Array (Array Check.CompactFamilyCertificate)
   rawOrdinals : Std.HashMap Name Nat
   reserved : Std.HashSet Name
   constructionReserved : Std.HashSet Name
@@ -2478,12 +2429,8 @@ private def FilterState.feedSource (state : FilterState) (context : FilterContex
   let sourceSummary := sourceSummaries[sourceOrdinal]!
   let sourceUsesAlias := sourceRecordUsesAliases sourceAliases sourceSummary d
   let replayD := if sourceUsesAlias then sourceAliases.buildRecord d else d
-  let sourceGlobalExtra := match context.sourceGlobalExtras?.bind (·[sourceOrdinal]?) with
-    | some record => record
-    | none => (Check.globalExtraRecordsWithIndex sourceSyntax #[d])[0]!
-  let sourceFamilyRecord := match context.sourceFamilyRecords?.bind (·[sourceOrdinal]?) with
-    | some records => records
-    | none => sourceSyntax.sourceFamilyCertificatesForRecord x d
+  let sourceGlobalExtra := context.sourceGlobalExtras[sourceOrdinal]!
+  let sourceFamilyRecord := context.sourceFamilyRecords[sourceOrdinal]!
   let rawOrdinals := context.rawOrdinals
   let reserved := context.constructionReserved
   let mut mainEnv := state.mainEnv
@@ -2933,14 +2880,11 @@ full mode retains declarations. -/
 private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
     (retention : RetentionMode)
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false)
-    (plannedSource? : Option Spool.PlannedSourceReader := none)
-    (sourceCensus? : Option SourceCensus := none)
     (collectAdapterShadows : Bool := false)
     (outputEmitter? : Option StreamOutputEmitter := none) :
     MetaM (Array EDecl × Report × CompactPlan × Array FilterSourceStep ×
       Array FamilyAdapter.ShadowObservation) := do
-  let plannedCensus := sourceCensus?.isSome
-  let sourceCensus := sourceCensus?.getD (SourceCensus.ofSource x)
+  let sourceCensus := SourceCensus.ofSource x
   let plannedAliases ← match sourceCensus.replayAliases with
     | .ok aliases => pure aliases
     | .error message => throwError "cannot plan collision-safe source replay: {message}"
@@ -2966,39 +2910,20 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   -- transient declaration at its logical transition.
   let sourceSyntax := sourceCensus.sourceSyntax
   let constructionSyntax ← if sourceAliases.isEmpty then pure sourceSyntax else do
-    if plannedCensus then
-      let some reader := plannedSource?
-        | throwError "planned source census has no declaration reader"
-      let mut index := sourceSyntax
-      for ordinal in [:sourceCensus.summaries.size] do
-        let declaration ← match ← reader.read ordinal with
-          | .ok declaration => pure declaration
-          | .error message =>
-            throwError "cannot decode planned source record {ordinal}: {message}"
-        if sourceRecordUsesAliases sourceAliases sourceCensus.summaries[ordinal]! declaration then
-          match index.withReplayRecords #[declaration]
-              #[sourceAliases.buildRecord declaration] with
-          | .ok next => index := next
-          | .error message =>
-            throwError "cannot index collision-safe source replay: {message}"
-      pure index
-    else
-      let mut exactRecords : Array EDecl := #[]
-      let mut replayRecords : Array EDecl := #[]
-      for ordinal in [:x.decls.size] do
-        let declaration := x.decls[ordinal]!
-        if sourceRecordUsesAliases sourceAliases sourceCensus.summaries[ordinal]! declaration then
-          exactRecords := exactRecords.push declaration
-          replayRecords := replayRecords.push (sourceAliases.buildRecord declaration)
-      match sourceSyntax.withReplayRecords exactRecords replayRecords with
-      | .ok index => pure index
-      | .error message => throwError "cannot index collision-safe source replay: {message}"
+    let mut exactRecords : Array EDecl := #[]
+    let mut replayRecords : Array EDecl := #[]
+    for ordinal in [:x.decls.size] do
+      let declaration := x.decls[ordinal]!
+      if sourceRecordUsesAliases sourceAliases sourceCensus.summaries[ordinal]! declaration then
+        exactRecords := exactRecords.push declaration
+        replayRecords := replayRecords.push (sourceAliases.buildRecord declaration)
+    match sourceSyntax.withReplayRecords exactRecords replayRecords with
+    | .ok index => pure index
+    | .error message => throwError "cannot index collision-safe source replay: {message}"
   let constructionNormalizer := constructionSyntax.exactNormalizer
   let sourceSummaries := sourceCensus.summaries
-  let sourceGlobalExtras? := if plannedCensus then none else
-    some (Check.globalExtraRecordsWithIndex sourceSyntax x.decls)
-  let sourceFamilyRecords? := if plannedCensus then none else
-    some (sourceCensus.familyCertificateRecords x)
+  let sourceGlobalExtras := Check.globalExtraRecordsWithIndex sourceSyntax x.decls
+  let sourceFamilyRecords := sourceCensus.familyCertificateRecords x
   let rawOrdinals := sourceCensus.rawOrdinals
   let reserved := sourceCensus.reserved
   let constructionReserved := reserved.fold (init := reserved) fun names name =>
@@ -3006,24 +2931,14 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let context : FilterContext := {
     source := x, checkRecursors, generation, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
-    sourceSummaries, sourceGlobalExtras?, sourceFamilyRecords?,
+    sourceSummaries, sourceGlobalExtras, sourceFamilyRecords,
     rawOrdinals, reserved, constructionReserved, collectTrace, collectAdapterShadows,
     outputEmitter? }
   let mut state : FilterState :=
     { mainEnv := mainEnv, persistentSyntax := sourceSyntax }
   for rawOrdinal in sourceOrder do
-    let declaration ← match plannedSource? with
-      | none => match x.decls[rawOrdinal]? with
-        | some oracle => pure oracle
-        | none => throwError "source record {rawOrdinal} has neither retained nor planned payload"
-      | some reader => do
-        match ← reader.read rawOrdinal with
-        | .error error => throwError "cannot decode planned source record {rawOrdinal}: {error}"
-        | .ok declaration =>
-          if let some oracle := x.decls[rawOrdinal]? then
-            unless declaration == oracle do
-              throwError "planned source record {rawOrdinal} differs from the validated parse"
-          pure declaration
+    let some declaration := x.decls[rawOrdinal]?
+      | throwError "source record {rawOrdinal} has no parsed payload"
     -- A `return` from a `for` loop preserves its mutable loop state. Move the
     -- real state out first so that `feedSource` owns its accumulated arrays;
     -- the placeholder is observed only by the loop machinery on an early
@@ -3093,92 +3008,3 @@ def runFilterStreaming (x : Export) (checkRecursors : Bool)
   let (_, report, compact, _, _) ← runFilterCore x checkRecursors generation
     .streamOutput (outputEmitter? := some emit)
   return (report, compact)
-
-/-- Phase-three declaration-span driver.  The complete parsed export remains
-the validation/census oracle in this tranche; each separately decoded source
-record is nevertheless the value consumed by `feedSource`, and compact mode
-does not retain it after that transition. -/
-def runFilterDiscardingPlanned (x : Export) (reader : Spool.PlannedSourceReader)
-    (checkRecursors : Bool) (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
-  let (_, report, compact, _, _) ←
-    runFilterCore x checkRecursors generation .compactDiscard (plannedSource? := some reader)
-  return (report, compact)
-
-private def validatePlannedSource (input : PlannedSourceInput)
-    (reader : Spool.PlannedSourceReader) : IO (Except String Unit) := do
-  unless ← reader.matchesSource input.provenance do
-    return .error "planned source census and reader have different raw provenance"
-  unless input.envelope.retainedDeclarations == 0 do
-    return .error "planned source parser retained complete declaration values"
-  unless input.envelope.declarationCount == input.census.summaries.size &&
-      input.envelope.declarationCount == reader.size do
-    return .error "planned source parser/census/reader cardinalities disagree"
-  return .ok ()
-
-/-- Reproduce the ordinary whole-source structural report from the frozen
-syntax index and one transient declaration value at a time. The retained rows
-contain names and compact certificates only. -/
-def checkPlannedSource (input : PlannedSourceInput)
-    (reader : Spool.PlannedSourceReader) : IO (Except String Check.Report) := do
-  if let .error message ← validatePlannedSource input reader then
-    return .error message
-  let template := input.envelope.template
-  let index := input.census.sourceSyntax
-  let mut records : Array Check.CompactCheckRecord := #[]
-  for ordinal in [:reader.size] do
-    let declaration ← match ← reader.read ordinal with
-      | .ok declaration => pure declaration
-      | .error message => return .error message
-    let families := index.sourceFamilyCertificatesForRecord template declaration
-    let globalExtra := (Check.globalExtraRecordsWithIndex index #[declaration])[0]!
-    records := records.push {
-      owner := match declaration with
-        | .induct (type :: _) _ _ => some type.name
-        | _ => none
-      modelSlots := families.flatMap (·.publicNames)
-      globalExtra
-      families }
-  return Check.compactSourceReport records
-
-/-- Materialize the exact parsed source only for a planned-input compatibility fallback. -/
-def materializePlannedSource (input : PlannedSourceInput)
-    (reader : Spool.PlannedSourceReader) : IO (Except String Export) := do
-  if let .error message ← validatePlannedSource input reader then
-    return .error message
-  let mut declarations : Array EDecl := #[]
-  for ordinal in [:reader.size] do
-    match ← reader.read ordinal with
-    | .error message => return .error message
-    | .ok declaration => declarations := declarations.push declaration
-  return .ok { input.envelope.template with decls := declarations }
-
-/-- Planned no-output route: the parser has released its complete source
-declaration array, and stream-order replay decodes exactly one certified raw
-record for each `FilterState.feedSource` transition. Main selects this path
-when generated output is discarded, generated-island kernel checking is
-enabled, and input kernel checking is disabled. -/
-def runFilterDiscardingPlannedCensus (input : PlannedSourceInput)
-    (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
-    (generation : Cli.Config) : MetaM (Report × CompactPlan) := do
-  if let .error message ← validatePlannedSource input reader then
-    throwError message
-  let (_, report, compact, _, _) ← runFilterCore input.envelope.template
-    checkRecursors generation .compactDiscard (plannedSource? := some reader)
-    (sourceCensus? := some input.census)
-  return (report, compact)
-
-/-- Declaration-wise planned-source output. The reader owns the frozen input
-arena and decodes one raw source record at a time; the callback owns only the
-current generated island or source record. -/
-def runFilterStreamingPlannedCensus (input : PlannedSourceInput)
-    (reader : Spool.PlannedSourceReader) (checkRecursors : Bool)
-    (generation : Cli.Config) (emit : StreamOutputEmitter) :
-    MetaM (Report × CompactPlan) := do
-  if let .error message ← validatePlannedSource input reader then
-    throwError message
-  let (_, report, compact, _, _) ← runFilterCore input.envelope.template
-    checkRecursors generation .streamOutput (plannedSource? := some reader)
-    (sourceCensus? := some input.census) (outputEmitter? := some emit)
-  return (report, compact)
-
-end InductiveModels

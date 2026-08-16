@@ -40,7 +40,7 @@ correctness_targets=(
   deepimaxboxtest psigmaprimetest exactsortlifttest
   tightpsigmaprimeroutetest vanishingerasuretest
   transparentowneraliasestest exportsyntaxnormalizationtest
-  basisvalidationtest sourcespooltest
+  basisvalidationtest arenaformattest
 )
 
 build_bounded lean-inductive-models
@@ -81,7 +81,7 @@ lake exe vanishingerasuretest
 lake exe transparentowneraliasestest
 lake exe exportsyntaxnormalizationtest
 lake exe basisvalidationtest
-lake exe sourcespooltest "$root"
+lake exe arenaformattest "$root"
 
 PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
 python3 test/scripts/generate_family_adapter_fixtures.py \
