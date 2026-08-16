@@ -393,10 +393,10 @@ def expectedPrim : List Row :=
     -- pays for the `Eq` and tight-pair/PUnit support records.
   , ("maybe_zero_indexed", [("MI", 15)], [])
   , ("maybe_zero_recursive", [("MRI", 15), ("MR", 6)], [])
-  -- **Still red, and now for two owners rather than four.** The two maybe-zero
-  -- rows above are multi-constructor, so nothing asks their model for a field
-  -- back. `maybe_zero_projection` is the one-constructor family beside them,
-  -- which does ask: intrinsic projections are demanded of every
+  -- **Green, and nothing in this table moved to make it so.** The two
+  -- maybe-zero rows above are multi-constructor, so nothing asks their model
+  -- for a field back. `maybe_zero_projection` is the one-constructor family
+  -- beside them, which does ask: intrinsic projections are demanded of every
   -- one-constructor owner and of nothing else (`Driver.lean`'s `nc == 1`
   -- gate), while the direct field/tight routes that retain a field are gated
   -- on `nonrecursiveOneConstructor && ni == 0`. Either excluded conjunct —
@@ -404,27 +404,31 @@ def expectedPrim : List Row :=
   -- route, whose carrier is a subsingleton and whose recursor eliminates only
   -- into `Prop`, and the emitted projection was then refused by Lean's kernel.
   --
-  -- **The index conjunct is closed.** `MZIdx` and `MZIdx2` are the direct
-  -- routes' **indexed case**: the very storage tower `.identity` and `.tight`
-  -- use, with arm F's packed Henry-Ford equation over it saying which fibre
-  -- the stored value sits in,
-  -- `Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, whose projections are
-  -- the storage tower's own and therefore select definitionally. Their counts
-  -- do not move — six and eight are the same public interface either way —
-  -- so what says they moved is the kernel's verdict, not this table.
-  -- `MZOne` (direct `.identity`) and `MZProof` (arm F proper) are the controls
-  -- and are untouched: the indexed guard carries `!armFNonRec`, so arm F keeps
-  -- every shape whose data the index vector does carry, and `ni == 0` selects
-  -- one of the two unindexed cases.
+  -- **The index conjunct is the direct routes' indexed case.** `MZIdx` and
+  -- `MZIdx2` take the very storage tower `.identity` and `.tight` use, with
+  -- arm F's packed Henry-Ford equation over it saying which fibre the stored
+  -- value sits in, `Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, whose
+  -- projections are the storage tower's own and therefore select
+  -- definitionally.
   --
-  -- **`MZSelf` and `MZData` remain red on purpose.** They are Direct's `isRec`
-  -- corner: nothing stores a recursive field, because the tower would have to
-  -- hold an inhabitant of the type being declared. Whether a maybe-zero
-  -- *recursive* one-constructor owner should be asked for an intrinsic
-  -- projection at all is a contract question and not a construction one, and
-  -- it is open. The kernel's verdict, read at `runOne` since `701191c`, is the
-  -- one red axis; the run aborts at the first refusal, so the message names
-  -- one of the two.
+  -- **The recursion conjunct is arm E's.** `MZSelf` and `MZData` each have a
+  -- constructor with a **bare** recursive field, so applying it would already
+  -- need an inhabitant of the carrier and both types are *empty* at every
+  -- instantiation of `u`. That is arm E's stated class, and the only thing
+  -- that used to keep it off them was a `route matches .type` in its guard:
+  -- its carrier `PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})` is empty
+  -- at every `w` and lands at exactly `Sort w` for a bare `w` too, which is
+  -- the whole of the universe question the exact-sort lift exists to answer.
+  -- The projections and their ι rules are then eliminations of the major, and
+  -- the recursor is one as well — a real change of model from the Church fold,
+  -- and adequate for the same small eliminator the kernel mints here and for a
+  -- large one it does not.
+  --
+  -- **No count in this row moves for any of it.** Six, seven and eight are the
+  -- same public interfaces they always were; what says the four moved is the
+  -- kernel's verdict and `runOne`'s carrier assertion below, not this table.
+  -- `MZOne` (direct `.identity`) and `MZProof` (arm F proper) are the controls
+  -- and are untouched: the direct route and arm F are tried before both.
   , ("maybe_zero_projection",
       [("Nt", 15), ("MZProof", 6), ("MZOne", 7), ("MZData", 8), ("MZSelf", 6),
        ("MZIdx2", 8), ("MZIdx", 6)],
@@ -972,6 +976,13 @@ structure TAcc where
 def check (a : TAcc) (ok : Bool) (msg : String) : TAcc :=
   { a with checks := a.checks + 1, failures := if ok then a.failures else a.failures.push msg }
 
+/-- A generated carrier's body under the parameter lambdas it is closed over.
+The carriers this is asked about are `fun p⃗ => …` and nothing else, so
+stripping every leading lambda reaches the carrier expression exactly. -/
+partial def underLambdas : Expr → Expr
+  | .lam _ _ body _ => underLambdas body
+  | expression => expression
+
 /-- One fixture, all four axes. With `cross`, compare the generated declaration
 array with the committed filtered export and verify idempotence structurally. -/
 def runOne (root : String) (a : TAcc) (r : Row)
@@ -1096,6 +1107,46 @@ def runOne (root : String) (a : TAcc) (r : Row)
       "prim_prop_skipped_field: PropDep projected a field the kernel refuses"
     a := check a (projected `PropChain 0 && projected `PropChain 1)
       "prim_prop_skipped_field: PropChain lost a projection the kernel allows"
+  if name == "maybe_zero_projection" then
+    -- **Which arm each owner takes, asserted rather than inferred.** Every
+    -- count in this fixture's row is the same on the arm the owner takes now
+    -- as on the one it took before — six, seven and eight are public
+    -- interfaces and not constructions — so the census cannot see the split
+    -- and the kernel's verdict only sees it once it has already gone wrong.
+    -- Arm E is the one arm whose carrier is *empty*, and the carrier is a
+    -- declaration in the output, so the model itself is the assertion:
+    -- `T._model p⃗` must be [`InductiveModels.emptyAt`] at the declared sort,
+    -- which is a value and not a name, a count or a shape guess.
+    --
+    -- The four controls are asserted in the other direction. `MZOne` is the
+    -- direct `.identity` route and `MZProof` is arm F; `MZIdx` and `MZIdx2`
+    -- are arm S's stored tower under a packed index equation. All four are
+    -- inhabited, so a widening that swept one of them onto the empty carrier
+    -- would be modelling an inhabited type by `⊥`, and this is where that is
+    -- caught.
+    let carrierIsEmpty := fun (owner : Name) =>
+      decls.any fun declaration => match declaration with
+        | .defn declarationName [level] _ value _ _ _ =>
+          declarationName == Naming.modelName owner &&
+            underLambdas value == InductiveModels.emptyAt (.param level)
+        | _ => false
+    for owner in [`MZSelf, `MZData] do
+      a := check a (carrierIsEmpty owner)
+        s!"maybe_zero_projection: {owner}'s carrier is not the derived lift of ⊥ at its \
+           own sort, so the empty model no longer reaches the maybe-zero recursive corner"
+    for owner in [`MZOne, `MZProof, `MZIdx, `MZIdx2] do
+      a := check a (!carrierIsEmpty owner)
+        s!"maybe_zero_projection: {owner} is inhabited and its carrier became empty"
+    -- The point of the arm is the field the contract asks back, so pin the
+    -- projections by index rather than trusting the count: three eligible
+    -- fields across the two empty owners, each with its selector and its rule.
+    let emittedNames := decls.flatMap (·.names.toArray)
+    let projected := fun (owner : Name) (fieldIndex : Nat) =>
+      emittedNames.contains (Naming.projectionName owner fieldIndex) &&
+        emittedNames.contains (Naming.projectionIotaName owner fieldIndex)
+    a := check a (projected `MZSelf 0 && projected `MZData 0 && projected `MZData 1)
+      "maybe_zero_projection: an empty-carrier owner lost an intrinsic projection the \
+       kernel offers for it"
   -- **Exempt then declined.** The basis primitives are their own row in the
   -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a

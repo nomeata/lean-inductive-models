@@ -91,12 +91,29 @@ destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
 
 A recursive declaration **every one of whose constructors has a bare recursive
 field** is empty rather than a degenerate case of this tower. Its carrier is the
-derived lift of `⊥`; each constructor returns one such field, and the recursor
-and ι theorems eliminate that empty value.  This is arm E below, and the class
-is not about linearity: a constructor with two bare recursive fields is exactly
+derived lift of `⊥`; each constructor returns one such field, and the recursor,
+the ι theorems, and — at one constructor — the intrinsic projections and *their*
+ι rules all eliminate that empty value.  This is arm E below, and the class is
+not about linearity: a constructor with two bare recursive fields is exactly
 as unapplicable as one with a single one.  *Bare* is the boundary — a recursive
 occurrence under a binder whose domain is empty is inhabited vacuously, and
 whether a binder domain is empty is not a question the route analysis asks.
+
+**Nor is the class about the sort.** Arm E serves the maybe-zero route on the
+same terms, because nothing in it is sort-specific: `emptyAt w` is
+`PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})`, empty at every `w` and at
+exactly `Sort (max 0 w) = Sort w` for a bare `w` as much as for a never-zero
+one — writing the empty type as `∀ p : Sort w, p` instead would land at
+`Sort (imax (w+1) w)` and miss the declared sort, which is the obstruction the
+exact-sort lift exists to remove.  `emptyAtElim` likewise serves at every
+result universe, so a **small** eliminator is no obstacle either and arm E's
+largeness test is an invariant of the never-zero route rather than a
+precondition of the arm.  That is what closes the maybe-zero route's
+field-retention corner: a *recursive* one-constructor owner there is asked for
+intrinsic projections, the direct routes below retain a field only at `!isRec`,
+and the Church encoding remembers only inhabitation — but an empty carrier owes
+no field back, because `proj_j (mk f⃗) = f_j` is proved by eliminating the
+major.  `maybe_zero_projection`'s `MZSelf` and `MZData` are that corner.
 
 * **A pad** closes a level gap. At a `dsingOk` level it is `D`
   ([`InductiveModels.dsingAt`]); at any other level — a bare parameter in the gap,
@@ -327,6 +344,13 @@ W's guard refuses it; B factors through the tag: \
            numAll := 1, ctors := site.ctorPairs, recs := #[site.recN], iotas, ruleKs
            spliced := st.spliced
            projectionOverrides := st.projectionOverrides
+           -- **The one arm whose carrier is empty says so here**, at the place
+           -- the arm was chosen, so the common projection driver reads a stated
+           -- property of the emitted model rather than re-deriving one. Arm E's
+           -- `T._model.self` is [`InductiveModels.emptyAt`] `w` and nothing
+           -- else; every other arm's carrier is inhabited or its inhabitation
+           -- is not this file's claim.
+           emptyCarriers := if site.armE then #[(site.tname, site.w)] else #[]
            requires := if site.armC then #[site.skelN] else st.requires
            aliases }
 

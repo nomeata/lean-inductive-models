@@ -898,6 +898,27 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     if (← getEnv).constants.contains modelRule then declineWith (.nameTaken publicRule)
     let override? := is.projectionOverrides.find? fun entry =>
       entry.1 == type.name && entry.2.1 == fieldIndex
+    -- **An empty carrier owes no field back, and that is a decision rather
+    -- than a fallback.**  The route that built the model states here that
+    -- `T._model.self p⃗` is [`InductiveModels.emptyAt`] at this level — arm E,
+    -- whose property is that every constructor of the owner has a *bare*
+    -- recursive field, so no constructor can be applied and the type is empty
+    -- at every instantiation of its sort.  Where that holds, both halves of
+    -- the projection contract are elimination of the major and nothing else:
+    -- the selector eliminates its `self` at the intrinsic codomain, and the
+    -- rule `proj_j (mk f⃗) = f_j` eliminates the modeled constructor
+    -- application, which δβ-reduces to one of the `f⃗` and inhabits the empty
+    -- carrier.  Both are total; neither is attempted-and-repaired, and if the
+    -- claim were false the kernel would refuse the two declarations below
+    -- rather than any other route being tried.
+    --
+    -- This cannot be a `projectionOverrides` entry.  An override supplies a
+    -- closed value, and the codomain these two need — field `j`'s type with
+    -- each earlier field replaced by *its* modeled projection at this major —
+    -- is assembled a few lines below out of names this module owns and no
+    -- route can see.  The route states the carrier; this module states the
+    -- codomain; the elimination is the only thing that has to know both.
+    let emptyCarrier? := (is.emptyCarriers.find? (·.1 == type.name)).map (·.2)
     let singletonOneLayer ←
       phase1OneLayerProjectionCertificate type constructor recursor is
     let mutualOneLayer ←
@@ -972,9 +993,15 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
 
     -- Both selectors eliminate the same major at the same motive; they differ
     -- in *which* recursor does it and in what its selected minor has in hand.
-    let value ← match override? with
-      | some (_, _, value, _) => pure value
-      | none => do
+    let value ← match override?, emptyCarrier? with
+      | some (_, _, value, _), _ => pure value
+      | none, some carrierLevel =>
+        forallBoundedTelescope projectionType (some (ownerArity + 1))
+            fun arguments result => do
+          let self := arguments[ownerArity]!
+          mkLambdaFVars arguments
+            (← emptyAtElim eqi (← ilevel result) carrierLevel result self)
+      | none, none => do
         forallBoundedTelescope projectionType (some (ownerArity + 1))
             fun arguments result => do
         let params := arguments.extract 0 type.numParams
@@ -1087,7 +1114,14 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           nestedProjectionProof eqi block us params packed? fieldLevel alpha lhs
             fields[fieldIndex]!
         | none, none =>
-          if legacyLiteral then
+          if let some carrierLevel := emptyCarrier? then
+            -- The major is `T._model.mk p⃗ f⃗`, which δβ-reduces to whichever
+            -- of `f⃗` is the bare recursive field the arm returned, and so
+            -- inhabits the empty carrier.  Eliminating it proves this
+            -- equation — and every other proposition — with no appeal to how
+            -- the selector above computes.
+            emptyAtElim eqi .zero carrierLevel (eqi.mk' fieldLevel alpha lhs rhs) major
+          else if legacyLiteral then
             pure (eqi.refl' fieldLevel alpha lhs)
           else do
           let targetMotive ← forallBoundedTelescope

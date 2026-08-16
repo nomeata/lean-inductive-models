@@ -1,7 +1,22 @@
 import InductiveModels.Simple.Site
 
 /-!
-# Arm E: the linearly recursive declaration with no base constructor
+# Arm E: the declaration every one of whose constructors has a bare recursive field
+
+Such a declaration is **empty** — no constructor can be applied, because
+applying one would already require an inhabitant of the carrier — and the model
+is the empty type at exactly the declared sort. Everything else follows from
+that one fact: the constructors return their own recursive field, and the
+recursor, its ι rules, and (at one constructor) the intrinsic projections and
+their ι rules all eliminate the same uninhabited value.
+
+The arm serves the never-zero and the **maybe-zero** routes alike, because
+nothing in it is sort-specific. [`InductiveModels.emptyAt`] is the derived
+exact-sort lift of Church `⊥`, `PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})`,
+which is empty at every `w` and lands at `Sort (max 0 w) = Sort w` for a bare
+`w` exactly as for a never-zero one; and [`InductiveModels.emptyAtElim`] is
+`cfalseElim` after that lift's `down`, which serves at every result universe
+including `Level.zero`.
 -/
 
 open Lean Meta
@@ -30,8 +45,24 @@ def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let emptySlots := site.emptySlots
   let mut out := st.out
   let mut spliced := st.spliced
-  -- ════ arm E: an exact empty model for recursion without a base ════
-  unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
+  -- ════ arm E: an exact empty model, at every route's sort ════
+  --
+  -- **Largeness is not a precondition of this arm**, and asking for it used to
+  -- confine it to the never-zero route. `v` below is the recursor's result
+  -- universe, which is `Level.zero` exactly when the kernel minted a small
+  -- eliminator, and [`InductiveModels.emptyAtElim`] serves at every `v` —
+  -- `cfalseElim` builds its `Nat.rec` family at `Sort (v+1)` and transports
+  -- into `Sort v`, with `v = 0` no different from any other. `MZData`'s
+  -- recursor is small (its data field is neither a proof nor a conclusion
+  -- index, so the kernel's subsingleton rule declines it) and its model is
+  -- exactly as complete for that.
+  --
+  -- On the never-zero route the recursor is large unconditionally, so the test
+  -- below is an invariant of that route rather than a shape question; it is
+  -- kept as one so a carrier that stopped being `Type`-valued cannot pass
+  -- silently.
+  unless large || site.route matches PrimRoute.bare do
+    badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
   for d in ← ensureNat do out := out.push d; spliced := spliced ++ d.getNames
   for d in ← ensureExactSortLift do out := out.push d; spliced := spliced ++ d.getNames
 

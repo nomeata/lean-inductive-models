@@ -435,7 +435,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     | none => restore tbl expression
   let publicRecTy := publicSource (sourceRecursor?.map (·.type) |>.getD rv.type)
 
-  -- **Arm E**: a non-indexed `Type` every one of whose constructors has a
+  -- **Arm E**: a non-indexed owner every one of whose constructors has a
   -- **bare** recursive field is empty. The tuple tower below deliberately
   -- starts from a base-constructor fibre, so this shape is not a degenerate
   -- tower: its exact model is the empty carrier already provided by the derived
@@ -462,8 +462,46 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- occurrences that carry an inhabitant of the owner directly, which is
   -- [`InductiveModels.bareRecSlotOf`]. `NbInf` and `NbVac` stay on arm W, and
   -- the file records both counts.
+  --
+  -- **The sort is not part of the class either, and the guard no longer says
+  -- it is.** Emptiness is a fact about the constructors: a constructor whose
+  -- application would require an inhabitant of the carrier cannot be applied,
+  -- whatever sort the carrier was declared at. The guard used to read
+  -- `route matches .type` and so confined the arm to a never-zero sort, and the
+  -- reason it could be widened is that the carrier itself was never
+  -- sort-specific: [`InductiveModels.emptyAt`] is
+  -- `PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})`, which is empty
+  -- because `∀ p : Prop, p` is, and sits at `Sort (max 0 w) = Sort w` for a
+  -- **bare** `w` exactly as for a never-zero one. That is the whole of the
+  -- universe question at a maybe-zero sort, and the derived exact-sort lift
+  -- had already answered it: writing the empty type as `∀ p : Sort w, p`
+  -- instead would land at `Sort (imax (w+1) w)` and miss the declared sort,
+  -- which is the obstruction the lift exists to remove.
+  --
+  -- **This is the maybe-zero route's field-retention corner, closed.** A
+  -- one-constructor owner is asked for intrinsic projections
+  -- ([`InductiveModels.addProjectionModels`]'s `nc == 1` gate), the direct
+  -- routes below retain a field only at `!isRec`, and the Church encoding
+  -- underneath remembers only inhabitation — so a *recursive* one-constructor
+  -- owner at a maybe-zero sort had no arm that could return its field, and its
+  -- projections were emitted onto a subsingleton carrier and refused by the
+  -- kernel. An empty carrier owes no field back: `proj_j (mk f⃗) = f_j` is
+  -- vacuously provable by eliminating the major, which is one of the `f⃗` and
+  -- inhabits nothing. `maybe_zero_projection`'s `MZSelf` and `MZData` are that
+  -- corner and this is where they are decided; `MZOne` is `!isRec` and reaches
+  -- the direct route first, and `MZIdx`/`MZIdx2` are `ni > 0` and reach that
+  -- same route's indexed case.
+  --
+  -- The literal `Prop` route is deliberately not included. Its own
+  -- constructions already model every shape there, a `Prop` owner is asked for
+  -- no data projection at all
+  -- ([`InductiveModels.eligibleProjectionFieldsM`]'s `ownerIsProp` gate), and
+  -- proof irrelevance settles the proof projections it *is* asked for at
+  -- whatever carrier the Church route built. Nothing there is waiting on an
+  -- empty carrier, so widening onto it would move models with no question to
+  -- answer.
   let emptySlots : Array (Option Nat) ←
-    if (route matches PrimRoute.type) && ni == 0 && isRec then
+    if (route matches PrimRoute.type | PrimRoute.bare) && ni == 0 && isRec then
       withParams fun ps =>
         exportCtors.mapM fun (_, cty) => do
           let tele ← instForall cty ps

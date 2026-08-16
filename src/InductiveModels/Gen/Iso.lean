@@ -212,6 +212,25 @@ structure Iso where
   reduction-proof value.  The common driver remains responsible for the
   public types, names, collision checks and declaration ordering. -/
   projectionOverrides : Array (Name × Nat × Expr × Expr) := #[]
+  /-- **Owners whose model carrier is empty, with the sort it is empty at.**
+
+  An entry says the emitted `T._model.self p⃗` δ-reduces to
+  [`InductiveModels.emptyAt`] at this level — the derived exact-sort lift of
+  Church `⊥`, which is empty at *every* level and sits at exactly that one.
+  The construction that puts it there is arm E, whose stated property is that
+  every constructor has a **bare** recursive field, so no constructor can ever
+  be applied.
+
+  This is a fact about the carrier and not a projection implementation, which
+  is why it is separate from `projectionOverrides` above: an override has to
+  supply a closed value at the intrinsic projection's codomain, and the
+  codomain — field `j`'s type with each earlier field replaced by *its*
+  modeled projection at the same major — is assembled by the common driver and
+  is not available to a route. An empty carrier needs nothing of the sort:
+  every projection out of it, and every projection ι rule about it, is one
+  elimination of the major, at whatever codomain the driver computed.  Empty
+  for every other construction. -/
+  emptyCarriers : Array (Name × Level) := #[]
   /-- **Prelude constants the input did not declare and this model spliced in**
   — a subset of `Eq`, `Eq.refl`, the four quotient names, `Quot.sound` and
   `T._model.funext`, in the order they were emitted, and **empty** for every
