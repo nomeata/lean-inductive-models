@@ -399,13 +399,27 @@ private def discoverWithIndexWhere (x : Export) (index : SyntaxIndex)
     let publicNames := correspondence.publicNames
     unless includeEmpty root ||
         publicNames.any (fun name => !(index.recordOccurrences name).isEmpty) do continue
+    -- Both accumulators below are order-preserving deduplications, and both
+    -- historically answered their membership test by scanning what they had
+    -- already accepted -- `Array.contains` here and [`appendUnique`] below.
+    -- A hash set answers the same question without the scan, so one family
+    -- costs its own occurrence and declaration-name count rather than their
+    -- squares. The accepted arrays are unchanged, element for element.
     let mut modelDecls : Array Nat := #[]
+    let mut seenDecls : Std.HashSet Nat := {}
     for name in publicNames do
       for i in index.recordOccurrences name do
-        unless modelDecls.contains i do modelDecls := modelDecls.push i
+        unless seenDecls.contains i do
+          seenDecls := seenDecls.insert i
+          modelDecls := modelDecls.push i
     modelDecls := modelDecls.qsort (· < ·)
-    let modelNames := modelDecls.foldl
-      (fun names i => appendUnique names x.decls[i]!.names) #[]
+    let mut modelNames : Array Name := #[]
+    let mut seenNames : Std.HashSet Name := {}
+    for i in modelDecls do
+      for name in x.decls[i]!.names do
+        unless seenNames.contains name do
+          seenNames := seenNames.insert name
+          modelNames := modelNames.push name
     let modelRoot := Naming.modelName root
     families := families.push
       { owner := root, modelRoot, carrier := modelRoot, ownerDecl, correspondence,
