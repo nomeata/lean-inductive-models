@@ -168,6 +168,47 @@ sort, and the field-preserving arm at a maybe-zero sort has no pad for the level
 never-zero tuple tower pads")
       return true
 
+/-- **Can an indexed one-constructor owner's fields be stored at the carrier's
+exact sort?** — the question that decides the stored-index route, and the one
+piece of it that must be settled before anything is spliced.
+
+The storage is [`InductiveModels.tightTowerTy`] at any field count: at one
+field the tower *is* that field's type, at two or more the right-nested
+`PSigma'` over them, and its level is the max of the field levels either way.
+Wrapping it in a `Prop`-valued index equation adds nothing to that level
+(`max ℓ 0` is `ℓ`), so the whole carrier lands at exactly `Sort w` precisely
+when the tower does.
+
+**A refusal here is a hard failure and not a decline, exactly as
+[`InductiveModels.planDirectTightRoute`]'s is.** The route is reached only
+after arm F has been ruled out, which means the constructor has a data field
+the conclusion's index vector does not carry; the model must therefore store
+it, and a maybe-zero carrier that cannot hold it has no model at all — the
+Church encoding underneath remembers inhabitation, and the intrinsic
+projection every one-constructor owner is asked for would state an equation
+the kernel refuses. Saying so with the levels named is the whole difference
+between "this construction does not deliver" and a rejected island. -/
+def planIndexedStoreRoute (eligible : Bool) (np : Nat) (memberTy : Expr)
+    (exportCtors : Array (Name × Expr)) (w : Level) : GenM Bool := do
+  unless eligible do return false
+  let (constructorName, constructorType) := exportCtors[0]!
+  let nf := numForalls constructorType - np
+  unless nf >= 1 do
+    badShape s!"{constructorName} has no fields, so its owner's every non-proof field is \
+vacuously one of the conclusion's indices and arm F, not this route, is the one that \
+models it"
+  forallBoundedTelescope memberTy (some np) fun ps _ => do
+    let tele ← instForall constructorType ps
+    forallBoundedTelescope tele (some nf) fun fields _ => do
+      let fieldLevels ← fields.mapM fun field => do ilevel (← ityp field)
+      let towerLevel :=
+        if nf == 1 then fieldLevels[0]! else (fieldLevels.foldl mkLevelMax' .zero).normalize
+      unless ← isLevelDefEq towerLevel w do
+        badShape s!"{constructorName}'s field tower inhabits Sort {towerLevel}, not the \
+carrier's Sort {w}, so the model cannot store the data field the conclusion's index vector \
+does not carry, and no route retains it"
+      return true
+
 /-- Install tight-pair support and emit the complete exact-sort model branch.
 The caller only merges the returned declarations, splice witnesses, and
 projection overrides into its route state. -/

@@ -393,27 +393,34 @@ def expectedPrim : List Row :=
     -- pays for the `Eq` and tight-pair/PUnit support records.
   , ("maybe_zero_indexed", [("MI", 15)], [])
   , ("maybe_zero_recursive", [("MRI", 15), ("MR", 6)], [])
-  -- **RED, deliberately, and the point of the file.** The two maybe-zero rows
-  -- above are multi-constructor, so nothing asks their model for a field back.
-  -- `maybe_zero_projection` is the one-constructor family beside them, which
-  -- does ask: intrinsic projections are demanded of every one-constructor
-  -- owner and of nothing else (`Driver.lean:810-817`), while the direct
-  -- field/tight routes that retain a field are gated on
-  -- `nonrecursiveOneConstructor && ni == 0` (`Simple/Site.lean:469-471`).
-  -- Either excluded conjunct — recursion, or an index — drops the owner onto
-  -- the Church/lift route, whose carrier is a subsingleton and whose recursor
-  -- eliminates only into `Prop`, and the emitted projection is then refused by
-  -- Lean's kernel. `MZOne` (direct `.identity`) and `MZProof` (arm F proper)
-  -- are the controls and model.
+  -- **Still red, and now for two owners rather than four.** The two maybe-zero
+  -- rows above are multi-constructor, so nothing asks their model for a field
+  -- back. `maybe_zero_projection` is the one-constructor family beside them,
+  -- which does ask: intrinsic projections are demanded of every
+  -- one-constructor owner and of nothing else (`Driver.lean`'s `nc == 1`
+  -- gate), while the direct field/tight routes that retain a field are gated
+  -- on `nonrecursiveOneConstructor && ni == 0`. Either excluded conjunct —
+  -- recursion, or an index — used to drop the owner onto the Church/lift
+  -- route, whose carrier is a subsingleton and whose recursor eliminates only
+  -- into `Prop`, and the emitted projection was then refused by Lean's kernel.
   --
-  -- The counts below are what the generator produces today, so the count axis
-  -- is green and exactly one axis is red: the kernel's verdict, read at
-  -- `runOne` since `701191c`. The run aborts at the first refusal, so the
-  -- message names one of `MZSelf`, `MZData`, `MZIdx`, `MZIdx2`; the family is
-  -- the four. Whichever way the split is decided — generalise the direct
-  -- routes past `ni == 0` and `!isRec`, or declare the projection contract
-  -- inapplicable at a maybe-zero recursive owner and decline hard — this row
-  -- moves, and that is what it is here to force.
+  -- **The index conjunct is closed.** `MZIdx` and `MZIdx2` are arm S's: arm
+  -- F's packed Henry-Ford equation over the direct routes' exact-sort storage,
+  -- `Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, whose projections are
+  -- the storage tower's own and therefore select definitionally. Their counts
+  -- do not move — six and eight are the same public interface either way —
+  -- so what says they moved is the kernel's verdict, not this table.
+  -- `MZOne` (direct `.identity`) and `MZProof` (arm F proper) are the controls
+  -- and are untouched: arm F is tried first and `ni == 0` never reaches arm S.
+  --
+  -- **`MZSelf` and `MZData` remain red on purpose.** They are Direct's `isRec`
+  -- corner: nothing stores a recursive field, because the tower would have to
+  -- hold an inhabitant of the type being declared. Whether a maybe-zero
+  -- *recursive* one-constructor owner should be asked for an intrinsic
+  -- projection at all is a contract question and not a construction one, and
+  -- it is open. The kernel's verdict, read at `runOne` since `701191c`, is the
+  -- one red axis; the run aborts at the first refusal, so the message names
+  -- one of the two.
   , ("maybe_zero_projection",
       [("Nt", 15), ("MZProof", 6), ("MZOne", 7), ("MZData", 8), ("MZSelf", 6),
        ("MZIdx2", 8), ("MZIdx", 6)],

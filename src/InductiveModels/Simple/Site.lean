@@ -76,6 +76,7 @@ structure PrimSite where
   armE : Bool
   directRoute? : Option DirectRoute
   armF : Bool
+  armS : Bool
   armC : Bool
   wTagged : Bool
   wPlan : WCarrierPlan
@@ -538,6 +539,52 @@ tuple tower pads")
   -- which positions those are; everything below reads `gNonPiv`.
   let armF := armFNonRec
 
+  -- **Arm S**: the indexed non-recursive singleton whose data the index vector
+  -- does **not** carry — arm F's Henry-Ford equation over Direct's exact-sort
+  -- storage, and the other half of one axis.
+  --
+  -- `armF` above is the same declaration shape asked one question: is every
+  -- non-proof field literally one of the conclusion's index arguments? That is
+  -- also the kernel's own subsingleton rule, so the answer is `large` and the
+  -- two are the same fact read at two places. Where the answer is yes, arm F
+  -- **substitutes**: it reads each data field off the recursor's own index
+  -- argument and Church-conjoins the proof fields, because at a maybe-zero
+  -- carrier there is no room to store anything — `Acc.intro`'s `x : α` sits at
+  -- a level the `Prop` carrier cannot hold, and the index vector is the only
+  -- place it can come back from.
+  --
+  -- Where the answer is no, that route is not merely narrower, it is
+  -- unavailable: a data field the index vector does not mention is recoverable
+  -- from nothing at all. **So the model has to store it**, which is exactly
+  -- what the direct routes do at `ni == 0`, and the index telescope is then
+  -- discharged the way arm F discharges its non-pivots — one packed equation:
+  --
+  --     T p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗
+  --
+  -- The two are genuinely different constructions for a statable reason, and
+  -- the reason is which side of the carrier the data comes back from. Neither
+  -- is a widening of the other: arm F cannot store, and this route cannot
+  -- recover a field the storage does not hold.
+  --
+  -- **`Store` is a definition and not a spliced inductive**, which is what
+  -- separates this from arm C. Arm C's erase-and-carve is the same idea — build
+  -- the index-free skeleton, then cut the family out of it — but it splices the
+  -- skeleton as an *inductive* so the kernel mints its large eliminator, and it
+  -- needs that eliminator twice. A maybe-zero skeleton has no large eliminator
+  -- to mint, so the stepping stone here is [`InductiveModels.tightTowerTy`], a
+  -- `PSigma'` tower whose projections are structure projections and need no
+  -- elimination grant at all.
+  --
+  -- Restricted to the maybe-zero route on purpose. At a never-zero sort this
+  -- shape is arm C's; at a literal `Prop` the storage would have to land at
+  -- `Sort 0`, which means every field is a proof, which means arm F has already
+  -- fired — and a `Prop` owner is asked for no data projection in the first
+  -- place ([`InductiveModels.eligibleProjectionFieldsM`]'s `ownerIsProp` gate),
+  -- so there is nothing there for this route to retain.
+  let armS ← planIndexedStoreRoute
+    ((route matches PrimRoute.bare) && nc == 1 && !isRec && ni > 0 && !armF)
+    np memberTy exportCtors w
+
   -- **Arm C**: an indexed family at a never-zero sort, carved out of its own
   -- index erasure. Gated on the erasure being
   -- **bare** — every recursive occurrence a `T p⃗ e⃗` whose whole domain the
@@ -968,7 +1015,7 @@ declines"
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  return ({ tname, root, lparams, np, memberTy, exportCtors, reserved, sourceRecursor?, interface?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armG, eqi, ctorPairs, tbl, installedRecTy, exactSource?, publicSource, publicRecTy, emptySlots, armE, directRoute?, armF, armC, wTagged, wPlan, armW, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
+  return ({ tname, root, lparams, np, memberTy, exportCtors, reserved, sourceRecursor?, interface?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armG, eqi, ctorPairs, tbl, installedRecTy, exactSource?, publicSource, publicRecTy, emptySlots, armE, directRoute?, armF, armS, armC, wTagged, wPlan, armW, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
           { out, requires, spliced, projectionOverrides })
 
 end InductiveModels
