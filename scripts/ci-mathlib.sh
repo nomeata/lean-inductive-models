@@ -57,10 +57,11 @@ mkdir -p "$WORK/logs" "$WORK/tmp"
 export TMPDIR="$WORK/tmp"
 
 checkout_pinned() {
-  rm -rf -- "$3"
-  git clone --filter=blob:none --no-checkout "$1" "$3"
-  git -C "$3" fetch --depth=1 origin "$2"
-  git -C "$3" checkout --detach FETCH_HEAD
+  local url="$1" revision="$2" directory="$3"
+  rm -rf -- "$directory"
+  git clone --filter=blob:none --no-checkout "$url" "$directory"
+  git -C "$directory" fetch --depth=1 origin "$revision"
+  git -C "$directory" checkout --detach FETCH_HEAD
 }
 
 LEAN_NUM_THREADS="$BUILD_THREADS" lake build lean-inductive-models
