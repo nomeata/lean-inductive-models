@@ -290,15 +290,15 @@ is unchanged at roughly 2.0 GiB. Under a 12 GiB `ulimit -v` no module builds at
 all, aborting with `failed to create thread`; a cap high enough for `lean` to
 start no longer says anything about memory. **RSS is the quantity of interest.**
 
-The Mathlib workflow keeps enforced per-phase budgets, and enforces them as
-cgroup v2 `memory.max` limits — `systemd-run --scope -p MemoryMax=…
--p MemorySwapMax=0` — rather than as address-space ceilings. `memory.max`
+The Mathlib workflow keeps per-phase budgets, and where the runner lets it,
+enforces them as cgroup v2 `memory.max` limits — `systemd-run --scope
+-p MemoryMax=… -p MemorySwapMax=0` — rather than as address-space ceilings. `memory.max`
 accounts page cache as well as anonymous memory, but the kernel reclaims cache
 under pressure and only OOM-kills on genuine anonymous growth, so streaming the
 ~5.9 GB output sibling does not trip a budget while a real leak does. The
 budgets are 6 GiB for the build and cache phases (measured peak 2.91 GiB),
-12 GiB for the Mathlib export (measured peak 7.80 GiB), and 12 GiB for the
-model worker. Its two Lake build phases now run under the same
+12 GiB for the Mathlib export (measured peak 7.79 GiB), and 12 GiB for the
+model worker (measured peaks 11.36 GiB generating and 8.19 GiB rechecking). Its two Lake build phases now run under the same
 `LEAN_NUM_THREADS` bound as CI, so the build budget is met by a stated ceiling
 rather than by whatever parallelism the runner happened to offer; the cache,
 export and generation phases are left unbounded, being a download and two
@@ -307,15 +307,26 @@ actually supports by probing each one for real — a per-user scope, a `sudo`
 system scope dropping back to the calling user, or, where no cgroup can be
 created, running unbudgeted and failing the phase afterwards on peak RSS from
 `TIME_BIN -v`. Which one applied is printed as `memory budgets: enforced by …`,
-and every phase reports its peak RSS against its budget either way.
+and every phase reports its peak RSS against its budget either way. Read that
+line before trusting a budget: only the two scope mechanisms *enforce*
+anything. The `measure` fallback compares after the fact, and `TIME_BIN -v`
+reports the largest single process rather than the process tree's sum, so it
+cannot catch a build phase whose Lake children only exceed 6 GiB together, and
+a genuine runaway takes the runner down before the comparison ever runs. A
+phase whose measurement cannot be read at all is now a hard failure rather than
+a skipped check.
 
 The generation pass uses transactional declaration-stream named output with
 the generated-island gate disabled; a separate artifact-validation invocation uses
 `--type-check-input --no-output` to check the serialized export as input after
-generation exits. Generation's measured 13.91 GiB peak RSS does not yet fit the
-12 GiB worker budget — that budget is the target it has to reach, not a
-description of what it costs today. The streamed generation and serialized
-input validation remain strictly separate processes.
+generation exits. Generation's measured 11.36 GiB peak RSS now fits the 12 GiB
+worker budget, but with 0.64 GiB — 5.3% — to spare, which is a number to defend
+rather than to spend: a 16 GiB runner also has to hold the OS, the gzip feeder
+and the page cache behind the ~5.9 GB output sibling, and the interner's
+power-of-two key table sits at roughly 75% of a 134.2M-entry capacity at this
+corpus' ~99.9M interned nodes, so the next doubling costs about 1.6 GB in one
+step. The streamed generation and serialized input validation remain strictly
+separate processes.
 
 ## Fixture regeneration
 

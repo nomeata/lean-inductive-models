@@ -125,29 +125,38 @@ cleanup_tree() {
 # also the mechanism the host itself uses to kill oversized runs, so a phase is
 # tested against the real constraint rather than a proxy for it.
 #
-# Measured peak RSS against the pinned corpus, in phase order:
+# Measured peak RSS against the pinned corpus, in phase order, from one
+# end-to-end run of this harness. build-generator is quoted from a cold build
+# tree, which is the only figure the budget is about; a warm tree turns that
+# phase into a relink and measures Lake itself, around 0.79 GiB.
 #
 #   build-generator  2.91 GiB   under BUILD_LIMIT_KIB  ( 6 GiB)
 #   build-exporter   1.43 GiB   under BUILD_LIMIT_KIB  ( 6 GiB)
-#   mathlib-cache    0.91 GiB   under BUILD_LIMIT_KIB  ( 6 GiB)
-#   export           7.80 GiB   under EXPORT_LIMIT_KIB (12 GiB)
-#   generate        13.91 GiB   under WORKER_LIMIT_KIB (12 GiB) -- exceeds it
+#   mathlib-cache    0.92 GiB   under BUILD_LIMIT_KIB  ( 6 GiB)
+#   export           7.79 GiB   under EXPORT_LIMIT_KIB (12 GiB)
+#   generate        11.36 GiB   under WORKER_LIMIT_KIB (12 GiB)
+#   check-input      8.19 GiB   under WORKER_LIMIT_KIB (12 GiB)
 #
 # The build budget is no longer set by any single translation unit: splitting
 # the simple construction route dropped build-generator to 2.91 GiB, so 6 GiB
 # leaves it a factor of two and still fails a runaway well before the runner
-# does. The export budget is sized by the exporter phase, whose 7.80 GiB the
+# does. The export budget is sized by the exporter phase, whose 7.79 GiB the
 # pinned compact-interner patch already buys, leaving 4 GiB of the standard
 # runner's 16 GiB for gzip and runner services.
 #
 # The 12 GiB worker budget is the authoritative one for the public generator
-# and the serialized kernel reread, and generation currently does not fit under
-# it. Raising it is not a fix: 13.91 GiB of resident working set leaves under
-# 2 GiB on a 16 GiB runner for the OS, the gzip feeder and the page cache
-# backing the output sibling. 12 GiB is the number generation has to reach, not
-# a description of what it costs today; the compact certificates retained
-# across the whole stream have to shrink to get there. See the generate phase
-# below for what does and does not influence them.
+# and the serialized kernel reread, and generation now fits under it -- but by
+# 0.64 GiB, 5.3%, which is not a margin to spend. Two things make it narrower
+# than it looks. A 16 GiB runner has to hold this 11.36 GiB alongside the OS,
+# the gzip feeder and the page cache backing the ~5.9 GB output sibling, so the
+# budget is close to the runner's real ceiling and not merely to a policy
+# number. And the interner's key array is a power-of-two table: at the ~99.9M
+# interned nodes this corpus reaches it sits at about 75% of a 134.2M-entry
+# capacity, so a corpus that pushes it over the load factor doubles the table
+# and costs roughly 1.6 GB in one step -- straight through the budget. Treat
+# 12 GiB as the number generation has to keep reaching, not as headroom the
+# compact certificates retained across the whole stream may grow into. See the
+# generate phase below for what does and does not influence them.
 
 # Pick the strongest memory-limiting mechanism this runner actually supports,
 # once, by running each candidate for real. Nothing is assumed available:
@@ -168,6 +177,25 @@ cleanup_tree() {
 # reported even when the kernel is also enforcing it. `TIME_BIN -v` reports the
 # largest single process in the tree rather than the tree's sum; the cgroup is
 # the accurate accountant and this is the backstop.
+#
+# `measure` is a weak backstop and should be read as one. Two ways it passes a
+# phase the cgroup would have killed:
+#
+#   * It measures the largest single process, not the tree. The build phases
+#     fan out into many `lean` children under Lake, so a tree that sums past
+#     6 GiB reports whichever child was biggest. Only the single-worker phases
+#     -- export, generate, check-input -- are measured by a number that means
+#     what the budget says.
+#   * It is after the fact. A runaway takes the whole runner down first; the
+#     comparison never runs and the job fails as an OOM kill or a lost runner,
+#     not as a budget verdict.
+#
+# The probes above decide which one applies, so this is not a switch to flip.
+# On a GitHub-hosted Ubuntu runner the expected outcome is `system-scope`: no
+# per-user manager for the `runner` user, but a system manager and passwordless
+# sudo, which is what `run_system_scope` needs. If a runner ever reports
+# `measure` in the job log, the budgets on that run were observations and not
+# limits, and the log says so on the line above.
 LIMIT_MECHANISM=measure
 SCOPE_ENV="$TMP_DIR/scope-env"
 
@@ -239,19 +267,40 @@ run_capped() (
   esac
 )
 
+# This report goes to stderr, never to stdout. `run_measured` is called from
+# inside pipelines whose stdout is *data*: the export phase pipes the exporter's
+# stdout straight into `gzip`, so a line written to stdout here is compressed
+# into the export itself rather than logged. That corruption is silent until
+# something downstream tries to parse the artifact -- it cost one full gate run,
+# whose only symptoms were a `parse error: offset 0` from the generator, an
+# export 80 bytes larger than the pinned one, and a missing `memory: export`
+# line in the job log. Every phase report is a diagnostic, so stderr is also
+# where it belongs on its own merits.
+#
+# A measurement that cannot be read is not a passed budget check. Reporting
+# "unavailable" and returning success made the budget satisfiable by failing to
+# measure, which is strictly worse than having no budget: an unbudgeted phase at
+# least looks unbudgeted. So an unreadable or non-numeric peak fails the phase.
+# The one exception is a phase that already failed on its own: GNU time may
+# never have written a report, and that phase's own status is the interesting
+# one, so it is left to propagate unmasked.
 report_peak_rss() {
-  local limit_kib="$1" limit_label="$2" label="$3"
+  local limit_kib="$1" limit_label="$2" label="$3" command_status="$4"
   local peak_kib
   peak_kib="$(awk -F': ' '/Maximum resident set size/ { print $2 }' \
     "$PERF_DIR/$label.time" 2>/dev/null || true)"
-  if [[ -z "$peak_kib" ]]; then
-    echo "memory: $label peak RSS unavailable"
-    return 0
+  if [[ ! "$peak_kib" =~ ^[0-9]+$ ]]; then
+    echo "memory: $label peak RSS unavailable" >&2
+    if ((command_status != 0)); then
+      return 0
+    fi
+    fail "$label reported no readable peak RSS in $PERF_DIR/$label.time;" \
+      "the $limit_label was never checked"
   fi
   awk -v kib="$peak_kib" -v budget="$limit_kib" -v phase="$label" \
     -v mechanism="$LIMIT_MECHANISM" \
     'BEGIN { printf "memory: %s peak RSS %.2f GiB of %.2f GiB budget (%s)\n",
-             phase, kib / 1048576, budget / 1048576, mechanism }'
+             phase, kib / 1048576, budget / 1048576, mechanism }' >&2
   if ((peak_kib > limit_kib)); then
     fail "$label exceeded the $limit_label: ${peak_kib} KiB peak RSS"
   fi
@@ -285,7 +334,7 @@ run_measured() {
     run_capped "$limit_kib" "$limit_label" \
       "$TIME_BIN" -v -o "$PERF_DIR/$label.time" "$@" || status=$?
   fi
-  report_peak_rss "$limit_kib" "$limit_label" "$label"
+  report_peak_rss "$limit_kib" "$limit_label" "$label" "$status"
   return "$status"
 }
 
@@ -390,6 +439,11 @@ cleanup_tree "$MATHLIB_CACHE_DIR"
 disk_census mathlib-cached
 
 rm -f "$INPUT_GZ" "$INPUT_FIFO" "$OUTPUT"
+# Everything this subshell writes to stdout becomes part of the compressed
+# export. Only the exporter may write there: diagnostics inside `run_measured`,
+# `run_capped` and `report_peak_rss` go to stderr, `cd` is given an absolute
+# path so no CDPATH echo can reach the stream, and nothing in here may call
+# `disk_census`, whose `tee` writes to stdout by construction.
 set +e
 (cd "$MATHLIB_DIR" &&
   run_export_measured export lake env "$BIN_DIR/lean4export" Mathlib) |
@@ -439,7 +493,10 @@ feeder_job="$feeder_pid"
 # check-mathlib-result.sh's required `output check:` line while saving nothing.
 #
 # Measured A/B over the pinned Mathlib export, same binary, run with the phase
-# budget lifted so neither arm is cut off:
+# budget lifted so neither arm is cut off. The absolute numbers predate the
+# reduction recorded in the phase table above -- both arms were taken at the
+# then-current 13.91 GiB -- but the comparison is between two arms of one
+# binary, so it is the difference that carries and it is nil:
 #
 #                     wall        peak RSS     output bytes
 #   default          31:17.86     13.91 GiB    5937056185
