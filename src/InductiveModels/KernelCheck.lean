@@ -197,68 +197,6 @@ def inputReferences (declaration : EDecl) : Std.HashSet Name := Id.run do
   if let .quot .. := declaration then references := references.insert `Eq
   return references
 
-namespace ConstantUniverseArities
-
-/- The same pointer-visited traversal as `Order.ExprReferences`, recording how
-   many universe levels each constant occurrence carries instead of the bare
-   name. Occurrence order is the traversal order, so the first mismatch a
-   declaration contains is reported deterministically. -/
-unsafe structure State where
-  visited : PtrSet Expr := mkPtrSet
-  occurrences : Array (Name × Nat) := #[]
-
-unsafe abbrev M := StateM State
-
-unsafe def visit (e : Expr) : M Unit := do
-  if (← get).visited.contains e then return
-  modify fun state => { state with visited := state.visited.insert e }
-  match e with
-  | .const name levels =>
-    modify fun state =>
-      { state with occurrences := state.occurrences.push (name, levels.length) }
-  | .proj _ _ struct => visit struct
-  | .app fn arg => visit fn; visit arg
-  | .lam _ type body _ | .forallE _ type body _ => visit type; visit body
-  | .letE _ type value body _ => visit type; visit value; visit body
-  | .mdata _ body => visit body
-  | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => pure ()
-
-unsafe def collectUnsafe (roots : Array Expr) : Array (Name × Nat) :=
-  ((roots.forM visit).run {}).2.occurrences
-
-end ConstantUniverseArities
-
-/-- Every constant occurrence in `roots`, with the number of universe levels it
-supplies. -/
-@[implemented_by ConstantUniverseArities.collectUnsafe]
-opaque constantUniverseArities (roots : Array Expr) : Array (Name × Nat) := #[]
-
-/-- Exactly the expressions a reconstructed declaration hands to the kernel. -/
-private def declarationExpressions : Declaration → Array Expr
-  | .axiomDecl value => #[value.type]
-  | .defnDecl value | .thmDecl value => #[value.type, value.value]
-  | .opaqueDecl value => #[value.type, value.value]
-  | .quotDecl => #[]
-  | .mutualDefnDecl values => values.toArray.flatMap fun value => #[value.type, value.value]
-  | .inductDecl _ _ types _ =>
-    types.toArray.flatMap fun type =>
-      #[type.type] ++ type.ctors.toArray.map (·.type)
-
-/-- The universe arities a declaration introduces itself. An inductive record
-is the only declaration whose own expressions may name it, and every member of
-a block shares the block's level parameters. -/
-private def introducedUniverseArities : Declaration → Array (Name × Nat)
-  | .axiomDecl value => #[(value.name, value.levelParams.length)]
-  | .defnDecl value | .thmDecl value => #[(value.name, value.levelParams.length)]
-  | .opaqueDecl value => #[(value.name, value.levelParams.length)]
-  | .quotDecl => #[]
-  | .mutualDefnDecl values =>
-    values.toArray.map fun value => (value.name, value.levelParams.length)
-  | .inductDecl levelParams _ types _ =>
-    types.toArray.flatMap fun type =>
-      #[(type.name, levelParams.length)] ++
-        type.ctors.toArray.map fun constructor => (constructor.name, levelParams.length)
-
 private abbrev ReplayMarks := Array UInt8
 
 private partial def visitRecord (x : Export) (ownership : Std.HashMap Name Nat)
