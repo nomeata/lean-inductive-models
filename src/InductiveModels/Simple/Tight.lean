@@ -82,13 +82,30 @@ partial def tightTowerMk (fields : Array Expr) (i : Nat)
   return mkAppN (.const `PSigma'.mk [u, v])
     #[α, β, fields[i]!, ← tightTowerMk fields (i + 1) pad?]
 
+/-- **The tower read out**, one primitive projection pair per rung.
+
+**It builds no types.** A primitive `.proj` carries the structure's name and a
+field index and nothing else — not the rung's `α`, not its `β`, not either
+level — so walking the tower to its `i`th field needs only the shape the
+recursion already has. This used to call [`InductiveModels.tightTowerAt`] at
+every rung and discard all four of its results, a vestige of the day the
+projections were `PSigma'.fst`/`.snd` *applications* and did need `α` and `β`
+spelled out. It was measured at 81% of this function's cost.
+
+Nor was it a well-formedness assertion standing in for one: every rung it
+rebuilt is rebuilt for real, at the same fields and the same `pad?`, by
+[`InductiveModels.tightTowerTy`] for the carrier and by
+[`InductiveModels.tightTowerAt`] under [`InductiveModels.tightTowerMk`] for the
+constructor, both of which run **before** the projections on both routes that
+reach here. Any shape this could have rejected is rejected there first, with
+the same message. -/
 partial def tightTowerProjs (fields : Array Expr) (i : Nat) (value : Expr)
-    (pre : Array Expr := #[]) (pad? : Option Level := none) : GenM (Array Expr) := do
+    (pre : Array Expr := #[]) (pad? : Option Level := none) : Array Expr :=
   if tightTowerDone fields i pad? then
-    return if pad?.isSome then pre else pre.push value
-  let (_, _, _, _) ← tightTowerAt fields i pre pad?
-  let first := .proj `PSigma' 0 value
-  tightTowerProjs fields (i + 1) (.proj `PSigma' 1 value) (pre.push first) pad?
+    (if pad?.isSome then pre else pre.push value)
+  else
+    let first := .proj `PSigma' 0 value
+    tightTowerProjs fields (i + 1) (.proj `PSigma' 1 value) (pre.push first) pad?
 
 partial def tightTowerPrepend (fields pre : Array Expr) (i : Nat) (tail : Expr)
     (pad? : Option Level := none) : GenM Expr := do
@@ -179,7 +196,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       withLocalDeclD `self (selfAt ps) fun self => do
-        let projections ← tightTowerProjs fields 0 self #[] pad?
+        let projections := tightTowerProjs fields 0 self #[] pad?
         (Array.range nf).mapM fun fieldIndex => do
           let selector ← mkLambdaFVars (ps.push self) projections[fieldIndex]!
           let proof ← do
@@ -253,7 +270,7 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
   let projsAt : Array Expr → Expr → GenM (Array Expr) := fun ps value => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ =>
-      tightTowerProjs fields 0 value #[] pad?
+      pure (tightTowerProjs fields 0 value #[] pad?)
   let towerOf : Array Expr → Array Expr → GenM Expr := fun _ fs =>
     tightTowerMk fs 0 pad?
 
