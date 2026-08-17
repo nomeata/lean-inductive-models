@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The full-Mathlib gate: build the generator and the pinned patched lean4export,
+# The full-Mathlib gate: build the generator and the pinned stock lean4export,
 # export a pinned Mathlib, and run that export through the generator in one pass.
 #
 # What the gate proves, over the whole corpus rather than over fixtures:
@@ -45,8 +45,6 @@ LOG="$WORK/logs/generate.log"
 
 MATHLIB_REV="5e932f97dd25535344f80f9dd8da3aab83df0fe6"
 EXPORTER_REV="caccfbebbc99077962b3321125b2375bb3fa22db"
-EXPORTER_PATCH="$ROOT/vendor/lean4export/compact-expr-interner.patch"
-EXPORTER_PATCH_SHA="151c25f6adbfd915ce62786da33352c089653f62d5d3445cc3b38879de19deeb"
 # Lake's build parallelism bound. Lake 5.0.0 has no job-count flag, so this is
 # `LEAN_NUM_THREADS`; test/scripts/check-ci-serialized-builds.sh pins it equal to
 # the value ci.yml states for the fast jobs.
@@ -67,9 +65,6 @@ checkout_pinned() {
 LEAN_NUM_THREADS="$BUILD_THREADS" lake build lean-inductive-models
 
 checkout_pinned https://github.com/leanprover/lean4export.git "$EXPORTER_REV" "$EXPORTER_DIR"
-echo "$EXPORTER_PATCH_SHA  $EXPORTER_PATCH" | sha256sum --check --strict
-git -C "$EXPORTER_DIR" apply --check "$EXPORTER_PATCH"
-git -C "$EXPORTER_DIR" apply "$EXPORTER_PATCH"
 # Deliberately a literal, not a copy of `$ROOT/lean-toolchain`: the NDJSON export
 # is the interface between the two, and the exporter has to load Mathlib's oleans
 # under the version that built them. `scripts/export-fixture.sh` pins the same.

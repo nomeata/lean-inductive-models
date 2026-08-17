@@ -169,7 +169,6 @@ test/scripts/check_arena_corpus.py
 test/scripts/check-hard-nested-a.sh
 test/scripts/check-hard-nested-c.sh
 test/scripts/check-mathlib-result.sh
-test/scripts/check-lean4export-patch.sh
 test/scripts/check-ci-serialized-builds.sh
 test/scripts/check-checker-imports.sh
 test/scripts/check-no-known-gap.sh
@@ -360,7 +359,7 @@ this writing, for the whole single-pass gate over the pinned export:
 | phase | peak RSS |
 | --- | --- |
 | `lake build lean-inductive-models`, cold | 2.91 GiB |
-| `lake build` in the patched lean4export | 1.46 GiB |
+| `lake build` in the pinned lean4export | 1.46 GiB |
 | `lake exe cache get` | 0.95 GiB |
 | Mathlib export | 7.92 GiB |
 | generation, single pass | **7.39 GiB**, 11:49 wall |
@@ -398,11 +397,10 @@ gzip -dc mathlib.ndjson.gz |
 ```
 
 It is deliberately about a dozen lines of work: clone Mathlib at the pinned
-revision, fetch its cache, clone lean4export at its pinned revision, verify and
-apply the vendored compact-interner patch, build both, export, and run that one
-pass. The pinned revisions and the patch's SHA-256 verification are correctness
-and stay; everything else that used to be here was scaffolding for phases that
-no longer exist.
+revision, fetch its cache, clone stock lean4export at its pinned revision, build
+both, export, and run that one pass. The pinned revisions are correctness and
+stay; everything else that used to be here was scaffolding for phases that no
+longer exist.
 
 The export is still serialized to a compressed file rather than piped live into
 the generator. That is not scaffolding: the export and generation peaks are
@@ -462,6 +460,5 @@ type mismatch 'x'` rather than crashing. `kernelcheck` pins that message.
 test/scripts/export-inductive-models.sh prim_shapes
 ```
 
-`LEAN4EXPORT_DIFFERENTIAL=1 test/scripts/check-lean4export-patch.sh` compares a
-stock and patched small export byte for byte. `.github/workflows/ci.yml`
-remains the authority for hosted-runner resource limits and artifact retention.
+`.github/workflows/ci.yml` remains the authority for hosted-runner resource
+limits and artifact retention.

@@ -43,12 +43,10 @@ forbid_harness() {
   fi
 }
 
-# Correctness, not scaffolding: the corpus and the exporter are pinned, and the
-# vendored patch is verified before it is applied rather than after.
+# Correctness, not scaffolding: the corpus and the exporter are both pinned to a
+# reviewed revision, and the exporter is stock upstream at that revision.
 require_harness '^MATHLIB_REV="[0-9a-f]{40}"$'
 require_harness '^EXPORTER_REV="[0-9a-f]{40}"$'
-require_harness '^EXPORTER_PATCH_SHA="[0-9a-f]{64}"$'
-require_harness 'sha256sum --check --strict' "the patch SHA must be verified"
 
 # Honest exit status. `pipefail` alone would abort the script before a
 # PIPESTATUS line could name the side that failed, so each large pipeline is

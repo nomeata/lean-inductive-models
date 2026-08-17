@@ -23,10 +23,8 @@ lean-inductive-models [OPTIONS] IN.ndjson
 
 `IN.ndjson` is an NDJSON kernel export of a Lean environment, as produced by
 [`leanprover/lean4export`](https://github.com/leanprover/lean4export); it may be
-`-` for standard input. **Stock upstream `lean4export` is all you need.** The
-patch under [`vendor/lean4export/`](vendor/lean4export/README.md) is only a
-memory optimisation for this project's own full-Mathlib job and changes not a
-byte of the exported output.
+`-` for standard input. Stock upstream `lean4export` is all you need; this
+project builds nothing of its own on that side.
 
 With no options, all generation routes and both structural checks run, each
 generated island is kernel-checked as it is produced, and the transformed export
