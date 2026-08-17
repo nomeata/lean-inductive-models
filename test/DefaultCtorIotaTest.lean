@@ -1,6 +1,8 @@
 import InductiveModels.Driver
 import InductiveModels.Order
 
+namespace DefaultCtorIotaTest
+
 /-!
 # Default-parameter recursor-iota syntax regression
 
@@ -173,3 +175,5 @@ def run (root : String) : IO UInt32 := do
 
 def main (args : List String) : IO UInt32 :=
   run (args.head?.getD ".")
+
+end DefaultCtorIotaTest

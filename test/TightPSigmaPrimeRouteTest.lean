@@ -1,6 +1,8 @@
 import InductiveModels.Driver
 import InductiveModels.Check
 
+namespace TightPSigmaPrimeRouteTest
+
 open Lean Meta InductiveModels
 
 structure TestState where
@@ -131,3 +133,5 @@ def main : IO UInt32 := do
   IO.println s!"tight PSigma': {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
+
+end TightPSigmaPrimeRouteTest

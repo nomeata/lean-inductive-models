@@ -6,7 +6,7 @@ set_option maxRecDepth 8192
 /-!
 # Focused tests for record-level model ordering
 
-Run from the repository root with `lake exe ordertest [ROOT]`.
+Run from the repository root with `lake exe test order [ROOT]`.
 -/
 
 open Lean Meta InductiveModels
@@ -962,7 +962,7 @@ def run (root : String) : IO UInt32 := do
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
 
-end InductiveModels.Order.Tests
-
 def main (args : List String) : IO UInt32 :=
-  InductiveModels.Order.Tests.run (args.head?.getD ".")
+  run (args.head?.getD ".")
+
+end InductiveModels.Order.Tests

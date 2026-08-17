@@ -1403,6 +1403,6 @@ def runMain : IO UInt32 := do
     identityDependencies={result.identityDependencies}"
   return 1
 
-end FamilyAdapterConstructionTest
+def main : IO UInt32 := runMain
 
-def main : IO UInt32 := FamilyAdapterConstructionTest.runMain
+end FamilyAdapterConstructionTest

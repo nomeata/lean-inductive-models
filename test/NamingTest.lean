@@ -1,6 +1,8 @@
 import InductiveModels.Naming
 import InductiveModels.ModelRoles
 
+namespace NamingTest
+
 open Lean InductiveModels InductiveModels.Naming
 
 structure TestState where
@@ -222,3 +224,5 @@ def main (args : List String) : IO UInt32 := do
   else
     IO.eprintln s!"Naming: {state.failed} failed, {state.passed} passed"
     return 1
+
+end NamingTest

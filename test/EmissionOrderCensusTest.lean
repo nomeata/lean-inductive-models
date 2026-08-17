@@ -1,9 +1,11 @@
 import InductiveModels.Driver
 
+namespace EmissionOrderCensusTest
+
 /-!
 # Emission order, as an invariant — and the replay that does not depend on it
 
-Run from the repository root: `lake exe emissionordercensustest [ROOT]`.
+Run from the repository root: `lake exe test emissionordercensus [ROOT]`.
 
 ## The invariant
 
@@ -214,3 +216,5 @@ def main (args : List String) : IO UInt32 := do
     across {paths.size - unrunnable.size} fixtures"
   for failure in failures do IO.eprintln s!"FAIL: {failure}"
   return if failures.isEmpty then 0 else 1
+
+end EmissionOrderCensusTest

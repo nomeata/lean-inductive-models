@@ -1,11 +1,13 @@
 import InductiveModels.Check
 
+namespace CheckTest
+
 set_option maxRecDepth 4096
 
 /-!
 # Focused tests for the structural model checker
 
-Run from the repository root with `lake exe checktest [ROOT]`.
+Run from the repository root with `lake exe test check [ROOT]`.
 
 The synthetic baseline starts from an actual lean4export fixture.  Exact public
 type-former, constructor and recursor axioms and iota propositions, plus a
@@ -1261,3 +1263,5 @@ def main (args : List String) : IO UInt32 :=
   | "--overlay-ownership-probe" :: rest =>
       runOverlayOwnershipProbe (rest.head?.getD ".")
   | _ => run (args.head?.getD ".")
+
+end CheckTest

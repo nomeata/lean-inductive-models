@@ -1,5 +1,7 @@
 import InductiveModels.Cli
 
+namespace CliTest
+
 open InductiveModels.Cli
 
 structure TestState where
@@ -118,3 +120,5 @@ def main : IO UInt32 := do
   else
     IO.eprintln s!"CLI parser: {state.failed} failed, {state.passed} passed"
     return 1
+
+end CliTest

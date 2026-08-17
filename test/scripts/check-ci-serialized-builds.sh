@@ -196,7 +196,12 @@ if [[ "$readme_actual" != "$expected" ]]; then
   exit 1
 fi
 
-mapfile -t lake_compile_only_targets < <(
+# The compile-only targets are the `lean_lib`s under `test/` that no suite
+# module imports: nothing builds them as a side effect of building the test
+# binary, so each has to be named in the build matrices or it is never compiled
+# at all. `TestSuites` is excluded because it is the library the suite modules
+# themselves live in -- `lake build test` builds exactly its imported modules.
+mapfile -t lake_test_libraries < <(
   current=
   while IFS= read -r line; do
     if [[ "$line" =~ ^lean_lib[[:space:]]+([^[:space:]]+)[[:space:]]+where$ ]]; then
@@ -211,6 +216,20 @@ mapfile -t lake_compile_only_targets < <(
     fi
   done < "$lakefile"
 )
+mapfile -t lake_compile_only_targets < <(
+  for library in "${lake_test_libraries[@]}"; do
+    if [[ "$library" == TestSuites ]]; then
+      continue
+    fi
+    if ! grep -qxE "import $library" "$root"/test/*.lean; then
+      printf '%s\n' "$library"
+    fi
+  done
+)
+if [[ "${#lake_compile_only_targets[@]}" -eq 0 ]]; then
+  echo "no compile-only library found in $lakefile; the extraction stopped working" >&2
+  exit 1
+fi
 
 readme_compile_source="$(
   sed -n '/^compile_only_targets=($/,/^)/p' "$maintainer_guide"
@@ -234,7 +253,7 @@ for matrix_name in readme_compile_source ci_compile_source; do
     printf '%s\n' "${lake_compile_only_targets[@]}" | LC_ALL=C sort
   )"
   if [[ "$sorted_matrix_targets" != "$sorted_compile_targets" ]]; then
-    printf '%s differs from lakefile.lean compile-only targets:\n' "$matrix_name" >&2
+    printf '%s differs from the lakefile compile-only libraries:\n' "$matrix_name" >&2
     diff -u \
       <(printf '%s\n' "$sorted_compile_targets") \
       <(printf '%s\n' "$sorted_matrix_targets") >&2 || true
@@ -242,56 +261,81 @@ for matrix_name in readme_compile_source ci_compile_source; do
   fi
 done
 
-mapfile -t lake_test_targets < <(
-  current=
-  while IFS= read -r line; do
-    if [[ "$line" =~ ^(\[default_target\][[:space:]]+)?lean_exe[[:space:]]+([^[:space:]]+)[[:space:]]+where$ ]]; then
-      current="${BASH_REMATCH[2]}"
-    elif [[ -n "$current" && "$line" =~ ^[[:space:]]+srcDir[[:space:]]+:=[[:space:]]+\"test\"$ ]]; then
-      if [[ "$current" != memoryprobe ]]; then
-        printf '%s\n' "$current"
-      fi
-      current=
-    fi
-  done < "$lakefile"
+# There is one test executable and the suite is its first argument, so the
+# agreement this script enforces is no longer between lists of Lake targets but
+# between the dispatcher's registry and the three places that name suites: the
+# runner, the workflow and the maintainer guide. `test/TestMain.lean` is the
+# registry, and it is the file the binary itself dispatches on -- a suite
+# spelled wrong anywhere else is a name the binary rejects at run time, and a
+# suite missing from a matrix is a suite nothing runs.
+registry="$root/test/TestMain.lean"
+mapfile -t registry_suites < <(
+  sed -n '/^def correctnessSuites : List Suite :=$/,/^  \]$/p' "$registry" |
+    sed -nE 's/^  [][,] suite "([a-z]+)".*$/\1/p'
 )
+if [[ "${#registry_suites[@]}" -lt 2 ]]; then
+  echo "test/TestMain.lean correctnessSuites registry did not parse" >&2
+  exit 1
+fi
+sorted_registry="$(printf '%s\n' "${registry_suites[@]}" | LC_ALL=C sort)"
+if [[ "$sorted_registry" != "$(printf '%s\n' "${registry_suites[@]}" | LC_ALL=C sort -u)" ]]; then
+  echo "test/TestMain.lean registers a suite name twice" >&2
+  exit 1
+fi
+# The diagnostics are registered apart and must stay out of the matrices; set
+# equality below is what enforces that, so assert the registry really does keep
+# them in a second list rather than in the one compared.
+if ! sed -n '/^def diagnosticSuites : List Suite :=$/,/^  \]$/p' "$registry" |
+    grep -qE '^  \[ suite "[a-z]+"'; then
+  echo "test/TestMain.lean has no diagnosticSuites registry" >&2
+  exit 1
+fi
 
-readme_targets_source="$(
-  sed -n '/^correctness_targets=($/,/^)/p' "$maintainer_guide"
+# The runner and the guide state the suite list as one array each; the workflow
+# runs `fixtures` and `maincli` in their own matrix jobs and the rest from an
+# array, so its list is the union of the two spellings.
+runner_suites_source="$(
+  sed -n '/^correctness_suites=($/,/^)/p' "$root/test/scripts/run-correctness.sh"
 )"
-if [[ -z "$readme_targets_source" ]]; then
-  echo "maintainer guide correctness_targets array is missing" >&2
-  exit 1
-fi
-mapfile -t readme_targets < <(
-  eval "$readme_targets_source"
-  printf '%s\n' "${correctness_targets[@]}"
+readme_suites_source="$(
+  sed -n '/^correctness_suites=($/,/^)/p' "$maintainer_guide"
+)"
+ci_suites_source="$(
+  sed -n '/^              focused_suites=($/,/^              )$/p' "$workflow" |
+    sed 's/^              //'
+)"
+for matrix_name in runner_suites_source readme_suites_source ci_suites_source; do
+  declare -n matrix_source="$matrix_name"
+  if [[ -z "$matrix_source" ]]; then
+    printf '%s\n' "$matrix_name is missing" >&2
+    exit 1
+  fi
+done
+mapfile -t runner_suites < <(
+  eval "$runner_suites_source"
+  printf '%s\n' "${correctness_suites[@]}"
 )
-
-sorted_lake_targets="$(printf '%s\n' "${lake_test_targets[@]}" | LC_ALL=C sort)"
-sorted_readme_targets="$(printf '%s\n' "${readme_targets[@]}" | LC_ALL=C sort)"
-if [[ "$sorted_readme_targets" != "$sorted_lake_targets" ]]; then
-  printf '%s\n' "maintainer guide correctness targets differ from lakefile.lean:" >&2
-  diff -u \
-    <(printf '%s\n' "$sorted_lake_targets") \
-    <(printf '%s\n' "$sorted_readme_targets") >&2 || true
-  exit 1
-fi
-
-mapfile -t readme_run_targets < <(
-  sed -nE 's/^(TMPDIR="[^\"]+" )?lake exe ([^[:space:]]+).*$/\2/p' "$maintainer_guide"
+mapfile -t readme_suites < <(
+  eval "$readme_suites_source"
+  printf '%s\n' "${correctness_suites[@]}"
 )
-mapfile -t ci_run_targets < <(
-  sed -nE 's/^[[:space:]]*lake exe ([^[:space:]]+).*$/\1/p' "$workflow"
+mapfile -t ci_suites < <(
+  eval "$ci_suites_source"
+  printf '%s\n' "${focused_suites[@]}"
+  sed -nE 's/^[[:space:]]*lake exe test ([a-z]+).*$/\1/p' "$workflow"
 )
-for matrix_name in readme_run_targets ci_run_targets; do
-  declare -n matrix_targets="$matrix_name"
-  sorted_matrix_targets="$(printf '%s\n' "${matrix_targets[@]}" | LC_ALL=C sort)"
-  if [[ "$sorted_matrix_targets" != "$sorted_lake_targets" ]]; then
-    printf '%s\n' "$matrix_name differs from the lakefile.lean correctness targets:" >&2
+# The guide also spells the individual execution matrix out, one line per suite.
+mapfile -t readme_run_suites < <(
+  sed -nE 's/^lake exe test ([a-z]+).*$/\1/p' "$maintainer_guide"
+)
+for matrix_name in runner_suites readme_suites ci_suites readme_run_suites; do
+  declare -n matrix_suites="$matrix_name"
+  sorted_matrix_suites="$(printf '%s\n' "${matrix_suites[@]}" | LC_ALL=C sort)"
+  if [[ "$sorted_matrix_suites" != "$sorted_registry" ]]; then
+    printf '%s\n' "$matrix_name differs from the test/TestMain.lean suite registry:" >&2
     diff -u \
-      <(printf '%s\n' "$sorted_lake_targets") \
-      <(printf '%s\n' "$sorted_matrix_targets") >&2 || true
+      <(printf '%s\n' "$sorted_registry") \
+      <(printf '%s\n' "$sorted_matrix_suites") >&2 || true
     exit 1
   fi
 done
@@ -326,4 +370,6 @@ for matrix_name in readme_check_scripts ci_check_scripts; do
   fi
 done
 
-echo "CI/maintainer-guide build matrix: LEAN_NUM_THREADS=$workflow_bound, ${#lake_test_targets[@]} targets, ${#check_scripts[@]} scripts"
+echo "CI/maintainer-guide build matrix: LEAN_NUM_THREADS=$workflow_bound, \
+${#registry_suites[@]} suites, ${#lake_compile_only_targets[@]} compile-only libraries, \
+${#check_scripts[@]} scripts"

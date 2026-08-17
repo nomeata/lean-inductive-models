@@ -1,5 +1,7 @@
 import InductiveModels.Driver
 
+namespace ComposedRecursorSyntaxTest
+
 /-!
 # Composed exact-recursor syntax regression
 
@@ -168,3 +170,5 @@ def run (root : String) : IO UInt32 := do
 
 def main (args : List String) : IO UInt32 :=
   run (args.head?.getD ".")
+
+end ComposedRecursorSyntaxTest

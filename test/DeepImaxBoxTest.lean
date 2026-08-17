@@ -3,6 +3,8 @@ import InductiveModels.Check
 import InductiveModels.Order
 import Lean.Util.CollectAxioms
 
+namespace DeepImaxBoxTest
+
 open Lean Meta InductiveModels
 
 structure TestState where
@@ -229,3 +231,5 @@ def main : IO UInt32 := do
       if #[`BoxF, `IBox, skeleton].contains violation.familyOwner then
         IO.eprintln s!"check violation: {repr violation}"
   return if state.failed.isEmpty then 0 else 1
+
+end DeepImaxBoxTest

@@ -1,6 +1,8 @@
 import InductiveModels.Driver
 import InductiveModels.Naming
 
+namespace SimpleNamingTest
+
 open Lean Meta InductiveModels InductiveModels.Naming
 
 structure FixtureResult where
@@ -231,3 +233,5 @@ def main : IO UInt32 := do
   IO.println s!"simple naming: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
+
+end SimpleNamingTest

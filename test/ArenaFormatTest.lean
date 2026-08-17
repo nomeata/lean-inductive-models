@@ -1,5 +1,7 @@
 import InductiveModels.Format
 
+namespace ArenaFormatTest
+
 open Lean InductiveModels
 
 set_option maxRecDepth 4096
@@ -11,7 +13,7 @@ Both readers — [`InductiveModels.parse`] over a whole string and
 [`InductiveModels.parseHandle`] over a chunked stream — must agree on every
 record spelling the Kernel Arena accepts, and the writer must produce exactly
 what they read back. Run from the repository root with
-`lake exe arenaformattest [ROOT]`.
+`lake exe test arenaformat [ROOT]`.
 -/
 
 structure TestState where
@@ -303,3 +305,5 @@ def main (args : List String) : IO UInt32 := do
   IO.println s!"arena format: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
+
+end ArenaFormatTest

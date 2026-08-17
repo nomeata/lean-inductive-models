@@ -1,5 +1,7 @@
 import InductiveModels.Driver
 
+namespace SourceReplayAliasTest
+
 open Lean Meta InductiveModels
 
 structure TestState where
@@ -453,3 +455,5 @@ def main : IO UInt32 := do
   IO.println s!"source replay aliases: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
+
+end SourceReplayAliasTest

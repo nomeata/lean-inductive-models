@@ -146,9 +146,6 @@ jobs:
             done
           }
           compile_only_targets=(
-            FamilyAdapterConstruction
-            FamilyAdapterPlan
-            FamilyAdapterShadow
             OneLayerProjectionPrototype
             OneLayerRecursorProof
           )
@@ -160,7 +157,7 @@ jobs:
           case "$SUITE" in
             fixtures)
               build_bounded lean-inductive-models test
-              lake exe test "$GITHUB_WORKSPACE" | tee _tmp/fixtures.log
+              lake exe test fixtures "$GITHUB_WORKSPACE" | tee _tmp/fixtures.log
               test/scripts/check-hard-nested-a.sh
               test/scripts/check-hard-nested-c.sh
               count="$(sed -nE 's/^([0-9]+) checks, 0 failed$/\1/p' _tmp/fixtures.log | tail -n1)"
@@ -168,60 +165,37 @@ jobs:
             focused)
               test/scripts/check-mathlib-result.sh
               build_bounded "${compile_only_targets[@]}"
-              build_bounded \
-                clitest generationflagstest checktest kernelchecktest \
-                familyadapterplantest familyadaptershadowtest familyadapterconstructiontest \
-                ordertest incrementalordertest namingtest \
-                drivernamingtest privatealiastest sourcereplayaliastest simplenamingtest rulektest \
-                defaultctoriotatest sourcestructuresyntaxtest composedrecursorsyntaxtest \
-                projectiontest projectiontransportcensustest \
-                emissionordercensustest \
-                indexedfibrediagnostictest mutualonelayerdiagnostictest \
-                structureetatest deepimaxboxtest \
-                psigmaprimetest exactsortlifttest tightpsigmaprimeroutetest \
-                vanishingerasuretest transparentowneraliasestest \
-                exportsyntaxnormalizationtest basisvalidationtest arenaformattest
-              lake exe clitest
-              lake exe generationflagstest
-              lake exe checktest "$GITHUB_WORKSPACE"
-              lake exe kernelchecktest "$GITHUB_WORKSPACE"
-              lake exe familyadapterplantest
-              lake exe familyadaptershadowtest
-              lake exe familyadapterconstructiontest
-              lake exe ordertest "$GITHUB_WORKSPACE"
-              lake exe incrementalordertest "$GITHUB_WORKSPACE"
-              lake exe namingtest
-              lake exe drivernamingtest
-              lake exe privatealiastest
-              lake exe sourcereplayaliastest
-              lake exe simplenamingtest
-              lake exe rulektest
-              lake exe defaultctoriotatest "$GITHUB_WORKSPACE"
-              lake exe sourcestructuresyntaxtest "$GITHUB_WORKSPACE"
-              lake exe composedrecursorsyntaxtest "$GITHUB_WORKSPACE"
-              lake exe projectiontest
-              lake exe projectiontransportcensustest "$GITHUB_WORKSPACE"
-              lake exe emissionordercensustest "$GITHUB_WORKSPACE"
-              lake exe indexedfibrediagnostictest "$GITHUB_WORKSPACE"
-              lake exe mutualonelayerdiagnostictest "$GITHUB_WORKSPACE"
-              lake exe structureetatest
-              lake exe deepimaxboxtest
-              lake exe psigmaprimetest
-              lake exe exactsortlifttest
-              lake exe tightpsigmaprimeroutetest
-              lake exe vanishingerasuretest
-              lake exe transparentowneraliasestest
-              lake exe exportsyntaxnormalizationtest
-              lake exe basisvalidationtest
-              lake exe arenaformattest "$GITHUB_WORKSPACE"
+              build_bounded test
+              # One binary, one suite per invocation, named by its first
+              # argument; the repository root is the argument every suite
+              # either reads or ignores. `test/TestMain.lean` holds the
+              # registry, and the build-matrix guard asserts this list, the
+              # runner's, the maintainer guide's and the registry agree.
+              focused_suites=(
+                cli generationflags check kernelcheck
+                familyadapterplan familyadaptershadow familyadapterconstruction
+                order incrementalorder naming
+                drivernaming privatealias sourcereplayalias simplenaming rulek
+                defaultctoriota sourcestructuresyntax composedrecursorsyntax
+                projection projectiontransportcensus
+                emissionordercensus
+                indexedfibrediagnostic mutualonelayerdiagnostic
+                structureeta deepimaxbox
+                psigmaprime exactsortlift tightpsigmaprimeroute
+                vanishingerasure transparentowneralias
+                exportsyntaxnormalization basisvalidation arenaformat
+              )
+              for suite in "${focused_suites[@]}"; do
+                lake exe test "$suite" "$GITHUB_WORKSPACE"
+              done
               PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
               python3 test/scripts/generate_family_adapter_fixtures.py \
                 --output test/fixtures/inductive-models/family_adapter_generated.lean --check
               count=33
               ;;
             cli)
-              build_bounded lean-inductive-models mainclitest
-              lake exe mainclitest "$GITHUB_WORKSPACE" | tee _tmp/maincli.log
+              build_bounded lean-inductive-models test
+              lake exe test maincli "$GITHUB_WORKSPACE" | tee _tmp/maincli.log
               cli_count="$(sed -nE 's/^main CLI: ([0-9]+) passed, 0 failed$/\1/p' _tmp/maincli.log | tail -n1)"
               if [[ -z "$cli_count" ]]; then
                 echo "CLI suite did not report lean-inductive-models CLI checks" >&2

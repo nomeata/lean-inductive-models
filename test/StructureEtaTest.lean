@@ -2,6 +2,8 @@ import InductiveModels.Driver
 import InductiveModels.Check
 import InductiveModels.ModelRoles
 
+namespace StructureEtaTest
+
 open Lean Meta InductiveModels
 
 structure TestState where
@@ -203,3 +205,5 @@ def main : IO UInt32 := do
   IO.println s!"structure eta: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
+
+end StructureEtaTest

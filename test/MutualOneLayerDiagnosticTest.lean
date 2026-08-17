@@ -2,6 +2,8 @@ import InductiveModels.Driver
 import InductiveModels.Check
 import InductiveModels.Order
 
+namespace MutualOneLayerDiagnosticTest
+
 /-!
 # Plain-mutual partial one-layer diagnostic
 
@@ -406,3 +408,5 @@ def run (root : String) : IO UInt32 := do
 
 def main (args : List String) : IO UInt32 :=
   run (args.head?.getD ".")
+
+end MutualOneLayerDiagnosticTest

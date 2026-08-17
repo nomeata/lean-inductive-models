@@ -1,6 +1,8 @@
 import InductiveModels.Driver
 import FamilyAdapterShadow
 
+namespace FamilyAdapterShadowTest
+
 open Lean Meta InductiveModels
 
 def shadowGeneration : Cli.Config :=
@@ -319,3 +321,5 @@ def main : IO UInt32 := do
         IO.eprintln s!"{shadow.root} repeated-index rules: {repr shadow.coverage.rules}"
   unless malformedRejected do IO.eprintln s!"malformed Nat: {repr malformed}"
   return 1
+
+end FamilyAdapterShadowTest

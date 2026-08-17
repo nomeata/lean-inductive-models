@@ -56,6 +56,8 @@ inductive LaterDependency : Ix -> Type where
 
 end IndexedFibreLaterDependencyBoundary
 
+namespace IndexedFibreDiagnosticTest
+
 structure TestState where
   passed : Nat := 0
   failed : Array String := #[]
@@ -806,3 +808,5 @@ def run (root : String) : IO UInt32 := do
 
 def main (args : List String) : IO UInt32 :=
   run (args.head?.getD ".")
+
+end IndexedFibreDiagnosticTest

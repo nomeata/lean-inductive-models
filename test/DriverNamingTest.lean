@@ -1,6 +1,8 @@
 import InductiveModels.Driver
 import InductiveModels.Naming
 
+namespace DriverNamingTest
+
 open Lean Meta InductiveModels InductiveModels.Naming
 
 structure FixtureResult where
@@ -156,3 +158,5 @@ def main : IO UInt32 := do
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   IO.eprintln s!"driver naming: {state.passed}/{state.passed + state.failed.size} passed"
   return 1
+
+end DriverNamingTest

@@ -1,10 +1,12 @@
 import InductiveModels.Driver
 import InductiveModels.Order
 
+namespace Test
+
 /-!
 # The tool's own oracles, as a test
 
-Run from the repository root: `lake exe test [ROOT]`.
+Run from the repository root: `lake exe test fixtures [ROOT]`.
 
 Four axes, and each one has an occupant that would pass the other three:
 
@@ -1824,3 +1826,5 @@ def main (args : List String) : IO UInt32 := do
   IO.println s!"{a.checks} checks, {a.failures.size} failed"
   for f in a.failures do IO.println s!"  FAIL {f}"
   return if a.failures.isEmpty then 0 else 1
+
+end Test

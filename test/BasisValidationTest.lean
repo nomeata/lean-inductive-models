@@ -1,5 +1,7 @@
 import InductiveModels.Driver
 
+namespace BasisValidationTest
+
 open Lean Meta InductiveModels
 
 structure TestState where
@@ -255,3 +257,5 @@ def main : IO UInt32 := do
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   IO.println s!"basis validation: {state.passed} passed, {state.failed.size} failed"
   return if state.failed.isEmpty then 0 else 1
+
+end BasisValidationTest

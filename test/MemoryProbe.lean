@@ -1,12 +1,14 @@
 import InductiveModels.Format
 
+namespace MemoryProbe
+
 /-!
 A deliberately tiny, opt-in process for comparing parser retention.  Run each
 mode in a fresh process so `/proc/self/status`'s `VmHWM` is meaningful:
 
 ```
-lake exe memoryprobe whole  INPUT.ndjson
-lake exe memoryprobe stream INPUT.ndjson
+lake exe test memoryprobe whole  INPUT.ndjson
+lake exe test memoryprobe stream INPUT.ndjson
 ```
 
 Only resident/high-water sizes and already-owned arena cardinalities are
@@ -50,3 +52,5 @@ def main (args : List String) : IO UInt32 := do
   | .ok parsed =>
       memory "parsed" parsed.decls.size
       return 0
+
+end MemoryProbe

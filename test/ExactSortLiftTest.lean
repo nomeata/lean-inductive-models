@@ -1,5 +1,7 @@
 import InductiveModels.Simple
 
+namespace ExactSortLiftTest
+
 open Lean Meta InductiveModels
 
 partial def containsConst (target : Name) : Expr → Bool
@@ -132,3 +134,5 @@ def main : IO UInt32 := do
   let passed := (checks.filter (·.2)).size
   IO.println s!"exact-sort lift: {passed} passed, {checks.size - passed} failed"
   return if checks.all (·.2) then 0 else 1
+
+end ExactSortLiftTest

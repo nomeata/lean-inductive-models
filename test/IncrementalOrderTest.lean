@@ -401,7 +401,7 @@ def run (root : String) : IO UInt32 := do
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
 
-end InductiveModels.IncrementalOrder.Tests
-
 def main (args : List String) : IO UInt32 :=
   InductiveModels.IncrementalOrder.Tests.run (args.head?.getD ".")
+
+end InductiveModels.IncrementalOrder.Tests

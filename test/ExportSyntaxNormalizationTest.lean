@@ -1,6 +1,8 @@
 import InductiveModels.Driver
 import InductiveModels.Order
 
+namespace ExportSyntaxNormalizationTest
+
 /-!
 # Exact export-syntax normalization controls
 
@@ -396,3 +398,5 @@ def run (root : String) : IO UInt32 := do
 
 def main (args : List String) : IO UInt32 :=
   run (args.head?.getD ".")
+
+end ExportSyntaxNormalizationTest

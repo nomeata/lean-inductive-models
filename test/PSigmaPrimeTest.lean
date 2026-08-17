@@ -1,5 +1,7 @@
 import InductiveModels.Simple
 
+namespace PSigmaPrimeTest
+
 open Lean Meta InductiveModels
 
 partial def containsProjection (owner : Name) (field : Nat) : Expr → Bool
@@ -73,3 +75,5 @@ def main : IO UInt32 := do
   let passed := (checks.filter (·.2)).size
   IO.println s!"PSigma' primitive: {passed} passed, {checks.size - passed} failed"
   return if checks.all (·.2) then 0 else 1
+
+end PSigmaPrimeTest

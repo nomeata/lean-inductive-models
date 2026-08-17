@@ -2,6 +2,8 @@ import InductiveModels.Check
 import InductiveModels.Naming
 import InductiveModels.Output
 
+namespace MainCliTest
+
 set_option maxRecDepth 4096
 
 /-!
@@ -125,7 +127,7 @@ def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let binary := s!"{root}/.lake/build/bin/lean-inductive-models"
   unless ← System.FilePath.pathExists binary do
-    IO.eprintln s!"mainclitest: missing {binary}; run `lake build lean-inductive-models` first"
+    IO.eprintln s!"maincli: missing {binary}; run `lake build lean-inductive-models` first"
     return 1
 
   let scratch := s!"{root}/_tmp"
@@ -1180,3 +1182,5 @@ def main (args : List String) : IO UInt32 := do
   IO.println s!"main CLI: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
+
+end MainCliTest

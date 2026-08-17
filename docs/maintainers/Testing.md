@@ -59,13 +59,12 @@ build_bounded() {
 }
 ```
 
-The compile-only targets — two proof oracles and three test-only libraries — are:
+The compile-only targets are the two proof oracles — the `lean_lib`s under
+`test/` that no suite module imports, so nothing builds them as a side effect of
+building the test binary:
 
 ```bash
 compile_only_targets=(
-  FamilyAdapterConstruction
-  FamilyAdapterPlan
-  FamilyAdapterShadow
   OneLayerProjectionPrototype
   OneLayerRecursorProof
 )
@@ -81,30 +80,45 @@ executable for compiling them bought nothing. `Driver` reaches an observation
 only through `InductiveModels.IslandObserver`, an opaque `EDecl → Iso → MetaM α`
 callback: production supplies none, and `test/FamilyAdapterShadowTest.lean`
 supplies the one that calls `deriveShadowPlan` and `ShadowReport.observe`. So
-`Driver` names no adapter type, and only `familyadapterplantest`,
-`familyadaptershadowtest` and `familyadapterconstructiontest` build these.
+`Driver` names no adapter type. They are not in the compile-only list because
+the `familyadapterplan`, `familyadaptershadow` and `familyadapterconstruction`
+suites import them, so `lake build test` compiles all three; the build-matrix
+guard derives the compile-only list that way rather than from a written list,
+and a new test-only library nothing imports has to be named or it is never
+compiled.
 
-The executable correctness targets are:
+There is **one** test executable, and it takes the suite name as its first
+argument: `lake exe test SUITE [ROOT]`. Every suite used to be a `lean_exe` of
+its own, and each of those linked the whole library into a separate ~230 MB
+binary -- 39 targets and 8.5 GB of `.lake/build/bin` for one program's worth of
+code. Running `lake exe test` with no suite prints the registry. Each
+invocation runs exactly one suite in its own process, as before: several suites
+install search paths and import environments, and their independence is worth
+more than a process.
+
+The suite names are the old target names without the `test` suffix, and
+`test/TestMain.lean` is the registry they come from. The correctness suites
+are:
 
 ```bash
-correctness_targets=(
-  test clitest generationflagstest checktest kernelchecktest ordertest
-  familyadapterplantest familyadaptershadowtest familyadapterconstructiontest
-  incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
-  simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
-  composedrecursorsyntaxtest mainclitest projectiontest projectiontransportcensustest
-  emissionordercensustest
-  indexedfibrediagnostictest
-  mutualonelayerdiagnostictest structureetatest
-  deepimaxboxtest psigmaprimetest exactsortlifttest
-  tightpsigmaprimeroutetest vanishingerasuretest
-  transparentowneraliasestest exportsyntaxnormalizationtest
-  basisvalidationtest arenaformattest
+correctness_suites=(
+  fixtures cli generationflags check kernelcheck order
+  familyadapterplan familyadaptershadow familyadapterconstruction
+  incrementalorder naming drivernaming privatealias sourcereplayalias
+  simplenaming rulek defaultctoriota sourcestructuresyntax
+  composedrecursorsyntax maincli projection projectiontransportcensus
+  emissionordercensus
+  indexedfibrediagnostic
+  mutualonelayerdiagnostic structureeta
+  deepimaxbox psigmaprime exactsortlift
+  tightpsigmaprimeroute vanishingerasure
+  transparentowneralias exportsyntaxnormalization
+  basisvalidation arenaformat
 )
 ```
 
-The canonical aggregate interface builds those roots one at a time and runs
-every executable and repository check script with its required arguments:
+The canonical aggregate interface builds the roots one at a time and runs every
+suite and repository check script with its required arguments:
 
 ```console
 test/scripts/run-correctness.sh
@@ -113,41 +127,41 @@ test/scripts/run-correctness.sh
 The individual execution matrix, useful when isolating a failure, is:
 
 ```console
-lake exe test "$PWD"
-lake exe clitest
-lake exe generationflagstest
-lake exe checktest "$PWD"
-lake exe kernelchecktest "$PWD"
-lake exe familyadapterplantest
-lake exe familyadaptershadowtest
-lake exe familyadapterconstructiontest
-lake exe ordertest "$PWD"
-lake exe incrementalordertest "$PWD"
-lake exe namingtest
-lake exe drivernamingtest
-lake exe privatealiastest
-lake exe sourcereplayaliastest
-lake exe simplenamingtest
-lake exe rulektest
-lake exe defaultctoriotatest "$PWD"
-lake exe sourcestructuresyntaxtest "$PWD"
-lake exe composedrecursorsyntaxtest "$PWD"
-lake exe mainclitest "$PWD"
-lake exe projectiontest
-lake exe projectiontransportcensustest "$PWD"
-lake exe emissionordercensustest "$PWD"
-lake exe indexedfibrediagnostictest "$PWD"
-lake exe mutualonelayerdiagnostictest "$PWD"
-lake exe structureetatest
-lake exe deepimaxboxtest
-lake exe psigmaprimetest
-lake exe exactsortlifttest
-lake exe tightpsigmaprimeroutetest
-lake exe vanishingerasuretest
-lake exe transparentowneraliasestest
-lake exe exportsyntaxnormalizationtest
-lake exe basisvalidationtest
-lake exe arenaformattest "$PWD"
+lake exe test fixtures "$PWD"
+lake exe test cli "$PWD"
+lake exe test generationflags "$PWD"
+lake exe test check "$PWD"
+lake exe test kernelcheck "$PWD"
+lake exe test familyadapterplan "$PWD"
+lake exe test familyadaptershadow "$PWD"
+lake exe test familyadapterconstruction "$PWD"
+lake exe test order "$PWD"
+lake exe test incrementalorder "$PWD"
+lake exe test naming "$PWD"
+lake exe test drivernaming "$PWD"
+lake exe test privatealias "$PWD"
+lake exe test sourcereplayalias "$PWD"
+lake exe test simplenaming "$PWD"
+lake exe test rulek "$PWD"
+lake exe test defaultctoriota "$PWD"
+lake exe test sourcestructuresyntax "$PWD"
+lake exe test composedrecursorsyntax "$PWD"
+lake exe test maincli "$PWD"
+lake exe test projection "$PWD"
+lake exe test projectiontransportcensus "$PWD"
+lake exe test emissionordercensus "$PWD"
+lake exe test indexedfibrediagnostic "$PWD"
+lake exe test mutualonelayerdiagnostic "$PWD"
+lake exe test structureeta "$PWD"
+lake exe test deepimaxbox "$PWD"
+lake exe test psigmaprime "$PWD"
+lake exe test exactsortlift "$PWD"
+lake exe test tightpsigmaprimeroute "$PWD"
+lake exe test vanishingerasure "$PWD"
+lake exe test transparentowneralias "$PWD"
+lake exe test exportsyntaxnormalization "$PWD"
+lake exe test basisvalidation "$PWD"
+lake exe test arenaformat "$PWD"
 PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
 python3 test/scripts/generate_family_adapter_fixtures.py \
   --output test/fixtures/inductive-models/family_adapter_generated.lean --check
@@ -161,14 +175,14 @@ test/scripts/check-checker-imports.sh
 test/scripts/check-no-known-gap.sh
 ```
 
-Two of those targets test the built binary rather than the library: `test`
-(its `runCli` section) and `mainclitest` spawn
-`.lake/build/bin/lean-inductive-models` as a subprocess. Both therefore declare
-`needs := #[`@/«lean-inductive-models»]` in `lakefile.lean`, so `lake exe test`
-and `lake exe mainclitest` rebuild the CLI before running and cannot assert the
-CLI contract against a stale executable. Do not remove those `needs`: without
-them the CLI checks silently pass or fail against whatever binary happens to be
-on disk.
+Two of those suites test the built binary rather than the library: `fixtures`
+(its `runCli` section) and `maincli` spawn
+`.lake/build/bin/lean-inductive-models` as a subprocess. The `test` target
+therefore declares `needs := #[`@/«lean-inductive-models»]` in `lakefile.lean`, so
+`lake exe test` rebuilds the CLI before running any suite and cannot assert the
+CLI contract against a stale executable. Do not remove that `needs`: without it
+the CLI checks silently pass or fail against whatever binary happens to be on
+disk.
 
 `check-checker-imports.sh` needs no build at all: it reads the `import` lines
 under `src/InductiveModels/` and fails if the structural checker
@@ -201,28 +215,28 @@ are not Lake targets, so they still require an explicit
 `lake build lean-inductive-models` first (`run-correctness.sh` does this, and
 each script fails loudly when the binary is absent).
 
-`mainclitest` exercises the public process boundary, including independent
+`maincli` exercises the public process boundary, including independent
 input/generated kernel-check flags and constructive model-before-owner output.
 The Arena corpus runner accepts every
 published `good/` case and requires each `bad/` case to be rejected or to stop
 at the documented internal-invariant boundary; unsupported exit 2 is a corpus
 failure.
 
-`ordertest` compares the compatibility retained-array path, declaration-event
+`order` compares the compatibility retained-array path, declaration-event
 collection, and sink-free compact discard over the same generation fixtures.
-`mainclitest` selects compact discard explicitly with `--no-output`;
+`maincli` selects compact discard explicitly with `--no-output`;
 `--type-check-generated` checks each exact generated island directly in process,
 while `--no-type-check-generated` invokes no generated checker. It pins exit-2
 precedence, noncanonical input equivalence, and — in every mode, including with
 a hostile `_tmp` and an ambient `TMPDIR` — that the run opens no file it was not
 given on the command line.
 
-`arenaformattest` pins the export format itself: both readers agree on every
+`arenaformat` pins the export format itself: both readers agree on every
 record spelling the Kernel Arena accepts, sparse and repeated arena IDs behave
 as the exporter's parser does, and the persistent declaration-stream writer is
 byte-identical to whole-export rendering.
 
-`test` runs each fixture with `typeCheckGenerated` at its default, so every
+`fixtures` runs each fixture with `typeCheckGenerated` at its default, so every
 accepted island goes through `checkGeneratedIn`, and `runOne` reads the verdict
 (`Report.generatedKernelRejected`, and `Report.unreplayable` beside it). It did
 not always: for a while the suite compared counts, declines, statements,
@@ -234,7 +248,7 @@ its projection ι related two terms of different types, the CLI rejected it, and
 this suite did not look. If a fixture is ever expected to fail the kernel, it
 belongs in a diagnostic suite that says so, not in this table.
 
-`projectiontransportcensustest` checks the intrinsic projection contract as an
+`projectiontransportcensus` checks the intrinsic projection contract as an
 invariant rather than as an allowlist. It generates every committed
 `test/fixtures/inductive-models` export with all generation branches enabled
 and requires, of every `T._model.proj_j.iota` without exception, that its
@@ -248,7 +262,7 @@ reproduces exactly, and is counted rather than restricted. The suite still
 pins the fixtures that the maximal configuration cannot run today, so the
 invariant cannot silently stop being exhaustive.
 
-`emissionordercensustest` checks **emission order as an invariant**: no
+`emissionordercensus` checks **emission order as an invariant**: no
 generated record references a name the output stream has not declared yet, in
 any committed fixture, under the maximal generation configuration. Lean's kernel
 starts from an empty environment and adds one declaration at a time, so this is
@@ -276,7 +290,7 @@ Generation now writes its own canonical declaration at the first point one is
 needed, whatever the input reserves, and drops the input's own record where it
 stands once `Driver.canonicalBasisRecordMatches` has established that it is
 that same declaration; a record which is *not* that declaration rejects the run
-rather than being silently replaced. `basisvalidationtest` covers both halves,
+rather than being silently replaced. `basisvalidation` covers both halves,
 including the rejection.
 
 `--type-check-input` sees record order. `typeCheckExport` used to replay in
@@ -291,8 +305,9 @@ separate cycle pass either. The census stays, because it covers the generated
 output under the maximal configuration whether or not `--type-check-input` is
 passed, and reports every offending record rather than the first.
 
-`memoryprobe`, `envprobe`, and `levelfuzz` are diagnostics, not correctness
-suites. `.github/workflows/ci.yml` is the only workflow file, and it holds
+The `memoryprobe` suite and the `envprobe` and `levelfuzz` executables are
+diagnostics, not correctness suites; `memoryprobe` is registered in
+`test/TestMain.lean` apart from `correctnessSuites` for that reason. `.github/workflows/ci.yml` is the only workflow file, and it holds
 five jobs on one trigger set — push to `main`, every pull request, a Monday
 03:17 UTC cron, and manual dispatch. Four of them are fast: an Arena corpus job
 and a three-way `fixtures`/`focused`/`cli` matrix, each capped at 30 minutes.
@@ -411,9 +426,9 @@ What it deliberately does not prove, and what covers those properties instead:
   case with `--type-check-input --type-check-generated`.
 * **Serialization round-tripping** — `--no-output`. The gate used to write a
   5.9 GB artifact and re-read it under `--type-check-input`, at 19:44 and
-  8.22 GiB. Round-tripping is covered by axis 4 of `lake exe test`'s fixture
-  sweep — `parse (render (parse t)) = parse t`, structurally — and by
-  `lake exe mainclitest`, which writes exports to real paths and reads them
+  8.22 GiB. Round-tripping is covered by axis 4 of the `fixtures`
+  suite — `parse (render (parse t)) = parse t`, structurally — and by
+  `lake exe test maincli`, which writes exports to real paths and reads them
   back. Note that `check_arena_corpus.py` does *not* cover this: it runs with
   `--no-output` too.
 
@@ -433,7 +448,7 @@ with the pinned exporter:
 
 `test/fixtures/rejected/` is separate and deliberately outside every fixture
 sweep: it holds malformed exports that exist to be *refused*, so no generation
-or census target should attempt to model them. `kernelchecktest` names each one
+or census target should attempt to model them. `kernelcheck` names each one
 directly. `const_universe_arity.ndjson` is the published Arena corpus'
 `bad/constlevels`, reduced to the records its crashing theorem needs; its
 `Eq.casesOn` occurrence carries no universe levels. Under Lean 4.29.1 that
@@ -441,7 +456,7 @@ occurrence reached `type_checker::whnf_core` through a `let` value the kernel
 only ever reduces, and killed the process with SIGSEGV. Lean 4.30.0 taught
 `type_checker::is_delta` to check a constant's universe-level arity, so from
 4.33.0 the kernel itself refuses the record — reporting a `let-declaration
-type mismatch 'x'` rather than crashing. `kernelchecktest` pins that message.
+type mismatch 'x'` rather than crashing. `kernelcheck` pins that message.
 
 ```console
 test/scripts/export-inductive-models.sh prim_shapes

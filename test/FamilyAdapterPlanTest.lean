@@ -1,6 +1,8 @@
 import FamilyAdapterPlan
 import family_adapter_generated
 
+namespace FamilyAdapterPlanTest
+
 open Lean InductiveModels
 open InductiveModels.FamilyAdapter
 
@@ -327,3 +329,5 @@ def main : IO UInt32 := do
     (withMimicComponent (makePlan 5 3 2 3 4 5)).validate
   let malformedOk ← checkMalformedPlans
   return if samplesOk && wideOk && mimicOk && malformedOk then 0 else 1
+
+end FamilyAdapterPlanTest

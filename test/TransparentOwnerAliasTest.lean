@@ -2,6 +2,8 @@ import InductiveModels.Driver
 import InductiveModels.Check
 import InductiveModels.Order
 
+namespace TransparentOwnerAliasTest
+
 /-!
 # Transparent recursive-owner aliases
 
@@ -113,3 +115,5 @@ def main : IO UInt32 := do
   IO.println s!"transparent owner aliases: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"
   return if state.failed.isEmpty then 0 else 1
+
+end TransparentOwnerAliasTest

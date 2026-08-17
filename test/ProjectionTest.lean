@@ -3,6 +3,8 @@ import InductiveModels.Check
 import InductiveModels.ModelRoles
 import InductiveModels.Order
 
+namespace ProjectionTest
+
 set_option maxRecDepth 2048
 
 open Lean Meta InductiveModels
@@ -1163,3 +1165,5 @@ def main : IO UInt32 := do
       if violation.familyOwner == `Wty then
         IO.eprintln s!"Wty projection check violation: {repr violation}"
   return if state.failed.isEmpty then 0 else 1
+
+end ProjectionTest

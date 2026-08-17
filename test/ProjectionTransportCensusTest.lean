@@ -1,9 +1,11 @@
 import InductiveModels.Driver
 
+namespace ProjectionTransportCensusTest
+
 /-!
 # The intrinsic projection contract, checked as an invariant
 
-Run from the repository root: `lake exe projectiontransportcensustest [ROOT]`.
+Run from the repository root: `lake exe test projectiontransportcensus [ROOT]`.
 
 Every intrinsic projection rule `T._model.proj_j.iota` is stated as
 
@@ -369,3 +371,5 @@ def main (args : List String) : IO UInt32 := do
     {paths.size - unrunnable.size} fixtures"
   for failure in failures do IO.eprintln s!"FAIL: {failure}"
   return if failures.isEmpty then 0 else 1
+
+end ProjectionTransportCensusTest

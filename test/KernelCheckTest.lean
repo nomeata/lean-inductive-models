@@ -260,7 +260,7 @@ def run (root : String) : IO UInt32 := do
   IO.eprintln s!"kernel check: {state.passed}/{state.passed + state.failed.size} passed"
   return 1
 
-end InductiveModels.KernelCheck.Tests
-
 def main (args : List String) : IO UInt32 :=
   InductiveModels.KernelCheck.Tests.run (args.head?.getD ".")
+
+end InductiveModels.KernelCheck.Tests

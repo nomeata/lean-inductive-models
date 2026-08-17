@@ -24,66 +24,35 @@ build_bounded() {
 }
 
 compile_only_targets=(
-  FamilyAdapterConstruction
-  FamilyAdapterPlan
-  FamilyAdapterShadow
   OneLayerProjectionPrototype
   OneLayerRecursorProof
 )
-correctness_targets=(
-  test clitest generationflagstest checktest kernelchecktest ordertest
-  familyadapterplantest familyadaptershadowtest familyadapterconstructiontest
-  incrementalordertest namingtest drivernamingtest privatealiastest sourcereplayaliastest
-  simplenamingtest rulektest defaultctoriotatest sourcestructuresyntaxtest
-  composedrecursorsyntaxtest mainclitest projectiontest projectiontransportcensustest
-  emissionordercensustest
-  indexedfibrediagnostictest
-  mutualonelayerdiagnostictest structureetatest
-  deepimaxboxtest psigmaprimetest exactsortlifttest
-  tightpsigmaprimeroutetest vanishingerasuretest
-  transparentowneraliasestest exportsyntaxnormalizationtest
-  basisvalidationtest arenaformattest
+# One binary, one suite per invocation, named by its first argument. Every
+# suite takes the repository root as its optional first argument or ignores
+# `argv` entirely, so passing it to all of them is exactly what each one did
+# before. `test/TestMain.lean` holds the registry these names come from.
+correctness_suites=(
+  fixtures cli generationflags check kernelcheck order
+  familyadapterplan familyadaptershadow familyadapterconstruction
+  incrementalorder naming drivernaming privatealias sourcereplayalias
+  simplenaming rulek defaultctoriota sourcestructuresyntax
+  composedrecursorsyntax maincli projection projectiontransportcensus
+  emissionordercensus
+  indexedfibrediagnostic
+  mutualonelayerdiagnostic structureeta
+  deepimaxbox psigmaprime exactsortlift
+  tightpsigmaprimeroute vanishingerasure
+  transparentowneralias exportsyntaxnormalization
+  basisvalidation arenaformat
 )
 
 build_bounded lean-inductive-models
 build_bounded "${compile_only_targets[@]}"
-build_bounded "${correctness_targets[@]}"
+build_bounded test
 
-lake exe test "$root"
-lake exe clitest
-lake exe generationflagstest
-lake exe checktest "$root"
-lake exe kernelchecktest "$root"
-lake exe familyadapterplantest
-lake exe familyadaptershadowtest
-lake exe familyadapterconstructiontest
-lake exe ordertest "$root"
-lake exe incrementalordertest "$root"
-lake exe namingtest
-lake exe drivernamingtest
-lake exe privatealiastest
-lake exe sourcereplayaliastest
-lake exe simplenamingtest
-lake exe rulektest
-lake exe defaultctoriotatest "$root"
-lake exe sourcestructuresyntaxtest "$root"
-lake exe composedrecursorsyntaxtest "$root"
-lake exe mainclitest "$root"
-lake exe projectiontest
-lake exe projectiontransportcensustest "$root"
-lake exe emissionordercensustest "$root"
-lake exe indexedfibrediagnostictest "$root"
-lake exe mutualonelayerdiagnostictest "$root"
-lake exe structureetatest
-lake exe deepimaxboxtest
-lake exe psigmaprimetest
-lake exe exactsortlifttest
-lake exe tightpsigmaprimeroutetest
-lake exe vanishingerasuretest
-lake exe transparentowneraliasestest
-lake exe exportsyntaxnormalizationtest
-lake exe basisvalidationtest
-lake exe arenaformattest "$root"
+for suite in "${correctness_suites[@]}"; do
+  lake exe test "$suite" "$root"
+done
 
 PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
 python3 test/scripts/generate_family_adapter_fixtures.py \

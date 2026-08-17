@@ -2,7 +2,12 @@ import Lake
 
 open System Lake DSL
 
-package lean_inductive_models where testDriver := "test"
+-- `lake test` is the quick fixture suite, which is now one suite of the one
+-- test executable rather than the whole of it: without the argument the
+-- dispatcher would print its registry and exit 2.
+package lean_inductive_models where
+  testDriver := "test"
+  testDriverArgs := #["fixtures"]
 
 lean_lib InductiveModels where
   srcDir := "src"
@@ -13,192 +18,37 @@ lean_lib InductiveModels where
   root := `Main
   supportInterpreter := true
 
--- `Test.runCli` spawns `.lake/build/bin/lean-inductive-models` as a subprocess,
--- so the CLI target has to be built before this suite runs. Without the `needs`
--- the suite silently asserts the CLI contract against whatever stale binary is
--- on disk.
+-- One binary for every suite, dispatching on its first argument; see
+-- `test/TestMain.lean`. `Test.runCli` and `MainCliTest` spawn
+-- `.lake/build/bin/lean-inductive-models` as a subprocess, so the CLI target
+-- has to be built before those suites run. Without the `needs` they silently
+-- assert the CLI contract against whatever stale binary is on disk.
 lean_exe test where
   srcDir := "test"
-  root := `Test
+  root := `TestMain
   needs := #[`@/«lean-inductive-models»]
   supportInterpreter := true
 
-lean_exe clitest where
+/-- The suite modules the dispatcher imports. Lake resolves an import to a
+module of a declared library, so a suite that is no longer its own executable
+root has to be listed here to be found at all — and a suite missing from this
+list fails the build rather than being silently skipped, because `TestMain`
+imports every one of them. -/
+lean_lib TestSuites where
   srcDir := "test"
-  root := `CliTest
-  supportInterpreter := true
-
-lean_exe generationflagstest where
-  srcDir := "test"
-  root := `GenerationFlagsTest
-  supportInterpreter := true
-
-lean_exe checktest where
-  srcDir := "test"
-  root := `CheckTest
-  supportInterpreter := true
-
-lean_exe ordertest where
-  srcDir := "test"
-  root := `OrderTest
-  supportInterpreter := true
-
-lean_exe kernelchecktest where
-  srcDir := "test"
-  root := `KernelCheckTest
-  supportInterpreter := true
-
-lean_exe incrementalordertest where
-  srcDir := "test"
-  root := `IncrementalOrderTest
-  supportInterpreter := true
-
-lean_exe namingtest where
-  srcDir := "test"
-  root := `NamingTest
-  supportInterpreter := true
-
-lean_exe drivernamingtest where
-  srcDir := "test"
-  root := `DriverNamingTest
-  supportInterpreter := true
-
-lean_exe privatealiastest where
-  srcDir := "test"
-  root := `PrivateAliasTest
-  supportInterpreter := true
-
-lean_exe sourcereplayaliastest where
-  srcDir := "test"
-  root := `SourceReplayAliasTest
-  supportInterpreter := true
-
-lean_exe simplenamingtest where
-  srcDir := "test"
-  root := `SimpleNamingTest
-  supportInterpreter := true
-
-lean_exe rulektest where
-  srcDir := "test"
-  root := `RuleKTest
-  supportInterpreter := true
-
-lean_exe defaultctoriotatest where
-  srcDir := "test"
-  root := `DefaultCtorIotaTest
-  supportInterpreter := true
-
-lean_exe sourcestructuresyntaxtest where
-  srcDir := "test"
-  root := `SourceStructureSyntaxTest
-  supportInterpreter := true
-
-lean_exe composedrecursorsyntaxtest where
-  srcDir := "test"
-  root := `ComposedRecursorSyntaxTest
-  supportInterpreter := true
-
--- Likewise: `MainCliTest` is entirely a test of the built binary's process
--- boundary and spawns it directly.
-lean_exe mainclitest where
-  srcDir := "test"
-  root := `MainCliTest
-  needs := #[`@/«lean-inductive-models»]
-
-lean_exe memoryprobe where
-  srcDir := "test"
-  root := `MemoryProbe
-  supportInterpreter := true
-
-lean_exe arenaformattest where
-  srcDir := "test"
-  root := `ArenaFormatTest
-  supportInterpreter := true
-
-lean_exe projectiontest where
-  srcDir := "test"
-  root := `ProjectionTest
-  supportInterpreter := true
-
-lean_exe projectiontransportcensustest where
-  srcDir := "test"
-  root := `ProjectionTransportCensusTest
-  supportInterpreter := true
-
-lean_exe emissionordercensustest where
-  srcDir := "test"
-  root := `EmissionOrderCensusTest
-  supportInterpreter := true
-
-lean_exe indexedfibrediagnostictest where
-  srcDir := "test"
-  root := `IndexedFibreDiagnosticTest
-  supportInterpreter := true
-
-lean_exe mutualonelayerdiagnostictest where
-  srcDir := "test"
-  root := `MutualOneLayerDiagnosticTest
-  supportInterpreter := true
-
-lean_exe structureetatest where
-  srcDir := "test"
-  root := `StructureEtaTest
-  supportInterpreter := true
-
-lean_exe deepimaxboxtest where
-  srcDir := "test"
-  root := `DeepImaxBoxTest
-  supportInterpreter := true
-
-lean_exe psigmaprimetest where
-  srcDir := "test"
-  root := `PSigmaPrimeTest
-  supportInterpreter := true
-
-lean_exe exactsortlifttest where
-  srcDir := "test"
-  root := `ExactSortLiftTest
-  supportInterpreter := true
-
-lean_exe tightpsigmaprimeroutetest where
-  srcDir := "test"
-  root := `TightPSigmaPrimeRouteTest
-  supportInterpreter := true
-
-lean_exe vanishingerasuretest where
-  srcDir := "test"
-  root := `VanishingErasureTest
-  supportInterpreter := true
-
-lean_exe transparentowneraliasestest where
-  srcDir := "test"
-  root := `TransparentOwnerAliasTest
-  supportInterpreter := true
-
-lean_exe exportsyntaxnormalizationtest where
-  srcDir := "test"
-  root := `ExportSyntaxNormalizationTest
-  supportInterpreter := true
-
-lean_exe basisvalidationtest where
-  srcDir := "test"
-  root := `BasisValidationTest
-  supportInterpreter := true
-
-lean_exe familyadapterplantest where
-  srcDir := "test"
-  root := `FamilyAdapterPlanTest
-  supportInterpreter := true
-
-lean_exe familyadaptershadowtest where
-  srcDir := "test"
-  root := `FamilyAdapterShadowTest
-  supportInterpreter := true
-
-lean_exe familyadapterconstructiontest where
-  srcDir := "test"
-  root := `FamilyAdapterConstructionTest
-  supportInterpreter := true
+  roots := #[
+    `Test, `CliTest, `GenerationFlagsTest, `CheckTest, `KernelCheckTest,
+    `OrderTest, `IncrementalOrderTest, `NamingTest, `DriverNamingTest,
+    `PrivateAliasTest, `SourceReplayAliasTest, `SimpleNamingTest, `RuleKTest,
+    `DefaultCtorIotaTest, `SourceStructureSyntaxTest, `ComposedRecursorSyntaxTest,
+    `MainCliTest, `ProjectionTest, `ProjectionTransportCensusTest,
+    `EmissionOrderCensusTest, `IndexedFibreDiagnosticTest,
+    `MutualOneLayerDiagnosticTest, `StructureEtaTest, `DeepImaxBoxTest,
+    `PSigmaPrimeTest, `ExactSortLiftTest, `TightPSigmaPrimeRouteTest,
+    `VanishingErasureTest, `TransparentOwnerAliasTest,
+    `ExportSyntaxNormalizationTest, `BasisValidationTest, `ArenaFormatTest,
+    `FamilyAdapterPlanTest, `FamilyAdapterShadowTest, `FamilyAdapterConstructionTest,
+    `MemoryProbe]
 
 lean_lib FamilyAdapterGeneratedFixtures where
   srcDir := "test/fixtures/inductive-models"
@@ -208,9 +58,10 @@ lean_lib FamilyAdapterGeneratedFixtures where
 test-only: no module under `src/` imports any of them, and the experiment emits
 nothing. `Driver` reaches an observation only through the opaque
 `IslandObserver` seam, so it names no type from these modules and the shipped
-executable's object closure contains none of them. Only
-`familyadapterplantest`, `familyadaptershadowtest` and
-`familyadapterconstructiontest` build them. -/
+executable's object closure contains none of them. They are declared as their
+own libraries rather than as modules of `InductiveModels` for exactly that
+reason; only the test binary, through the `familyadapterplan`,
+`familyadaptershadow` and `familyadapterconstruction` suites, builds them. -/
 lean_lib FamilyAdapterPlan where
   srcDir := "test"
   roots := #[`FamilyAdapterPlan]

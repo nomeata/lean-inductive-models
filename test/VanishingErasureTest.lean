@@ -2,6 +2,8 @@ import InductiveModels.Driver
 import InductiveModels.Check
 import InductiveModels.Order
 
+namespace VanishingErasureTest
+
 /-!
 # Focused test for βζ-dead owner mentions in internal erasures
 
@@ -367,3 +369,5 @@ def main : IO UInt32 := do
     IO.eprintln s!"generated: {report.generated}"
     IO.eprintln s!"declined: {report.declined}"
   return if state.failed.isEmpty then 0 else 1
+
+end VanishingErasureTest
