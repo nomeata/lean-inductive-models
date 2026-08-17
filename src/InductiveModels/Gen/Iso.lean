@@ -180,9 +180,9 @@ structure Iso where
   `implementation?` so legacy consumers cannot accidentally interpret a
   partial mutual prefix as a complete certificate. -/
   familyImplementation? : Option IsoFamilyImplementation := none
-  /-- Checked nested-container maps, one per private mimic. They are assigned
-  to exact source occurrence keys by `FamilyAdapterShadow`; array position is
-  not a consumer contract. -/
+  /-- Checked nested-container maps, one per private mimic. A consumer assigns
+  them to exact source occurrence keys; array position is not a consumer
+  contract. -/
   containerImplementations : Array IsoContainerImplementation := #[]
   /-- The `funext` this model's own proofs use, present exactly when the block
   stores a packed position under a binder.  [`InductiveModels.ensureFunext`]

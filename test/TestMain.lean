@@ -30,9 +30,6 @@ import TransparentOwnerAliasTest
 import ExportSyntaxNormalizationTest
 import BasisValidationTest
 import ArenaFormatTest
-import FamilyAdapterPlanTest
-import FamilyAdapterShadowTest
-import FamilyAdapterConstructionTest
 import MemoryProbe
 
 /-!
@@ -113,9 +110,6 @@ def correctnessSuites : List Suite :=
   , suite "exportsyntaxnormalization"  ExportSyntaxNormalizationTest.main
   , suite "basisvalidation"            (fun _ => BasisValidationTest.main)
   , suite "arenaformat"                ArenaFormatTest.main
-  , suite "familyadapterplan"          (fun _ => FamilyAdapterPlanTest.main)
-  , suite "familyadaptershadow"        (fun _ => FamilyAdapterShadowTest.main)
-  , suite "familyadapterconstruction"  (fun _ => FamilyAdapterConstructionTest.main)
   ]
 
 /-- Diagnostics. Useful during development, not correctness suites, and not run

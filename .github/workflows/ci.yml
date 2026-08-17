@@ -172,7 +172,6 @@ jobs:
               # runner's, the maintainer guide's and the registry agree.
               focused_suites=(
                 cli generationflags check kernelcheck
-                familyadapterplan familyadaptershadow familyadapterconstruction
                 order incrementalorder naming
                 drivernaming privatealias sourcereplayalias simplenaming rulek
                 defaultctoriota sourcestructuresyntax composedrecursorsyntax
@@ -187,10 +186,7 @@ jobs:
               for suite in "${focused_suites[@]}"; do
                 lake exe test "$suite" "$GITHUB_WORKSPACE"
               done
-              PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
-              python3 test/scripts/generate_family_adapter_fixtures.py \
-                --output test/fixtures/inductive-models/family_adapter_generated.lean --check
-              count=33
+              count=30
               ;;
             cli)
               build_bounded lean-inductive-models test

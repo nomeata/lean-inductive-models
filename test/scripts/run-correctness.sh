@@ -33,7 +33,6 @@ compile_only_targets=(
 # before. `test/TestMain.lean` holds the registry these names come from.
 correctness_suites=(
   fixtures cli generationflags check kernelcheck order
-  familyadapterplan familyadaptershadow familyadapterconstruction
   incrementalorder naming drivernaming privatealias sourcereplayalias
   simplenaming rulek defaultctoriota sourcestructuresyntax
   composedrecursorsyntax maincli projection projectiontransportcensus
@@ -53,10 +52,6 @@ build_bounded test
 for suite in "${correctness_suites[@]}"; do
   lake exe test "$suite" "$root"
 done
-
-PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
-python3 test/scripts/generate_family_adapter_fixtures.py \
-  --output test/fixtures/inductive-models/family_adapter_generated.lean --check
 
 test/scripts/check_arena_corpus.py
 test/scripts/check-hard-nested-a.sh

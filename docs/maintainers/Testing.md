@@ -70,22 +70,9 @@ compile_only_targets=(
 )
 ```
 
-The three `FamilyAdapter*` libraries are not oracles: they are the parked
-family-adapter experiment, which lives in `test/FamilyAdapterPlan.lean`,
-`test/FamilyAdapterShadow.lean` and `test/FamilyAdapterConstruction.lean` and is
-declared as its own `lean_lib` per layer rather than as modules of
-`InductiveModels`. Nothing under `src/` imports any of them and the experiment
-emits nothing, so charging the shipped library and the `lean-inductive-models`
-executable for compiling them bought nothing. `Driver` reaches an observation
-only through `InductiveModels.IslandObserver`, an opaque `EDecl → Iso → MetaM α`
-callback: production supplies none, and `test/FamilyAdapterShadowTest.lean`
-supplies the one that calls `deriveShadowPlan` and `ShadowReport.observe`. So
-`Driver` names no adapter type. They are not in the compile-only list because
-the `familyadapterplan`, `familyadaptershadow` and `familyadapterconstruction`
-suites import them, so `lake build test` compiles all three; the build-matrix
-guard derives the compile-only list that way rather than from a written list,
-and a new test-only library nothing imports has to be named or it is never
-compiled.
+The build-matrix guard derives that list rather than reading a written one: a
+`lean_lib` under `test/` no suite module imports is compile-only, so a new
+test-only library has to be named there or it is never compiled at all.
 
 There is **one** test executable, and it takes the suite name as its first
 argument: `lake exe test SUITE [ROOT]`. Every suite used to be a `lean_exe` of
@@ -103,7 +90,6 @@ are:
 ```bash
 correctness_suites=(
   fixtures cli generationflags check kernelcheck order
-  familyadapterplan familyadaptershadow familyadapterconstruction
   incrementalorder naming drivernaming privatealias sourcereplayalias
   simplenaming rulek defaultctoriota sourcestructuresyntax
   composedrecursorsyntax maincli projection projectiontransportcensus
@@ -132,9 +118,6 @@ lake exe test cli "$PWD"
 lake exe test generationflags "$PWD"
 lake exe test check "$PWD"
 lake exe test kernelcheck "$PWD"
-lake exe test familyadapterplan "$PWD"
-lake exe test familyadaptershadow "$PWD"
-lake exe test familyadapterconstruction "$PWD"
 lake exe test order "$PWD"
 lake exe test incrementalorder "$PWD"
 lake exe test naming "$PWD"
@@ -162,9 +145,6 @@ lake exe test transparentowneralias "$PWD"
 lake exe test exportsyntaxnormalization "$PWD"
 lake exe test basisvalidation "$PWD"
 lake exe test arenaformat "$PWD"
-PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_family_adapter_fixture_generator.py
-python3 test/scripts/generate_family_adapter_fixtures.py \
-  --output test/fixtures/inductive-models/family_adapter_generated.lean --check
 test/scripts/check_arena_corpus.py
 test/scripts/check-hard-nested-a.sh
 test/scripts/check-hard-nested-c.sh

@@ -50,37 +50,8 @@ roots = [
   "PSigmaPrimeTest", "ExactSortLiftTest", "TightPSigmaPrimeRouteTest",
   "VanishingErasureTest", "TransparentOwnerAliasTest",
   "ExportSyntaxNormalizationTest", "BasisValidationTest", "ArenaFormatTest",
-  "FamilyAdapterPlanTest", "FamilyAdapterShadowTest", "FamilyAdapterConstructionTest",
   "MemoryProbe",
 ]
-
-[[lean_lib]]
-name = "FamilyAdapterGeneratedFixtures"
-srcDir = "test/fixtures/inductive-models"
-roots = ["family_adapter_generated"]
-
-# The parked family-adapter experiment, in its three layers. All three are
-# test-only: no module under `src/` imports any of them, and the experiment
-# emits nothing. `Driver` reaches an observation only through the opaque
-# `IslandObserver` seam, so it names no type from these modules and the shipped
-# executable's object closure contains none of them. They are declared as their
-# own libraries rather than as modules of `InductiveModels` for exactly that
-# reason; only the test binary, through the `familyadapterplan`,
-# `familyadaptershadow` and `familyadapterconstruction` suites, builds them.
-[[lean_lib]]
-name = "FamilyAdapterPlan"
-srcDir = "test"
-roots = ["FamilyAdapterPlan"]
-
-[[lean_lib]]
-name = "FamilyAdapterShadow"
-srcDir = "test"
-roots = ["FamilyAdapterShadow"]
-
-[[lean_lib]]
-name = "FamilyAdapterConstruction"
-srcDir = "test"
-roots = ["FamilyAdapterConstruction"]
 
 # The two compile-only proof oracles: nothing imports them, so `lake build test`
 # does not compile them and `test/scripts/run-correctness.sh` builds them by
