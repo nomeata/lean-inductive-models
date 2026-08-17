@@ -352,6 +352,19 @@ def parse (text : String) : Except String Export := do
   resultExport.validateUniqueDeclarationNames
   return resultExport
 
+/-- The index of the first `0x0A` in `bytes` at or after `start`, or `limit` if
+there is none before it.
+
+Deliberately a pure function and not a `while` in the reader's `do` block: a
+`while` over mutable state compiles to a monadic loop whose state is allocated
+once per iteration, which is affordable once per line and ruinous once per byte
+-- measured at 2.6× the whole parse when the byte scan was written that way. -/
+private def nextNewline (bytes : ByteArray) (limit : Nat) (start : Nat) : Nat :=
+  if start < limit then
+    if bytes[start]! == 10 then start else nextNewline bytes limit (start + 1)
+  else limit
+termination_by limit - start
+
 /-- Options shared by the streaming/handle parser entry points. A structure is
 used deliberately: adding or removing an option cannot silently reinterpret a
 positional `Bool` at public call sites. -/
@@ -422,30 +435,53 @@ private def parseStreamCore (h : IO.FS.Stream) (allowDuplicateNames : Bool) :
     match String.fromUTF8? (block.extract 0 cut) with
     | none => err := some "the input is not valid UTF-8"
     | some text =>
-      let lines := (text.splitOn "\n").toArray
-      for hline : lineIndex in [:lines.size] do
-        let line := lines[lineIndex]
-        -- `splitOn` leaves one empty sentinel after a final LF.  Other empty
-        -- lines remain accepted by the historical parser.
-        if line.isEmpty then continue
-        match Json.parse line with
-        | .error e => err := some e; break
-        | .ok j =>
-          if first then
-            first := false
-            if (jField j "meta").toOption.isSome then
-              metaLine := j
-              continue
-          match ← cRef.modifyGet fun c =>
-              match readLine c j with
-              -- **`{}`, not `c`.** Putting `c` back in the failure arm keeps it
-              -- alive across `readLine`, so the arrays it pushes to are at
-              -- refcount two and every push reallocates. The parse is over when
-              -- this arm fires, so the context is dead either way.
-              | .error e => (Except.error e, ({} : RCtx))
-              | .ok (c', d?) => (Except.ok d?, c') with
-          | .error e => err := some e; break
-          | .ok d? => if let some d := d? then declsRef.modify (·.push d)
+      -- **The line breaks are found in the bytes, not in the string.**
+      -- `text.splitOn "\n"` decoded the whole chunk as UTF-8 a character at a
+      -- time to look for one ASCII byte, and built every line of the chunk as a
+      -- live list before the first of them was read; together that was an
+      -- eighth of the parse. `0x0A` cannot occur inside a multi-byte UTF-8
+      -- character, so a byte scan finds exactly the same breaks and every one
+      -- of them is a character boundary, which is what a `String.Pos` counts.
+      -- The lines are therefore the same lines, now cut one at a time.
+      --
+      -- The chunk is still decoded and validated *whole*, before any line of it
+      -- is parsed: validating line by line would let a syntax error earlier in
+      -- the chunk preempt invalid UTF-8 later in it, which is a different
+      -- verdict on the same input.
+      let mut lineStart := 0
+      let mut stop := false
+      while !stop && lineStart <= cut do
+        -- The segment runs to the next LF, or to the cut if there is none: as
+        -- `splitOn` does, a chunk ending in LF yields one empty sentinel there,
+        -- and one not ending in LF -- only possible at EOF -- yields its last
+        -- real line.
+        let lineEnd := nextNewline block cut lineStart
+        let line := String.Pos.Raw.extract text ⟨lineStart⟩ ⟨lineEnd⟩
+        lineStart := lineEnd + 1
+        -- Empty lines, sentinel or not, remain accepted by the historical
+        -- parser.
+        if !line.isEmpty then
+          match Json.parse line with
+          | .error e => err := some e; stop := true
+          | .ok j =>
+            let mut isMeta := false
+            if first then
+              first := false
+              if (jField j "meta").toOption.isSome then
+                metaLine := j
+                isMeta := true
+            if !isMeta then
+              match ← cRef.modifyGet fun c =>
+                  match readLine c j with
+                  -- **`{}`, not `c`.** Putting `c` back in the failure arm
+                  -- keeps it alive across `readLine`, so the arrays it pushes
+                  -- to are at refcount two and every push reallocates. The
+                  -- parse is over when this arm fires, so the context is dead
+                  -- either way.
+                  | .error e => (Except.error e, ({} : RCtx))
+                  | .ok (c', d?) => (Except.ok d?, c') with
+              | .error e => err := some e; stop := true
+              | .ok d? => if let some d := d? then declsRef.modify (·.push d)
   match err with
   | some e => return .error e
   | none =>
