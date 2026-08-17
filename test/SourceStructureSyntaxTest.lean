@@ -118,12 +118,27 @@ structure Face where
   name : Name
   actual : Expr
   expected : Expr
+  /-- What the kernel holds for this name after the replay.  Printed as
+  evidence, **not compared to `actual`**: `toDeclaration` hands the recorded
+  type to `addDeclCore` verbatim and the kernel stores what it is given, so in
+  an environment this test itself built out of these very records the two are
+  equal by construction and the comparison could not fail.  What the replay
+  does assert is that the kernel *accepts* every record and that no name is
+  lost — see `missing` below. -/
   kernel : Expr
   difference : String
 
 structure Evidence where
   report : Report
   faces : Array Face
+  /-- Names `ordered` declares that the kernel replay did not install.  Every
+  record must reach the kernel under the names it claims: `toDeclaration`
+  answering `none` for a record kind, or an inductive whose kernel-generated
+  recursor is not the name the record carries, drops a declaration here
+  silently, and the export would then name a constant the replayed environment
+  does not have.  Only the four `Quot` names are exempt, and only because
+  `Declaration.quotDecl` installs all four from the first of them. -/
+  missing : Array Name
   ownerFreeAccepted : Bool
 
 def projectionExpectations (x : Export) (family : Check.Family)
@@ -243,6 +258,8 @@ def collectEvidence (path : String) : IO Evidence := do
           throwError "kernel replay rejected {declaration.names}: {
             ← (exception.toMessageData {}).toString}"
     setEnv checked
+    let missing := ordered.decls.flatMap (·.names.toArray) |>.filter fun name =>
+      !checked.contains name
     let mut faces := #[]
     for (name, wanted) in expected do
       let some (_, actual) := declarationType? ordered name
@@ -267,7 +284,7 @@ def collectEvidence (path : String) : IO Evidence := do
     let ownerFreeAccepted := match ← checkGeneratedIn sourceBase generatedRecords with
       | .ok _ => true
       | .error _ => false
-    return { report, faces, ownerFreeAccepted }
+    return { report, faces, missing, ownerFreeAccepted }
   return (← Core.CoreM.toIO (MetaM.run' action) context { env := base }).1
 
 def containsName (faces : Array Face) (name : Name) : Bool :=
@@ -288,16 +305,15 @@ def run (root : String) : IO UInt32 := do
   let projectionIotaCovered := evidence.faces.any fun face =>
     face.name == Naming.projectionIotaName `SourceStructure 0
   let mismatches := evidence.faces.filter fun face => face.actual != face.expected
-  let kernelMatchesActual := evidence.faces.all fun face => face.actual == face.kernel
   let passed := coreCovered && projectionCovered && projectionIotaCovered &&
-    mismatches.isEmpty && kernelMatchesActual &&
+    mismatches.isEmpty && evidence.missing.isEmpty &&
     evidence.report.stmtErrors.isEmpty && evidence.ownerFreeAccepted
   IO.println s!"source structure exact syntax: {evidence.faces.size} faces; {
     evidence.report.stmtErrors.size} statement mismatches"
   unless passed do
     IO.eprintln s!"FAIL: core={coreCovered}, projection={projectionCovered}, \
       projection-iota={projectionIotaCovered}, mismatches={mismatches.size}, \
-      kernel-matches={kernelMatchesActual}, report-errors={evidence.report.stmtErrors.size}, \
+      kernel-missing={evidence.missing}, report-errors={evidence.report.stmtErrors.size}, \
       owner-free={evidence.ownerFreeAccepted}"
   return if passed then 0 else 1
 
