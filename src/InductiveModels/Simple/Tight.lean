@@ -36,51 +36,125 @@ the recursor still discards the pad by ι alone, and every rule is `Eq.refl`.
 A padded tower exists at every field count, including one, where an unpadded
 tower is the bare field type. -/
 
+/-- **Which stored fields a later field's type mentions**, read off the
+constructor's `Π`-nest before anything is built.
+
+`tele` is the field telescope with the owner's parameters already substituted,
+so inside its `j`th domain the preceding fields are exactly the loose bound
+variables and field `i` is `bvar (j - 1 - i)`. `looseBVarRange` bounds how far a
+domain reaches — a header field on `Expr` rather than a traversal — so a field
+type that mentions nothing costs one comparison, and `hasLooseBVar` decides the
+rest exactly, with the same bound as its own early-out.
+
+**Answered from de Bruijn indices and not from free variables** because the
+answer is a property of the telescope and not of any one entry into it: the
+carrier, the constructor, the recursor and the projections each open the same
+`Π`-nest into a fresh set of `fvar`s, and re-deriving the mask at each would be
+four traversals of the field types for one fact about their shape.
+
+A `tele` with fewer than `nf` leading binders is a caller fault rather than a
+shape this can answer; it reports every field as depended upon, which is the
+unconditional abstraction this mask exists to skip, so a fault costs
+instructions and never a different term. -/
+def tightFieldDepMask (tele : Expr) (nf : Nat) : Array Bool := Id.run do
+  let allDependent := (Array.range nf).map fun _ => true
+  let mut fieldTypes : Array Expr := #[]
+  let mut current := tele
+  for _ in [0:nf] do
+    let .forallE _ domain body _ := current | return allDependent
+    fieldTypes := fieldTypes.push domain
+    current := body
+  let mut dep := (Array.range nf).map fun _ => false
+  for j in [0:nf] do
+    let fieldType := fieldTypes[j]!
+    for k in [0:min fieldType.looseBVarRange j] do
+      if fieldType.hasLooseBVar k then dep := dep.set! (j - 1 - k) true
+  return dep
+
+/-- **One owner's storage tower**: the fields it stores, which of them a later
+field's type mentions, and where it ends.  `fields` and `dep` are index-aligned;
+`fields` are the free variables of whichever telescope the tower is being built
+in, and `dep` is [`InductiveModels.tightFieldDepMask`] of that telescope. -/
+structure TightTower where
+  /-- The constructor's stored fields, as free variables. -/
+  fields : Array Expr
+  /-- `dep[i]` — does any **later** field's type mention field `i`? -/
+  dep : Array Bool
+  /-- The tail: `none` where the tower ends at its last field, `some w` where it
+  ends at the pad [`InductiveModels.unitAt`] `w`. -/
+  pad? : Option Level := none
+
+/-- The tower over an opened field telescope.  `tele` must be the very `Π`-nest
+`fields` was opened from, so that the mask's indices are the fields' own. -/
+def tightTowerOf (tele : Expr) (fields : Array Expr) (pad? : Option Level) : TightTower :=
+  { fields, dep := tightFieldDepMask tele fields.size, pad? }
+
 /-- Has the tower reached its tail?  A padded tower runs past its last field
 and ends at the pad; an unpadded one ends *at* its last field. -/
-def tightTowerDone (fields : Array Expr) (i : Nat) (pad? : Option Level) : Bool :=
-  if pad?.isSome then i == fields.size else i + 1 == fields.size
+def tightTowerDone (tower : TightTower) (i : Nat) : Bool :=
+  if tower.pad?.isSome then i == tower.fields.size else i + 1 == tower.fields.size
 
 /-- The type the tower ends in: the pad, or the last field's own type. -/
-def tightTowerTail (fields : Array Expr) (i : Nat) (pad? : Option Level) : GenM Expr :=
-  match pad? with
+def tightTowerTail (tower : TightTower) (i : Nat) : GenM Expr :=
+  match tower.pad? with
   | some w => pure (unitAt w)
-  | none => ityp fields[i]!
+  | none => ityp tower.fields[i]!
 
-partial def tightTowerTy (fields : Array Expr) (i : Nat)
-    (pad? : Option Level := none) : GenM Expr := do
-  if tightTowerDone fields i pad? then return ← tightTowerTail fields i pad?
-  let α ← ityp fields[i]!
+/-- **The rung's family, where the tail does not mention the field.**
+
+`mkLambdaFVars #[f] rest` abstracts `f` out of `rest` — a full traversal of
+everything above this rung — and then binds it at `f`'s own name, binder info
+and (head-beta-reduced) type.  Where no later field's type mentions `f` there is
+nothing in `rest` to abstract, so the binding is written directly and the
+traversal is skipped.  The term is the one `mkLambdaFVars` would have returned,
+to the byte: `Lean.MetavarContext.mkBinding` binds a `cdecl` at
+`mkLambda' userName binderInfo type.headBeta`, and `abstractRange` over a
+variable that does not occur is the identity. -/
+def tightConstantFamily (field α body : Expr) (binderInfo : BinderInfo) : GenM Expr :=
+  return .lam (← field.fvarId!.getUserName) α.headBeta body binderInfo
+
+partial def tightTowerTy (tower : TightTower) (i : Nat) : GenM Expr := do
+  if tightTowerDone tower i then return ← tightTowerTail tower i
+  let field := tower.fields[i]!
+  let α ← ityp field
   let u ← ilevel α
-  let rest ← tightTowerTy fields (i + 1) pad?
+  let rest ← tightTowerTy tower (i + 1)
   let v ← ilevel rest
-  let β ← mkLambdaFVars #[fields[i]!] rest
+  let β ← if tower.dep[i]! then mkLambdaFVars #[field] rest
+    else tightConstantFamily field α rest (← field.fvarId!.getBinderInfo)
   return mkAppN (.const `PSigma' [u, v]) #[α, β]
 
-def tightTowerAt (fields : Array Expr) (i : Nat) (pre : Array Expr)
-    (pad? : Option Level := none) : GenM (Level × Level × Expr × Expr) := do
+def tightTowerAt (tower : TightTower) (i : Nat) (pre : Array Expr) :
+    GenM (Level × Level × Expr × Expr) := do
+  let field := tower.fields[i]!
   let substitute := fun (expression : Expr) =>
-    expression.replaceFVars (fields.extract 0 pre.size) pre
-  let α := substitute (← ityp fields[i]!)
+    expression.replaceFVars (tower.fields.extract 0 pre.size) pre
+  let α := substitute (← ityp field)
   let u ← ilevel α
-  let rest ← tightTowerTy fields (i + 1) pad?
-  let (v, β) ← withLocalDeclD (← fields[i]!.fvarId!.getUserName) α fun value => do
+  let rest ← tightTowerTy tower (i + 1)
+  -- The tail does not mention this field, so the binder it would be abstracted
+  -- under holds nothing: substituting `pre` for the fields *before* it is the
+  -- whole of the substitution, and the family is constant.
+  unless tower.dep[i]! do
+    let rest := substitute rest
+    let v ← ilevel rest
+    return (u, v, α, ← tightConstantFamily field α rest .default)
+  let (v, β) ← withLocalDeclD (← field.fvarId!.getUserName) α fun value => do
     let rest := rest.replaceFVars
-      (fields.extract 0 (pre.size + 1)) (pre.push value)
+      (tower.fields.extract 0 (pre.size + 1)) (pre.push value)
     let v ← ilevel rest
     return (v, ← mkLambdaFVars #[value] rest)
   return (u, v, α, β)
 
-partial def tightTowerMk (fields : Array Expr) (i : Nat)
-    (pad? : Option Level := none) : GenM Expr := do
-  if tightTowerDone fields i pad? then
-    return match pad? with
+partial def tightTowerMk (tower : TightTower) (i : Nat) : GenM Expr := do
+  if tightTowerDone tower i then
+    return match tower.pad? with
       | some w => unitAtCanon w
-      | none => fields[i]!
-  let pre := fields.extract 0 i
-  let (u, v, α, β) ← tightTowerAt fields i pre pad?
+      | none => tower.fields[i]!
+  let pre := tower.fields.extract 0 i
+  let (u, v, α, β) ← tightTowerAt tower i pre
   return mkAppN (.const `PSigma'.mk [u, v])
-    #[α, β, fields[i]!, ← tightTowerMk fields (i + 1) pad?]
+    #[α, β, tower.fields[i]!, ← tightTowerMk tower (i + 1)]
 
 /-- **The tower read out**, one primitive projection pair per rung.
 
@@ -99,20 +173,20 @@ rebuilt is rebuilt for real, at the same fields and the same `pad?`, by
 constructor, both of which run **before** the projections on both routes that
 reach here. Any shape this could have rejected is rejected there first, with
 the same message. -/
-partial def tightTowerProjs (fields : Array Expr) (i : Nat) (value : Expr)
-    (pre : Array Expr := #[]) (pad? : Option Level := none) : Array Expr :=
-  if tightTowerDone fields i pad? then
-    (if pad?.isSome then pre else pre.push value)
+partial def tightTowerProjs (tower : TightTower) (i : Nat) (value : Expr)
+    (pre : Array Expr := #[]) : Array Expr :=
+  if tightTowerDone tower i then
+    (if tower.pad?.isSome then pre else pre.push value)
   else
     let first := .proj `PSigma' 0 value
-    tightTowerProjs fields (i + 1) (.proj `PSigma' 1 value) (pre.push first) pad?
+    tightTowerProjs tower (i + 1) (.proj `PSigma' 1 value) (pre.push first)
 
-partial def tightTowerPrepend (fields pre : Array Expr) (i : Nat) (tail : Expr)
-    (pad? : Option Level := none) : GenM Expr := do
+partial def tightTowerPrepend (tower : TightTower) (pre : Array Expr) (i : Nat)
+    (tail : Expr) : GenM Expr := do
   if i == pre.size then return tail
-  let (u, v, α, β) ← tightTowerAt fields i (pre.extract 0 i) pad?
+  let (u, v, α, β) ← tightTowerAt tower i (pre.extract 0 i)
   return mkAppN (.const `PSigma'.mk [u, v])
-    #[α, β, pre[i]!, ← tightTowerPrepend fields pre (i + 1) tail pad?]
+    #[α, β, pre[i]!, ← tightTowerPrepend tower pre (i + 1) tail]
 
 /-- **The tower taken apart**, one `PSigma'.rec'` per stored field.
 
@@ -124,20 +198,19 @@ dropped.  That is well typed and not a coincidence: the branch owes
 tight-pair and `PUnit` structure eta expand `t` against the literal pair
 `canon` is, and proof irrelevance closes its `⊤` component.  No transport
 rides along and the recursor's ι rule stays `Eq.refl`. -/
-partial def tightTowerRec (s : Level) (fields : Array Expr) (motive minor value : Expr)
-    (i : Nat := 0) (pre : Array Expr := #[])
-    (pad? : Option Level := none) : GenM Expr := do
-  if tightTowerDone fields i pad? then
-    return mkAppN minor (if pad?.isSome then pre else pre.push value)
-  let (u, v, α, β) ← tightTowerAt fields i pre pad?
+partial def tightTowerRec (s : Level) (tower : TightTower) (motive minor value : Expr)
+    (i : Nat := 0) (pre : Array Expr := #[]) : GenM Expr := do
+  if tightTowerDone tower i then
+    return mkAppN minor (if tower.pad?.isSome then pre else pre.push value)
+  let (u, v, α, β) ← tightTowerAt tower i pre
   let tailType := mkAppN (.const `PSigma' [u, v]) #[α, β]
   let targetMotive ← withLocalDeclD `tail tailType fun tail => do
-    let full ← tightTowerPrepend fields pre 0 tail pad?
+    let full ← tightTowerPrepend tower pre 0 tail
     mkLambdaFVars #[tail] (mkApp motive full)
   let branch ← withLocalDeclD `fst α fun fst =>
     withLocalDeclD `snd (mkApp β fst).headBeta fun snd => do
       mkLambdaFVars #[fst, snd]
-        (← tightTowerRec s fields motive minor snd (i + 1) (pre.push fst) pad?)
+        (← tightTowerRec s tower motive minor snd (i + 1) (pre.push fst))
   return mkAppN (.const `PSigma'.rec' [u, v, s])
     #[α, β, targetMotive, branch, value]
 
@@ -160,7 +233,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
   let selfValue ← withParams fun ps => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
-      mkLambdaFVars ps (← tightTowerTy fields 0 pad?)
+      mkLambdaFVars ps (← tightTowerTy (tightTowerOf tele fields pad?) 0)
   let selfDecl := Declaration.defnDecl
     { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfValue
       hints := ← hintsFor selfValue, safety := .safe }
@@ -170,7 +243,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
   let constructorValue ← withParams fun ps => do
     let tele ← instForall modelConstructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
-      mkLambdaFVars (ps ++ fields) (← tightTowerMk fields 0 pad?)
+      mkLambdaFVars (ps ++ fields) (← tightTowerMk (tightTowerOf tele fields pad?) 0)
   let constructorDecl := Declaration.defnDecl
     { name := constructorN, levelParams := lparams, type := modelConstructorType,
       value := constructorValue, hints := ← hintsFor constructorValue, safety := .safe }
@@ -185,7 +258,8 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let ps := binders.extract 0 np
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
-      mkLambdaFVars binders (← tightTowerRec v fields motive minor self 0 #[] pad?)
+      mkLambdaFVars binders
+        (← tightTowerRec v (tightTowerOf tele fields pad?) motive minor self)
   let recursorDecl := Declaration.defnDecl
     { name := recursorN, levelParams := recursorLevelParams, type := recursorPublicType,
       value := recursorValue, hints := ← hintsFor recursorValue, safety := .safe }
@@ -196,7 +270,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       withLocalDeclD `self (selfAt ps) fun self => do
-        let projections := tightTowerProjs fields 0 self #[] pad?
+        let projections := tightTowerProjs (tightTowerOf tele fields pad?) 0 self
         (Array.range nf).mapM fun fieldIndex => do
           let selector ← mkLambdaFVars (ps.push self) projections[fieldIndex]!
           let proof ← do
@@ -266,13 +340,16 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
   -- unindexed `.identity` route's carrier written by the same function.
   let storeAt : Array Expr → GenM Expr := fun ps => do
     let tele ← instForall constructorType ps
-    forallBoundedTelescope tele (some nf) fun fields _ => tightTowerTy fields 0 pad?
+    forallBoundedTelescope tele (some nf) fun fields _ =>
+      tightTowerTy (tightTowerOf tele fields pad?) 0
   let projsAt : Array Expr → Expr → GenM (Array Expr) := fun ps value => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ =>
-      pure (tightTowerProjs fields 0 value #[] pad?)
-  let towerOf : Array Expr → Array Expr → GenM Expr := fun _ fs =>
-    tightTowerMk fs 0 pad?
+      pure (tightTowerProjs (tightTowerOf tele fields pad?) 0 value)
+  -- Takes the `Π`-nest its fields were opened from rather than the parameters,
+  -- because the tower's dependency mask is read off that nest.
+  let towerOf : Expr → Array Expr → GenM Expr := fun tele fs =>
+    tightTowerMk (tightTowerOf tele fs pad?) 0
 
   -- **`Pk`, the whole index telescope packed.** Closed over the parameters
   -- alone: [`InductiveModels.packTyOf`] abstracts every selected index, and
@@ -326,7 +403,7 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
       let packedC ← packChain ni pk (← idxOfVals ps fields) 0
       let fibre ← fibreAt ps store pk ℓpk packedC
       mkLambdaFVars (ps ++ fields)
-        (psigmaMk w .zero store fibre (← towerOf ps fields) (eqi.refl' ℓpk pk packedC))
+        (psigmaMk w .zero store fibre (← towerOf tele fields) (eqi.refl' ℓpk pk packedC))
   let constructorDecl := Declaration.defnDecl
     { name := constructorN, levelParams := lparams, type := modelConstructorType,
       value := constructorValue, hints := ← hintsFor constructorValue, safety := .safe }
