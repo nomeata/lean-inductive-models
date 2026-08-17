@@ -13,7 +13,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 workflow="$root/.github/workflows/ci.yml"
 maintainer_guide="$root/docs/maintainers/Testing.md"
-lakefile="$root/lakefile.lean"
+lakefile="$root/lakefile.toml"
 
 # Lake's build parallelism bound, asserted to be one positive number stated
 # identically by the workflow and the maintainer guide. A guard that only
@@ -139,7 +139,7 @@ fi
 
 # No tracked Lake invocation may carry a `-K` configuration option. Lake 5.0.0
 # reads `-K` only as a key for the configuration file to consume via
-# `get_config?`, and this lakefile consumes none, so every such option here has
+# `get_config?`, which a TOML lakefile cannot do at all, so every such option has
 # been a silent no-op pretending to control the build. Prose may name the
 # option; a command line may not. Case matters: an invocation is lowercase.
 config_opt="$(printf '%s%s' '-' 'K')"
@@ -202,19 +202,25 @@ fi
 # at all. `TestSuites` is excluded because it is the library the suite modules
 # themselves live in -- `lake build test` builds exactly its imported modules.
 mapfile -t lake_test_libraries < <(
-  current=
+  kind= library= source_directory=
+  flush_library() {
+    if [[ "$kind" == lean_lib && -n "$library" && "$source_directory" == test ]]; then
+      printf '%s\n' "$library"
+    fi
+  }
   while IFS= read -r line; do
-    if [[ "$line" =~ ^lean_lib[[:space:]]+([^[:space:]]+)[[:space:]]+where$ ]]; then
-      current="${BASH_REMATCH[1]}"
-    elif [[ "$line" =~ ^lean_exe[[:space:]]+ ]]; then
-      current=
-    elif [[ -n "$current" && "$line" =~ ^[[:space:]]+srcDir[[:space:]]+:=[[:space:]]+\"test\"$ ]]; then
-      printf '%s\n' "$current"
-      current=
-    elif [[ -n "$current" && "$line" =~ ^[[:space:]]+srcDir[[:space:]]+:= ]]; then
-      current=
+    if [[ "$line" =~ ^\[\[([a-z_]+)\]\]$ ]]; then
+      flush_library
+      kind="${BASH_REMATCH[1]}"
+      library=
+      source_directory=
+    elif [[ "$line" =~ ^name[[:space:]]*=[[:space:]]*\"([^\"]+)\"$ ]]; then
+      library="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^srcDir[[:space:]]*=[[:space:]]*\"([^\"]+)\"$ ]]; then
+      source_directory="${BASH_REMATCH[1]}"
     fi
   done < "$lakefile"
+  flush_library
 )
 mapfile -t lake_compile_only_targets < <(
   for library in "${lake_test_libraries[@]}"; do

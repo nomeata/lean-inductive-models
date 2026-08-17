@@ -19,7 +19,7 @@ export LEAN_NUM_THREADS=4
 
 **Lake 5.0.0 has no job-count flag.** `-j/--jobs` was dropped in the toolchain
 bump, and `-K key=value` only sets a configuration-file option for a lakefile to
-read back with `get_config?` — this lakefile reads none. The `-Kjobs=1` that
+read back with `get_config?` — a TOML lakefile cannot read one at all. The `-Kjobs=1` that
 scripts, CI and this guide used to pass was therefore inert: it produced a
 byte-for-byte identical, fully parallel build. Any instruction to build "with
 one job" that relied on it had no effect.
@@ -178,7 +178,7 @@ test/scripts/check-no-known-gap.sh
 Two of those suites test the built binary rather than the library: `fixtures`
 (its `runCli` section) and `maincli` spawn
 `.lake/build/bin/lean-inductive-models` as a subprocess. The `test` target
-therefore declares `needs := #[`@/«lean-inductive-models»]` in `lakefile.lean`, so
+therefore declares `needs = ["@/lean-inductive-models"]` in `lakefile.toml`, so
 `lake exe test` rebuilds the CLI before running any suite and cannot assert the
 CLI contract against a stale executable. Do not remove that `needs`: without it
 the CLI checks silently pass or fail against whatever binary happens to be on

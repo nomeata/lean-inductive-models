@@ -8,7 +8,7 @@ mkdir -p "$root/_tmp/build-tmp"
 export TMPDIR="${TMPDIR:-$root/_tmp/build-tmp}"
 
 # Bound Lake's build parallelism. Lake 5.0.0 has no job-count flag -- `-j` is
-# gone and `-K` only sets a configuration key no lakefile here reads -- so the
+# gone and `-K` only sets a configuration key a TOML lakefile cannot read -- so the
 # `-Kjobs=1` this loop used to pass did nothing at all. Lake schedules build
 # jobs as Lean tasks, so the runtime thread pool is the bound that exists.
 # See docs/maintainers/Testing.md for the measurements behind the value.

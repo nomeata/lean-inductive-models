@@ -16,7 +16,7 @@ permissions:
 
 # Bound Lake's build parallelism. Lake 5.0.0 has no job-count flag: `-j`
 # was dropped and `-K key=value` only sets a *configuration file* option
-# that this lakefile never reads, so the `-Kjobs=1` this workflow used to
+# that a TOML lakefile cannot read, so the `-Kjobs=1` this workflow used to
 # pass was inert -- byte-for-byte the same build as passing nothing.
 #
 # Lake schedules its build jobs as Lean tasks, so the Lean runtime's thread
