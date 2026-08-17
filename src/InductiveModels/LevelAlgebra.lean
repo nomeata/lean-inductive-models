@@ -242,7 +242,15 @@ def ofLevels (u v : Level) : Option (Nat × LA × LA) := do
 /-- Decides `∀ ρ, ⟦u⟧ = ⟦v⟧` over the private AST. -/
 def laEquiv (nvars : Nat) (u v : LA) : Verdict := go nvars false u v maxSplits
 
-/-- Decides `∀ ρ, ⟦u⟧ ≥ ⟦v⟧` over the private AST. -/
+/-- Decides `∀ ρ, ⟦u⟧ ≥ ⟦v⟧` over the private AST.
+
+This is the whole of the `geq` branch's use: `tools/LevelFuzz.lean` calls it,
+both against the semantic oracle's `≥` and — as `laGeq nvars a (succ zero)` —
+as the complete counterpart of the route selector's structural
+`Level.isNeverZero`. Nothing in `src/` calls it, and that is not an oversight:
+the planner widens equality only, so a `Lean.Level`-facing `levelGeq` wrapper
+would be a second entry point with no decision behind it. It existed and was
+deleted; add one back only with a caller. -/
 def laGeq (nvars : Nat) (u v : LA) : Verdict := go nvars true u v maxSplits
 
 /-- `∀ ρ, ⟦u⟧ = ⟦v⟧` for `Lean.Level`s: `.unknown` when the pair is out of
@@ -251,12 +259,6 @@ def levelEquiv (u v : Level) : Verdict :=
   match ofLevels u v with
   | none              => .unknown
   | some (nv, lu, lv) => laEquiv nv lu lv
-
-/-- `∀ ρ, ⟦u⟧ ≥ ⟦v⟧` for `Lean.Level`s. -/
-def levelGeq (u v : Level) : Verdict :=
-  match ofLevels u v with
-  | none              => .unknown
-  | some (nv, lu, lv) => laGeq nv lu lv
 
 /-! ## The control and the census
 
