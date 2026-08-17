@@ -266,7 +266,7 @@ this constructor")
         let (cs, fib) ← fibreAt ps
         let c := cs[j]!
         forallBoundedTelescope c.tele (some c.nf) fun fs _ => do
-          let tup ← chainTuple c.pad? c.boxed c.nf c.tele fs
+          let tup ← chainTuple c.pad? c.boxed c.nf c.tele c.chain fs
           mkLambdaFVars (ps ++ fs)
             (psigmaMk (.succ .zero) w natT fib (natNumeral j) tup)
       else do
@@ -283,7 +283,7 @@ this constructor")
           | none =>
             let (bcs, bfib) ← towerAt ps baseJ (.sort w)
             let c := bcs[tagOf[j]!]!
-            let tup ← chainTuple c.pad? c.boxed c.nf c.tele fs
+            let tup ← chainTuple c.pad? c.boxed c.nf c.tele c.chain fs
             mkLambdaFVars (ps ++ fs) (mkOuter (natNumeral 0)
               (psigmaMk (.succ .zero) w natT bfib (natNumeral (tagOf[j]!)) tup))
           | some k =>
@@ -292,7 +292,7 @@ this constructor")
             let rv2 := psigmaSnd (.succ .zero) w natT spine r
             let (scs, sfib) ← towerAt ps stepJ (mkApp spine rn).headBeta
             let c := scs[tagOf[j]!]!
-            let tup ← chainTuple c.pad? c.boxed c.nf c.tele (fs.set! k rv2)
+            let tup ← chainTuple c.pad? c.boxed c.nf c.tele c.chain (fs.set! k rv2)
             mkLambdaFVars (ps ++ fs) (mkOuter (.app (.const `Nat.succ []) rn)
               (psigmaMk (.succ .zero) w natT sfib (natNumeral (tagOf[j]!)) tup))
     let d := Declaration.defnDecl

@@ -60,7 +60,8 @@ partial def stepTower (v w : Level) (eqi : EqInfo) (fib : Expr)
     withLocalDeclD `f c.chain fun f => do
       let target := fun (tup : Expr) => pure (tgt (mkAt (natNumeral j) tup))
       let minorAt := minorOf j
-      mkLambdaFVars #[f] (← chainDestruct v eqi c.pad? c.boxed c.nf c.tele f id target minorAt)
+      mkLambdaFVars #[f]
+        (← chainDestruct v eqi c.pad? c.boxed c.nf c.tele c.chain f id target minorAt)
   let sc ← withLocalDeclD `m natT fun m => do
     let inner ←
       if j + 1 == cs.size then

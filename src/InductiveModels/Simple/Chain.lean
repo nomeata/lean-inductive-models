@@ -34,28 +34,59 @@ partial def chainTy (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : 
     return (psigmaT ℓt ℓi st (← mkLambdaFVars #[xv] inner),
       (mkLevelMax' ℓt ℓi).normalize)
 
+/-- **The rung a chain type already spells out**: its two levels, its stored
+component's type and its tail family, read back off the pair
+[`InductiveModels.chainTy`] built rather than rebuilt from the telescope.
+
+`chain` is the type of the value being taken apart or put together, so it is
+already in every caller's hand — `stepTower` binds its scrutinee at it and
+[`InductiveModels.PCtor`] carries it beside the telescope it was built from.
+Rebuilding it was the tower's quadratic: at rung `i` both the tuple and the
+destructor called `chainTy` again on the *whole* tail, and each rebuild ends in
+a `mkLambdaFVars` that traverses everything above the rung, so a chain of `n`
+fields paid `O(n²)` rung constructions over terms that grow with the fields'
+own size.
+
+Reading the rung off the type is also the stronger statement. The rebuilt rung
+had to *agree* with the scrutinee's type for the recursor to be well typed, and
+nothing but the kernel gate said it did; the components below are that type's
+own, so the constructor and the destructor cannot disagree with the carrier
+about the shape of a rung. -/
+def chainRung (chain : Expr) : GenM (Level × Level × Expr × Expr) := do
+  let .app (.app (.const `PSigma' [ℓt, ℓi]) st) β := chain
+    | badShape "the chain's rung is not the pair its carrier was built at"
+  return (ℓt, ℓi, st, β)
+
 /-- The tuple `⟨v₁, ⟨v₂, …⟩⟩` at the given field values — each boxed where its
-plan says so — closed by the pad's canonical element when there is one. -/
+plan says so — closed by the pad's canonical element when there is one.
+`chain` is [`InductiveModels.chainTy`] of `tele`, i.e. the tuple's own type. -/
 partial def chainTuple (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr)
-    (vals : Array Expr) (i : Nat := 0) : GenM Expr := do
+    (chain : Expr) (vals : Array Expr) (i : Nat := 0) : GenM Expr := do
   if nf == 0 then
     let some p := pad? | badShape "a chain with no fields needs a pad"
     return p.canon
-  let .forallE x t rest _ := tele | badShape "field telescope shorter than the field count"
+  let .forallE _ t rest _ := tele | badShape "field telescope shorter than the field count"
   let bx := boxed[i]?.getD false
   let sv ← if bx then boxValOf t vals[i]! else pure vals[i]!
   if nf == 1 && pad?.isNone then
     return sv
-  let st ← if bx then boxTyOf t else pure t
-  let ℓt ← ilevel st
-  let (β, ℓi) ← withLocalDeclD x st fun xv => do
-    let rv ← if bx then unboxValOf t xv else pure xv
-    let (inner, ℓi) ← chainTy pad? boxed (nf - 1) (rest.instantiate1 rv) (i + 1)
-    return (← mkLambdaFVars #[xv] inner, ℓi)
-  let snd ← chainTuple pad? boxed (nf - 1) (rest.instantiate1 vals[i]!) vals (i + 1)
+  let (ℓt, ℓi, st, β) ← chainRung chain
+  let tailTele := rest.instantiate1 vals[i]!
+  -- **The tail's own chain type.** Where a later field's type mentions this
+  -- one the tuple descends at the *value* while `β` abstracts at a variable,
+  -- so the two are the same type only up to that substitution and the tail is
+  -- built for real. Where it does not, `β` is a constant function and its body
+  -- *is* the tail's type, at the identical telescope — `rest` unchanged by
+  -- either instantiation — so the descent costs a `headBeta` and nothing else.
+  let tailChain ←
+    if rest.hasLooseBVar 0 then
+      Prod.fst <$> chainTy pad? boxed (nf - 1) tailTele (i + 1)
+    else
+      pure (mkApp β vals[i]!).headBeta
+  let snd ← chainTuple pad? boxed (nf - 1) tailTele tailChain vals (i + 1)
   return psigmaMk ℓt ℓi st β sv snd
 
-/-- The recursor's destructor for one chain: from `scrut : chainTy`, an
+/-- The recursor's destructor for one chain: from `scrut : chain`, an
 element of `target (wrap scrut)` — `wrap` embeds a suffix value into the
 full tuple (the identity at the top) and `target` is `fun tup => M ⟨j̄,
 tup⟩`. The minor is applied to the collected fields, each unboxed where the
@@ -63,9 +94,15 @@ plan boxed it. A canonical pad costs nothing — `scrut` is defeq to its
 canonical element. A [`InductiveModels.unitAt`] pad is discharged by transporting
 the applied minor along [`InductiveModels.unitAtUniq`], and on a constructor
 application that proof is a closed self-equality which K-like reduction on
-`Eq.rec` erases — ι stays `Eq.refl` on both. -/
+`Eq.rec` erases — ι stays `Eq.refl` on both.
+
+`chain` is `scrut`'s type, [`InductiveModels.chainTy`] of `tele`, and it is
+what every rung is read off ([`InductiveModels.chainRung`]): the walk down the
+chain builds no type at all, because each rung's family already carries the
+next rung's. -/
 partial def chainDestruct (v : Level) (eqi : EqInfo)
-    (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr) (scrut : Expr)
+    (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr) (chain : Expr)
+    (scrut : Expr)
     (wrap : Expr → Expr) (target : Expr → GenM Expr)
     (minorAt : Array Expr → Expr) (vals : Array Expr := #[]) (i : Nat := 0) : GenM Expr := do
   if nf == 0 then
@@ -82,20 +119,19 @@ partial def chainDestruct (v : Level) (eqi : EqInfo)
   if nf == 1 && pad?.isNone then
     let rv ← if bx then unboxValOf t scrut else pure scrut
     return minorAt (vals.push rv)
-  let st ← if bx then boxTyOf t else pure t
-  let ℓt ← ilevel st
-  let (β, ℓi) ← withLocalDeclD x st fun xv => do
-    let rv ← if bx then unboxValOf t xv else pure xv
-    let (inner, ℓi) ← chainTy pad? boxed (nf - 1) (rest.instantiate1 rv) (i + 1)
-    return (← mkLambdaFVars #[xv] inner, ℓi)
-  let motive ← withLocalDeclD `s (psigmaT ℓt ℓi st β) fun s => do
+  let (ℓt, ℓi, st, β) ← chainRung chain
+  let motive ← withLocalDeclD `s chain fun s => do
     mkLambdaFVars #[s] (← target (wrap s))
   let m ← withLocalDeclD x st fun xv => do
     let rv ← if bx then unboxValOf t xv else pure xv
-    withLocalDeclD `s (mkApp β xv).headBeta fun s => do
+    -- The tail's chain type, which the rung's family already carries: the
+    -- recursion descends at the very variable `β` abstracts, so this is what
+    -- rebuilding the tail would have returned, and it is `s`'s type either way.
+    let tailChain := (mkApp β xv).headBeta
+    withLocalDeclD `s tailChain fun s => do
       let wrap' := fun (z : Expr) => wrap (psigmaMk ℓt ℓi st β xv z)
       mkLambdaFVars #[xv, s] (← chainDestruct v eqi pad? boxed (nf - 1)
-        (rest.instantiate1 rv) s wrap' target minorAt (vals.push rv) (i + 1))
+        (rest.instantiate1 rv) tailChain s wrap' target minorAt (vals.push rv) (i + 1))
   return psigmaRec v ℓt ℓi st β motive m scrut
 
 end InductiveModels
