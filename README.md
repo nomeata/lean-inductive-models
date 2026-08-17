@@ -15,6 +15,95 @@ model-correspondence errors that an official-kernel replay alone accepts.
 
 **Work in progress**. Do not look too closely yet.
 
+## Usage
+
+```console
+lean-inductive-models [OPTIONS] IN.ndjson
+```
+
+`IN.ndjson` is an NDJSON kernel export of a Lean environment, as produced by
+[`leanprover/lean4export`](https://github.com/leanprover/lean4export); it may be
+`-` for standard input. **Stock upstream `lean4export` is all you need.** The
+patch under [`vendor/lean4export/`](vendor/lean4export/README.md) is only a
+memory optimisation for this project's own full-Mathlib job and changes not a
+byte of the exported output.
+
+With no options, all generation routes and both structural checks run, each
+generated island is kernel-checked as it is produced, and the transformed export
+is written to standard output. Diagnostics go to standard error.
+
+```console
+# Generate, check generated islands, and write to a file.
+lean-inductive-models -o OUT.ndjson IN.ndjson
+
+# Check an input without generating or writing anything.
+lean-inductive-models --no-inductives --check --no-output IN.ndjson
+
+# Also request a separate kernel check of the input declarations.
+lean-inductive-models --type-check-input --no-output "$IN"
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--nested` | on | Generate models for nested inductives. |
+| `--mutual` | on | Generate models for plain mutual inductives. |
+| `--simple` | on | Generate models for ordinary non-mutual inductives. |
+| `--basic` | on | Generate bootstrap and generated-support models. |
+| `--inductives` | on | Set all four generation options. |
+| `--check-input` | on | Structurally check input model families. |
+| `--check-output` | on | Structurally check final model families. |
+| `--check` | on | Set both structural-check options. |
+| `--type-check-input` | off | Replay the parsed input through Lean's kernel. |
+| `--type-check-generated` | on | Kernel-check each generated model island as it is produced. |
+| `--output` | on | Write the transformed export. |
+| `-o PATH` | `-` | Select the output path and enable output. |
+| `--quiet` | off | Suppress successful-pass diagnostics. |
+
+Every boolean long option has a `--no-...` form. Options apply left to right,
+so `--no-inductives --simple` enables only simple generation, while
+`--simple --no-inductives` disables every generation route. `--no-output`
+suppresses only the final write; enabled transformations and checks still run.
+
+The input is parsed exactly once and nothing is ever re-read, re-parsed or
+spooled to disk: the tool opens no export file it was not given on the command
+line. Every pass — parsing, generation, structural checking, and both optional
+kernel gates — runs in the invoking process. It starts no checker worker and
+does not re-execute itself under a supervisor.
+
+A named `-o PATH` output is built in a private sibling and renamed over the
+target only after every requested structural and kernel check has passed, so a
+rejected or failed run leaves an existing target untouched. Standard output
+cannot retract bytes, and a run that fails late may therefore already have
+written a valid declaration prefix.
+
+Exit codes follow the Lean Kernel Arena checker contract:
+
+| Code | Outcome |
+| --- | --- |
+| `0` | Accepted. |
+| `1` | Rejected by a requested structural or kernel check. |
+| `2` | A requested generation route declined an unsupported owner. |
+| `3` | Parser, I/O, CLI, or internal tool error. |
+
+## Building
+
+The Lean version is pinned by [`lean-toolchain`](lean-toolchain).
+
+```console
+lake build
+lake test
+```
+
+`lake test` is the quick fixture suite. Run the complete correctness interface
+with:
+
+```console
+test/scripts/run-correctness.sh
+```
+
+Detailed target matrices, CI envelopes, fixture regeneration, and diagnostic
+tools are documented in [Maintainer testing](docs/maintainers/Testing.md).
+
 ## Idea
 
 The filter represents a supported inductive family with ordinary definitions
@@ -42,38 +131,61 @@ Each of these is written by the tool itself, at a fixed declaration, wherever a
 generated island needs one — never taken from a record the input declares later
 in the stream. See the output contract below for what happens to such a record.
 
+A consumer using models as an inductive front end must therefore implement the
+five-member basis and admit the standard axioms of whichever generated route
+fired. With `--basic` on, that basis is the only unmodelled inductive residue
+in the output.
+
 ## Output contract
 
-For a modeled source type former `T`, constructor `C`, recursor `R`, and
-zero-based slot `j`, the public interface is:
+Throughout, `p⃗` is a member's parameters and `i⃗` its indices, `x⃗` is one
+constructor's own field telescope, and `M⃗`, `m⃗` are a recursor's motives and
+minor premises. A modeled member `T` has constructors `C_0 … C_{n-1}` and
+recursor `R`, whose exported rule `j` belongs to `C_j`; `ı⃗_j` is the index
+tuple in `C_j`'s result type, and `A_j` is field `j`'s declared type.
 
-| Source | Generated declaration |
-| --- | --- |
-| `T` | `T._model` |
-| `C` | `C._model` |
-| `R` | `R._model` |
-| rule `j` of `R` | `R._model.iota_j` |
-| eligible field `j` of `T` | `T._model.proj_j` |
-| projection reduction rule | `T._model.proj_j.iota` |
+Type formers, constructors, recursors and intrinsic projections are **safe
+definitions**; every `iota_j`, `unitlike`, `ruleK` and `eta` slot is a
+**theorem**. Each lives at exactly the name given.
 
-Generated type formers, constructors, recursors, and intrinsic projections are
-safe definitions; iota declarations are theorems. Type-former, constructor,
-recursor, and recursor-iota statements are exact simultaneous public-name
-rewrites of the exported source declarations. Intrinsic projections come from
-kernel declaration metadata rather than source `structure` syntax. An atomic
-mutual block still exposes one interface per member; private mutual bookkeeping
-and support declarations are not public slots.
-
-The following theorem slots are part of the public family exactly when the
-exported kernel metadata makes them applicable:
-
-| Condition | Generated theorem | Contract |
+| Slot | Present when | Statement |
 | --- | --- | --- |
-| rule `j` of modeled recursor `R` | `R._model.iota_j` | The literal exported iota proposition after the same simultaneous public-name rewrite. |
-| `T` is kernel-unit-like: nonrecursive, unindexed, with one zero-field constructor | `T._model.unitlike` | Any two inhabitants of the modeled `T` are equal. |
-| exported recursor `R` has literal `k = true` (with its one zero-field rule) | `R._model.ruleK` | The K-like reduction at the constructor-result fibre; indexed results retain that exact fibre. |
-| `T` is non-propositional and kernel-structure-like: nonrecursive, unindexed, with one constructor | `T._model.eta` | Reconstruct an inhabitant with the modeled constructor and every intrinsic modeled projection in field order. |
-| eligible field `j` of `T` | `T._model.proj_j.iota` | The intrinsic modeled projection applied to the modeled constructor equals constructor field `j`. The right-hand side is that field binder itself, never a transported term. |
+| `T._model` | per member | `T`'s exported type, `∀ p⃗ i⃗, Sort w` |
+| `C._model` | per constructor | `C`'s exported type, `∀ p⃗ x⃗, T._model p⃗ ı⃗(p⃗, x⃗)` |
+| `R._model` | per recursor | `R`'s exported type, `∀ p⃗ M⃗ m⃗ i⃗ (x : T._model p⃗ i⃗), M i⃗ x` |
+| `R._model.iota_j` | per exported rule `j` | `∀ p⃗ M⃗ m⃗ x⃗, R._model p⃗ M⃗ m⃗ ı⃗_j (C_j._model p⃗ x⃗) = rhs_j`, at type `M ı⃗_j (C_j._model p⃗ x⃗)` |
+| `T._model.proj_j` | field `j` is *projectable* | `∀ p⃗ i⃗ (self : T._model p⃗ i⃗), A_j`, each earlier field `x_k` occurring in `A_j` replaced by `T._model.proj_k p⃗ i⃗ self` |
+| `T._model.proj_j.iota` | with `T._model.proj_j` | `∀ p⃗ x⃗, T._model.proj_j p⃗ ı⃗ (C._model p⃗ x⃗) = x_j` |
+| `T._model.unitlike` | `T` is *unit-like* | `∀ p⃗ (x y : T._model p⃗), x = y` |
+| `T._model.eta` | `T` is *structure-like* and not a proposition | `∀ p⃗ (x : T._model p⃗), x = C._model p⃗ (T._model.proj_0 p⃗ x) … (T._model.proj_{n-1} p⃗ x)` |
+| `R._model.ruleK` | `R` is exported with `k = true` | `∀ p⃗ M⃗ m⃗ (x : T._model p⃗ ı⃗_0), R._model p⃗ M⃗ m⃗ ı⃗_0 x = rhs_0` |
+
+`rhs_j` is the exported rule's own right-hand side — for a plain block, `m_j`
+applied to `x⃗` and to `R._model` at each recursive field. *Structure-like* is
+the kernel's own predicate: nonrecursive, unindexed, exactly one constructor.
+*Unit-like* is that with a zero-field constructor. A field is *projectable*
+when `T` has one constructor and the kernel's own `proj` walk is well typed
+there — which is every field of a non-propositional owner, and of a
+propositional one only its propositional fields, and only while no later
+field's type names a non-propositional one; the owner may be recursive or
+indexed. `k = true` forces one rule with a zero-field constructor, so `ruleK`
+is `iota_0` with the constructor major replaced by an arbitrary inhabitant of
+that exact constructor-result fibre — an indexed family retains `ı⃗_0` rather
+than quantifying over indices.
+
+`T._model`, `C._model` and `R._model` carry their source declarations' exported
+types under one simultaneous public-name rewrite and nothing else, and
+`R._model.iota_j` states the exported reduction rule itself under the same
+rewrite — the recursor's own minor premise supplies the motive application,
+constructor levels, parameters, indices and field telescope, and the exported
+rule supplies the right-hand side. The remaining five slots are reconstructed
+from the owner's own exported records — the constructor telescope, the
+recursor's minor premises, the kernel's projection rules — and then rewritten
+the same way; no source `structure` syntax is consulted, and
+`T._model.eta` reconstructs through the intrinsic projection slots rather than
+through any exported field wrapper. An atomic mutual block still exposes one
+interface per member; private mutual bookkeeping and support declarations are
+not public slots.
 
 Generation consumes source declarations in their original order. At an
 accepted inductive owner it emits the complete generated island immediately
@@ -85,7 +197,7 @@ whole-output kernel replay.
 **Every record therefore declares each name it references before referencing
 it**, so any prefix of the output that ends at a record boundary is itself a
 complete export. This is checked over the whole fixture corpus by
-`emissionordercensustest`.
+[`test/EmissionOrderCensusTest.lean`](test/EmissionOrderCensusTest.lean).
 
 **One class of source record is dropped rather than retained.** Generation
 writes a fixed set of declarations of its own — the basis inductives above,
@@ -98,25 +210,6 @@ already carries it, and a record that is *not* that declaration rejects the
 run rather than being silently replaced. Every other source declaration is
 retained.
 
-Actual generated output is serialized declaration by declaration through one
-persistent standard arena writer, so its declaration order is the order above.
-A named output is a sibling transaction and becomes visible only after every
-requested final semantic and structural verdict succeeds. Standard output is
-direct and may therefore contain a valid declaration prefix when a later
-transition fails.
-The no-generation write path continues to write the retained input export.
-
-`--type-check-generated` kernel-checks each exact generated island once, in
-process and before it is emitted. Source declarations are trusted dependencies
-for that check and never enter the generated-declaration gate.
-`--type-check-input` separately checks only input declarations. Disabling
-either flag performs no kernel check for that declaration class. The default
-`--check-output` structural check validates compact incremental/final
-certificates; it does not reconstruct and replay the complete output.
-Parsing, generation, structural checking, and both optional kernel gates all
-run in the invoking process; the executable neither starts a checker worker
-nor re-executes itself under a supervisor.
-
 ## Checker contract
 
 The structural checker discovers a family whenever any public model slot for
@@ -125,7 +218,7 @@ family and checks:
 
 - model-before-owner ordering and absence of public backreferences;
 - unique type-former, constructor, recursor, rule, projection, and metadata
-  slots at their exact names;
+  slots at their exact names, with no rule slot beyond the exported rule count;
 - matching universe arities and literal declaration types after simultaneous
   source-to-model renaming;
 - exact recursor-iota and projection-iota propositions; every projection-iota
@@ -149,15 +242,19 @@ definitions and read their values. It settles which slots must exist and how
 their statements are spelled. It never loosens the comparison itself.
 
 `--check-input` runs it on models already in the input. `--check-output` runs
-it on the final transformed stream. An input with no model slots is not
-rejected merely because an inductive is unsupported or generation is disabled.
+it on the final transformed stream, validating the compact incremental and
+final certificates rather than reconstructing and replaying the whole output.
+An input with no model slots is not rejected merely because an inductive is
+unsupported or generation is disabled. Independently of either flag, an input
+in which a public model declaration occurs after its owner is rejected before
+any other pass runs.
 
 `--type-check-input` and `--type-check-generated` govern disjoint declaration
-classes. The former checks only input declarations. The latter, enabled by
-default, checks each exact generated model island incrementally as it is
-produced; input declarations are trusted dependencies in that environment,
-not checked a second time. With either flag off, that declaration class is not
-kernel-checked.
+classes. The former replays only input declarations, in stream order, through
+Lean's kernel. The latter, enabled by default, checks each exact generated
+model island incrementally as it is produced; input declarations are trusted
+dependencies in that environment, not checked a second time. With either flag
+off, that declaration class is not kernel-checked.
 
 ## Constructions
 
@@ -351,133 +448,6 @@ turns such a plan into a reported generated-kernel rejection, the stderr line
 `levels: N planner comparisons, M escapes` counts every pair the widening
 decided and the elaborator would not, and the Mathlib gate requires `M = 0` —
 the corpus condition under which the limitation was accepted.
-
-## Usage
-
-```console
-lean-inductive-models [OPTIONS] IN.ndjson
-```
-
-`IN.ndjson` may be `-` for standard input. With no options, all generation
-routes and both structural checks run, each generated island is kernel-checked
-as it is produced, and the transformed export is written to standard output.
-Diagnostics go to standard error.
-
-```console
-# Generate, check generated islands, and write to a file.
-lean-inductive-models -o OUT.ndjson IN.ndjson
-
-# Check an input without generating or writing anything.
-lean-inductive-models --no-inductives --check --no-output IN.ndjson
-
-# Also request a separate kernel check of the input declarations.
-lean-inductive-models --type-check-input --no-output "$IN"
-```
-
-| Option | Default | Meaning |
-| --- | --- | --- |
-| `--nested` | on | Generate models for nested inductives. |
-| `--mutual` | on | Generate models for plain mutual inductives. |
-| `--simple` | on | Generate models for ordinary non-mutual inductives. |
-| `--basic` | on | Generate bootstrap and generated-support models. |
-| `--inductives` | on | Set all four generation options. |
-| `--check-input` | on | Structurally check input model families. |
-| `--check-output` | on | Structurally check final model families. |
-| `--check` | on | Set both structural-check options. |
-| `--type-check-input` | off | Replay the parsed input through Lean's kernel. |
-| `--type-check-generated` | on | Kernel-check each generated model island as it is produced. |
-| `--output` | on | Write the transformed export. |
-| `-o PATH` | `-` | Select the output path and enable output. |
-| `--quiet` | off | Suppress successful-pass diagnostics. |
-
-Every boolean long option has a `--no-...` form. Options apply left to right,
-so `--no-inductives --simple` enables only simple generation, while
-`--simple --no-inductives` disables every generation route. `--no-output`
-suppresses only the final write; enabled transformations and checks still run.
-
-Exit codes follow the Lean Kernel Arena checker contract:
-
-| Code | Outcome |
-| --- | --- |
-| `0` | Accepted. |
-| `1` | Rejected by a requested structural or kernel check. |
-| `2` | A requested generation route declined an unsupported owner. |
-| `3` | Parser, I/O, CLI, or internal tool error. |
-
-## Implementation notes
-
-Nested, mutual, simple, and basis generation are independent routes sharing
-one public correspondence; [Constructions](#constructions) says what each of
-them represents and when it fires. The generator keeps exact source records as the
-syntax authority and uses installed kernel metadata only as a layout and proof
-oracle. Each accepted model island is appended immediately before its source
-owner, while all other source declarations retain input order. Input
-validation rejects a model declaration that occurs after its owner.
-
-Canonical generation retains compact structural certificates while model
-islands are live. Actual generated output receives the exact island and then
-its source owner at that transition and feeds each declaration into one
-persistent standard arena writer. The writer retains global interning maps but
-no cumulative output declaration array.
-
-Those interning maps are what the output path costs. The export format
-addresses names, levels and expressions by ID, and any record may back-
-reference a node emitted anywhere earlier in the file, so the writer must
-remember every node it has emitted for as long as it is writing. Measured on
-the pinned Mathlib export with generation disabled, that is **40.5 bytes per
-interned arena node** — 393 MB of peak resident set on a 10-million-line
-prefix, 856 MB on 20 million, growing linearly with the *output*. With
-generation enabled the maps additionally hold every generated island's
-expressions live for the rest of the file, where `--no-output` lets them die
-at island close; enabling output then costs 820 MB on the same 10-million-line
-prefix, against 864 MB for the whole rest of the pass. Nothing here can be
-pruned: forgetting an ID would re-emit its node under a fresh one, which is a
-valid export but not the same export. Making the map cheaper than a
-`Std.HashMap Expr Nat`, not making it smaller, is the available lever.
-
-Named output remains in a
-private sibling until the final compact semantic/structural verdict commits it;
-standard output is direct and can therefore contain a parseable declaration
-prefix after a late failure. When input kernel checking is disabled, both actual
-output and eligible checked no-output generation first build a compact source
-census; each exact source declaration is trusted-installed for construction,
-and each generated island is optionally checked directly in process while its
-compact certificate is live. The input is parsed exactly once and the parsed
-declarations are kept, so nothing is ever re-read, re-parsed or spooled to
-disk: the tool opens no file it was not given on the command line. Generated
-logical declarations are checked directly as values, never through JSON, an
-output parser or a writer. With both `--no-output` and
-`--no-type-check-generated`, accepted islands are summarized while live and
-then discarded without any kernel check, and no cumulative generated
-declaration array is retained. No-generation writing preserves the existing
-whole-export path.
-
-Unsupported shapes pass through unchanged and are reported as declines;
-[Constructions](#constructions) is the complete ledger of which shapes those
-are. A consumer using models as an inductive front end must implement the
-five-member basis and admit the standard axioms used by the selected generated
-route. With `--basic` on, that basis is the only unmodelled inductive residue,
-because an inductive a construction splices is itself modelled or the island is
-withdrawn.
-
-## Building
-
-The Lean version is pinned by [`lean-toolchain`](lean-toolchain).
-
-```console
-lake build
-lake test
-```
-
-`lake test` is the quick fixture suite. Run the complete correctness interface
-with:
-
-```console
-test/scripts/run-correctness.sh
-```
-
-Detailed target matrices, CI envelopes, fixture regeneration, and diagnostic
-tools are documented in [Maintainer testing](docs/maintainers/Testing.md).
 
 ## Copyright and license
 
