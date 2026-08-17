@@ -341,8 +341,34 @@ this writing, for the whole single-pass gate over the pinned export:
 | `lake build lean-inductive-models`, cold | 2.91 GiB |
 | `lake build` in the pinned lean4export | 1.46 GiB |
 | `lake exe cache get` | 0.95 GiB |
-| Mathlib export | 7.92 GiB |
+| Mathlib export | **11.45 GiB** |
 | generation, single pass | **7.39 GiB**, 11:49 wall |
+
+The export phase is the one number that went **up**, and deliberately. It was
+7.92 GiB while the gate patched `lean4export`'s expression interner; the patch
+is gone and the gate builds the pinned revision as upstream ships it, so the
+phase costs what stock costs. Measured here on the same host, same pinned
+Mathlib, exporter revision `caccfbe`, `lake env lean4export Mathlib | gzip -1`:
+
+| exporter | peak RSS | retired instructions | wall |
+| --- | --- | --- | --- |
+| stock | 11.45 GiB | 2.025e12 | 3:31 |
+| patched | 7.77 GiB | 3.102e12 | 4:35 |
+
+Read the RSS and the instruction count; **wall time on this host is not
+comparable** — it is shared, and repeated runs of identical work swing by tens
+of percent. The instruction counts are `perf stat -e instructions` over the
+whole export and are stable. The compact interner bought 3.68 GiB of resident
+memory for 1.53x the instructions, which is the trade it was designed to make
+and is not one this repository has to make for someone else's binary. Both
+exports are byte-identical: the two gzip files agree on SHA-256
+(`28de0ef1…c03a0`, 1,115,721,571 bytes), over all of Mathlib rather than over
+the small fixture the old differential check used.
+
+11.45 GiB is comfortable rather than roomy on a 16 GiB runner. What makes it
+fine is that the gate is single-pass: the export writes a gzip and exits, and
+generation reads that file afterwards, so the export phase has the runner to
+itself and its peak never coexists with generation's.
 
 The single pass measures *lower* than the two-phase shape it replaced, which
 was 11.39 GiB generating plus 8.22 GiB rechecking, and faster than either. That
@@ -384,8 +410,9 @@ longer exist.
 
 The export is still serialized to a compressed file rather than piped live into
 the generator. That is not scaffolding: the export and generation peaks are
-roughly 8 and 12 GiB, which do not coexist on a 16 GiB runner, and gzip also
-keeps the 5.6 GB uncompressed export off the disk. Both large pipelines report
+roughly 11.5 and 7.4 GiB, which do not coexist on a 16 GiB runner and would not
+fit if they did, and gzip also keeps the 5.6 GB uncompressed export off the
+disk. Both large pipelines report
 `PIPESTATUS`, so a failed exporter or a truncated stream fails the gate instead
 of producing a plausible-looking run.
 
