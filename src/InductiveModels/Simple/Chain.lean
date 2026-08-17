@@ -16,7 +16,30 @@ boxed ([`InductiveModels.boxTyOf`]); a later field's type always depends on the
 variable and the real value stays what the minor is applied to. -/
 
 /-- The chain's type and level. `nf` is the field count; the telescope's
-trailing result type is never entered. -/
+trailing result type is never entered.
+
+**A rung whose tail does not mention the field is written down rather than
+abstracted.** `mkLambdaFVars #[xv] inner` traverses everything above the rung
+to abstract a variable out of it and then binds it at `xv`'s own name, binder
+info and (head-beta-reduced) type; where the tail holds no `xv` there is
+nothing to abstract, and the direct `.lam` is the term it would have returned
+to the byte — `Lean.MetavarContext.mkBinding` binds a `cdecl` at
+`mkLambda' userName binderInfo type.headBeta`, and `abstractRange` over a
+variable that does not occur is the identity.
+
+**And the question is asked before the instantiation, so there is no mask to
+build.** This walk descends by `rest.instantiate1`, and `instantiate1` is what
+renumbers the loose variables, so at every rung `rest`'s own `bvar 0` is this
+field and `rest.hasLooseBVar 0` is exactly "does what is left mention it" — one
+header comparison on `Expr`, with no per-telescope precomputation and nothing
+carried between rungs. The whole binder is then skipped: with the field absent
+from `rest` the instantiation is the identity, so the tail is built in the
+outer scope and `withLocalDeclD` is never entered.
+
+The question is asked of the remaining telescope entire, which includes the
+constructor's trailing result type. That is conservative in the one direction
+that costs only instructions: an index the field appears in keeps the binder a
+field alone would not have needed. -/
 partial def chainTy (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr)
     (i : Nat := 0) : GenM (Expr × Level) := do
   if nf == 0 then
@@ -28,6 +51,10 @@ partial def chainTy (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : 
   let ℓt ← ilevel st
   if nf == 1 && pad?.isNone then
     return (st, ℓt)
+  unless rest.hasLooseBVar 0 do
+    let (inner, ℓi) ← chainTy pad? boxed (nf - 1) rest (i + 1)
+    return (psigmaT ℓt ℓi st (.lam x st.headBeta inner .default),
+      (mkLevelMax' ℓt ℓi).normalize)
   withLocalDeclD x st fun xv => do
     let rv ← if bx then unboxValOf t xv else pure xv
     let (inner, ℓi) ← chainTy pad? boxed (nf - 1) (rest.instantiate1 rv) (i + 1)
