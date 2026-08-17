@@ -431,9 +431,15 @@ def expectedPrim : List Row :=
   -- kernel's verdict and `runOne`'s carrier assertion below, not this table.
   -- `MZOne` (direct `.identity`) and `MZProof` (arm F proper) are the controls
   -- and are untouched: the direct route and arm F are tried before both.
+    -- `MZIdx2` is 10 and not 8, and `PProd'` is a row of its own, because
+    -- `MZIdx2` is the first owner here whose stored tower has a rung no later
+    -- field's type mentions: its island splices the binder-free pair — the
+    -- inductive and its `rec'`, two declarations — and then models it, which
+    -- is the splice-closure rule and not an extra. Every other count is
+    -- untouched: the pair changes a carrier's shape and no public statement.
   , ("maybe_zero_projection",
       [("Nt", 15), ("MZProof", 6), ("MZOne", 7), ("MZData", 8), ("MZSelf", 6),
-       ("MZIdx2", 8), ("MZIdx", 6)],
+       ("MZIdx2", 10), ("PProd'", 9), ("MZIdx", 6)],
       [("Eq", "prim model: a basis primitive")])
   -- **Green, and evidence rather than a refusal.** Arm E models a recursive
   -- declaration every one of whose constructors has a **bare** recursive field
@@ -520,9 +526,16 @@ def expectedPrim : List Row :=
   -- carrier is the bare tower it always was; `IdOne` and `PropOne` are the two
   -- exact one-field answers, which still run before the tower and are still
   -- the field itself and the bare lift.
+    -- `PadDep` is 20 and not 18 for the reason `MZIdx2` above is 10: it is the
+    -- first owner in this export with a constant rung, so its island carries
+    -- the binder-free pair's two support declarations and the descent models
+    -- the pair beside it. `PadDep` is also the fixture's *dependent* shape, so
+    -- the row pins both halves at once — the rungs a later field mentions stay
+    -- `PSigma'` and only the rest move.
   , ("maybe_zero_pad",
-      [("PadDep", 18), ("PadMix", 9), ("PadOne", 7), ("Nt", 7), ("PadIdx2", 8),
-       ("PropOne", 7), ("IdOne", 7), ("PadNone", 9), ("PadMany", 9), ("PadIdx", 6)],
+      [("PadDep", 20), ("PProd'", 9), ("PadMix", 9), ("PadOne", 7), ("Nt", 7),
+       ("PadIdx2", 8), ("PropOne", 7), ("IdOne", 7), ("PadNone", 9),
+       ("PadMany", 9), ("PadIdx", 6)],
       [("Eq", "prim model: a basis primitive")])
   -- **The shapes that still reach no arm**, and the claim of this row is the
   -- *word in the parenthesis* rather than the count. Each of these four
@@ -1268,6 +1281,45 @@ def runOne (root : String) (a : TAcc) (r : Row)
     a := check a (projected `MZSelf 0 && projected `MZData 0 && projected `MZData 1)
       "maybe_zero_projection: an empty-carrier owner lost an intrinsic projection the \
        kernel offers for it"
+  -- **The binder-free pair is not modelled by itself**, and something in the
+  -- export is modelled by it.
+  --
+  -- This is the one thing about `PProd'` that every other axis accepts. Its own
+  -- two fields are independent, so the ordinary route would carry them in a
+  -- `PProd'` and emit `PProd'._model α β := PProd' α β` — a well typed
+  -- definition at the exact statement the source declares, so `--check-output`
+  -- compares it and finds no difference, `--type-check-generated` accepts it,
+  -- and both censuses are happy. What it would be is an inductive this tool
+  -- spliced standing on itself, which is the splice-closure rule's whole
+  -- subject and the reason
+  -- [`InductiveModels.TightTower.pairs`] hard-codes the pair's own model to the
+  -- plain `PSigma'` tower. So the claim is read off the emitted value.
+  --
+  -- The second half is what keeps the first from passing vacuously: a run that
+  -- stopped using the pair altogether would satisfy "the pair does not model
+  -- itself" trivially.
+  if ["maybe_zero_pad", "maybe_zero_projection"].contains name then
+    let mentions := fun (value : Expr) => Id.run do
+      let mut seen := false
+      for constant in value.getUsedConstants do
+        if constant == `PProd' then seen := true
+      return seen
+    let carrierOf := fun (owner : Name) =>
+      decls.findSome? fun declaration => match declaration with
+        | .defn declarationName _ _ value _ _ _ =>
+          if declarationName == Naming.modelName owner then some value else none
+        | _ => none
+    a := check a (carrierOf `PProd' |>.map mentions |>.getD false |> not)
+      s!"{name}: PProd'._model mentions PProd', so the binder-free pair is modelled \
+         by itself and the splice it introduced stands on nothing"
+    a := check a ((carrierOf `PProd').isSome)
+      s!"{name}: PProd' was spliced but no carrier was emitted for it"
+    a := check a (decls.any fun declaration => match declaration with
+      | .defn declarationName _ _ value _ _ _ =>
+        declarationName != Naming.modelName `PProd' && mentions value
+      | _ => false)
+      s!"{name}: no generated carrier is built at PProd', so the claim that the pair \
+         does not model itself holds vacuously"
   -- **Exempt then declined.** The basis primitives are their own row in the
   -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a

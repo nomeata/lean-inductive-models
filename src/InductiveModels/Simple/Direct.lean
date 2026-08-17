@@ -42,15 +42,17 @@ def primDirect (site : PrimSite) (directRoute : DirectRoute) (st : PrimOut) : Ge
   let publicRecTy := site.publicRecTy
   let mut out := st.out
   let mut spliced := st.spliced
+  let mut requires := st.requires
   let mut projectionOverrides := st.projectionOverrides
   let (cn0, cty0) := exportCtors[0]!
   let modelCtorTy := publicSource sourceCtors[0]!.2
-  let (directDecls, directSpliced, overrides) ← emitDirectModel directRoute eqi tname
-    lparams np ni cn0 memberTy cty0 modelCtorTy declaredMemberTy selfN (ctorN 0) recN
-    rv.levelParams installedRecTy publicRecTy w v
+  let (directDecls, directSpliced, directRequires, overrides) ← emitDirectModel directRoute
+    eqi tname lparams np ni cn0 memberTy cty0 modelCtorTy declaredMemberTy selfN (ctorN 0)
+    recN rv.levelParams installedRecTy publicRecTy w v
   out := out ++ directDecls
   spliced := spliced ++ directSpliced
+  requires := requires ++ directRequires
   projectionOverrides := projectionOverrides ++ overrides
-  return { st with out, spliced, projectionOverrides }
+  return { st with out, spliced, requires, projectionOverrides }
 
 end InductiveModels

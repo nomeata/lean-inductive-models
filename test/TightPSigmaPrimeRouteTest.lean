@@ -91,7 +91,10 @@ def main : IO UInt32 := do
 
   let tightSupport :=
     #[`PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
-      `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk]
+      `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
+      -- The binder-free pair travels with it wherever a rung is constant, and
+      -- its bundle is one derived declaration where the tight pair's is six.
+      `PProd', `PProd'.mk, `PProd'.rec, `PProd'.rec']
   state := state.check "missing tight pair is spliced with its complete support bundle" <|
     tightSupport.all names.contains &&
       report.spliced.any fun (_, spliced) => tightSupport.all spliced.contains
@@ -103,12 +106,22 @@ def main : IO UInt32 := do
   state := state.check "every source field gets a projection and iota theorem" <|
     #[pi2Projection0, pi2Projection1, pi2Rule0, pi2Rule1,
       depProjection0, depProjection1, depRule0, depRule1].all names.contains
-  state := state.check "both carriers are stored in the tight pair basis" <|
-    #[`PI2, `PIDep].all fun owner =>
-      (declarationValue? generated (Naming.modelName owner)).any (containsConst `PSigma')
-  state := state.check "selectors use primitive tight-pair projections" <|
-    (declarationValue? generated pi2Projection0).any (containsProjection `PSigma' 0) &&
-      (declarationValue? generated pi2Projection1).any (containsProjection `PSigma' 1) &&
+  -- **The two owners are stored in different pairs, and that is the claim.**
+  -- `PIDep`'s second field's type mentions its first, so its rung's family is a
+  -- real function and the rung is a `PSigma'`. `PI2`'s two fields are
+  -- independent, so its family would be constant and the rung is a `PProd'` —
+  -- the same pair with no binder, at the same sort. Asserting `PSigma'` for
+  -- both would pass on a run that had stopped distinguishing them, which is
+  -- the whole thing this fixture exists to hold apart.
+  state := state.check "the dependent carrier is stored in the tight pair" <|
+    (declarationValue? generated (Naming.modelName `PIDep)).any (containsConst `PSigma')
+  state := state.check "the independent carrier is stored in the binder-free pair" <|
+    (declarationValue? generated (Naming.modelName `PI2)).any (containsConst `PProd') &&
+      (declarationValue? generated (Naming.modelName `PI2)).all
+        (!containsConst `PSigma' ·)
+  state := state.check "selectors use each carrier's own primitive projections" <|
+    (declarationValue? generated pi2Projection0).any (containsProjection `PProd' 0) &&
+      (declarationValue? generated pi2Projection1).any (containsProjection `PProd' 1) &&
       (declarationValue? generated depProjection0).any (containsProjection `PSigma' 0) &&
       (declarationValue? generated depProjection1).any (containsProjection `PSigma' 1)
   state := state.check "nonrecursive dependent field rules are both literal" <|

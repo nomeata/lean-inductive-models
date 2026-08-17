@@ -188,13 +188,23 @@ arm-C skeleton names deliberately do not qualify. Callers must additionally
 require an explicit [`Iso.spliced`] witness: this namespace predicate alone is
 not ownership evidence. -/
 def persistentSupportRoot (name : Name) : Bool :=
-  [`Eq, `Nat, `PSigma', `PUnit, `Nonempty, `Iff, `Quot].contains name
+  [`Eq, `Nat, `PSigma', `PProd', `PUnit, `Nonempty, `Iff, `Quot].contains name
 
+/-- **`PProd'` is listed by its exact members and not by its prefix**, unlike
+`PSigma'` and `PUnit` above.  The binder-free pair is not a basis primitive, so
+it is modelled like any other spliced inductive, and its model's public
+interface is `PProd'._model`, `PProd'.mk._model`, `PProd'.rec._model` and their
+ι rules — every one of them under the `PProd'` prefix.  A prefix test would
+call that interface reusable shared support and retain it past its island,
+which is what the `Iso.spliced` witness alone would not catch: the descent that
+builds the model splices `Eq` and `PSigma'` under `PProd'`'s own name, so the
+witness is present. -/
 def persistentSupportName (name : Name) : Bool :=
   persistentSupportRoot name ||
     (`PSigma').isPrefixOf name ||
     (`PUnit).isPrefixOf name ||
-    [`Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
+    [`PProd'.mk, `PProd'.rec, `PProd'.rec',
+      `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
       `Classical.choice, `propext].contains name ||
     wCoreRoot.isPrefixOf name
 /-- `WT.sup` under the prefix — the node former. -/

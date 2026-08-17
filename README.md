@@ -299,7 +299,13 @@ instance of one of the others.
   *identity* where the single field's sort is already the carrier's, *prop lift*
   where it is exactly a proposition — and everything else is stored in a
   right-nested `PSigma'` tower at any field count, ending at the exact-sort pad
-  where the fields' own levels do not reach the carrier's sort. The *indexed*
+  where the fields' own levels do not reach the carrier's sort. A rung whose
+  field is mentioned by no later field's type has a constant family, and is
+  built at `PProd'` — the same pair without the binder, at the same
+  `Sort (max u v)`. `PProd'` is spliced support rather than a basis member: it
+  is modelled like any inductive a construction introduces, by the plain
+  `PSigma'` tower, since a tower over its own two independent fields would be a
+  `PProd'`. The *indexed*
   case wraps that same tower in a `Prop`-valued packed Henry-Ford equation
   saying which fibre the storage sits in, and is disjoint from the other two by
   its own guard; the two exact answers are taken before the tower so that their

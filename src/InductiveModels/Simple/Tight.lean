@@ -52,14 +52,22 @@ carrier, the constructor, the recursor and the projections each open the same
 `Π`-nest into a fresh set of `fvar`s, and re-deriving the mask at each would be
 four traversals of the field types for one fact about their shape.
 
-A `tele` with fewer than `nf` leading binders is a caller fault rather than a
-shape this can answer; it reports every field as depended upon, which is the
-unconditional abstraction this mask exists to skip, so a fault costs
+`skip` drops that many leading binders first, so the same function answers for
+a raw constructor type whose owner parameters have not been instantiated: a
+parameter is a *deeper* loose variable than any field, and the `min … j` below
+is what keeps the walk to the field binders alone.
+
+A `tele` with fewer than `skip + nf` leading binders is a caller fault rather
+than a shape this can answer; it reports every field as depended upon, which is
+the unconditional abstraction this mask exists to skip, so a fault costs
 instructions and never a different term. -/
-def tightFieldDepMask (tele : Expr) (nf : Nat) : Array Bool := Id.run do
+def tightFieldDepMask (tele : Expr) (nf : Nat) (skip : Nat := 0) : Array Bool := Id.run do
   let allDependent := (Array.range nf).map fun _ => true
   let mut fieldTypes : Array Expr := #[]
   let mut current := tele
+  for _ in [0:skip] do
+    let .forallE _ _ body _ := current | return allDependent
+    current := body
   for _ in [0:nf] do
     let .forallE _ domain body _ := current | return allDependent
     fieldTypes := fieldTypes.push domain
@@ -83,11 +91,41 @@ structure TightTower where
   /-- The tail: `none` where the tower ends at its last field, `some w` where it
   ends at the pad [`InductiveModels.unitAt`] `w`. -/
   pad? : Option Level := none
+  /-- **May a rung the tail does not depend on be a binder-free `PProd'`?**
+
+  True everywhere but at one owner: `PProd'` itself.  Its own two fields are
+  independent, so the ordinary route would carry them in a `PProd'` — that is,
+  it would model the binder-free pair *by* the binder-free pair, and the
+  inductive this tool splices would be left standing on itself.  So `PProd'`'s
+  model is hard-coded to the plain tight tower, `PSigma' α (fun _ => β)`, which
+  is the construction every carrier had before this flag existed.  Nothing else
+  about it is special-cased: it is spliced, modelled, checked, ordered and
+  emitted like any other inductive a construction introduces. -/
+  pairs : Bool := true
 
 /-- The tower over an opened field telescope.  `tele` must be the very `Π`-nest
 `fields` was opened from, so that the mask's indices are the fields' own. -/
-def tightTowerOf (tele : Expr) (fields : Array Expr) (pad? : Option Level) : TightTower :=
-  { fields, dep := tightFieldDepMask tele fields.size, pad? }
+def tightTowerOf (tele : Expr) (fields : Array Expr) (pad? : Option Level)
+    (pairs : Bool := true) : TightTower :=
+  { fields, dep := tightFieldDepMask tele fields.size, pad?, pairs }
+
+/-- **Is rung `i` carried by the binder-free pair?**  Exactly when no later
+field's type mentions field `i` and this tower is allowed the pair at all. -/
+def TightTower.binderFree (tower : TightTower) (i : Nat) : Bool :=
+  tower.pairs && !tower.dep[i]!
+
+/-- The pair constant a rung is built at: `PProd'` where the tail is a plain
+type, `PSigma'` where it is a family. -/
+def TightTower.pairName (tower : TightTower) (i : Nat) : Name :=
+  if tower.binderFree i then `PProd' else `PSigma'
+
+/-- That pair's constructor. -/
+def TightTower.mkName (tower : TightTower) (i : Nat) : Name :=
+  if tower.binderFree i then `PProd'.mk else `PSigma'.mk
+
+/-- That pair's projection-derived eliminator. -/
+def TightTower.recName (tower : TightTower) (i : Nat) : Name :=
+  if tower.binderFree i then `PProd'.rec' else `PSigma'.rec'
 
 /-- Has the tower reached its tail?  A padded tower runs past its last field
 and ends at the pad; an unpadded one ends *at* its last field. -/
@@ -120,10 +158,17 @@ partial def tightTowerTy (tower : TightTower) (i : Nat) : GenM Expr := do
   let u ← ilevel α
   let rest ← tightTowerTy tower (i + 1)
   let v ← ilevel rest
+  if tower.binderFree i then return mkAppN (.const `PProd' [u, v]) #[α, rest]
   let β ← if tower.dep[i]! then mkLambdaFVars #[field] rest
     else tightConstantFamily field α rest (← field.fvarId!.getBinderInfo)
   return mkAppN (.const `PSigma' [u, v]) #[α, β]
 
+/-- **One rung, at a substituted prefix**: its two levels, its first component's
+type, and its **second component** — which is the tail's *family* at a
+`PSigma'` rung and the tail's *type* at a binder-free `PProd'` one.  Which of
+the two it is, is [`InductiveModels.TightTower.binderFree`] at `i`, and every
+caller reads it through [`InductiveModels.TightTower.pairName`] and its
+siblings rather than by inspecting the term. -/
 def tightTowerAt (tower : TightTower) (i : Nat) (pre : Array Expr) :
     GenM (Level × Level × Expr × Expr) := do
   let field := tower.fields[i]!
@@ -134,10 +179,11 @@ def tightTowerAt (tower : TightTower) (i : Nat) (pre : Array Expr) :
   let rest ← tightTowerTy tower (i + 1)
   -- The tail does not mention this field, so the binder it would be abstracted
   -- under holds nothing: substituting `pre` for the fields *before* it is the
-  -- whole of the substitution, and the family is constant.
+  -- whole of the substitution, and the second component is constant.
   unless tower.dep[i]! do
     let rest := substitute rest
     let v ← ilevel rest
+    if tower.pairs then return (u, v, α, rest)
     return (u, v, α, ← tightConstantFamily field α rest .default)
   let (v, β) ← withLocalDeclD (← field.fvarId!.getUserName) α fun value => do
     let rest := rest.replaceFVars
@@ -152,16 +198,17 @@ partial def tightTowerMk (tower : TightTower) (i : Nat) : GenM Expr := do
       | some w => unitAtCanon w
       | none => tower.fields[i]!
   let pre := tower.fields.extract 0 i
-  let (u, v, α, β) ← tightTowerAt tower i pre
-  return mkAppN (.const `PSigma'.mk [u, v])
-    #[α, β, tower.fields[i]!, ← tightTowerMk tower (i + 1)]
+  let (u, v, α, snd) ← tightTowerAt tower i pre
+  return mkAppN (.const (tower.mkName i) [u, v])
+    #[α, snd, tower.fields[i]!, ← tightTowerMk tower (i + 1)]
 
 /-- **The tower read out**, one primitive projection pair per rung.
 
 **It builds no types.** A primitive `.proj` carries the structure's name and a
-field index and nothing else — not the rung's `α`, not its `β`, not either
-level — so walking the tower to its `i`th field needs only the shape the
-recursion already has. This used to call [`InductiveModels.tightTowerAt`] at
+field index and nothing else — not the rung's `α`, not its second component,
+not either level — so walking the tower to its `i`th field needs only the shape
+the recursion already has, and the shape says which of the two pairs the rung
+was built at. This used to call [`InductiveModels.tightTowerAt`] at
 every rung and discard all four of its results, a vestige of the day the
 projections were `PSigma'.fst`/`.snd` *applications* and did need `α` and `β`
 spelled out. It was measured at 81% of this function's cost.
@@ -178,17 +225,20 @@ partial def tightTowerProjs (tower : TightTower) (i : Nat) (value : Expr)
   if tightTowerDone tower i then
     (if tower.pad?.isSome then pre else pre.push value)
   else
-    let first := .proj `PSigma' 0 value
-    tightTowerProjs tower (i + 1) (.proj `PSigma' 1 value) (pre.push first)
+    let pair := tower.pairName i
+    let first := .proj pair 0 value
+    tightTowerProjs tower (i + 1) (.proj pair 1 value) (pre.push first)
 
 partial def tightTowerPrepend (tower : TightTower) (pre : Array Expr) (i : Nat)
     (tail : Expr) : GenM Expr := do
   if i == pre.size then return tail
-  let (u, v, α, β) ← tightTowerAt tower i (pre.extract 0 i)
-  return mkAppN (.const `PSigma'.mk [u, v])
-    #[α, β, pre[i]!, ← tightTowerPrepend tower pre (i + 1) tail]
+  let (u, v, α, snd) ← tightTowerAt tower i (pre.extract 0 i)
+  return mkAppN (.const (tower.mkName i) [u, v])
+    #[α, snd, pre[i]!, ← tightTowerPrepend tower pre (i + 1) tail]
 
-/-- **The tower taken apart**, one `PSigma'.rec'` per stored field.
+/-- **The tower taken apart**, one projection-derived `rec'` per stored field —
+the tight pair's at a rung with a family, the binder-free pair's at a rung
+without one.
 
 At a padded tower the last call arrives with every field already bound and the
 pad in hand; the minor premise is applied to the fields alone and the pad is
@@ -202,17 +252,18 @@ partial def tightTowerRec (s : Level) (tower : TightTower) (motive minor value :
     (i : Nat := 0) (pre : Array Expr := #[]) : GenM Expr := do
   if tightTowerDone tower i then
     return mkAppN minor (if tower.pad?.isSome then pre else pre.push value)
-  let (u, v, α, β) ← tightTowerAt tower i pre
-  let tailType := mkAppN (.const `PSigma' [u, v]) #[α, β]
+  let (u, v, α, snd) ← tightTowerAt tower i pre
+  let tailType := mkAppN (.const (tower.pairName i) [u, v]) #[α, snd]
   let targetMotive ← withLocalDeclD `tail tailType fun tail => do
     let full ← tightTowerPrepend tower pre 0 tail
     mkLambdaFVars #[tail] (mkApp motive full)
   let branch ← withLocalDeclD `fst α fun fst =>
-    withLocalDeclD `snd (mkApp β fst).headBeta fun snd => do
-      mkLambdaFVars #[fst, snd]
-        (← tightTowerRec s tower motive minor snd (i + 1) (pre.push fst))
-  return mkAppN (.const `PSigma'.rec' [u, v, s])
-    #[α, β, targetMotive, branch, value]
+    withLocalDeclD `snd (if tower.binderFree i then snd else (mkApp snd fst).headBeta)
+      fun sndValue => do
+        mkLambdaFVars #[fst, sndValue]
+          (← tightTowerRec s tower motive minor sndValue (i + 1) (pre.push fst))
+  return mkAppN (.const (tower.recName i) [u, v, s])
+    #[α, snd, targetMotive, branch, value]
 
 /-- Emit an exact-sort model for a non-recursive, unindexed, one-constructor
 family, storing its fields in the tower.  `pad?` is that tower's tail: `none`
@@ -221,7 +272,8 @@ the pad is what takes them there. -/
 def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (v : Level) (pad? : Option Level) :
+    (recursorProofType recursorPublicType : Expr) (v : Level) (pad? : Option Level)
+    (pairs : Bool) :
     GenM (Array Declaration × Array (Name × Nat × Expr × Expr)) := do
   let us := lparams.map Level.param
   let nf := numForalls constructorType - np
@@ -233,7 +285,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
   let selfValue ← withParams fun ps => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
-      mkLambdaFVars ps (← tightTowerTy (tightTowerOf tele fields pad?) 0)
+      mkLambdaFVars ps (← tightTowerTy (tightTowerOf tele fields pad? pairs) 0)
   let selfDecl := Declaration.defnDecl
     { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfValue
       hints := ← hintsFor selfValue, safety := .safe }
@@ -243,7 +295,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
   let constructorValue ← withParams fun ps => do
     let tele ← instForall modelConstructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
-      mkLambdaFVars (ps ++ fields) (← tightTowerMk (tightTowerOf tele fields pad?) 0)
+      mkLambdaFVars (ps ++ fields) (← tightTowerMk (tightTowerOf tele fields pad? pairs) 0)
   let constructorDecl := Declaration.defnDecl
     { name := constructorN, levelParams := lparams, type := modelConstructorType,
       value := constructorValue, hints := ← hintsFor constructorValue, safety := .safe }
@@ -259,7 +311,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       mkLambdaFVars binders
-        (← tightTowerRec v (tightTowerOf tele fields pad?) motive minor self)
+        (← tightTowerRec v (tightTowerOf tele fields pad? pairs) motive minor self)
   let recursorDecl := Declaration.defnDecl
     { name := recursorN, levelParams := recursorLevelParams, type := recursorPublicType,
       value := recursorValue, hints := ← hintsFor recursorValue, safety := .safe }
@@ -270,7 +322,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       withLocalDeclD `self (selfAt ps) fun self => do
-        let projections := tightTowerProjs (tightTowerOf tele fields pad?) 0 self
+        let projections := tightTowerProjs (tightTowerOf tele fields pad? pairs) 0 self
         (Array.range nf).mapM fun fieldIndex => do
           let selector ← mkLambdaFVars (ps.push self) projections[fieldIndex]!
           let proof ← do
@@ -326,7 +378,8 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
     (constructorName : Name)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (w v : Level) (pad? : Option Level) :
+    (recursorProofType recursorPublicType : Expr) (w v : Level) (pad? : Option Level)
+    (pairs : Bool) :
     GenM (Array Declaration × Array (Name × Nat × Expr × Expr)) := do
   let us := lparams.map Level.param
   let nf := numForalls constructorType - np
@@ -341,15 +394,15 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
   let storeAt : Array Expr → GenM Expr := fun ps => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ =>
-      tightTowerTy (tightTowerOf tele fields pad?) 0
+      tightTowerTy (tightTowerOf tele fields pad? pairs) 0
   let projsAt : Array Expr → Expr → GenM (Array Expr) := fun ps value => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ =>
-      pure (tightTowerProjs (tightTowerOf tele fields pad?) 0 value)
+      pure (tightTowerProjs (tightTowerOf tele fields pad? pairs) 0 value)
   -- Takes the `Π`-nest its fields were opened from rather than the parameters,
   -- because the tower's dependency mask is read off that nest.
   let towerOf : Expr → Array Expr → GenM Expr := fun tele fs =>
-    tightTowerMk (tightTowerOf tele fs pad?) 0
+    tightTowerMk (tightTowerOf tele fs pad? pairs) 0
 
   -- **`Pk`, the whole index telescope packed.** Closed over the parameters
   -- alone: [`InductiveModels.packTyOf`] abstracts every selected index, and
@@ -599,20 +652,54 @@ indexed case, is the one that models it"
       let fieldLevels ← fields.mapM fun field => do ilevel (← ityp field)
       return some (← planTightTower tname constructorName fieldLevels w "field tower")
 
+/-- **The binder-free pair's support, where a tower will use it** — three
+answers in one, because they must agree or the island references a constant it
+never installed:
+
+* `pairs` — may this owner's tower use the pair at all?  Everywhere but at
+  `PProd'` itself; see [`InductiveModels.TightTower.pairs`].
+* the support to install — `PProd'` and its `rec'`, spliced if the input has
+  none and validated if it has one, and only where some rung will actually be
+  binder-free.  A fully dependent telescope pays nothing.
+* `requires` — `PProd'` where **this** island is the one that spliced it, and
+  empty where an earlier island already did.  That is
+  [`InductiveModels.Iso.requires`]' rule at arm W's shape exactly: the model
+  that introduces an inductive is the one that may not leave it unmodelled, and
+  a later island reusing persistent support has nothing to model.
+
+The need is asked of the source constructor type **and** the model's, and
+answered yes if either says so.  The two are one telescope up to renaming, and
+each of the four constructions opens one or the other; a rung that came out
+constant in only one of them would otherwise reach for `PProd'` in an island
+that never installed it. -/
+def tightBinderFreeSupport (tname : Name) (constructorType modelConstructorType : Expr)
+    (np nf : Nat) : GenM (Bool × Array Declaration × Array Name) := do
+  let pairs := tname != `PProd'
+  let anyConstant := fun (ty : Expr) => (tightFieldDepMask ty nf np).contains false
+  unless pairs && (anyConstant constructorType || anyConstant modelConstructorType) do
+    return (pairs, #[], #[])
+  let support ← ensurePProdPrime
+  let spliced := support.any fun declaration => declaration.getNames.contains `PProd'
+  return (true, support, if spliced then #[`PProd'] else #[])
+
 /-- Install tight-pair support and emit the complete exact-sort model branch.
-The caller only merges the returned declarations, splice witnesses, and
-projection overrides into its route state. -/
+The caller only merges the returned declarations, splice witnesses, model
+requirements, and projection overrides into its route state. -/
 def emitDirectTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
     (recursorProofType recursorPublicType : Expr) (v : Level) (pad? : Option Level) :
-    GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
+    GenM (Array Declaration × Array Name × Array Name ×
+      Array (Name × Nat × Expr × Expr)) := do
+  let (pairs, pairSupport, requires) ← tightBinderFreeSupport tname constructorType
+    modelConstructorType np (numForalls constructorType - np)
   let support ← if pad?.isSome then ensureExactSortLift else ensurePSigmaPrime
+  let support := support ++ pairSupport
   let (declarations, overrides) ← directTightModel eqi tname lparams np memberTy
     constructorType modelConstructorType declaredMemberTy selfN constructorN recursorN
-    recursorLevelParams recursorProofType recursorPublicType v pad?
+    recursorLevelParams recursorProofType recursorPublicType v pad? pairs
   let spliced := support.flatMap fun declaration => declaration.getNames.toArray
-  return (support ++ declarations, spliced, overrides)
+  return (support ++ declarations, spliced, requires, overrides)
 
 /-- Install tight-pair support and emit the indexed exact-sort model branch.
 The same support as the unindexed tower — the storage is that tower — plus the
@@ -624,13 +711,17 @@ def emitDirectIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
     (recursorProofType recursorPublicType : Expr) (w v : Level) (pad? : Option Level) :
-    GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
+    GenM (Array Declaration × Array Name × Array Name ×
+      Array (Name × Nat × Expr × Expr)) := do
+  let (pairs, pairSupport, requires) ← tightBinderFreeSupport tname constructorType
+    modelConstructorType np (numForalls constructorType - np)
   let support ← if pad?.isSome then ensureExactSortLift else ensurePSigmaPrime
+  let support := support ++ pairSupport
   let (declarations, overrides) ← directIndexedModel eqi tname lparams np ni constructorName
     memberTy constructorType modelConstructorType declaredMemberTy selfN constructorN
-    recursorN recursorLevelParams recursorProofType recursorPublicType w v pad?
+    recursorN recursorLevelParams recursorProofType recursorPublicType w v pad? pairs
   let spliced := support.flatMap fun declaration => declaration.getNames.toArray
-  return (support ++ declarations, spliced, overrides)
+  return (support ++ declarations, spliced, requires, overrides)
 
 /-- Emit the field-preserving implementation of a tight one-field model.
 Kept outside [`InductiveModels.primIso`] so the already-large route dispatcher does
@@ -715,7 +806,8 @@ def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
     (recursorProofType recursorPublicType : Expr) (w v : Level) :
-    GenM (Array Declaration × Array Name × Array (Name × Nat × Expr × Expr)) := do
+    GenM (Array Declaration × Array Name × Array Name ×
+      Array (Name × Nat × Expr × Expr)) := do
   match route with
   | .field fieldRoute =>
     let support ← if fieldRoute matches .propLift then ensureExactSortLift else pure #[]
@@ -723,7 +815,7 @@ def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
       memberTy constructorType modelConstructorType declaredMemberTy selfN constructorN
       recursorN recursorLevelParams recursorProofType recursorPublicType w v
     let spliced := support.flatMap fun declaration => declaration.getNames.toArray
-    return (support ++ declarations, spliced, #[override])
+    return (support ++ declarations, spliced, #[], #[override])
   | .tight pad? =>
     emitDirectTightModel eqi tname lparams np memberTy constructorType modelConstructorType
       declaredMemberTy selfN constructorN recursorN recursorLevelParams

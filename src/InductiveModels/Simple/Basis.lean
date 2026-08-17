@@ -94,6 +94,43 @@ def psigmaPrimeDecl : Declaration :=
     [{ name := `PSigma', type := ty,
        ctors := [{ name := `PSigma'.mk, type := mkTy }] }] false
 
+/-! ## The binder-free pair
+
+`PProd'` is [`InductiveModels.psigmaPrimeDecl`] with the second component's
+binder removed: `PProd' α β : Sort (max u v)` where the tight pair would carry
+`β : α → Sort v`.  A storage rung whose field is mentioned by no later field
+has a constant family, and that is the rung with no family at all.
+
+**Not Lean's `PProd`.**  Lean's is a `structure`, so it lands at
+`Sort (max 1 u v)` — every `structure` does — and a `max 1` floor under the
+carrier is exactly what this construction may not have: the tower's whole
+purpose is to land on the owner's *declared* sort, which may be `Prop`.  So
+this crosses the same bootstrap boundary `PSigma'` does, for the same reason,
+and takes the same primed name.
+
+**Support, not basis.**  The trusted basis stays `Eq`, `Nat`, `PUnit`,
+`PSigma'` and `Quot`: nothing here has to be assumed, because `PProd'` is
+modelled like any other inductive this tool splices
+([`InductiveModels.Iso.requires`]).  Its own model is the one construction that
+cannot be the ordinary one — a tight tower over `PProd'`'s two fields *is* a
+`PProd'`, so the route would model it by itself — and is therefore hard-coded
+to the plain `PSigma'` tower at [`InductiveModels.TightTower.pairs`]. -/
+
+def pprodPrimeDecl : Declaration :=
+  let lu := Level.param `u
+  let lv := Level.param `v
+  let ty : Expr := .forallE `α (.sort lu)
+    (.forallE `β (.sort lv) (.sort (mkLevelMax' lu lv)) .default) .implicit
+  let mkTy : Expr := .forallE `α (.sort lu)
+    (.forallE `β (.sort lv)
+      (.forallE `fst (.bvar 1)
+        (.forallE `snd (.bvar 1)
+          (mkAppN (.const `PProd' [lu, lv]) #[.bvar 3, .bvar 2]) .default)
+        .default) .implicit) .implicit
+  .inductDecl [`u, `v] 2
+    [{ name := `PProd', type := ty,
+       ctors := [{ name := `PProd'.mk, type := mkTy }] }] false
+
 /-! ## Exact basis-owner validation
 
 A declaration is exempt because a consumer is expected to implement its
@@ -250,6 +287,15 @@ def psigmaPrimeSnd (u v : Level) (α β self : Expr) : Expr :=
 def psigmaPrimeRec (u v w : Level) (α β motive minor self : Expr) : Expr :=
   mkAppN (.const `PSigma'.rec' [u, v, w]) #[α, β, motive, minor, self]
 
+def pprodPrimeT (u v : Level) (α β : Expr) : Expr :=
+  mkAppN (.const `PProd' [u, v]) #[α, β]
+
+def pprodPrimeMk (u v : Level) (α β fst snd : Expr) : Expr :=
+  mkAppN (.const `PProd'.mk [u, v]) #[α, β, fst, snd]
+
+def pprodPrimeRec (u v w : Level) (α β motive minor self : Expr) : Expr :=
+  mkAppN (.const `PProd'.rec' [u, v, w]) #[α, β, motive, minor, self]
+
 /-- One primitive, checked or spliced. `check` runs on a present declaration
 and says what is wrong with it; a missing one is spliced at Lean's shape and
 re-checked. The pattern is [`InductiveModels.ensureEq`]'s.
@@ -342,6 +388,34 @@ def checkPSigmaPrimeCore (env : Environment) : Except String Unit := do
     | _ => unreachable!
   unless constructor.type == expectedConstructor && constructor.numFields == 2 do
     throw "PSigma'.mk does not retain exactly its dependent first and second components"
+
+/-- Validate the binder-free pair's kernel inductive and constructor, exactly
+as [`InductiveModels.checkPSigmaPrimeCore`] validates the tight pair's.  `rec'`
+is checked as an ordinary derived declaration by
+[`InductiveModels.ensurePProdPrime`]. -/
+def checkPProdPrimeCore (env : Environment) : Except String Unit := do
+  let some (.inductInfo iv) := env.constants.find? `PProd'
+    | throw "it is not an inductive type"
+  unless iv.numParams == 2 && iv.numIndices == 0 && iv.ctors == [`PProd'.mk]
+      && iv.levelParams.length == 2 do
+    throw "it is not a two-parameter, one-constructor binder-free Sort-polymorphic pair"
+  let [u, v] := iv.levelParams | throw "it does not have two universe parameters"
+  let expectedType := match pprodPrimeDecl with
+    | .inductDecl _ _ [value] _ =>
+      value.type.instantiateLevelParams [`u, `v] [.param u, .param v]
+    | _ => unreachable!
+  unless iv.type == expectedType do
+    throw "its type is not `{α : Sort u} → Sort v → Sort (max u v)`, so it is not \
+the binder-free pair at the exact sort — Lean's own `PProd` is a structure and \
+carries a `max 1` floor no carrier may inherit"
+  let some (.ctorInfo constructor) := env.constants.find? `PProd'.mk
+    | throw "PProd'.mk is not its constructor"
+  let expectedConstructor := match pprodPrimeDecl with
+    | .inductDecl _ _ [value] _ =>
+      value.ctors[0]!.type.instantiateLevelParams [`u, `v] [.param u, .param v]
+    | _ => unreachable!
+  unless constructor.type == expectedConstructor && constructor.numFields == 2 do
+    throw "PProd'.mk does not retain exactly its two independent components"
 
 /-- **Lean's `Nonempty`**, as `Init/Prelude.lean` declares it:
 `inductive Nonempty (α : Sort u) : Prop | intro (val : α) : Nonempty α`.
@@ -441,9 +515,11 @@ Exactly the roots for which generation holds a `Declaration` of its own and
 splices it when the input declares none: the four of
 [`InductiveModels.inductiveBasis`]; `Nonempty`, which is not a basis primitive
 but is `Classical.choice`'s own domain and is spliced by the graph arm on the
-same terms; and `Iff`, which is `propext`'s own domain and which the W
-fragment splices on those same terms. A name outside this list belongs to the
-input alone — there is no declaration of this tool's own to write under it.
+same terms; `Iff`, which is `propext`'s own domain and which the W
+fragment splices on those same terms; and `PProd'`, the binder-free pair the
+storage tower's constant rungs are built at. A name outside this list belongs
+to the input alone — there is no declaration of this tool's own to write under
+it.
 
 The declaration and the root travel together because the list is read for both:
 the names each declaration introduces are what
@@ -452,7 +528,8 @@ itself is the shape written under that root. `Iff`'s copy here is the W
 fragment's own, which `basisvalidationtest` pins. -/
 def canonicalSpliceInductives : List (Name × Declaration) :=
   [(`Eq, eqDecl), (`Nat, natDecl), (`PUnit, punitDecl),
-   (`PSigma', psigmaPrimeDecl), (`Nonempty, nonemptyDecl), (`Iff, iffDecl)]
+   (`PSigma', psigmaPrimeDecl), (`PProd', pprodPrimeDecl),
+   (`Nonempty, nonemptyDecl), (`Iff, iffDecl)]
 
 /-- **Every name generation writes at a fixed canonical declaration of its
 own** — the six inductives above with their constructors and kernel recursors,
@@ -470,7 +547,7 @@ def canonicalBasisNames : Std.HashSet Name :=
     (canonicalSpliceInductives.flatMap fun (_, declaration) => declaration.getNames) ++
       Declaration.quotDecl.getNames ++
       [`PSigma'.fst, `PSigma'.snd, `PSigma'.rec',
-       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk,
+       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk, `PProd'.rec',
        `Quot.sound, `Classical.choice, `propext]
 
 def ensurePUnit : GenM (Array Declaration) :=
@@ -591,16 +668,20 @@ def psigmaPrimeDerivedDecls : GenM (Array Declaration) := do
 
   return #[fstDecl, sndDecl, recDecl, fstRule, sndRule, recRule]
 
-private def checkPSigmaPrimeDerived (expected : Array Declaration) : GenM Unit := do
+/-- Every declaration of a derived pair bundle, already present, is the one
+this tool would have written.  `what` names the bundle in the diagnostics; the
+comparison is `isDefEq` at the present declaration's own level parameters. -/
+private def checkDerivedPairBundle (what : String) (expected : Array Declaration) :
+    GenM Unit := do
   for declaration in expected do
     let [name] := declaration.getNames
-      | badShape "one PSigma' support declaration has several names"
+      | badShape s!"one {what} support declaration has several names"
     let some actual := (← getEnv).constants.find? name
-      | declineWith (.notLeans name "it is missing from the tight pair support bundle")
+      | declineWith (.notLeans name s!"it is missing from the {what} support bundle")
     let (expectedLevels, expectedType, expectedValue, expectedTheorem) ← match declaration with
       | .defnDecl value => pure (value.levelParams, value.type, value.value, false)
       | .thmDecl value => pure (value.levelParams, value.type, value.value, true)
-      | _ => badShape s!"{name} is not a derived tight-pair declaration"
+      | _ => badShape s!"{name} is not a derived {what} declaration"
     let (actualLevels, actualType, actualValue) ← match actual, expectedTheorem with
       | .defnInfo value, false => pure (value.levelParams, value.type, value.value)
       | .thmInfo value, true => pure (value.levelParams, value.type, value.value)
@@ -628,7 +709,58 @@ def ensurePSigmaPrime : GenM (Array Declaration) := do
     if (← getEnv).constants.contains name then continue
     addChecked declaration
     out := out.push declaration
-  checkPSigmaPrimeDerived expected
+  checkDerivedPairBundle "tight pair" expected
+  return out
+
+/-- **The binder-free pair's one derived declaration**, `PProd'.rec'`.
+
+Only `rec'`, where the tight pair has six.  The two named projections and the
+three reduction rules exist because consumers of the tight pair name them; the
+storage tower reaches a constant rung through primitive `.proj` and eliminates
+it through `rec'`, and nothing else in this tool mentions a `PProd'` component
+by name.  A bundle member nobody uses would still have to be emitted, checked
+and modelled in every island that splices the pair.
+
+`rec'` is written over primitive projections directly rather than over named
+ones, so it needs no `fst`/`snd` beneath it.  It is where the pair's structure
+eta is spent — the body owes `motive self` and delivers `motive (mk self.1
+self.2)` — and spending it once here rather than at every rung is the whole
+reason the tower calls a recursor instead of projecting inline. -/
+def pprodPrimeDerivedDecls : GenM (Array Declaration) := do
+  let u := Level.param `u
+  let v := Level.param `v
+  let w := Level.param `w
+  let recDecl ← withLocalDecl `α .implicit (.sort u) fun α =>
+    withLocalDecl `β .implicit (.sort v) fun β => do
+    let pair := pprodPrimeT u v α β
+    withLocalDecl `motive .implicit (.forallE `self pair (.sort w) .default) fun motive => do
+      let minorType ← withLocalDeclD `fst α fun fst =>
+        withLocalDeclD `snd β fun snd =>
+          mkForallFVars #[fst, snd] (mkApp motive (pprodPrimeMk u v α β fst snd))
+      withLocalDeclD `minor minorType fun minor =>
+        withLocalDeclD `self pair fun self => do
+          let type ← mkForallFVars #[α, β, motive, minor, self] (mkApp motive self)
+          let body := mkAppN minor #[.proj `PProd' 0 self, .proj `PProd' 1 self]
+          let value ← mkLambdaFVars #[α, β, motive, minor, self] body
+          return .defnDecl
+            { name := `PProd'.rec', levelParams := [`u, `v, `w], type, value,
+              hints := ← hintsFor value, safety := .safe }
+  return #[recDecl]
+
+/-- Ensure the exact binder-free pair bundle, on
+[`InductiveModels.ensurePSigmaPrime`]'s terms: the inductive is spliced at its
+canonical shape if the input has none and validated if it has one, and `rec'`
+is an ordinary checked declaration over primitive projections. -/
+def ensurePProdPrime : GenM (Array Declaration) := do
+  let mut out ← ensurePrim `PProd' pprodPrimeDecl checkPProdPrimeCore
+  let expected ← pprodPrimeDerivedDecls
+  for declaration in expected do
+    let [name] := declaration.getNames
+      | badShape "one PProd' support declaration has several names"
+    if (← getEnv).constants.contains name then continue
+    addChecked declaration
+    out := out.push declaration
+  checkDerivedPairBundle "binder-free pair" expected
   return out
 
 /-- Ensure the complete shared support for the internally derived exact-sort

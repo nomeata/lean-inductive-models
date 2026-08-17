@@ -239,12 +239,20 @@ a projection has to be looked at rather than absorbed.  `prim_shape_declines`
 is a zero of the other kind: its four declining owners are exactly the shapes
 that reach no arm, and its only model is a two-constructor enumeration, so a
 projection appearing there would mean one of the four had started modelling.
-`maybe_zero_pad` is the complement and is 14: every one of its ten owners but
+`maybe_zero_pad` is the complement and is 16: every one of its ten owners but
 the two-constructor `Nt` is a projection-eligible one-constructor record, and
 the count is their fields — one each for `IdOne`, `PropOne`, `PadOne` and
-`PadIdx`, two each for `PadNone`, `PadMany`, `PadMix`, `PadDep` and `PadIdx2`.
-Four of those are the pad's own occupants, and a route that stopped padding
+`PadIdx`, two each for `PadNone`, `PadMany`, `PadMix`, `PadDep` and `PadIdx2`
+— **plus two for `PProd'`**, the binder-free pair the storage tower's constant
+rungs are built at, which this export is the first to splice and which the
+splice-closure rule then models like any other spliced inductive. Its two
+fields are projection-eligible on exactly the terms every other
+one-constructor record's are, so it is a row occupant and not an exemption.
+Four of the ten are the pad's own occupants, and a route that stopped padding
 would drop them out of this row rather than merely change a carrier.
+
+`maybe_zero_projection` (10, was 8) and `tight_psigma_prime` (6, was 4) carry
+the same two for the same reason.
 
 `mutual_one_layer_boundary` is 7 and not 18 because its only consumer of the W
 core was an index erasure with no base constructor: arm E models that skeleton
@@ -282,8 +290,8 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("hard_nested_mutual_index", 11), ("imax_box", 3), ("indexed_container", 11),
     ("indexed_decl", 11), ("indexed_fibre_boundary", 57),
     ("indexed_hidden_erasure", 11), ("infinitary", 23), ("maybe_zero_indexed", 0),
-    ("maybe_zero_pad", 14),
-    ("maybe_zero_projection", 8), ("maybe_zero_recursive", 0), ("mutual_index", 6),
+    ("maybe_zero_pad", 16),
+    ("maybe_zero_projection", 10), ("maybe_zero_recursive", 0), ("mutual_index", 6),
     ("mutual_keying", 2),
     ("mutual_nonrec", 2), ("mutual_odd_shapes", 15),
     ("mutual_one_layer_boundary", 7), ("mutual_prop", 1), ("mutual_shapes", 18),
@@ -303,7 +311,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("private_constructor", 1), ("prop_projection_boundaries", 12),
     ("prop_recursive_projections", 3), ("source_structure_syntax", 5),
     ("structure_eta", 12), ("structure_projections", 17),
-    ("tight_prop_field_late", 1), ("tight_psigma_prime", 4),
+    ("tight_prop_field_late", 1), ("tight_psigma_prime", 6),
     ("transparent_owner_aliases", 1), ("unitlike", 6), ("w_alias", 11),
     ("w_core", 11), ("w_dependent_field", 28), ("w_imax", 11), ("w_late_iff", 11),
     ("w_max", 11)]
