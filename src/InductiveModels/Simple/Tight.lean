@@ -80,63 +80,74 @@ def tightFieldDepMask (tele : Expr) (nf : Nat) (skip : Nat := 0) : Array Bool :=
   return dep
 
 /-- **One owner's storage tower**: the fields it stores, which of them a later
-field's type mentions, and where it ends.  `fields` and `dep` are index-aligned;
-`fields` are the free variables of whichever telescope the tower is being built
-in, and `dep` is [`InductiveModels.tightFieldDepMask`] of that telescope. -/
+field's type mentions, where it ends, and the **split** those two facts settle.
+
+The tower is a right-nested `PSigma'` **spine** carrying exactly the fields some
+later field's type mentions, ending in a balanced binary `PProd'` **block** over
+everything else. A block leaf can never mention another block leaf — a
+mentioned field is by definition on the spine — so the block needs no binders
+at all; it may mention spine variables freely, because it is built at the
+bottom of the spine where every spine binder is open. Field order is not
+touched: the split is a storage layout, and the public interface indexes a
+projection by the *source's* field position, which
+[`InductiveModels.tightTowerProjs`] answers from the split rather than from the
+storage's own order.
+
+**Balanced rather than right-nested**, because a right-nested block costs
+`O(n²)` to write down — every rung of the tail is written again inside the rung
+above it — and depth `n` to project the last leaf, where a balanced one costs
+`O(n log n)` and `log n`. That trade is the opposite of the dependent tower's,
+and for a stated reason: a balanced *`PSigma'`* would force `fun p => …` motives
+and turn every field reference into a projection path into a pair, and neither
+applies to a pair with no family over leaves that reference nothing inside it.
+
+`fields` and `dep` are index-aligned; `fields` are the free variables of
+whichever telescope the tower is being built in, and `dep` is
+[`InductiveModels.tightFieldDepMask`] of that telescope. -/
 structure TightTower where
   /-- The constructor's stored fields, as free variables. -/
   fields : Array Expr
   /-- `dep[i]` — does any **later** field's type mention field `i`? -/
   dep : Array Bool
-  /-- The tail: `none` where the tower ends at its last field, `some w` where it
+  /-- The tail: `none` where the block ends at its last field, `some w` where it
   ends at the pad [`InductiveModels.unitAt`] `w`. -/
   pad? : Option Level := none
-  /-- **May a rung the tail does not depend on be a binder-free `PProd'`?**
+  /-- **May this tower carry its independent fields in a block?**
 
   True everywhere but at one owner: `PProd'` itself.  Its own two fields are
   independent, so the ordinary route would carry them in a `PProd'` — that is,
   it would model the binder-free pair *by* the binder-free pair, and the
   inductive this tool splices would be left standing on itself.  So `PProd'`'s
   model is hard-coded to the plain tight tower, `PSigma' α (fun _ => β)`, which
-  is the construction every carrier had before this flag existed.  Nothing else
-  about it is special-cased: it is spliced, modelled, checked, ordered and
-  emitted like any other inductive a construction introduces. -/
+  is the construction every carrier had before this flag existed: the whole
+  telescope stays on the spine and a field nothing mentions gets a constant
+  family rather than a block leaf.  Nothing else about it is special-cased: it
+  is spliced, modelled, checked, ordered and emitted like any other inductive a
+  construction introduces. -/
   pairs : Bool := true
+  /-- The field indices the spine carries, in field order. -/
+  spine : Array Nat := #[]
+  /-- The block's leaves, in field order: a field index, or `none` for the pad.
+  Never empty at a tower with a field, because the *last* field is mentioned by
+  nothing after it and is therefore always a leaf. -/
+  leaves : Array (Option Nat) := #[]
 
 /-- The tower over an opened field telescope.  `tele` must be the very `Π`-nest
 `fields` was opened from, so that the mask's indices are the fields' own. -/
 def tightTowerOf (tele : Expr) (fields : Array Expr) (pad? : Option Level)
     (pairs : Bool := true) : TightTower :=
-  { fields, dep := tightFieldDepMask tele fields.size, pad?, pairs }
-
-/-- **Is rung `i` carried by the binder-free pair?**  Exactly when no later
-field's type mentions field `i` and this tower is allowed the pair at all. -/
-def TightTower.binderFree (tower : TightTower) (i : Nat) : Bool :=
-  tower.pairs && !tower.dep[i]!
-
-/-- The pair constant a rung is built at: `PProd'` where the tail is a plain
-type, `PSigma'` where it is a family. -/
-def TightTower.pairName (tower : TightTower) (i : Nat) : Name :=
-  if tower.binderFree i then `PProd' else `PSigma'
-
-/-- That pair's constructor. -/
-def TightTower.mkName (tower : TightTower) (i : Nat) : Name :=
-  if tower.binderFree i then `PProd'.mk else `PSigma'.mk
-
-/-- That pair's projection-derived eliminator. -/
-def TightTower.recName (tower : TightTower) (i : Nat) : Name :=
-  if tower.binderFree i then `PProd'.rec' else `PSigma'.rec'
-
-/-- Has the tower reached its tail?  A padded tower runs past its last field
-and ends at the pad; an unpadded one ends *at* its last field. -/
-def tightTowerDone (tower : TightTower) (i : Nat) : Bool :=
-  if tower.pad?.isSome then i == tower.fields.size else i + 1 == tower.fields.size
-
-/-- The type the tower ends in: the pad, or the last field's own type. -/
-def tightTowerTail (tower : TightTower) (i : Nat) : GenM Expr :=
-  match tower.pad? with
-  | some w => pure (unitAt w)
-  | none => ityp tower.fields[i]!
+  let n := fields.size
+  let dep := tightFieldDepMask tele n
+  let padLeaf : Array (Option Nat) := if pad?.isSome then #[none] else #[]
+  let (spine, leaves) :=
+    if pairs then
+      ((Array.range n).filter (fun i => dep[i]!),
+        ((Array.range n).filter (fun i => !dep[i]!)).map some ++ padLeaf)
+    else if pad?.isSome then
+      (Array.range n, padLeaf)
+    else
+      (Array.range (n - 1), #[some (n - 1)])
+  { fields, dep, pad?, pairs, spine, leaves }
 
 /-- **The rung's family, where the tail does not mention the field.**
 
@@ -147,68 +158,111 @@ nothing in `rest` to abstract, so the binding is written directly and the
 traversal is skipped.  The term is the one `mkLambdaFVars` would have returned,
 to the byte: `Lean.MetavarContext.mkBinding` binds a `cdecl` at
 `mkLambda' userName binderInfo type.headBeta`, and `abstractRange` over a
-variable that does not occur is the identity. -/
+variable that does not occur is the identity.
+
+Reached only at a tower denied the block, since everywhere else such a field is
+a leaf and has no rung at all. -/
 def tightConstantFamily (field α body : Expr) (binderInfo : BinderInfo) : GenM Expr :=
   return .lam (← field.fvarId!.getUserName) α.headBeta body binderInfo
 
-partial def tightTowerTy (tower : TightTower) (i : Nat) : GenM Expr := do
-  if tightTowerDone tower i then return ← tightTowerTail tower i
+/-- The block's leaves as types and levels, in leaf order. -/
+def tightBlockLeaves (tower : TightTower) : GenM (Array (Expr × Level)) :=
+  tower.leaves.mapM fun leaf => do
+    let ty ← match leaf, tower.pad? with
+      | some i, _ => ityp tower.fields[i]!
+      | none, some w => pure (unitAt w)
+      | none, none => badShape "a tight tower's pad leaf has no pad"
+    return (ty, ← ilevel ty)
+
+/-- The block's type: the balanced `PProd'` tree over its leaves. -/
+def tightBlockTy (tower : TightTower) : GenM Expr := do
+  let leaves ← tightBlockLeaves tower
+  if leaves.isEmpty then badShape "a tight tower with no fields needs a pad"
+  return (blockTy leaves 0 leaves.size).1
+
+/-- The tower's type from spine position `k` down. -/
+partial def tightTowerTy (tower : TightTower) (k : Nat) : GenM Expr := do
+  if k == tower.spine.size then return ← tightBlockTy tower
+  let i := tower.spine[k]!
   let field := tower.fields[i]!
   let α ← ityp field
   let u ← ilevel α
-  let rest ← tightTowerTy tower (i + 1)
+  let rest ← tightTowerTy tower (k + 1)
   let v ← ilevel rest
-  if tower.binderFree i then return mkAppN (.const `PProd' [u, v]) #[α, rest]
   let β ← if tower.dep[i]! then mkLambdaFVars #[field] rest
     else tightConstantFamily field α rest (← field.fvarId!.getBinderInfo)
   return mkAppN (.const `PSigma' [u, v]) #[α, β]
 
-/-- **One rung, at a substituted prefix**: its two levels, its first component's
-type, and its **second component** — which is the tail's *family* at a
-`PSigma'` rung and the tail's *type* at a binder-free `PProd'` one.  Which of
-the two it is, is [`InductiveModels.TightTower.binderFree`] at `i`, and every
-caller reads it through [`InductiveModels.TightTower.pairName`] and its
-siblings rather than by inspecting the term. -/
-def tightTowerAt (tower : TightTower) (i : Nat) (pre : Array Expr) :
+/-- An expression built at the tower's own field variables, at a substituted
+spine prefix: `pre` holds the values of the first `pre.size` **spine** fields. -/
+def tightSpineSubst (tower : TightTower) (pre : Array Expr) (expression : Expr) : Expr :=
+  expression.replaceFVars
+    ((tower.spine.extract 0 pre.size).map (fun i => tower.fields[i]!)) pre
+
+/-- **One spine rung, at a substituted prefix**: its two levels, its first
+component's type, and its second component — always a *family*, because a field
+the tail does not mention is a block leaf and never a rung, except at a tower
+denied the block, where the family is constant. -/
+def tightTowerAt (tower : TightTower) (k : Nat) (pre : Array Expr) :
     GenM (Level × Level × Expr × Expr) := do
+  let i := tower.spine[k]!
   let field := tower.fields[i]!
-  let substitute := fun (expression : Expr) =>
-    expression.replaceFVars (tower.fields.extract 0 pre.size) pre
-  let α := substitute (← ityp field)
+  let α := tightSpineSubst tower pre (← ityp field)
   let u ← ilevel α
-  let rest ← tightTowerTy tower (i + 1)
-  -- The tail does not mention this field, so the binder it would be abstracted
-  -- under holds nothing: substituting `pre` for the fields *before* it is the
-  -- whole of the substitution, and the second component is constant.
+  let rest ← tightTowerTy tower (k + 1)
+  -- The tail does not mention this field, so the binder it is abstracted under
+  -- holds nothing: substituting `pre` for the spine fields before it is the
+  -- whole of the substitution.
   unless tower.dep[i]! do
-    let rest := substitute rest
+    let rest := tightSpineSubst tower pre rest
     let v ← ilevel rest
-    if tower.pairs then return (u, v, α, rest)
     return (u, v, α, ← tightConstantFamily field α rest .default)
   let (v, β) ← withLocalDeclD (← field.fvarId!.getUserName) α fun value => do
-    let rest := rest.replaceFVars
-      (tower.fields.extract 0 (pre.size + 1)) (pre.push value)
+    let rest := tightSpineSubst tower (pre.push value) rest
     let v ← ilevel rest
     return (v, ← mkLambdaFVars #[value] rest)
   return (u, v, α, β)
 
-partial def tightTowerMk (tower : TightTower) (i : Nat) : GenM Expr := do
-  if tightTowerDone tower i then
-    return match tower.pad? with
-      | some w => unitAtCanon w
-      | none => tower.fields[i]!
-  let pre := tower.fields.extract 0 i
-  let (u, v, α, snd) ← tightTowerAt tower i pre
-  return mkAppN (.const (tower.mkName i) [u, v])
-    #[α, snd, tower.fields[i]!, ← tightTowerMk tower (i + 1)]
+/-- The block's value: the balanced tree of `PProd'.mk` over the leaf fields,
+at the node types the block's own type carries. -/
+partial def tightBlockMk (tower : TightTower) (block : Expr) (lo hi : Nat) : GenM Expr := do
+  if hi ≤ lo + 1 then
+    match tower.leaves[lo]!, tower.pad? with
+    | some i, _ => return tower.fields[i]!
+    | none, some w => return unitAtCanon w
+    | none, none => badShape "a tight tower's pad leaf has no pad"
+  let (u, v, α, β) ← blockNode block
+  let mid := blockSplit lo hi
+  return mkAppN (.const `PProd'.mk [u, v])
+    #[α, β, ← tightBlockMk tower α lo mid, ← tightBlockMk tower β mid hi]
 
-/-- **The tower read out**, one primitive projection pair per rung.
+partial def tightTowerMk (tower : TightTower) (k : Nat) : GenM Expr := do
+  if k == tower.spine.size then
+    return ← tightBlockMk tower (← tightBlockTy tower) 0 tower.leaves.size
+  let pre := (tower.spine.extract 0 k).map (fun i => tower.fields[i]!)
+  let (u, v, α, snd) ← tightTowerAt tower k pre
+  return mkAppN (.const `PSigma'.mk [u, v])
+    #[α, snd, tower.fields[tower.spine[k]!]!, ← tightTowerMk tower (k + 1)]
+
+/-- The block read out, one primitive projection pair per node. -/
+partial def tightBlockProjs (tower : TightTower) (out : Array Expr) (value : Expr)
+    (lo hi : Nat) : Array Expr :=
+  if hi ≤ lo + 1 then
+    match tower.leaves[lo]! with
+    | some i => out.set! i value
+    | none => out
+  else
+    let mid := blockSplit lo hi
+    tightBlockProjs tower
+      (tightBlockProjs tower out (.proj `PProd' 0 value) lo mid)
+      (.proj `PProd' 1 value) mid hi
+
+/-- **The tower read out**, at each field's *source* index.
 
 **It builds no types.** A primitive `.proj` carries the structure's name and a
 field index and nothing else — not the rung's `α`, not its second component,
-not either level — so walking the tower to its `i`th field needs only the shape
-the recursion already has, and the shape says which of the two pairs the rung
-was built at. This used to call [`InductiveModels.tightTowerAt`] at
+not either level — so walking the tower to a field needs only the split the
+tower already carries. This used to call [`InductiveModels.tightTowerAt`] at
 every rung and discard all four of its results, a vestige of the day the
 projections were `PSigma'.fst`/`.snd` *applications* and did need `α` and `β`
 spelled out. It was measured at 81% of this function's cost.
@@ -219,51 +273,91 @@ rebuilt is rebuilt for real, at the same fields and the same `pad?`, by
 [`InductiveModels.tightTowerAt`] under [`InductiveModels.tightTowerMk`] for the
 constructor, both of which run **before** the projections on both routes that
 reach here. Any shape this could have rejected is rejected there first, with
-the same message. -/
-partial def tightTowerProjs (tower : TightTower) (i : Nat) (value : Expr)
-    (pre : Array Expr := #[]) : Array Expr :=
-  if tightTowerDone tower i then
-    (if tower.pad?.isSome then pre else pre.push value)
-  else
-    let pair := tower.pairName i
-    let first := .proj pair 0 value
-    tightTowerProjs tower (i + 1) (.proj pair 1 value) (pre.push first)
+the same message.
 
-partial def tightTowerPrepend (tower : TightTower) (pre : Array Expr) (i : Nat)
+**A block field's path is `log n` long and a spine field's is its spine
+position**, where a right-nested tower gave every field a path as long as its
+own index; the array below is still indexed by the source field position, which
+is the whole of the bookkeeping the split costs a consumer. -/
+def tightTowerProjs (tower : TightTower) (value : Expr) : Array Expr := Id.run do
+  let mut out := Array.replicate tower.fields.size value
+  let mut current := value
+  for k in [0:tower.spine.size] do
+    out := out.set! tower.spine[k]! (.proj `PSigma' 0 current)
+    current := .proj `PSigma' 1 current
+  return tightBlockProjs tower out current 0 tower.leaves.size
+
+partial def tightTowerPrepend (tower : TightTower) (pre : Array Expr) (k : Nat)
     (tail : Expr) : GenM Expr := do
-  if i == pre.size then return tail
-  let (u, v, α, snd) ← tightTowerAt tower i (pre.extract 0 i)
-  return mkAppN (.const (tower.mkName i) [u, v])
-    #[α, snd, pre[i]!, ← tightTowerPrepend tower pre (i + 1) tail]
+  if k == pre.size then return tail
+  let (u, v, α, snd) ← tightTowerAt tower k (pre.extract 0 k)
+  return mkAppN (.const `PSigma'.mk [u, v])
+    #[α, snd, pre[k]!, ← tightTowerPrepend tower pre (k + 1) tail]
 
-/-- **The tower taken apart**, one projection-derived `rec'` per stored field —
-the tight pair's at a rung with a family, the binder-free pair's at a rung
-without one.
+/-- **The block taken apart**, one `PProd'.rec'` per node of the balanced tree.
 
-At a padded tower the last call arrives with every field already bound and the
-pad in hand; the minor premise is applied to the fields alone and the pad is
-dropped.  That is well typed and not a coincidence: the branch owes
-`motive ⟨f⃗, t⟩` for the bound pad `t`, the minor delivers
-`motive ⟨f⃗, canon⟩`, and `t ≡ canon` is a conversion the kernel performs —
-tight-pair and `PUnit` structure eta expand `t` against the literal pair
-`canon` is, and proof irrelevance closes its `⊤` component.  No transport
-rides along and the recursor's ι rule stays `Eq.refl`. -/
+`rebuild` carries this subtree's value back to the whole tower value the motive
+is stated about, and `cont` is what the traversal owes once every leaf under
+this subtree is bound: the leaves to its right, and finally the minor at the
+fields in their **source** order.
+
+The right subtree's `rebuild` names the left subtree rebuilt from its own
+leaves, because by then the left subtree's value has been taken apart. That is
+where a right-nested block pays `O(n²)` and a balanced one pays `O(n log n)`:
+the term a node writes down is the size of its left sibling. -/
+partial def tightBlockRec (s : Level) (tower : TightTower) (motive minor : Expr)
+    (block value : Expr) (lo hi : Nat) (rebuild : Expr → GenM Expr)
+    (vals : Array Expr) (cont : Array Expr → Expr → GenM Expr) : GenM Expr := do
+  if hi ≤ lo + 1 then
+    match tower.leaves[lo]! with
+    -- **The pad is dropped**, and that is well typed and not a coincidence: the
+    -- branch owes `motive ⟨f⃗, t⟩` for the bound pad `t`, the minor delivers
+    -- `motive ⟨f⃗, canon⟩`, and `t ≡ canon` is a conversion the kernel performs
+    -- — tight-pair and `PUnit` structure eta expand `t` against the literal
+    -- pair `canon` is, and proof irrelevance closes its `⊤` component. No
+    -- transport rides along and the recursor's ι rule stays `Eq.refl`.
+    | none => cont vals value
+    | some i => cont (vals.set! i value) value
+  else
+    let (u, v, α, β) ← blockNode block
+    let mid := blockSplit lo hi
+    let mk := fun (left right : Expr) =>
+      mkAppN (.const `PProd'.mk [u, v]) #[α, β, left, right]
+    let targetMotive ← withLocalDeclD `tail block fun tail => do
+      mkLambdaFVars #[tail] (mkApp motive (← rebuild tail))
+    let branch ← withLocalDeclD `fst α fun a => withLocalDeclD `snd β fun b => do
+      let body ← tightBlockRec s tower motive minor α a lo mid
+        (fun z => rebuild (mk z b)) vals
+        (fun vals' left =>
+          tightBlockRec s tower motive minor β b mid hi
+            (fun z => rebuild (mk left z)) vals'
+            (fun vals'' right => cont vals'' (mk left right)))
+      mkLambdaFVars #[a, b] body
+    return mkAppN (.const `PProd'.rec' [u, v, s]) #[α, β, targetMotive, branch, value]
+
+/-- **The tower taken apart**, one `PSigma'.rec'` per spine rung and one
+`PProd'.rec'` per block node, with the minor premise applied to the fields at
+their source positions. -/
 partial def tightTowerRec (s : Level) (tower : TightTower) (motive minor value : Expr)
-    (i : Nat := 0) (pre : Array Expr := #[]) : GenM Expr := do
-  if tightTowerDone tower i then
-    return mkAppN minor (if tower.pad?.isSome then pre else pre.push value)
-  let (u, v, α, snd) ← tightTowerAt tower i pre
-  let tailType := mkAppN (.const (tower.pairName i) [u, v]) #[α, snd]
+    (k : Nat := 0) (pre : Array Expr := #[]) : GenM Expr := do
+  if k == tower.spine.size then
+    let block := tightSpineSubst tower pre (← tightBlockTy tower)
+    let mut vals := Array.replicate tower.fields.size value
+    for j in [0:pre.size] do
+      vals := vals.set! tower.spine[j]! pre[j]!
+    return ← tightBlockRec s tower motive minor block value 0 tower.leaves.size
+      (fun z => tightTowerPrepend tower pre 0 z) vals
+      (fun fieldValues _ => pure (mkAppN minor fieldValues))
+  let (u, v, α, snd) ← tightTowerAt tower k pre
+  let tailType := mkAppN (.const `PSigma' [u, v]) #[α, snd]
   let targetMotive ← withLocalDeclD `tail tailType fun tail => do
     let full ← tightTowerPrepend tower pre 0 tail
     mkLambdaFVars #[tail] (mkApp motive full)
   let branch ← withLocalDeclD `fst α fun fst =>
-    withLocalDeclD `snd (if tower.binderFree i then snd else (mkApp snd fst).headBeta)
-      fun sndValue => do
-        mkLambdaFVars #[fst, sndValue]
-          (← tightTowerRec s tower motive minor sndValue (i + 1) (pre.push fst))
-  return mkAppN (.const (tower.recName i) [u, v, s])
-    #[α, snd, targetMotive, branch, value]
+    withLocalDeclD `snd (mkApp snd fst).headBeta fun sndValue => do
+      mkLambdaFVars #[fst, sndValue]
+        (← tightTowerRec s tower motive minor sndValue (k + 1) (pre.push fst))
+  return mkAppN (.const `PSigma'.rec' [u, v, s]) #[α, snd, targetMotive, branch, value]
 
 /-- Emit an exact-sort model for a non-recursive, unindexed, one-constructor
 family, storing its fields in the tower.  `pad?` is that tower's tail: `none`
@@ -322,7 +416,7 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       withLocalDeclD `self (selfAt ps) fun self => do
-        let projections := tightTowerProjs (tightTowerOf tele fields pad? pairs) 0 self
+        let projections := tightTowerProjs (tightTowerOf tele fields pad? pairs) self
         (Array.range nf).mapM fun fieldIndex => do
           let selector ← mkLambdaFVars (ps.push self) projections[fieldIndex]!
           let proof ← do
@@ -398,7 +492,7 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
   let projsAt : Array Expr → Expr → GenM (Array Expr) := fun ps value => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ =>
-      pure (tightTowerProjs (tightTowerOf tele fields pad? pairs) 0 value)
+      pure (tightTowerProjs (tightTowerOf tele fields pad? pairs) value)
   -- Takes the `Π`-nest its fields were opened from rather than the parameters,
   -- because the tower's dependency mask is read off that nest.
   let towerOf : Expr → Array Expr → GenM Expr := fun tele fs =>
@@ -659,8 +753,10 @@ never installed:
 * `pairs` — may this owner's tower use the pair at all?  Everywhere but at
   `PProd'` itself; see [`InductiveModels.TightTower.pairs`].
 * the support to install — `PProd'` and its `rec'`, spliced if the input has
-  none and validated if it has one, and only where some rung will actually be
-  binder-free.  A fully dependent telescope pays nothing.
+  none and validated if it has one, and only where some field is mentioned by
+  nothing later, which is what puts a leaf in the block.  A fully dependent
+  telescope pays nothing.  The test over-approximates by one shape — a block of
+  a single leaf needs no pair — exactly as it did before the block existed.
 * `requires` — `PProd'` where **this** island is the one that spliced it, and
   empty where an earlier island already did.  That is
   [`InductiveModels.Iso.requires`]' rule at arm W's shape exactly: the model
@@ -669,8 +765,8 @@ never installed:
 
 The need is asked of the source constructor type **and** the model's, and
 answered yes if either says so.  The two are one telescope up to renaming, and
-each of the four constructions opens one or the other; a rung that came out
-constant in only one of them would otherwise reach for `PProd'` in an island
+each of the four constructions opens one or the other; a field that fell into
+the block in only one of them would otherwise reach for `PProd'` in an island
 that never installed it. -/
 def tightBinderFreeSupport (tname : Name) (constructorType modelConstructorType : Expr)
     (np nf : Nat) : GenM (Bool × Array Declaration × Array Name) := do

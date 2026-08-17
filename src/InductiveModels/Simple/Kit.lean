@@ -39,10 +39,11 @@ def psigmaSnd (u v : Level) (α β y : Expr) : Expr :=
 /-! ### The binder-free pair
 
 `PProd'` is the tight pair with the second component's binder removed, at the
-same `Sort (max u v)` ([`InductiveModels.pprodPrimeDecl`]).  A storage rung
-whose field is mentioned by nothing above it has a constant family, and that is
-the rung with no family at all.  Spelled through the same thin wrappers the
-tight pair is, so a construction reads one shape or the other and never a bare
+same `Sort (max u v)` ([`InductiveModels.pprodPrimeDecl`]).  The fields no later
+field's type mentions need no binder at all, so both storage towers carry them
+beneath their spine in a balanced binary tree of this pair
+([`InductiveModels.blockTy`]).  Spelled through the same thin wrappers the tight
+pair is, so a construction reads one shape or the other and never a bare
 `.const`. -/
 
 def pprodT (u v : Level) (α β : Expr) : Expr :=

@@ -43,7 +43,7 @@ def pctorsAt (pairs : Bool) (exportCtors : Array (Name × Expr)) (plans : Array 
     let nf := numForalls tele
     let boxed := plans[j]!.boxed
     let (chain, _) ← chainTy pairs pads[j]! boxed nf tele
-    return { tele, nf, pad? := pads[j]!, boxed, chain }
+    return { tele, nf, pad? := pads[j]!, boxed, chain, pairs }
 
 /-- Which route the carrier's sort admits: `Sort 0` is the Church encoding, a
 never-zero sort the `Nat`-tagged sum, and a **maybe-zero** sort — `Prop` at

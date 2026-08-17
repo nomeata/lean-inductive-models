@@ -35,13 +35,14 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let mut out := st.out
   let mut spliced := st.spliced
   let mut requires := st.requires
-  -- **May this owner's chains carry a constant rung in the binder-free pair?**
-  -- Everywhere but at `PProd'` itself, which a tower built out of `PProd'`
-  -- would model by itself and so leave the splice standing on nothing; its own
-  -- model is the plain tight tower ([`InductiveModels.TightTower.pairs`]). The
-  -- never-zero tuple tower does not in fact reach the pair — `Sort (max u v)`
-  -- is maybe-zero and takes the direct route — so this is the same guard
-  -- written at the same place and not a branch this arm exercises.
+  -- **May this owner's chains carry the fields nothing mentions in a
+  -- binder-free block?** Everywhere but at `PProd'` itself, which a tower built
+  -- out of `PProd'` would model by itself and so leave the splice standing on
+  -- nothing; its own model is the plain tight tower
+  -- ([`InductiveModels.TightTower.pairs`]). The never-zero tuple tower does not
+  -- in fact reach the pair — `Sort (max u v)` is maybe-zero and takes the direct
+  -- route — so this is the same guard written at the same place and not a branch
+  -- this arm exercises.
   let pairs := tname != `PProd'
   -- ════ the Type route ════
   unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
@@ -235,7 +236,7 @@ this constructor")
       let tele ← spineSwap tname sub nf tele0
       let pl : CPlan := plans[j]!
       let (chain, _) ← chainTy pairs pads[j]! pl.boxed nf tele
-      pure { tele, nf, pad? := pads[j]!, boxed := pl.boxed, chain }
+      pure { tele, nf, pad? := pads[j]!, boxed := pl.boxed, chain, pairs }
     let fib ← withLocalDeclD `tag natT fun tg =>
       do mkLambdaFVars #[tg] (← fibreTower w cs 0 tg)
     return (cs, fib)
@@ -263,17 +264,18 @@ this constructor")
   let selfVal ← site.withParams fun ps => do mkLambdaFVars ps (← carrierAt ps)
   -- **The binder-free pair's support, read off the carrier that uses it.**
   --
-  -- `PProd'` is installed exactly where some rung came out constant, and the
-  -- carrier is the record of that: [`InductiveModels.fibreTower`] carries every
-  -- constructor's chain, and the constructors and the recursor read each rung's
-  -- shape off the same chain rather than deciding it again, so a pair they
-  -- build at is a pair the carrier is built at. A fully dependent telescope
-  -- installs nothing.
+  -- `PProd'` is installed exactly where some chain's block holds two or more
+  -- leaves, and the carrier is the record of that:
+  -- [`InductiveModels.fibreTower`] carries every constructor's chain, and the
+  -- constructors and the recursor split the same telescope the carrier split
+  -- rather than deciding it again, so a pair they build at is a pair the
+  -- carrier is built at. A fully dependent telescope installs nothing, and so
+  -- does one whose block is a single leaf.
   --
   -- Asking the emitted term rather than the telescopes is also what keeps the
   -- recursive spine honest: its chains are built at a swapped telescope whose
-  -- recursive slot is closed, which can make a rung constant that the source
-  -- telescope's own dependency answer would not.
+  -- recursive slot is closed, which can put a field in the block that the
+  -- source telescope's own dependency answer would have kept on the spine.
   --
   -- `requires` names the pair only where **this** island spliced it —
   -- [`InductiveModels.Iso.requires`]' rule: the model that introduces an

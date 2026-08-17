@@ -382,17 +382,16 @@ seven declarations recorded below include its intrinsic projection and eta;
 no level-normalizer relaxation or axiom is involved.
 
 **Where a row carries `PProd'`, and where a count moved by two to pay for it.**
-A storage rung whose field is mentioned by nothing above it has a constant
-family, and both towers now build that rung at the binder-free pair rather than
-at a lambda over the tight one — the never-zero chain
-([`InductiveModels.chainTy`]) as well as the maybe-zero tight tower. The first
-owner in an export whose tower has such a rung is the one whose island splices
-the pair, so **its** count rises by exactly two — the inductive and its `rec'` —
-and `PProd'` then appears as a model row of its own with nine, because an
-inductive this tool splices is one it must also model. Every other count in
-such a row is untouched: the pair changes a carrier's shape and no public
-statement. A later export reusing persistent support splices nothing and
-neither count moves. -/
+The fields no later field's type mentions need no binder, and both towers carry
+them beneath their spine in a balanced binary tree of the binder-free pair — the
+never-zero chain ([`InductiveModels.chainTy`]) as well as the maybe-zero tight
+tower. The first owner in an export whose storage has such a tree is the one
+whose island splices the pair, so **its** count rises by exactly two — the
+inductive and its `rec'` — and `PProd'` then appears as a model row of its own
+with nine, because an inductive this tool splices is one it must also model.
+Every other count in such a row is untouched: the block changes a carrier's
+shape and no public statement. A later export reusing persistent support
+splices nothing and neither count moves. -/
 def expectedPrim : List Row :=
   [ -- A non-indexed tuple spine with one real child and a later field whose
     -- written owner mention β-reduces away.  The payload is non-recursive, so
@@ -1082,6 +1081,20 @@ def expectedPrim : List Row :=
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
        ("_wcore.PProd", 9), ("DeadBranch", 12), ("DeadStruct", 16), ("DeadProp", 6)],
+      [("Eq", "prim model: a basis primitive")])
+    -- **The four positions the spine/block split can be in**, on both routes
+    -- that store a field telescope. `WFlat` is all block and no spine at the
+    -- never-zero tuple tower, `WMixed` interleaves the two with every block
+    -- field naming a spine variable, `WChain` is all spine but the last, and
+    -- `WBox` is a block whose every leaf is boxed. `BFlat`, `BMixed` and
+    -- `BChain` are the first three at a maybe-zero carrier, which is the tight
+    -- tower and its reflexive projection overrides rather than the tuple
+    -- tower's recursor. `PProd'` carries nine because this export's first
+    -- block splices it.
+  , ("wide_block",
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 8), ("PProd'", 9),
+       ("WFlat", 29), ("WMixed", 19), ("WChain", 15), ("WBox", 13),
+       ("BFlat", 21), ("BMixed", 17), ("BChain", 13)],
       [("Eq", "prim model: a basis primitive")])
   ]
 

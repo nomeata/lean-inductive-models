@@ -16,8 +16,14 @@ structure PCtor where
   boxed : Array Bool
   /-- The chain type. -/
   chain : Expr
+  /-- **May this owner's chain carry its independent fields in a block?**  True
+  everywhere but at `PProd'` itself, which a block built out of `PProd'` would
+  model by itself; see [`InductiveModels.chainTy`].  Carried beside the chain
+  rather than re-derived, so the destructor splits the telescope exactly where
+  the carrier did. -/
+  pairs : Bool
 
-instance : Inhabited PCtor := ⟨⟨default, 0, none, #[], default⟩⟩
+instance : Inhabited PCtor := ⟨⟨default, 0, none, #[], default, true⟩⟩
 
 /-- `F`'s cases tower over `scrut`: `chain_j` at tag `j̄`, empty above. -/
 partial def fibreTower (w : Level) (cs : Array PCtor) (j : Nat) (scrut : Expr) :
@@ -61,7 +67,7 @@ partial def stepTower (v w : Level) (eqi : EqInfo) (fib : Expr)
       let target := fun (tup : Expr) => pure (tgt (mkAt (natNumeral j) tup))
       let minorAt := minorOf j
       mkLambdaFVars #[f]
-        (← chainDestruct v eqi c.pad? c.boxed c.nf c.tele c.chain f id target minorAt)
+        (← chainDestruct v eqi c.pairs c.pad? c.boxed c.nf c.tele c.chain f id target minorAt)
   let sc ← withLocalDeclD `m natT fun m => do
     let inner ←
       if j + 1 == cs.size then
