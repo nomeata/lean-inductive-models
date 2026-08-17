@@ -76,8 +76,13 @@ def main : IO UInt32 := do
   -- ordinary `PSigma` splice, which is the one declaration every first-owner
   -- count lost; `5786e01` refreshed the same figure in the four other suites
   -- and left this one behind. The alias families and their order are unchanged.
+  -- `AliasI._model._impl.skel` is 8 and not 6, and `PProd'` is an entry of its
+  -- own, because the skeleton is the first owner here whose stored chain has a
+  -- rung no later field's type mentions: its island splices the binder-free
+  -- pair — the inductive and its `rec'` — and the descent then models it, which
+  -- is the splice-closure rule and not an extra.
   let expected : Array (Name × Nat) :=
-    #[(`N, 15), (`AliasI, 8), (`AliasI._model._impl.skel, 6),
+    #[(`N, 15), (`AliasI, 8), (`AliasI._model._impl.skel, 8), (`PProd', 9),
       (`AliasP, 16), (`Nonempty, 4), (`AliasC, 6)]
   state := state.check "generation counts pin all alias routes and support closure" <|
     report.generated == expected
@@ -85,7 +90,7 @@ def main : IO UInt32 := do
     #[`AliasI, `AliasI._model._impl.skel, `AliasP, `AliasC].all fun owner =>
       !report.declined.any (·.1 == owner)
   state := state.check "all generated recursor statements match literally" <|
-    report.stmtChecked == 18 && report.stmtErrors.isEmpty
+    report.stmtChecked == 24 && report.stmtErrors.isEmpty
 
   let interfaces : Array (Name × Name × Array Name) := #[
     (`AliasI, `At,
@@ -108,9 +113,9 @@ def main : IO UInt32 := do
     | .error error => throw <| IO.userError s!"cannot parse generated output: {error}"
   let inputCheck := Check.checkReport reparsed
   state := state.check "in-memory output Check covers every generated family" <|
-    outputCheck.familiesChecked == 6 && outputCheck.violations.isEmpty
+    outputCheck.familiesChecked == 7 && outputCheck.violations.isEmpty
   state := state.check "serialized input Check preserves the exact contract" <|
-    inputCheck.familiesChecked == 6 && inputCheck.violations.isEmpty
+    inputCheck.familiesChecked == 7 && inputCheck.violations.isEmpty
 
   IO.println s!"transparent owner aliases: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

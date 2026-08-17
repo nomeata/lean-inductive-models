@@ -34,6 +34,15 @@ def primArmTuple (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let wTagged := site.wTagged
   let mut out := st.out
   let mut spliced := st.spliced
+  let mut requires := st.requires
+  -- **May this owner's chains carry a constant rung in the binder-free pair?**
+  -- Everywhere but at `PProd'` itself, which a tower built out of `PProd'`
+  -- would model by itself and so leave the splice standing on nothing; its own
+  -- model is the plain tight tower ([`InductiveModels.TightTower.pairs`]). The
+  -- never-zero tuple tower does not in fact reach the pair — `Sort (max u v)`
+  -- is maybe-zero and takes the direct route — so this is the same guard
+  -- written at the same place and not a branch this arm exercises.
+  let pairs := tname != `PProd'
   -- ════ the Type route ════
   unless large do badShape s!"{ern} is not large-eliminating at a Type-valued carrier"
   for d in ← ensureNat do out := out.push d; spliced := spliced ++ d.getNames
@@ -182,7 +191,7 @@ this constructor")
   let natT : Expr := .const `Nat []
   let fibreAt := fun (ps : Array Expr) => do
     let pads ← padsAt plans
-    let cs ← pctorsAt exportCtors plans pads ps
+    let cs ← pctorsAt pairs exportCtors plans pads ps
     withLocalDeclD `n natT fun n =>
       return (cs, ← mkLambdaFVars #[n] (← fibreTower w cs 0 n))
 
@@ -225,7 +234,7 @@ this constructor")
       let nf := numForalls tele0
       let tele ← spineSwap tname sub nf tele0
       let pl : CPlan := plans[j]!
-      let (chain, _) ← chainTy pads[j]! pl.boxed nf tele
+      let (chain, _) ← chainTy pairs pads[j]! pl.boxed nf tele
       pure { tele, nf, pad? := pads[j]!, boxed := pl.boxed, chain }
     let fib ← withLocalDeclD `tag natT fun tg =>
       do mkLambdaFVars #[tg] (← fibreTower w cs 0 tg)
@@ -252,6 +261,33 @@ this constructor")
     else do pure (psigmaT (.succ .zero) w natT (← fibreAt ps).2
   )
   let selfVal ← site.withParams fun ps => do mkLambdaFVars ps (← carrierAt ps)
+  -- **The binder-free pair's support, read off the carrier that uses it.**
+  --
+  -- `PProd'` is installed exactly where some rung came out constant, and the
+  -- carrier is the record of that: [`InductiveModels.fibreTower`] carries every
+  -- constructor's chain, and the constructors and the recursor read each rung's
+  -- shape off the same chain rather than deciding it again, so a pair they
+  -- build at is a pair the carrier is built at. A fully dependent telescope
+  -- installs nothing.
+  --
+  -- Asking the emitted term rather than the telescopes is also what keeps the
+  -- recursive spine honest: its chains are built at a swapped telescope whose
+  -- recursive slot is closed, which can make a rung constant that the source
+  -- telescope's own dependency answer would not.
+  --
+  -- `requires` names the pair only where **this** island spliced it —
+  -- [`InductiveModels.Iso.requires`]' rule: the model that introduces an
+  -- inductive is the one that may not leave it unmodelled, and a later island
+  -- reusing persistent support has nothing to model. Installed before
+  -- `hintsFor` and `addChecked`, both of which read the environment the carrier
+  -- now names.
+  if mentions `PProd' selfVal then
+    let support ← ensurePProdPrime
+    for d in support do
+      out := out.push d
+      spliced := spliced ++ d.getNames
+    if support.any fun d => d.getNames.contains `PProd' then
+      requires := requires.push `PProd'
   let dSelf := Declaration.defnDecl
     { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
       hints := ← hintsFor selfVal, safety := .safe }
@@ -266,7 +302,7 @@ this constructor")
         let (cs, fib) ← fibreAt ps
         let c := cs[j]!
         forallBoundedTelescope c.tele (some c.nf) fun fs _ => do
-          let tup ← chainTuple c.pad? c.boxed c.nf c.tele c.chain fs
+          let tup ← chainTuple pairs c.pad? c.boxed c.nf c.tele c.chain fs
           mkLambdaFVars (ps ++ fs)
             (psigmaMk (.succ .zero) w natT fib (natNumeral j) tup)
       else do
@@ -283,7 +319,7 @@ this constructor")
           | none =>
             let (bcs, bfib) ← towerAt ps baseJ (.sort w)
             let c := bcs[tagOf[j]!]!
-            let tup ← chainTuple c.pad? c.boxed c.nf c.tele c.chain fs
+            let tup ← chainTuple pairs c.pad? c.boxed c.nf c.tele c.chain fs
             mkLambdaFVars (ps ++ fs) (mkOuter (natNumeral 0)
               (psigmaMk (.succ .zero) w natT bfib (natNumeral (tagOf[j]!)) tup))
           | some k =>
@@ -292,7 +328,7 @@ this constructor")
             let rv2 := psigmaSnd (.succ .zero) w natT spine r
             let (scs, sfib) ← towerAt ps stepJ (mkApp spine rn).headBeta
             let c := scs[tagOf[j]!]!
-            let tup ← chainTuple c.pad? c.boxed c.nf c.tele c.chain (fs.set! k rv2)
+            let tup ← chainTuple pairs c.pad? c.boxed c.nf c.tele c.chain (fs.set! k rv2)
             mkLambdaFVars (ps ++ fs) (mkOuter (.app (.const `Nat.succ []) rn)
               (psigmaMk (.succ .zero) w natT sfib (natNumeral (tagOf[j]!)) tup))
     let d := Declaration.defnDecl
@@ -378,6 +414,6 @@ this constructor")
       hints := ← hintsFor recVal, safety := .safe }
   addChecked dRec
   out := out.push dRec
-  return { st with out, spliced }
+  return { st with out, spliced, requires }
 
 end InductiveModels

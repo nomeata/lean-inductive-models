@@ -36,6 +36,24 @@ def psigmaFst (u v : Level) (α β y : Expr) : Expr :=
 def psigmaSnd (u v : Level) (α β y : Expr) : Expr :=
   psigmaPrimeSnd u v α β y
 
+/-! ### The binder-free pair
+
+`PProd'` is the tight pair with the second component's binder removed, at the
+same `Sort (max u v)` ([`InductiveModels.pprodPrimeDecl`]).  A storage rung
+whose field is mentioned by nothing above it has a constant family, and that is
+the rung with no family at all.  Spelled through the same thin wrappers the
+tight pair is, so a construction reads one shape or the other and never a bare
+`.const`. -/
+
+def pprodT (u v : Level) (α β : Expr) : Expr :=
+  pprodPrimeT u v α β
+
+def pprodMk (u v : Level) (α β fst snd : Expr) : Expr :=
+  pprodPrimeMk u v α β fst snd
+
+def pprodRec (s u v : Level) (α β motive m t : Expr) : Expr :=
+  pprodPrimeRec u v s α β motive m t
+
 def natRec (s : Level) (motive z sc t : Expr) : Expr :=
   mkAppN (.const `Nat.rec [s]) #[motive, z, sc, t]
 

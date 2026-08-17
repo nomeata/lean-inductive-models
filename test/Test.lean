@@ -379,13 +379,26 @@ codomain box, but recursive boxing transforms the whole Π tree.  Every atomic
 leaf gains a never-`Prop` `PSigma'` codomain, every `imax` therefore normalizes
 to `max`, and the forward and inverse maps are definitionally inverse.  The
 seven declarations recorded below include its intrinsic projection and eta;
-no level-normalizer relaxation or axiom is involved. -/
+no level-normalizer relaxation or axiom is involved.
+
+**Where a row carries `PProd'`, and where a count moved by two to pay for it.**
+A storage rung whose field is mentioned by nothing above it has a constant
+family, and both towers now build that rung at the binder-free pair rather than
+at a lambda over the tight one — the never-zero chain
+([`InductiveModels.chainTy`]) as well as the maybe-zero tight tower. The first
+owner in an export whose tower has such a rung is the one whose island splices
+the pair, so **its** count rises by exactly two — the inductive and its `rec'` —
+and `PProd'` then appears as a model row of its own with nine, because an
+inductive this tool splices is one it must also model. Every other count in
+such a row is untouched: the pair changes a carrier's shape and no public
+statement. A later export reusing persistent support splices nothing and
+neither count moves. -/
 def expectedPrim : List Row :=
   [ -- A non-indexed tuple spine with one real child and a later field whose
     -- written owner mention β-reduces away.  The payload is non-recursive, so
     -- `Dead.step` consumes exactly one predecessor and the ordinary tuple
     -- route emits its six public declarations.
-    ("nonindexed_vanishing", [("N", 15), ("Dead", 6)],
+    ("nonindexed_vanishing", [("N", 15), ("Dead", 8), ("PProd'", 9)],
       [("Eq", "prim model: a basis primitive")])
   -- The two small-elimination seams under the derived exact-sort lift. `MI` forces the pair
     -- motive at two distinct result indices; `MR.step` forces a recursive
@@ -457,9 +470,8 @@ def expectedPrim : List Row :=
   -- its child binder's domain `E0` is empty, so `NbVac` is inhabited, and it
   -- stays on arm W at 21.
   , ("empty_no_base",
-      [("NbLin", 23), ("Nt", 6), ("NbBr", 16), ("NbInf", 224),
-       ("_wcore.Subtype", 9),
-       ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
+      [("NbLin", 23), ("Nt", 6), ("NbBr", 16), ("NbInf", 224), ("_wcore.Subtype", 11),
+       ("PProd'", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
        ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
@@ -473,12 +485,12 @@ def expectedPrim : List Row :=
   -- checks the genuinely propositional end.
   , ("degenerate_graph", [("DG", 15)], [])
   , ("prim_shapes",
-      [("Tri", 18), ("TagS4", 10), ("TagS3", 8), ("Weave", 10), ("Opt", 6),
+      [("Tri", 18), ("TagS4", 10), ("TagS3", 8), ("Weave", 12), ("PProd'", 9), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
        ("Conj3", 10), ("PU", 6), ("Sv", 5), ("PE", 2), ("MNm", 8), ("IdxS", 5),
-       ("Dec", 6), ("Conj", 8), ("TagS2", 8), ("TagS", 6), ("PT", 8),
-       ("Tor", 8), ("Hq", 5), ("Boxed", 9), ("PI", 7), ("Sub", 9),
-       ("UL", 7), ("Lst", 6), ("TrL", 7), ("Big", 7), ("PF", 7)],
+       ("Dec", 6), ("Conj", 8), ("TagS2", 8), ("TagS", 6), ("PT", 8), ("Tor", 8),
+       ("Hq", 5), ("Boxed", 9), ("PI", 7), ("Sub", 9), ("UL", 7), ("Lst", 6),
+       ("TrL", 7), ("Big", 7), ("PF", 7)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **`Branch` and `Binder` are on the other side of the boundary now**, and
   -- this row is where that is recorded: they are the two shapes this file was
@@ -492,13 +504,13 @@ def expectedPrim : List Row :=
   -- graph arm splices neither wherever the core has already gone in.
   , ("prim_declines",
       [("P", 15), ("Idx", 5), ("Inf", 16), ("Nonempty", 4), ("Branch", 213),
-       ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
-       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
-       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("_wcore.Acc", 13),
-       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
-       ("_wcore.PProd", 9), ("MixI", 4), ("Inf.below", 18), ("Binder", 12),
-       ("BoxF", 7), ("SvIx", 4)],
+       ("_wcore.Subtype", 11), ("PProd'", 9), ("_wcore.List", 6),
+       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+       ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
+       ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
+       ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("MixI", 4), ("Inf.below", 18),
+       ("Binder", 12), ("BoxF", 7), ("SvIx", 4)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The exact-sort pad at a maybe-zero sort**, and the one level relation
   -- the whole row is. A nonrecursive one-constructor owner at a maybe-`Prop`
@@ -643,7 +655,7 @@ def expectedPrim : List Row :=
        ("G2.below", 13)],
       [ ("Eq", "prim model: a basis primitive")])
   , ("prim_graph_pre", [("Ac", 24), ("Nonempty", 4), ("Ac.below", 13),
-      ("PSigma", 11)],
+      ("PSigma", 13), ("PProd'", 9)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
   -- the core's six roots — the export `lean4export` emits for
@@ -693,10 +705,10 @@ def expectedPrim : List Row :=
   -- additionally receive one eta theorem; unit-like and K-like declarations
   -- receive their own one-theorem metadata roles.
   , ("w_core",
-      [("Subtype", 19), ("List", 6), ("Sigma", 9),
-       ("Option", 6), ("Exists", 4), ("And", 8), ("False", 2), ("Decidable", 6),
-       ("True", 6), ("Or", 6), ("Iff", 8), ("Acc", 14), ("Nonempty", 4),
-       ("WellFounded", 6), ("Bool", 6), ("HEq", 5), ("PProd", 9)],
+      [("Subtype", 21), ("PProd'", 9), ("List", 6), ("Sigma", 9), ("Option", 6),
+       ("Exists", 4), ("And", 8), ("False", 2), ("Decidable", 6), ("True", 6),
+       ("Or", 6), ("Iff", 8), ("Acc", 14), ("Nonempty", 4), ("WellFounded", 6),
+       ("Bool", 6), ("HEq", 5), ("PProd", 9)],
       [ ("Eq", "prim model: a basis primitive")
       , ("PUnit", "prim model: a basis primitive")
       , ("Nat", "prim model: a basis primitive")])
@@ -743,22 +755,21 @@ def expectedPrim : List Row :=
   -- records; this row only counts them.
   , ("prim_carve",
       [("N", 16), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
-       ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
-       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
-       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
-       ("_wcore.Acc", 13),
-       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9),
-       ("Cf", 8), ("Cf._model._impl.skel", 12), ("Inf2", 8), ("Inf2._model._impl.skel", 12),
+       ("_wcore.Subtype", 11), ("PProd'", 9), ("_wcore.List", 6),
+       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+       ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
+       ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
+       ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
+       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Cf", 8),
+       ("Cf._model._impl.skel", 12), ("Inf2", 8), ("Inf2._model._impl.skel", 12),
        ("Vec", 8), ("Vec._model._impl.skel", 6), ("Bl", 10),
        ("Bl._model._impl.skel", 8), ("IBox", 16), ("IBox._model._impl.skel", 7),
-       ("Vc", 8), ("Vc._model._impl.skel", 6),
-       ("Mx", 8), ("Mx._model._impl.skel", 12),
-       ("Two2", 8), ("Two2._model._impl.skel", 6), ("Fn", 8), ("Fn._model._impl.skel", 6),
-       ("Sm3", 8), ("Sm3._model._impl.skel", 12), ("Br", 8), ("Br._model._impl.skel", 12),
-       ("NoBase", 18), ("NoBase._model._impl.skel", 16),
-       ("Tri3", 8), ("Tri3._model._impl.skel", 6)],
+       ("Vc", 8), ("Vc._model._impl.skel", 6), ("Mx", 8),
+       ("Mx._model._impl.skel", 12), ("Two2", 8), ("Two2._model._impl.skel", 6),
+       ("Fn", 8), ("Fn._model._impl.skel", 6), ("Sm3", 8),
+       ("Sm3._model._impl.skel", 12), ("Br", 8), ("Br._model._impl.skel", 12),
+       ("NoBase", 18), ("NoBase._model._impl.skel", 16), ("Tri3", 8),
+       ("Tri3._model._impl.skel", 6)],
       [ ("Eq", "prim model: a basis primitive")])
   -- Arm W's two recursive-boxing seams. `WData` stores a non-recursive
   -- `((α → β) → β)` in the label tower; `WBind` stores the same type
@@ -766,13 +777,12 @@ def expectedPrim : List Row :=
   -- and therefore carries the W fragment, while the latter is the arm's own
   -- twelve declarations. Both remain on the tagged W instantiation.
   , ("w_imax",
-      [("WData", 224), ("_wcore.Subtype", 9), ("_wcore.List", 6),
+      [("WData", 224), ("_wcore.Subtype", 11), ("PProd'", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
-       ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6),
-       ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
-       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9),
-       ("WBind", 12)],
+       ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
+       ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
+       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("WBind", 12)],
       [("Eq", "prim model: a basis primitive")])
   -- **Arm W**, and this row is three claims at once.
   --
@@ -837,17 +847,16 @@ def expectedPrim : List Row :=
   -- `GTree`, `nest_fam_arg`'s `Both` and `Key`), but every one of those is
   -- multi-constructor and so out of the one-layer route's reach.
   , ("prim_w",
-      [("Tree", 225), ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
-       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
-       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
-       ("_wcore.Acc", 13),
-       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9),
-       ("Triple", 18), ("Wty", 23), ("Q", 8), ("P", 6),
-       ("Dep", 12), ("Bad", 12), ("TwinInf", 23), ("Utd", 14), ("TrineInf", 27),
-       ("Wt", 20), ("Br", 12), ("Trine", 21), ("Mixed", 19), ("Quad", 20),
-       ("QuadInf", 27), ("TripleInf", 25), ("Twin", 16), ("Prefix", 20)],
+      [("Tree", 225), ("_wcore.Subtype", 11), ("PProd'", 9), ("_wcore.List", 6),
+       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+       ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
+       ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
+       ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
+       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Triple", 18),
+       ("Wty", 23), ("Q", 8), ("P", 6), ("Dep", 12), ("Bad", 12), ("TwinInf", 23),
+       ("Utd", 14), ("TrineInf", 27), ("Wt", 20), ("Br", 12), ("Trine", 21),
+       ("Mixed", 19), ("Quad", 20), ("QuadInf", 27), ("TripleInf", 25),
+       ("Twin", 16), ("Prefix", 20)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The W arm reached without the one-layer adapter's reflexive selectors,
   -- and the family of dependent fields it now selects on its own.** `prim_w`'s
@@ -876,14 +885,14 @@ def expectedPrim : List Row :=
   -- two-step dependency, and `WPlain` the control with none. `WDep` is first,
   -- so it is the one that carries the fragment splice.
   , ("w_dependent_field",
-      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6), ("WDep", 219),
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 8), ("PProd'", 9), ("WDep", 219),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
        ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9),
-       ("WTag", 16), ("WMid", 18), ("Tag", 6), ("WChain", 18), ("WPlain", 16)],
+       ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("WTag", 16), ("WMid", 18),
+       ("Tag", 6), ("WChain", 18), ("WPlain", 16)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The same question at the empty carrier, and the family it now selects on
   -- its own.** `EDep.mk`'s third field is a *bare* recursive occurrence, so arm
@@ -907,7 +916,7 @@ def expectedPrim : List Row :=
   -- enough to remove it. So that owner stores nothing, its projections are
   -- eliminations again, and field 2 names two earlier fields.
   , ("e_dependent_field",
-      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 6), ("EDep", 10),
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 8), ("PProd'", 9), ("EDep", 10),
        ("Tag", 6), ("EChain", 12), ("EMid", 12), ("ENon", 12), ("Fib", 6),
        ("EBare", 10), ("EMulti", 6)],
       [ ("Eq", "prim model: a basis primitive")
@@ -952,50 +961,48 @@ def expectedPrim : List Row :=
   -- through a skeleton with no base constructor, which arm E models as the
   -- exact empty carrier.
   , ("nest_fam_arg",
-      [("N", 15), ("Opt", 6), ("L", 6), ("Vec", 8), ("Vec._model._impl.skel", 6),
-       ("RB", 215),
-       ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
-       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
-       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
-       ("_wcore.Acc", 13),
-       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9),
-       ("RB2", 6), ("Ctr", 9),
-       ("OK", 15), ("OK._model._impl.0", 14), ("OK._model._impl.0._model._impl.tag", 6),
+      [("N", 15), ("Opt", 6), ("L", 8), ("PProd'", 9), ("Vec", 8),
+       ("Vec._model._impl.skel", 6), ("RB", 215), ("_wcore.Subtype", 9),
+       ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
+       ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
+       ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
+       ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
+       ("_wcore.PProd", 9), ("RB2", 6), ("Ctr", 9), ("OK", 15),
+       ("OK._model._impl.0", 14), ("OK._model._impl.0._model._impl.tag", 6),
        ("OK._model._impl.0._model._impl.aux", 10),
-       ("OK._model._impl.0._model._impl.aux._model._impl.skel", 14),
-       ("JT", 15), ("JT._model._impl.0", 14), ("JT._model._impl.0._model._impl.tag", 6),
+       ("OK._model._impl.0._model._impl.aux._model._impl.skel", 14), ("JT", 15),
+       ("JT._model._impl.0", 14), ("JT._model._impl.0._model._impl.tag", 6),
        ("JT._model._impl.0._model._impl.aux", 12),
-       ("JT._model._impl.0._model._impl.aux._model._impl.skel", 16),
-       ("PT", 17), ("PT._model._impl.0", 16), ("PT._model._impl.0._model._impl.tag", 6),
+       ("JT._model._impl.0._model._impl.aux._model._impl.skel", 16), ("PT", 17),
+       ("PT._model._impl.0", 16), ("PT._model._impl.0._model._impl.tag", 6),
        ("PT._model._impl.0._model._impl.aux", 10),
-       ("PT._model._impl.0._model._impl.aux._model._impl.skel", 14),
-       ("PTP", 17), ("PTP._model._impl.0", 16), ("PTP._model._impl.0._model._impl.tag", 6),
+       ("PT._model._impl.0._model._impl.aux._model._impl.skel", 14), ("PTP", 17),
+       ("PTP._model._impl.0", 16), ("PTP._model._impl.0._model._impl.tag", 6),
        ("PTP._model._impl.0._model._impl.aux", 10),
-       ("PTP._model._impl.0._model._impl.aux._model._impl.skel", 14),
-       ("Deep", 23), ("Deep._model._impl.0", 20), ("Deep._model._impl.0._model._impl.tag", 8),
+       ("PTP._model._impl.0._model._impl.aux._model._impl.skel", 14), ("Deep", 23),
+       ("Deep._model._impl.0", 20), ("Deep._model._impl.0._model._impl.tag", 8),
        ("Deep._model._impl.0._model._impl.aux", 14),
-       ("Deep._model._impl.0._model._impl.aux._model._impl.skel", 18),
-       ("Idx", 23), ("Idx._model._impl.0", 20), ("Idx._model._impl.0._model._impl.tag", 8),
+       ("Deep._model._impl.0._model._impl.aux._model._impl.skel", 18), ("Idx", 23),
+       ("Idx._model._impl.0", 20), ("Idx._model._impl.0._model._impl.tag", 8),
        ("Idx._model._impl.0._model._impl.aux", 14),
-       ("Idx._model._impl.0._model._impl.aux._model._impl.skel", 18),
-       ("Both", 15), ("Both._model._impl.0", 14), ("Both._model._impl.0._model._impl.tag", 6),
+       ("Idx._model._impl.0._model._impl.aux._model._impl.skel", 18), ("Both", 15),
+       ("Both._model._impl.0", 14), ("Both._model._impl.0._model._impl.tag", 6),
        ("Both._model._impl.0._model._impl.aux", 10),
-       ("Both._model._impl.0._model._impl.aux._model._impl.skel", 14),
-       ("Two", 15), ("Two._model._impl.0", 14), ("Two._model._impl.0._model._impl.tag", 6),
+       ("Both._model._impl.0._model._impl.aux._model._impl.skel", 14), ("Two", 15),
+       ("Two._model._impl.0", 14), ("Two._model._impl.0._model._impl.tag", 6),
        ("Two._model._impl.0._model._impl.aux", 10),
-       ("Two._model._impl.0._model._impl.aux._model._impl.skel", 14),
-       ("Flat", 14), ("Flat._model._impl.0", 16), ("Flat._model._impl.0._model._impl.tag", 6),
+       ("Two._model._impl.0._model._impl.aux._model._impl.skel", 14), ("Flat", 14),
+       ("Flat._model._impl.0", 16), ("Flat._model._impl.0._model._impl.tag", 6),
        ("Flat._model._impl.0._model._impl.aux", 8),
-       ("Flat._model._impl.0._model._impl.aux._model._impl.skel", 6),
-       ("Key", 23), ("Key._model._impl.0", 20), ("Key._model._impl.0._model._impl.tag", 8),
+       ("Flat._model._impl.0._model._impl.aux._model._impl.skel", 6), ("Key", 23),
+       ("Key._model._impl.0", 20), ("Key._model._impl.0._model._impl.tag", 8),
        ("Key._model._impl.0._model._impl.aux", 14),
-       ("Key._model._impl.0._model._impl.aux._model._impl.skel", 18),
-       ("Zeta", 23), ("Zeta._model._impl.0", 20), ("Zeta._model._impl.0._model._impl.tag", 8),
+       ("Key._model._impl.0._model._impl.aux._model._impl.skel", 18), ("Zeta", 23),
+       ("Zeta._model._impl.0", 20), ("Zeta._model._impl.0._model._impl.tag", 8),
        ("Zeta._model._impl.0._model._impl.aux", 14),
-       ("Zeta._model._impl.0._model._impl.aux._model._impl.skel", 18),
-       ("Ix", 15), ("Ix._model._impl.0", 14), ("Ix._model._impl.0._model._impl.tag", 6),
+       ("Zeta._model._impl.0._model._impl.aux._model._impl.skel", 18), ("Ix", 15),
+       ("Ix._model._impl.0", 14), ("Ix._model._impl.0._model._impl.tag", 6),
        ("Ix._model._impl.0._model._impl.aux", 12),
        ("Ix._model._impl.0._model._impl.aux._model._impl.skel", 16)],
       [("Eq", "prim model: a basis primitive")])
@@ -1024,18 +1031,17 @@ def expectedPrim : List Row :=
   -- fixed basis, while the input-owned `PSigma` appears as the final modeled
   -- owner rather than as an exemption.
   , ("prim_late_basis",
-      [("N", 15), ("L", 6), ("Pre", 6), ("MA", 22),
+      [("N", 15), ("L", 8), ("PProd'", 9), ("Pre", 6), ("MA", 22),
        ("MA._model._impl.tag", 8), ("MA._model._impl.aux", 16),
-       ("MA._model._impl.aux._model._impl.skel", 14),
-       ("Nd", 15), ("Nd._model._impl.0", 14),
-       ("Nd._model._impl.0._model._impl.tag", 6), ("Nd._model._impl.0._model._impl.aux", 12),
+       ("MA._model._impl.aux._model._impl.skel", 14), ("Nd", 15),
+       ("Nd._model._impl.0", 14), ("Nd._model._impl.0._model._impl.tag", 6),
+       ("Nd._model._impl.0._model._impl.aux", 12),
        ("Nd._model._impl.0._model._impl.aux._model._impl.skel", 219),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
-       ("_wcore.Acc", 13),
-       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
+       ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("PSigma", 9)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The basis record itself stands at a positive ordinal.** `Cnt` is an
@@ -1069,13 +1075,13 @@ def expectedPrim : List Row :=
   -- structure with both intrinsic projections and their ι rules, `DeadProp`
   -- is the Church route's six.
   , ("dead_owner_mention",
-      [("P", 15), ("Q", 8), ("DeadLabel", 215), ("_wcore.Subtype", 9), ("_wcore.List", 6),
-       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
-       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
-       ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
-       ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
-       ("_wcore.HEq", 5), ("_wcore.PProd", 9),
-       ("DeadBranch", 12), ("DeadStruct", 16), ("DeadProp", 6)],
+      [("P", 15), ("Q", 8), ("DeadLabel", 215), ("_wcore.Subtype", 11), ("PProd'", 9),
+       ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
+       ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
+       ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
+       ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
+       ("_wcore.PProd", 9), ("DeadBranch", 12), ("DeadStruct", 16), ("DeadProp", 6)],
       [("Eq", "prim model: a basis primitive")])
   ]
 
@@ -1298,26 +1304,33 @@ def runOne (root : String) (a : TAcc) (r : Row)
   -- The second half is what keeps the first from passing vacuously: a run that
   -- stopped using the pair altogether would satisfy "the pair does not model
   -- itself" trivially.
-  if ["maybe_zero_pad", "maybe_zero_projection"].contains name then
-    let mentions := fun (value : Expr) => Id.run do
-      let mut seen := false
-      for constant in value.getUsedConstants do
-        if constant == `PProd' then seen := true
-      return seen
-    let carrierOf := fun (owner : Name) =>
-      decls.findSome? fun declaration => match declaration with
-        | .defn declarationName _ _ value _ _ _ =>
-          if declarationName == Naming.modelName owner then some value else none
-        | _ => none
-    a := check a (carrierOf `PProd' |>.map mentions |>.getD false |> not)
+  --
+  -- **Asked of every export that touches the pair at all**, and not of a named
+  -- pair of fixtures. Both storage towers reach the binder-free rung now — the
+  -- maybe-zero tight tower and the never-zero chain — so the two halves are
+  -- each other's guard wherever either fires: a carrier built at `PProd'`
+  -- demands a `PProd'` model that is not itself, and a `PProd'` model demands a
+  -- carrier that is built at it.
+  let pairCarrier := decls.findSome? fun declaration => match declaration with
+    | .defn declarationName _ _ value _ _ _ =>
+      if declarationName == Naming.modelName `PProd' then some value else none
+    | _ => none
+  let mentionsPair := fun (value : Expr) => Id.run do
+    let mut seen := false
+    for constant in value.getUsedConstants do
+      if constant == `PProd' then seen := true
+    return seen
+  let pairUsed := decls.any fun declaration => match declaration with
+    | .defn declarationName _ _ value _ _ _ =>
+      declarationName != Naming.modelName `PProd' && mentionsPair value
+    | _ => false
+  if pairUsed || pairCarrier.isSome then
+    a := check a (pairCarrier.map mentionsPair |>.getD false |> not)
       s!"{name}: PProd'._model mentions PProd', so the binder-free pair is modelled \
          by itself and the splice it introduced stands on nothing"
-    a := check a ((carrierOf `PProd').isSome)
+    a := check a pairCarrier.isSome
       s!"{name}: PProd' was spliced but no carrier was emitted for it"
-    a := check a (decls.any fun declaration => match declaration with
-      | .defn declarationName _ _ value _ _ _ =>
-        declarationName != Naming.modelName `PProd' && mentions value
-      | _ => false)
+    a := check a pairUsed
       s!"{name}: no generated carrier is built at PProd', so the claim that the pair \
          does not model itself holds vacuously"
   -- **Exempt then declined.** The basis primitives are their own row in the

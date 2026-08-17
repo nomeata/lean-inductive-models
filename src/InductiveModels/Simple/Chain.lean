@@ -39,9 +39,19 @@ outer scope and `withLocalDeclD` is never entered.
 The question is asked of the remaining telescope entire, which includes the
 constructor's trailing result type. That is conservative in the one direction
 that costs only instructions: an index the field appears in keeps the binder a
-field alone would not have needed. -/
-partial def chainTy (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr)
-    (i : Nat := 0) : GenM (Expr × Level) := do
+field alone would not have needed.
+
+**And a constant family is a binder holding nothing.** `PSigma' α (fun _ => β)`
+is `PProd' α β` with a lambda in front of it, so with `pairs` the rung is built
+at the binder-free pair outright — the same pair at the same `Sort (max u v)`,
+carrying the tail as a type rather than as a family
+([`InductiveModels.pprodPrimeDecl`]). `pairs` is false at one owner only, the
+pair itself, which may not be modelled by a tower built out of it; the never-zero
+tuple tower does not in fact reach `PProd'`, whose own `Sort (max u v)` is
+maybe-zero and takes the direct route, so the flag is a guard and not a
+branch this arm exercises. -/
+partial def chainTy (pairs : Bool) (pad? : Option Pad) (boxed : Array Bool) (nf : Nat)
+    (tele : Expr) (i : Nat := 0) : GenM (Expr × Level) := do
   if nf == 0 then
     let some p := pad? | badShape "a chain with no fields needs a pad"
     return (p.ty, p.lv)
@@ -52,12 +62,13 @@ partial def chainTy (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : 
   if nf == 1 && pad?.isNone then
     return (st, ℓt)
   unless rest.hasLooseBVar 0 do
-    let (inner, ℓi) ← chainTy pad? boxed (nf - 1) rest (i + 1)
-    return (psigmaT ℓt ℓi st (.lam x st.headBeta inner .default),
+    let (inner, ℓi) ← chainTy pairs pad? boxed (nf - 1) rest (i + 1)
+    let second := if pairs then inner else .lam x st.headBeta inner .default
+    return ((if pairs then pprodT else psigmaT) ℓt ℓi st second,
       (mkLevelMax' ℓt ℓi).normalize)
   withLocalDeclD x st fun xv => do
     let rv ← if bx then unboxValOf t xv else pure xv
-    let (inner, ℓi) ← chainTy pad? boxed (nf - 1) (rest.instantiate1 rv) (i + 1)
+    let (inner, ℓi) ← chainTy pairs pad? boxed (nf - 1) (rest.instantiate1 rv) (i + 1)
     return (psigmaT ℓt ℓi st (← mkLambdaFVars #[xv] inner),
       (mkLevelMax' ℓt ℓi).normalize)
 
@@ -74,21 +85,28 @@ a `mkLambdaFVars` that traverses everything above the rung, so a chain of `n`
 fields paid `O(n²)` rung constructions over terms that grow with the fields'
 own size.
 
-Reading the rung off the type is also the stronger statement. The rebuilt rung
-had to *agree* with the scrutinee's type for the recursor to be well typed, and
-nothing but the kernel gate said it did; the components below are that type's
-own, so the constructor and the destructor cannot disagree with the carrier
-about the shape of a rung. -/
-def chainRung (chain : Expr) : GenM (Level × Level × Expr × Expr) := do
-  let .app (.app (.const `PSigma' [ℓt, ℓi]) st) β := chain
-    | badShape "the chain's rung is not the pair its carrier was built at"
-  return (ℓt, ℓi, st, β)
+Reading the rung off the type is also the stronger statement, and it is what
+makes the binder-free rung cost nothing to agree about. The rebuilt rung had to
+*agree* with the scrutinee's type for the recursor to be well typed, and nothing
+but the kernel gate said it did; the components below are that type's own, so
+the constructor and the destructor cannot disagree with the carrier about which
+of the two pairs a rung was built at — `binderFree` is read off the carrier
+rather than re-derived beside it, and there is no second dependency question to
+answer the same way twice.
+
+`β` is the tail's **family** at a `PSigma'` rung and the tail's **type** at a
+binder-free `PProd'` one; `binderFree` is which. -/
+def chainRung (chain : Expr) : GenM (Bool × Level × Level × Expr × Expr) := do
+  match chain with
+  | .app (.app (.const `PSigma' [ℓt, ℓi]) st) β => return (false, ℓt, ℓi, st, β)
+  | .app (.app (.const `PProd' [ℓt, ℓi]) st) β => return (true, ℓt, ℓi, st, β)
+  | _ => badShape "the chain's rung is not either pair its carrier could be built at"
 
 /-- The tuple `⟨v₁, ⟨v₂, …⟩⟩` at the given field values — each boxed where its
 plan says so — closed by the pad's canonical element when there is one.
 `chain` is [`InductiveModels.chainTy`] of `tele`, i.e. the tuple's own type. -/
-partial def chainTuple (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr)
-    (chain : Expr) (vals : Array Expr) (i : Nat := 0) : GenM Expr := do
+partial def chainTuple (pairs : Bool) (pad? : Option Pad) (boxed : Array Bool) (nf : Nat)
+    (tele : Expr) (chain : Expr) (vals : Array Expr) (i : Nat := 0) : GenM Expr := do
   if nf == 0 then
     let some p := pad? | badShape "a chain with no fields needs a pad"
     return p.canon
@@ -97,21 +115,23 @@ partial def chainTuple (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele
   let sv ← if bx then boxValOf t vals[i]! else pure vals[i]!
   if nf == 1 && pad?.isNone then
     return sv
-  let (ℓt, ℓi, st, β) ← chainRung chain
+  let (binderFree, ℓt, ℓi, st, β) ← chainRung chain
   let tailTele := rest.instantiate1 vals[i]!
   -- **The tail's own chain type.** Where a later field's type mentions this
   -- one the tuple descends at the *value* while `β` abstracts at a variable,
   -- so the two are the same type only up to that substitution and the tail is
-  -- built for real. Where it does not, `β` is a constant function and its body
-  -- *is* the tail's type, at the identical telescope — `rest` unchanged by
-  -- either instantiation — so the descent costs a `headBeta` and nothing else.
+  -- built for real. Where it does not, the rung carries the tail with no binder
+  -- at all — or, at a tower denied the pair, a constant family whose body is
+  -- that same tail, at the identical telescope since `rest` survives either
+  -- instantiation — so the descent costs nothing.
   let tailChain ←
-    if rest.hasLooseBVar 0 then
-      Prod.fst <$> chainTy pad? boxed (nf - 1) tailTele (i + 1)
+    if binderFree then pure β
+    else if rest.hasLooseBVar 0 then
+      Prod.fst <$> chainTy pairs pad? boxed (nf - 1) tailTele (i + 1)
     else
       pure (mkApp β vals[i]!).headBeta
-  let snd ← chainTuple pad? boxed (nf - 1) tailTele tailChain vals (i + 1)
-  return psigmaMk ℓt ℓi st β sv snd
+  let snd ← chainTuple pairs pad? boxed (nf - 1) tailTele tailChain vals (i + 1)
+  return (if binderFree then pprodMk else psigmaMk) ℓt ℓi st β sv snd
 
 /-- The recursor's destructor for one chain: from `scrut : chain`, an
 element of `target (wrap scrut)` — `wrap` embeds a suffix value into the
@@ -125,8 +145,10 @@ application that proof is a closed self-equality which K-like reduction on
 
 `chain` is `scrut`'s type, [`InductiveModels.chainTy`] of `tele`, and it is
 what every rung is read off ([`InductiveModels.chainRung`]): the walk down the
-chain builds no type at all, because each rung's family already carries the
-next rung's. -/
+chain builds no type at all, because each rung's second component already
+carries the next rung's — and it is that component, and not a mask recomputed
+here, that says whether the rung is the tight pair or the binder-free one and
+so which projection-derived `rec'` takes it apart. -/
 partial def chainDestruct (v : Level) (eqi : EqInfo)
     (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr) (chain : Expr)
     (scrut : Expr)
@@ -146,19 +168,22 @@ partial def chainDestruct (v : Level) (eqi : EqInfo)
   if nf == 1 && pad?.isNone then
     let rv ← if bx then unboxValOf t scrut else pure scrut
     return minorAt (vals.push rv)
-  let (ℓt, ℓi, st, β) ← chainRung chain
+  let (binderFree, ℓt, ℓi, st, β) ← chainRung chain
+  let mkAt := if binderFree then pprodMk else psigmaMk
   let motive ← withLocalDeclD `s chain fun s => do
     mkLambdaFVars #[s] (← target (wrap s))
   let m ← withLocalDeclD x st fun xv => do
     let rv ← if bx then unboxValOf t xv else pure xv
-    -- The tail's chain type, which the rung's family already carries: the
-    -- recursion descends at the very variable `β` abstracts, so this is what
-    -- rebuilding the tail would have returned, and it is `s`'s type either way.
-    let tailChain := (mkApp β xv).headBeta
+    -- The tail's chain type, which the rung's second component already carries:
+    -- at a binder-free rung it *is* that component, and at a rung with a family
+    -- the recursion descends at the very variable the family abstracts, so this
+    -- is what rebuilding the tail would have returned. It is `s`'s type either
+    -- way.
+    let tailChain := if binderFree then β else (mkApp β xv).headBeta
     withLocalDeclD `s tailChain fun s => do
-      let wrap' := fun (z : Expr) => wrap (psigmaMk ℓt ℓi st β xv z)
+      let wrap' := fun (z : Expr) => wrap (mkAt ℓt ℓi st β xv z)
       mkLambdaFVars #[xv, s] (← chainDestruct v eqi pad? boxed (nf - 1)
         (rest.instantiate1 rv) tailChain s wrap' target minorAt (vals.push rv) (i + 1))
-  return psigmaRec v ℓt ℓi st β motive m scrut
+  return (if binderFree then pprodRec else psigmaRec) v ℓt ℓi st β motive m scrut
 
 end InductiveModels

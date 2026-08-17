@@ -254,6 +254,15 @@ would drop them out of this row rather than merely change a carrier.
 `maybe_zero_projection` (10, was 8) and `tight_psigma_prime` (6, was 4) carry
 the same two for the same reason.
 
+**And sixty-three rows carry them now**, because the never-zero chain reaches a
+constant rung as well: any export with a `Type`-sorted owner whose stored chain
+has a rung no later field's type mentions splices the pair and models it, and
+the pair's own two fields are then projection-eligible on the same terms every
+other one-constructor record's are. So the +2 in each of those rows is the pair
+and nothing about the owner that occasioned it. `default_ctor_iota` is the one
+that moved off zero: it had no projection-eligible owner of its own, and its
+whole row is now the pair's.
+
 `mutual_one_layer_boundary` is 7 and not 18 because its only consumer of the W
 core was an index erasure with no base constructor: arm E models that skeleton
 by the lift of `⊥`, so the `_wcore` fragment is not spliced there at all and
@@ -280,41 +289,42 @@ fields, restoring the one-layer adapter over a W carrier past the two
 `TwinInf` has.  Each is one-constructor and so projection-eligible, and their
 three, four and four fields are the whole of the difference. -/
 def expectedProjectionIotas : Array (String × Nat) :=
-  #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 21),
-    ("dead_owner_mention", 13), ("decline_no_eq", 11), ("default_ctor_iota", 0), ("degenerate_graph", 1),
-    ("dependent_fields", 11), ("e_dependent_field", 18), ("empty_no_base", 16),
-    ("filtered/nat_char_equations", 3),
-    ("filtered/nested_deep", 11), ("filtered/nested_iota", 13),
-    ("filtered/nested_iota_arm", 11), ("filtered/nested_keying", 11),
-    ("filtered/nested_shapes", 17), ("funext_binder", 19),
-    ("hard_nested_mutual_index", 11), ("imax_box", 3), ("indexed_container", 11),
-    ("indexed_decl", 11), ("indexed_fibre_boundary", 57),
-    ("indexed_hidden_erasure", 11), ("infinitary", 23), ("maybe_zero_indexed", 0),
+  #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 23),
+    ("dead_owner_mention", 15), ("decline_no_eq", 13), ("default_ctor_iota", 2),
+    ("degenerate_graph", 1),
+    ("dependent_fields", 13), ("e_dependent_field", 20), ("empty_no_base", 18),
+    ("filtered/nat_char_equations", 5),
+    ("filtered/nested_deep", 13), ("filtered/nested_iota", 15),
+    ("filtered/nested_iota_arm", 13), ("filtered/nested_keying", 13),
+    ("filtered/nested_shapes", 19), ("funext_binder", 21),
+    ("hard_nested_mutual_index", 13), ("imax_box", 3), ("indexed_container", 13),
+    ("indexed_decl", 13), ("indexed_fibre_boundary", 59),
+    ("indexed_hidden_erasure", 13), ("infinitary", 25), ("maybe_zero_indexed", 0),
     ("maybe_zero_pad", 16),
-    ("maybe_zero_projection", 10), ("maybe_zero_recursive", 0), ("mutual_index", 6),
+    ("maybe_zero_projection", 10), ("maybe_zero_recursive", 0), ("mutual_index", 8),
     ("mutual_keying", 2),
-    ("mutual_nonrec", 2), ("mutual_odd_shapes", 15),
-    ("mutual_one_layer_boundary", 7), ("mutual_prop", 1), ("mutual_shapes", 18),
-    ("mutual_structure_projections", 3), ("nest_binder_cross", 23),
-    ("nest_cycle_group", 13), ("nest_fam_arg", 39), ("nest_family_edges", 13),
-    ("nest_index_cross", 14), ("nest_mutual_both", 13), ("nest_mutual_cycle", 11),
-    ("nest_mutual_index", 13), ("nest_odd_shapes", 31), ("nest_sorts", 17),
-    ("nest_through_mutual", 13), ("nest_through_nested", 11), ("nested_deep", 11),
-    ("nested_default_iota", 17), ("nested_iota", 13), ("nested_iota_arm", 11),
-    ("nested_keying", 11), ("nested_mutual_indexed_container", 11),
-    ("nested_one_layer", 17), ("nested_shapes", 17), ("nested_value_dependency", 27),
-    ("nonindexed_vanishing", 0), ("poly_nested", 13), ("prim_carve", 17),
-    ("prim_declines", 16), ("prim_graph", 8), ("prim_graph_pre", 2), ("prim_idx", 19),
-    ("prim_late_basis", 14), ("prim_late_eq", 1),
+    ("mutual_nonrec", 2), ("mutual_odd_shapes", 17),
+    ("mutual_one_layer_boundary", 9), ("mutual_prop", 1), ("mutual_shapes", 20),
+    ("mutual_structure_projections", 5), ("nest_binder_cross", 25),
+    ("nest_cycle_group", 15), ("nest_fam_arg", 41), ("nest_family_edges", 15),
+    ("nest_index_cross", 16), ("nest_mutual_both", 15), ("nest_mutual_cycle", 13),
+    ("nest_mutual_index", 15), ("nest_odd_shapes", 33), ("nest_sorts", 19),
+    ("nest_through_mutual", 15), ("nest_through_nested", 13), ("nested_deep", 13),
+    ("nested_default_iota", 19), ("nested_iota", 15), ("nested_iota_arm", 13),
+    ("nested_keying", 13), ("nested_mutual_indexed_container", 13),
+    ("nested_one_layer", 19), ("nested_shapes", 19), ("nested_value_dependency", 27),
+    ("nonindexed_vanishing", 2), ("poly_nested", 15), ("prim_carve", 19),
+    ("prim_declines", 18), ("prim_graph", 8), ("prim_graph_pre", 4), ("prim_idx", 19),
+    ("prim_late_basis", 16), ("prim_late_eq", 1),
     ("prim_prop_skipped_field", 4), ("prim_shape_declines", 0),
-    ("prim_shapes", 22), ("prim_w", 46),
-    ("private_constructor", 1), ("prop_projection_boundaries", 12),
-    ("prop_recursive_projections", 3), ("source_structure_syntax", 5),
-    ("structure_eta", 12), ("structure_projections", 17),
+    ("prim_shapes", 24), ("prim_w", 48),
+    ("private_constructor", 3), ("prop_projection_boundaries", 12),
+    ("prop_recursive_projections", 3), ("source_structure_syntax", 7),
+    ("structure_eta", 12), ("structure_projections", 19),
     ("tight_prop_field_late", 1), ("tight_psigma_prime", 6),
-    ("transparent_owner_aliases", 1), ("unitlike", 6), ("w_alias", 11),
-    ("w_core", 11), ("w_dependent_field", 28), ("w_imax", 11), ("w_late_iff", 11),
-    ("w_max", 11)]
+    ("transparent_owner_aliases", 3), ("unitlike", 6), ("w_alias", 13),
+    ("w_core", 13), ("w_dependent_field", 30), ("w_imax", 13), ("w_late_iff", 13),
+    ("w_max", 13)]
 
 def main (args : List String) : IO UInt32 := do
   initSearchPath (← findSysroot)

@@ -35,14 +35,14 @@ def padsAt (plans : Array CPlan) :
     return some { ty := unitAt ℓ, lv := ℓ, canon := unitAtCanon ℓ, canonical := true }
 
 /-- The constructors, analysed at a parameter scope. -/
-def pctorsAt (exportCtors : Array (Name × Expr)) (plans : Array CPlan)
+def pctorsAt (pairs : Bool) (exportCtors : Array (Name × Expr)) (plans : Array CPlan)
     (pads : Array (Option Pad)) (ps : Array Expr) : GenM (Array PCtor) := do
   (Array.range exportCtors.size).mapM fun j => do
     let (_, cty) := exportCtors[j]!
     let tele ← instForall cty ps
     let nf := numForalls tele
     let boxed := plans[j]!.boxed
-    let (chain, _) ← chainTy pads[j]! boxed nf tele
+    let (chain, _) ← chainTy pairs pads[j]! boxed nf tele
     return { tele, nf, pad? := pads[j]!, boxed, chain }
 
 /-- Which route the carrier's sort admits: `Sort 0` is the Church encoding, a

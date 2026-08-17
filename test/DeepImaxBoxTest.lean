@@ -169,6 +169,11 @@ def main : IO UInt32 := do
   -- `max 1 u` is positive but has no syntactic predecessor. Arm W therefore
   -- builds its core in `Type` and exposes it at the literal public sort through
   -- the constrained lift `PSigma' low (fun _ => PSigma' True (fun _ => PUnit))`.
+  --
+  -- The statement and family counts below carry the binder-free pair as well.
+  -- Both of these exports have a stored chain with a rung no later field's type
+  -- mentions, so each splices `PProd'` and models it: one more model family and
+  -- six more public statements, and nothing about arm W itself.
   let maxRaw ← readExport "test/fixtures/inductive-models/w_max.ndjson"
   let (maxGenerated, maxReport, _) ← runExport maxRaw
   let maxModel := Naming.modelName `WMax
@@ -176,7 +181,7 @@ def main : IO UInt32 := do
     maxReport.generated.any (· == (`WMax, 224)) &&
       !maxReport.declined.any (·.1 == `WMax)
   state := state.check "predecessor-free W keeps its exact recursor statements" <|
-    maxReport.stmtChecked == 67 && maxReport.stmtErrors.isEmpty
+    maxReport.stmtChecked == 73 && maxReport.stmtErrors.isEmpty
   state := state.check "predecessor-free W carrier uses the derived constrained lift" <|
     (declarationValue? maxGenerated maxModel).any fun value =>
       containsConst `PSigma' value && containsConst `PUnit value &&
@@ -188,7 +193,7 @@ def main : IO UInt32 := do
   let maxInputCheck := Check.checkReport maxSerialized
   state := state.check "predecessor-free W passes output and serialized input Check" <|
     maxOutputCheck.violations.isEmpty && maxInputCheck.violations.isEmpty &&
-      maxOutputCheck.familiesChecked == 19 && maxInputCheck.familiesChecked == 19
+      maxOutputCheck.familiesChecked == 20 && maxInputCheck.familiesChecked == 20
 
   -- Recursive-result recognition may unfold a transparent former, but the
   -- model interface may not. `AliasW.lim` is accepted as infinitary because
@@ -216,9 +221,9 @@ def main : IO UInt32 := do
   let inputCheck := Check.checkReport aliasSerialized
   state := state.check "transparent W alias passes output and serialized input Check" <|
     outputCheck.violations.isEmpty && inputCheck.violations.isEmpty &&
-      outputCheck.familiesChecked == 20 && inputCheck.familiesChecked == 20
+      outputCheck.familiesChecked == 21 && inputCheck.familiesChecked == 21
   state := state.check "transparent W alias recursor statements remain literal" <|
-    aliasReport.stmtChecked == 70 && aliasReport.stmtErrors.isEmpty
+    aliasReport.stmtChecked == 76 && aliasReport.stmtErrors.isEmpty
 
   IO.println s!"deep imax box: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

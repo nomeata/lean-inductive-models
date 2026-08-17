@@ -305,7 +305,8 @@ instance of one of the others.
   `Sort (max u v)`. `PProd'` is spliced support rather than a basis member: it
   is modelled like any inductive a construction introduces, by the plain
   `PSigma'` tower, since a tower over its own two independent fields would be a
-  `PProd'`. The *indexed*
+  `PProd'`. The `Type` route's chain does the same at the same rungs. The
+  *indexed*
   case wraps that same tower in a `Prop`-valued packed Henry-Ford equation
   saying which fibre the storage sits in, and is disjoint from the other two by
   its own guard; the two exact answers are taken before the tower so that their
@@ -336,7 +337,10 @@ instance of one of the others.
   spine is deliberately linear: one bare recursive field per constructor. That
   is the whole of what separates it from arm W, and the two are split by cost
   rather than by reach — the tower costs `Nat`, `PSigma'` and no axiom, and
-  every one of its ι rules is `Eq.refl`.
+  every one of its ι rules is `Eq.refl`. A constructor's chain carries its
+  constant rungs in `PProd'` exactly as the direct route's tower does, and
+  splices the pair where it does; the chain's constructor and destructor read
+  each rung's shape off the carrier's own type rather than deciding it again.
 - **Church**, with **G** inside it — the fallback for the `Prop` and maybe-zero
   routes, which is why neither of those routes has an unreached shape. The
   carrier is the impredicative Church encoding, under the derived lift at a
