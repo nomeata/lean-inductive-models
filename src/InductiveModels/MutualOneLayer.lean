@@ -134,6 +134,39 @@ private def exactFamilySource (env : Environment) (all : Array Name)
   let mapping := modelTable env all publicIso
   restore mapping expression
 
+/-! ## The `!` lookups, and why they are total
+
+`panic!` prints and returns the `Inhabited` default; it does not abort.  A
+`getD (panic! …)` that fired would therefore hand `Name.anonymous` to the rest
+of construction and emit a model built from it, so "cannot happen" has to mean
+*established before the lookup*, not *never seen*.
+
+These four helpers are pure — `badShape` is a `GenM` action and is not
+available in them — and they are read at some fifty sites.  Threading `GenM`
+through them would put a monad on every reader for a condition none of them
+can act on differently, so the preconditions are established once instead, at
+the single entry point every path runs through
+([`mutualOneLayerBase`], reached from [`mutualOneLayerIso`] via
+[`mutualOneLayerFields`], which is the module's only external caller):
+
+* `classifyMutualOneLayer` returns one `MutualMemberShape` per source type in
+  `types` order, so `familyMember!` is total for any owner in `all`; and
+  `certificateMembers` is `all.map`, so `familyCertificateMember!` is too.
+  Every owner either comes from `all` or is a field's `directMutualTarget?`,
+  which only ever answers with a member of `all`.
+* `classifyMutualOneLayer` also declines unless every name in a `type.ctors`
+  has an exact constructor record whose `induct` is that type, and
+  `privateConstructors` is exactly that filter, so `privateConstructor!` is
+  total for any constructor of its member's owner.
+* `mutualOneLayerBase` declines unless each owner has its own `rec` record
+  whose rules cover that owner's constructors, which is what `privateIotas` is
+  built from, so `privateIota!` is total for the same constructors; and unless
+  every recursor in the block belongs to an owner in it, which is what
+  `sourceRecursorOwner!` and the recursor-plan owner lookup read.
+
+Keep that guard in step with these lookups: it, and not the `panic!` strings,
+is what makes a malformed source block a decline. -/
+
 private def familyMember! (members : Array MutualMemberShape) (owner : Name) :
     MutualMemberShape :=
   members.find? (·.owner == owner) |>.getD (panic! s!"missing mutual member {owner}")
@@ -337,6 +370,25 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
   let recursors := sourceRecursors.toArray
   let some members ← classifyMutualOneLayer types constructors
     | badShape "the mutual family is outside the bounded one-layer tranche"
+  -- **The recursor half of the totality precondition** — see the note above
+  -- `familyMember!`.  `classifyMutualOneLayer` has already established that
+  -- `members` covers `all` and that every name in a `type.ctors` has its own
+  -- exact constructor record; nothing yet says the block carries a recursor
+  -- per owner, whose rules cover that owner's constructors, and no recursor
+  -- belonging to an owner outside the block.  Those are the facts the
+  -- certificate's `privateIotas` and `privateRules` are read back through, and
+  -- the source is the only thing that can falsify them, so they are checked
+  -- here, once, where a failure is a decline instead of a `panic!` that
+  -- continues.
+  for type in types do
+    let some recursor := recursors.find? (·.name == Name.str type.name "rec")
+      | badShape s!"the mutual block has no exact recursor for {type.name}"
+    for constructorName in type.ctors do
+      unless recursor.rules.any (·.ctor == constructorName) do
+        badShape s!"{recursor.name} has no rule for {constructorName}"
+  for recursor in recursors do
+    unless types.any (Name.str ·.name "rec" == recursor.name) do
+      badShape s!"{recursor.name} is not a recursor of the mutual block"
   let all := types.map (·.name)
   let root := all[0]!
   let buildRoot := buildRoot?.getD root
