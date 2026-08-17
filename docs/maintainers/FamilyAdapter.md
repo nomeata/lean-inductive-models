@@ -1,5 +1,51 @@
 # Generic family-adapter design
 
+> **Status: parked experiment. Nothing here is part of the shipped tool.** The
+> family adapter was an attempt at a fourth step layered on the generator, to
+> replace the fixed-shape routes with one keyed finite-array construction. It is
+> **disabled and emits nothing**: no route selection, no serialized output, no
+> report. It is absent from `src/` entirely — `Driver` reaches an observation
+> only through the opaque `InductiveModels.IslandObserver α := EDecl → Iso →
+> MetaM α`, which names no adapter type, and production supplies no observer.
+> All three layers live under `test/` (`FamilyAdapterPlan.lean`,
+> `FamilyAdapterShadow.lean`, `FamilyAdapterConstruction.lean`) behind their own
+> Lake targets, so the library and the `lean-inductive-models` executable
+> compile none of them. **Read this document as a design record of a parked
+> branch, not as a description of how the tool works today.**
+
+## What someone reviving it would need to know
+
+* **The construction's declarations are not kernel-checked on `main`.**
+  `Gen.Monad.addChecked` is `addDeclCore … (doCheck := false)`: it installs a
+  declaration into the disposable construction environment and confirms
+  `find?` visibility, nothing more. Every "accepted by the kernel" claim below
+  means *accepted by that unchecked install*, plus the construction's own
+  `isDefEq` comparisons. The generated-island kernel gate
+  (`--type-check-generated`) covers emitted records, and the adapter emits
+  none.
+* **The one real measurement is 77 of 122.** On the branch, an observer
+  replays the exact declaration array the construction returned into a scratch
+  environment with kernel checking enabled, in build order. **77 of the 122
+  accepted families are kernel-clean**, over 60 distinct roots, with no root
+  clean in one fixture and rejected in the other. The remaining **45 are
+  rejected**, in four groups: `decodeEncode` (17), `publicIota` (15),
+  `callableRecursorMinorAgreement` (12), `publicRecursor` (1). They are left
+  failing. That census is the *only* evidence about these proofs; nothing on
+  `main` reproduces it.
+* **The work is on branch `joachim/general-model-adapter`** (tip `1a58b2c`,
+  "Kernel-check the observed adapter declarations", which is where the census
+  above comes from). It is well behind `main` and would need rebasing.
+* **What still runs on `main`:** `lake exe familyadapterplantest`,
+  `lake exe familyadaptershadowtest`, `lake exe familyadapterconstructiontest`,
+  and the compile-only `FamilyAdapterPlan` / `FamilyAdapterShadow` /
+  `FamilyAdapterConstruction` libraries. `docs/maintainers/Testing.md` lists
+  them. Those tests pass; they establish structure and `isDefEq`, not kernel
+  acceptance.
+
+The rest of this document is the design as the branch left it.
+
+## Layering
+
 `FamilyAdapterPlan` is the source-derived representation for a future
 one-layer adapter. It replaces unary/binary, singleton, indexed, nested, and
 mutual shape cases with keyed finite arrays. `FamilyAdapterShadow` derives this
@@ -60,7 +106,9 @@ one packed result-index equality, exact installed minor/IH associations, and
 one finite IH-transport compatibility theorem per exact rule.
 Construction starts only from a complete exact-source shadow. Every reused
 member map and inverse law has its exact installed type checked, and every new
-declaration is accepted by the kernel before its name enters the certificate.
+declaration is installed by `addChecked` before its name enters the
+certificate — which, as the status note above says, is an *unchecked* install
+(`doCheck := false`), not a kernel verdict.
 Certificates stay as `Name` and `Expr` values in the incremental Lean
 environment; they are never serialized through JSON.
 
@@ -102,7 +150,9 @@ The proof is structural, with no clause selected by a cardinality.
    the source-recorded motive and minor arities. Constructor keys select the
    minor and occurrence keys select the literal IH binder, including shared
    hypotheses for multiple occurrences in one field. The prototype emits one
-   kernel-checked minor-compatibility theorem per rule. It deduplicates the
+   minor-compatibility theorem per rule —
+   `callableRecursorMinorAgreement` is one of the four groups the 77-of-122
+   census rejects, so these are exactly the proofs not to trust. It deduplicates the
    keyed literal binder sequence, then folds equality transport over that
    finite sequence: each distinct IH binder contributes one `Eq.rec`, while
    two source occurrences sharing an IH contribute one step. The certificate
