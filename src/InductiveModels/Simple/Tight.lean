@@ -294,60 +294,55 @@ partial def tightTowerPrepend (tower : TightTower) (pre : Array Expr) (k : Nat)
   return mkAppN (.const `PSigma'.mk [u, v])
     #[α, snd, pre[k]!, ← tightTowerPrepend tower pre (k + 1) tail]
 
-/-- **The block taken apart**, one `PProd'.rec'` per node of the balanced tree.
+/-- **The tower taken apart**, one `PSigma'.rec'` per spine rung and, for the
+block, no eliminator at all: the leaves are *read* by primitive projection
+([`InductiveModels.tightBlockProjs`]) and the minor premise is applied to the
+fields at their source positions.
 
-`rebuild` carries this subtree's value back to the whole tower value the motive
-is stated about, and `cont` is what the traversal owes once every leaf under
-this subtree is bound: the leaves to its right, and finally the minor at the
-fields in their **source** order.
+### Why the block is read and the spine is eliminated
 
-The right subtree's `rebuild` names the left subtree rebuilt from its own
-leaves, because by then the left subtree's value has been taken apart. That is
-where a right-nested block pays `O(n²)` and a balanced one pays `O(n log n)`:
-the term a node writes down is the size of its left sibling. -/
-partial def tightBlockRec (s : Level) (tower : TightTower) (motive minor : Expr)
-    (block value : Expr) (lo hi : Nat) (rebuild : Expr → GenM Expr)
-    (vals : Array Expr) (cont : Array Expr → Expr → GenM Expr) : GenM Expr := do
-  if hi ≤ lo + 1 then
-    match tower.leaves[lo]! with
-    -- **The pad is dropped**, and that is well typed and not a coincidence: the
-    -- branch owes `motive ⟨f⃗, t⟩` for the bound pad `t`, the minor delivers
-    -- `motive ⟨f⃗, canon⟩`, and `t ≡ canon` is a conversion the kernel performs
-    -- — tight-pair and `PUnit` structure eta expand `t` against the literal
-    -- pair `canon` is, and proof irrelevance closes its `⊤` component. No
-    -- transport rides along and the recursor's ι rule stays `Eq.refl`.
-    | none => cont vals value
-    | some i => cont (vals.set! i value) value
-  else
-    let (u, v, α, β) ← blockNode block
-    let mid := blockSplit lo hi
-    let mk := fun (left right : Expr) =>
-      mkAppN (.const `PProd'.mk [u, v]) #[α, β, left, right]
-    let targetMotive ← withLocalDeclD `tail block fun tail => do
-      mkLambdaFVars #[tail] (mkApp motive (← rebuild tail))
-    let branch ← withLocalDeclD `fst α fun a => withLocalDeclD `snd β fun b => do
-      let body ← tightBlockRec s tower motive minor α a lo mid
-        (fun z => rebuild (mk z b)) vals
-        (fun vals' left =>
-          tightBlockRec s tower motive minor β b mid hi
-            (fun z => rebuild (mk left z)) vals'
-            (fun vals'' right => cont vals'' (mk left right)))
-      mkLambdaFVars #[a, b] body
-    return mkAppN (.const `PProd'.rec' [u, v, s]) #[α, β, targetMotive, branch, value]
+The block used to be eliminated by one `PProd'.rec'` per node, each carrying a
+motive `fun tail => motive (prepend pre tail)` — and `prepend` writes down every
+spine rung above the block. A block of `n` leaves under a spine of `m` rungs
+therefore wrote the spine down `n - 1` times and had the kernel check each copy,
+which is the cost a record with a dependent head and a tail of independent proof
+fields pays twice over.
 
-/-- **The tower taken apart**, one `PSigma'.rec'` per spine rung and one
-`PProd'.rec'` per block node, with the minor premise applied to the fields at
-their source positions. -/
+Reading the block costs one conversion instead, at the end: the minor's type
+says `motive (ctor f⃗)`, `ctor` unfolds to [`InductiveModels.tightTowerMk`], and
+this owes `motive value` — so the kernel must see `blockMk (projs value) ≡ value`,
+which is `PProd'` structure eta at each of the `n - 1` nodes. `PProd'` is a
+genuine single-constructor, index-free inductive
+([`InductiveModels.pprodPrimeDecl`]), so it has both primitive projections and
+that conversion, and `PProd'.rec'`'s own body already spends it.
+
+**The pad is still dropped**, and for the reason it always was: the tower stores
+`canon` at that leaf and the projection reaches an element of the same
+singleton, so the conversion closes there by tight-pair and `PUnit` structure eta
+plus proof irrelevance. No transport rides along and the recursor's ι rule stays
+`Eq.refl`.
+
+**What still says leaf `k` is source field `k`.** The old check was the ι rule,
+`Eq.refl` at the minor applied in source order. This is the same check on the
+same fields: if the fill and [`InductiveModels.tightBlockTy`]'s split disagreed
+by a permutation, the conversion would ask the kernel to equate two *distinct*
+projection paths applied to the **variable** `value`. Neither is a redex, so the
+kernel refuses them unless they are the same path — and distinct leaves have
+distinct paths. `tightBlockTy`, `tightBlockMk` and `tightBlockProjs` split the
+same leaf range by [`InductiveModels.blockSplit`], which is a function of the
+leaf count alone.
+
+The spine keeps its recursor because its rungs are *dependent*: a later rung's
+type mentions an earlier field, so a projection path into it is not the term the
+minor's telescope was opened at. -/
 partial def tightTowerRec (s : Level) (tower : TightTower) (motive minor value : Expr)
     (k : Nat := 0) (pre : Array Expr := #[]) : GenM Expr := do
   if k == tower.spine.size then
-    let block := tightSpineSubst tower pre (← tightBlockTy tower)
+    if tower.leaves.isEmpty then badShape "a tight tower with no fields needs a pad"
     let mut vals := Array.replicate tower.fields.size value
     for j in [0:pre.size] do
       vals := vals.set! tower.spine[j]! pre[j]!
-    return ← tightBlockRec s tower motive minor block value 0 tower.leaves.size
-      (fun z => tightTowerPrepend tower pre 0 z) vals
-      (fun fieldValues _ => pure (mkAppN minor fieldValues))
+    return mkAppN minor (tightBlockProjs tower vals value 0 tower.leaves.size)
   let (u, v, α, snd) ← tightTowerAt tower k pre
   let tailType := mkAppN (.const `PSigma' [u, v]) #[α, snd]
   let targetMotive ← withLocalDeclD `tail tailType fun tail => do

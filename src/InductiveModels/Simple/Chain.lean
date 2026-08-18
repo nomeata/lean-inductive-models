@@ -199,53 +199,81 @@ partial def chainTuple (pairs : Bool) (pad? : Option Pad) (boxed : Array Bool) (
 whether it is stored boxed and the type the box was taken of. -/
 abbrev BlockLeaf := Option (Nat × Bool × Expr)
 
-/-- **The block taken apart**, one `PProd'.rec'` per node of the balanced tree.
+/-- **The block read out**, each leaf at the primitive projection path that
+reaches it: `.proj PProd' 0` into the left subtree, `.proj PProd' 1` into the
+right, `log n` deep, with a one-leaf block reached by no projection at all.
 
-`rebuild` carries this subtree's value back to the whole chain value the target
-is stated about — the spine's `PSigma'.mk`s above and this subtree's `PProd'.mk`
-ancestors — and `cont` is what the traversal owes once every leaf under this
-subtree is bound: the leaves to its right, and finally the minor.
+**It builds no types.** A primitive `.proj` carries the structure's name and a
+field index and nothing else, so the walk needs only the split
+[`InductiveModels.blockSplit`] already decides — not a node's `α`, not its `β`,
+not either level. The array is leaf-indexed; the caller moves each leaf to its
+**source** field position.
 
-The right subtree's `rebuild` names the left subtree **rebuilt from its own
-leaves**, because by the time it runs the left subtree's value has been taken
-apart. That is where a right-nested block pays `O(n²)` and a balanced one pays
-`O(n log n)`: the term a node has to write down is the size of its left sibling,
-and the sum of those over a balanced tree is `n log n`. -/
-partial def blockDestruct (v : Level) (eqi : EqInfo) (pad? : Option Pad)
-    (leaves : Array BlockLeaf) (block value : Expr) (lo hi : Nat)
-    (rebuild : Expr → Expr) (target : Expr → GenM Expr)
-    (vals : Array Expr) (cont : Array Expr → Expr → GenM Expr) : GenM Expr := do
-  if hi ≤ lo + 1 then
-    match leaves[lo]! with
-    | some (idx, bx, t) =>
-      let rv ← if bx then unboxValOf t value else pure value
-      return ← cont (vals.set! idx rv) value
-    | none =>
-      -- **The pad, and the one place a chain can still transport.** A canonical
-      -- pad costs nothing — `value` is defeq to the pad's canonical element, so
-      -- the applied minor already has the target type. A
-      -- [`InductiveModels.unitAt`] pad is discharged by transporting the applied
-      -- minor along [`InductiveModels.unitAtUniq`], and on a constructor
-      -- application that proof is a closed self-equality which K-like reduction
-      -- on `Eq.rec` erases — ι stays `Eq.refl` on both.
-      let some p := pad? | badShape "internal: a block pad leaf with no pad"
-      if p.canonical then return ← cont vals value
-      return ← transportAlong eqi v p.lv p.ty p.canon value
-        (unitAtUniq eqi p.lv value) (← cont vals p.canon)
-        (fun z => target (rebuild z))
-  let (ℓa, ℓb, α, β) ← blockNode block
-  let mid := blockSplit lo hi
-  let motive ← withLocalDeclD `s block fun s => do
-    mkLambdaFVars #[s] (← target (rebuild s))
-  let m ← withLocalDeclD `fst α fun a => withLocalDeclD `snd β fun b => do
-    let body ← blockDestruct v eqi pad? leaves α a lo mid
-      (fun z => rebuild (pprodMk ℓa ℓb α β z b)) target vals
-      (fun vals' left =>
-        blockDestruct v eqi pad? leaves β b mid hi
-          (fun z => rebuild (pprodMk ℓa ℓb α β left z)) target vals'
-          (fun vals'' right => cont vals'' (pprodMk ℓa ℓb α β left right)))
-    mkLambdaFVars #[a, b] body
-  return pprodRec v ℓa ℓb α β motive m value
+This is [`InductiveModels.tightBlockProjs`] over the same tree, and the two
+routes read the block the same way for the same reason. -/
+partial def blockPaths (out : Array Expr) (value : Expr) (lo hi : Nat) : Array Expr :=
+  if hi ≤ lo + 1 then out.set! lo value
+  else
+    let mid := blockSplit lo hi
+    blockPaths (blockPaths out (.proj `PProd' 0 value) lo mid)
+      (.proj `PProd' 1 value) mid hi
+
+/-- **The block taken apart by projection**, from the chain's innermost spine
+value.
+
+`vals` is the destructor's field vector, at **source** indices; the leaves it
+still owes are exactly the block's, so this fills them and returns it. The pad
+leaf fills nothing: the minor's telescope is the source constructor's and has no
+binder for it.
+
+### Why this is a projection and not a `PProd'.rec'`
+
+The block used to be eliminated by one `PProd'.rec'` per node, each carrying a
+motive `fun s => target (rebuild s)` — and `rebuild` names the whole chain value
+the target is stated about, spine `PSigma'.mk`s included. A block of `n` leaves
+under a spine of `m` rungs therefore wrote the spine down `n - 1` times, and the
+kernel type-checked each copy. That is what the split was costing on a record
+whose fields are mostly dependent and whose *tail* is a run of independent proof
+fields: a long spine and a wide block are the same declaration.
+
+Reading the block instead costs one conversion, once, at the end: the minor's
+own type says `motive (ctor f⃗)`, `ctor` unfolds to the chain's tuple, and the
+destructor owes `motive ⟨j̄, scrut⟩` — so the kernel must see
+`blockTuple (paths scrut) ≡ scrut`, which is `PProd'` structure eta at each of
+the `n - 1` nodes. Not the *proof* of eta — that is what `PProd'.rec'` is for
+and what its own body spends — but the kernel's structure-eta conversion, which
+expands a neutral `scrut` against a literal `PProd'.mk` and compares
+componentwise. `PProd'` is a genuine single-constructor, index-free inductive
+([`InductiveModels.pprodPrimeDecl`]), so it has both primitive projections and
+that conversion; nothing here is assumed that `PProd'.rec'`'s own kernel check
+does not already assume.
+
+### What still says leaf `k` is source field `k`
+
+The recursor's ι rule was the old check: it is `Eq.refl` at the minor applied in
+source order, so a mis-filled slot was a kernel rejection. **The conversion above
+is the same check, and on the same fields.** Suppose the fill below and
+[`InductiveModels.chainTy`]'s split disagreed by a permutation `π` of the block's
+leaves. Then `blockTuple` puts the path to leaf `π ℓ` where the carrier stores
+leaf `ℓ`, and the conversion asks the kernel for
+`.proj⃗ (path ℓ) scrut ≡ .proj⃗ (path (π ℓ)) scrut` — two *distinct* projection
+paths applied to a **variable**. Neither is a redex, so neither reduces, and the
+kernel refuses them unless the paths are the same path. Distinct leaves have
+distinct paths by construction, so `π` is the identity or the recursor does not
+typecheck. A silent permutation among same-typed fields is not available here
+either.
+
+The three walks that have to agree agree because they are one walk: `chainTy`,
+`chainTuple` and this function all descend the telescope by
+`rest.hasLooseBVar 0` and split the leaf range by
+[`InductiveModels.blockSplit`], which is a function of the leaf count alone. -/
+def blockFill (leaves : Array BlockLeaf) (paths vals : Array Expr) :
+    GenM (Array Expr) := do
+  let mut vals := vals
+  for l in [0:leaves.size] do
+    if let some (idx, bx, t) := leaves[l]! then
+      vals := vals.set! idx (← if bx then unboxValOf t paths[l]! else pure paths[l]!)
+  return vals
 
 /-- The recursor's destructor for one chain: from `scrut : chain`, an
 element of `target (wrap scrut)` — `wrap` embeds a suffix value into the
@@ -256,8 +284,8 @@ plan boxed it.
 `chain` is `scrut`'s type, [`InductiveModels.chainTy`] of `tele`, and it is
 what every rung is read off ([`InductiveModels.chainRung`]): the walk down the
 spine builds no type at all, because each rung's family already carries the
-next rung's. The block underneath it is bound by
-[`InductiveModels.blockDestruct`], and the fields land in `vals` at their
+next rung's. The block underneath it is *read* rather than eliminated
+([`InductiveModels.blockPaths`]), and the fields land in `vals` at their
 **source** index rather than in the order the storage binds them — which is the
 whole of the bookkeeping the split costs, since the minor's telescope is the
 source constructor's. -/
@@ -270,8 +298,23 @@ partial def chainDestruct (v : Level) (eqi : EqInfo) (pairs : Bool)
   if nf == 0 then
     let leaves := if pad?.isSome then leaves.push none else leaves
     if leaves.isEmpty then badShape "a chain with no fields needs a pad"
-    return ← blockDestruct v eqi pad? leaves chain scrut 0 leaves.size wrap target vals
-      (fun vals _ => pure (minorAt vals))
+    let n := leaves.size
+    let paths := blockPaths (Array.replicate n scrut) scrut 0 n
+    let vals ← blockFill leaves paths vals
+    -- **The pad, and the one place a chain can still transport.** A canonical
+    -- pad costs nothing — the path that reaches it is defeq to the pad's
+    -- canonical element, so the applied minor already has the target type and
+    -- the conversion above closes at that leaf like any other. A
+    -- [`InductiveModels.unitAt`] pad is discharged by transporting the applied
+    -- minor along [`InductiveModels.unitAtUniq`], and on a constructor
+    -- application that proof is a closed self-equality which K-like reduction on
+    -- `Eq.rec` erases — ι stays `Eq.refl` on both. The block is rebuilt here and
+    -- only here, because only here is there a term to state the transport about.
+    let some p := pad? | return minorAt vals
+    if p.canonical then return minorAt vals
+    return ← transportAlong eqi v p.lv p.ty p.canon paths[n - 1]!
+      (unitAtUniq eqi p.lv paths[n - 1]!) (minorAt vals)
+      (fun z => do target (wrap (← blockTuple chain (paths.set! (n - 1) z) 0 n)))
   let .forallE x t rest _ := tele | badShape "field telescope shorter than the field count"
   let bx := boxed[i]?.getD false
   if nf == 1 && pad?.isNone && leaves.isEmpty then
