@@ -53,6 +53,53 @@ def metadataFailureInstalls (x : Export) (name : Name) : IO Bool := do
     return !accepted result && (← getEnv).constants.contains name
   return (← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }).1
 
+/-- **`bad/rec-missing-ih`'s defect, written by hand.** A recursor rule's
+right-hand side ends in the induction hypothesis it applies, so dropping the
+application's last argument leaves `minor x⃗` where the recursor's own type
+asserts `minor x⃗ ih`. -/
+def dropLastRuleArgument : Expr → Option Expr
+  | .lam name domain body info => (dropLastRuleArgument body).map (.lam name domain · info)
+  | .app function _ => some function
+  | _ => none
+
+def corruptFirstRecursorRule (x : Export) : Option Export := Id.run do
+  for index in [0:x.decls.size] do
+    let some (.induct types constructors recursors) := x.decls[index]? | continue
+    for recursorIndex in [0:recursors.length] do
+      let some recursor := recursors[recursorIndex]? | continue
+      for ruleIndex in [0:recursor.rules.length] do
+        let some rule := recursor.rules[ruleIndex]? | continue
+        -- A rule of the recursor's own block: a nested block's auxiliary rule
+        -- is stated at the container's constructor and the check leaves it to
+        -- the metadata comparison, so corrupting one proves nothing.
+        unless constructors.any
+            (fun c => c.name == rule.ctor && recursor.all.contains c.induct) do
+          continue
+        let some rhs := dropLastRuleArgument rule.rhs | continue
+        let rules := recursor.rules.set ruleIndex { rule with rhs }
+        let corrupted := recursors.set recursorIndex { recursor with rules }
+        return some { x with
+          decls := x.decls.set! index (.induct types constructors corrupted) }
+  return none
+
+/-- The exported ι rules of `corrupted`, at the environment `x` replays into.
+The corruption is not replayed: a rule Lean's kernel would not have derived is
+caught by the metadata comparison long before this check, so the only way to
+ask this question of a hand-written defect is to ask it directly. -/
+def ruleTypeMismatchesAfter (x corrupted : Export) : IO (Array String) := do
+  let env ← importModules #[] {}
+  let context : Core.Context :=
+    { fileName := "<kernel-check-rule-test>", fileMap := default,
+      maxHeartbeats := 0, maxRecDepth := 8192 }
+  let action : MetaM (Array String) := do
+    let mut checked := (← getEnv).toKernelEnv
+    for record in x.decls do
+      if let .ok (some declaration) := KernelCheck.replayDeclaration record then
+        if let .ok next := checked.addDeclCore 0 0 declaration none then
+          checked := next
+    KernelCheck.ruleTypeMismatches checked corrupted
+  return (← Lean.Core.CoreM.toIO (Lean.Meta.MetaM.run' action) context { env }).1
+
 def corruptFirstRecursor (x : Export) : Option Export := do
   let index ← x.decls.findIdx? fun declaration => match declaration with
     | .induct _ _ (_ :: _) => true
@@ -139,6 +186,19 @@ def run (root : String) : IO UInt32 := do
       generatedCheckOn.2.generatedKernelChecks > 0 &&
       generatedCheckOn.2.generatedKernelRejected.any
         (fun message => message.contains "DefinitelyMissingGeneratedDependency")
+
+  -- **The recursor an export carries is never replayed**, so a rule which is
+  -- not the reduct its own recursor asserts is invisible to both the replay
+  -- and the metadata comparison whenever Lean's kernel derives the same rule.
+  -- The Kernel Arena's `bad/rec-missing-ih` is that export; here the same
+  -- defect is written by hand and the check asked directly, with the fixture's
+  -- own rules — nested auxiliary ones included — as the positive control.
+  let some malformedRule := corruptFirstRecursorRule fixture
+    | IO.eprintln "kernelchecktest: fixture has no applied recursor rule"; return 1
+  let ruleMismatches ← ruleTypeMismatchesAfter fixture malformedRule
+  state := state.check "an ι rule which is not its recursor's reduct is rejected" <|
+    ruleMismatches.size == 1 && ruleMismatches.any (·.contains "is not a reduct of") &&
+      (← ruleTypeMismatchesAfter fixture fixture).isEmpty
 
   let some malformedMetadata := corruptFirstRecursor fixture
     | IO.eprintln "kernelchecktest: fixture has no recursor"; return 1
