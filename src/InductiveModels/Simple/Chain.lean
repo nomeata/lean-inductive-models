@@ -287,11 +287,70 @@ plan boxed it.
 `chain` is `scrut`'s type, [`InductiveModels.chainTy`] of `tele`, and it is
 what every rung is read off ([`InductiveModels.chainRung`]): the walk down the
 spine builds no type at all, because each rung's family already carries the
-next rung's. The block underneath it is *read* rather than eliminated
-([`InductiveModels.blockPaths`]), and the fields land in `vals` at their
+next rung's. The block underneath it is read by
+[`InductiveModels.blockPaths`], and the fields land in `vals` at their
 **source** index rather than in the order the storage binds them — which is the
 whole of the bookkeeping the split costs, since the minor's telescope is the
-source constructor's. -/
+source constructor's.
+
+### Nothing here is eliminated: the spine is read like the block
+
+The block stopped being eliminated at `da1e3f4`; the spine had the identical
+defect one level up. Each rung emitted a `PSigma'.rec'` whose motive is
+`fun s => target (wrap s)`, and `wrap` writes down every rung above it, so an
+`m`-rung spine wrote itself `m` times and the kernel checked every copy — on top
+of `m` calls to `target`, which spells out the whole model application. A record
+with a dependent head is exactly the shape that pays it.
+
+Now the descent is two primitive projections per rung: the stored value is
+`.proj PSigma' 0 scrut` and the tail is `.proj PSigma' 1 scrut`. No motive, no
+`wrap` application, no `target` call at any rung — `target` survives only for
+the non-canonical pad below, which is the one place there is a term to state a
+transport about.
+
+**This asks the kernel for nothing `PSigma'.rec'` did not already ask it.**
+`rec'` is not a kernel recursor: its body is `minor self.1 self.2` over
+primitive projections ([`InductiveModels.ensurePSigmaPrime`]), well typed only
+because `mk self.1 self.2 ≡ self`. Emitting it per rung bought the motive and
+nothing else, since it δ-unfolds to the very application built here. What is
+owed at the end is `chainTuple (paths scrut) ≡ scrut`: `PSigma'` structure eta
+at each of the `m` rungs and `PProd'` structure eta at each of the block's
+`n - 1` nodes, both genuine single-constructor, index-free inductives.
+
+**The rungs are dependent and that is fine.** Unlike the block's, a rung's type
+mentions the rungs before it — but the kernel's typing rule for `.proj` on a
+dependent structure instantiates the second component's family at the *first
+projection of the same value*, so `.proj 1 scrut` is typed at `β (.proj 0
+scrut)`. Descending by projection therefore threads each rung's dependency at
+the earlier rungs' own paths, definitionally, which is exactly the substitution
+`rest.instantiate1` performs on the telescope below. Selection stays
+definitional: these are the same paths [`InductiveModels.tightTowerProjs`] hands
+the projection overrides, and those are gated on `isDefEq` against the field's
+intrinsic codomain before an owner may emit them.
+
+### What still says rung `k` and leaf `k` are source field `k`
+
+The recursor's ι rule was the old check: it is `Eq.refl` at the minor applied in
+source order, so a mis-filled slot was a kernel rejection. **The conversion is
+the same check, and on the same fields.** Suppose the fill and
+[`InductiveModels.chainTy`]'s split disagreed by a permutation `π`. Then
+`chainTuple` puts the path to field `π k` where the carrier stores field `k`,
+and the conversion asks the kernel for
+`.proj⃗ (path k) scrut ≡ .proj⃗ (path (π k)) scrut` — two *distinct* projection
+paths applied to a **variable**. Neither is a redex, so neither reduces, and the
+kernel refuses them unless the paths are the same path. Spine paths are
+`.proj 0 (.proj 1)ᵏ`, distinct for distinct `k`; block paths are distinct by
+[`InductiveModels.blockSplit`]. So `π` is the identity or the recursor does not
+typecheck, and a silent permutation among same-typed fields is not available.
+On the spine a permutation is additionally ill-typed — a rung whose type
+mentions an earlier field cannot be offered that field's own path — but the path
+argument alone decides it, and it is the one that does not need the fields'
+types to be distinguishable.
+
+The three walks that have to agree agree because they are one walk: `chainTy`,
+`chainTuple` and this function all descend the telescope by
+`rest.hasLooseBVar 0` and split the leaf range by
+[`InductiveModels.blockSplit`], which is a function of the leaf count alone. -/
 partial def chainDestruct (v : Level) (eqi : EqInfo) (pairs : Bool)
     (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr) (chain : Expr)
     (scrut : Expr)
@@ -318,7 +377,7 @@ partial def chainDestruct (v : Level) (eqi : EqInfo) (pairs : Bool)
     return ← transportAlong eqi v p.lv p.ty p.canon paths[n - 1]!
       (unitAtUniq eqi p.lv paths[n - 1]!) (minorAt vals)
       (fun z => do target (wrap (← blockTuple chain (paths.set! (n - 1) z) 0 n)))
-  let .forallE x t rest _ := tele | badShape "field telescope shorter than the field count"
+  let .forallE _ t rest _ := tele | badShape "field telescope shorter than the field count"
   let bx := boxed[i]?.getD false
   if nf == 1 && pad?.isNone && leaves.isEmpty then
     let rv ← if bx then unboxValOf t scrut else pure scrut
@@ -329,18 +388,17 @@ partial def chainDestruct (v : Level) (eqi : EqInfo) (pairs : Bool)
     return ← chainDestruct v eqi pairs pad? boxed (nf - 1) (rest.lowerLooseBVars 1 1) chain
       scrut wrap target minorAt (vals.push scrut) (i + 1) (leaves.push (some (i, bx, t)))
   let (ℓt, ℓi, st, β) ← chainRung chain
-  let motive ← withLocalDeclD `s chain fun s => do
-    mkLambdaFVars #[s] (← target (wrap s))
-  let m ← withLocalDeclD x st fun xv => do
-    let rv ← if bx then unboxValOf t xv else pure xv
-    -- The tail's chain type, which the rung's family already carries: the
-    -- recursion descends at the very variable the family abstracts, so this is
-    -- what rebuilding the tail would have returned. It is `s`'s type.
-    let tailChain := (mkApp β xv).headBeta
-    withLocalDeclD `s tailChain fun s => do
-      let wrap' := fun (z : Expr) => wrap (psigmaMk ℓt ℓi st β xv z)
-      mkLambdaFVars #[xv, s] (← chainDestruct v eqi pairs pad? boxed (nf - 1)
-        (rest.instantiate1 rv) tailChain s wrap' target minorAt (vals.push rv) (i + 1) leaves)
-  return psigmaRec v ℓt ℓi st β motive m scrut
+  -- **A spine rung is read, not eliminated.** The rung's binder name goes
+  -- unused: the value is the projection path into `scrut`, and the recursion
+  -- descends into the tail's own path rather than under a lambda.
+  let xv := Expr.proj `PSigma' 0 scrut
+  let rv ← if bx then unboxValOf t xv else pure xv
+  -- The tail's chain type, which the rung's family already carries: the
+  -- descent happens at the very value the family abstracts, so this is what
+  -- rebuilding the tail would have returned. It is the tail path's own type.
+  let tailChain := (mkApp β xv).headBeta
+  let wrap' := fun (z : Expr) => wrap (psigmaMk ℓt ℓi st β xv z)
+  chainDestruct v eqi pairs pad? boxed (nf - 1) (rest.instantiate1 rv) tailChain
+    (.proj `PSigma' 1 scrut) wrap' target minorAt (vals.push rv) (i + 1) leaves
 
 end InductiveModels

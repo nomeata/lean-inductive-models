@@ -10,9 +10,13 @@ A maybe-`Prop` family with two or more data fields cannot use the Church route:
 at a positive universe instantiation that route remembers only inhabitation,
 so intrinsic projections could not satisfy their constructor rules.  A
 right-nested `PSigma'` retains the fields at the exact maximum of their
-universes.  Its named, projection-derived `rec'` is deliberately used rather
-than the kernel's small recursor, so the storage interface itself has no
-elimination-universe restriction.
+universes.  The storage is taken apart by **primitive `.proj`** and never by
+the kernel's own recursor, so the storage interface itself has no
+elimination-universe restriction: a projection carries no motive, so there is
+no elimination universe for a subsingleton rule to restrict.  This is why the
+pair's derived `rec'` existed here at all — it is `fun … minor self => minor
+self.1 self.2`, a projection read wearing an eliminator's type — and why the
+tower no longer needs even that ([`InductiveModels.tightTowerRec`]).
 
 ### What the tower ends in, and the level gap the end closes
 
@@ -287,37 +291,60 @@ def tightTowerProjs (tower : TightTower) (value : Expr) : Array Expr := Id.run d
     current := .proj `PSigma' 1 current
   return tightBlockProjs tower out current 0 tower.leaves.size
 
-partial def tightTowerPrepend (tower : TightTower) (pre : Array Expr) (k : Nat)
-    (tail : Expr) : GenM Expr := do
-  if k == pre.size then return tail
-  let (u, v, α, snd) ← tightTowerAt tower k (pre.extract 0 k)
-  return mkAppN (.const `PSigma'.mk [u, v])
-    #[α, snd, pre[k]!, ← tightTowerPrepend tower pre (k + 1) tail]
+/-- **The tower taken apart**, with no eliminator anywhere in it: every field —
+spine rung and block leaf alike — is *read* at the primitive projection path
+that reaches it ([`InductiveModels.tightTowerProjs`]), and the minor premise is
+applied to those paths at the fields' source positions. The recursor's whole
+body is that one application.
 
-/-- **The tower taken apart**, one `PSigma'.rec'` per spine rung and, for the
-block, no eliminator at all: the leaves are *read* by primitive projection
-([`InductiveModels.tightBlockProjs`]) and the minor premise is applied to the
-fields at their source positions.
+### Why nothing is eliminated
 
-### Why the block is read and the spine is eliminated
+The block used to be eliminated by one `PProd'.rec'` per node and **the spine by
+one `PSigma'.rec'` per rung**, each carrying a motive `fun tail => motive
+(prepend pre tail)` — and `prepend` writes down every spine rung above it. A
+spine of `m` rungs therefore wrote itself `m` times, and a block of `n` leaves
+under it wrote the spine `n - 1` times more, with the kernel checking every
+copy. `da1e3f4` removed the block's `n - 1` copies; this removes the spine's
+`m`, which is the same defect one level up and the larger half of it on a record
+with a dependent head.
 
-The block used to be eliminated by one `PProd'.rec'` per node, each carrying a
-motive `fun tail => motive (prepend pre tail)` — and `prepend` writes down every
-spine rung above the block. A block of `n` leaves under a spine of `m` rungs
-therefore wrote the spine down `n - 1` times and had the kernel check each copy,
-which is the cost a record with a dependent head and a tail of independent proof
-fields pays twice over.
+Reading costs one conversion instead, at the end: the minor's type says
+`motive (ctor f⃗)`, `ctor` unfolds to [`InductiveModels.tightTowerMk`], and this
+owes `motive value` — so the kernel must see `towerMk (projs value) ≡ value`,
+which is structure eta at each of the `m` `PSigma'` rungs and each of the
+`n - 1` `PProd'` nodes. Both are genuine single-constructor, index-free
+inductives ([`InductiveModels.psigmaPrimeDecl`],
+[`InductiveModels.pprodPrimeDecl`]), so both have primitive projections and that
+conversion.
 
-Reading the block costs one conversion instead, at the end: the minor's type
-says `motive (ctor f⃗)`, `ctor` unfolds to [`InductiveModels.tightTowerMk`], and
-this owes `motive value` — so the kernel must see `blockMk (projs value) ≡ value`,
-which is `PProd'` structure eta at each of the `n - 1` nodes. `PProd'` is a
-genuine single-constructor, index-free inductive
-([`InductiveModels.pprodPrimeDecl`]), so it has both primitive projections and
-that conversion — the eliminator that used to do this spent the very same
-conversion in its own body, which is why removing it costs nothing.
-`PProd'.rec'` went with its last consumer and the pair's derived bundle is now
-empty ([`InductiveModels.ensurePProdPrime`]).
+**`PSigma'.rec'` was never a kernel recursor and this asks the kernel for
+nothing new.** Its own body is `fun … minor self => minor self.1 self.2` over
+primitive projections ([`InductiveModels.ensurePSigmaPrime`]), so it is well
+typed *only* because `mk self.1 self.2 ≡ self` — the very eta this now spends
+directly. Emitting the rung's `rec'` bought nothing but the motive: `rec'`
+δ-unfolds to exactly the application below, so the kernel did this conversion
+either way and paid for `m` motives on top. The tight route already reads the
+spine this way where it matters most — [`InductiveModels.tightTowerProjs`] is
+what the projection overrides are built from, and each of those is checked to
+**select** its field by `isDefEq` before it may be emitted, so the paths applied
+below are the same paths that contract already certifies reduce to their fields.
+They are now the same *call*: the recursor's body and this route's projection
+overrides are one function's output, where they used to be two constructions —
+a recursion over bound `fst` variables and a walk over paths — that had to
+agree and were only checked to.
+
+### Why the spine's dependency does not obstruct this
+
+Rung `k`'s type mentions the fields before it, so unlike the block's the paths
+are not independent — but they do not have to be. The minor binds
+`∀ (f₀ : T₀) (f₁ : T₁ f₀) …`, and the kernel's own typing rule for `.proj` on a
+dependent structure instantiates the later field's type at the *earlier
+projections of the same value*: `.proj 1 s` is typed at `β (.proj 0 s)`. So
+supplying `p₀ = .proj 0 s`, `p₁ = .proj 0 (.proj 1 s)`, … threads the dependency
+exactly as the telescope demands, and it does so definitionally rather than by
+transport. This is why the paths may be handed to a telescope that was opened at
+fresh variables: they are not the variables, but the kernel substitutes them
+into the binder types itself.
 
 **The pad is still dropped**, and for the reason it always was: the tower stores
 `canon` at that leaf and the projection reaches an element of the same
@@ -325,37 +352,25 @@ singleton, so the conversion closes there by tight-pair and `PUnit` structure et
 plus proof irrelevance. No transport rides along and the recursor's ι rule stays
 `Eq.refl`.
 
-**What still says leaf `k` is source field `k`.** The old check was the ι rule,
+**What still says field `k` is source field `k`.** The old check was the ι rule,
 `Eq.refl` at the minor applied in source order. This is the same check on the
-same fields: if the fill and [`InductiveModels.tightBlockTy`]'s split disagreed
-by a permutation, the conversion would ask the kernel to equate two *distinct*
-projection paths applied to the **variable** `value`. Neither is a redex, so the
-kernel refuses them unless they are the same path — and distinct leaves have
-distinct paths. `tightBlockTy`, `tightBlockMk` and `tightBlockProjs` split the
-same leaf range by [`InductiveModels.blockSplit`], which is a function of the
-leaf count alone.
+same fields, and it now covers the spine as well as the block: if the fill and
+the tower's own layout disagreed by a permutation, the conversion would ask the
+kernel to equate two *distinct* projection paths applied to the **variable**
+`value`. Neither is a redex, so the kernel refuses them unless they are the same
+path. On the spine the paths are `.proj 0 (.proj 1)ᵏ`, distinct for distinct
+`k`; in the block they are distinct by [`InductiveModels.blockSplit`], a
+function of the leaf count alone. A permutation is additionally ill-typed on the
+spine — swapping two rungs offers rung `k`'s path where a type mentioning it is
+expected — but the path argument alone already decides it, and it is the one
+that does not depend on the fields' types being distinguishable.
 
-The spine keeps its recursor because its rungs are *dependent*: a later rung's
-type mentions an earlier field, so a projection path into it is not the term the
-minor's telescope was opened at. -/
-partial def tightTowerRec (s : Level) (tower : TightTower) (motive minor value : Expr)
-    (k : Nat := 0) (pre : Array Expr := #[]) : GenM Expr := do
-  if k == tower.spine.size then
-    if tower.leaves.isEmpty then badShape "a tight tower with no fields needs a pad"
-    let mut vals := Array.replicate tower.fields.size value
-    for j in [0:pre.size] do
-      vals := vals.set! tower.spine[j]! pre[j]!
-    return mkAppN minor (tightBlockProjs tower vals value 0 tower.leaves.size)
-  let (u, v, α, snd) ← tightTowerAt tower k pre
-  let tailType := mkAppN (.const `PSigma' [u, v]) #[α, snd]
-  let targetMotive ← withLocalDeclD `tail tailType fun tail => do
-    let full ← tightTowerPrepend tower pre 0 tail
-    mkLambdaFVars #[tail] (mkApp motive full)
-  let branch ← withLocalDeclD `fst α fun fst =>
-    withLocalDeclD `snd (mkApp snd fst).headBeta fun sndValue => do
-      mkLambdaFVars #[fst, sndValue]
-        (← tightTowerRec s tower motive minor sndValue (k + 1) (pre.push fst))
-  return mkAppN (.const `PSigma'.rec' [u, v, s]) #[α, snd, targetMotive, branch, value]
+`tightTowerTy`, `tightTowerMk` and `tightTowerProjs` walk one spine and split
+one leaf range, so the three cannot disagree about the layout they are
+each asked about. -/
+def tightTowerRec (tower : TightTower) (minor value : Expr) : GenM Expr := do
+  if tower.leaves.isEmpty then badShape "a tight tower with no fields needs a pad"
+  return mkAppN minor (tightTowerProjs tower value)
 
 /-- Emit an exact-sort model for a non-recursive, unindexed, one-constructor
 family, storing its fields in the tower.  `pad?` is that tower's tail: `none`
@@ -364,7 +379,7 @@ the pad is what takes them there. -/
 def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (v : Level) (pad? : Option Level)
+    (recursorProofType recursorPublicType : Expr) (pad? : Option Level)
     (pairs : Bool) :
     GenM (Array Declaration × Array (Name × Nat × Expr × Expr)) := do
   let us := lparams.map Level.param
@@ -396,14 +411,16 @@ def directTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : N
 
   let recursorValue ← forallBoundedTelescope recursorProofType
       (some (np + 3)) fun binders _ => do
-    let motive := binders[np]!
+    -- The motive is bound and not read: the body is the minor at the tower's
+    -- projection paths, and what ties it to `motive self` is the kernel's
+    -- structure-eta conversion rather than an eliminator stated at a motive.
     let minor := binders[np + 1]!
     let self := binders[binders.size - 1]!
     let ps := binders.extract 0 np
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       mkLambdaFVars binders
-        (← tightTowerRec v (tightTowerOf tele fields pad? pairs) motive minor self)
+        (← tightTowerRec (tightTowerOf tele fields pad? pairs) minor self)
   let recursorDecl := Declaration.defnDecl
     { name := recursorN, levelParams := recursorLevelParams, type := recursorPublicType,
       value := recursorValue, hints := ← hintsFor recursorValue, safety := .safe }
@@ -783,7 +800,7 @@ requirements, and projection overrides into its route state. -/
 def emitDirectTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
-    (recursorProofType recursorPublicType : Expr) (v : Level) (pad? : Option Level) :
+    (recursorProofType recursorPublicType : Expr) (pad? : Option Level) :
     GenM (Array Declaration × Array Name × Array Name ×
       Array (Name × Nat × Expr × Expr)) := do
   let (pairs, pairSupport, requires) ← tightBinderFreeSupport tname constructorType
@@ -792,7 +809,7 @@ def emitDirectTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np
   let support := support ++ pairSupport
   let (declarations, overrides) ← directTightModel eqi tname lparams np memberTy
     constructorType modelConstructorType declaredMemberTy selfN constructorN recursorN
-    recursorLevelParams recursorProofType recursorPublicType v pad? pairs
+    recursorLevelParams recursorProofType recursorPublicType pad? pairs
   let spliced := support.flatMap fun declaration => declaration.getNames.toArray
   return (support ++ declarations, spliced, requires, overrides)
 
@@ -914,7 +931,7 @@ def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
   | .tight pad? =>
     emitDirectTightModel eqi tname lparams np memberTy constructorType modelConstructorType
       declaredMemberTy selfN constructorN recursorN recursorLevelParams
-      recursorProofType recursorPublicType v pad?
+      recursorProofType recursorPublicType pad?
   | .indexed pad? =>
     emitDirectIndexedModel eqi tname lparams np ni constructorName memberTy constructorType
       modelConstructorType declaredMemberTy selfN constructorN recursorN recursorLevelParams
