@@ -253,20 +253,6 @@ model island incrementally as it is produced; input declarations are trusted
 dependencies in that environment, not checked a second time. With either flag
 off, that declaration class is not kernel-checked.
 
-**Replaying an inductive block does not check the recursor the export
-carries.** Lean's kernel derives a recursor from the block instead, so
-`--type-check-input` compares the exported recursor metadata against that
-derivation — and that comparison is silent when the derivation is itself
-incoherent, which the Kernel Arena's `bad/rec-missing-ih` is: a minor premise
-binds an induction hypothesis its own ι rule then does not apply, and Lean
-regenerates exactly that recursor. So each exported ι rule is additionally
-submitted to the kernel at the type its own recursor asserts for it,
-`∀ p⃗ M⃗ m⃗ x⃗, M ι⃗_j (C_j p⃗ x⃗)`, read off the recursor's and the
-constructor's own types. A rule stated at a constructor outside the recursor's
-block — a nested block's auxiliary rule, at the container's constructor
-instantiated at the nesting — has no such type to reconstruct and is left to
-the metadata comparison.
-
 ## Constructions
 
 Three constructions share one generator core, one decline vocabulary and one

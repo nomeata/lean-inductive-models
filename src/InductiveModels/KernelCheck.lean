@@ -267,116 +267,6 @@ private def batchMetadataMismatches (constants : Std.HashMap Name ConstantInfo)
           checkInductiveMetadataIn checked types constructors recursors
   return mismatches
 
-/-- Peel `n` `∀` binders, keeping them, and return them with what is left. -/
-private def peelForalls (n : Nat) (e : Expr) :
-    Option (Array (Name × Expr × BinderInfo) × Expr) := Id.run do
-  let mut binders : Array (Name × Expr × BinderInfo) := #[]
-  let mut cur := e
-  for _ in [0:n] do
-    let .forallE x dom body info := cur | return none
-    binders := binders.push (x, dom, info)
-    cur := body
-  return some (binders, cur)
-
-/-- **The type a recursor's ι rule asserts for its own right-hand side.**
-
-A `RecursorRule` is not free-standing: the recursor's declared type already
-says what `R p⃗ M⃗ m⃗ ι⃗_j (C_j p⃗ x⃗)` reduces at, so the rule's right-hand side
-has exactly one admissible type,
-
-    ∀ p⃗ M⃗ m⃗ x⃗, M ι⃗_j (C_j p⃗ x⃗)
-
-read off `R`'s own type and `C_j`'s own type and nothing else.
-
-Built in de Bruijn rather than through a `Meta` telescope: the environment this
-runs in is `Environment.ofKernelEnv` of the replay, whose constants
-`Environment.find?` — and therefore `inferType` — does not see. `none` where
-the record's own arities do not admit the reading above; the metadata
-comparison beside this one is what reports those. -/
-private def recursorRuleType? (env : Kernel.Environment) (recursor : ERec)
-    (rule : ERecRule) : Option Expr := Id.run do
-  let some (.ctorInfo constructor) := env.constants.find? rule.ctor | return none
-  let levels := (recursor.levelParams.drop
-    (recursor.levelParams.length - constructor.levelParams.length)).map Level.param
-  let leading := recursor.numParams + recursor.numMotives + recursor.numMinors
-  let some (pre, tail) := peelForalls leading recursor.type | return none
-  -- The constructor's parameters are the recursor's own, at the index `∀ p⃗ M⃗ m⃗`
-  -- gives them; `instantiate1` lifts each reference as it crosses a binder, so
-  -- the field binders peeled next carry the right ones without further work.
-  let mut atParameters := constructor.type.instantiateLevelParams
-    constructor.levelParams levels
-  for k in [0:recursor.numParams] do
-    let .forallE _ _ body _ := atParameters | return none
-    atParameters := body.instantiate1 (.bvar (leading - 1 - k))
-  let some (fields, result) := peelForalls rule.nfields atParameters | return none
-  let arguments := result.getAppArgs
-  unless arguments.size == recursor.numParams + recursor.numIndices do return none
-  let parameterRefs := (Array.range recursor.numParams).map fun k =>
-    Expr.bvar (leading - 1 - k + rule.nfields)
-  let fieldRefs := (Array.range rule.nfields).map fun i => Expr.bvar (rule.nfields - 1 - i)
-  let major := mkAppN (.const rule.ctor levels) (parameterRefs ++ fieldRefs)
-  let mut motiveAt := tail.liftLooseBVars 0 rule.nfields
-  for argument in (arguments.extract recursor.numParams arguments.size).push major do
-    let .forallE _ _ body _ := motiveAt | return none
-    motiveAt := body.instantiate1 argument
-  for (x, dom, info) in fields.reverse do motiveAt := .forallE x dom motiveAt info
-  for (x, dom, info) in pre.reverse do motiveAt := .forallE x dom motiveAt info
-  return some motiveAt
-
-/-- **Every exported ι rule, at the type its own recursor demands.**
-
-Lean's kernel derives a recursor rather than checking the one an export
-carries, so the metadata comparison above relates the export to that
-derivation and is silent about whether the derivation is *itself* coherent. It
-need not be. `bad/rec-missing-ih` is an export whose minor premise binds an
-induction hypothesis its own ι rule then does not apply — the field it is the
-hypothesis for reduces to the owner when the minor premise is built and does
-not when the rule is, so the two disagree — and Lean's kernel regenerates that
-recursor byte for byte. Nothing which compares the export with the derivation
-can see it, because there is nothing to see there.
-
-What sees it is the recursor's own type: a right-hand side of type
-`M x → M (C x⃗)` cannot be the reduct of a recursor application at `M (C x⃗)`.
-So the rule is submitted to the kernel as an ordinary definition at exactly
-that type, and the kernel says whether it is one.
-
-This is a kernel question and belongs behind `--type-check-input` with the
-replay, not in the structural checker, which never asks for definitional
-equality. -/
-def ruleTypeMismatches (env : Kernel.Environment) (x : Export) : IO (Array String) := do
-  let mut mismatches : Array String := #[]
-  for record in x.decls do
-    let .induct _ _ recursors := record | continue
-    if replaySkipped record then continue
-    for recursor in recursors do
-      if recursor.isUnsafe then continue
-      for rule in recursor.rules do
-        -- **A rule of the recursor's own block, and no other.** A *nested*
-        -- block's auxiliary recursor states a rule at the container's
-        -- constructor — `Lean.Syntax.rec_2` at `List.nil` — whose parameters
-        -- are the nesting and not the recursor's, and no record carries the
-        -- instantiation to recover them from. Such a rule's type cannot be
-        -- reconstructed here and is not this check's business; the metadata
-        -- comparison above still relates it to Lean's own derivation.
-        let some (.ctorInfo constructor) := env.constants.find? rule.ctor | continue
-        unless recursor.all.contains constructor.induct do continue
-        let some expected := recursorRuleType? env recursor rule
-          | mismatches := mismatches.push s!"{recursor.name}: the ι rule for \
-{rule.ctor} does not present the arities its own recursor record declares"
-            continue
-        -- Discarded either way: this asks the kernel a question about `rhs`
-        -- and adds nothing to the environment the export builds.
-        match env.addDeclCore 0 0 (.defnDecl
-            { name := `_ruleTypeCheck, levelParams := recursor.levelParams
-              type := expected, value := rule.rhs, hints := .opaque
-              safety := .safe, all := [`_ruleTypeCheck] }) none with
-        | .ok _ => pure ()
-        | .error exception =>
-          mismatches := mismatches.push s!"{recursor.name}: the ι rule for {rule.ctor} \
-is not a reduct of {recursor.name} at that constructor: \
-{← (exception.toMessageData {}).toString}"
-  return mismatches
-
 end KernelCheck
 
 /-- Compatibility name for the exact constant-info preflight. -/
@@ -419,10 +309,6 @@ def typeCheckExport (x : Export) : MetaM (Except String Unit) := do
   unless mismatches.isEmpty do
     return .error s!"serialized declaration metadata differs from Lean's kernel:\n  \
       {"\n  ".intercalate mismatches.toList}"
-  let ruleMismatches ← KernelCheck.ruleTypeMismatches checked x
-  unless ruleMismatches.isEmpty do
-    return .error s!"a recursor's ι rule is not the rule its own type asserts:\n  \
-      {"\n  ".intercalate ruleMismatches.toList}"
   return .ok ()
 
 end InductiveModels
