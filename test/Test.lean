@@ -381,23 +381,25 @@ to `max`, and the forward and inverse maps are definitionally inverse.  The
 seven declarations recorded below include its intrinsic projection and eta;
 no level-normalizer relaxation or axiom is involved.
 
-**Where a row carries `PProd'`, and where a count moved by two to pay for it.**
+**Where a row carries `PProd'`, and where a count moved by one to pay for it.**
 The fields no later field's type mentions need no binder, and both towers carry
 them beneath their spine in a balanced binary tree of the binder-free pair — the
 never-zero chain ([`InductiveModels.chainTy`]) as well as the maybe-zero tight
 tower. The first owner in an export whose storage has such a tree is the one
-whose island splices the pair, so **its** count rises by exactly two — the
-inductive and its `rec'` — and `PProd'` then appears as a model row of its own
-with nine, because an inductive this tool splices is one it must also model.
-Every other count in such a row is untouched: the block changes a carrier's
-shape and no public statement. A later export reusing persistent support
-splices nothing and neither count moves. -/
+whose island splices the pair, so **its** count rises by exactly one — the
+inductive record, which is the pair's whole bundle now that the block is read
+by primitive projection and no `PProd'.rec'` is derived over it
+([`InductiveModels.ensurePProdPrime`]) — and `PProd'` then appears as a model
+row of its own with nine, because an inductive this tool splices is one it must
+also model. Every other count in such a row is untouched: the block changes a
+carrier's shape and no public statement. A later export reusing persistent
+support splices nothing and neither count moves. -/
 def expectedPrim : List Row :=
   [ -- A non-indexed tuple spine with one real child and a later field whose
     -- written owner mention β-reduces away.  The payload is non-recursive, so
     -- `Dead.step` consumes exactly one predecessor and the ordinary tuple
     -- route emits its six public declarations.
-    ("nonindexed_vanishing", [("N", 15), ("Dead", 8), ("PProd'", 9)],
+    ("nonindexed_vanishing", [("N", 15), ("Dead", 7), ("PProd'", 9)],
       [("Eq", "prim model: a basis primitive")])
   -- The two small-elimination seams under the derived exact-sort lift. `MI` forces the pair
     -- motive at two distinct result indices; `MR.step` forces a recursive
@@ -443,15 +445,15 @@ def expectedPrim : List Row :=
   -- kernel's verdict and `runOne`'s carrier assertion below, not this table.
   -- `MZOne` (direct `.identity`) and `MZProof` (arm F proper) are the controls
   -- and are untouched: the direct route and arm F are tried before both.
-    -- `MZIdx2` is 10 and not 8, and `PProd'` is a row of its own, because
+    -- `MZIdx2` is 9 and not 8, and `PProd'` is a row of its own, because
     -- `MZIdx2` is the first owner here whose stored tower has a rung no later
     -- field's type mentions: its island splices the binder-free pair — the
-    -- inductive and its `rec'`, two declarations — and then models it, which
-    -- is the splice-closure rule and not an extra. Every other count is
+    -- inductive record, which is the pair's whole bundle — and then models it,
+    -- which is the splice-closure rule and not an extra. Every other count is
     -- untouched: the pair changes a carrier's shape and no public statement.
   , ("maybe_zero_projection",
       [("Nt", 15), ("MZProof", 6), ("MZOne", 7), ("MZData", 8), ("MZSelf", 6),
-       ("MZIdx2", 10), ("PProd'", 9), ("MZIdx", 6)],
+       ("MZIdx2", 9), ("PProd'", 9), ("MZIdx", 6)],
       [("Eq", "prim model: a basis primitive")])
   -- **Green, and evidence rather than a refusal.** Arm E models a recursive
   -- declaration every one of whose constructors has a **bare** recursive field
@@ -469,7 +471,7 @@ def expectedPrim : List Row :=
   -- its child binder's domain `E0` is empty, so `NbVac` is inhabited, and it
   -- stays on arm W at 21.
   , ("empty_no_base",
-      [("NbLin", 23), ("Nt", 6), ("NbBr", 16), ("NbInf", 224), ("_wcore.Subtype", 11),
+      [("NbLin", 23), ("Nt", 6), ("NbBr", 16), ("NbInf", 224), ("_wcore.Subtype", 10),
        ("PProd'", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
        ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
@@ -484,7 +486,7 @@ def expectedPrim : List Row :=
   -- checks the genuinely propositional end.
   , ("degenerate_graph", [("DG", 15)], [])
   , ("prim_shapes",
-      [("Tri", 18), ("TagS4", 10), ("TagS3", 8), ("Weave", 12), ("PProd'", 9), ("Opt", 6),
+      [("Tri", 18), ("TagS4", 10), ("TagS3", 8), ("Weave", 11), ("PProd'", 9), ("Opt", 6),
        ("IdxP", 6), ("Le3", 8), ("Le3.below", 8), ("PM", 6), ("Emp", 2),
        ("Conj3", 10), ("PU", 6), ("Sv", 5), ("PE", 2), ("MNm", 8), ("IdxS", 5),
        ("Dec", 6), ("Conj", 8), ("TagS2", 8), ("TagS", 6), ("PT", 8), ("Tor", 8),
@@ -503,7 +505,7 @@ def expectedPrim : List Row :=
   -- graph arm splices neither wherever the core has already gone in.
   , ("prim_declines",
       [("P", 15), ("Idx", 5), ("Inf", 16), ("Nonempty", 4), ("Branch", 213),
-       ("_wcore.Subtype", 11), ("PProd'", 9), ("_wcore.List", 6),
+       ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
@@ -537,14 +539,14 @@ def expectedPrim : List Row :=
   -- carrier is the bare tower it always was; `IdOne` and `PropOne` are the two
   -- exact one-field answers, which still run before the tower and are still
   -- the field itself and the bare lift.
-    -- `PadDep` is 20 and not 18 for the reason `MZIdx2` above is 10: it is the
+    -- `PadDep` is 19 and not 18 for the reason `MZIdx2` above is 9: it is the
     -- first owner in this export with a constant rung, so its island carries
-    -- the binder-free pair's two support declarations and the descent models
+    -- the binder-free pair's one support declaration and the descent models
     -- the pair beside it. `PadDep` is also the fixture's *dependent* shape, so
     -- the row pins both halves at once — the rungs a later field mentions stay
     -- `PSigma'` and only the rest move.
   , ("maybe_zero_pad",
-      [("PadDep", 20), ("PProd'", 9), ("PadMix", 9), ("PadOne", 7), ("Nt", 7),
+      [("PadDep", 19), ("PProd'", 9), ("PadMix", 9), ("PadOne", 7), ("Nt", 7),
        ("PadIdx2", 8), ("PropOne", 7), ("IdOne", 7), ("PadNone", 9),
        ("PadMany", 9), ("PadIdx", 6)],
       [("Eq", "prim model: a basis primitive")])
@@ -654,7 +656,7 @@ def expectedPrim : List Row :=
        ("G2.below", 13)],
       [ ("Eq", "prim model: a basis primitive")])
   , ("prim_graph_pre", [("Ac", 24), ("Nonempty", 4), ("Ac.below", 13),
-      ("PSigma", 13), ("PProd'", 9)],
+      ("PSigma", 12), ("PProd'", 9)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
   -- the core's six roots — the export `lean4export` emits for
@@ -704,7 +706,7 @@ def expectedPrim : List Row :=
   -- additionally receive one eta theorem; unit-like and K-like declarations
   -- receive their own one-theorem metadata roles.
   , ("w_core",
-      [("Subtype", 21), ("PProd'", 9), ("List", 6), ("Sigma", 9), ("Option", 6),
+      [("Subtype", 20), ("PProd'", 9), ("List", 6), ("Sigma", 9), ("Option", 6),
        ("Exists", 4), ("And", 8), ("False", 2), ("Decidable", 6), ("True", 6),
        ("Or", 6), ("Iff", 8), ("Acc", 14), ("Nonempty", 4), ("WellFounded", 6),
        ("Bool", 6), ("HEq", 5), ("PProd", 9)],
@@ -754,7 +756,7 @@ def expectedPrim : List Row :=
   -- records; this row only counts them.
   , ("prim_carve",
       [("N", 16), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
-       ("_wcore.Subtype", 11), ("PProd'", 9), ("_wcore.List", 6),
+       ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
@@ -776,7 +778,7 @@ def expectedPrim : List Row :=
   -- and therefore carries the W fragment, while the latter is the arm's own
   -- twelve declarations. Both remain on the tagged W instantiation.
   , ("w_imax",
-      [("WData", 224), ("_wcore.Subtype", 11), ("PProd'", 9), ("_wcore.List", 6),
+      [("WData", 224), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
@@ -846,7 +848,7 @@ def expectedPrim : List Row :=
   -- `GTree`, `nest_fam_arg`'s `Both` and `Key`), but every one of those is
   -- multi-constructor and so out of the one-layer route's reach.
   , ("prim_w",
-      [("Tree", 225), ("_wcore.Subtype", 11), ("PProd'", 9), ("_wcore.List", 6),
+      [("Tree", 225), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
@@ -884,7 +886,7 @@ def expectedPrim : List Row :=
   -- two-step dependency, and `WPlain` the control with none. `WDep` is first,
   -- so it is the one that carries the fragment splice.
   , ("w_dependent_field",
-      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 8), ("PProd'", 9), ("WDep", 219),
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 7), ("PProd'", 9), ("WDep", 219),
        ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
        ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
@@ -915,7 +917,7 @@ def expectedPrim : List Row :=
   -- enough to remove it. So that owner stores nothing, its projections are
   -- eliminations again, and field 2 names two earlier fields.
   , ("e_dependent_field",
-      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 8), ("PProd'", 9), ("EDep", 10),
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 7), ("PProd'", 9), ("EDep", 10),
        ("Tag", 6), ("EChain", 12), ("EMid", 12), ("ENon", 12), ("Fib", 6),
        ("EBare", 10), ("EMulti", 6)],
       [ ("Eq", "prim model: a basis primitive")
@@ -960,7 +962,7 @@ def expectedPrim : List Row :=
   -- through a skeleton with no base constructor, which arm E models as the
   -- exact empty carrier.
   , ("nest_fam_arg",
-      [("N", 15), ("Opt", 6), ("L", 8), ("PProd'", 9), ("Vec", 8),
+      [("N", 15), ("Opt", 6), ("L", 7), ("PProd'", 9), ("Vec", 8),
        ("Vec._model._impl.skel", 6), ("RB", 215), ("_wcore.Subtype", 9),
        ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
        ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
@@ -1030,7 +1032,7 @@ def expectedPrim : List Row :=
   -- fixed basis, while the input-owned `PSigma` appears as the final modeled
   -- owner rather than as an exemption.
   , ("prim_late_basis",
-      [("N", 15), ("L", 8), ("PProd'", 9), ("Pre", 6), ("MA", 22),
+      [("N", 15), ("L", 7), ("PProd'", 9), ("Pre", 6), ("MA", 22),
        ("MA._model._impl.tag", 8), ("MA._model._impl.aux", 16),
        ("MA._model._impl.aux._model._impl.skel", 14), ("Nd", 15),
        ("Nd._model._impl.0", 14), ("Nd._model._impl.0._model._impl.tag", 6),
@@ -1074,7 +1076,7 @@ def expectedPrim : List Row :=
   -- structure with both intrinsic projections and their ι rules, `DeadProp`
   -- is the Church route's six.
   , ("dead_owner_mention",
-      [("P", 15), ("Q", 8), ("DeadLabel", 215), ("_wcore.Subtype", 11), ("PProd'", 9),
+      [("P", 15), ("Q", 8), ("DeadLabel", 215), ("_wcore.Subtype", 10), ("PProd'", 9),
        ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
        ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
@@ -1092,7 +1094,7 @@ def expectedPrim : List Row :=
     -- tower's recursor. `PProd'` carries nine because this export's first
     -- block splices it.
   , ("wide_block",
-      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 8), ("PProd'", 9),
+      [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 7), ("PProd'", 9),
        ("WFlat", 29), ("WMixed", 19), ("WChain", 15), ("WBox", 13),
        ("BFlat", 21), ("BMixed", 17), ("BChain", 13)],
       [("Eq", "prim model: a basis primitive")])

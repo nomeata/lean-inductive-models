@@ -314,7 +314,10 @@ this owes `motive value` — so the kernel must see `blockMk (projs value) ≡ v
 which is `PProd'` structure eta at each of the `n - 1` nodes. `PProd'` is a
 genuine single-constructor, index-free inductive
 ([`InductiveModels.pprodPrimeDecl`]), so it has both primitive projections and
-that conversion, and `PProd'.rec'`'s own body already spends it.
+that conversion — the eliminator that used to do this spent the very same
+conversion in its own body, which is why removing it costs nothing.
+`PProd'.rec'` went with its last consumer and the pair's derived bundle is now
+empty ([`InductiveModels.ensurePProdPrime`]).
 
 **The pad is still dropped**, and for the reason it always was: the tower stores
 `canon` at that leaf and the projection reaches an element of the same
@@ -747,7 +750,8 @@ never installed:
 
 * `pairs` — may this owner's tower use the pair at all?  Everywhere but at
   `PProd'` itself; see [`InductiveModels.TightTower.pairs`].
-* the support to install — `PProd'` and its `rec'`, spliced if the input has
+* the support to install — `PProd'`, the whole of it now that the pair is
+  projected rather than eliminated, spliced if the input has
   none and validated if it has one, and only where some field is mentioned by
   nothing later, which is what puts a leaf in the block.  A fully dependent
   telescope pays nothing.  The test over-approximates by one shape — a block of

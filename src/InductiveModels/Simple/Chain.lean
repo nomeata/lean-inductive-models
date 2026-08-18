@@ -240,13 +240,16 @@ Reading the block instead costs one conversion, once, at the end: the minor's
 own type says `motive (ctor f⃗)`, `ctor` unfolds to the chain's tuple, and the
 destructor owes `motive ⟨j̄, scrut⟩` — so the kernel must see
 `blockTuple (paths scrut) ≡ scrut`, which is `PProd'` structure eta at each of
-the `n - 1` nodes. Not the *proof* of eta — that is what `PProd'.rec'` is for
-and what its own body spends — but the kernel's structure-eta conversion, which
-expands a neutral `scrut` against a literal `PProd'.mk` and compares
-componentwise. `PProd'` is a genuine single-constructor, index-free inductive
+the `n - 1` nodes. Not a *proof* of eta — the eliminator that used to carry one
+spent this same conversion in its own body to have it — but the kernel's
+structure-eta conversion, which expands a neutral `scrut` against a literal
+`PProd'.mk` and compares componentwise. `PProd'` is a genuine
+single-constructor, index-free inductive
 ([`InductiveModels.pprodPrimeDecl`]), so it has both primitive projections and
-that conversion; nothing here is assumed that `PProd'.rec'`'s own kernel check
-does not already assume.
+that conversion, and neither is anything a derived declaration would have
+supplied. `PProd'.rec'` is gone with its last consumer: the pair is now built
+and projected and never eliminated, so its bundle is the inductive alone
+([`InductiveModels.ensurePProdPrime`]).
 
 ### What still says leaf `k` is source field `k`
 

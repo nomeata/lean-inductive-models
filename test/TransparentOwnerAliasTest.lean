@@ -76,13 +76,14 @@ def main : IO UInt32 := do
   -- ordinary `PSigma` splice, which is the one declaration every first-owner
   -- count lost; `5786e01` refreshed the same figure in the four other suites
   -- and left this one behind. The alias families and their order are unchanged.
-  -- `AliasI._model._impl.skel` is 8 and not 6, and `PProd'` is an entry of its
+  -- `AliasI._model._impl.skel` is 7 and not 6, and `PProd'` is an entry of its
   -- own, because the skeleton is the first owner here whose stored chain has a
   -- rung no later field's type mentions: its island splices the binder-free
-  -- pair — the inductive and its `rec'` — and the descent then models it, which
-  -- is the splice-closure rule and not an extra.
+  -- pair — the inductive record, which is the pair's whole bundle now that the
+  -- block is read by primitive projection — and the descent then models it,
+  -- which is the splice-closure rule and not an extra.
   let expected : Array (Name × Nat) :=
-    #[(`N, 15), (`AliasI, 8), (`AliasI._model._impl.skel, 8), (`PProd', 9),
+    #[(`N, 15), (`AliasI, 8), (`AliasI._model._impl.skel, 7), (`PProd', 9),
       (`AliasP, 16), (`Nonempty, 4), (`AliasC, 6)]
   state := state.check "generation counts pin all alias routes and support closure" <|
     report.generated == expected

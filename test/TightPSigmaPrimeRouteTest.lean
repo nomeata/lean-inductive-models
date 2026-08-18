@@ -93,8 +93,10 @@ def main : IO UInt32 := do
     #[`PSigma', `PSigma'.mk, `PSigma'.rec, `PSigma'.fst, `PSigma'.snd,
       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec', `PSigma'.rec'_mk,
       -- The binder-free pair travels with it wherever a rung is constant, and
-      -- its bundle is one derived declaration where the tight pair's is six.
-      `PProd', `PProd'.mk, `PProd'.rec, `PProd'.rec']
+      -- its bundle is the inductive alone where the tight pair's carries six
+      -- derived declarations: the block is built with `mk` and read by
+      -- primitive projection, so nothing derives a `PProd'.rec'` over it.
+      `PProd', `PProd'.mk, `PProd'.rec]
   state := state.check "missing tight pair is spliced with its complete support bundle" <|
     tightSupport.all names.contains &&
       report.spliced.any fun (_, spliced) => tightSupport.all spliced.contains

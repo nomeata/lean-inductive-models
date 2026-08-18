@@ -44,16 +44,18 @@ field's type mentions need no binder at all, so both storage towers carry them
 beneath their spine in a balanced binary tree of this pair
 ([`InductiveModels.blockTy`]).  Spelled through the same thin wrappers the tight
 pair is, so a construction reads one shape or the other and never a bare
-`.const`. -/
+`.const`.
+
+There is no eliminator wrapper here, and there is no eliminator to wrap: the
+block is *read* by primitive projection ([`InductiveModels.blockPaths`],
+[`InductiveModels.tightBlockProjs`]), so the pair is only ever built and
+projected. -/
 
 def pprodT (u v : Level) (α β : Expr) : Expr :=
   pprodPrimeT u v α β
 
 def pprodMk (u v : Level) (α β fst snd : Expr) : Expr :=
   pprodPrimeMk u v α β fst snd
-
-def pprodRec (s u v : Level) (α β motive m t : Expr) : Expr :=
-  pprodPrimeRec u v s α β motive m t
 
 def natRec (s : Level) (motive z sc t : Expr) : Expr :=
   mkAppN (.const `Nat.rec [s]) #[motive, z, sc, t]

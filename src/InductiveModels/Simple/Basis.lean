@@ -293,9 +293,6 @@ def pprodPrimeT (u v : Level) (α β : Expr) : Expr :=
 def pprodPrimeMk (u v : Level) (α β fst snd : Expr) : Expr :=
   mkAppN (.const `PProd'.mk [u, v]) #[α, β, fst, snd]
 
-def pprodPrimeRec (u v w : Level) (α β motive minor self : Expr) : Expr :=
-  mkAppN (.const `PProd'.rec' [u, v, w]) #[α, β, motive, minor, self]
-
 /-- One primitive, checked or spliced. `check` runs on a present declaration
 and says what is wrong with it; a missing one is spliced at Lean's shape and
 re-checked. The pattern is [`InductiveModels.ensureEq`]'s.
@@ -534,7 +531,9 @@ def canonicalSpliceInductives : List (Name × Declaration) :=
 /-- **Every name generation writes at a fixed canonical declaration of its
 own** — the six inductives above with their constructors and kernel recursors,
 the tight pair's six derived declarations, the kernel quotient's four records,
-and the three axioms.
+and the three axioms. The binder-free pair contributes its inductive record and
+nothing beyond it: it is built and projected, never eliminated, so there is no
+derived declaration of its own for generation to write.
 
 This is the complete hardcoded basis group and nothing else: it is a fixed
 list, not a shape, count, or corpus test. Two rules are stated in terms of it
@@ -547,7 +546,7 @@ def canonicalBasisNames : Std.HashSet Name :=
     (canonicalSpliceInductives.flatMap fun (_, declaration) => declaration.getNames) ++
       Declaration.quotDecl.getNames ++
       [`PSigma'.fst, `PSigma'.snd, `PSigma'.rec',
-       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk, `PProd'.rec',
+       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk,
        `Quot.sound, `Classical.choice, `propext]
 
 def ensurePUnit : GenM (Array Declaration) :=
@@ -712,56 +711,38 @@ def ensurePSigmaPrime : GenM (Array Declaration) := do
   checkDerivedPairBundle "tight pair" expected
   return out
 
-/-- **The binder-free pair's one derived declaration**, `PProd'.rec'`.
+/-- **The binder-free pair has no derived declaration at all**, where the tight
+pair has six.
 
-Only `rec'`, where the tight pair has six.  The two named projections and the
-three reduction rules exist because consumers of the tight pair name them; the
-storage tower reaches a constant rung through primitive `.proj` and eliminates
-it through `rec'`, and nothing else in this tool mentions a `PProd'` component
-by name.  A bundle member nobody uses would still have to be emitted, checked
-and modelled in every island that splices the pair.
+It used to have one, `PProd'.rec'`, and the reason it does not any more is the
+reason the tight pair still has six: a derived declaration exists because some
+construction names it.  The tight pair's two projections and three reduction
+rules are named by the towers that carry a *dependent* rung.  The block —
+the balanced tree of `PProd'` holding the fields no later field's type mentions
+— is built with `mk` and taken apart by primitive `.proj`
+([`InductiveModels.blockPaths`], [`InductiveModels.tightBlockProjs`]), so the
+only `PProd'` names this tool writes down are the inductive's own.
 
-`rec'` is written over primitive projections directly rather than over named
-ones, so it needs no `fst`/`snd` beneath it.  It is where the pair's structure
-eta is spent — the body owes `motive self` and delivers `motive (mk self.1
-self.2)` — and spending it once here rather than at every rung is the whole
-reason the tower calls a recursor instead of projecting inline. -/
-def pprodPrimeDerivedDecls : GenM (Array Declaration) := do
-  let u := Level.param `u
-  let v := Level.param `v
-  let w := Level.param `w
-  let recDecl ← withLocalDecl `α .implicit (.sort u) fun α =>
-    withLocalDecl `β .implicit (.sort v) fun β => do
-    let pair := pprodPrimeT u v α β
-    withLocalDecl `motive .implicit (.forallE `self pair (.sort w) .default) fun motive => do
-      let minorType ← withLocalDeclD `fst α fun fst =>
-        withLocalDeclD `snd β fun snd =>
-          mkForallFVars #[fst, snd] (mkApp motive (pprodPrimeMk u v α β fst snd))
-      withLocalDeclD `minor minorType fun minor =>
-        withLocalDeclD `self pair fun self => do
-          let type ← mkForallFVars #[α, β, motive, minor, self] (mkApp motive self)
-          let body := mkAppN minor #[.proj `PProd' 0 self, .proj `PProd' 1 self]
-          let value ← mkLambdaFVars #[α, β, motive, minor, self] body
-          return .defnDecl
-            { name := `PProd'.rec', levelParams := [`u, `v, `w], type, value,
-              hints := ← hintsFor value, safety := .safe }
-  return #[recDecl]
+`rec'` was where the pair's structure eta used to be spent, once, so that the
+towers could eliminate rather than project.  Reading the block spends the same
+conversion directly: the kernel expands a neutral value against the literal
+`PProd'.mk` the tuple is, which is a conversion `rec'`'s own body needed and
+never a consequence of it.  So the declaration was left with no consumer, and a
+bundle member nobody uses would still be minted, emitted and kernel-checked in
+the first island that splices the pair and carried in persistent support for
+the rest of the run.
 
-/-- Ensure the exact binder-free pair bundle, on
-[`InductiveModels.ensurePSigmaPrime`]'s terms: the inductive is spliced at its
-canonical shape if the input has none and validated if it has one, and `rec'`
-is an ordinary checked declaration over primitive projections. -/
-def ensurePProdPrime : GenM (Array Declaration) := do
-  let mut out ← ensurePrim `PProd' pprodPrimeDecl checkPProdPrimeCore
-  let expected ← pprodPrimeDerivedDecls
-  for declaration in expected do
-    let [name] := declaration.getNames
-      | badShape "one PProd' support declaration has several names"
-    if (← getEnv).constants.contains name then continue
-    addChecked declaration
-    out := out.push declaration
-  checkDerivedPairBundle "binder-free pair" expected
-  return out
+So the pair's whole bundle is the inductive itself, and `ensurePProdPrime` is
+[`InductiveModels.ensurePrim`] with nothing after it — no derived-bundle mint
+and no [`InductiveModels.checkDerivedPairBundle`] pass, because there is no
+member for either to range over.  `PProd'.rec'` is correspondingly *not* a
+[`InductiveModels.canonicalBasisNames`] member: generation writes no
+declaration under that name, so an input record at it must be left to the input
+rather than dropped against a declaration nothing wrote.  It is not a
+[`InductiveModels.persistentSupportName`] either, for the same reason — the two
+lists name what generation emits, and they move together with it. -/
+def ensurePProdPrime : GenM (Array Declaration) :=
+  ensurePrim `PProd' pprodPrimeDecl checkPProdPrimeCore
 
 /-- Ensure the complete shared support for the internally derived exact-sort
 propositional lift.  The construction itself is inlined into generated

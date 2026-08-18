@@ -198,12 +198,19 @@ interface is `PProd'._model`, `PProd'.mk._model`, `PProd'.rec._model` and their
 call that interface reusable shared support and retain it past its island,
 which is what the `Iso.spliced` witness alone would not catch: the descent that
 builds the model splices `Eq` and `PSigma'` under `PProd'`'s own name, so the
-witness is present. -/
+witness is present.
+
+**The members are exactly what generation writes under the prefix**, which is
+the inductive's own three records and nothing else: the pair is built with `mk`
+and taken apart by primitive `.proj`, so there is no derived `PProd'.rec'` for
+this list to retain ([`InductiveModels.ensurePProdPrime`]). Listing a name
+generation never emits would be harmless here and misleading in the one place
+the emitted and the retained sets are supposed to be read off each other. -/
 def persistentSupportName (name : Name) : Bool :=
   persistentSupportRoot name ||
     (`PSigma').isPrefixOf name ||
     (`PUnit).isPrefixOf name ||
-    [`PProd'.mk, `PProd'.rec, `PProd'.rec',
+    [`PProd'.mk, `PProd'.rec,
       `Quot.mk, `Quot.lift, `Quot.ind, `Quot.sound,
       `Classical.choice, `propext].contains name ||
     wCoreRoot.isPrefixOf name

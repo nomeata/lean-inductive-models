@@ -171,7 +171,7 @@ def main : IO UInt32 := do
   -- The same syntax at the ordinary non-indexed Type route.  `Dead.step` has
   -- one genuine recursive child followed by a field whose annotation mentions
   -- `Dead` but whose β-reduct is `N`; the tuple spine must count only the
-  -- former.  Its six public declarations are eight here and its statements
+  -- former.  Its six public declarations are seven here and its statements
   -- twelve rather than six, because `Dead` is the first owner in this export
   -- whose chain has a rung no later field's type mentions: its island splices
   -- the binder-free pair and then models it beside itself.
@@ -180,7 +180,7 @@ def main : IO UInt32 := do
   state := state.check "the raw non-indexed constructor retains a dead owner mention" <|
     (constructorTypes nonindexedRaw `Dead).any (hasVanishingDomain `Dead)
   state := state.check "the non-indexed tuple route models one real predecessor" <|
-    generatedExactly nonindexedReport `Dead 8 &&
+    generatedExactly nonindexedReport `Dead 7 &&
       !nonindexedReport.declined.any fun (owner, _) => owner == `Dead
   state := state.check "the non-indexed public interface checks literally" <|
     ownerPasses nonindexedGenerated `Dead && nonindexedReport.stmtChecked == 12 &&
