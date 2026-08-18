@@ -409,6 +409,23 @@ be recordable as a gap rather than dressed up as a boundary.
   `∀ z⃗, T p⃗ e⃗` after βζ head normalization is declined as out of scope: that
   is nesting, and nesting is the nested construction's business. Nothing is
   missing; a model built here would be the wrong layer's.
+
+  **The export is asked before that boundary is claimed.** The recursor's minor
+  premise for `C_j` binds one induction hypothesis per recursive field, so the
+  export itself says how many of `C_j`'s fields carry an occurrence, and the
+  decline is made only where that number is the number the shape analysis
+  reads. The fields it then cannot read are ones the kernel does not treat as
+  recursive either — a mention `δ` discards. Where the export asserts *more*,
+  it asserts a recursive occurrence at a field whose domain does not reduce to
+  the owner here; every arm represents a recursive field by replacing an
+  occurrence it can find, so there is no model of that recursor to build, and
+  the run fails naming the constructor and the two numbers rather than
+  reporting a boundary it is not standing on. The Kernel Arena's
+  `bad/rec-missing-ih` is the occupant: its recursive field is a stuck
+  `k`-recursor application that Lean's kernel reduces to the owner and
+  `Lean.Meta`'s conversion does not. A disagreement can only hide behind a
+  decline — wherever a model *is* built, `R._model` carries the exported
+  recursor's type verbatim and is kernel-checked as it is produced.
 - *Storage that no pad or box can land on the carrier's sort*. A field whose
   level falls short of `Sort w` has to be padded into it, and the pad is the
   derived exact-sort lift of `⊤` — a `PSigma'.{0,w}`, so it sits at exactly

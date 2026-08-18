@@ -12,6 +12,28 @@ open Lean Meta
 
 namespace InductiveModels
 
+/-- **How many induction hypotheses the exported recursor's `j`-th minor
+premise binds**, given that constructor's field count.
+
+The minor premise for `C_j` is `∀ x⃗ ih⃗, M ι⃗_j (C_j p⃗ x⃗)`: one binder per
+field, then one per *recursive* field. Its binder count less the field count is
+therefore the export's own statement of how many of `C_j`'s fields carry a
+recursive occurrence — read off the recursor's type, with nothing reduced and
+no shape decided here.
+
+`0` where the type is shorter than the walk expects; [`InductiveModels.analysePrim`]
+has already refused a recursor whose motive, minor and index counts are not the
+declaration's. -/
+def minorIHCount (rv : RecursorVal) (j nf : Nat) : Nat := Id.run do
+  let mut t := rv.type
+  for _ in [0:rv.numParams + rv.numMotives + j] do
+    match t with
+    | .forallE _ _ b _ => t := b
+    | _ => return 0
+  match t with
+  | .forallE _ dom _ _ => return numForalls dom - nf
+  | _ => return 0
+
 /-- The declaration facts shared by all primitive-model routes.  Keeping this
 phase separate from emission gives the route dispatcher plain data rather than
 closures over the declaration telescope. -/
@@ -149,6 +171,42 @@ def analysePrim (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr
   -- never-zero route. It aborted the whole stream at an owner the contract says
   -- should pass through unchanged and be reported.
   if let some why := erasureBareWhy then
+    -- **The boundary is claimed only where the export itself agrees there is
+    -- nothing recursive here to miss.**
+    --
+    -- The decline below says the occurrence is *nesting*. That is a statement
+    -- about the declaration, and the declaration answers it: the exported
+    -- recursor's minor premise for `C_j` binds one induction hypothesis per
+    -- recursive field, so the export says how many of `C_j`'s fields carry an
+    -- occurrence the elaborator's own reduction found. Where that number is the
+    -- number this analysis reads, the fields it cannot read are ones the
+    -- kernel does not treat as recursive either — a mention that δ discards,
+    -- which is what `prim_shape_declines.lean`'s `Foreign` is — and the
+    -- boundary is a boundary.
+    --
+    -- Where it is larger, the two disagree about the declaration's own shape:
+    -- the export asserts a recursive occurrence at a field whose domain this
+    -- analysis does not reduce to the owner. There is then no model of *that*
+    -- recursor for any arm to build — every arm represents a recursive field
+    -- by replacing an occurrence it can find — and "declined" would report a
+    -- boundary the tool is not standing on. So it fails instead, and says
+    -- which constructor and which two numbers.
+    --
+    -- This is asked here and nowhere else on purpose. A disagreement can only
+    -- hide behind a decline: wherever a model *is* built, `R._model` carries
+    -- the exported recursor's type verbatim and is kernel-checked as it is
+    -- produced, so a construction that read the wrong fields as recursive is
+    -- refused there already.
+    for j in [0:nc] do
+      let (cn, cty) := exportCtors[j]!
+      let nf := numForalls cty - np
+      let asserted := minorIHCount rv j nf
+      let seen ← bareRecFieldCount tname np ni cty
+      unless asserted == seen do
+        badShape s!"{ern}'s minor premise for {cn} binds an induction hypothesis for \
+{asserted} of its fields and this analysis reads {seen} of them as recursive, so the \
+export asserts a recursive occurrence at a field whose domain does not reduce to \
+{tname} here and no model of {ern} can be built ({why})"
     declineWith (.shapeUnsupported tname .outOfScope
       s!"a field mentions {tname} other than as `∀ z⃗, {tname} p⃗ e⃗` after βζ head \
 normalization, and every arm of every route represents a recursive field by replacing \

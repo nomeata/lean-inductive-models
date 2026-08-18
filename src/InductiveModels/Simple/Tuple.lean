@@ -318,6 +318,29 @@ application of {tname}"
     if why.isSome then return why
   return none
 
+/-- **How many of one constructor's fields this analysis reads as a recursive
+occurrence it could replace**: `∀ z⃗, T p⃗ e⃗` after βζ head normalization, which
+is exactly what [`InductiveModels.erasureBareFailure?`] refuses a field for not
+being.
+
+The two walks ask the same question of the same domains and differ only in what
+they do with the answer — that one reports the first field it cannot read, this
+one counts the fields it can. The count exists because the exported recursor
+states the same number from the other side: its minor premise for `C_j` binds
+one induction hypothesis per recursive field, so the two numbers must agree
+before a model of that recursor can be built at all. -/
+def bareRecFieldCount (tname : Name) (np ni : Nat) (cty : Expr) : GenM Nat := do
+  withTeleFVars np cty fun _ rest =>
+    withTeleFVars (numForalls rest) rest fun fields _ => do
+      let mut n := 0
+      for field in fields do
+        let dom := erasureFieldDomain tname (← ityp field)
+        unless mentionsAny #[tname] dom do continue
+        let bare ← withTeleFVars (numForalls dom) dom fun _ core => do
+          return (← ownerAppArgs? tname np ni core).isSome
+        if bare then n := n + 1
+      return n
+
 /-- Which field of a constructor is the recursive one, if any. Declines the
 shapes the tower cannot express, each by name. -/
 def recSlotOf (tname : Name) (np ni : Nat) (cn : Name) (nf : Nat) (tele : Expr)
