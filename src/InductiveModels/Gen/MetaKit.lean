@@ -73,6 +73,34 @@ def instForall (ty : Expr) (args : Array Expr) : GenM Expr := do
     | _ => badShape "too few binders to instantiate"
   return cur
 
+/-- **Open a `Π`-nest's leading binders as local declarations**, at most `n` of
+them, and hand the continuation those local declarations and whatever is left
+of the nest.
+
+A constructor is exported as a raw `Π`-nest, so a field domain read straight
+off it names the parameters and the constructor's earlier fields as *loose* de
+Bruijn variables. That is fine for a syntactic question — `mentionsAny` and
+[`InductiveModels.headNorm`] never look at a variable's type — and it is not
+fine for a question that reduces. Recognizing a field through a transparent
+former, or through an ι step whose major premise is an earlier field, is
+`whnf`'s business, and `whnf` answers a loose bound variable with
+`Lean.Meta.whnfEasyCases`' panic rather than with a verdict. Walking the nest
+through here is what makes each domain closed in the current local context, so
+that the question can be asked at all.
+
+`test/fixtures/inductive-models/recursor_field_domain.lean` is a kernel-valid
+export of exactly that shape.
+
+A nest with fewer than `n` binders is not an error here: the continuation is
+handed the ones there were, and each caller says what a short telescope means
+to it. -/
+partial def withTeleFVars [Inhabited α] (n : Nat) (ty : Expr)
+    (k : Array Expr → Expr → GenM α) (fvars : Array Expr := #[]) : GenM α := do
+  if fvars.size == n then return ← k fvars ty
+  let .forallE x dom body bi := ty | k fvars ty
+  withLocalDecl x bi dom fun xv =>
+    withTeleFVars n (body.instantiate1 xv) k (fvars.push xv)
+
 /-- A constructor's type at the given levels with `qs` substituted for its
 leading binders, leaving the field telescope. -/
 def instCtor (cn : Name) (ls : List Level) (qs : Array Expr) : GenM Expr := do

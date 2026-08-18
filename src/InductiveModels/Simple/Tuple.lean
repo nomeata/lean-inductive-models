@@ -282,39 +282,40 @@ answer remains a diagnostic value and it emits no declaration.
 
 Keeping the early exits in a named `GenM` computation also makes their scope
 unambiguous: they return from this analysis, never from the surrounding model
-construction. -/
+construction.
+
+**Opened, not peeled.** The telescope goes through
+[`InductiveModels.withTeleFVars`] because the reduction below is asked of a
+field domain, and a domain read off the raw `Π`-nest names the parameters and
+the constructor's earlier fields as loose bound variables. -/
 def erasureBareFailure? (tname : Name) (np ni : Nat)
     (exportCtors : Array (Name × Expr)) : GenM (Option String) := do
   for (cn, cty) in exportCtors do
-    let mut t := cty
-    let mut short := false
-    for _ in [0:np] do
-      match t with
-      | .forallE _ _ b _ => t := b
-      | _ => short := true
-    if short then return some s!"{cn}'s telescope is shorter than {np} parameters"
-    while t matches .forallE .. do
-      let .forallE _ dom b _ := t | unreachable!
-      let dom := erasureFieldDomain tname dom
-      if mentionsAny #[tname] dom then
-        -- Peel the field's own binders after βζ head normalization. The
-        -- erasure retains those binder types, so an owner mention there would
-        -- refer to the wrong carrier after the field itself is retyped.
-        let mut core := dom
-        let mut inBinder := false
-        while core matches .forallE .. do
-          let .forallE _ z cb _ := core | unreachable!
-          if mentionsAny #[tname] z then inBinder := true
-          core := cb
-        if inBinder then
-          return some s!"binder mention: a binder of {cn}'s recursive field mentions \
+    let why ← withTeleFVars np cty fun ps rest => do
+      if ps.size < np then
+        return some s!"{cn}'s telescope is shorter than {np} parameters"
+      withTeleFVars (numForalls rest) rest fun fields _ => do
+        for field in fields do
+          let dom := erasureFieldDomain tname (← ityp field)
+          unless mentionsAny #[tname] dom do continue
+          -- Peel the field's own binders after βζ head normalization. The
+          -- erasure retains those binder types, so an owner mention there would
+          -- refer to the wrong carrier after the field itself is retyped.
+          let inner ← withTeleFVars (numForalls dom) dom fun zs core => do
+            for z in zs do
+              if mentionsAny #[tname] (← ityp z) then
+                return some s!"binder mention: a binder of {cn}'s recursive field mentions \
 {tname}, and the erasure keeps binder types verbatim"
-        -- A transparent former around `T p⃗ e⃗` is bare. Reduction is confined
-        -- to this route/index analysis; the public model retains `dom`.
-        if (← ownerAppArgs? tname np ni core).isNone then
-          return some s!"nested: {cn} has a recursive occurrence that is not an \
+            -- A transparent former around `T p⃗ e⃗` is bare, and so is an ι
+            -- step that exposes one. Reduction is confined to this route/index
+            -- analysis; the public model retains `dom`.
+            if (← ownerAppArgs? tname np ni core).isNone then
+              return some s!"nested: {cn} has a recursive occurrence that is not an \
 application of {tname}"
-      t := b
+            return none
+          if inner.isSome then return inner
+        return none
+    if why.isSome then return why
   return none
 
 /-- Which field of a constructor is the recursive one, if any. Declines the
@@ -338,24 +339,25 @@ def recSlotOf (tname : Name) (np ni : Nat) (cn : Name) (nf : Nat) (tele : Expr)
   let bill := s!"; B factors through the tag: {if tagged then "yes" else "no"}\
 ; through the label: {if labelled then "yes" else "no"}\
 ; carrier is Type u: {if typeU then "yes" else "no"}"
-  let mut cur := tele
-  let mut slot : Option Nat := none
-  for i in [0:nf] do
-    let .forallE _ d b _ := cur | badShape "field telescope shorter than its field count"
-    let d := erasureFieldDomain tname d
-    if mentionsAny #[tname] d then
-      if slot.isSome then
-        badShape s!"{cn} has two recursive fields: the tuple tower's spine is one \
+  -- Opened rather than peeled, for [`InductiveModels.withTeleFVars`]' reason.
+  withTeleFVars nf tele fun fields _ => do
+    unless fields.size == nf do
+      badShape "field telescope shorter than its field count"
+    let mut slot : Option Nat := none
+    for i in [0:nf] do
+      let d := erasureFieldDomain tname (← ityp fields[i]!)
+      if mentionsAny #[tname] d then
+        if slot.isSome then
+          badShape s!"{cn} has two recursive fields: the tuple tower's spine is one \
 Nat and a constructor takes one predecessor, so a branching constructor needs the \
 W/path construction (plan B){bill}"
-      -- A βζ-dead mention was removed above.  Every domain which remains is a
-      -- real binder or nesting if its head is not the owner itself.
-      unless (← ownerAppArgs? tname np ni d).isSome do
-        badShape s!"{cn} has a recursive field that is not a bare occurrence of \
+        -- A βζ-dead mention was removed above.  Every domain which remains is a
+        -- real binder or nesting if its head is not the owner itself.
+        unless (← ownerAppArgs? tname np ni d).isSome do
+          badShape s!"{cn} has a recursive field that is not a bare occurrence of \
 {tname} — under a binder, or nested, neither of which the tuple tower reaches{bill}"
-      slot := some i
-    cur := b
-  return slot
+        slot := some i
+    return slot
 
 /-- **A constructor's first bare recursive field**, or `none` where it has
 none. Bare means what it means everywhere else in this file: after βζ head
@@ -382,14 +384,15 @@ because it is asked of every recursive declaration and its answer selects a
 route rather than refusing one. -/
 def bareRecSlotOf (tname : Name) (np ni : Nat) (nf : Nat) (tele : Expr) :
     GenM (Option Nat) := do
-  let mut cur := tele
-  for i in [0:nf] do
-    let .forallE _ d b _ := cur | badShape "field telescope shorter than its field count"
-    let d := erasureFieldDomain tname d
-    if mentionsAny #[tname] d then
-      if (← ownerAppArgs? tname np ni d).isSome then return some i
-    cur := b
-  return none
+  -- Opened rather than peeled, for [`InductiveModels.withTeleFVars`]' reason.
+  withTeleFVars nf tele fun fields _ => do
+    unless fields.size == nf do
+      badShape "field telescope shorter than its field count"
+    for i in [0:nf] do
+      let d := erasureFieldDomain tname (← ityp fields[i]!)
+      if mentionsAny #[tname] d then
+        if (← ownerAppArgs? tname np ni d).isSome then return some i
+    return none
 
 /-- A recursive field's domain with the **occurrence** replaced by `Vn` and the
 binders it sits under kept verbatim: `T p⃗ e⃗` becomes `Vn` and `∀ z⃗, T p⃗ e⃗`

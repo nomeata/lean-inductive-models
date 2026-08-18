@@ -287,7 +287,13 @@ their conclusion indices, exactly as in `w_dependent_field`.
 `TrineInf` — three one-constructor arm-W owners at three and four recursive
 fields, restoring the one-layer adapter over a W carrier past the two
 `TwinInf` has.  Each is one-constructor and so projection-eligible, and their
-three, four and four fields are the whole of the difference. -/
+three, four and four fields are the whole of the difference.
+
+`recursor_field_domain` is 2, and both are the spliced pair's: `P` is a
+two-constructor enumeration and `Owner` is a two-constructor recursive owner,
+so neither is asked for an intrinsic projection at all.  The fixture is about
+the *field domain* `Owner.node` reads its recursion through, not about
+selecting it. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 23),
     ("dead_owner_mention", 15), ("decline_no_eq", 13), ("default_ctor_iota", 2),
@@ -319,7 +325,8 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("prim_prop_skipped_field", 4), ("prim_shape_declines", 0),
     ("prim_shapes", 24), ("prim_w", 48),
     ("private_constructor", 3), ("prop_projection_boundaries", 12),
-    ("prop_recursive_projections", 3), ("source_structure_syntax", 7),
+    ("prop_recursive_projections", 3), ("recursor_field_domain", 2),
+    ("source_structure_syntax", 7),
     ("structure_eta", 12), ("structure_projections", 19),
     ("tight_prop_field_late", 1), ("tight_psigma_prime", 6),
     ("transparent_owner_aliases", 3), ("unitlike", 6), ("w_alias", 13),
