@@ -28,6 +28,31 @@ MAX_MEMBER_SIZE = 256 * 1024 * 1024
 MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024
 MAX_ARCHIVE_SIZE = 512 * 1024 * 1024
 
+# The `bad/` cases this checker declines with exit 3 instead of rejecting with
+# exit 1, named rather than counted. A bare count would let one case regress
+# while another improves without the total moving; the names make the swap
+# visible. This is a cap, not an equality: a case that starts rejecting cleanly
+# leaves the set unused, which is an improvement, not a failure.
+EXPECTED_BAD_ERRORED = frozenset(
+    {
+        "proj-of-stuck-prop",
+        "proj-of-subst-prop",
+        "rec-missing-ih",
+    }
+)
+
+# Lean's runtime prints a panic on stderr and then carries on with the default
+# value, so a panicking run and a run that reached a real verdict can leave the
+# same exit code behind -- only the output tells them apart. `Init/Util.lean`
+# builds the first two prefixes; the C runtime's `lean_internal_panic` prints
+# the third.
+#
+# A panic fails this suite because these are known inputs and this checker is
+# expected to answer them. That is a rule about *our* corpus, not a change in
+# what a panic means to a consumer: a caller that sees one has still not had
+# its input accepted, and should still treat the panic as a rejection.
+PANIC_PREFIXES = ("PANIC at ", "PANIC: ", "INTERNAL PANIC:")
+
 
 class CorpusError(Exception):
     """An infrastructure error, distinct from a corpus verdict mismatch."""
@@ -122,7 +147,25 @@ def first_diagnostic(stderr: Path, stdout: Path) -> list[str]:
         return [f"  {prefix}{line.rstrip()}" for _, line in zip(range(8), stream)]
 
 
-def run_corpus(binary: Path, corpus: Path, work: Path) -> int:
+def panic_line(stderr: Path, stdout: Path) -> str | None:
+    """The first Lean runtime panic a run printed, if it printed one at all."""
+    for source in (stderr, stdout):
+        if not source.stat().st_size:
+            continue
+        with source.open(encoding="utf-8", errors="replace") as stream:
+            for line in stream:
+                stripped = line.strip()
+                if stripped.startswith(PANIC_PREFIXES):
+                    return stripped
+    return None
+
+
+def run_corpus(
+    binary: Path,
+    corpus: Path,
+    work: Path,
+    expected_bad_errored: frozenset[str] = EXPECTED_BAD_ERRORED,
+) -> int:
     logs = work / "logs"
     runtime = work / "runtime"
     logs.mkdir()
@@ -150,6 +193,20 @@ def run_corpus(binary: Path, corpus: Path, work: Path) -> int:
                     check=False,
                 )
             total += 1
+            panic = panic_line(stderr, stdout)
+            if panic is not None:
+                # Checked before the exit code, because a panic and a clean
+                # verdict both leave exit 3 behind. A consumer may treat a
+                # panic as a rejection; this suite may not, because the case
+                # is known and an answer was available.
+                failed += 1
+                print(
+                    f"FAIL {relative}: the checker panicked instead of answering "
+                    f"(exit {result.returncode})",
+                    file=sys.stderr,
+                )
+                print(f"  {panic}", file=sys.stderr)
+                continue
             if group == "good" and result.returncode == 0:
                 good_accepted += 1
                 continue
@@ -161,7 +218,29 @@ def run_corpus(binary: Path, corpus: Path, work: Path) -> int:
                 # still proves the soundness property enforced here: the bad
                 # proof was not accepted. A decline remains a failure because
                 # this checker claims to handle the corpus.
-                bad_errored += 1
+                #
+                # Exit 3 exists as a category because not every decline is a
+                # confident verdict. "Generated statements differ" is the
+                # example: the input is *likely* invalid, but the difference
+                # might equally be a bug in our own model generation, so it is
+                # not something to report as "I am certain this input is bad".
+                # Exit 1 claims that certainty; exit 3 declines to.
+                #
+                # Which cases land here is pinned, so a new decline cannot be
+                # absorbed by the tolerance unnoticed.
+                name = case.relative_to(corpus / group).with_suffix("").as_posix()
+                if name in expected_bad_errored:
+                    bad_errored += 1
+                    continue
+                failed += 1
+                print(
+                    f"FAIL {relative}: exit 3 (checker error) from a case outside the "
+                    "expected set; fix the decline or add the case to "
+                    "EXPECTED_BAD_ERRORED deliberately",
+                    file=sys.stderr,
+                )
+                for line in first_diagnostic(stderr, stdout):
+                    print(line, file=sys.stderr)
                 continue
             failed += 1
             expected = "0" if group == "good" else "1 or 3 (never 0, 2, or a signal)"

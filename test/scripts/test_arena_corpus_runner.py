@@ -49,6 +49,12 @@ if sys.argv[1:-1] != expected:
 outcome = Path(sys.argv[-1]).read_text().strip()
 if outcome == "signal":
     os.kill(os.getpid(), signal.SIGTERM)
+if outcome.startswith("panic "):
+    # What the Lean runtime prints for `panic!`: a line on stderr, and then
+    # the program carries on and exits with whatever it would have exited with.
+    print("PANIC at Lean.Meta.whnf Lean.Meta.WHNF:1:2: loose bvar in expression",
+          file=sys.stderr)
+    outcome = outcome.removeprefix("panic ")
 sys.exit(int(outcome))
 """,
             encoding="utf-8",
@@ -65,19 +71,29 @@ sys.exit(int(outcome))
                 (directory / f"case-{index}.ndjson").write_text(outcome, encoding="utf-8")
         return corpus
 
-    def run_cases(self, good: list[str], bad: list[str]) -> tuple[int, str, str]:
+    def run_cases(
+        self,
+        good: list[str],
+        bad: list[str],
+        expected_bad_errored: frozenset[str] = frozenset(),
+    ) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
         run_work = self.work / "run"
         run_work.mkdir()
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             result = RUNNER.run_corpus(
-                self.fake_checker(), self.corpus(good, bad), run_work
+                self.fake_checker(),
+                self.corpus(good, bad),
+                run_work,
+                expected_bad_errored,
             )
         return result, stdout.getvalue(), stderr.getvalue()
 
     def test_accepts_good_zero_and_reports_bad_one_and_three_separately(self) -> None:
-        result, stdout, stderr = self.run_cases(["0"], ["1", "3"])
+        result, stdout, stderr = self.run_cases(
+            ["0"], ["1", "3"], frozenset({"case-1"})
+        )
         self.assertEqual(result, 0)
         self.assertEqual(stderr, "")
         self.assertIn("1 good accepted, 1 bad rejected, 1 bad checker errors", stdout)
@@ -88,6 +104,31 @@ sys.exit(int(outcome))
         self.assertIn("4 failed", stdout)
         self.assertIn("got -15", stderr)
         self.assertIn("got 2", stderr)
+
+    def test_rejects_a_bad_checker_error_outside_the_expected_set(self) -> None:
+        result, stdout, stderr = self.run_cases(
+            ["0"], ["3", "3"], frozenset({"case-0"})
+        )
+        self.assertEqual(result, 1)
+        self.assertIn("1 bad checker errors, 1 failed", stdout)
+        self.assertIn("FAIL bad/case-1.ndjson: exit 3", stderr)
+        self.assertIn("outside the expected set", stderr)
+        self.assertNotIn("case-0", stderr)
+
+    def test_rejects_a_panic_whatever_the_exit_code_says(self) -> None:
+        # A panicking `good` case exits 0 and a panicking `bad` case exits 3:
+        # both would pass on their exit code alone, and neither may.
+        result, stdout, stderr = self.run_cases(
+            ["panic 0"], ["panic 3"], frozenset({"case-0"})
+        )
+        self.assertEqual(result, 1)
+        self.assertIn("0 good accepted, 0 bad rejected, 0 bad checker errors", stdout)
+        self.assertIn("2 failed", stdout)
+        for case in ("good/case-0.ndjson", "bad/case-0.ndjson"):
+            self.assertIn(
+                f"FAIL {case}: the checker panicked instead of answering", stderr
+            )
+        self.assertIn("loose bvar in expression", stderr)
 
     def make_archive(self, members: list[tuple[tarfile.TarInfo, bytes]]) -> Path:
         archive_path = self.work / "cases.tar.gz"
