@@ -329,7 +329,8 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("source_structure_syntax", 7),
     ("structure_eta", 12), ("structure_projections", 19),
     ("tight_prop_field_late", 1), ("tight_psigma_prime", 6),
-    ("transparent_owner_aliases", 3), ("unitlike", 6), ("w_alias", 13),
+    ("transparent_owner_aliases", 3), ("unitlike", 6), ("unused_level_param", 0),
+    ("w_alias", 13),
     ("wide_block", 48),
     ("w_core", 13), ("w_dependent_field", 30), ("w_imax", 13), ("w_late_iff", 13),
     ("w_max", 13)]

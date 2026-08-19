@@ -288,6 +288,25 @@ private def namesJ (w : Writer) (ns : List Name) : Writer × String :=
   let (w, idxs) := ns.foldl (fun (w, acc) n => let (w, i) := w.name n; (w, acc.push i)) (w, #[])
   (w, "[" ++ String.intercalate "," (idxs.toList.map toString) ++ "]")
 
+/-- A record's `levelParams` list: the names, and the `param` level of each.
+
+A declaration's `levelParams` is part of its kernel identity, not a summary of
+the levels its expressions happen to use.  The kernel accepts
+`def levelComp4.{u} : Sort 1 := Sort 0`, whose one universe parameter occurs in
+neither the type nor the value, so the level set a record emits is **seeded**
+from this list rather than only reached from its expressions.  Otherwise the
+`param` line is dropped while the record still names the parameter, and a
+consumer which interns `Level.param` as it reads — nanoda does — has nothing to
+intern.
+
+This is `lean4export`'s own `dumpUparams`, in its order: every name first, then
+one `param` level per name, all of it ahead of the record that lists them.  A
+level a later expression reaches is interned after these and is unaffected. -/
+private def levelParamsJ (w : Writer) (lp : List Name) : Writer × String :=
+  let (w, json) := w.namesJ lp
+  let w := lp.foldl (fun w p => (w.level (.param p)).1) w
+  (w, json)
+
 private def binderStr : BinderInfo → String
   | .default => "default"
   | .implicit => "implicit"
@@ -344,7 +363,7 @@ private def hintsJ : EHints → String
 
 private def ctorJ (w : Writer) (c : ECtor) : Writer × String :=
   let (w, ni) := w.name c.name
-  let (w, lp) := w.namesJ c.levelParams
+  let (w, lp) := w.levelParamsJ c.levelParams
   let (w, ti) := w.expr c.type
   let (w, ii) := w.name c.induct
   (w, s!"\{\"cidx\":{c.cidx},\"induct\":{ii},\"isUnsafe\":{c.isUnsafe},\"levelParams\":{lp},\
@@ -357,7 +376,7 @@ private def ruleJ (w : Writer) (r : ERecRule) : Writer × String :=
 
 private def recJ (w : Writer) (r : ERec) : Writer × String :=
   let (w, al) := w.namesJ r.all
-  let (w, lp) := w.namesJ r.levelParams
+  let (w, lp) := w.levelParamsJ r.levelParams
   let (w, ni) := w.name r.name
   let (w, rules) :=
     r.rules.foldl (fun (w, acc) x => let (w, s) := w.ruleJ x; (w, acc.push s)) (w, #[])
@@ -370,7 +389,7 @@ private def recJ (w : Writer) (r : ERec) : Writer × String :=
 private def indTypeJ (w : Writer) (t : EIndType) : Writer × String :=
   let (w, al) := w.namesJ t.all
   let (w, cs) := w.namesJ t.ctors
-  let (w, lp) := w.namesJ t.levelParams
+  let (w, lp) := w.levelParamsJ t.levelParams
   let (w, ni) := w.name t.name
   let (w, ti) := w.expr t.type
   (w, s!"\{\"all\":{al},\"ctors\":{cs},\"isRec\":{t.isRec},\"isReflexive\":{t.isReflexive},\
@@ -381,13 +400,13 @@ private def indTypeJ (w : Writer) (t : EIndType) : Writer × String :=
 def decl (w : Writer) (d : EDecl) : Writer :=
   match d with
   | .ax n lp t u =>
-    let (w, lpj) := w.namesJ lp
+    let (w, lpj) := w.levelParamsJ lp
     let (w, ni) := w.name n
     let (w, ti) := w.expr t
     w.push s!"\{\"axiom\":\{\"isUnsafe\":{u},\"levelParams\":{lpj},\"name\":{ni},\"type\":{ti}}}"
   | .defn n lp t v h sf all =>
     let (w, aj) := w.namesJ all
-    let (w, lpj) := w.namesJ lp
+    let (w, lpj) := w.levelParamsJ lp
     let (w, ni) := w.name n
     let (w, ti) := w.expr t
     let (w, vi) := w.expr v
@@ -395,7 +414,7 @@ def decl (w : Writer) (d : EDecl) : Writer :=
       \"name\":{ni},\"safety\":\"{sf}\",\"type\":{ti},\"value\":{vi}}}"
   | .thm n lp t v all =>
     let (w, aj) := w.namesJ all
-    let (w, lpj) := w.namesJ lp
+    let (w, lpj) := w.levelParamsJ lp
     let (w, ni) := w.name n
     let (w, ti) := w.expr t
     let (w, vi) := w.expr v
@@ -403,14 +422,14 @@ def decl (w : Writer) (d : EDecl) : Writer :=
       \"type\":{ti},\"value\":{vi}}}"
   | .opaq n lp t v u all =>
     let (w, aj) := w.namesJ all
-    let (w, lpj) := w.namesJ lp
+    let (w, lpj) := w.levelParamsJ lp
     let (w, ni) := w.name n
     let (w, ti) := w.expr t
     let (w, vi) := w.expr v
     w.push s!"\{\"opaque\":\{\"all\":{aj},\"isUnsafe\":{u},\"levelParams\":{lpj},\"name\":{ni},\
       \"type\":{ti},\"value\":{vi}}}"
   | .quot n lp t k =>
-    let (w, lpj) := w.namesJ lp
+    let (w, lpj) := w.levelParamsJ lp
     let (w, ni) := w.name n
     let (w, ti) := w.expr t
     w.push s!"\{\"quot\":\{\"kind\":\"{k}\",\"levelParams\":{lpj},\"name\":{ni},\"type\":{ti}}}"

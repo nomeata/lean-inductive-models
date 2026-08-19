@@ -117,6 +117,44 @@ def reverseConstructorsFor (inputExport : InductiveModels.Export) (target : Lean
       else declaration
     | other => other }
 
+/-- The level-parameter name IDs an emitted stream names in a `levelParams`
+list without a `param` level line having introduced them first, as
+`(record kind, name ID)` pairs, or `none` when a line does not decode.
+
+Read at the arena level, line by line, rather than through
+`InductiveModels.parse`: the property is about what the *file* introduces, and
+the reader this is for interns `Level.param` as it goes, so a line that arrives
+after the record naming it is as bad as one that never arrives.  The parsed
+export cannot see either — it holds names, not arena lines. -/
+def undeclaredStreamLevelParams (text : String) : Option (Array (String × Nat)) := Id.run do
+  let mut declared : Std.HashSet Nat := {}
+  let mut missing : Array (String × Nat) := #[]
+  for line in text.splitOn "\n" do
+    if line.isEmpty then continue
+    let .ok record := Lean.Json.parse line | return none
+    if (record.getObjVal? "il").isOk then
+      if let .ok p := record.getObjVal? "param" >>= (·.getNat?) then
+        declared := declared.insert p
+    for (kind, ids) in streamLevelParams record do
+      for id in ids do
+        unless declared.contains id do missing := missing.push (kind, id)
+  return some missing
+where
+  /-- The `levelParams` name IDs of every record spelling that carries one. -/
+  streamLevelParams (record : Lean.Json) : Array (String × Array Nat) := Id.run do
+    let ids (body : Lean.Json) : Array Nat :=
+      match body.getObjVal? "levelParams" >>= (·.getArr?) with
+      | .ok items => items.filterMap (·.getNat?.toOption)
+      | .error _ => #[]
+    let mut lists := #[]
+    for kind in ["axiom", "def", "thm", "opaque", "quot"] do
+      if let .ok body := record.getObjVal? kind then lists := lists.push (kind, ids body)
+    if let .ok block := record.getObjVal? "inductive" then
+      for kind in ["types", "ctors", "recs"] do
+        if let .ok (.arr members) := block.getObjVal? kind then
+          for member in members do lists := lists.push (kind, ids member)
+    return lists
+
 /-- The committed fixtures the complete tool declines (exit 2).  Every other
 fixture in the sweep below is expected to be accepted (exit 0), so this one
 list pins the disposition of all of them. -/
@@ -1104,6 +1142,37 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "quiet suppresses successful check diagnostics" <|
     (nestedOnly.stderr.splitOn "input check:").length == 1 &&
       (nestedOnly.stderr.splitOn "output check:").length == 1
+
+  -- **The emitted stream introduces every level parameter it names.**
+  --
+  -- A declaration's `levelParams` is part of its kernel identity rather than a
+  -- summary of the levels its expressions use, so a record may name a
+  -- parameter that nothing inside it mentions — the kernel accepts
+  -- `def levelComp4.{u} : Sort 1 := Sort 0`, and `lean4export` emits the
+  -- parameter's `param` level regardless.  A writer that emitted only the
+  -- levels its expressions reach drops that line, and a consumer which interns
+  -- `Level.param` as it reads has nothing to intern.  `unused_level_param` is
+  -- that shape in all four declaration kinds that can carry it; `arenaformat`
+  -- pins the writer directly, and this is the same property read off the bytes
+  -- the process actually wrote.
+  let unusedLevelParam := s!"{root}/test/fixtures/inductive-models/unused_level_param.ndjson"
+  let unusedOutput : System.FilePath := s!"{scratch}/main-cli-unused-level-param.ndjson"
+  removeIfPresent unusedOutput
+  let unusedRun ← runInductiveModels binary
+    ["--inductives", "--check", "--type-check-generated", "--quiet",
+      "-o", unusedOutput.toString, unusedLevelParam]
+  state := state.check "the unused-level-parameter fixture passes the complete tool"
+    (unusedRun.exitCode == 0)
+  -- The input has the property already, so the reading is checked against a
+  -- stream known to satisfy it before it is asked about the one we wrote.
+  state := state.check "the unused-level-parameter input introduces its own level parameters" <|
+    undeclaredStreamLevelParams (← IO.FS.readFile unusedLevelParam) == some #[]
+  -- A run that wrote nothing leaves no output to read, and reading nothing
+  -- must fail this check rather than pass it vacuously.
+  let emitted ← if ← unusedOutput.pathExists then IO.FS.readFile unusedOutput else pure "?"
+  state := state.check "the emitted stream introduces every level parameter it names" <|
+    undeclaredStreamLevelParams emitted == some #[]
+  removeIfPresent unusedOutput
 
   -- **Every committed fixture, through the complete process boundary.**
   --

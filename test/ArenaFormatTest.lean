@@ -55,6 +55,89 @@ def bothHaveDecls (whole streamed : Except String Export) (expected : Array EDec
   | .ok first, .ok second => first.decls == expected && second.decls == expected
   | _, _ => false
 
+/-! ## A declaration introduces every level parameter it names
+
+`levelParams` is part of a declaration's kernel identity and not a summary of
+the levels its expressions use: the kernel accepts
+`def levelComp4.{u} : Sort 1 := Sort 0`, whose universe parameter occurs in
+neither the type nor the value.  `lean4export`'s `dumpUparams` therefore dumps
+every parameter's name *and* the `Level.param` of it before the record that
+lists them, so a stream always introduces the level parameters its declarations
+name — and a consumer which interns `Level.param` while it reads (nanoda) has
+nothing to intern when a line is missing.
+
+The writer must do the same for every record it emits, whatever produced it:
+the level set to emit is seeded from `levelParams`, not only reached from
+expressions.  Each list is pinned separately below, because a record whose
+other lists mention the parameter would hide a partial repair. -/
+
+/-- Every name in `params` is introduced by `d`'s own arena, at exactly the
+line the writer spells for it. -/
+def declaresLevelParams (d : EDecl) (params : List Name) : Bool :=
+  let (writer, split) := (Writer.fromCursor {}).splitDecl d
+  params.all fun p =>
+    match writer.names.find? p, writer.levels.find? (.param p) with
+    | some namej, some levelj => split.arena.contains s!"\{\"il\":{levelj},\"param\":{namej}}"
+    | _, _ => false
+
+/-- `Sort 1`: a type that mentions no level parameter, so a record built from
+it names its parameters in `levelParams` and nowhere else. -/
+def unmentioning : Expr := .sort (.succ .zero)
+
+/-- One record of every declaration kind that carries a `levelParams` list,
+each naming `w` without any expression of the record mentioning it.  The three
+lists of an inductive block are three separate records for the reason above. -/
+def unusedLevelParamRecords : Array (String × EDecl) :=
+  let ctor : ECtor :=
+    { name := `Unused.mk, levelParams := [`w], type := .const `Unused [], cidx := 0,
+      numParams := 0, numFields := 0, induct := `Unused, isUnsafe := false }
+  let indType : EIndType :=
+    { name := `Unused, levelParams := [`w], type := unmentioning, all := [`Unused],
+      ctors := [`Unused.mk], numParams := 0, numIndices := 0, numNested := 0, isRec := false,
+      isReflexive := false, isUnsafe := false }
+  let recursor : ERec :=
+    { name := `Unused.rec, levelParams := [`w], type := unmentioning, all := [`Unused],
+      numParams := 0, numIndices := 0, numMotives := 1, numMinors := 1, rules := [],
+      k := false, isUnsafe := false }
+  #[("axiom", .ax `Unused [`w] unmentioning false),
+    ("def", .defn `Unused [`w] unmentioning (.sort .zero) .opaque "safe" [`Unused]),
+    ("theorem", .thm `Unused [`w] unmentioning (.sort .zero) [`Unused]),
+    ("opaque", .opaq `Unused [`w] unmentioning (.sort .zero) false [`Unused]),
+    ("quot", .quot `Unused [`w] unmentioning "type"),
+    ("inductive type", .induct [indType] [] []),
+    ("constructor", .induct [] [ctor] []),
+    ("recursor", .induct [] [] [recursor])]
+
+/-- The level parameters a whole export names without introducing them, as
+`(record, parameter)` pairs.  Read off the writer's own level table after each
+record rather than from the text: the table is what the emitted `param` lines
+are, and a parameter absent from it is a line that was never written.  A record
+is checked against the table as it stands when the record's own arena closes,
+so a parameter introduced only by a *later* record does not count. -/
+def undeclaredLevelParams (x : Export) : Array (Name × Name) := Id.run do
+  let mut w : Writer := {}
+  let mut missing : Array (Name × Name) := #[]
+  for d in x.decls do
+    -- `splitDecl` is `decl` with the record's own lines already drained, which
+    -- is the shape the writer is meant to be carried in across declarations.
+    let (next, _) := w.splitDecl d
+    w := next
+    for (owner, params) in recordLevelParams d do
+      for p in params do
+        if (w.levels.find? (.param p)).isNone then missing := missing.push (owner, p)
+  return missing
+where
+  /-- Every `levelParams` list a record carries, with the name it belongs to. -/
+  recordLevelParams : EDecl → Array (Name × List Name)
+    | .ax n lp _ _ | .quot n lp _ _ => #[(n, lp)]
+    | .defn n lp .. => #[(n, lp)]
+    | .thm n lp .. => #[(n, lp)]
+    | .opaq n lp .. => #[(n, lp)]
+    | .induct ts cs rs =>
+      (ts.map (fun t => (t.name, t.levelParams))).toArray ++
+        (cs.map (fun c => (c.name, c.levelParams))).toArray ++
+        (rs.map (fun r => (r.name, r.levelParams))).toArray
+
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let scratch := s!"{root}/_tmp"
@@ -300,6 +383,61 @@ def main (args : List String) : IO UInt32 := do
   state := state.check "opaque records may omit isUnsafe for arena compatibility" <|
     bothHaveDecls (InductiveModels.parse legacyOpaque) (← parseHandleAt compatibilityPath)
       #[legacyOpaqueDecl]
+
+  -- **Every level parameter a record names is introduced by that record.**
+  for (kind, record) in unusedLevelParamRecords do
+    state := state.check s!"an unused level parameter of a {kind} record is still emitted" <|
+      declaresLevelParams record [`w]
+  -- The same property, read back off a whole export rather than one record,
+  -- and against a record whose *other* level parameter is mentioned: seeding
+  -- the level set must add to what the expressions reach, not replace it.
+  let mixed : Export :=
+    { metaLine := Json.null
+      decls := #[
+        .ax `Mixed [`u, `w] (.sort (.param `u)) false,
+        .defn `Later [`w] unmentioning (.sort .zero) .opaque "safe" [`Later]] }
+  state := state.check "a mixed export introduces every level parameter it names" <|
+    undeclaredLevelParams mixed == #[]
+  state := state.check "a mentioned level parameter is still reached from its expression" <|
+    match InductiveModels.parse mixed.render with
+    | .ok reparsed => reparsed.decls == mixed.decls
+    | .error _ => false
+
+  -- **The committed corpus, through the writer.**  The property is about
+  -- every stream the tool writes, so it is asserted over every export the
+  -- repository keeps rather than only over the records built above.
+  let mut sweptExports := 0
+  let mut sweptRecords := 0
+  let mut unparsable := 0
+  let mut corpusFailures : Array String := #[]
+  for directory in #["test/fixtures/inductive-models",
+      "test/fixtures/inductive-models/filtered", "test/fixtures/rejected"] do
+    let path : System.FilePath := s!"{root}/{directory}"
+    unless ← path.isDir do continue
+    let mut entries : Array System.FilePath := #[]
+    for entry in ← path.readDir do
+      if entry.path.extension == some "ndjson" then entries := entries.push entry.path
+    for file in entries.qsort (fun a b => a.toString < b.toString) do
+      -- `test/fixtures/rejected` holds exports that exist to be refused, and a
+      -- record the reader will not decode has no writer contract to check.
+      -- Counted rather than passed over: a sweep that stopped parsing would
+      -- otherwise report the property of nothing at all.
+      let .ok x := InductiveModels.parse (← IO.FS.readFile file)
+        | do
+          unparsable := unparsable + 1
+          continue
+      sweptExports := sweptExports + 1
+      sweptRecords := sweptRecords + x.decls.size
+      let missing := undeclaredLevelParams x
+      unless missing.isEmpty do
+        corpusFailures := corpusFailures.push
+          s!"{file.fileName.getD file.toString}: {missing.size} level parameters named \
+             without being introduced, first {missing[0]!}"
+  for failure in corpusFailures do IO.eprintln s!"FAIL corpus level parameters: {failure}"
+  state := state.check
+    s!"every record of every committed export introduces the level parameters it names \
+      ({sweptRecords} records across {sweptExports} exports, {unparsable} not read)"
+    corpusFailures.isEmpty
 
   for path in paths do removeIfPresent path
   IO.println s!"arena format: {state.passed} passed, {state.failed.size} failed"
