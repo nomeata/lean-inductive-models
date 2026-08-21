@@ -384,43 +384,18 @@ every other declaration in the export is still modelled and checked — it is
 the run saying, precisely, that this one declaration gets no model.
 
 Run over this repository's entire fixture corpus, the tool declines exactly
-five declarations as unsupported, in two fixture files, and they fall into
-the two situations below; each is shown here shrunk to a minimal declaration
-that still declines. That is a count of what this corpus contains, not a
-bound on what other inputs may hit. Two further behaviours are not declines
-but are still user-visible: one shares its cause with the second situation
-and is described inside that entry, the other closes the list.
+three declarations as unsupported, in two fixture files, and they all fall
+into the one situation below; it is shown here shrunk to a minimal
+declaration that still declines. That is a count of what this corpus
+contains, not a bound on what other inputs may hit. Two further behaviours
+are not declines but are still user-visible: one shares its cause with that
+situation and is described inside the same entry, the other closes the list.
 
 | What you can hit | What the run does |
 | --- | --- |
-| a constructor field that mentions the type other than by applying it | declines that declaration |
 | a field whose universe level has an `imax` the declared universe only bounds | declines that declaration |
 | a universe equality Lean's kernel cannot check | models it, and reports every such use |
 | a `Prop`-valued structure-like carrying data fields | models it, but silently omits some or all projections |
-
-#### Declined: a mention of the type that is not an application of it
-
-```lean
-universe u
-
-def hide (α : Sort u) (a : α) : α := a
-
-inductive Twisted : Type where
-  | base : Twisted
-  | step (child : Twisted)
-      (tag : hide (Twisted → Type) (fun _ => Nat) child) : Twisted
-```
-
-Lean accepts `Twisted`: its positivity check unfolds `hide`, the type of
-`tag` reduces to `Nat`, and the mention of `Twisted` disappears entirely.
-The tool reads constructor fields without unfolding definitions, so for it
-the mention is still there — and it is not `Twisted` applied to arguments,
-which is the one form of recursive occurrence the model constructions know
-how to replace. Unable to represent the occurrence, the tool declines the
-declaration, naming the constructor that carries it. `Foreign` and
-`Foreign0` in
-[`test/fixtures/inductive-models/prim_shape_declines.lean`](test/fixtures/inductive-models/prim_shape_declines.lean)
-are the corpus's two instances.
 
 #### Declined or reported: types whose models need a better level comparison than the kernel has
 
