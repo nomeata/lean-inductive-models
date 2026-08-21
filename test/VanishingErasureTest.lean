@@ -187,7 +187,7 @@ def main : IO UInt32 := do
       nonindexedReport.stmtErrors.isEmpty
 
   -- An indexed Type-family whose recursive field is infinitary only after β
-  -- reduction. This is a simple (numNested = 0) kernel declaration, so arm C
+  -- reduction. This is a simple (numNested = 0) kernel declaration, so the carve arm
   -- must expose the binder in its private skeleton while retaining the public
   -- constructor and recursor expressions literally.
   let hiddenRaw ← readExport "test/fixtures/inductive-models/indexed_hidden_erasure.ndjson"
@@ -314,9 +314,9 @@ def main : IO UInt32 := do
   --     is accepted, which is `nonindexed_vanishing`'s shape; and
   --   * `erasureBareFailure?` refuses it first anyway, so `analysePrim`
   --     declines it `.outOfScope` (a nested occurrence is layer 1's business)
-  --     before arm W's eligibility is asked at all.
+  --     before the tree arm's eligibility is asked at all.
   --
-  -- So no input — valid or not — reaches arm W's label guard with the guard
+  -- So no input — valid or not — reaches the tree arm's label guard with the guard
   -- false, and the arm asserts it instead of testing it.
   let payloadT : Expr := .const `Boundary.Payload []
   let ownerFieldRedexes : Array (String × Expr) := #[
@@ -338,7 +338,7 @@ def main : IO UInt32 := do
     let verdict ← kernelVerdict cty
     state := state.check s!"the {spelling} spelling reaches labelFactored unnormalized" <|
       shapeCtorTy owner 0 cty == cty && !labelFactored owner 0 shaped
-    state := state.check s!"the {spelling} spelling is refused as nested before arm W" <|
+    state := state.check s!"the {spelling} spelling is refused as nested before the tree arm" <|
       match bareWhy with
       | .ok (some _) => true
       | _ => false

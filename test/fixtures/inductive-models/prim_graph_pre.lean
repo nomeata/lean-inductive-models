@@ -1,4 +1,4 @@
-/- **Arm G beside an ordinary `PSigma`.** `prim_graph.lean` is the
+/- **The graph arm beside an ordinary `PSigma`.** `prim_graph.lean` is the
    same arm on a file that declares only `Eq`, so everything the graph route
    needs is spliced there. Here an input-owned ordinary `PSigma` must neither
    satisfy the tight-pair requirement nor be exempt: the tool splices

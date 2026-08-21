@@ -428,7 +428,7 @@ Auxiliaries: `PProd'` for the balanced trees, modelled by entry 2. Basis
 members the input does not declare are spliced in at Lean's own shape and
 reported on `prelude spliced` lines, unmodelled under entry 1's exemption.
 
-### 4. Types with no elements (arm E)
+### 4. Types with no elements (the empty arm)
 
 The shape: recursive, non-indexed, and every constructor has a *bare*
 recursive field — a field whose type is the declaration itself, not under a
@@ -468,7 +468,7 @@ is fine for propositions, which are never asked to hand data back — and it
 is exactly why the sometimes-`Prop` storage shapes are entry 2's instead.
 Auxiliaries: none.
 
-### 6. Propositions whose indices carry their data (arm F)
+### 6. Propositions whose indices carry their data (the recovery arm)
 
 The shape: one constructor, no recursion, indexed, at a `Prop` or
 sometimes-`Prop` sort, and granted large elimination by the kernel — which,
@@ -491,7 +491,7 @@ conclusion's indices carry comes back by substitution here, and one they do
 not carry has to be stored there. Auxiliaries: none — the equation is the
 basis's own `Eq`.
 
-### 7. Recursive subsingletons at `Prop`: recursion recovered from its graph (arm G)
+### 7. Recursive subsingletons at `Prop`: recursion recovered from its graph (the graph arm)
 
 The shape: one constructor, recursive, a literal `Prop`, granted large
 elimination by the kernel. `Acc`, the accessibility predicate under every
@@ -515,7 +515,7 @@ sometimes-`Prop` declaration is granted no large elimination by the kernel
 in the first place. Auxiliaries: `Nonempty`, the domain of
 `Classical.choice`, modelled by entry 5.
 
-### 8. Branching recursion at a never-`Prop` sort, as well-founded trees (arm W)
+### 8. Branching recursion at a never-`Prop` sort, as well-founded trees (the tree arm)
 
 The shape: non-indexed, recursive, never-`Prop`, with recursion that
 entry 3 cannot express — some constructor has two or more recursive fields, or a
@@ -537,7 +537,7 @@ output. Every inductive in it re-enters this list and goes wherever its own
 shape sends it: `_wcore.Subtype` to entry 2, `_wcore.List` to entry 3,
 `_wcore.Or` to entry 5, `_wcore.HEq` to entry 6, `_wcore.Acc` to entry 7.
 
-### 9. Indexed families at a never-`Prop` sort, carved out of an index-free skeleton (arm C)
+### 9. Indexed families at a never-`Prop` sort, carved out of an index-free skeleton (the carve arm)
 
 The shape: an indexed family at a never-`Prop` sort whose recursive fields
 mention the family only directly — each is, up to reduction, the family

@@ -4,7 +4,7 @@ open Lean Meta
 
 namespace InductiveModels
 
-/-! ## Arm G: the recursive subsingleton, by the **graph** of the recursion
+/-! ## The graph arm: the recursive subsingleton, by the **graph** of the recursion
 
 This is the arm that emits the graph-and-choice carrier for an arbitrary
 supported shape, taking **`Acc` out of the basis** rather than putting it to

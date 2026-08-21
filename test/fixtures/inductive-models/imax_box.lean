@@ -1,5 +1,5 @@
 /- Focused nested-imax storage cases.  The non-indexed family exercises the
-   direct Type route; the indexed family exercises the same shape after arm C
+   direct Type route; the indexed family exercises the same shape after the carve arm
    erases its index. -/
 
 universe u v

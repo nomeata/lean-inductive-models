@@ -4,15 +4,15 @@ open Lean Meta
 
 namespace InductiveModels
 
-/-! ## Arm C's index erasure
+/-! ## The carve arm's index erasure
 
-The skeleton arm C splices is the declaration with its indices dropped: the
+The skeleton the carve arm splices is the declaration with its indices dropped: the
 carrier loses its index telescope and every recursive field and every
 constructor's conclusion loses its index arguments. Nothing else moves except
 that a field whose only owner mention βζ-disappears is stored at its reduct;
 [`InductiveModels.erasureFieldDomain`] is that one internal exception. Public types
 remain literal. This is the whole reason this arm has no currying glue where
-the W route has one lemma per constructor.
+the tree route has one lemma per constructor.
 
 Both functions below are **raw `Expr` surgery on de Bruijn indices and not a
 telescope walk**, and that is forced rather than stylistic: opening a telescope
@@ -36,7 +36,7 @@ already established that the occurrence is a bare `T p⃗ e⃗` **under a possib
 empty binder telescope of its own** — so replacing the occurrence and keeping
 the binders is right, and a field this would corrupt has been declined.
 **Once per such field and no cap on how many**: a branching constructor erases
-exactly as a linear one does, which is why arm C is gated on bareness alone.
+exactly as a linear one does, which is why the carve arm is gated on bareness alone.
 
 `eraseOcc` is where the infinitary field is carried. `∀ z⃗, T p⃗ e⃗` erases to
 `∀ z⃗, S p⃗` — the binder types are kept from the field's head-normal form.
@@ -67,7 +67,7 @@ partial def eraseCtorTy (tname skelN : Name) (us : List Level) (np : Nat) (e : E
 /-- **A recursive slot, opened.** A recursive field's type is `∀ z⃗, T p⃗ e⃗`
 with `z⃗` possibly empty; this opens the `z⃗` as local declarations and hands
 the continuation them and the child's index arguments `e⃗`, which may mention
-them. Everything arm C builds per slot — the `good` clause, the constructor's
+them. Everything the carve arm builds per slot — the `good` clause, the constructor's
 component, the recursor's induction hypothesis — is a `mkLambdaFVars zs` or a
 `mkForallFVars zs` around what the continuation returns, and at `zs = #[]` each
 of them is the term the bare case built before this existed.

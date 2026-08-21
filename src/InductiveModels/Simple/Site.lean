@@ -1,6 +1,6 @@
 import InductiveModels.Simple.Analysis
 import InductiveModels.Simple.Interface
-import InductiveModels.Simple.WArm
+import InductiveModels.Simple.TreeKit
 import InductiveModels.Simple.Tight
 
 /-!
@@ -13,7 +13,7 @@ modules — and separate translation units — without any of them being a copy
 of another.
 
 `PrimSite` is *only* what the arms read: names and their guards, the shape
-analysis, the route booleans, and the closures arm W and the ι rules share.
+analysis, the route booleans, and the closures the tree arm and the ι rules share.
 `PrimOut` is the emission state every arm threads.
 -/
 
@@ -77,7 +77,7 @@ structure PrimSite where
   gNf : Nat
   gPivotTransports : Array (Nat × Nat)
   gNonPiv : Array Nat
-  armG : Bool
+  armGraph : Bool
   eqi : EqInfo
   ctorPairs : Array (Name × Name)
   tbl : Std.HashMap Name (Nat × Expr)
@@ -85,18 +85,18 @@ structure PrimSite where
   publicSource : Expr → Expr
   publicRecTy : Expr
   emptySlots : Array (Option Nat)
-  armE : Bool
-  /-- **The constructor-0 field indices arm E stores**, in declaration order,
-  and empty exactly when arm E's carrier is the bare
+  armEmpty : Bool
+  /-- **The constructor-0 field indices the empty arm stores**, in declaration order,
+  and empty exactly when the empty arm's carrier is the bare
   [`InductiveModels.emptyAt`] `w`. Settled by `mkPrimSite` from the owner's
   constructor count and one level question; see the decision there. -/
-  eStored : Array Nat
+  emptyStored : Array Nat
   directRoute? : Option DirectRoute
-  armF : Bool
-  armC : Bool
+  armRecovery : Bool
+  armCarve : Bool
   wTagged : Bool
   wPlan : WCarrierPlan
-  armW : Bool
+  armTree : Bool
   wW : Level
   wDN : Name
   wTelN : Name
@@ -152,30 +152,30 @@ than one more closure inside it. -/
 def PrimSite.withParams (site : PrimSite) (k : Array Expr → GenM α) : GenM α :=
   forallBoundedTelescope site.memberTy (some site.np) fun ps _ => k ps
 
-/-- **Arm E's stored-field variables**, out of constructor 0's shape telescope
+/-- **The empty arm's stored-field variables**, out of constructor 0's shape telescope
 at `ps`. A definition rather than a closure on the site for the same reason
 `withParams` is: the continuation's result is universe-polymorphic. -/
 def PrimSite.withStored (site : PrimSite) (ps : Array Expr)
     (k : Array Expr → GenM α) : GenM α := do
   let tele ← instForall site.exportCtors[0]!.2 ps
   forallBoundedTelescope tele (some (numForalls tele)) fun fs _ =>
-    k (site.eStored.map (fs[·]!))
+    k (site.emptyStored.map (fs[·]!))
 
-/-- **Arm E's carrier at `ps`**: the tower over the stored fields ending at
+/-- **The empty arm's carrier at `ps`**: the tower over the stored fields ending at
 [`InductiveModels.emptyAt`] `w`, or that emptiness bare where nothing is
 stored. -/
-def PrimSite.eCarrier (site : PrimSite) (ps : Array Expr) : GenM Expr := do
-  if site.eStored.isEmpty then return emptyAt site.w
-  site.withStored ps fun xs => eTowerTyOf site.w xs
+def PrimSite.emptyCarrier (site : PrimSite) (ps : Array Expr) : GenM Expr := do
+  if site.emptyStored.isEmpty then return emptyAt site.w
+  site.withStored ps fun xs => emptyTowerTyOf site.w xs
 
-/-- **The descent out of arm E's carrier**: an inhabitant of the carrier taken
+/-- **The descent out of the empty arm's carrier**: an inhabitant of the carrier taken
 back to the [`InductiveModels.emptyAt`] `w` it ends in. The identity where
 nothing is stored, and the `snd` chain past every stored component where
 something is — so every elimination the arm performs, and every elimination the
 common projection driver performs on its behalf, goes through one function. -/
-def PrimSite.eDrop (site : PrimSite) (ps : Array Expr) (e : Expr) : GenM Expr := do
-  if site.eStored.isEmpty then return e
-  site.withStored ps fun xs => eTowerTailOf site.w xs e
+def PrimSite.emptyDrop (site : PrimSite) (ps : Array Expr) (e : Expr) : GenM Expr := do
+  if site.emptyStored.isEmpty then return e
+  site.withStored ps fun xs => emptyTowerTailOf site.w xs e
 
 set_option maxRecDepth 2048 in
 /-- Settle every fact the arms share, in the order the single definition
@@ -244,7 +244,7 @@ def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (me
   let iotaN := fun (j : Nat) => interface.iotas[j]?.getD
     (Naming.iotaName (Naming.relocateSource tname root ern) j)
   let indN := Name.str impl "ind"
-  -- Arm G's **internal** names, guarded exactly like the interface's — but
+  -- The graph arm's **internal** names, guarded exactly like the interface's — but
   -- only when the arm is taken, so a file that declares
   -- `T._model._impl.graph` of its own costs nothing to a declaration this arm
   -- never sees.
@@ -253,10 +253,10 @@ def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (me
      Name.str impl "graph_inv_ty", Name.str impl "graph_inv",
      Name.str impl "graph_unique", Name.str impl "graph_exists",
      Name.str impl "rec_graph"]
-  -- Arm C's **internal** names. `skel` is the index erasure, spliced as an
+  -- The carve arm's **internal** names. `skel` is the index erasure, spliced as an
   -- ordinary inductive so that the kernel mints its recursor and its ι is
   -- definitional (the construction uses the real type); `good` is
-  -- the carving predicate. Guarded like arm G's, and only when the arm fires.
+  -- the carving predicate. Guarded like the graph arm's, and only when the arm fires.
   let skelN := Name.str impl "skel"
   let goodN := Name.str impl "good"
   let skelCtorN := fun (j : Nat) => Name.str skelN s!"c_{j}"
@@ -339,8 +339,8 @@ after normalisation"
 
   let route := analysis.route
 
-  -- **Is the index erasure unnested, and is it linear?** — the two questions arm
-  -- C's reach turns on, and the second is the same test the tuple tower
+  -- **Is the index erasure unnested, and is it linear?** — the two questions
+  -- the carve arm's reach turns on, and the second is the same test the tuple tower
   -- applies ([`InductiveModels.recSlotOf`]). *Unnested* (the historical
   -- `erasureBare` name below): every recursive occurrence reduces to
   -- `∀ z⃗, T p⃗ e⃗`, rather than sitting inside a container. *Linear*:
@@ -354,7 +354,7 @@ after normalisation"
   -- census measures the arm's reach instead of estimating it.
   --
   -- **Three reasons, counted apart, and none of the first two still bounds
-  -- arm C.** The erasure can fail to be linear by branching (two recursive
+  -- the carve arm.** The erasure can fail to be linear by branching (two recursive
   -- fields), by being infinitary (a recursive occurrence under a binder), or
   -- by the occurrence not being an application of `tname` at all. The first
   -- keeps every occurrence bare, which is all that [`InductiveModels.eraseCtorTy`]
@@ -363,17 +363,17 @@ after normalisation"
   -- erases as readily as one. The second keeps the *binders* and moves only
   -- the occurrence under them: `∀ z⃗, T p⃗ e⃗` erases to `∀ z⃗, S p⃗`, and the
   -- three consumers each wrap what they built in the same `z⃗`
-  -- ([`InductiveModels.withRecSlot`]). Arm C therefore runs at `erasureBare`, which
+  -- ([`InductiveModels.withRecSlot`]). The carve arm therefore runs at `erasureBare`, which
   -- is now the third reason alone, and carries **every** recursive slot
   -- through `ctorIdxAt`, `good`'s minor and the constructor's carve proof; the
-  -- spliced skeleton that comes out branches and is infinitary, and arm W is
+  -- spliced skeleton that comes out branches and is infinitary, and the tree arm is
   -- what models *it*.
   --
   -- `erasureLinear` survives because it is what the *decline message* reports,
   -- what the census counts the populations by, and — the load-bearing use —
-  -- what says a **non-indexed** declaration is arm W's rather than the tuple
+  -- what says a **non-indexed** declaration is the tree arm's rather than the tuple
   -- tower's. Relaxing `erasureBare` alone would have taken every infinitary
-  -- non-indexed declaration away from arm W and handed it to a tower that
+  -- non-indexed declaration away from the tree arm and handed it to a tower that
   -- cannot express it, so the infinitary test is split out rather than
   -- deleted.
   let erasureBare := analysis.erasureBare
@@ -383,7 +383,7 @@ after normalisation"
   -- (`churchSwapAt` and the strong-induction fold below); the `Nat`-tagged sum
   -- has neither. At a maybe-zero sort, small elimination uses the Church pair
   -- with `down`/`up` at the carrier boundary, including for indices and
-  -- recursion. The lifted arm-F construction below carries the remaining
+  -- recursion. The lifted recovery-arm construction below carries the remaining
   -- indexed shape: the large-eliminating nonrecursive singleton.
   -- ── the singleton's index shape, settled before anything is spliced ──
   --
@@ -409,29 +409,29 @@ after normalisation"
   --   `p.obj a`, `Acc.below`'s `Acc.intro x h`, `Inf.below`'s `Inf.mk a`.
   --   Such a position carries nothing the substitution can use and is
   --   discharged instead by a **Henry-Ford equation at the non-pivot
-  --   subsequence** — which is what arm F's carrier already was, back when the
+  --   subsequence** — which is what the recovery arm's carrier already was, back when the
   --   arm demanded that *every* position be of this kind.
   --
   -- Read that way the two arms' old refusals were the same refusal seen from
-  -- the two ends: arm F took only all-non-pivot index vectors and arm G took
+  -- the two ends: the recovery arm took only all-non-pivot index vectors and the graph arm took
   -- only all-pivot ones, and everything in between — `MixI`, `SvIx`,
   -- `IsHomLift`, every `.below` Lean mints beside a recursive `Prop`, and
   -- `Acc.below` — fell through the gap between them.
   -- `test/fixtures/inductive-models/prim_idx.lean` is the grid.
-  let armGRec := (route matches PrimRoute.prop) && large && nc == 1 && isRec
-  let armFNonRec := ((route matches PrimRoute.prop) || (route matches PrimRoute.bare)) &&
+  let armGraphRec := (route matches PrimRoute.prop) && large && nc == 1 && isRec
+  let armRecoveryNonRec := ((route matches PrimRoute.prop) || (route matches PrimRoute.bare)) &&
     large && nc == 1 && ni > 0 && !isRec
   let mut gIsData : Array Bool := #[]
   let mut gIdxPos : Array Nat := #[]
   let mut gRecNb : Array (Option Nat) := #[]
   let mut gNf := 0
   -- Constructor field / pivot-position pairs whose declared index type moves
-  -- with a non-pivot. Arm F's zipper transports all of them in field order.
+  -- with a non-pivot. The recovery arm's zipper transports all of them in field order.
   let mut gPivotTransports : Array (Nat × Nat) := #[]
   -- The index positions that are **not** pivots, in telescope order.
   let mut gNonPiv : Array Nat := #[]
-  if armGRec || armFNonRec then
-    if armGRec then for n in graphNames do taken n
+  if armGraphRec || armRecoveryNonRec then
+    if armGraphRec then for n in graphNames do taken n
     let (a, b, cc, npv, pt) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
       let (cn, cty) := exportCtors[0]!
       let tele ← instForall cty ps
@@ -463,7 +463,7 @@ after normalisation"
             -- kernel mints that recursor only when every non-proof field is
             -- literally recoverable as a conclusion index. A declaration may
             -- contain an unrecoverable data field and still be accepted, but
-            -- its recursor is small and `armFNonRec` / `armGRec` are false.
+            -- its recursor is small and `armRecoveryNonRec` / `armGraphRec` are false.
             -- `arm_f_guards` pins that route boundary. Only a raw export whose
             -- recursor metadata contradicts the installed kernel declaration
             -- can arrive here, and that remains a named decline rather than a
@@ -497,14 +497,14 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     gIsData := a; gIdxPos := b; gRecNb := cc; gNf := a.size; gNonPiv := npv
     gPivotTransports := pt
 
-  -- **Arm G's half of the index axis.** `GraphInv ι⃗ t val` carries one
+  -- **The graph arm's half of the index axis.** `GraphInv ι⃗ t val` carries one
   -- equality at the dependent tuple of non-pivot indices.  Its continuation
   -- transports the constructor step from `ι⃗_ctor` to `ι⃗`; pivots stay
   -- fixed because their data fields are supplied from the caller's indices.
   -- Proof-valued non-pivots still reduce for free by proof irrelevance, while
   -- data-valued ones (`BadC`, `Rgd`, and their `.below` declarations) now take
-  -- the same explicit packed transport as arm F.
-  let armG := armGRec
+  -- the same explicit packed transport as the recovery arm.
+  let armGraph := armGraphRec
 
   let (eqi, eqDecls) ← ensureEq
   let mut out : Array Declaration := eqDecls
@@ -542,7 +542,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
         if name == source then some target else none) expression
   let publicRecTy := publicSource (sourceRecursor?.map (·.type) |>.getD rv.type)
 
-  -- **Arm E**: a non-indexed owner every one of whose constructors has a
+  -- **The empty arm**: a non-indexed owner every one of whose constructors has a
   -- **bare** recursive field is empty. The tuple tower below deliberately
   -- starts from a base-constructor fibre, so this shape is not a degenerate
   -- tower: its exact model is the empty carrier already provided by the derived
@@ -555,7 +555,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- **The class is not about linearity, and the guard no longer says it is.**
   -- It used to ask [`InductiveModels.recSlotOf`], which is the *tuple tower's*
   -- question — one recursive field per constructor, that occurrence bare — so
-  -- arm E reached only the linear corner of a shape class linearity has nothing
+  -- the empty arm reached only the linear corner of a shape class linearity has nothing
   -- to do with. A constructor with two bare recursive fields is exactly as
   -- unapplicable as one with a single one, and `empty_no_base`'s `NbBr` was
   -- paying a two-hundred-declaration W core and `Classical.choice` for a
@@ -567,7 +567,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- reading "no base constructor" would model it by `⊥`. Whether a binder
   -- domain is empty is not a question available here, so the class stops at the
   -- occurrences that carry an inhabitant of the owner directly, which is
-  -- [`InductiveModels.bareRecSlotOf`]. `NbInf` and `NbVac` stay on arm W, and
+  -- [`InductiveModels.bareRecSlotOf`]. `NbInf` and `NbVac` stay on the tree arm, and
   -- the file records both counts.
   --
   -- **The sort is not part of the class either, and the guard no longer says
@@ -617,7 +617,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
           bareRecSlotOf tname np ni (numForalls tele) tele
     else
       pure #[]
-  let armE := emptySlots.size == nc && nc > 0 && emptySlots.all Option.isSome
+  let armEmpty := emptySlots.size == nc && nc > 0 && emptySlots.all Option.isSome
 
   -- A one-field singleton must retain its field.  At a maybe-zero sort the
   -- ordinary Church/lift route records only a proof of inhabitation; at a
@@ -721,11 +721,13 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- [`InductiveModels.planDirectIndexedRoute`] asks
   -- [`InductiveModels.planDirectTightRoute`]'s question and not a second one.
   --
-  -- **`!armFNonRec` is what keeps arm F's shapes with arm F.** `armFNonRec` is
+  -- **`!armRecoveryNonRec` is what keeps the recovery arm's shapes with it.**
+  -- `armRecoveryNonRec` is
   -- the same declaration shape asked one question: is every non-proof field
   -- literally one of the conclusion's index arguments? That is the kernel's own
   -- subsingleton rule, so the answer is `large` and the two are one fact read
-  -- at two places. Where the answer is **yes**, arm F **substitutes**: it reads
+  -- at two places. Where the answer is **yes**, the recovery arm
+  -- **substitutes**: it reads
   -- each data field off the recursor's own index argument and Church-conjoins
   -- the proof fields, because at a maybe-zero carrier there is no room to store
   -- anything — `Acc.intro`'s `x : α` sits at a level the `Prop` carrier cannot
@@ -735,15 +737,15 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- it every shape it had. Direct is the *first* dispatch guard, so without the
   -- conjunct it would steal them.
   --
-  -- Where the answer is **no**, arm F is not merely narrower but unavailable: a
+  -- Where the answer is **no**, the recovery arm is not merely narrower but unavailable: a
   -- data field the index vector does not mention is recoverable from nothing at
   -- all, so the model has to store it, which is this route. Neither side is a
   -- fallback for the other and the decision is read off the shape, not
   -- attempted.
   --
   -- **`Store` is a definition and not a spliced inductive**, which is what
-  -- separates this from arm C — and, at a never-zero sort, what makes it the
-  -- cheaper of the two. Arm C's erase-and-carve is the same idea — build the
+  -- separates this from the carve arm — and, at a never-zero sort, what makes it the
+  -- cheaper of the two. The carve arm's erase-and-carve is the same idea — build the
   -- index-free skeleton, then cut the family out of it — but it splices the
   -- skeleton as an *inductive* so the kernel mints its large eliminator, and it
   -- needs that eliminator twice. A spliced inductive is not free: the
@@ -752,25 +754,25 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- owner pays for two families where it declared one. The `PSigma'` tower
   -- splices nothing and needs no elimination grant at all, because its
   -- projections are structure projections and carry no motive. A maybe-zero
-  -- skeleton has no large eliminator to mint either, which is why arm C never
+  -- skeleton has no large eliminator to mint either, which is why the carve arm never
   -- reached there in the first place.
   --
   -- **So the shared shape — one constructor, non-recursive, indexed — is this
-  -- route's at both sorts, and arm C keeps everything else.** `nc == 1` and
+  -- route's at both sorts, and the carve arm keeps everything else.** `nc == 1` and
   -- `!isRec` are the whole of the overlap: a multi-constructor or recursive
-  -- indexed family has no storage tower to write and is arm C's exactly as
+  -- indexed family has no storage tower to write and is the carve arm's exactly as
   -- before. Where the tower misses `Sort w` at a never-zero carrier this is a
-  -- fall-through and not a decline — the last argument — because arm C is
+  -- fall-through and not a decline — the last argument — because the carve arm is
   -- behind it and takes the owner; at a maybe-zero sort there is nothing
   -- behind it and the missed sort is the stated boundary. At a literal `Prop`
   -- the storage would have to land at `Sort 0`, which means every field is a
-  -- proof, which means arm F has already fired — and a `Prop` owner is asked
+  -- proof, which means the recovery arm has already fired — and a `Prop` owner is asked
   -- for no data projection in the first place
   -- ([`InductiveModels.eligibleProjectionFieldsM`]'s `ownerIsProp` gate), so
   -- there is nothing there for this route to retain.
   let directIndexedRoute ← planDirectIndexedRoute tname
     ((route matches PrimRoute.bare | PrimRoute.type) && nc == 1 && !isRec && ni > 0 &&
-      !armFNonRec)
+      !armRecoveryNonRec)
     np memberTy exportCtors w (route matches PrimRoute.type)
 
   -- The indexed case is disjoint from the other two by its own guard —
@@ -803,19 +805,19 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- telescope, which is what brings `MixI`, `SvIx` and
   -- `CategoryTheory.Functor.IsHomLift` inside. The analysis above is what says
   -- which positions those are; everything below reads `gNonPiv`.
-  let armF := armFNonRec
+  let armRecovery := armRecoveryNonRec
 
-  -- **Arm C**: an indexed family at a never-zero sort, carved out of its own
+  -- **The carve arm**: an indexed family at a never-zero sort, carved out of its own
   -- index erasure. Gated on the erasure being
   -- **bare** — every recursive occurrence a `T p⃗ e⃗` whose whole domain the
   -- erasure can replace — and no longer on its being *linear*: the carve
   -- carries an arbitrary number of recursive slots per constructor, and the
-  -- branching skeleton that results is modelled by arm W. A family whose
+  -- branching skeleton that results is modelled by the tree arm. A family whose
   -- skeleton does not model is still a decline and never an emission, which is
   -- `Iso.requires`' job and not this guard's.
-  let armC := (route matches PrimRoute.type) && ni > 0 && erasureBare
+  let armCarve := (route matches PrimRoute.type) && ni > 0 && erasureBare
 
-  -- **Arm W**: the tagged W construction, and the **decision** that splits the
+  -- **The tree arm**: the tagged W construction, and the **decision** that splits the
   -- non-indexed recursive `Type` class in two.
   --
   -- Two constructions model that class and they are not ranked by reach: the
@@ -829,13 +831,14 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --
   -- **`!erasureLinear` is therefore a decision, not a refusal boundary**, and
   -- what decides it is cost rather than reach: on the linear side the tower
-  -- costs `Nat`, `PSigma'` and no axiom and every ι rule is `Eq.refl`, while W
-  -- splices a two-hundred-declaration core and proves its ι rules through
-  -- `WT.Wrec_iota`. Taking W wherever it *applies* would move six thousand
+  -- costs `Nat`, `PSigma'` and no axiom and every ι rule is `Eq.refl`, while
+  -- the tree arm splices a two-hundred-declaration core and proves its ι rules
+  -- through `WT.Wrec_iota`. Taking the tree arm wherever it *applies* would
+  -- move six thousand
   -- models onto the heavier construction for nothing. Neither side is a
-  -- fallback for the other: a declaration this sends to W is one the tower
-  -- cannot express, and a declaration it sends to the tower is one W would
-  -- overcharge.
+  -- fallback for the other: a declaration this sends to the tree arm is one the
+  -- tower cannot express, and a declaration it sends to the tower is one the
+  -- tree arm would overcharge.
   --
   -- **The two conditions the arm used to add to that decision are gone, and
   -- both were dead.** They used to sit in the conjunction below and a
@@ -916,37 +919,37 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --   the branch tower. Asserting it is a hard failure at an impossible state
   --   rather than a decline at a reachable one.
   --
-  -- **`!armE` is part of the decision and not part of the shape.** A branching
+  -- **`!armEmpty` is part of the decision and not part of the shape.** A branching
   -- declaration with no base constructor is in the W class by every question
   -- above and is *empty*, and W would duly build a W-type with no leaves — a
   -- spliced core, `Classical.choice`, two hundred declarations, for a carrier
-  -- that is `⊥`. Arm E's carrier *is* `⊥`, at the declaration's own sort, with
+  -- that is `⊥`. The empty arm's carrier *is* `⊥`, at the declaration's own sort, with
   -- no axiom. Where both apply the exact model wins, and saying so here rather
   -- than in the dispatcher's `if`-order is what makes these booleans mutually
   -- exclusive *facts* of the site: the arms and [`InductiveModels.primIotaRules`]
   -- read the same decision instead of each re-deriving it from the order they
   -- happen to test in.
   let wTagged := tagFactored tname np exportCtors
-  let armW :=
-    (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear && !armE
-  let wPlan ← wCarrierPlan armW w
+  let armTree :=
+    (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear && !armEmpty
+  let wPlan ← wCarrierPlan armTree w
   -- **The two invariants the arm stands on, stated where the arm is chosen.**
-  -- Both were conjuncts of `armW` until the classes they refuse were shown
+  -- Both were conjuncts of `armTree` until the classes they refuse were shown
   -- empty; neither can be re-derived from the booleans above, so each is a
   -- hard failure here rather than a silent route change.
-  if armW then
+  if armTree then
     unless labelFactored tname np exportCtors do
-      badShape s!"{tname} reaches arm W with a recursive field whose binder type names \
+      badShape s!"{tname} reaches the tree arm with a recursive field whose binder type names \
 an earlier recursive field, which `erasureBare` and Lean's positivity check between them \
 leave no spelling of; `wRecDom` substitutes only non-recursive fields and would leave a \
 dangling local in the branch tower"
     unless w.normalize.dec.isSome || wPlan.lifted do
-      badShape s!"{tname} reaches arm W at the never-zero sort {w}, whose carrier plan \
+      badShape s!"{tname} reaches the tree arm at the never-zero sort {w}, whose carrier plan \
 delivered neither a syntactic predecessor for the `Type u` core nor the constrained lift; \
 `max 1 w` converts to `w` at every never-zero `w`, so this state is unreachable"
   let wW := wPlan.coreLevel
-  -- Arm W's **internal** names, guarded exactly like arm C's and arm G's, and
-  -- only when the arm is taken.
+  -- The tree arm's **internal** names, guarded exactly like the carve arm's
+  -- and the graph arm's, and only when the arm is taken.
   let wDN := Name.str impl "wD"
   let wTelN := Name.str impl "wTel"
   let wBN := Name.str impl "wB"
@@ -954,7 +957,7 @@ delivered neither a syntactic predecessor for the `Type u` core nor the constrai
   let wTgN := Name.str impl "wtg"
   let wFN := Name.str impl "wF"
 
-  -- ── the kit arm C needs: Church conjunction's two projections and its
+  -- ── the kit the carve arm needs: Church conjunction's two projections and its
   -- introduction, built here because [`InductiveModels.andCOf`] gives the type only.
   let andCMk := fun (A B a b : Expr) => withLocalDeclD `D (.sort .zero) fun D => do
     withLocalDeclD `k (.forallE `a A (.forallE `b B D .default) .default) fun kk =>
@@ -968,16 +971,16 @@ delivered neither a syntactic predecessor for the `Type u` core nor the constrai
       mkLambdaFVars #[a, b] b
     pure (mkAppN p #[B, sel])
 
-  -- ── arm W's builders ──
+  -- ── the tree arm's builders ──
   -- Defined here rather than inside the arm because the **ι block below needs
-  -- them too**: an arm W ι rule is `WT.Wrec_iota` at this declaration's own
+  -- them too**: an tree arm ι rule is `WT.Wrec_iota` at this declaration's own
   -- `F`, its label and its dispatch, and those have to be rebuilt at the ι
   -- theorem's telescope. Defining a closure costs nothing to a declaration
   -- that never calls it, and every one of these declines rather than returning
-  -- a wrong answer when it is called at a shape arm W does not reach.
+  -- a wrong answer when it is called at a shape the tree arm does not reach.
   let wNatT : Expr := .const `Nat []
   -- `Type u` for the internal `Sort wW` carrier. Meaningless — and unused —
-  -- unless `armW`, whose carrier plan proved `wW` successor-shaped.
+  -- unless `armTree`, whose carrier plan proved `wW` successor-shaped.
   let uL := wW.normalize.dec.getD .zero
   -- **The core's `K` level**, and the one place the two instantiations differ
   -- in the level lists rather than in a term: `K = Nat : Type 0` tagged and
@@ -1032,10 +1035,10 @@ delivered neither a syntactic predecessor for the `Type u` core nor the constrai
     return (nrs, rcs)
   let wRecCount : Nat → GenM Nat := fun k => return (← wShapeOf k).2.size
 
-  -- ════ arm E's storage decision ════
+  -- ════ the empty arm's storage decision ════
   --
   -- **An empty carrier is correct without storing anything; storing is what
-  -- makes its projections *selectors*.**  Arm E's carrier is empty because
+  -- makes its projections *selectors*.**  The empty arm's carrier is empty because
   -- every constructor has a bare recursive field, and that fact is untouched
   -- by putting the constructor's other fields in front of the emptiness: a
   -- right-nested `PSigma'` tower ending at [`InductiveModels.emptyAt`] `w` is
@@ -1055,10 +1058,10 @@ delivered neither a syntactic predecessor for the `Type u` core nor the constrai
   --   more there is no reader for a stored field and no single telescope to
   --   store: the arms at two tags would have to land in one tower with no
   --   field to name it.  This is the gate
-  --   [`InductiveModels.wStoredFieldOverrides`] states for arm W, at the same
+  --   [`InductiveModels.treeStoredFieldOverrides`] states for the tree arm, at the same
   --   shape and for the same reason.
   -- * **The tower is at `Sort w`.**  [`InductiveModels.wTowerLevel`] — the
-  --   same level question arm W and the tuple route ask, including the same
+  --   same level question the tree arm and the tuple route ask, including the same
   --   recursive box for a component whose level retains an `imax`.  A field of
   --   an inductive at `Sort w` sits at `Sort ℓ` with `max ℓ w = w`, which is
   --   the kernel's own `is_geq` on the input re-asked as a conversion; where
@@ -1074,11 +1077,11 @@ delivered neither a syntactic predecessor for the `Type u` core nor the constrai
   -- level question decides is whether the *projections select*, and where they
   -- do not the driver says so with
   -- [`InductiveModels.Decline.projectionCodomain`] at exactly the fields that
-  -- name an earlier one.  The tuple route and arm W hard-fail on this same
-  -- question because storage is the whole of their carrier; for arm E storage
+  -- name an earlier one.  The tuple route and the tree arm hard-fail on this same
+  -- question because storage is the whole of their carrier; for the empty arm storage
   -- is an addition to a carrier that is already correct.
-  let eStored : Array Nat ←
-    if armE && nc == 1 then
+  let emptyStored : Array Nat ←
+    if armEmpty && nc == 1 then
       withParams fun ps => do
         let (nrs, _) ← wShapeOf 0
         if nrs.isEmpty then pure #[] else do
@@ -1097,7 +1100,7 @@ delivered neither a syntactic predecessor for the `Type u` core nor the constrai
               let reachable := xs.extract 0 q
               let stray := fs.filter fun f => !reachable.any fun x => x.fvarId! == f.fvarId!
               if (← ityp xs[q]!).hasAnyFVar fun id => stray.any fun f => f.fvarId! == id then
-                badShape s!"{exportCtors[0]!.1}'s field {nrs[q]!} names a field arm E \
+                badShape s!"{exportCtors[0]!.1}'s field {nrs[q]!} names a field the empty arm \
 does not store, which its positivity check should have made unspellable"
             match ← wTowerLevelOf w xs with
             | some _ => pure #[]
@@ -1179,7 +1182,7 @@ does not store, which its positivity check should have made unspellable"
   --
   -- **A mention of an earlier *recursive* field would leave a dangling local**,
   -- since only `nrs` is substituted. That is exactly `labelFactored`, asserted
-  -- where `armW` is decided; the assertion is what this line stands on.
+  -- where `armTree` is decided; the assertion is what this line stands on.
   let wRecDom : Array Expr → Nat → Nat → Array Expr → GenM Expr := fun ps k r nrv => do
     let (nrs, rcs) ← wShapeOf k
     let tele ← instForall exportCtors[k]!.2 ps
@@ -1369,7 +1372,7 @@ does not store, which its positivity check should have made unspellable"
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armG, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armE, eStored, directRoute?, armF, armC, wTagged, wPlan, armW, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
+  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armGraph, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armEmpty, emptyStored, directRoute?, armRecovery, armCarve, wTagged, wPlan, armTree, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
           { out, requires, spliced, projectionOverrides })
 
 end InductiveModels

@@ -4,7 +4,7 @@
    `N → Hidden N.z`. Lean's source exporter normalizes the displayed redex, so
    the adjacent raw fixture pins the unreduced, kernel-accepted constructor,
    recursor type and recursor rule. The public interface must retain that raw
-   spelling while arm C's private erasure exposes the binder.
+   spelling while the carve arm's private erasure exposes the binder.
 
    This is not a nested inductive: after head normalization the recursive
    occurrence is headed by `Hidden` itself. A foreign head such as

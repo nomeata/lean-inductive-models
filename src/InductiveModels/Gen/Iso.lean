@@ -22,7 +22,7 @@ namespace InductiveModels
 
 Most constructions implement and expose the same family, so [`Iso`] keeps its
 historical fields as the public interface and leaves `implementation?` empty.
-The indexed fibre adapter is different: it exposes arm C's public family and
+The indexed fibre adapter is different: it exposes the carve arm's public family and
 records the same declarations again at private names, so that the certificate
 its consumers read has both sides. Keeping that distinction explicit prevents
 later consumers from accidentally publishing the private recursor or using the
@@ -220,12 +220,12 @@ structure Iso where
   `descent p⃗ self` is an inhabitant of [`InductiveModels.emptyAt`] at this
   level — the derived exact-sort lift of Church `⊥`, which is empty at *every*
   level and sits at exactly that one. The construction that puts it there is
-  arm E, whose stated property is that every constructor has a **bare**
+  the empty arm, whose stated property is that every constructor has a **bare**
   recursive field, so no constructor can ever be applied.
 
   `descent` is a closed `fun p⃗ self => …` the route supplies. It is the
   identity where the carrier *is* that emptiness, and the tower's `snd` chain
-  where arm E stores the constructor's fields in front of it — so a consumer
+  where the empty arm stores the constructor's fields in front of it — so a consumer
   eliminates through one function and never has to know which.
 
   This is a fact about the carrier and not a projection implementation, which
@@ -245,7 +245,7 @@ structure Iso where
   a splice is a decision on record and not a silent one. -/
   spliced : Array Name
   /-- **Spliced inductives this model is not allowed to leave unmodelled.**
-  Arm C splices the *index erasure* of the family it is
+  The carve arm splices the *index erasure* of the family it is
   modelling and carves the family out of it, so its output contains an
   inductive declaration that was in nobody's input. If the prim pass then
   cannot model that skeleton, the emission would put an additional unmodelled

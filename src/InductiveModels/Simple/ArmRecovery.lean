@@ -1,16 +1,16 @@
 import InductiveModels.Simple.Site
-import InductiveModels.Simple.ArmFKit
+import InductiveModels.Simple.RecoveryKit
 import InductiveModels.Simple.GraphKit
 
 /-!
-# Arm F: the indexed subsingleton, by one packed index equation
+# The recovery arm: the indexed subsingleton, by one packed index equation
 -/
 
 open Lean Meta
 
 namespace InductiveModels
 
-def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
+def primArmRecovery (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- The site, under the names this arm has always read it by.
   let tname := site.tname
   let lparams := site.lparams
@@ -38,7 +38,7 @@ def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let publicRecTy := site.publicRecTy
   let mut out := st.out
   let mut spliced := st.spliced
-  -- ════ arm F: the indexed subsingleton, by one packed index equation ════
+  -- ════ the recovery arm: the indexed subsingleton, by one packed index equation ════
   --
   -- Shape: one constructor, every field a `Prop` or a
   -- variable that literally *is* one of the output's indices. The kernel
@@ -110,7 +110,7 @@ def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
     pure (args.extract np args.size)
 
   -- The constructor's field telescope with the **data fields substituted**
-  -- from an index vector — [`InductiveModels.ctorFieldsAux`], the same walk arm G's
+  -- from an index vector — [`InductiveModels.ctorFieldsAux`], the same walk the graph arm's
   -- `GraphInv` is stated by. `fs` is every field (substituted or bound),
   -- `bnd` only the bound ones, and `res` the conclusion at them.
   let fieldsAt := fun (ps is : Array Expr)
@@ -136,7 +136,7 @@ def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
       (k : Array Expr → Option Expr → GenM Expr) =>
     if zipRoute then
       let (pk, ℓpk) := pk?.get!
-      armFZipMinor eqi memberTy cty0 ni gIsData gIdxPos gPivotTransports
+      recoveryZipMinor eqi memberTy cty0 ni gIsData gIdxPos gPivotTransports
         ps is pk ℓpk (idxOfRes tname) mk fun fs h => k fs (some h)
     else
       fieldsAt ps is fun fs bnd res => do
@@ -184,7 +184,7 @@ def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
         | none => pure (((Array.range nf).filter (!gIsData[·]!)).map (fs[·]!))
         | some (pk, ℓpk) =>
           if zipRoute then
-            armFZipCtorArgs eqi memberTy ni gIsData gIdxPos gPivotTransports ps idx fs pk ℓpk
+            recoveryZipCtorArgs eqi memberTy ni gIsData gIdxPos gPivotTransports ps idx fs pk ℓpk
           else do
             let bnd := ((Array.range nf).filter (!gIsData[·]!)).map (fs[·]!)
             pure (bnd.push (eqi.refl' ℓpk pk
@@ -216,7 +216,7 @@ def primArmF (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
     let nf := numForalls tele
     if zipRoute then
       let (pk, ℓpk) := pk?.get!
-      let body ← armFZipModelRec eqi lift? memberTy cty0 ni gIsData gIdxPos
+      let body ← recoveryZipModelRec eqi lift? memberTy cty0 ni gIsData gIdxPos
         gPivotTransports ps idxs base pk motive minor ℓpk (idxOfRes tname)
         (fun full r => minorTyAt ps full (some (pk, ℓpk)) r)
         (fun full => encodedAt ps full)

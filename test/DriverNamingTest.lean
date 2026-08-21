@@ -115,7 +115,7 @@ def main : IO UInt32 := do
   let carve ← runFixture "test/fixtures/inductive-models/prim_carve.ndjson"
     (legacyGenerationConfig true)
   let skeleton := `Bif._model._impl.skel
-  state := state.check "arm-C skeleton uses exact carriers"
+  state := state.check "carve-arm skeleton uses exact carriers"
     (carve.generated `Bif && carve.generated skeleton &&
       carve.hasExactCarrier skeleton && !carve.hasLegacyCarrier skeleton)
 

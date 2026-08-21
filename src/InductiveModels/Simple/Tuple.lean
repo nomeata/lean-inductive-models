@@ -59,7 +59,7 @@ question whose answer is invariant under β and ζ:
 
 * **is the occurrence bare** — [`InductiveModels.recSlotOf`] and `erasureBareWhy`;
 * **what are its index arguments, and how many binders is it under** —
-  [`InductiveModels.withRecSlot`], which is where arm C's `ctorIdxAt` used to inspect
+  [`InductiveModels.withRecSlot`], which is where the carve arm's `ctorIdxAt` used to inspect
   only the unreduced head;
 * **what binders does a recursive field have** — [`InductiveModels.tagFactored`],
   which has none to peel until the redex is gone.
@@ -75,7 +75,7 @@ survives head normalisation under its foreign type former and is still routed
 back to layer 1.
 
 `PFunctor.Approx.CofixA`'s `(F.B a → CofixA n)` is a binder that is genuinely
-*written*, so none of this touches it — it is arm C's infinitary erasure that
+*written*, so none of this touches it — it is the carve arm's infinitary erasure that
 carries it, and `prim_carve`'s `Inf2`, `Cf` and `Bif` are its fixtures. -/
 
 /-- **Does `B` factor through the constructor tag?** — the one question that
@@ -104,7 +104,7 @@ domain's own binders, indices `0 … j-1` are those binders, `j … j+i-1` are t
 constructor's earlier fields, and above that the parameters. So a binder type
 must have no loose bvar in `[j, j+i)`.
 
-Non-throwing, and asked of every declaration the W arm would take, so that the
+Non-throwing, and asked of every declaration the tree arm would take, so that the
 census reports the certifiable and uncertifiable populations as two numbers
 rather than one. -/
 def tagFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) : Bool :=
@@ -135,7 +135,7 @@ def tagFactored (tname : Name) (np : Nat) (exportCtors : Array (Name × Expr)) :
 
 /-- **Does `B` factor through the whole label?** — the same question as
 [`InductiveModels.tagFactored`], asked of the *untagged* instantiation of the same
-core, and the guard arm W actually runs on.
+core, and the guard the tree arm actually runs on.
 
 The untagged form is the tagged construction at `K := A` and `tg := id`, so
 there is one construction and two bills. At `K := A` the branch
@@ -151,7 +151,7 @@ refuses is modelled at `[propext, Classical.choice, Quot.sound]`, because
 `WT.decEqAll` is `Classical.propDecidable`; one it admits *and* `tagFactored`
 admits keeps `instDecidableEqNat` and stays at `[propext, Quot.sound]`.
 
-**This is an invariant, not a route condition.** It was a conjunct of `armW`
+**This is an invariant, not a route condition.** It was a conjunct of `armTree`
 until its refusal class was shown empty, and [`InductiveModels.mkPrimSite`]
 now asserts it — a hard failure — where it used to test it. The argument is
 written out there; in one line: everything reaching the assertion has passed
@@ -244,7 +244,7 @@ def shapeFieldDomain (tname : Name) (dom : Expr) : Expr :=
 **field** domain, its `np` parameter binders and its conclusion untouched.
 
 **This is the whole of the normalisation, and it happens once.** The three
-questions the W arm splits its telescope by — [`InductiveModels.wShapeOf`],
+questions the tree arm splits its telescope by — [`InductiveModels.wShapeOf`],
 [`InductiveModels.labelFactored`] and [`InductiveModels.eraseCtorTy`] — used to test
 `mentionsAny` on the domain *as written*, so a field whose owner mention βζ
 discards was a recursive *branch* to all three, and to
@@ -452,7 +452,7 @@ shapes the tower cannot express, each by name. -/
 def recSlotOf (tname : Name) (np ni : Nat) (cn : Name) (nf : Nat) (tele : Expr)
     (tagged : Bool := true) (typeU : Bool := true) (labelled : Bool := true) :
     GenM (Option Nat) := do
-  -- **The W arm's bill, printed at the decline that names W**, and it is two
+  -- **The tree arm's bill, printed at the decline that names it**, and it is two
   -- questions because the arm runs the one core at two
   -- instantiations. `labelled` is [`InductiveModels.labelFactored`] and `tagged`
   -- is [`InductiveModels.tagFactored`], which decides what the model *costs* —
@@ -460,7 +460,7 @@ def recSlotOf (tname : Name) (np ni : Nat) (cn : Name) (nf : Nat) (tele : Expr)
   -- `Classical.choice` on top. Two populations, so the census counts two
   -- numbers.
   --
-  -- Neither column can now read `no` at a declaration arm W would otherwise
+  -- Neither column can now read `no` at a declaration the tree arm would otherwise
   -- have taken: `labelled` is an invariant asserted at
   -- [`InductiveModels.mkPrimSite`] rather than a route condition. It is printed
   -- here because *this* decline is reached before `erasureBare` holds, where
@@ -548,7 +548,7 @@ plan for this one too.
 
 The tuple tower only ever calls this at a **bare** occurrence, where
 [`InductiveModels.swapOcc`] is the identity on binders and this is the whole-domain
-replacement it always was; arm C calls it at an infinitary one too. -/
+replacement it always was; the carve arm calls it at an infinitary one too. -/
 partial def spineSwap (tname : Name) (Vn : Expr) (nf : Nat) (tele : Expr) :
     GenM Expr := do
   if nf == 0 then return tele

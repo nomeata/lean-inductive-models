@@ -1,7 +1,7 @@
 import InductiveModels.Simple.Church
 
 /-!
-# Arm F's zipper
+# The recovery arm's zipper
 
 Walking the indexed subsingleton's constructor telescope while recovering its
 dependent data fields from the caller's index telescope.
@@ -11,12 +11,12 @@ open Lean Meta
 
 namespace InductiveModels
 
-/-- Walk arm F's constructor telescope while recovering dependent data fields
+/-- Walk the recovery arm's constructor telescope while recovering dependent data fields
 from the caller's index telescope.  Before each moving pivot, a packed equality
 of the complete earlier index prefix transports the caller's pivot back to the
 constructor field type.  Proof fields are then bound at the already recovered
 constructor prefix. -/
-partial def armFZipPrefix (eqi : EqInfo) (memberTy ctorTy : Expr) (ni : Nat)
+partial def recoveryZipPrefix (eqi : EqInfo) (memberTy ctorTy : Expr) (ni : Nat)
     (isData : Array Bool) (idxPos : Array Nat) (transports : Array (Nat × Nat))
     (ps is : Array Expr) (ctorIdx : Expr → GenM (Array Expr))
     (bind : Nat → Name → Expr → (Expr → GenM Expr) → GenM Expr)
@@ -69,13 +69,13 @@ partial def armFZipPrefix (eqi : EqInfo) (memberTy ctorTy : Expr) (ni : Nat)
           go (i + 1) (slot + 1) (fields.push field) (bound.push field)
     go 0 0 #[] #[]
 
-def armFZipMinor (eqi : EqInfo) (memberTy ctorTy : Expr) (ni : Nat)
+def recoveryZipMinor (eqi : EqInfo) (memberTy ctorTy : Expr) (ni : Nat)
     (isData : Array Bool) (idxPos : Array Nat) (transports : Array (Nat × Nat))
     (ps is : Array Expr) (pk : Expr) (ℓpk : Level)
     (ctorIdx : Expr → GenM (Array Expr)) (mk : Array Expr → Expr → GenM Expr)
     (k : Array Expr → Expr → GenM Expr) : GenM Expr := do
   let sel := Array.range ni
-  armFZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps is ctorIdx
+  recoveryZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps is ctorIdx
     (fun _ name ty cont => withLocalDeclD name ty cont)
     fun fs bnd idx => do
       let lhs ← packChain ni pk (sel.map (idx[·]!)) 0
@@ -83,7 +83,7 @@ def armFZipMinor (eqi : EqInfo) (memberTy ctorTy : Expr) (ni : Nat)
       withLocalDeclD `heq (eqi.mk' ℓpk pk lhs rhs) fun h => do
         mk (bnd.push h) (← k fs h)
 
-def armFZipCtorArgs (eqi : EqInfo) (memberTy : Expr) (ni : Nat)
+def recoveryZipCtorArgs (eqi : EqInfo) (memberTy : Expr) (ni : Nat)
     (isData : Array Bool) (idxPos : Array Nat) (transports : Array (Nat × Nat))
     (ps idx fields : Array Expr) (pk : Expr) (ℓpk : Level) : GenM (Array Expr) := do
   let nf := isData.size
@@ -104,12 +104,12 @@ def armFZipCtorArgs (eqi : EqInfo) (memberTy : Expr) (ni : Nat)
   let packed ← packChain ni pk ((Array.range ni).map (idx[·]!)) 0
   pure (args.push (eqi.refl' ℓpk pk packed))
 
-/-- Arm F's full-index zipper recursor.  The outer equality moves the entire
+/-- The recovery arm's full-index zipper recursor.  The outer equality moves the entire
 dependent index telescope.  Its motive is a function over every prefix
 equation and proof field, so the constructor endpoint applies the original
 minor while the caller endpoint rebuilds exactly the Church witness stored in
 the major premise. -/
-def armFZipRec (eqi : EqInfo) (ℓpk : Level) (lift? : Option Level)
+def recoveryZipRec (eqi : EqInfo) (ℓpk : Level) (lift? : Option Level)
     (pk pkc pki heq motive minor : Expr) (idxs : Array Expr)
     (zipAll : Array Expr → (Array Expr → Array Expr → GenM Expr) → GenM Expr)
     (minorTy : Array Expr → Expr → GenM Expr)
@@ -133,10 +133,10 @@ def armFZipRec (eqi : EqInfo) (ℓpk : Level) (lift? : Option Level)
   let fn := eqi.recAt (← ilevel (← inferType base)) ℓpk pk pkc motiveE base pki heq
   pure (mkAppN fn extracted)
 
-/-- Extract arm F's zipper premises from the Church major and hand them to the
+/-- Extract the recovery arm's zipper premises from the Church major and hand them to the
 full-index equality recursor.  Kept out of [`InductiveModels.primIso`] so the route
 dispatcher remains below the default elaboration heartbeat budget. -/
-def armFZipModelRec (eqi : EqInfo) (lift? : Option Level)
+def recoveryZipModelRec (eqi : EqInfo) (lift? : Option Level)
     (memberTy ctorTy : Expr) (ni : Nat) (isData : Array Bool) (idxPos : Array Nat)
     (transports : Array (Nat × Nat)) (ps idxs : Array Expr) (base pk motive minor : Expr)
     (ℓpk : Level) (ctorIdx : Expr → GenM (Array Expr))
@@ -144,14 +144,14 @@ def armFZipModelRec (eqi : EqInfo) (lift? : Option Level)
     (encodedAt : Array Expr → GenM Expr) : GenM Expr := do
   let packSel := Array.range ni
   let project := fun (slot : Nat) => do
-    armFZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps idxs ctorIdx
+    recoveryZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps idxs ctorIdx
       (fun _ name ty cont => withLocalDeclD name ty cont)
       fun _ bnd idx => do
         let lhs ← packChain ni pk (packSel.map (idx[·]!)) 0
         let rhs ← packChain ni pk (packSel.map (idxs[·]!)) 0
         withLocalDeclD `heq (eqi.mk' ℓpk pk lhs rhs) fun h => do
           mkLambdaFVars (bnd.push h) (if slot == bnd.size then h else bnd[slot]!)
-  armFZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps idxs ctorIdx
+  recoveryZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps idxs ctorIdx
     (fun slot _ ty cont => do
       let value := mkAppN base #[ty, ← project slot]
       cont value)
@@ -160,9 +160,9 @@ def armFZipModelRec (eqi : EqInfo) (lift? : Option Level)
       let pki ← packChain ni pk (packSel.map (idxs[·]!)) 0
       let eqTy := eqi.mk' ℓpk pk pkc pki
       let heq := mkAppN base #[eqTy, ← project args.size]
-      armFZipRec eqi ℓpk lift? pk pkc pki heq motive minor idxs
+      recoveryZipRec eqi ℓpk lift? pk pkc pki heq motive minor idxs
         (fun full kk =>
-          armFZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps full ctorIdx
+          recoveryZipPrefix eqi memberTy ctorTy ni isData idxPos transports ps full ctorIdx
             (fun _ name ty cont => withLocalDeclD name ty cont)
             fun fs bnd idx => do
               let lhs ← packChain ni pk (packSel.map (idx[·]!)) 0

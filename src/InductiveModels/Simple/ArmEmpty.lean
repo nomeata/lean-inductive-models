@@ -1,7 +1,7 @@
 import InductiveModels.Simple.Site
 
 /-!
-# Arm E: the declaration every one of whose constructors has a bare recursive field
+# The empty arm: the declaration every one of whose constructors has a bare recursive field
 
 Such a declaration is **empty** — no constructor can be applied, because
 applying one would already require an inhabitant of the carrier — and the model
@@ -27,7 +27,7 @@ handed. The intrinsic projections of the stored fields are the tower's own
 fields still eliminate, now through `drop`.
 
 Where the shape does not admit storage — two or more constructors, or a field
-whose level the tower cannot reach — `eStored` is empty, `drop` is the identity
+whose level the tower cannot reach — `emptyStored` is empty, `drop` is the identity
 and every line below is the bare empty carrier it always was. That decision, and
 why both of its answers are total, is stated at
 [`InductiveModels.mkPrimSite`].
@@ -45,7 +45,7 @@ open Lean Meta
 
 namespace InductiveModels
 
-/-- **Arm E's intrinsic projections for the fields it stores.**
+/-- **The empty arm's intrinsic projections for the fields it stores.**
 
 The common driver's projection-ι contract is literal — `T._model.proj_j` at the
 modeled constructor *is* the constructor's own field binder, with no transport —
@@ -73,30 +73,30 @@ emptiness does not prove. Those projections stay on the driver's
 
 **Empty exactly when nothing is stored**, which is the storage decision at
 [`InductiveModels.mkPrimSite`] and not a second gate. -/
-private def eStoredFieldOverrides (site : PrimSite) :
+private def emptyStoredFieldOverrides (site : PrimSite) :
     GenM (Array (Name × Nat × Expr × Expr)) := do
-  if site.eStored.isEmpty then return #[]
+  if site.emptyStored.isEmpty then return #[]
   let us := site.us
   let w := site.w
   let eqi := site.eqi
   let mut overrides : Array (Name × Nat × Expr × Expr) := #[]
-  for q in [0:site.eStored.size] do
+  for q in [0:site.emptyStored.size] do
     let selector ← site.withParams fun ps => do
       site.withStored ps fun xs => do
         withLocalDeclD `self (mkAppN (.const site.selfN us) ps) fun self => do
-          let projections ← eTowerProjsOf w xs self
+          let projections ← emptyTowerProjsOf w xs self
           mkLambdaFVars (ps.push self) projections[q]!
     let proof ← site.withParams fun ps => do
       let tele ← instForall (site.publicSource site.sourceCtors[0]!.2) ps
       forallBoundedTelescope tele (some (numForalls tele)) fun fields _ => do
-        let selected := fields[site.eStored[q]!]!
+        let selected := fields[site.emptyStored[q]!]!
         let fieldType ← ityp selected
         mkLambdaFVars (ps ++ fields)
           (eqi.refl' (← ilevel fieldType) fieldType selected)
-    overrides := overrides.push (site.tname, site.eStored[q]!, selector, proof)
+    overrides := overrides.push (site.tname, site.emptyStored[q]!, selector, proof)
   return overrides
 
-def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
+def primArmEmpty (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- The site, under the names this arm has always read it by.
   let lparams := site.lparams
   let np := site.np
@@ -119,7 +119,7 @@ def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let emptySlots := site.emptySlots
   let mut out := st.out
   let mut spliced := st.spliced
-  -- ════ arm E: an exact empty model, at every route's sort ════
+  -- ════ the empty arm: an exact empty model, at every route's sort ════
   --
   -- **Largeness is not a precondition of this arm**, and asking for it used to
   -- confine it to the never-zero route. `v` below is the recursor's result
@@ -144,7 +144,7 @@ def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- one constructor's non-recursive fields in front of that emptiness where
   -- the shape admits it.
   let selfVal ← site.withParams fun ps =>
-    return ← mkLambdaFVars ps (← site.eCarrier ps)
+    return ← mkLambdaFVars ps (← site.emptyCarrier ps)
   let dSelf := Declaration.defnDecl
     { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
       hints := ← hintsFor selfVal, safety := .safe }
@@ -165,11 +165,11 @@ def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
       forallBoundedTelescope rtele (some nfj) fun fs _ => do
         let some k := emptySlots[j]!
           | badShape s!"{exportCtors[j]!.1} has no recursive field in the empty route"
-        let tail ← site.eDrop ps fs[k]!
+        let tail ← site.emptyDrop ps fs[k]!
         let value ←
-          if site.eStored.isEmpty then pure tail
+          if site.emptyStored.isEmpty then pure tail
           else site.withStored ps fun xs =>
-            eTowerMkOf w xs (site.eStored.map (fs[·]!)) tail
+            emptyTowerMkOf w xs (site.emptyStored.map (fs[·]!)) tail
         mkLambdaFVars (ps ++ fs) value
     let d := Declaration.defnDecl
       { name := ctorN j, levelParams := lparams, type := ty, value := val
@@ -188,13 +188,13 @@ def primArmE (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
     let major := bs[bs.size - 1]!
     let params := bs.extract 0 np
     mkLambdaFVars bs
-      (← emptyAtElim eqi v w (mkApp motive major) (← site.eDrop params major))
+      (← emptyAtElim eqi v w (mkApp motive major) (← site.emptyDrop params major))
   let dRec := Declaration.defnDecl
     { name := recN, levelParams := rv.levelParams, type := publicRecTy, value := recVal
       hints := ← hintsFor recVal, safety := .safe }
   addChecked dRec
   out := out.push dRec
-  let projectionOverrides := st.projectionOverrides ++ (← eStoredFieldOverrides site)
+  let projectionOverrides := st.projectionOverrides ++ (← emptyStoredFieldOverrides site)
   return { st with out, spliced, projectionOverrides }
 
 end InductiveModels

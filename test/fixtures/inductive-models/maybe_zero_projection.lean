@@ -27,18 +27,18 @@
 
    * `MZIdx` — no recursion; an **index**, and a data field.  **Green on the
      direct routes' indexed case.**  The route that was supposed to cover it is
-     arm F, whose guard carries `large`; `Site.lean` argued that a data field
+     the recovery arm, whose guard carries `large`; `Site.lean` argued that a data field
      which is not a conclusion index is unreachable there, "because the kernel
      mints that recursor only when every non-proof field is literally
      recoverable as a conclusion index".  That premise is correct and the
      conclusion drawn from it was not: the kernel does not refuse such a
      declaration, it mints a **small** recursor for it, so `large` is false and
      the shape fell through to Church.  `MZIdx.rec`'s motive really is
-     `Prop`-valued; read the export.  What arm F cannot do here is *store* the
+     `Prop`-valued; read the export.  What the recovery arm cannot do here is *store* the
      field — its carrier is a Church conjunction of proofs, and it recovers
-     data only by substituting at a pivot — so the shape is not arm F's after
+     data only by substituting at a pivot — so the shape is not the recovery arm's after
      all.  Storing it is what the direct routes already do, and the index is
-     discharged by arm F's packed Henry-Ford equation over that same storage:
+     discharged by the recovery arm's packed Henry-Ford equation over that same storage:
      `T p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, with `Store`
      the tight `PSigma'` tower as a **definition**.  The projection is the
      tower's own, so it selects definitionally and its rule is `Eq.refl`.
@@ -46,16 +46,16 @@
      shape with an index in front of it.  **Green, on the same route and the
      same tower.**
    * `MZSelf` — recursion alone, and the minimum of the whole family.  The one
-     projected field *is* the carrier, at `Sort u`.  **Arm E.**
-   * `MZData` — the same with a data field in front of the child.  **Arm E.**
+     projected field *is* the carrier, at `Sort u`.  **The empty arm.**
+   * `MZData` — the same with a data field in front of the child.  **The empty arm.**
 
    `MZOne` and `MZProof` are the controls on either side: the first is the
-   direct `.identity` route (`ni == 0`, not recursive), the second is arm F
+   direct `.identity` route (`ni == 0`, not recursive), the second is the recovery arm
    proper (every field a proof, so the kernel does mint the large eliminator).
    Both model, and both are untouched by either closure.  The indexed case's
-   guard carries `!armFNonRec`, so every shape whose data the index vector
-   *does* carry stays arm F's; `ni == 0` selects one of the two unindexed
-   cases; and arm E is reached only past both.
+   guard carries `!armRecoveryNonRec`, so every shape whose data the index vector
+   *does* carry stays the recovery arm's; `ni == 0` selects one of the two unindexed
+   cases; and the empty arm is reached only past both.
 
    **`MZSelf` and `MZData` are not a storage problem; they are empty.**  The
    reading that kept them red asked where a *recursive* field could be stored —
@@ -65,7 +65,7 @@
    at all.  The question does not arise.  Each of these constructors has a
    **bare** recursive field, so applying it already needs an inhabitant of the
    carrier: `MZSelf` and `MZData a` are uninhabited at every instantiation of
-   `u`.  That is exactly the class arm E models, by
+   `u`.  That is exactly the class the empty arm models, by
    `emptyAt w = PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})` — the
    derived exact-sort lift of Church `⊥`.
 
@@ -83,7 +83,7 @@
    is empty too, but it lives at `Sort (imax (u+1) u)` and so misses the
    declared sort; the lift instead puts an empty *proposition* at
    `Sort (max 0 w) = Sort w` for a **bare** `w` exactly as for a never-zero
-   one.  So arm E was never sort-specific, and its guard no longer says it is:
+   one.  So the empty arm was never sort-specific, and its guard no longer says it is:
    it reads `route matches .type | .bare`, `ni == 0`, `isRec`, and
    `bareRecSlotOf` at every constructor.  Nothing about the class is about
    linearity, a base constructor, or a `Type`-valued carrier.
@@ -100,9 +100,9 @@
      adequate for the same interface and more: both owners' kernel recursors
      are **small** (`MZSelf`'s field is not a proof and is not a conclusion
      index, so the subsingleton rule declines it, and `MZData`'s data field
-     likewise), and `emptyAtElim` serves at every result universe, so arm E
+     likewise), and `emptyAtElim` serves at every result universe, so the empty arm
      would deliver a large eliminator too if the kernel had minted one, which
-     the Church fold could not.  Arm E's `large` guard is therefore an
+     the Church fold could not.  The empty arm's `large` guard is therefore an
      invariant of the never-zero route and not a precondition of the arm;
    * every ι rule is on the literal contract with the constructor's own binder
      on the right, exactly as everywhere else — `Eq.refl` for a stored field,

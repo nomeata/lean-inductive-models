@@ -8,7 +8,7 @@ an equivalence `roll`/`unroll` between them with both round trips proved, so a
 consumer can read the public interface without seeing the encoding underneath.
 
 Two routes still emit that certificate.  The **indexed fibre** adapter at the
-bottom of this module wraps arm C's own public family: its `roll`/`unroll` are
+bottom of this module wraps the carve arm's own public family: its `roll`/`unroll` are
 the identity and its laws are reflexivity, so the certificate costs eight
 aliases and no transport.  The **plain mutual** adapter
 (`InductiveModels.MutualOneLayer`) rebuilds a real layer over the tag/aux
@@ -81,7 +81,7 @@ private def renameOneLayerCertificateNames (mapping : Array (Name × Name))
     if name == source then some target else none) type
 
 /-- Add the short, exact private/public certificate around the already checked
-indexed fibre implementation.  Arm C remains the semantic implementation of
+indexed fibre implementation.  The carve arm remains the semantic implementation of
 `P p i = Σ layer, resultIndex layer = i`; these declarations expose its two
 interfaces and their identity equivalence without rebuilding or normalizing a
 single public statement. -/

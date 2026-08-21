@@ -14,18 +14,18 @@ import InductiveModels.Simple.GraphKit
 import InductiveModels.Simple.Graph
 import InductiveModels.Simple.Plan
 import InductiveModels.Simple.Erasure
-import InductiveModels.Simple.WArm
+import InductiveModels.Simple.TreeKit
 import InductiveModels.Simple.RuleK
 import InductiveModels.Simple.Tight
-import InductiveModels.Simple.ArmFKit
+import InductiveModels.Simple.RecoveryKit
 import InductiveModels.Simple.Analysis
 import InductiveModels.Simple.Interface
 import InductiveModels.Simple.Site
 import InductiveModels.Simple.Direct
-import InductiveModels.Simple.ArmF
-import InductiveModels.Simple.ArmC
-import InductiveModels.Simple.ArmE
-import InductiveModels.Simple.ArmW
+import InductiveModels.Simple.ArmRecovery
+import InductiveModels.Simple.ArmCarve
+import InductiveModels.Simple.ArmEmpty
+import InductiveModels.Simple.ArmTree
 import InductiveModels.Simple.ArmTuple
 import InductiveModels.Simple.ArmChurch
 import InductiveModels.Simple.Iota
@@ -90,7 +90,7 @@ elimination the basis buys, and the reason `Nat` is in it — and then
 destructs the chain. Two level repairs keep the chain at exactly `Sort w`:
 
 A recursive declaration **every one of whose constructors has a bare recursive
-field** is empty rather than a degenerate case of this tower. This is arm E
+field** is empty rather than a degenerate case of this tower. This is the empty arm
 below, and the class is not about linearity: a constructor with two bare
 recursive fields is exactly as unapplicable as one with a single one.  *Bare* is
 the boundary — a recursive occurrence under a binder whose domain is empty is
@@ -112,14 +112,14 @@ asked for at one constructor — the only shape any projection is asked of — a
 only where the tower's level question closes; both answers are total, and the
 decision is written out at [`InductiveModels.mkPrimSite`].
 
-**Nor is the class about the sort.** Arm E serves the maybe-zero route on the
+**Nor is the class about the sort.** The empty arm serves the maybe-zero route on the
 same terms, because nothing in it is sort-specific: `emptyAt w` is
 `PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})`, empty at every `w` and at
 exactly `Sort (max 0 w) = Sort w` for a bare `w` as much as for a never-zero
 one — writing the empty type as `∀ p : Sort w, p` instead would land at
 `Sort (imax (w+1) w)` and miss the declared sort, which is the obstruction the
 exact-sort lift exists to remove.  `emptyAtElim` likewise serves at every
-result universe, so a **small** eliminator is no obstacle either and arm E's
+result universe, so a **small** eliminator is no obstacle either and the empty arm's
 largeness test is an invariant of the never-zero route rather than a
 precondition of the arm.  That is what closes the maybe-zero route's
 field-retention corner: a *recursive* one-constructor owner there is asked for
@@ -146,7 +146,7 @@ field to store and `MZData`'s one data field sits in a one-component tower.
   **The lift pad is not sort-specific and serves the maybe-zero routes too.**
   `unitAt w` is a `PSigma'.{0,w}` of a proposition, so it lands at
   `Sort (max 0 w) = Sort w` for a **bare** `w` exactly as for a never-zero one —
-  the same fact that makes arm E's `emptyAt w` an exact empty carrier at every
+  the same fact that makes the empty arm's `emptyAt w` an exact empty carrier at every
   route's sort. It is what the direct routes' storage tower ends at where the
   fields' own levels do not reach the carrier
   ([`InductiveModels.planTightTower`]), and `maybe_zero_pad.lean` is that
@@ -193,7 +193,7 @@ Three recursors:
   eliminator. One constructor, no indices: the subsingleton rule that minted
   the recursor says every field is a proposition, so extract each by
   instantiating the encoding at the field's own type, sequentially, with
-  proof irrelevance closing the motive. With indices, arm F stores the proof
+  proof irrelevance closing the motive. With indices, the recovery arm stores the proof
   fields together with a packed index equation.  A pivot whose type moves is
   recovered by prefix equations in a left-to-right zipper before the final
   full-telescope equation; otherwise only the non-pivot subsequence is packed.
@@ -205,11 +205,11 @@ not a separate arm either: it is the **direct routes' indexed case**. A
 maybe-zero one-constructor owner whose constructor has a data field the
 conclusion's index vector does *not* carry gets a **small** eliminator from the
 kernel — its subsingleton rule is exactly "every non-proof field is one of the
-conclusion's indices" — so arm F's substitution has nothing to substitute and
+conclusion's indices" — so the recovery arm's substitution has nothing to substitute and
 the Church encoding, which remembers only inhabitation, cannot return the field
 either. The model has to store it, which is precisely what the direct routes
 do; an index does not change the storage, it only says which fibre the stored
-value sits in, and it says it the way arm F discharges its non-pivots:
+value sits in, and it says it the way the recovery arm discharges its non-pivots:
 
 ```text
 T._model.self p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗
@@ -219,21 +219,21 @@ T._model.self p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pa
 ([`InductiveModels.tightTowerTy`], at one field and no pad the field's own type
 — so the unindexed `.identity`, `.tight` and this share one storage function,
 and one pad decision with it), and it is
-a **definition**: arm C's erase-and-carve is the same idea but splices its
+a **definition**: the carve arm's erase-and-carve is the same idea but splices its
 skeleton as an inductive so the kernel mints the large eliminator it needs
 twice, and a maybe-zero skeleton has no large eliminator to mint. The pair sits
 at `max w 0` — a `Prop` costs no level, which is why one guard
 ([`InductiveModels.planDirectIndexedRoute`]) asks the unindexed tower's own
 question — the intrinsic projections are the tower's own, and every rule is
-`Eq.refl`. Arm F keeps its shapes: the direct guard carries `!armFNonRec`, and
+`Eq.refl`. The recovery arm keeps its shapes: the direct guard carries `!armRecoveryNonRec`, and
 Direct is the first guard in the dispatch chain.
 
-**And it is the model at a never-zero sort too, where arm C could also have
+**And it is the model at a never-zero sort too, where the carve arm could also have
 carved.** The two overlap at exactly one constructor and no recursion, and
 there the storage is strictly less: a spliced inductive re-enters the
-construction under the splice-closure rule and is modelled in turn, so arm C's
+construction under the splice-closure rule and is modelled in turn, so the carve arm's
 owner pays for two families where it declared one, while `Store` is a
-definition nobody has to model. Arm C keeps every shape outside that overlap —
+definition nobody has to model. The carve arm keeps every shape outside that overlap —
 multi-constructor and recursive indexed families have no single tower to
 store — and it also keeps the one-constructor owners whose fields carry an
 `imax` the tower cannot reach, because at a never-zero sort a tower that
@@ -259,15 +259,15 @@ every type the old basis reached at a bare sort was inhabited.
 
 The ordinary tuple and Church routes prove their ι theorems by `Eq.refl`.
 On a Church route with a `Prop`-valued motive that is free for a reason
-unrelated to reduction: both sides are proofs of one proposition.  Arm E
+unrelated to reduction: both sides are proofs of one proposition.  The empty arm
 instead eliminates the constructor's empty recursive field; the graph arm
 uses its single-valuedness because its `Classical.choice` recursor reduces to
-nothing; and arm W applies the W core's propositional ι theorem.
+nothing; and the tree arm applies the W core's propositional ι theorem.
 
 ## Routing boundaries
 
 * **branching and infinitary recursion at a never-zero sort**
-  (`Lean.ParserDescr`) routes to arm W. The tuple tower
+  (`Lean.ParserDescr`) routes to the tree arm. The tuple tower
   ([`InductiveModels.recSlotOf`]) remains deliberately linear; its refusal is the
   dispatcher signal that selects the W/path construction rather than a public
   generation decline.
@@ -284,14 +284,14 @@ nothing; and arm W applies the W core's propositional ι theorem.
   reduct is `N`; the internal skeleton field is the reduct while the public
   constructor type stays literal.
   An indexed family whose erasure is bare is no longer a refusal, **however
-  many recursive fields its constructors have**: it is **arm C**
-  ([`InductiveModels.primIso`]'s `armC`), a skeleton-plus-`good` construction standing
+  many recursive fields its constructors have**: it is **the carve arm**
+  ([`InductiveModels.primIso`]'s `armCarve`), a skeleton-plus-`good` construction standing
   on a spliced inductive rather than on a W-type — no axioms, no
   per-constructor currying glue, every ι rule `Eq.refl`.
   A *branching* erasure used to decline here, because the spliced skeleton
-  branches too and nothing modelled a branching non-indexed inductive; arm W
+  branches too and nothing modelled a branching non-indexed inductive; the tree arm
   does, so the carve now carries every recursive slot and hands the skeleton
-  to W.
+  to the tree arm.
 * **a recursive subsingleton at mixed pivot and non-pivot indices** models by
   [`InductiveModels.graphArm`]. Its inversion carries one equality at the dependent
   tuple of non-pivots and transports the constructor step into the caller's
@@ -342,33 +342,33 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- conditions there still models. The never-zero route has no such fallback:
   -- `primArmTuple` is its last arm and the tower is deliberately *linear*, so a
   -- non-indexed recursive declaration whose recursion is branching or
-  -- infinitary is arm W's or it is nobody's. When arm W's guard said no, the
+  -- infinitary is the tree arm's or it is nobody's. When the tree arm's guard said no, the
   -- chain fell into the tower anyway and the tower raised an internal tool
-  -- error carrying arm W's own bill — an abort, at a shape the dispatcher had
+  -- error carrying the tree arm's own bill — an abort, at a shape the dispatcher had
   -- already decided no arm would take. A `.shapeUnsupported .incomplete`
   -- decline stood here to stop that, and it was the tool's only one.
   --
-  -- **It is gone because `armW` now *is* that class.** The two conditions that
+  -- **It is gone because `armTree` now *is* that class.** The two conditions that
   -- could turn the arm off for a declaration in it —
   -- [`InductiveModels.labelFactored`] and a carrier plan with no level to write
   -- the core at — refuse classes that are empty, for reasons written out at
   -- [`InductiveModels.mkPrimSite`], and are asserted there rather than tested.
-  -- So `site.armW` holds for exactly the declarations this decline described
-  -- (`ni == 0 && isRec && !erasureLinear && !armE` on the never-zero route),
+  -- So `site.armTree` holds for exactly the declarations this decline described
+  -- (`ni == 0 && isRec && !erasureLinear && !armEmpty` on the never-zero route),
   -- the test below would be `false` by construction, and an unreachable
   -- decline is a worse record of the situation than none.
   --
-  -- **`!armE` remains part of that class because arm E is in the chain.** A
+  -- **`!armEmpty` remains part of that class because the empty arm is in the chain.** A
   -- branching declaration with no base constructor is in it by every question
-  -- above and is *empty*; arm E models it exactly, by the lift of `⊥`, and
-  -- reaches it below. Leaving `armE` out declined six of `prim_w`'s occupants
+  -- above and is *empty*; the empty arm models it exactly, by the lift of `⊥`, and
+  -- reaches it below. Leaving `armEmpty` out declined six of `prim_w`'s occupants
   -- at the shape they are modelled at.
   let st ←
     if let some directRoute := site.directRoute? then primDirect site directRoute st
-    else if site.armF then primArmF site st
-    else if site.armC then primArmC site st
-    else if site.armE then primArmE site st
-    else if site.armW then primArmW site st
+    else if site.armRecovery then primArmRecovery site st
+    else if site.armCarve then primArmCarve site st
+    else if site.armEmpty then primArmEmpty site st
+    else if site.armTree then primArmTree site st
     else if site.route matches PrimRoute.type then primArmTuple site st
     else primArmChurch site st
   let (st, iotas) ← primIotaRules site st
@@ -381,17 +381,17 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- **The one arm whose carrier is empty says so here**, at the place the arm
   -- was chosen, so the common projection driver reads a stated property of the
   -- emitted model rather than re-deriving one.  The entry carries the descent
-  -- as well as the level: arm E's carrier is
+  -- as well as the level: the empty arm's carrier is
   -- [`InductiveModels.emptyAt`] `w` bare where it stores nothing and a
   -- `PSigma'` tower ending at that emptiness where it does, and
-  -- [`InductiveModels.PrimSite.eDrop`] is what makes the two one thing for a
+  -- [`InductiveModels.PrimSite.emptyDrop`] is what makes the two one thing for a
   -- consumer.  Every other arm's carrier is inhabited or its inhabitation is
   -- not this file's claim.
   let emptyCarriers : Array (Name × Level × Expr) ←
-    if site.armE then do
+    if site.armEmpty then do
       let descent ← site.withParams fun ps => do
         withLocalDeclD `self (mkAppN (.const site.selfN site.us) ps) fun self => do
-          mkLambdaFVars (ps.push self) (← site.eDrop ps self)
+          mkLambdaFVars (ps.push self) (← site.emptyDrop ps self)
       pure #[(site.tname, site.w, descent)]
     else pure #[]
   return { decls := out2, levelParams := site.lparams, members := #[]

@@ -74,7 +74,7 @@ def serialiseIso (source : EDecl) (is : Iso)
   --
   -- A model splices shared support where it first needs it, which can be
   -- behind an inductive the model itself generated — the composition's
-  -- implementation tag and auxiliary, arm C's skeleton. Those inductives are
+  -- implementation tag and auxiliary, the carve arm's skeleton. Those inductives are
   -- declarations of the output like any other, so the simple route runs on
   -- them next and its island goes *in front of* the inductive it models. The
   -- support is already installed by then, so the second model splices nothing

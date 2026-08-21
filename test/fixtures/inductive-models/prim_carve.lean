@@ -1,4 +1,4 @@
-/- **Arm C**: an indexed family at a never-zero sort, modelled by carving it
+/- **The carve arm**: an indexed family at a never-zero sort, modelled by carving it
    out of its own **index erasure** using a skeleton-plus-`good` construction,
    standing on a spliced inductive rather than on a W-type.
 
@@ -37,12 +37,12 @@
      field cannot distinguish reading one for the other.
 
    Three occupants for the **multi-slot** carve — a constructor with more than
-   one recursive field. Arm C runs at `erasureBare` rather than at
+   one recursive field. The carve arm runs at `erasureBare` rather than at
    `erasureLinear`: [`InductiveModels.eraseCtorTy`] and [`InductiveModels.spineSwap`] replace
    a recursive field's whole domain and do it once per such field, so the
    erasure of a branching family is as bare as a linear one — and the spliced
-   skeleton that comes out branches, which is **arm W's** to model. That is why
-   these three could not land before arm W did.
+   skeleton that comes out branches, which is **the tree arm's** to model. That is why
+   these three could not land before the tree arm did.
 
    * `Br` — the base case: **two recursive fields at different indices**,
      interleaved with the two non-recursive fields that carry those indices.
@@ -96,8 +96,8 @@
    under them (`∀ z⃗, T p⃗ e⃗` becomes `∀ z⃗, S p⃗`), and each of the three
    consumers — `good`'s clause, the constructor's component, the recursor's
    induction hypothesis — wraps what it built in the same `z⃗`
-   ([`InductiveModels.withRecSlot`]). The spliced skeleton is then **arm W's**, which
-   is why these could not land before arm W did, and `Inf2` was this file's
+   ([`InductiveModels.withRecSlot`]). The spliced skeleton is then **the tree arm's**, which
+   is why these could not land before the tree arm did, and `Inf2` was this file's
    third negative until they did.
 
    * `Inf2` — the base case: one binder at a ground type, and the child's index
@@ -124,7 +124,7 @@
      with one binder each `Inf2` and `Cf` cannot see it: measured, a mutation
      that hands the consumers the branch's binders in reverse is red at `Bif`'s
      `_model.good` **alone** and every other occupant in this file models under
-     it. It is `Utd`'s role in `prim_w.lean` arriving at arm C.
+     it. It is `Utd`'s role in `prim_w.lean` arriving at the carve arm.
 
    Four further mutations, for the record, and all four loud at every
    infinitary occupant: erasing the occurrence *with* its binders (the
@@ -145,7 +145,7 @@
    internal erased field.
 
    * `IBox` — an indexed family whose erasure is `prim_declines`' `BoxF`.
-     Recursive boxing models that skeleton, so arm C retains the parent and
+     Recursive boxing models that skeleton, so the carve arm retains the parent and
      both interfaces reach the output.  This is the positive composition test
      for deep-imax storage followed by skeleton carving.
 
@@ -157,15 +157,15 @@
      field's level is `imax (imax u v) v`, which neither the bare tower nor
      the exact-sort pad reaches, and the recursive box that does reach it is
      the tuple tower's and not the tower's.  So the direct route answers *does
-     not apply* rather than declining, and arm C behind it takes the owner
+     not apply* rather than declining, and the carve arm behind it takes the owner
      exactly as it always did.
 
    * `Zx` — the fall-through's **other** case, and the one that has nothing to
      do with levels: one constructor, no recursion, one index and **no
      fields**.  At a maybe-zero carrier this shape never reaches the direct
      routes at all — every non-proof field is vacuously a conclusion index, so
-     the kernel grants the large eliminator and arm F fires — and
-     [`InductiveModels.planDirectIndexedRoute`] asserts as much.  Here arm F is
+     the kernel grants the large eliminator and the recovery arm fires — and
+     [`InductiveModels.planDirectIndexedRoute`] asserts as much.  Here the recovery arm is
      not in the chain, so the shape does arrive, there is no tower to build
      from no fields, and the answer is again *does not apply*.  Without that
      answer the assertion fires and the run ends in an internal tool error at
@@ -173,8 +173,8 @@
 
    `NoBase` is the opposite control. `NoBase._model._impl.skel` is
    `S | mk : N → S → S`: an uninhabited, linearly recursive inductive with
-   no base constructor.  Arm E gives that skeleton the exact empty carrier,
-   so arm C can carve and emit the indexed family too. -/
+   no base constructor.  The empty arm gives that skeleton the exact empty carrier,
+   so the carve arm can carve and emit the indexed family too. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false

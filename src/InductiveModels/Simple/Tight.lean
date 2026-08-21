@@ -456,7 +456,7 @@ one field and no pad that *is* the field's type, so this is `.identity`'s
 carrier and the `tight` tower written by one function — and a **definition**
 rather than a spliced inductive. The equation is stated once at the whole index
 telescope packed into a `PSigma'`, because a later index's type may mention an
-earlier one; it is the same Henry-Ford equation arm F discharges its non-pivot
+earlier one; it is the same Henry-Ford equation the recovery arm discharges its non-pivot
 indices with, which is why the two are the storage half and the substitution
 half of one axis rather than two ideas.
 
@@ -661,7 +661,7 @@ exactly two shapes of answer:
 * **`some w`** — they do not, but `max ℓ⃗ w ≡ w` does, and the tower ends at
   [`InductiveModels.unitAt`] `w`. That equation is Lean's own `is_geq(w, ℓᵢ)`
   on the input re-asked as a *conversion*, and the pad exists at a maybe-zero
-  `w` for the same reason arm E's `emptyAt` does: the derived exact-sort lift
+  `w` for the same reason the empty arm's `emptyAt` does: the derived exact-sort lift
   is `PSigma'.{0,w}` of a proposition, so `max 0 w` is `w` for a bare `w`
   exactly as for a never-zero one.
 
@@ -765,7 +765,7 @@ nothing to that level (`max ℓ 0` is `ℓ`), so the whole carrier lands at exac
 
 **A tower that misses the carrier's sort is the same answer
 [`InductiveModels.planTightTower`] gives everywhere else**, and for the same
-reason: the case is reached only after arm F has been ruled out, which means
+reason: the case is reached only after the recovery arm has been ruled out, which means
 the constructor has a data field the conclusion's index vector does not carry,
 so the model must store it and the Church encoding underneath — which remembers
 only inhabitation — cannot. The pad is what takes that storage to the declared
@@ -775,14 +775,14 @@ passes through unchanged.
 
 Zero fields is a different answer, and which answer depends on the sort. At a
 **maybe-zero** carrier every non-proof field is then vacuously one of the
-conclusion's indices, so the kernel minted the large eliminator and arm F
+conclusion's indices, so the kernel minted the large eliminator and the recovery arm
 fired; reaching this there with no fields is a route-classification fault. At a
-**never-zero** one arm F is not in the chain at all, so a zero-field indexed
+**never-zero** one the recovery arm is not in the chain at all, so a zero-field indexed
 family is an ordinary shape with nothing to store, and it belongs to the arm
 behind this route rather than to this one.
 
 `fallback` is [`InductiveModels.planDirectTightRoute`]'s, for the same reason
-and with the same meaning: at a never-zero sort arm C stands behind this route
+and with the same meaning: at a never-zero sort the carve arm stands behind this route
 and takes both the zero-field owner and the owner whose fields carry an `imax`
 the tower cannot reach, so neither is a decline here. -/
 def planDirectIndexedRoute (tname : Name) (eligible : Bool) (np : Nat) (memberTy : Expr)
@@ -794,7 +794,7 @@ def planDirectIndexedRoute (tname : Name) (eligible : Bool) (np : Nat) (memberTy
   if nf == 0 then
     if fallback then return none
     badShape s!"internal: {constructorName} has no fields, so every non-proof field of \
-{tname} is vacuously one of the conclusion's indices and arm F, not the direct routes' \
+{tname} is vacuously one of the conclusion's indices and the recovery arm, not the direct routes' \
 indexed case, is the one that models it"
   forallBoundedTelescope memberTy (some np) fun ps _ => do
     let tele ← instForall constructorType ps
@@ -820,7 +820,7 @@ never installed:
   a parameter and the answer is not read off the dependency mask alone.
 * `requires` — `PProd'` where **this** island is the one that spliced it, and
   empty where an earlier island already did.  That is
-  [`InductiveModels.Iso.requires`]' rule at arm W's shape exactly: the model
+  [`InductiveModels.Iso.requires`]' rule at the tree arm's shape exactly: the model
   that introduces an inductive is the one that may not leave it unmodelled, and
   a later island reusing persistent support has nothing to model.
 

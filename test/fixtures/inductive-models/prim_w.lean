@@ -1,4 +1,4 @@
-/- **The W arm of simple-model generation** — the shapes the tuple
+/- **The tree arm of simple-model generation** — the shapes the tuple
    tower cannot express and the tagged W construction can.
 
    `Wt` has six constructors chosen so that every shape the emitted scheme has to handle
@@ -115,25 +115,26 @@ inductive Wty (α : Type u) (β : α → Type u) : Type u where
    direct/direct, direct/infinitary, infinitary/infinitary, and a dependent
    *ordinary* prefix before the recursive suffix.
 
-   **They are also all uninhabited, and six of them are arm E's.**
+   **They are also all uninhabited, and six of them are the empty arm's.**
    Each is a single constructor with no base, so every constructor has a bare
-   recursive field, and arm E — which reaches that whole shape class rather
+   recursive field, and the empty arm — which reaches that whole shape class rather
    than its linear corner — models `Twin`, `Mixed`, `Prefix`, `Triple`, `Quad`
    and `Trine` by the lift of `⊥`, exactly and with no axiom.  `TwinInf` has no
-   bare occurrence and stays on W.
+   bare occurrence and stays on the tree arm.
 
    **These six therefore stay as they are**: they are this file's
-   arm-E-past-the-linear-corner column, and a base constructor would move them
+   empty-arm-past-the-linear-corner column, and a base constructor would move them
    off it.  A direct one-layer adapter used to sit over all of them — a private
    fixpoint, a rolled public layer and one `Eq.rec` transport per recursive
    field in every ι rule — and was withdrawn once it was established that the
    simple construction publishes the identical public interface unaided;
    `test/ProjectionTest.lean` pins its absence at every arity here.
 
-   `TripleInf`, `QuadInf` and `TrineInf` below are the same arities on **arm
-   W**: a one-constructor owner whose every recursive occurrence is under a
-   binder, which is the only way to be on W without a base constructor.  (Arm W
-   also runs at three and four in the multi-constructor fixtures —
+   `TripleInf`, `QuadInf` and `TrineInf` below are the same arities on **the
+   tree arm**: a one-constructor owner whose every recursive occurrence is under
+   a binder, which is the only way to reach that arm without a base
+   constructor.  (The tree arm also runs at three and four in the
+   multi-constructor fixtures —
    `prim_carve`'s `Sm3`, `infinitary`'s `GTree` and `nest_fam_arg`'s `Both` and
    `Key`.) -/
 inductive Twin : Type where
@@ -164,24 +165,24 @@ inductive Quad : Type where
 inductive Trine (α : Type) : Type where
   | mk : α → Trine α → (α → Trine α) → Trine α → Trine α
 
-/- **Arm W past two recursive fields at one constructor**, which is the one
-   combination the six above stopped covering when they became arm E's.
+/- **The tree arm past two recursive fields at one constructor**, which is the one
+   combination the six above stopped covering when they became the empty arm's.
 
    There is exactly one way to be in it, and these three are it.  A single
-   constructor with a **bare** recursive field is empty and arm E's
+   constructor with a **bare** recursive field is empty and the empty arm's
    ([`InductiveModels.bareRecSlotOf`], `Simple/Site.lean`'s `emptySlots`).  So a
-   one-constructor arm W has to put *every* recursive occurrence under a binder
+   one-constructor the tree arm has to put *every* recursive occurrence under a binder
    — which is what `TwinInf` already is at two fields.  `TripleInf` and
    `QuadInf` are that shape at three and four; `TrineInf` puts an ordinary
    field in front of three of them at a parameter, so the data tower is
    non-empty while the branch tower is three deep.
 
-   Nothing here is a new *arm*: it is arm W itself, whose ι rule is proved by
+   Nothing here is a new *arm*: it is the tree arm itself, whose ι rule is proved by
    `WT.Wrec_iota`, at a recursive-field count no occupant of the corpus reached
    past `TwinInf`'s two.  A direct one-layer adapter used to roll a public
    layer over exactly this carrier and fold an n-ary compatibility chain over
    that ι rule, and these three were the only occupants of that composition; it
-   was withdrawn, and arm W publishes them itself, so what they pin now is the
+   was withdrawn, and the tree arm publishes them itself, so what they pin now is the
    arm's own reach and not a layer over it.  The chain outlived that adapter by
    a while and has since gone too — with only the plain mutual adapter left
    calling it, and that adapter's round trips definitional, no step it took was

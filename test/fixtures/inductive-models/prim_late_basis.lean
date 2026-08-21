@@ -22,7 +22,7 @@
      use tight `PSigma'`; this source block stays put and models in its own turn.
    * `Nd` is a **nested** declaration, also before `PSigma`, because the third
      step has two callers and a repair at one of them would leave the other
-     declining. Its `_model._impl.aux` is indexed and takes arm C.
+     declining. Its `_model._impl.aux` is indexed and takes the carve arm.
    * `Pre` is the control: a direct simple inductive **before** `PSigma` in the
    raw export. It uses the same fixed support prefix as composed models.
 

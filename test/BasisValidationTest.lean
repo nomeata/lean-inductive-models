@@ -133,7 +133,7 @@ def wCoreRecord (name : Name) : IO EDecl := do
 
 /-- **The canonical `Iff` and `propext` are the fragment's own.**
 
-The W arm splices [`InductiveModels.wCoreText`] under the shared logical names, so
+The tree arm splices [`InductiveModels.wCoreText`] under the shared logical names, so
 that fragment *is* the declaration this tool writes under `Iff` and `propext`.
 `iffDecl` and `propextType` are this tool's own independent statement of the
 same two, written without parsing the fragment: `canonicalSpliceInductives`

@@ -1,4 +1,4 @@
-/- Focused arm-F index-zipper cases.
+/- Focused recovery-arm index-zipper cases.
 
    Each declaration has a large eliminator and at least one data pivot whose
    declared index type changes with an earlier index.  Together they force the

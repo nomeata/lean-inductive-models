@@ -107,9 +107,9 @@
      shape and that of seventeen more like it in Mathlib. **Two** hidden
      indices rather than one, because with one a model that guessed a fixed
      count would still pass; two is where the count has to come from the
-     unfolding. From there it is an ordinary indexed subsingleton and arm F
+     unfolding. From there it is an ordinary indexed subsingleton and the recovery arm
      models it. `prim_declines.lean`'s `SvIx` is the same hidden telescope
-     with *field-dependent* indices: after the same unfolding, arm F's
+     with *field-dependent* indices: after the same unfolding, the recovery arm's
      pivot/non-pivot transport models it. The pair verifies that telescope
      unfolding composes with the dependent index analysis.
 

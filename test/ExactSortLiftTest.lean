@@ -61,7 +61,7 @@ partial def levelFamily : Nat → Array Level
     let imaxes := previous.flatMap fun a => previous.map fun b => mkLevelIMax' a b
     previous ++ succs ++ maxes ++ imaxes
 
-/-- **Arm W's carrier plan delivers at every never-zero sort.**
+/-- **The tree arm's carrier plan delivers at every never-zero sort.**
 
 The W core fixes its `A` and `B'` at `Type u`, so the arm needs the public
 `Sort w` to be a successor level or to be reachable from a `Type` core by the
@@ -124,7 +124,7 @@ def main : IO UInt32 := do
     ("derived expressions contain no PULiftP", noLegacy),
     ("down, arbitrary rec iota, and full eta are definitional", defeqs),
     ("PULiftP is absent from the primitive basis", basisClean),
-    ("arm W's carrier plan delivers at every never-zero level", badPlans.isEmpty),
+    ("the tree arm's carrier plan delivers at every never-zero level", badPlans.isEmpty),
     ("the level family is populated on both sides", tested == 1200 && neverZero == 234)]
   for (label, passed) in checks do
     unless passed do IO.eprintln s!"FAIL: {label}"

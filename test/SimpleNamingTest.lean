@@ -181,12 +181,12 @@ def main : IO UInt32 := do
   let w ← runInput (← withCompletePrerequisiteBefore wInput `Eq `Wt) simpleOnly
   state := state.check "raw W owner before Eq models at a written Eq"
     (wRaw.modelsAtWrittenSupport `Wt `Eq)
-  state := state.check "W route has declaration-local interface"
+  state := state.check "tree route has declaration-local interface"
     (w.hasInterface `Wt `Wt.rec #[`Wt.leaf, `Wt.one, `Wt.two, `Wt.mix, `Wt.gap, `Wt.alt] 6)
   state := state.check "W helpers are implementation descendants"
     (w.hasName `Wt._model._impl.wD && w.hasName `Wt._model._impl.wF &&
       !w.hasName `Wt._model.wD)
-  state := state.check "W route has no legacy slots" (w.noLegacySlots `Wt)
+  state := state.check "tree route has no legacy slots" (w.noLegacySlots `Wt)
 
   let basicNonempty ← runFixture "test/fixtures/inductive-models/prim_graph_pre.ndjson"
     { noGeneration with basic := true }
@@ -200,7 +200,7 @@ def main : IO UInt32 := do
   let accSupportInput ← withCompletePrerequisitesBefore accInput
     #[`Nat, `Nonempty, `Classical.choice] `Acc
   let basicAcc ← runInput accSupportInput { noGeneration with basic := true }
-  -- Arm G reaches `Nonempty` and `Classical.choice` and does not reach `Nat`,
+  -- The graph arm reaches `Nonempty` and `Classical.choice` and does not reach `Nat`,
   -- so the two halves of the rule are visible in one run: the `Nonempty` this
   -- `Acc` needs is written in front of it and the input's own record is
   -- dropped, while the `Nat` nothing needed keeps its own record behind `Acc`.

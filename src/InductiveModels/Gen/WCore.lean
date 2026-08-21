@@ -7,7 +7,7 @@ import InductiveModels.Gen.Monad
 
 The embedded `lean4export` fragment over the W type, and the splice that puts
 it in the construction environment when a target needs it. The simple
-construction's W arm is its main consumer; it is shared core rather than part
+construction's tree arm is its main consumer; it is shared core rather than part
 of any one rung.
 -/
 
@@ -184,7 +184,7 @@ def wCoreSelf : Name := wCoreRoot ++ `WT.W
 /-- Names whose generated declarations are reusable support rather than part
 of one model's disposable implementation forest.  These are exact fixed
 interfaces (or the fixed `_wcore` namespace); declaration-local funext and
-arm-C skeleton names deliberately do not qualify. Callers must additionally
+carve-arm skeleton names deliberately do not qualify. Callers must additionally
 require an explicit [`Iso.spliced`] witness: this namespace predicate alone is
 not ownership evidence. -/
 def persistentSupportRoot (name : Name) : Bool :=
@@ -224,7 +224,7 @@ alone: `(sup a f).1 []` is `mk tg a _ []`, whose `[]` arm is literally
 `some a`, and `Option.get (some a) _` selects `a`. So `root (sup a f) ≡ a`
 with no appeal to `WT.Wrec` and no transport — `test/fixtures/inductive-models/w_dependent_field.lean`
 is the family that rests on it. The sibling `WT.kids` does **not** reduce this
-way (`WT.kids_sup` is a theorem carrying a `cast`), which is exactly why arm W
+way (`WT.kids_sup` is a theorem carrying a `cast`), which is exactly why the tree arm
 selects its *stored* fields definitionally and its *children* through the
 recursor. -/
 def wCoreRootFn : Name := wCoreRoot ++ `WT.root

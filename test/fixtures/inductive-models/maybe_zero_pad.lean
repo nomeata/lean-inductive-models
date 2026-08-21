@@ -24,7 +24,7 @@
    tower ends at the derived exact-sort lift of `⊤`,
    `PSigma'.{0,w} ⊤ (fun _ => PUnit.{w})`, which sits at `Sort (max 0 w)` —
    that is `Sort w` for a **bare, maybe-zero** `w` exactly as for a never-zero
-   one, which is the same fact that lets arm E's `emptyAt w` be the exact
+   one, which is the same fact that lets the empty arm's `emptyAt w` be the exact
    carrier of an empty type at every route's sort. The tower then lands at
    `Sort (max ℓ⃗ w)`, and `max u (max u v)` *is* `max u v` in normal form. This
    is the never-zero tuple tower's own pad ([`InductiveModels.padsAt`]) at the

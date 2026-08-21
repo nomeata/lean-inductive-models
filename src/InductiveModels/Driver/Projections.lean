@@ -138,7 +138,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       entry.1 == type.name && entry.2.1 == fieldIndex
     -- **An empty carrier owes no field back, and that is a decision rather
     -- than a fallback.**  The route that built the model states here that
-    -- `T._model.self p⃗` is [`InductiveModels.emptyAt`] at this level — arm E,
+    -- `T._model.self p⃗` is [`InductiveModels.emptyAt`] at this level — the empty arm,
     -- whose property is that every constructor of the owner has a *bare*
     -- recursive field, so no constructor can be applied and the type is empty
     -- at every instantiation of its sort.  Where that holds, both halves of
@@ -354,7 +354,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       -- the literal routes above by δι on the carrier's own selectors, the
       -- direct route's overrides by their reflexive projections, the nested
       -- rung by the block's primitive ι rule, the carved indexed routes by
-      -- unfolding onto the layer underneath, and **arm W** by
+      -- unfolding onto the layer underneath, and **the tree arm** by
       -- [`InductiveModels.wStoredFieldRead`] — `_wcore.WT.root`, the label's
       -- two `PSigma'` projections and the data tower, none of which is
       -- `WT.Wrec`.  Its children keep `WT.Wrec` and nothing can depend on one.

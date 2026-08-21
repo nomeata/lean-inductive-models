@@ -337,7 +337,7 @@ report and not a decline, which is why the expected list
 below reads `exempt ++ declined` and why one extra check per row says nothing
 but a basis primitive reaches the first of the two.
 
-`prim_graph` is **arm G** — the recursive subsingleton by the graph of its own
+`prim_graph` is **the graph arm** — the recursive subsingleton by the graph of its own
 recursion, the arm that took `Acc` out of the basis. Its base counts are the twelve
 declarations of the construction (`self`, `ctor_0`, `ind`, the six graph
 declarations, `rec_0`, `rec_graph`, `iota_0_0`) plus whatever that shape
@@ -368,7 +368,7 @@ Data-valued non-pivots take an explicit packed transport. `BadC` reaches the
 one-index case; `Rgd` beside it in `prim_idx` puts a proof-valued non-pivot in
 front of the data one, and their `.below` declarations add the kernel-generated
 proof index.
-Arm F models its whole row of the same axis — a pivot anywhere in the
+The recovery arm models its whole row of the same axis — a pivot anywhere in the
 telescope, an expression over a data or a proof field beside it — so `MixI`
 and `SvIx` in `prim_declines` moved from its declines to its models in the
 commit that added `prim_idx`. `prim_idx` is the grid that records the two arms'
@@ -422,15 +422,15 @@ def expectedPrim : List Row :=
   --
   -- **The index conjunct is the direct routes' indexed case.** `MZIdx` and
   -- `MZIdx2` take the very storage tower `.identity` and `.tight` use, with
-  -- arm F's packed Henry-Ford equation over it saying which fibre the stored
+  -- the recovery arm's packed Henry-Ford equation over it saying which fibre the stored
   -- value sits in, `Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, whose
   -- projections are the storage tower's own and therefore select
   -- definitionally.
   --
-  -- **The recursion conjunct is arm E's.** `MZSelf` and `MZData` each have a
+  -- **The recursion conjunct is the empty arm's.** `MZSelf` and `MZData` each have a
   -- constructor with a **bare** recursive field, so applying it would already
   -- need an inhabitant of the carrier and both types are *empty* at every
-  -- instantiation of `u`. That is arm E's stated class, and the only thing
+  -- instantiation of `u`. That is the empty arm's stated class, and the only thing
   -- that used to keep it off them was a `route matches .type` in its guard:
   -- its carrier `PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})` is empty
   -- at every `w` and lands at exactly `Sort w` for a bare `w` too, which is
@@ -443,8 +443,8 @@ def expectedPrim : List Row :=
   -- **No count in this row moves for any of it.** Six, seven and eight are the
   -- same public interfaces they always were; what says the four moved is the
   -- kernel's verdict and `runOne`'s carrier assertion below, not this table.
-  -- `MZOne` (direct `.identity`) and `MZProof` (arm F proper) are the controls
-  -- and are untouched: the direct route and arm F are tried before both.
+  -- `MZOne` (direct `.identity`) and `MZProof` (the recovery arm proper) are the controls
+  -- and are untouched: the direct route and the recovery arm are tried before both.
     -- `MZIdx2` is 9 and not 8, and `PProd'` is a row of its own, because
     -- `MZIdx2` is the first owner here whose stored tower has a rung no later
     -- field's type mentions: its island splices the binder-free pair — the
@@ -455,22 +455,22 @@ def expectedPrim : List Row :=
       [("Nt", 15), ("MZProof", 6), ("MZOne", 7), ("MZData", 8), ("MZSelf", 6),
        ("MZIdx2", 9), ("PProd'", 9), ("MZIdx", 6)],
       [("Eq", "prim model: a basis primitive")])
-  -- **Green, and evidence rather than a refusal.** Arm E models a recursive
+  -- **Green, and evidence rather than a refusal.** The empty arm models a recursive
   -- declaration every one of whose constructors has a **bare** recursive field
   -- by the lift of `⊥`, exactly, with no axiom. Its guard used to ask the tuple
   -- tower's own slot analysis, so it reached only the *linear* corner of a
   -- shape class linearity has nothing to do with; it now asks
   -- `bareRecSlotOf` (`Simple/Site.lean`'s `emptySlots`) and reaches the class.
-  -- `NbLin` is 15 and the control. **`NbBr` moved off arm W, to 8**: one
+  -- `NbLin` is 15 and the control. **`NbBr` moved off the tree arm, to 8**: one
   -- recursive field more than `NbLin`, exactly as empty, and it no longer pays
   -- the whole `_wcore` fragment and `Classical.choice` for a carrier that is
   -- `⊥`. The fragment does not disappear — `NbInf` recurses under an
-  -- *inhabited* binder, has no bare occurrence, and is still arm W's, so it
+  -- *inhabited* binder, has no bare occurrence, and is still the tree arm's, so it
   -- carries the core now, at 215, instead of `NbBr` carrying it; that count is
   -- the order of what `NbBr` used to cost. `NbVac` is why the statement is
   -- "every constructor has a **bare** recursive field" and not "no base
   -- constructor": its child binder's domain `E0` is empty, so `NbVac` is
-  -- inhabited, and it stays on arm W at 12.
+  -- inhabited, and it stays on the tree arm at 12.
   , ("empty_no_base",
       [("NbLin", 15), ("Nt", 6), ("NbBr", 8), ("NbInf", 215), ("_wcore.Subtype", 10),
        ("PProd'", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
@@ -480,7 +480,7 @@ def expectedPrim : List Row :=
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
        ("_wcore.PProd", 9), ("E0", 2), ("NbVac", 12)],
       [("Eq", "prim model: a basis primitive")])
-  -- Lifted arm F at its minimum: one proof field and one constant result
+  -- Lifted the recovery arm at its minimum: one proof field and one constant result
   -- index. The latter forces the packed equation; the existing one-field
   -- direct-carrier route is index-free. At positive `u`, forgetting the
   -- exact-sort lift boundary is a kernel type error; at `u = 0`, the same declaration
@@ -497,7 +497,7 @@ def expectedPrim : List Row :=
   -- **`Branch` and `Binder` are on the other side of the boundary now**, and
   -- this row is where that is recorded: they are the two shapes this file was
   -- built to refuse — a branching constructor and a recursive occurrence under
-  -- a binder — and arm W models both. `Branch` is 213
+  -- a binder — and the tree arm models both. `Branch` is 213
   -- declarations because it is the first W target in the file and so the one
   -- that carries the W core; `Binder` behind it is its own dozen.
   --
@@ -527,7 +527,7 @@ def expectedPrim : List Row :=
   -- **One debt and one pad.** The tower now ends at
   -- [`InductiveModels.unitAt`] `w`, the derived exact-sort lift of `⊤`, which
   -- is at `Sort (max 0 w) = Sort w` for a bare `w` exactly as for a never-zero
-  -- one — the same fact that lets arm E's `emptyAt w` be an exact empty
+  -- one — the same fact that lets the empty arm's `emptyAt w` be an exact empty
   -- carrier at every route's sort. The tower then lands at `Sort (max ℓ⃗ w)`,
   -- and `max ℓᵢ w ≡ w` is Lean's own `is_geq` on the input re-asked as a
   -- conversion. Nothing new was built: this is the never-zero tuple tower's
@@ -632,18 +632,18 @@ def expectedPrim : List Row :=
       [ ("Eq", "prim model: a basis primitive")])
   -- **The index axis**, as the explicit grid documented by
   -- `test/fixtures/inductive-models/prim_idx.lean`.
-  -- Arm F's row models — `Fg` the all-ground control, `Fdup` one data field at
+  -- The recovery arm's row models — `Fg` the all-ground control, `Fdup` one data field at
   -- two index positions, `Fdep` a non-pivot whose type mentions a pivot,
   -- `Fall3` every index a pivot and therefore no equation at all, `Fxh` an
-  -- index expression over a proof field — and **arm G's row models too now**,
+  -- index expression over a proof field — and **the graph arm's row models too now**,
   -- because at a non-pivot whose own type is a `Prop` the two index vectors
   -- are two proofs of one proposition and the kernel identifies them.
   --
   -- **The base counts here are the arms, not the cells.** `Rv` is the first
-  -- arm-G model in the file and carries the splice (`PSigma'`,
+  -- graph-arm model in the file and carries the splice (`PSigma'`,
   -- `Nonempty`, `Classical.choice`, the quotient and a derived `funext`);
-  -- `Inf` behind it is arm G's twelve declarations with nothing left to
-  -- splice; `N` is 9 for the `Type` route's own basis. Every arm-F cell is 4 —
+  -- `Inf` behind it is the graph arm's twelve declarations with nothing left to
+  -- splice; `N` is 9 for the `Type` route's own basis. Every recovery-arm cell is 4 —
   -- the type former, constructor, recursor and recursor-local ι theorem —
   -- including `Fall3`, whose carrier
   -- packs nothing and whose recursor builds no `Eq.rec`. The **13**s are the
@@ -661,7 +661,7 @@ def expectedPrim : List Row :=
   -- `Rgd` is a proof non-pivot followed by a data non-pivot; `Rgd.below` adds
   -- the dependent proof index generated by the kernel. Both exercise the
   -- graph inversion's packed transport. `Fmid` and `FChain` remain the
-  -- positive arm-F controls for one and several dependent pivot transports;
+  -- positive recovery-arm controls for one and several dependent pivot transports;
   -- `arm_f_zip` isolates the wider zipper cases.
   , ("prim_idx",
       [("N", 16), ("Rv", 17), ("Nonempty", 4), ("Rvx", 13), ("Inf", 14),
@@ -689,10 +689,10 @@ def expectedPrim : List Row :=
   , ("prim_graph_pre", [("Ac", 24), ("Nonempty", 4), ("Ac.below", 13),
       ("PSigma", 11), ("PProd'", 9)],
       [ ("Eq", "prim model: a basis primitive")])
-  -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
+  -- **The tree arm's foundation.** `w_core.ndjson` is the transitive closure of
   -- the core's six roots — the export `lean4export` emits for
   -- `--#export WT.W WT.sup WT.Wrec WT.Wrec_iota instDecidableEqNat
-  -- WT.decEqAll`, 20 inductive blocks and 3 axioms — and the W arm's plan is
+  -- WT.decEqAll`, 20 inductive blocks and 3 axioms — and the tree arm's plan is
   -- to splice it and model what it splices.
   --
   -- **The last two roots are why this row is worth re-reading rather than
@@ -706,7 +706,7 @@ def expectedPrim : List Row :=
   -- that are the basis exemption.
   --
   -- `Acc` is the interesting entry three times over. It is 12 declarations
-  -- because it is arm G's graph route and this input has both the `Nonempty`
+  -- because it is on the graph arm and this input has both the `Nonempty`
   -- and the `Classical.choice` it would otherwise splice; it is **the only
   -- model in the fragment that spends `Classical.choice`** at the tagged
   -- instantiation; and it uses both of them **from behind**, because both are
@@ -717,7 +717,7 @@ def expectedPrim : List Row :=
   -- own support.** `Iff` sits between `Or` and `Acc` exactly where the export
   -- puts it, because nothing in this file reaches `Iff` before that record.
   -- `Nonempty` does not: it is last in the export and second-to-`Acc` here,
-  -- because `Acc` is arm G and arm G asserts `Classical.choice`, whose domain
+  -- because `Acc` is on the graph arm, which asserts `Classical.choice`, whose domain
   -- it is. Generation writes its own `Nonempty` and `Classical.choice` inside
   -- `Acc`'s island — that is `Acc`'s 12 becoming 14 — the splice-closure rule
   -- models the `Nonempty` it just wrote, and the input's own record is dropped
@@ -751,27 +751,27 @@ def expectedPrim : List Row :=
       [ ("Eq", "prim model: a basis primitive")
       , ("PUnit", "prim model: a basis primitive")
       , ("Nat", "prim model: a basis primitive")])
-  -- **Arm C**, at one and at many recursive slots, and
+  -- **The carve arm**, at one and at many recursive slots, and
   -- the three rows below the models are the arm's boundaries.
   -- Every `X._model._impl.skel` beside an `X` is the spliced index erasure being
   -- modelled in turn, so a row here going missing
-  -- is arm C emitting a skeleton it did not model — the thing `Iso.requires`
+  -- is the carve arm emitting a skeleton it did not model — the thing `Iso.requires`
   -- exists to make impossible.
   --
   -- `Mx`, `Sm3` and `Br` are the **multi-slot** occupants and `Inf2`, `Cf` and
   -- `Bif` the **infinitary** ones, and between them they are the reason this
-  -- row grew the W fragment. Arm C runs at `erasureBare`: a constructor may
+  -- row grew the W fragment. The carve arm runs at `erasureBare`: a constructor may
   -- have any number of recursive fields and each may sit under binders of its
   -- own, the erasure replaces each occurrence and keeps those binders, and the
   -- spliced skeleton that comes out **branches and is infinitary** — so it is
-  -- arm W that models it, and the first skeleton to be reached carries the
+  -- the tree arm that models it, and the first skeleton to be reached carries the
   -- splice. That is `Bif._model._impl.skel` at 215 here, and the eighteen `_wcore`
   -- rows after it are the fragment being modelled in turn (`Iso.requires`'
   -- rule). Every other `_model._impl.skel` is its own dozen, because by then the
   -- fragment is in.
   --
   -- **`Bif._model._impl.skel`'s 215 is an ordering fact, not a fact about `Bif`**, in
-  -- exactly the sense the arm W row below records for `Tree`: the fixture's
+  -- exactly the sense the tree arm row below records for `Tree`: the fixture's
   -- declaration order decides which skeleton pays for the splice.
   --
   -- **`Inf2`, `Cf`, and `Bif` model successfully.** `Cf` is the infinitary
@@ -799,8 +799,8 @@ def expectedPrim : List Row :=
       -- `Zx` and its skeleton are the direct routes' indexed fall-through at
       -- its second case: one constructor, no recursion, one index, **no
       -- fields**. There is no tower to store nothing in, so the direct route
-      -- answers *does not apply* and arm C — which is not behind it at a
-      -- maybe-zero sort, where arm F takes this shape instead — models it here.
+      -- answers *does not apply* and the carve arm — which is not behind it at a
+      -- maybe-zero sort, where the recovery arm takes this shape instead — models it here.
       [("N", 16), ("Zx", 14), ("Zx._model._impl.skel", 6),
        ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
@@ -819,7 +819,7 @@ def expectedPrim : List Row :=
        ("NoBase", 18), ("NoBase._model._impl.skel", 8), ("Tri3", 8),
        ("Tri3._model._impl.skel", 6)],
       [ ("Eq", "prim model: a basis primitive")])
-  -- Arm W's two recursive-boxing seams. `WData` stores a non-recursive
+  -- The tree arm's two recursive-boxing seams. `WData` stores a non-recursive
   -- `((α → β) → β)` in the label tower; `WBind` stores the same type
   -- as an infinitary child's binder in the branch tower. The former is first
   -- and therefore carries the W fragment, while the latter is the arm's own
@@ -832,7 +832,7 @@ def expectedPrim : List Row :=
        ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
        ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("WBind", 12)],
       [("Eq", "prim model: a basis primitive")])
-  -- **Arm W**, and this row is three claims at once.
+  -- **The tree arm**, and this row is three claims at once.
   --
   -- The four models are the shapes the tuple tower cannot express: `Wt` is a
   -- six-constructor target, `Tree` the same branching at a
@@ -848,8 +848,8 @@ def expectedPrim : List Row :=
   -- `InductiveModels.wCoreText` is not in Lake's trace.
   --
   -- **The eighteen rows between it and `Q` are the fragment being modelled in
-  -- turn** — `Iso.requires`' rule, the same one arm C's skeleton is under. A
-  -- row going missing here is arm W emitting an unmodelled inductive in front
+  -- turn** — `Iso.requires`' rule, the same one the carve arm's skeleton is under. A
+  -- row going missing here is the tree arm emitting an unmodelled inductive in front
   -- of a consumer. `Iff`, `Nonempty` and `Classical.choice` carry no prefix on
   -- purpose: they are among the twenty names the fragment shares with the
   -- input, because downstream consumers key axioms on their exact names and
@@ -862,7 +862,7 @@ def expectedPrim : List Row :=
   -- `Twin`, `Mixed`, `TwinInf`, and `Prefix` are one recursive constructor at
   -- two recursive fields, and `Triple`, `Quad`, `Trine`, `TripleInf`,
   -- `QuadInf` and `TrineInf` are the same shape at three and four — the first
-  -- three on arm E, the last three on arm W. A direct one-layer adapter used
+  -- three on the empty arm, the last three on the tree arm. A direct one-layer adapter used
   -- to publish all ten over a private fixpoint; it was withdrawn, and the
   -- assertion in `runOne` now requires each of them to publish its *complete*
   -- public family — carrier, constructor, recursor, ι rule and one intrinsic
@@ -870,19 +870,19 @@ def expectedPrim : List Row :=
   -- underneath. Nothing counts fields, so an arity restriction reintroduced
   -- anywhere shows up here as a missing public face.
   --
-  -- **Six of them are no longer on arm W, and the reason is that they are
+  -- **Six of them are no longer on the tree arm, and the reason is that they are
   -- empty.** `Twin`, `Mixed`, `Prefix`, `Triple`, `Quad` and `Trine` were
   -- each written with a single constructor and no base, so every one of them
-  -- has a bare recursive field in every constructor and is uninhabited; arm E
+  -- has a bare recursive field in every constructor and is uninhabited; the empty arm
   -- reaches that whole shape class rather than its linear corner and takes
   -- them. The models are exact and cheaper — the carrier really is `⊥`.
   --
-  -- `TripleInf`, `QuadInf` and `TrineInf` are the same arities on **arm W**.
+  -- `TripleInf`, `QuadInf` and `TrineInf` are the same arities on **the tree arm**.
   -- There is one way into that combination — a single constructor, every
   -- recursive occurrence under a binder, since a bare one would make the
-  -- declaration empty and arm E's — so these three are `TwinInf`'s shape at
+  -- declaration empty and the empty arm's — so these three are `TwinInf`'s shape at
   -- three and four fields, `TrineInf` with an ordinary field in front of its
-  -- three. Arm W at those arities is itself still exercised elsewhere
+  -- three. The tree arm at those arities is itself still exercised elsewhere
   -- (`prim_carve`'s `Sm3`, `infinitary`'s `GTree`, `nest_fam_arg`'s `Both`
   -- and `Key`), all of them multi-constructor.
   , ("prim_w",
@@ -897,7 +897,7 @@ def expectedPrim : List Row :=
        ("Mixed", 10), ("Quad", 12), ("QuadInf", 18), ("TripleInf", 16),
        ("Twin", 8), ("Prefix", 12)],
       [ ("Eq", "prim model: a basis primitive")])
-  -- **The W arm's own dependent-field selectors.** Every owner in
+  -- **The tree arm's own dependent-field selectors.** Every owner in
   -- `w_dependent_field` hides its result former behind a reducible definition
   -- — the same idiom `HiddenIndexed` uses in `indexed_fibre_boundary` — which
   -- is what kept them off the withdrawn direct one-layer adapter while it
@@ -931,8 +931,8 @@ def expectedPrim : List Row :=
        ("Tag", 6), ("WChain", 18), ("WPlain", 16)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The same question at the empty carrier, and the family it now selects on
-  -- its own.** `EDep.mk`'s third field is a *bare* recursive occurrence, so arm
-  -- E's property holds and the carrier is empty — and an empty carrier was read
+  -- its own.** `EDep.mk`'s third field is a *bare* recursive occurrence, so the
+  -- empty arm's property holds and the carrier is empty — and an empty carrier was read
   -- as one that stores nothing, so its projections were eliminations, total but
   -- not selectors, and field 1's codomain was not its own `Vec a`. What makes
   -- the carrier empty is a single empty *component*: a `PSigma'` tower ending
@@ -980,7 +980,7 @@ def expectedPrim : List Row :=
   --
   -- **`RB` is 215 because it is this file's first W target** and therefore the
   -- one that carries the fragment's splice: `RB.node` has two recursive
-  -- fields, so the tuple tower declines it and arm W models it. The eighteen
+  -- fields, so the tuple tower declines it and the tree arm models it. The eighteen
   -- `_wcore` rows after it are the fragment being modelled in turn
   -- (`Iso.requires`' rule). Both numbers are facts about *ordering*.
   --
@@ -993,8 +993,8 @@ def expectedPrim : List Row :=
   --   normalises exactly this domain rather than replacing it, so both aux
   --   families and both skeletons model. Their public declarations retain the
   --   literal redex; `VanishingErasureTest` checks that distinction directly.
-  -- `Flat` is the positive control: its nested specialization reaches arm C
-  -- through a skeleton with no base constructor, which arm E models as the
+  -- `Flat` is the positive control: its nested specialization reaches the carve arm
+  -- through a skeleton with no base constructor, which the empty arm models as the
   -- exact empty carrier.
   , ("nest_fam_arg",
       [("N", 15), ("Opt", 6), ("L", 7), ("PProd'", 9), ("Vec", 8),
@@ -1044,7 +1044,7 @@ def expectedPrim : List Row :=
       [("Eq", "prim model: a basis primitive")])
   -- **`Ac` is written at a quotient the input declares behind it.** `Quot`,
   -- `Quot.sound`, `Nonempty` and `Classical.choice` all follow `Ac` in the raw
-  -- export and `Ac` needs every one of them: its 24 declarations are arm G's 13
+  -- export and `Ac` needs every one of them: its 24 declarations are the graph arm's 13
   -- plus the fixed-support prefix it carries as the file's first model —
   -- including those four, written there rather than waited for. The input's own
   -- records for them are dropped where they stand
@@ -1087,7 +1087,7 @@ def expectedPrim : List Row :=
   -- input's own record replays as a no-op at its own position.
   --
   -- `Cnt`'s 16 is the Church route's 14 plus the two records it writes in
-  -- front of itself, `Nat` and `Eq`; `Use`'s 6 is arm F's. The claim of the row
+  -- front of itself, `Nat` and `Eq`; `Use`'s 6 is the recovery arm's. The claim of the row
   -- is that `Cnt` models at all: an implementation that only recovers owners
   -- *behind* the basis record leaves `Cnt` in the decline row. The input's own
   -- `Nat` and `Eq` records are dropped against the two that were written, so
@@ -1104,10 +1104,10 @@ def expectedPrim : List Row :=
   -- normalised its telescope once: `DeadLabel` declined
   -- `.shapeUnsupported .incomplete` on `labelFactored`, and `DeadBranch`,
   -- `DeadStruct` and `DeadProp` each aborted the run with an internal tool
-  -- error from arm W's tower split, the since-withdrawn direct one-layer
+  -- error from the tree arm's tower split, the since-withdrawn direct one-layer
   -- adapter and the Church classification respectively. The counts are the
-  -- ordinary ones for their shapes: `DeadLabel` is arm W untagged and carries
-  -- the core splice, `DeadBranch` is arm W tagged behind it, `DeadStruct` is
+  -- ordinary ones for their shapes: `DeadLabel` is the tree arm untagged and carries
+  -- the core splice, `DeadBranch` is the tree arm tagged behind it, `DeadStruct` is
   -- an ordinary one-constructor structure with both intrinsic projections,
   -- their ι rules and **its η rule** and nothing private underneath, `DeadProp`
   -- is the Church route's six. `DeadStruct`'s η is there because recursion is
@@ -1156,7 +1156,7 @@ partial def underLambdas : Expr → Expr
 /-- **How many components a carrier stores in front of the emptiness it ends
 in**, or `none` if it does not end in [`InductiveModels.emptyAt`] at `level`.
 
-Arm E's carrier is that emptiness bare where it stores nothing (`some 0`) and a
+The empty arm's carrier is that emptiness bare where it stores nothing (`some 0`) and a
 right-nested `PSigma'` tower ending at it where it does. Walking the `snd`
 fibres is what tells the two apart from an *inhabited* tower, whose last fibre
 is a field or a pad and never `⊥`. -/
@@ -1238,11 +1238,12 @@ def runOne (root : String) (a : TAcc) (r : Row)
         s!"prim_w: {owner} carries a private one-layer certificate again"
     -- **Which arm is under each owner, asserted rather than inferred.**
     -- The check above is arm-blind on purpose, so the split that moved
-    -- silently when arm E widened is invisible to it: `Triple`, `Quad` and
-    -- `Trine` went from arm W to arm E and nothing went red. Arm W is the only
+    -- silently when the empty arm widened is invisible to it: `Triple`, `Quad`
+    -- and `Trine` went from the tree arm to the empty arm and nothing went red.
+    -- The tree arm is the only
     -- arm that emits the two towers, so their presence is the arm. The `Inf`
-    -- three are W's only occupants past two recursive fields, and the bare
-    -- three are arm E's past its old linear corner; a widening or a narrowing
+    -- three are the tree arm's only occupants past two recursive fields, and the bare
+    -- three are the empty arm's past its old linear corner; a widening or a narrowing
     -- that moves either group across is a failure here.
     let tower := fun (owner : Name) =>
       let privateRoot := Name.str (Naming.modelName owner) "_impl"
@@ -1250,11 +1251,11 @@ def runOne (root : String) (a : TAcc) (r : Row)
         Name.str privateRoot "wB", Name.str privateRoot "wF"]
     for owner in [`TripleInf, `QuadInf, `TrineInf] do
       a := check a ((tower owner).all emittedNames.contains)
-        s!"prim_w: {owner} is not on arm W, so the simple construction no longer \
+        s!"prim_w: {owner} is not on the tree arm, so the simple construction no longer \
            publishes a W carrier past two recursive fields"
     for owner in [`Triple, `Quad, `Trine] do
       a := check a (!(tower owner).any emittedNames.contains)
-        s!"prim_w: {owner} is on arm W, so arm E no longer reaches the branching \
+        s!"prim_w: {owner} is on the tree arm, so the empty arm no longer reaches the branching \
            corner of the shape class it models exactly"
   if name == "prim_carve" then
     -- `IBox` is the indexed-fibre occupant in this mixed route fixture.  Its
@@ -1335,14 +1336,14 @@ def runOne (root : String) (a : TAcc) (r : Row)
     -- as on the one it took before — six, seven and eight are public
     -- interfaces and not constructions — so the census cannot see the split
     -- and the kernel's verdict only sees it once it has already gone wrong.
-    -- Arm E is the one arm whose carrier is *empty*, and the carrier is a
+    -- The empty arm is the one arm whose carrier is *empty*, and the carrier is a
     -- declaration in the output, so the model itself is the assertion:
     -- `T._model p⃗` must be [`InductiveModels.emptyAt`] at the declared sort,
     -- which is a value and not a name, a count or a shape guess.
     --
     -- The four controls are asserted in the other direction. `MZOne` is the
-    -- direct `.identity` route and `MZProof` is arm F; `MZIdx` and `MZIdx2`
-    -- are arm S's stored tower under a packed index equation. All four are
+    -- direct `.identity` route and `MZProof` is the recovery arm; `MZIdx` and `MZIdx2`
+    -- are the direct route's stored tower under a packed index equation. All four are
     -- inhabited, so a widening that swept one of them onto the empty carrier
     -- would be modelling an inhabited type by `⊥`, and this is where that is
     -- caught.

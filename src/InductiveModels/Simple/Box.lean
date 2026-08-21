@@ -128,7 +128,7 @@ partial def levelHasIMax : Level → Bool
   | _ => false
 
 /-- The universe of [`InductiveModels.boxTyOf`] without constructing its `PSigma'`
-terms. The W arm asks its tower-level question before primitives are spliced,
+terms. The tree arm asks its tower-level question before primitives are spliced,
 so this level-only mirror keeps that early, rollback-free guard while using the
 same recursive Π shape as the actual box. -/
 partial def boxLevelOf (t : Expr) : GenM Level := do

@@ -2,7 +2,7 @@ import InductiveModels.Simple.Site
 import InductiveModels.Simple.Graph
 
 /-!
-# The Church routes, and arm G's graph recursion beside them
+# The Church routes, and the graph arm's recursion beside them
 -/
 
 open Lean Meta
@@ -40,7 +40,7 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let gRecNb := site.gRecNb
   let gNf := site.gNf
   let gNonPiv := site.gNonPiv
-  let armG := site.armG
+  let armGraph := site.armGraph
   let eqi := site.eqi
   let installedRecTy := site.installedRecTy
   let publicSource := site.publicSource
@@ -88,14 +88,14 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   if lift?.isSome then
     for d in ← ensureExactSortLift do out := out.push d; spliced := spliced ++ d.getNames
 
-  -- **Arm G's prelude, asked for before anything is emitted.** The graph
+  -- **The graph arm's prelude, asked for before anything is emitted.** The graph
   -- route pairs a value with its graph proof (`PSigma'`) and extracts it with
   -- `Classical.choice`, whose own domain is `Nonempty`; and `Graph.unique`
   -- transports along a `funext` — but only when a recursive field has a
   -- binder, because [`InductiveModels.funextUp`] is the only caller and it is the
   -- identity at none. That is the whole of why the axiom cost is per shape.
   let mut gFx? : Option Name := none
-  if armG then
+  if armGraph then
     for d in ← ensurePSigmaPrime do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensureNonempty do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensureChoice do out := out.push d; spliced := spliced ++ d.getNames
@@ -171,18 +171,18 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   if large && nc == 0 then
     for d in ← ensureNat do out := out.push d; spliced := spliced ++ d.getNames
     for d in ← ensureExactSortLift do out := out.push d; spliced := spliced ++ d.getNames
-  -- **One fold, two consumers.** Arm G's `ind` — the free `Prop`-motive
+  -- **One fold, two consumers.** The graph arm's `ind` — the free `Prop`-motive
   -- recursor the graph route folds at — *is* the strong-induction fold
   -- below at `v := 0`, so the arm forces the small-elimination branches and
   -- takes the result as `ind` instead of as `rec_0`. Building it a second
   -- time by hand would be a second thing to keep in step.
   let installedIndTy :=
-    if armG then installedRecTy.instantiateLevelParams [rv.levelParams[0]!] [.zero]
+    if armGraph then installedRecTy.instantiateLevelParams [rv.levelParams[0]!] [.zero]
     else installedRecTy
   let publicIndTy :=
-    if armG then publicRecTy.instantiateLevelParams [rv.levelParams[0]!] [.zero]
+    if armGraph then publicRecTy.instantiateLevelParams [rv.levelParams[0]!] [.zero]
     else publicRecTy
-  let large := large && !armG
+  let large := large && !armGraph
   let recVal ← forallBoundedTelescope installedIndTy
       (some (np + 1 + nc + ni + 1)) fun bs _ => do
     let ps := bs.extract 0 np
@@ -284,8 +284,8 @@ def primArmChurch (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
         es := es.push (mkAppN body #[ft, proj])
         curT := rest.instantiate1 es[i]!
       mkLambdaFVars bs (mkAppN minors[0]! es)
-  if armG then
-    -- ════ arm G: the recursive subsingleton, by the graph ════
+  if armGraph then
+    -- ════ the graph arm: the recursive subsingleton, by the graph ════
     -- The carrier and the constructor above are already the graph route's
     -- own — `CAcc` and `CAcc.intro` cost no primitive whatsoever — and so is
     -- the `Prop`-motive recursor just built. What is emitted here is the

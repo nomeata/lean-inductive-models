@@ -17,9 +17,9 @@
    * a **pivot** — literally one of the constructor's data fields. The model
      substitutes the recursor's own index argument for it.
    * anything else — an arbitrary term over the parameters, the data fields and
-     the *proof* fields. Nothing can be recovered from such a position, so arm
-     F and G discharge it by a **Henry-Ford equation at the non-pivot
-     subsequence**. In arm G the equation transports the graph inversion's
+     the *proof* fields. Nothing can be recovered from such a position, so the
+     recovery and graph arms discharge it by a **Henry-Ford equation at the non-pivot
+     subsequence**. In the graph arm the equation transports the graph inversion's
      step value into the caller's fibre.
 
    The two arms meet at mixed pivot/non-pivot vectors and use the same packed
@@ -58,7 +58,7 @@
 
    # The occupants and the mutations, red at one apiece
 
-   * `Fg` — the **control**: one ground index, no pivot at all. Arm F exactly
+   * `Fg` — the **control**: one ground index, no pivot at all. The recovery arm exactly
      as it was before the split, and green under every mutation below, which
      is what says the new cells and not the old path are what they measure.
    * `Fdup` — **one** data field at **two** index positions. Only *one* of them
@@ -78,11 +78,11 @@
      (`k h`), and no data fields at all: `Inf.below`'s shape without the
      recursion. **Green under every mutation in the sweep, and that is the
      finding rather than a gap** — see below.
-   * `Fmid` — a pivot whose type moves with a preceding non-pivot; arm F
+   * `Fmid` — a pivot whose type moves with a preceding non-pivot; the recovery arm
      transports a function over that pivot along the packed equation.
    * `FChain` — the same pivot type mentions **two** preceding non-pivots,
      showing that the transport is per pivot rather than per dependency edge.
-   * `Rv` — arm G's control, `Acc`'s own shape, every index a pivot; `Rxh` and
+   * `Rv` — the graph arm's control, `Acc`'s own shape, every index a pivot; `Rxh` and
      `Rvx` its two mixed cells, a proof non-pivot beside no pivot and beside
      one.
    * `Rgd` — a **proof** non-pivot at index 0 standing in front of a **data**
@@ -101,8 +101,8 @@
    | **H** the rebuilt carrier handed every field rather than the bound ones | `Fdep`, `Fdup` |
    | **C** the whole index vector packed rather than the non-pivot subsequence | every cell with a pivot; `Fg` and `Fxh` green |
    | **D** the non-pivot subsequence reversed | nothing here; `prim_shapes`'s `Hq` and the W core's `HEq`, whose packs are dependent |
-   | **G** arm G transports only the first packed component, or rebuilds components out of order | `Rgd`, `Rgd.below`; `BadC` green |
-   | **I** arm G omits the packed transport | `BadC`, `BadC.below`, `Rgd`, `Rgd.below`; proof-only cells green by proof irrelevance |
+   | **G** the graph arm transports only the first packed component, or rebuilds components out of order | `Rgd`, `Rgd.below`; `BadC` green |
+   | **I** the graph arm omits the packed transport | `BadC`, `BadC.below`, `Rgd`, `Rgd.below`; proof-only cells green by proof irrelevance |
 
    **C and D cascade.** A decline moves a splice, so both take out the whole W
    core fragment in `prim_declines`, `prim_carve` and `prim_w`; the columns
@@ -130,7 +130,7 @@
    witness that it is inhabited and works; `Fp` would have been a second
    witness of the same nothing.
 
-   # Arm F's dependent pivot transport
+   # The recovery arm's dependent pivot transport
 
    `Fmid : (α : Type) → α → α → Prop` with `mk (x : N) : Fmid N x N.z` is a
    pivot whose *own type* is the ground index before it. The model reads a data
@@ -143,7 +143,7 @@
    caller's term and would leave the recursor motive at the wrong syntactic
    index. The function transport makes both endpoints exact and keeps ι `rfl`.
 
-   # Arm G's transport
+   # The graph arm's transport
 
    `Rgd` and `prim_graph`'s `BadC` force the generalisation: `GraphInv ι⃗ t val`
    concludes with a value in the caller fibre, while the constructor step
@@ -154,7 +154,7 @@
    then all check at the exact exported types.
 
    `Inf` and `N` beside them are the controls that say the arms are not
-   swallowing the file: `Inf` is arm G's degenerate positive and `N` an
+   swallowing the file: `Inf` is the graph arm's degenerate positive and `N` an
    ordinary `Type`-route model. -/
 prelude
 
@@ -177,7 +177,7 @@ inductive Fam : N → Type where
 inductive Inf : Prop where
   | mk : Inf → Inf
 
--- ── arm F: the non-recursive row ──
+-- ── the recovery arm: the non-recursive row ──
 
 inductive Fg : N → Prop where
   | mk : Fg N.z
@@ -200,7 +200,7 @@ inductive Fmid : (α : Type) → α → α → Prop where
 inductive FChain : (α : Type) → (β : α → Type) → (a : α) → β a → Prop where
   | mk (x : N) : FChain N (fun _ => N) N.z x
 
--- ── arm G: the recursive row ──
+-- ── the graph arm: the recursive row ──
 
 inductive Rv (r : N → N → Prop) : N → Prop where
   | mk (x : N) (h : (y : N) → r y x → Rv r y) : Rv r x

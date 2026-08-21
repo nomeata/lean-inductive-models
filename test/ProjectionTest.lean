@@ -522,7 +522,7 @@ def main : IO UInt32 := do
       (Check.check propBoundaryGenerated).all fun violation =>
         !#[`NestedProp, `MutualPropA, `MutualPropB].contains violation.familyOwner
 
-  -- A recursive Type with no base constructor is empty, including when arm C
+  -- A recursive Type with no base constructor is empty, including when the carve arm
   -- obtains it as the erasure skeleton of an indexed family.  `NoBase` checks
   -- both layers: each exact eight-slot public interface (including its two
   -- intrinsic projection pairs) must close. First-use foundation records are
@@ -600,7 +600,7 @@ def main : IO UInt32 := do
       fmidLateEqOwners.all (fun owner => fmidRawReport.generated.any (·.1 == owner)) &&
       fmidRawReport.spliced.any (fun row => row.2.contains `Eq) &&
       (fmidRawDeclarations.filter (·.names.contains `Eq)).size == 1
-  state := state.check "one-pivot arm-F owners retain their exact interfaces" <|
+  state := state.check "one-pivot recovery-arm owners retain their exact interfaces" <|
     #[(`Fmid, 4), (`FChain, 4)].all fmidReport.generated.contains &&
       !fmidReport.declined.any fun (owner, _) => fmidOwners.contains owner &&
       (Check.check fmidOrdered).all fun violation => !fmidOwners.contains violation.familyOwner
@@ -608,7 +608,7 @@ def main : IO UInt32 := do
   -- The two apparent guards at the dependent-pivot classifier have different
   -- status. `LostData` is accepted by the kernel, but because its `Nat`
   -- payload is absent from the conclusion index the kernel gives it only a
-  -- small recursor: route selection stops before arm F. `MovingPivot` has a
+  -- small recursor: route selection stops before the recovery arm. `MovingPivot` has a
   -- large recursor and reaches the dependent-pivot scan. Its pivot and the
   -- supplying constructor field are one recorded classifier entry, so the
   -- old "pivot has no data field" state is unrepresentable.
@@ -617,20 +617,21 @@ def main : IO UInt32 := do
   let guardGenerated := outputExport guardRaw guardDeclarations
   let guardOrdered ← match Order.reorder guardGenerated with
     | .ok output => pure output
-    | .error error => throw <| IO.userError s!"cannot order arm-F guard fixture: {repr error}"
+    | .error error =>
+      throw <| IO.userError s!"cannot order recovery-arm guard fixture: {repr error}"
   let guardOwners := #[`LostData, `MovingPivot]
   let lostRoute := ownerAndRecursor? guardRaw `LostData
   let movingRoute := ownerAndRecursor? guardRaw `MovingPivot
-  state := state.check "unrecoverable data receives a small recursor before arm F" <|
+  state := state.check "unrecoverable data receives a small recursor before the recovery arm" <|
     lostRoute.any fun (type, recursor) =>
       recursor.levelParams.length == type.levelParams.length
-  state := state.check "a dependent pivot receives the large arm-F recursor" <|
+  state := state.check "a dependent pivot receives the large recovery-arm recursor" <|
     movingRoute.any fun (type, recursor) =>
       recursor.levelParams.length == type.levelParams.length + 1
-  state := state.check "arm-F guard boundaries model at exact interface sizes" <|
+  state := state.check "recovery-arm guard boundaries model at exact interface sizes" <|
     #[(`LostData, 5), (`MovingPivot, 11)].all guardReport.generated.contains &&
       !guardReport.declined.any fun (owner, _) => guardOwners.contains owner
-  state := state.check "arm-F guard boundary output satisfies the exact checker" <|
+  state := state.check "recovery-arm guard boundary output satisfies the exact checker" <|
     (Check.check guardOrdered).all fun violation => !guardOwners.contains violation.familyOwner
   state := state.check "the dependent-pivot boundary takes the zipper transport" <|
     (definitionValue? guardGenerated (Naming.modelName `MovingPivot.rec)).any
@@ -645,35 +646,36 @@ def main : IO UInt32 := do
   let zipGenerated := outputExport zipSupportRaw zipDeclarations
   let zipOrdered ← match Order.reorder zipGenerated with
     | .ok output => pure output
-    | .error error => throw <| IO.userError s!"cannot order arm-F zipper fixture: {repr error}"
+    | .error error =>
+      throw <| IO.userError s!"cannot order recovery-arm zipper fixture: {repr error}"
   let zipOwners := #[`FTwo, `FProof, `FChain, `FEndpoint]
   let zipSupport := #[`PSigma', `PSigma'.rec, `PSigma'.mk, `PSigma'.fst,
     `PSigma'.snd, `PSigma'.rec', `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk]
-  state := state.check "arm-F fixture declares a basis-exempt owner before Eq" <|
+  state := state.check "recovery-arm fixture declares a basis-exempt owner before Eq" <|
     (declarationIndex? zipRaw `Nat).any fun natIndex =>
       (declarationIndex? zipRaw `Eq).any fun eqIndex => natIndex < eqIndex
-  state := state.check "raw-order arm-F owner before Eq models at a written Eq" <|
+  state := state.check "raw-order recovery-arm owner before Eq models at a written Eq" <|
     !zipRawReport.declined.any (·.1 == `FTwo) &&
       zipRawReport.generated.any (·.1 == `FTwo) &&
       zipRawReport.spliced.any (fun row => row.2.contains `Eq) &&
       (zipRawDeclarations.filter (·.names.contains `Eq)).size == 1
-  state := state.check "arm-F shared support persists once ahead of every owner" <|
+  state := state.check "recovery-arm shared support persists once ahead of every owner" <|
     zipSupport.all fun support =>
       (zipDeclarations.filter (·.names.contains support)).size == 1 &&
         (declarationIndex? zipGenerated support).any fun supportIndex =>
           zipOwners.all fun owner =>
             (declarationIndex? zipGenerated owner).any fun ownerIndex => supportIndex < ownerIndex
-  state := state.check "arm-F zipper owners model at exact interface sizes" <|
+  state := state.check "recovery-arm zipper owners model at exact interface sizes" <|
     zipOwners.all (fun owner => zipReport.generated.any (·.1 == owner)) &&
       !zipReport.declined.any fun (owner, _) => zipOwners.contains owner
-  state := state.check "arm-F zipper input satisfies the exact public checker" <|
+  state := state.check "recovery-arm zipper input satisfies the exact public checker" <|
     (Check.check zipRaw).all fun violation => !zipOwners.contains violation.familyOwner
-  state := state.check "arm-F zipper output satisfies the exact public checker" <|
+  state := state.check "recovery-arm zipper output satisfies the exact public checker" <|
     (Check.check zipOrdered).all fun violation => !zipOwners.contains violation.familyOwner
-  state := state.check "arm-F zipper emits every checked iota slot" <|
+  state := state.check "recovery-arm zipper emits every checked iota slot" <|
     zipOwners.all fun owner =>
       (declaration? zipGenerated (Naming.iotaName (Name.str owner "rec") 0)).isSome
-  state := state.check "arm-F zipper recursors perform equality transport" <|
+  state := state.check "recovery-arm zipper recursors perform equality transport" <|
     #[`FTwo.rec, `FProof.rec, `FChain.rec, `FEndpoint.rec].all fun recursor =>
       (definitionValue? zipGenerated (Naming.modelName recursor)).any (containsConst ``Eq.rec)
 

@@ -4,7 +4,7 @@ open Lean Meta
 
 namespace InductiveModels
 
-/-! ## Arm W's kit
+/-! ## The tree arm's kit
 
 This arm directly emits the tagged W scheme. For a declaration at
 `Sort w = Type u`
@@ -72,7 +72,7 @@ def wTowerBoxed (xs : Array Expr) : GenM (Array Bool) :=
 at the singleton [`InductiveModels.unitAt`] `w` — a stored tuple is inhabited
 and its last fibre is the pad.
 
-**Arm E's ends at [`InductiveModels.emptyAt`] `w` instead**, and that one
+**The empty arm's ends at [`InductiveModels.emptyAt`] `w` instead**, and that one
 substitution is the whole of its storage. `PSigma'` is inhabited only when both
 components are, so a tower whose tail is empty is empty — however many fields
 sit in front of it, at whatever levels, and whatever the owner's constructor
@@ -193,7 +193,7 @@ def wTowerMkOf (w : Level) (xs vals : Array Expr) : GenM Expr := do
 every stored component, at the same `α` and `β` [`InductiveModels.wTowerProjs`]
 rebuilds. Where the tail is [`InductiveModels.emptyAt`] this is the descent that
 turns any inhabitant of the carrier back into the emptiness it was built from,
-which is what every elimination out of arm E's carrier goes through. -/
+which is what every elimination out of the empty arm's carrier goes through. -/
 partial def wTowerTail (tail : Expr) (w : Level) (xs : Array Expr) (boxed : Array Bool)
     (i : Nat) (d : Expr) (acc : Array Expr) : GenM Expr := do
   if i == xs.size then return d
@@ -202,26 +202,26 @@ partial def wTowerTail (tail : Expr) (w : Level) (xs : Array Expr) (boxed : Arra
   let value ← if boxed[i]! then unboxValOf original fst else pure fst
   wTowerTail tail w xs boxed (i + 1) (psigmaSnd ℓ w stored β d) (acc.push value)
 
-/-! ### Arm E's tower
+/-! ### The empty arm's tower
 
 The same tower, ending in [`InductiveModels.emptyAt`] `w` rather than the
-singleton. Nothing else differs, and nothing here is arm-E-specific beyond the
+singleton. Nothing else differs, and nothing here is empty-arm-specific beyond the
 end: the level question, the boxing, the dependent binder substitution and the
-selecting projections are the ones arm W already asks. -/
+selecting projections are the ones the tree arm already asks. -/
 
-def eTowerTyOf (w : Level) (xs : Array Expr) : GenM Expr := do
+def emptyTowerTyOf (w : Level) (xs : Array Expr) : GenM Expr := do
   wTowerTy (emptyAt w) w xs (← wTowerBoxed xs) 0
 
-def eTowerProjsOf (w : Level) (xs : Array Expr) (d : Expr) : GenM (Array Expr) := do
+def emptyTowerProjsOf (w : Level) (xs : Array Expr) (d : Expr) : GenM (Array Expr) := do
   wTowerProjs (emptyAt w) w xs (← wTowerBoxed xs) 0 d #[]
 
-def eTowerTailOf (w : Level) (xs : Array Expr) (d : Expr) : GenM Expr := do
+def emptyTowerTailOf (w : Level) (xs : Array Expr) (d : Expr) : GenM Expr := do
   wTowerTail (emptyAt w) w xs (← wTowerBoxed xs) 0 d #[]
 
 /-- The tower a constructor builds. `tailVal` is the emptiness the constructor
 already has in hand — the descent out of its own bare recursive field — so it
 manufactures nothing that was not handed to it. -/
-def eTowerMkOf (w : Level) (xs vals : Array Expr) (tailVal : Expr) : GenM Expr := do
+def emptyTowerMkOf (w : Level) (xs vals : Array Expr) (tailVal : Expr) : GenM Expr := do
   wTowerMk (emptyAt w) tailVal w xs (← wTowerBoxed xs) 0 vals
 
 /-! ### Reading a stored field back out of a tag and its data
@@ -287,12 +287,12 @@ mutual
     -- **One**, and it is the caller's gate rather than a simplification:
     -- intrinsic projections exist only at a one-constructor owner, and at two
     -- or more the arms would have to land in one codomain with no field to
-    -- name it ([`InductiveModels.wStoredFieldOverrides`]).
+    -- name it ([`InductiveModels.treeStoredFieldOverrides`]).
     return mkApp (← natCascade s 1 motAt armAt junkAt 0 t) d
 
 end
 
-/-- The two universe levels at which arm W exposes and builds its carrier.
+/-- The two universe levels at which the tree arm exposes and builds its carrier.
 
 Most declarations expose the W core directly, so both levels are the public
 carrier level.  A predecessor-free, provably positive public level instead

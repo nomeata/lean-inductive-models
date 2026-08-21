@@ -1,10 +1,10 @@
 import InductiveModels.Simple.GraphKit
 
 /-!
-# Arm G's construction: the recursion by its graph
+# The graph arm's construction: the recursion by its graph
 
 `graphArm` and the context it reads. The Church-conjunction, telescope and
-`funext` kit it shares with arms C and F is one module below it.
+`funext` kit it shares with the carve and recovery arms is one module below it.
 -/
 
 open Lean Meta

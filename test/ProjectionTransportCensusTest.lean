@@ -33,11 +33,11 @@ right, and the literal right-hand side is the only one the generator ever has
 to state.
 
 `test/fixtures/inductive-models/w_dependent_field.lean` used to be that owner
-and is now a positive: arm W selects its stored fields through
+and is now a positive: the tree arm selects its stored fields through
 `_wcore.WT.root` and the data tower, so a dependent field on that arm states
 its rule by `Eq.refl` like every other route and is counted here rather than
-declined.  `e_dependent_field` went the same way one construction later: arm
-E's carrier stores its constructor's non-recursive fields in a `PSigma'` tower
+declined.  `e_dependent_field` went the same way one construction later: the
+empty arm's carrier stores its constructor's non-recursive fields in a `PSigma'` tower
 ending at `emptyAt w`, so its projections are the tower's own and select by π.
 
 Recursion is a separate and stronger reason for the same thing on the routes
@@ -261,7 +261,7 @@ that moved off zero: it had no projection-eligible owner of its own, and its
 whole row is now the pair's.
 
 `mutual_one_layer_boundary` is 7 and not 18 because its only consumer of the W
-core was an index erasure with no base constructor: arm E models that skeleton
+core was an index erasure with no base constructor: the empty arm models that skeleton
 by the lift of `⊥`, so the `_wcore` fragment is not spliced there at all and
 the eleven projection iotas its own records carried are gone with it. The
 fixture's public interfaces are unchanged; what left is a fragment it no longer
@@ -292,21 +292,21 @@ domain as written makes it recursive again and this row drops to eleven.
 
 `e_dependent_field` is 18 and not 0: `EDep`'s three fields, `EChain`'s,
 `EMid`'s and `ENon`'s four each and `EBare`'s three, every one of them stated
-by `Eq.refl` against arm E's stored tower.  `EMulti` contributes nothing — two
+by `Eq.refl` against the empty arm's stored tower.  `EMulti` contributes nothing — two
 constructors, so no intrinsic projection is asked — and neither does `EOpaque`,
 which declines.  `Tag` and `Fib` are indexed helpers whose only fields are
 their conclusion indices, exactly as in `w_dependent_field`.
 
 `prim_w` is 46 and not 35 because it gained `TripleInf`, `QuadInf` and
-`TrineInf` — three one-constructor arm-W owners at three and four recursive
-fields, which is arm W past the two `TwinInf` has.  Each is one-constructor and
+`TrineInf` — three one-constructor tree-arm owners at three and four recursive
+fields, which is the tree arm past the two `TwinInf` has.  Each is one-constructor and
 so projection-eligible, and their three, four and four fields are the whole of
 the difference.
 
 `structure_eta` is 11, `structure_projections` 16 and `unitlike` 5 — five
-fewer between them than when their indexed one-constructor owners were arm C's.
+fewer between them than when their indexed one-constructor owners were the carve arm's.
 Every one of those five belonged to a `T._model._impl.skel`, the index erasure
-arm C *splices* as an inductive and must then model, projections and rules
+the carve arm *splices* as an inductive and must then model, projections and rules
 included.  `EtaIndexed`, `Indexed` and `IndexedDep` are one constructor and
 non-recursive, so the direct indexed route stores their fields in a `PSigma'`
 tower instead and splices no inductive at all; the skeletons are gone and so

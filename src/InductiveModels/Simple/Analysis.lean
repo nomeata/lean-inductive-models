@@ -131,8 +131,9 @@ def analysePrim (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr
   -- and this is where that is asserted.**
   --
   -- Every arm below represents a recursive field by *replacing* its occurrence:
-  -- the tuple tower with a spine predecessor, arm C with its index erasure, arm
-  -- W with a branch of `B'`, the Church routes with the encoding's own `C`. All
+  -- the tuple tower with a spine predecessor, the carve arm with its index
+  -- erasure, the tree arm with a branch of `B'`, the Church routes with the
+  -- encoding's own `C`. All
   -- four need the occurrence to be `∀ z⃗, T p⃗ e⃗`, which is exactly what
   -- [`InductiveModels.erasureBareFailure?`] answers of the *normalised*
   -- telescope [`InductiveModels.mkPrimSite`] hands this analysis.

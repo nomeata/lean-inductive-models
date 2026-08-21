@@ -15,7 +15,7 @@
      and `Binder` — a recursive occurrence **under a binder** — are **no longer
      refusals**. They are the two shapes this file was built to refuse, the
      tuple tower's spine being one `Nat` and a constructor taking one
-     predecessor; **arm W** models both, and they stay
+     predecessor; **the tree arm** models both, and they stay
      here as the positives at the boundary they used to mark. `Branch` is the
      first W target in the file, so it is the one that carries the spliced W
      core and the eighteen models of the fragment's own inductives that follow
@@ -26,7 +26,7 @@
      case whose branch type factors through the complete label rather than its
      constructor tag.
    * `Inf.below` — the `below` Lean mints for the recursive proposition beside
-     it. It is a recursive subsingleton too and reaches **arm G**. Graph
+     it. It is a recursive subsingleton too and reaches **the graph arm**. Graph
      inversion now carries and transports the packed non-pivot index equality,
      so this generated declaration, `prim_graph.lean`'s `BadC`, and
      `prim_idx.lean`'s corresponding deliberate cases all model.
@@ -46,7 +46,7 @@
      an exact `max 1 u v` representation and models with projection and eta.
 
    `Inf` itself — `inductive Inf : Prop | mk : Inf → Inf` — is **no longer a
-   refusal**: it is the degenerate shape of arm G, the graph route, and models
+   refusal**: it is the degenerate shape of the graph arm, the graph route, and models
    with no `funext` at all because its recursive field has no binders.
    `prim_graph.lean` carries that arm's positives.
 
@@ -62,7 +62,7 @@
    reported on its own row and is not counted a decline: it is what makes the
    construction well-founded rather than a shape it cannot reach.
 
-   The old arm-F "index-variable field" and arm-G non-pivot refusal paths no
+   The old recovery-arm "index-variable field" and graph-arm non-pivot refusal paths no
    longer exist: they were missing transport cases rather than semantic
    bounds. `prim_idx.lean` and `prim_graph.lean` carry the complete regression
    grids for those routes. -/

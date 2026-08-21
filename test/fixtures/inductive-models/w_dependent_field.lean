@@ -1,4 +1,4 @@
-/- **Dependent ordinary fields on the legacy W route.**
+/- **Dependent ordinary fields on the legacy tree route.**
 
    The intrinsic projection ι contract is literal: `T._model.proj_j` applied to
    the modeled constructor equals constructor field `j` itself, with no
@@ -8,7 +8,7 @@
    each of those projections selects its field definitionally**. Where it does
    not, the two sides live in different types and there is nothing to state.
 
-   **Arm W selects its stored fields definitionally, and this file is the
+   **The tree arm selects its stored fields definitionally, and this file is the
    family that says so rather than one specimen.** The tagged W scheme puts a
    constructor's non-recursive fields in a `PSigma'` data tower `D p⃗ t` and its
    recursive positions in the branch tower, and the label `⟨t, d⟩` of a node is
@@ -26,10 +26,10 @@
    serialized owner type does not end in a literal sort. That is the idiom
    `HiddenIndexed` uses in `indexed_fibre_boundary.lean`, and it is what kept
    these owners off the withdrawn direct one-layer adapter — the one that used
-   to supply reflexive selectors of its own — while it existed. Arm W supplies
+   to supply reflexive selectors of its own — while it existed. The tree arm supplies
    them itself, for every owner of this shape now that the adapter is gone.
    Each is infinitary in at least one recursive position, so the tuple tower
-   declines them and arm W models them.
+   declines them and the tree arm models them.
 
    The five owners are the five spellings of the same question:
 
@@ -53,10 +53,10 @@
      is written at a motive that already mentions the selectors for 0 and 1.
      One layer of dependency does not exercise that nesting.
    * `WPlain` — **the control**, and it must keep modelling: the same reducible
-     result former, the same legacy W arm, the same three projected fields —
+     result former, the same legacy tree arm, the same three projected fields —
      and no field type that names an earlier one.
 
-   Before arm W supplied the selectors this file is why: generation emitted
+   Before the tree arm supplied the selectors this file is why: generation emitted
    `WDep._model.proj_1.iota` at `Eq (Vec (WDep._model.proj_0 (WDep.mk._model …)))`
    with the constructor's own `Vec a` binder on the right, and Lean's kernel
    rejected the declaration with an application type mismatch. Nothing in the

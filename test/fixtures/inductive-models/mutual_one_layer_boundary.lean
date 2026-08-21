@@ -55,8 +55,8 @@ What this pair pins is the *adapter* past one recursive field per constructor:
 the member certificate, the minor layout read off the public minor's own
 binders, the checker's independent agreement, and — now — that the reflexivity
 guard holds at three fields with two of them crossing to a sibling.  It is
-unrelated to `MutualBranchA`'s erasure skeleton having moved from arm W to arm
-E.
+unrelated to `MutualBranchA`'s erasure skeleton having moved from the tree arm
+to the empty arm.
 -/
 mutual
 inductive MutualBranchA : Type where

@@ -13,7 +13,7 @@ constructor, recursor, ι rule and intrinsic projections at the exact source
 syntax and with literal projection ι rules, so the layer only added eight
 private declarations, one `Eq.rec` transport per recursive field and a
 `funext` splice per function-typed one.  What survives of this design is the
-*indexed fibre* adapter (`roll`/`unroll` the identity over arm C) and the
+*indexed fibre* adapter (`roll`/`unroll` the identity over the carve arm) and the
 *plain mutual* adapter, which does roll a real layer; the sections below are
 read as notes on those.  Exact-source simple `Prop` projection literals are
 implemented separately through proof irrelevance.

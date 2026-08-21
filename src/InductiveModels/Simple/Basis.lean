@@ -463,7 +463,7 @@ choice this tool gets to make: `Iff.intro`'s two fields *are* function types,
 so a canonical `Iff` which named those binders anything else would not be the
 declaration Lean's own export carries, and the comparison below is a byte
 comparison. `basisvalidationtest` pins the canonical record against the
-fragment the W arm actually splices, so a Lean release that spelled this
+fragment the tree arm actually splices, so a Lean release that spelled this
 differently fails there rather than silently declining every W target. -/
 def anonymousArrowBinder : Name :=
   .num (.str (.str (.str (.str .anonymous "a") "_@") "_internal") "_hyg") 0

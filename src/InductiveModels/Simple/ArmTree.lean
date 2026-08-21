@@ -1,20 +1,20 @@
 import InductiveModels.Simple.Site
 
 /-!
-# Arm W: the tagged W construction
+# The tree arm: the tagged W construction
 -/
 
 open Lean Meta
 
 namespace InductiveModels
 
-/-- **Arm W's intrinsic projections for the fields it stores.**
+/-- **The tree arm's intrinsic projections for the fields it stores.**
 
 The common driver's projection-ι contract is literal — `T._model.proj_j` at the
 modeled constructor *is* the constructor's own field binder, with no transport
 — and for a field whose type names an earlier field that is a statable
 proposition only if the earlier field's selector **reduces** on the modeled
-constructor. Arm W's recursor cannot do it: `WT.Wrec` is a well-founded
+constructor. The tree arm's recursor cannot do it: `WT.Wrec` is a well-founded
 recursion whose ι rule is the theorem `WT.Wrec_iota`.
 
 **Its carrier can, for exactly the fields it stores.** A node is
@@ -42,7 +42,7 @@ about. The cascade above would run at any constructor count, but at two or more
 the arm at tag `k` and the arm at tag `k'` would have to land in one codomain
 and there is no field to name; the driver never asks, and this declines to
 answer rather than publishing an override nothing can consume. -/
-private def wStoredFieldOverrides (site : PrimSite) :
+private def treeStoredFieldOverrides (site : PrimSite) :
     GenM (Array (Name × Nat × Expr × Expr)) := do
   unless site.nc == 1 do return #[]
   let (nrs, _) ← site.wShapeOf 0
@@ -68,7 +68,7 @@ private def wStoredFieldOverrides (site : PrimSite) :
         let stray := fs.filter fun f => !reachable.any fun x => x.fvarId! == f.fvarId!
         let fieldType ← ityp xs[q]!
         if fieldType.hasAnyFVar fun id => stray.any fun f => f.fvarId! == id then
-          badShape s!"{site.exportCtors[0]!.1}'s field {nrs[q]!} names a field arm W \
+          badShape s!"{site.exportCtors[0]!.1}'s field {nrs[q]!} names a field the tree arm \
 does not store, which its positivity check should have made unspellable"
         withLocalDeclD `self (mkAppN (.const site.selfN us) ps) fun self => do
           let label := mkAppN (.const wCoreRootFn [site.uL, site.wKL])
@@ -92,7 +92,7 @@ does not store, which its positivity check should have made unspellable"
     overrides := overrides.push (site.tname, nrs[q]!, selector, proof)
   return overrides
 
-def primArmW (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
+def primArmTree (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- The site, under the names this arm has always read it by.
   let tname := site.tname
   let lparams := site.lparams
@@ -146,7 +146,7 @@ def primArmW (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let mut out := st.out
   let mut spliced := st.spliced
   let mut requires := st.requires
-  -- ════ arm W: branching and infinitary, out of the spliced W core ════
+  -- ════ the tree arm: branching and infinitary, out of the spliced W core ════
   --
   -- The tagged W construction and its untagged instantiation. Six
   -- definitions, the constructors, one `Nat.rec` cascade for `rec_0` and one
@@ -199,7 +199,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
   let core ← ensureWCore reserved
   for d in core do out := out.push d; spliced := spliced ++ d.getNames
   -- **The inductives the core brought with it, which this model may not
-  -- leave unmodelled** — `Iso.requires`' rule, and the same one arm C's
+  -- leave unmodelled** — `Iso.requires`' rule, and the same one the carve arm's
   -- skeleton is under. Empty when the fragment was already spliced, and that
   -- is not a hole: [`InductiveModels.genPrim`] rolls the environment back on every
   -- withdrawal and on every decline, so a fragment that is *present* was put
@@ -393,7 +393,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
   requires := wRequires
   -- **Last**, because the selectors name the carrier and the tag cascade is
   -- typed against `D`: both are in the environment only now.
-  let projectionOverrides := st.projectionOverrides ++ (← wStoredFieldOverrides site)
+  let projectionOverrides := st.projectionOverrides ++ (← treeStoredFieldOverrides site)
   return { st with out, spliced, requires, projectionOverrides }
 
 end InductiveModels

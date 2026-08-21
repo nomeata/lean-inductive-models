@@ -48,7 +48,7 @@ inductive ShapeScope where
 
   **Nothing produces this today**, and `test/scripts/check-no-known-gap.sh` is
   what says so mechanically, beside `README`'s ledger. The last producer was
-  arm W's eligibility test, whose two remaining guards turned out to refuse
+  the tree arm's eligibility test, whose two remaining guards turned out to refuse
   empty classes and are now invariants asserted at
   [`InductiveModels.mkPrimSite`]. The constructor stays because the distinction
   it draws is the point: a future guard narrower than its arm must be
@@ -116,8 +116,8 @@ inductive Decline where
   at `Aⱼ(proj⃗ (mk f⃗))` and the right at `Aⱼ(f⃗)`, which are different types.
 
   **What is left in that position is a conversion question, not a
-  construction.** Every arm now stores the fields a codomain can name — arm W
-  in its data tower, arm E in a `PSigma'` tower ending at
+  construction.** Every arm now stores the fields a codomain can name — the tree arm
+  in its data tower, the empty arm in a `PSigma'` tower ending at
   [`InductiveModels.emptyAt`], which is empty because of its tail and stores
   everything in front of it — and a tower over a field at `Sort ℓ` reaches the
   carrier's `Sort w` exactly when `max ℓ w ≡ w`.
@@ -148,7 +148,7 @@ inductive Decline where
   inductive to model an inductive defeats the construction.
 
   **Why this verdict and not [`InductiveModels.Decline.shapeUnsupported`].**
-  Arm E models `EOpaque` completely: carrier, constructors, recursor and ι
+  The empty arm models `EOpaque` completely: carrier, constructors, recursor and ι
   rules all exist and check, and construction reaches the projection stage
   holding them. Only the intrinsic projection *rules* have no well-formed
   statement. A `ShapeScope` verdict — `outOfScope` above all — would say no

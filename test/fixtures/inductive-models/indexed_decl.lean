@@ -23,7 +23,7 @@
    `U.node : (x : U) → Box U x → U` is rejected with that exact message: the
    later field cannot observe the earlier child through a dependent container
    while `U` is being declared. There is consequently no raw export of that
-   source shape for the simple W arm; hand-specialising it produces a mutual
+   source shape for the simple tree arm; hand-specialising it produces a mutual
    block, which takes the mutual route instead. -/
 prelude
 

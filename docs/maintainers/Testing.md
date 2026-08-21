@@ -222,7 +222,7 @@ not always: for a while the suite compared counts, declines, statements,
 ordering and the round trip and dropped the kernel's answer on the floor, so a
 model Lean refused could match every other axis and be reported green. The
 fixture that found this is `w_dependent_field`, whose `WDep` is a
-one-constructor owner with a dependent ordinary field on the legacy W arm —
+one-constructor owner with a dependent ordinary field on the legacy tree arm —
 its projection ι related two terms of different types, the CLI rejected it, and
 this suite did not look. If a fixture is ever expected to fail the kernel, it
 belongs in a diagnostic suite that says so, not in this table.

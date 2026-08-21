@@ -9,7 +9,7 @@
    so the equation is a proposition only if each of those projections
    **selects** — reduces to — its field on the modeled constructor.
 
-   Arm E's property is that every constructor has a **bare** recursive field,
+   The empty arm's property is that every constructor has a **bare** recursive field,
    so no constructor can ever be applied and the carrier is empty. That used to
    be read as "stores nothing, so cannot select", and it is not: what makes the
    carrier empty is a single empty *component*, and a right-nested `PSigma'`
@@ -24,7 +24,7 @@
    recursive fields' projections still eliminate, through the same `drop`, at
    every result universe.
 
-   `w_dependent_field.lean` is the same closure one construction earlier: arm W
+   `w_dependent_field.lean` is the same closure one construction earlier: the tree arm
    selects its stored fields through `_wcore.WT.root` and the data tower.
 
    Seven owners, one per thing the storage has to survive.
@@ -39,7 +39,7 @@
      Both are excluded from the tower — a component whose type mentions the
      carrier cannot be stored in a definition — and by positivity no field type
      can name either, so nothing is lost.
-   * `EBare` — the **maybe-zero** route at the same dependency. Arm E serves
+   * `EBare` — the **maybe-zero** route at the same dependency. The empty arm serves
      `Sort u` on the same terms, and so does the tower: every component is a
      field of an inductive at `Sort u`, hence at a level the kernel's own
      acceptance of the input says `Sort u` absorbs.
@@ -64,12 +64,12 @@
      to *be* at `Sort (max 1 u v)` and the kernel decides that by normal-form
      equality, in which a true inequality is not a conversion
      (`InductiveModels.wTowerLevel` says which test is asked and why it is the
-     stock one). It is the same wall the tuple route and arm W hard-fail on;
-     arm E does not hard-fail only because it has a total alternative the other
+     stock one). It is the same wall the tuple route and the tree arm hard-fail on;
+     the empty arm does not hard-fail only because it has a total alternative the other
      two do not: emptiness alone is already a model.
 
      The verdict is `InductiveModels.Decline.projectionCodomain` and not a
-     shape verdict because arm E models this owner completely — carrier,
+     shape verdict because the empty arm models this owner completely — carrier,
      constructors, recursor and ι rules all exist and check. Only the intrinsic
      projection *rules* have no well-formed statement.
 

@@ -1231,7 +1231,7 @@ def main (args : List String) : IO UInt32 := do
   -- out of seven. `Decline.projectionCodomain` refuses a projection rule whose
   -- equation would relate two terms of different types, because the field it
   -- selects depends on an earlier field whose modeled projection does not
-  -- select it definitionally. Arm E's carrier stores its constructor's
+  -- select it definitionally. The empty arm's carrier stores its constructor's
   -- non-recursive fields in a `PSigma'` tower ending at `emptyAt w` — empty
   -- because of its tail, selecting because of its components — so `EDep`,
   -- `EChain`, `EMid`, `ENon`, `EBare` and `EMulti` all model. `EOpaque` is the
@@ -1239,7 +1239,7 @@ def main (args : List String) : IO UInt32 := do
   -- an `imax` and no box can inspect an opaque type far enough to normalize its
   -- level, so nothing stores it and field 2 names it.
   --
-  -- `w_dependent_field` used to be on this list for the same verdict. Arm W
+  -- `w_dependent_field` used to be on this list for the same verdict. The tree arm
   -- now selects its *stored* fields definitionally — through `_wcore.WT.root`
   -- and the data tower rather than through `WT.Wrec` — and by positivity those
   -- are exactly the fields a codomain can name, so the whole file is accepted.

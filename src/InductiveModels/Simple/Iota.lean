@@ -3,7 +3,7 @@ import InductiveModels.Simple.Site
 /-!
 # The ι rules, one per constructor
 
-Every one is `Eq.refl` except arms E, G and W, and the *statement* is the
+Every one is `Eq.refl` except the empty, graph and tree arms, and the *statement* is the
 shared one in all three cases — which is what keeps the oracle's syntactic
 comparison honest across the arms.
 -/
@@ -33,16 +33,16 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
   let recLs := site.recLs
   let gRecNb := site.gRecNb
   let gNf := site.gNf
-  let armG := site.armG
+  let armGraph := site.armGraph
   let eqi := site.eqi
   let ctorPairs := site.ctorPairs
   let installedRecTy := site.installedRecTy
   let publicSource := site.publicSource
   let publicRecTy := site.publicRecTy
   let emptySlots := site.emptySlots
-  let armE := site.armE
+  let armEmpty := site.armEmpty
   let wPlan := site.wPlan
-  let armW := site.armW
+  let armTree := site.armTree
   let wFN := site.wFN
   let uL := site.uL
   let wKL := site.wKL
@@ -98,13 +98,13 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
           | badShape s!"{modelC}'s public recursor telescope has fewer fields than its installed type"
         let some theoremType := closeForallsExact? publicRecTy pre fieldsType
           | badShape s!"{ern}'s exported telescope is shorter than its recursor prefix"
-        -- **Every ι theorem is `Eq.refl` except arms E, G and W.**
+        -- **Every ι theorem is `Eq.refl` except the empty, graph and tree arms.**
         --
-        -- Arm G's value is a `Classical.choice` application, which reduces to
+        -- The graph arm's value is a `Classical.choice` application, which reduces to
         -- nothing, so the rule is proved instead: both sides are graph points
         -- at this constructor and the graph is single-valued.
         --
-        -- Arm W's is `WT.Wrec_iota` and nothing else, at this declaration's own
+        -- The tree arm's is `WT.Wrec_iota` and nothing else, at this declaration's own
         -- `F`, label and dispatch — `Wrec` is a well-founded recursion, so its
         -- ι is a theorem rather than a conversion. **That theorem is the pin
         -- for a collapsed tag assignment**, which is the one wrong model no
@@ -117,25 +117,25 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
         -- keeps the oracle's syntactic comparison honest across the arms.
         --
         -- The site's route booleans are mutually exclusive by construction
-        -- ([`InductiveModels.mkPrimSite`] settles `armW` against `armE`
+        -- ([`InductiveModels.mkPrimSite`] settles `armTree` against `armEmpty`
         -- explicitly), so the order of the tests below carries no decision:
         -- reading them in a different order would select the same arm.
         let proof ←
-          if armW then do
+          if armTree then do
             let (a, disp) ← wCtorParts ps j fields
             let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
             pure (mkAppN (.const wCoreIota [uL, v, wKL])
               #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, coreMotive,
                 mkAppN (.const wFN recLs) pre, a, disp])
-          else if armE then do
+          else if armEmpty then do
             let some k := emptySlots[j]!
               | badShape s!"{cn} has no recursive field in the empty route"
             -- The bare recursive field inhabits the carrier, so dropping it to
             -- the emptiness that carrier ends in proves this equation and every
             -- other proposition.  With nothing stored the descent is the
             -- identity and this is the field itself, as before.
-            emptyAtElim eqi .zero w (eqi.mk' v α lhs rhs) (← site.eDrop ps fields[k]!)
-          else if !armG then pure (eqi.refl' v α lhs) else do
+            emptyAtElim eqi .zero w (eqi.mk' v α lhs rhs) (← site.emptyDrop ps fields[k]!)
+          else if !armGraph then pure (eqi.refl' v α lhs) else do
             let rsI := (Array.range gNf).filter fun i => gRecNb[i]!.isSome
             let atSlot := fun (nm : Name) => rsI.mapM fun i => do
               let fty ← ityp fields[i]!

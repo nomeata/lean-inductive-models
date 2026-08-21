@@ -36,7 +36,7 @@ is non-recursive.  What that argument does not establish is that a
 non-recursive field is *selected* definitionally, and the two constructions
 that reach a field without selecting it answer differently.
 
-The W arm's *recursor* is `WT.Wrec`, whose ι rule is the theorem
+The tree arm's *recursor* is `WT.Wrec`, whose ι rule is the theorem
 `WT.Wrec_iota`, but its carrier is not opaque: a node is `WT.sup ⟨t, d⟩ f` and
 `_wcore.WT.root` takes it back to the label by βιπ alone, so the stored
 non-recursive fields come out through the data tower with no appeal to the
@@ -48,7 +48,7 @@ pins it — both instantiations, a child between the two fields, and a two-step
 dependency — with a control on the same arm.
 
 The empty-carrier route selects too, and what makes it able to is that
-*empty* and *empty-handed* were never the same thing.  Arm E's property is that
+*empty* and *empty-handed* were never the same thing.  The empty arm's property is that
 every constructor has a *bare* recursive field, so no constructor can be
 applied; a `PSigma'` tower ending at `emptyAt w` is uninhabited for exactly
 that reason — a pair needs both components — while storing every non-recursive

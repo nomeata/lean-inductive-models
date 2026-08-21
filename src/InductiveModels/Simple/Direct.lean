@@ -12,7 +12,7 @@ which at one field *is* that field's type, so `.identity` is the tower too —
 and they differ only in what sits around that storage: nothing, at `ni == 0`;
 a `Prop`-valued packed equation naming the fibre, at `ni > 0`
 ([`InductiveModels.directIndexedModel`]). The indexed case used to be a
-separate arm behind arm F in the dispatch chain, and there is no idea in it
+separate arm behind the recovery arm in the dispatch chain, and there is no idea in it
 this file did not already have.
 -/
 

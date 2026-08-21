@@ -19,14 +19,14 @@
    and each was wrong about this field in its own way. They are four
    dispositions, not four copies of one:
 
-   * `DeadLabel` — **arm W's `labelFactored` gap**, and the shape the guard's
+   * `DeadLabel` — **the tree arm's `labelFactored` gap**, and the shape the guard's
      own comment describes. The ζ-dead field `k` is *data*, and the infinitary
      child beside it binds `PFam k`; read as written, `k` is an earlier
      *recursive* field, which is precisely what the untagged label cannot
      reach, so the declaration was refused. It declined
      `.shapeUnsupported .incomplete` with `through the label: no`.
 
-   * `DeadBranch` — **arm W's tower split**. `labelFactored` and `tagFactored`
+   * `DeadBranch` — **the tree arm's tower split**. `labelFactored` and `tagFactored`
      both say yes here, so the arm fired, and `wShapeOf` then put the ζ-dead
      field in the *branch* tower beside the two real children — a child whose
      type is `Q`. That was an internal tool error and not a decline: the arm
@@ -44,13 +44,13 @@
 
    * `DeadProp` — the same shape as `DeadLabel` at `Prop`, so the **Church**
      route's `classifyCtor`/`pairArm` classification answers it rather than
-     arm W's towers. It aborted on the nested-occurrence boundary message,
+     the tree arm's towers. It aborted on the nested-occurrence boundary message,
      naming a boundary this field is not on.
 
    `PFam` is `prim_w`'s: a family over a two-element type written through
    `P.rec`, because the equation compiler wants `PProd` and a `prelude`
    fixture has none. `DeadLabel` and `DeadProp` have a label-dependent child
-   and are therefore the **untagged** instantiation of arm W's core, which is
+   and are therefore the **untagged** instantiation of the tree arm's core, which is
    the `[propext, Classical.choice, Quot.sound]` column; `DeadBranch`'s
    branch type is a function of the tag alone and stays at
    `[propext, Quot.sound]`. -/

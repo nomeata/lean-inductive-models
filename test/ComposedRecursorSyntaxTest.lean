@@ -6,7 +6,7 @@ namespace ComposedRecursorSyntaxTest
 # Composed exact-recursor syntax regression
 
 The three composition seams consume inductives generated earlier in the same
-island: nested to mutual, mutual auxiliary to simple, and arm-C skeleton to
+island: nested to mutual, mutual auxiliary to simple, and carve-arm skeleton to
 simple splice closure. The focused transform perturbs the exact recursor minor
 domain at its serialization boundary, before the immediate composed consumer.
 Every generated public statement must follow that syntax while proof terms
@@ -31,7 +31,7 @@ def routes : Array Route := #[
   { label := "mutual-to-simple", fixture := "mutual_nonrec.ndjson",
     generation := { noGeneration with mutualModels := true, simple := true },
     owner := `OA._model._impl.aux },
-  { label := "arm-C-splice-closure", fixture := "prim_carve.ndjson",
+  { label := "carve-arm-splice-closure", fixture := "prim_carve.ndjson",
     generation := { noGeneration with simple := true, basic := true },
     owner := `Bif._model._impl.skel }
 ]

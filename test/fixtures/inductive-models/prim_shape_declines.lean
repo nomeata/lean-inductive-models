@@ -75,7 +75,7 @@
    `N` is the control: an ordinary owner in the same file that models, so a
    run which declined everything could not pass this row.
 
-   The **third** hole the audit named — arm W's `labelFactored` guard refusing
+   The **third** hole the audit named — the tree arm's `labelFactored` guard refusing
    a shape at a never-zero non-indexed sort — has no occupant here, and not
    for want of trying. It needs a recursive field one of whose *binder types*
    depends on an earlier recursive field, and the kernel rejects an owner

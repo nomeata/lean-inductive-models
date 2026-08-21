@@ -206,11 +206,11 @@ this constructor")
         w.normalize.dec.isSome (labelFactored tname np exportCtors)
   let baseJ := (Array.range nc).filter fun j => slots[j]!.isNone
   let stepJ := (Array.range nc).filter fun j => slots[j]!.isSome
-  -- **Arm E has already taken every recursive declaration without a base
+  -- **The empty arm has already taken every recursive declaration without a base
   -- constructor**, and now takes the whole of that shape class rather than its
   -- linear corner: reaching the tuple tower at all means `recSlotOf` accepted
   -- every constructor, so each has exactly one recursive field and that
-  -- occurrence is bare — which is precisely arm E's guard once `baseJ` is
+  -- occurrence is bare — which is precisely the empty arm's guard once `baseJ` is
   -- empty. This is therefore an assertion about the route classification and
   -- not a shape the tower declines; the tower below would in fact build the
   -- zero-base spine, and it must not, because the exact model of an empty

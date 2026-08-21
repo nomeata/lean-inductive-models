@@ -166,14 +166,14 @@ def main : IO UInt32 := do
       axioms.contains `propext && axioms.contains `Quot.sound &&
         !axioms.contains `Classical.choice && axioms.size == 2
 
-  -- `max 1 u` is positive but has no syntactic predecessor. Arm W therefore
+  -- `max 1 u` is positive but has no syntactic predecessor. The tree arm therefore
   -- builds its core in `Type` and exposes it at the literal public sort through
   -- the constrained lift `PSigma' low (fun _ => PSigma' True (fun _ => PUnit))`.
   --
   -- The statement and family counts below carry the binder-free pair as well.
   -- Both of these exports have a stored chain with a rung no later field's type
   -- mentions, so each splices `PProd'` and models it: one more model family and
-  -- six more public statements, and nothing about arm W itself. The splice is
+  -- six more public statements, and nothing about the tree arm itself. The splice is
   -- the inductive record alone — the pair's bundle derives nothing over it.
   let maxRaw ← readExport "test/fixtures/inductive-models/w_max.ndjson"
   let (maxGenerated, maxReport, _) ← runExport maxRaw

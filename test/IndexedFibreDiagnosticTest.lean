@@ -403,9 +403,9 @@ def run (root : String) : IO UInt32 := do
     actual payloadRule == expectedProjection payloadRule
   state := state.check "indexed family carries the complete one-layer fibre certificate" <|
     certificate.all generatedNames.contains
-  -- **The carrier is the direct route's stored fibre and no longer arm C's
+  -- **The carrier is the direct route's stored fibre and no longer the carve arm's
   -- carve.**  Both write a `PSigma'` whose second component is an `Eq`; what
-  -- separates them is what sits underneath.  Arm C splices the family's index
+  -- separates them is what sits underneath.  The carve arm splices the family's index
   -- erasure as an *inductive* and carves the family out of it through a
   -- `good` predicate, so its model owes a model for that skeleton too.  The
   -- direct indexed route stores the fields in the `PSigma'` tower — a

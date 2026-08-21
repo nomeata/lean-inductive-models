@@ -83,11 +83,11 @@ def main : IO UInt32 := do
   state := state.check "basic closes a simple model's spliced Nonempty"
     ((generatedNames graphClosed).contains `Nonempty)
 
-  -- Arm C marks its spliced skeleton as `Iso.requires`. Without basic, the
+  -- The carve arm marks its spliced skeleton as `Iso.requires`. Without basic, the
   -- parent model remains valid and is not withdrawn merely because the
   -- skeleton itself has no model.
   let carveSimple ← runFixture "test/fixtures/inductive-models/prim_carve.ndjson" { noGeneration with simple := true }
-  state := state.check "simple without basic keeps the arm-C parent"
+  state := state.check "simple without basic keeps the carve-arm parent"
     ((generatedNames carveSimple).contains `Bif)
   state := state.check "simple without basic leaves the required skeleton unmodelled"
     (!(generatedNames carveSimple).contains `Bif._model._impl.skel &&

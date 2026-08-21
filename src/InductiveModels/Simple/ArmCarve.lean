@@ -3,14 +3,14 @@ import InductiveModels.Simple.Erasure
 import InductiveModels.Simple.GraphKit
 
 /-!
-# Arm C: an indexed family carved out of its own index erasure
+# The carve arm: an indexed family carved out of its own index erasure
 -/
 
 open Lean Meta
 
 namespace InductiveModels
 
-def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
+def primArmCarve (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- The site, under the names this arm has always read it by.
   let tname := site.tname
   let lparams := site.lparams
@@ -44,7 +44,7 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let mut out := st.out
   let mut spliced := st.spliced
   let mut requires := st.requires
-  -- ════ arm C: an indexed family, carved out of its spliced erasure ════
+  -- ════ the carve arm: an indexed family, carved out of its spliced erasure ════
   --
   -- A skeleton-plus-`good` construction standing on a **real inductive**
   -- rather than on a W-type. The requirement to use the real type picks the
@@ -67,8 +67,8 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- with one conjunct per child, the constructor's carve proof supplies one
   -- component per child, and the recursor takes one induction hypothesis per
   -- child. All three read `ctorIdxAt`'s slot array, in telescope order.
-  -- The skeleton that comes out **branches**, and arm W is what models it —
-  -- which is why this could not be relaxed before arm W landed.
+  -- The skeleton that comes out **branches**, and the tree arm is what models it —
+  -- which is why this could not be relaxed before the tree arm landed.
   --
   -- What this buys over carving out of W: **no per-constructor currying
   -- glue** (a
@@ -115,7 +115,7 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   spliced := spliced.push skelN
   -- **The arm that splices the skeleton is the arm that owes it a model**
   -- ([`InductiveModels.Iso.requires`]). Recorded here, at the splice, and no
-  -- longer re-derived by the dispatcher from `armC` — that guard says which
+  -- longer re-derived by the dispatcher from `armCarve` — that guard says which
   -- arm *could* run, not which one did, and a route reached before it leaves
   -- the same guard true while splicing nothing at all.
   requires := requires.push skelN

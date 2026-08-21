@@ -119,7 +119,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
   -- **Route selection is a property of the declaration, not of its
   -- provenance.** The predicate below reads only the block being modelled —
   -- its exact serialized type, constructor and recursor — so an inductive a
-  -- model spliced (arm C's index erasure, the composition's tag and
+  -- model spliced (the carve arm's index erasure, the composition's tag and
   -- auxiliary) is asked exactly the question an input inductive is asked.
   -- Gating the question on "did this come from the input stream?" made a
   -- generated owner miss the one-layer implementation certificate that its own
@@ -213,7 +213,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
           genPrim n iv.levelParams iv.numParams iv.type cts #[] reserved
             basicModels st2 (some (exactBlock, normalizer)) exactTransform
             (observer? := observer?)
-    -- **A model may not leave an inductive it introduced unmodelled.** Arm C
+    -- **A model may not leave an inductive it introduced unmodelled.** The carve arm
     -- splices the index erasure of the family it is
     -- carving, so its output contains an inductive that was in nobody's
     -- input; if the descent above could not model it, emitting would put a
@@ -240,8 +240,8 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
           -- skeleton did not model" names where a value stopped rather than
           -- why, which is the defect class this repository has paid for most.
           let inner := (st2.2.1.declined.find? fun (m, _) => m == n).map (·.2)
-          -- **"spliced inductive", not "spliced index erasure".** Arm C's
-          -- skeleton was the only occupant when this was written; arm W's
+          -- **"spliced inductive", not "spliced index erasure".** The carve arm's
+          -- skeleton was the only occupant when this was written; the tree arm's
           -- fragment is seventeen more, and none of them is an index
           -- erasure. A reason that misnames what stopped is the defect class
           -- this line already exists to avoid.
@@ -256,7 +256,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
 model just emitted — `T._model._impl.tag` and `T._model._impl.aux` — are
 declarations of the output like any other, so the simple branch runs on them
 too. The tag is a plain sum and models; the auxiliary is indexed and takes
-arm C. Their own public carriers are the declaration-local names
+the carve arm. Their own public carriers are the declaration-local names
 `T._model._impl.tag._model` and `T._model._impl.aux._model`.
 
 Composition completes in the same disposable environment as the mutual model;

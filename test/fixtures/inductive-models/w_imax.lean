@@ -1,6 +1,6 @@
-/- Focused arm-W storage cases at nested `imax` levels.
+/- Focused tree-arm storage cases at nested `imax` levels.
 
-   `WData` branches, so it reaches arm W rather than the linear tuple tower;
+   `WData` branches, so it reaches the tree arm rather than the linear tuple tower;
    its leaf stores `((α → β) → β)`, whose inner function level survives a
    shallow codomain box.
 

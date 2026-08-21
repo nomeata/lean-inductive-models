@@ -824,7 +824,7 @@ def run (root : String) : IO UInt32 := do
       !malformedTrace.steps.isEmpty && malformedTrace.steps.size < validTrace.steps.size &&
       malformedTrace.steps == validTrace.steps.extract 0 malformedTrace.steps.size
 
-  -- The small alias fixture exercises both a model-local arm-C skeleton and
+  -- The small alias fixture exercises both a model-local carve-arm skeleton and
   -- fixed shared graph support. Every generated declaration that survives in
   -- the replay environment must be explicitly witnessed as spliced and have
   -- a fixed support name; public interfaces and local implementation support
@@ -862,8 +862,9 @@ def run (root : String) : IO UInt32 := do
   state := state.check "every witnessed fixed support declaration persists" <|
     !fixedWitnessedNames.isEmpty && fixedWitnessedNames.all aliasRun.env.constants.contains
 
-  -- A W model has the largest fixed splice: the reusable `_wcore` fragment.
-  -- The core survives for later source owners, while the public W model and its
+  -- A tree-arm model has the largest fixed splice: the reusable `_wcore`
+  -- fragment.
+  -- The core survives for later source owners, while the public model and its
   -- per-owner implementation forest remain confined to this island.
   let wRawRun ← generatedFixtureState s!"{root}/test/fixtures/inductive-models/prim_w.ndjson"
     { noGeneration with simple := true }
