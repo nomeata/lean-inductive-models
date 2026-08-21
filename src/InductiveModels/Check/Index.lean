@@ -540,8 +540,8 @@ def globalExtraRecordsWithIndex (index : SyntaxIndex)
       { names := declaration.names.toArray
         templates := types.toArray.map (fun type =>
           .type type.name (intrinsicProjectionFieldsWithIndex index type constructors)
-            (type.isKernelUnitlike constructors)
-            (type.isKernelStructureLike constructors &&
+            (type.isKernelUnitlike constructors index.normalizer)
+            (type.isKernelStructureLike constructors index.normalizer &&
               !index.normalizer.isPropositionFormer type.type)) ++
         recursors.toArray.map fun recursor => .recursor recursor.name recursor.k }
     | _ => { names := declaration.names.toArray, templates := #[] }

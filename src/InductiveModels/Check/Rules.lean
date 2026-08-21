@@ -121,7 +121,7 @@ def checkEta (x : Export) (normalizer : ExactNormalizationEnv) (family : Family)
   let some constructor := constructors.find? fun candidate =>
       candidate.name == constructorName && candidate.induct == metadata.owner
     | return #[.declarationType metadata.owner metadata.name]
-  unless ownerType.isKernelStructureLike constructors &&
+  unless ownerType.isKernelStructureLike constructors normalizer &&
       !normalizer.isPropositionFormer ownerType.type do
     return #[.declarationType metadata.owner metadata.name]
   if ownerType.levelParams.length != model.levelParams.length then

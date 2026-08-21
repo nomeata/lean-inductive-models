@@ -594,12 +594,16 @@ def expectedPrim : List Row :=
   -- with literal ι rules.
   --
   -- `Plain` is the control and is the same owner with the mention spelled `N`.
-  -- Its count is larger by the η rule: Lean's exported `isRec` is syntactic and
-  -- says `true` of `ProjDead`, whose recursor binds no induction hypothesis, so
-  -- the structure route declines to claim η where this construction still
-  -- models the owner. Two questions, two answers, and the row pins both.
+  -- **Its count is `ProjDead`'s, and that is the claim**: Lean's exported
+  -- `isRec` is syntactic and says `true` of `ProjDead`, whose recursor binds no
+  -- induction hypothesis, and the structure route follows the recursor, so the
+  -- η rule is on both. (`Plain`'s row reads one larger because it is the owner
+  -- whose family carries the spliced `PProd'` record; the nine model
+  -- declarations are the same nine.)
+  -- `ProjDeadDep` keeps its 8 and is the control on the other side: `child` is
+  -- an occurrence that survives reduction, so that owner really is recursive.
   , ("delta_dead_mention",
-      [("N", 15), ("Plain", 10), ("PProd'", 9), ("ProjDead", 8), ("ProjDeadDep", 8)],
+      [("N", 15), ("Plain", 10), ("PProd'", 9), ("ProjDead", 9), ("ProjDeadDep", 8)],
       [("Eq", "prim model: a basis primitive")])
   -- **A proposition's projectable field behind a field the kernel skips.**
   -- `infer_proj` substitutes an earlier constructor field only where the rest
@@ -1104,9 +1108,12 @@ def expectedPrim : List Row :=
   -- adapter and the Church classification respectively. The counts are the
   -- ordinary ones for their shapes: `DeadLabel` is arm W untagged and carries
   -- the core splice, `DeadBranch` is arm W tagged behind it, `DeadStruct` is
-  -- an ordinary one-constructor structure with both intrinsic projections and
-  -- their ι rules and nothing private underneath, `DeadProp` is the Church
-  -- route's six.
+  -- an ordinary one-constructor structure with both intrinsic projections,
+  -- their ι rules and **its η rule** and nothing private underneath, `DeadProp`
+  -- is the Church route's six. `DeadStruct`'s η is there because recursion is
+  -- decided by what survives reduction on the structure route too: Lean's
+  -- `isRec` says `true` of a block whose only owner mention is ζ-dead, and the
+  -- recursor it minted binds no induction hypothesis.
   , ("dead_owner_mention",
       [("P", 15), ("Q", 8), ("DeadLabel", 215), ("_wcore.Subtype", 10), ("PProd'", 9),
        ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
@@ -1114,7 +1121,7 @@ def expectedPrim : List Row :=
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
-       ("_wcore.PProd", 9), ("DeadBranch", 12), ("DeadStruct", 8), ("DeadProp", 6)],
+       ("_wcore.PProd", 9), ("DeadBranch", 12), ("DeadStruct", 9), ("DeadProp", 6)],
       [("Eq", "prim model: a basis primitive")])
     -- **The four positions the spine/block split can be in**, on both routes
     -- that store a field telescope. `WFlat` is all block and no spine at the

@@ -79,7 +79,14 @@ private def classifyMutualOneLayer (types : Array EIndType)
   unless types.size ≥ 2 do return none
   let all := types.map (·.name)
   unless types.all fun type => type.all.toArray == all && type.numIndices == 0 &&
-      type.numNested == 0 && type.isRec && !type.isUnsafe do return none
+      type.numNested == 0 && !type.isUnsafe do return none
+  -- **Recursive is what survives reduction, not what the exported flag says.**
+  -- A block whose every owner mention is one a definition discards has no
+  -- recursion for this route to make one layer of, and the recursors Lean
+  -- minted beside it bind no induction hypothesis.  Asked of one member
+  -- because the answer is the block's, exactly as `isRec` was.
+  unless (ExactNormalizationEnv.ofEnvironment (← getEnv)).blockRecurses types[0]!
+      constructors.toList do return none
   let np := types[0]!.numParams
   unless types.all (·.numParams == np) do return none
   let mut members := #[]

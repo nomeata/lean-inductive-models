@@ -35,10 +35,12 @@ zero-based field order.  This interface is independent of whether the export
 also contains named wrapper definitions for any fields. -/
 def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor)
     (recursors : Array ERec) (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+  let normalizer := ExactNormalizationEnv.ofEnvironment (← getEnv)
   let mut eligible : Array Nat := #[]
   for k in [0:types.size] do
     let type := types[k]!
-    if type.isKernelStructureLike constructors.toList && !(← isPropFormerType type.type) then
+    if type.isKernelStructureLike constructors.toList normalizer &&
+        !(← isPropFormerType type.type) then
       eligible := eligible.push k
   if eligible.isEmpty then return is
   unless types.size == is.numAll && is.selfNames.size == is.numAll do

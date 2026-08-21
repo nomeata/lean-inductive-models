@@ -38,15 +38,18 @@
      and it must model with the same two projections and the same two ι rules,
      so a run that declined everything cannot pass this row.
 
-     It does **not** model with the same declaration count, and the difference
-     is worth reading rather than smoothing over: `Plain` also gets an η rule
-     and `ProjDead` does not. Lean's exported `isRec` flag is syntactic — it is
-     `true` for `ProjDead`, whose only mention is dead — while the recursor
-     Lean minted beside it binds no induction hypothesis. This construction
-     believes the recursor and models the owner; the structure route reads the
-     flag and declines to claim η of something the export calls recursive. Two
-     different questions, answered consistently, and only the second one is
-     about a rule nobody's source asked for.
+     **It models with the same η rule too, and that agreement is the row.**
+     Lean's exported `isRec` flag is syntactic: it is `true` for `ProjDead`,
+     whose only mention is dead, while the recursor Lean minted beside it binds
+     no induction hypothesis at all. One question — is this declaration
+     recursive? — gets one answer here, and the answer is the recursor's: a
+     field is recursive exactly when an owner occurrence survives full
+     reduction. So `ProjDead` is *structure-like* by the same reading the
+     construction already used to build its carrier, and `README.md`'s η
+     contract applies to it exactly as it applies to `Plain`.
+     `ProjDeadDep` is the control on the other side and gets **no** η rule: its
+     `child` is an occurrence that survives, so the block really is recursive
+     and the recursor really does bind an induction hypothesis for it.
 
    `idf` and `cst` are the two ways a definition can swallow a mention: the
    identity applied at a function type whose *domain* is the owner, and a

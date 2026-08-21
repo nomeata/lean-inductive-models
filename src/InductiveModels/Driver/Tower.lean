@@ -40,23 +40,20 @@ def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr))
       let n := Naming.ruleKName recursor
       if env.constants.contains n then return some n
   if let some (.inductInfo info) := env.constants.find? tname then
-    if !info.isRec && info.numIndices == 0 && info.ctors.length == 1 &&
+    -- The block as export records, so the eta name is predicted by the very
+    -- predicate that emits it — including its reading of recursion, which is
+    -- what survives reduction and not `info.isRec`.
+    let .induct blockTypes blockCtors _ ← indEDecl info.all.toArray | return none
+    let some type := blockTypes.find? (·.name == tname) | return none
+    if type.isKernelStructureLike blockCtors (.ofEnvironment env) &&
         !(← isPropFormerType info.type) then
       let n := Naming.etaName tname
       if env.constants.contains n then return some n
     if ctors.size == 1 then
       let ctorName := ctors[0]!.1
-      let some (.ctorInfo ctorInfo) := env.constants.find? ctorName | return none
-      let type : EIndType :=
-        { name := info.name, levelParams := info.levelParams, type := info.type,
-          all := info.all, ctors := info.ctors, numParams := info.numParams,
-          numIndices := info.numIndices, numNested := info.numNested, isRec := info.isRec,
-          isReflexive := info.isReflexive, isUnsafe := info.isUnsafe }
-      let constructor : ECtor :=
-        { name := ctorInfo.name, levelParams := ctorInfo.levelParams, type := ctorInfo.type,
-          cidx := ctorInfo.cidx, numParams := ctorInfo.numParams,
-          numFields := ctorInfo.numFields, induct := ctorInfo.induct,
-          isUnsafe := ctorInfo.isUnsafe }
+      let some constructor := blockCtors.find? fun constructor =>
+          constructor.name == ctorName && constructor.induct == tname
+        | return none
       for fieldIndex in ← eligibleProjectionFieldsM type constructor do
         for n in #[Naming.projectionName tname fieldIndex,
             Naming.projectionIotaName tname fieldIndex] do

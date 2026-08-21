@@ -124,6 +124,36 @@ def main : IO UInt32 := do
     state := state.check s!"focused miss {negative} has no eta" <|
       !focusedNames.contains (Naming.etaName negative)
 
+  -- **Where the exported flag and the exported recursor disagree.**
+  -- `ProjDead`'s only owner mention is `cst ProjDead N`, which unfolding a
+  -- definition discards, so Lean's syntactic `isRec` is `true` of it while the
+  -- recursor Lean minted beside it binds no induction hypothesis at all.
+  -- Structure-likeness follows the recursor, so the owner is structure-like
+  -- and earns η exactly as the `Plain` control does. `ProjDeadDep`'s `child`
+  -- is an occurrence that survives reduction, and it earns none.
+  -- `test/fixtures/inductive-models/delta_dead_mention.lean` is the source.
+  let deadRaw ← readExport "test/fixtures/inductive-models/delta_dead_mention.ndjson"
+  let (deadOutput, _) ← runExport deadRaw
+  let deadNames := deadOutput.decls.flatMap (·.names.toArray)
+  let deadOwners := #[`Plain, `ProjDead, `ProjDeadDep]
+  let exportedIsRec := fun (owner : Name) =>
+    deadRaw.decls.any fun declaration => match declaration with
+      | .induct types _ _ => types.any fun type => type.name == owner && type.isRec
+      | _ => false
+  state := state.check "the export's own flag calls a dead owner mention recursive" <|
+    exportedIsRec `ProjDead && exportedIsRec `ProjDeadDep && !exportedIsRec `Plain
+  state := state.check "a dead owner mention is structure-like and gets eta" <|
+    deadNames.contains (Naming.etaName `ProjDead) &&
+      deadNames.contains (Naming.etaName `Plain)
+  state := state.check "an occurrence that survives reduction gets no eta" <|
+    !deadNames.contains (Naming.etaName `ProjDeadDep)
+  state := state.check "the dead-mention families pass the checker" <|
+    Check.check deadOutput |>.all fun violation =>
+      !deadOwners.contains violation.familyOwner
+  let extraDeadEta := insertCollision deadOutput (Naming.etaName `ProjDeadDep)
+  state := state.check "checker rejects eta at an owner that really recurses" <|
+    (Check.check extraDeadEta).any (hasExtraEta `ProjDeadDep (Naming.etaName `ProjDeadDep))
+
   let projectionRaw ← readExport "test/fixtures/inductive-models/structure_projections.ndjson"
   let (projectionOutput, projectionReport) ← runExport projectionRaw
   let depEta := Naming.etaName `Dep

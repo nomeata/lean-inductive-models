@@ -96,7 +96,7 @@ def unitlikeProposition? (x : Export) (ownerDecl : Nat) (owner : Name) :
     Option (List Name × Expr) := do
   let .induct types constructors _ ← x.decls[ownerDecl]? | none
   let type ← types.find? (·.name == owner)
-  unless type.isKernelUnitlike constructors do none
+  unless type.isKernelUnitlike constructors x.exactNormalizationEnv do none
   let (allBinders, result) := openForalls ((`_check.unitlike).append owner) type.type
   unless allBinders.size == type.numParams do none
   let .sort _ := result | none
@@ -186,12 +186,13 @@ def correspondenceForParts (normalizer : ExactNormalizationEnv)
   let iotas := recursorRecords.flatMap fun recursor =>
     (Array.range recursor.ruleCount).map (Naming.Iota.ofRecursor recursor.name)
   let unitlikeMetadata := types.toArray.filterMap fun type =>
-    if type.isKernelUnitlike ctors then some (Naming.Metadata.ofOwner .unitlike type.name)
+    if type.isKernelUnitlike ctors normalizer then
+      some (Naming.Metadata.ofOwner .unitlike type.name)
     else none
   let ruleKMetadata := recursorRecords.filterMap fun recursor =>
     if recursor.k then some (Naming.Metadata.ofOwner .ruleK recursor.name) else none
   let etaMetadata := types.toArray.filterMap fun type =>
-    if type.isKernelStructureLike ctors &&
+    if type.isKernelStructureLike ctors normalizer &&
         !normalizer.isPropositionFormer type.type then
       some (Naming.Metadata.ofOwner .eta type.name)
     else none

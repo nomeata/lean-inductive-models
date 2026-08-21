@@ -43,8 +43,9 @@ the model recursor twice, once for each side of the equality.  Constant
 equality motives discharge the unrelated arms of a mutual/nested recursor. -/
 def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
     (recursors : Array ERec) (reserved : Std.HashSet Name) (is : Iso) : GenM Iso := do
+  let normalizer := ExactNormalizationEnv.ofEnvironment (← getEnv)
   let eligible := (Array.range types.size).filter fun k =>
-    types[k]!.isKernelUnitlike constructors.toList
+    types[k]!.isKernelUnitlike constructors.toList normalizer
   if eligible.isEmpty then return is
   unless types.size == is.numAll && is.selfNames.size == is.numAll do
     badShape "the unit-like member table does not match the generated model"

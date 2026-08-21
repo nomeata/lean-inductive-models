@@ -160,7 +160,13 @@ definitions**; every `iota_j`, `unitlike`, `ruleK` and `eta` slot is a
 `rhs_j` is the exported rule's own right-hand side — for a plain block, `m_j`
 applied to `x⃗` and to `R._model` at each recursive field. *Structure-like* is
 the kernel's own predicate: nonrecursive, unindexed, exactly one constructor.
-*Unit-like* is that with a zero-field constructor. A field is *projectable*
+*Unit-like* is that with a zero-field constructor. *Nonrecursive* is read off
+the **recursor** rather than off the export's `isRec` flag: that flag is
+syntactic and reads `true` of a block whose only owner mention is one a
+definition discards, whose recursor then binds no induction hypothesis at all.
+A field is recursive exactly when an owner occurrence survives full reduction,
+which is the same reading every construction here uses. The scope is the whole
+block, as the flag's own is. A field is *projectable*
 when `T` has one constructor and the kernel's own `proj` walk is well typed
 there — which is every field of a non-propositional owner, and of a
 propositional one only its propositional fields, and only while no later

@@ -93,6 +93,10 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     spliced := spliced ++ declaration.getNames.toArray
   let mut projectionModels := is.projections
   let mut aliases := is.aliases
+  -- The source environment as the bounded normalizer sees it, taken once: the
+  -- only constants a source constructor field domain names were installed
+  -- before this block was, so nothing added below can change an answer.
+  let sourceRecursion := ExactNormalizationEnv.ofEnvironment (← getEnv)
 
   for (owner, fieldIndex) in fields do
     let some memberIndex := types.findIdx? (·.name == owner)
@@ -313,7 +317,8 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       let indices := majorArguments.extract type.numParams ownerArity
       let lhs := mkAppN (.const modelProjection us) (params ++ indices ++ #[major])
       let propositionLiteral := propositionProjectionIotaUsesLiteralField type
-      let legacyLiteral := projectionIotaUsesLiteralField types type || propositionLiteral
+      let legacyLiteral := projectionIotaUsesLiteralField types type constructors.toList
+        sourceRecursion || propositionLiteral
       unless nestedBlock?.isSome == types.any (·.numNested > 0) do
         badShape s!"{type.name}'s nested block and its serialized nesting metadata disagree"
       if nestedBlock?.isSome && !legacyLiteral then

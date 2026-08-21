@@ -61,6 +61,7 @@ guessed. This distinguishes an original inductive literally named
 `Foo._model` from the carrier model of `Foo`, and treats raw private names as
 ordinary exact keys. -/
 def table (x : Export) : Table := Id.run do
+  let normalizer := x.exactNormalizationEnv
   let mut sites : Std.HashMap Name Site := {}
   for declaration in x.decls do
     for name in declaration.names do
@@ -97,10 +98,10 @@ def table (x : Export) : Table := Id.run do
         (result, ambiguous) := add result ambiguous
           (Naming.ruleKName recursor.name) .theorem (entry .ruleK)
     for type in types do
-      if type.isKernelUnitlike constructors then
+      if type.isKernelUnitlike constructors normalizer then
         (result, ambiguous) := add result ambiguous
           (Naming.unitlikeName type.name) .theorem (entry .unitlike)
-      if type.isKernelStructureLike constructors then
+      if type.isKernelStructureLike constructors normalizer then
         (result, ambiguous) := add result ambiguous
           (Naming.etaName type.name) .theorem (entry .eta)
       for fieldIndex in x.intrinsicProjectionFieldsFor type constructors do

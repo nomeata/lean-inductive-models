@@ -37,7 +37,10 @@
      one-constructor nonrecursive routes were never reached and the
      since-withdrawn direct one-layer adapter's pointwise recursor walk
      aborted on a field that ends in `Q`.  It is an ordinary structure and
-     models with both intrinsic projections and their literal ι rules.
+     models with both intrinsic projections, their literal ι rules, and the η
+     rule that being structure-like earns — because the structure route reads
+     recursion off what survives reduction as well, and not off the exported
+     `isRec` flag, which is `true` here for a mention that means nothing.
 
    * `DeadProp` — the same shape as `DeadLabel` at `Prop`, so the **Church**
      route's `classifyCtor`/`pairArm` classification answers it rather than

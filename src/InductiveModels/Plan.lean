@@ -82,15 +82,6 @@ structure Plan where
   paramTys : Array Expr
   deriving Inhabited
 
-/-- Does `e` mention any of `ns` as a constant head? -/
-def mentionsAny (ns : Array Name) (e : Expr) : Bool :=
-  Option.isSome <| e.find? fun s => match s with
-    | .const n _ => ns.contains n
-    | _ => false
-
-/-- Does `e` mention `n`? -/
-def mentions (n : Name) (e : Expr) : Bool := mentionsAny #[n] e
-
 private structure SpState where
   members : Array Name
   mimics : Array Mimic

@@ -139,12 +139,23 @@ Plain recursive owners without nesting reconstruct a field only
 propositionally, so their rules are proved through the model recursor's ι
 theorem rather than by `Eq.refl` — at the same literal statement.  Callers
 establish the one-constructor precondition while discovering intrinsic
-projections. -/
-def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType) : Bool :=
+projections.
+
+**Recursive is what survives reduction**, which is the same question the route
+that built the carrier asked: [`InductiveModels.analysePrim`]'s `isRec` reads
+the telescope [`InductiveModels.mkPrimSite`] has already reduced, so an owner
+whose only owner mention is dead reaches the direct field/tight route and does
+have the reflexive overrides this disjunct is about.  Reading the exported
+flag here instead said "recursive" of an owner the construction had just
+built as a non-recursive one, and proved a rule `Eq.refl` settles through the
+recursor's ι theorem. -/
+def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType)
+    (constructors : List ECtor) (normalizer : ExactNormalizationEnv) : Bool :=
   type.ctors.length == 1 &&
     (types.any (·.numNested > 0) ||
       (types.size > 1 && types.all (·.numNested == 0)) ||
-      (types.size == 1 && type.numIndices == 0 && type.numNested == 0 && !type.isRec))
+      (types.size == 1 && type.numIndices == 0 && type.numNested == 0 &&
+        !normalizer.blockRecurses type constructors))
 
 /-- Whether the exact exported former ends in the literal sort `Prop`.
 

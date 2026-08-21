@@ -172,6 +172,108 @@ partial def ExactNormalizationEnv.isPropositionFormer
   | .sort .zero => true
   | _ => false
 
+/-! ### Recursion, decided by what survives reduction
+
+An export carries `isRec`, and Lean computes it **syntactically**: a block is
+flagged recursive when a constructor field type *mentions* a member of the
+block, whether or not the mention means anything.  A field written
+`cst T N` — `cst` the constant function on sorts — mentions `T` in the
+argument it throws away, so the flag reads `true` of an owner whose recursor
+binds no induction hypothesis at all.
+
+**This tool follows the recursor.**  A field is recursive exactly when an
+owner occurrence *survives full reduction*, which is the notion
+[`InductiveModels.deltaFieldDomain`] already decides the constructions by; the
+two questions below are that same notion asked of the export records, so the
+structure route and the constructions answer one question rather than two.
+
+The reduction is [`ExactNormalizationEnv.whnf`], which is where an export's
+own transparent definitions live, and the walk is cheap for the same reason
+the construction's is: **no constant an export declares before `T` can mention
+`T`**, so reduction only ever removes mentions and a subterm the syntactic
+test clears is never reduced at all.  A declaration with no dead mention
+therefore pays one `Expr.find?` per field. -/
+
+/-- Whether an occurrence of one of `owners` **survives full reduction** in
+`expression`.
+
+Head-normalise; if the mention is gone the answer is `no`, and otherwise ask
+the same of the parts that still mention an owner.  A subterm the syntactic
+test clears is returned `no` without being reduced.  The walk needs no local
+context: it looks only at constant heads, so a loose bound variable is a leaf
+like any other. -/
+partial def ExactNormalizationEnv.occurrenceSurvives (env : ExactNormalizationEnv)
+    (owners : Array Name) (expression : Expr) : Bool :=
+  if !mentionsAny owners expression then false else
+  let expression := env.whnf expression
+  if !mentionsAny owners expression then false else
+  match expression with
+  | .app .. =>
+    env.occurrenceSurvives owners expression.getAppFn ||
+      expression.getAppArgs.any (env.occurrenceSurvives owners)
+  | .forallE _ domain body _ | .lam _ domain body _ =>
+    env.occurrenceSurvives owners domain || env.occurrenceSurvives owners body
+  | .letE _ t v b _ =>
+    env.occurrenceSurvives owners t || env.occurrenceSurvives owners v ||
+      env.occurrenceSurvives owners b
+  | .mdata _ body | .proj _ _ body => env.occurrenceSurvives owners body
+  -- A leaf that still mentions an owner is the owner's own constant.
+  | _ => true
+
+/-- Whether one constructor's **field** domains carry an owner occurrence that
+survives reduction.  The `numParams` parameter binders and the conclusion are
+not fields and are not asked; the conclusion names the owner in every case. -/
+private def ExactNormalizationEnv.constructorRecurses (env : ExactNormalizationEnv)
+    (owners : Array Name) (numParams : Nat) (type : Expr) : Bool :=
+  let rec fields : Expr → Bool
+    | .forallE _ domain body _ => env.occurrenceSurvives owners domain || fields body
+    | _ => false
+  let rec params : Nat → Expr → Bool
+    | 0, type => fields type
+    | k + 1, .forallE _ _ body _ => params k body
+    | _, _ => false
+  params numParams type
+
+/-- Whether this inductive **block** is recursive: some constructor of some
+member has a field whose domain still mentions a member after full reduction.
+
+Block-wide, because that is the question `isRec` itself asks — Lean sets the
+flag for every member of a block in which any member occurs — and this is the
+same question with reduction in place of syntax rather than a different one.
+`test/fixtures/inductive-models/mutual_nonrec.lean` is the argument for the
+scope: a replay that recomputed recursion *per member* would disagree with the
+export about a non-recursive member of a recursive block. -/
+def ExactNormalizationEnv.blockRecurses (env : ExactNormalizationEnv)
+    (type : EIndType) (constructors : List ECtor) : Bool :=
+  let owners := type.all.toArray
+  constructors.any fun constructor =>
+    owners.contains constructor.induct &&
+      env.constructorRecurses owners constructor.numParams constructor.type
+
+/-- Whether this member has Lean's kernel-level structure treatment, with
+recursion read off what survives reduction rather than off the exported flag.
+
+This is deliberately per member.  A non-recursive mutual block may contain
+several structure-like members even though the elaborator's `StructureInfo`
+extension (and therefore any source-level `structure` grouping) is absent from
+the export. -/
+def EIndType.isKernelStructureLike (type : EIndType) (constructors : List ECtor)
+    (normalizer : ExactNormalizationEnv) : Bool :=
+  !normalizer.blockRecurses type constructors && type.numIndices == 0 &&
+    (type.soleConstructor? constructors).isSome
+
+/-- Whether this member has Lean's kernel-level unit-like treatment.
+
+This is [`InductiveModels.EIndType.isKernelStructureLike`] followed by the
+zero-field test in the kernel's `is_def_eq_unit_like`: the member is
+non-recursive, has no indices and exactly one constructor, and that constructor
+has no fields.  The test is deliberately per member; a non-recursive mutual
+block may have more than one such member. -/
+def EIndType.isKernelUnitlike (type : EIndType) (constructors : List ECtor)
+    (normalizer : ExactNormalizationEnv) : Bool :=
+  type.isKernelStructureLike constructors normalizer &&
+    (type.soleConstructor? constructors).any (·.numFields == 0)
+
 private structure ExactDeclType where
   levelParams : List Name
   type : Expr
