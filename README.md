@@ -360,11 +360,19 @@ the island is withdrawn and the owner declines carrying that inner reason. With
 residue in the output.
 
 Above the arms sit two **presentation adapters**. They change what the public
-interface looks like rather than how the shape is represented. A one-constructor
-recursive unindexed `Type` owner, none of whose recursive fields is named by a
-later field's type, is published as one constructor layer over a private
-fixpoint; the indexed bare-erasure case of the same owner is published as an
-indexed fibre. Both exist so that the intrinsic projections select literally.
+interface looks like rather than how the shape is represented, and both exist
+so that the intrinsic projections select literally. A one-constructor recursive
+*indexed* `Type` owner whose erasure is bare is published as an indexed fibre
+over arm C's own family. A plain mutual block whose members are unindexed and
+never-zero is published as one simultaneous family in which each selected
+member exposes a constructor layer over the tag/aux encoding.
+
+There is no adapter for a one-constructor recursive *unindexed* owner. One was
+built and withdrawn: the simple construction already publishes that owner's
+carrier, constructor, recursor, ι rule and intrinsic projections at the exact
+source syntax and with literal projection ι rules, so a private fixpoint with a
+rolled layer over it bought nothing and cost one `Eq.rec` transport per
+recursive field in every ι rule it published.
 
 ### What is covered, and what is not
 

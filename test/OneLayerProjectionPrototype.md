@@ -20,8 +20,8 @@ implemented separately through proof irrelevance.
 
 ## Production boundary
 
-Keep the current construction as an implementation fixpoint `M_k`.  Add a
-second carrier per real block member:
+A layered adapter keeps the ordinary construction as an implementation
+fixpoint `M_k` and adds a second carrier per real block member:
 
 ```
 P_k p⃗ i⃗ = { layer : F_k M⃗ p⃗ // resultIndex layer = i⃗ }
@@ -33,13 +33,12 @@ recursive occurrence of member `m` contains `M_m`.  It can use the same tight
 `PSigma'`/tower machinery already used to hold arbitrary-sort constructor
 telescopes; this does not require adding another primitive inductive.
 
-The generated public name `R_k._model` should denote `P_k`; fresh private
-implementation names denote `M_k`.  This requires splitting `Iso.selfNames`
-into implementation carriers and public carriers.  Route construction and
-its existing constructors/recursors initially target the former.  The
-correspondence table and final aliases target the latter.  Do this at the
-`Iso` boundary rather than teaching each existing simple arm a different
-one-layer representation.
+The generated public name `R_k._model` denotes `P_k`; fresh private
+implementation names denote `M_k`.  That split lives at the `Iso` boundary —
+`Iso.implementation?` for a single owner and `Iso.familyImplementation?` for a
+simultaneous family — rather than in any simple arm, so route construction and
+its constructors/recursors target the private side while the correspondence
+table and the final aliases target the public one.
 
 For each member generate internal operations
 
@@ -75,12 +74,15 @@ projection (publicConstructor ... field ...) = field
 ```
 
 with the source field as the literal RHS.  All earlier fields on which a later
-field may genuinely depend are ordinary layer fields and reduce directly.
-Consequently the `ProjectionField.normalizeProjectionField` transport path in
-`Driver.addProjectionModels` is unnecessary for owners using the one-layer
-interface.  Keep it during migration for old-route owners, then make
-`Check.checkProjection` expect the literal source field for every converted
-owner.
+field may genuinely depend are ordinary layer fields and reduce directly, so a
+layered owner needs no dependency transport in its projection rules at all.
+That is now the contract for *every* owner, layered or not:
+`Check.checkProjection` expects the literal source field, and
+`Driver.addProjectionModels` declines rather than transporting a right-hand
+side (`test/ProjectionTransportCensusTest.lean` pins zero transported rules
+across the corpus).  `ProjectionField.normalizeProjectionField` survives only
+on the source-structure recursor path in `Driver/StructureRecursor.lean`; there
+is no migration and no old-route owner left for it to serve.
 
 ## Indexed, nested, and mutual cases
 

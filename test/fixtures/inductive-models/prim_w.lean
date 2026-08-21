@@ -151,8 +151,10 @@ inductive Prefix (α : Type u) (β : α → Type u) : Type u where
 /- Past the binary boundary.  `Triple` and `Quad` are three and four bare
    recursive fields; `Trine` is three of them mixed — an ordinary field, a
    direct occurrence, an infinitary one and a direct one — at a parameter.
-   Nothing in the compatibility construction may count, so these are the
-   arities beyond the reach of any fixed-arity lemma. -/
+   Nothing in the construction may count recursive fields, and these are the
+   arities that say so: each publishes the same complete public family as its
+   two-field neighbours, which `test/ProjectionTest.lean` and this fixture's
+   `prim_w` row in `test/Test.lean` assert face by face. -/
 inductive Triple : Type where
   | mk : Triple → Triple → Triple → Triple
 
@@ -174,10 +176,13 @@ inductive Trine (α : Type) : Type where
    field in front of three of them at a parameter, so the data tower is
    non-empty while the branch tower is three deep.
 
-   Nothing here is a new *arm*: it is the composition — arm W's `roll`,
-   `unroll`, `unroll_roll` and `WT.Wrec_iota`-proved private ι rule under the
-   n-ary chain of [`InductiveModels.oneLayerNaryCompatibility`] — that no
-   occupant of the corpus reached past `TwinInf`'s two. -/
+   Nothing here is a new *arm*: it is arm W itself, whose ι rule is proved by
+   `WT.Wrec_iota`, at a recursive-field count no occupant of the corpus reached
+   past `TwinInf`'s two.  A direct one-layer adapter used to roll a public
+   layer over exactly this carrier and fold an n-ary compatibility chain over
+   that ι rule, and these three were the only occupants of that composition; it
+   was withdrawn, and arm W publishes them itself, so what they pin now is the
+   arm's own reach and not a layer over it. -/
 inductive TripleInf (P Q : Type) : Type where
   | mk : (P → TripleInf P Q) → (Q → TripleInf P Q) → (P → Q → TripleInf P Q) →
       TripleInf P Q

@@ -461,15 +461,16 @@ def expectedPrim : List Row :=
   -- tower's own slot analysis, so it reached only the *linear* corner of a
   -- shape class linearity has nothing to do with; it now asks
   -- `bareRecSlotOf` (`Simple/Site.lean`'s `emptySlots`) and reaches the class.
-  -- `NbLin` is 23 as before. **`NbBr` moved from 225 to 16**: one recursive
-  -- field more than `NbLin`, exactly as empty, and it no longer pays the whole
-  -- `_wcore` fragment and `Classical.choice` for a carrier that is `⊥`. The
-  -- fragment does not disappear — `NbInf` recurses under an *inhabited* binder,
-  -- has no bare occurrence, and is still arm W's, so it carries the core now
-  -- (224) instead of `NbBr` carrying it. `NbVac` is why the statement is "every
-  -- constructor has a **bare** recursive field" and not "no base constructor":
-  -- its child binder's domain `E0` is empty, so `NbVac` is inhabited, and it
-  -- stays on arm W at 21.
+  -- `NbLin` is 15 and the control. **`NbBr` moved off arm W, to 8**: one
+  -- recursive field more than `NbLin`, exactly as empty, and it no longer pays
+  -- the whole `_wcore` fragment and `Classical.choice` for a carrier that is
+  -- `⊥`. The fragment does not disappear — `NbInf` recurses under an
+  -- *inhabited* binder, has no bare occurrence, and is still arm W's, so it
+  -- carries the core now, at 215, instead of `NbBr` carrying it; that count is
+  -- the order of what `NbBr` used to cost. `NbVac` is why the statement is
+  -- "every constructor has a **bare** recursive field" and not "no base
+  -- constructor": its child binder's domain `E0` is empty, so `NbVac` is
+  -- inhabited, and it stays on arm W at 12.
   , ("empty_no_base",
       [("NbLin", 15), ("Nt", 6), ("NbBr", 8), ("NbInf", 215), ("_wcore.Subtype", 10),
        ("PProd'", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
@@ -747,13 +748,16 @@ def expectedPrim : List Row :=
   -- are the positive layer-3 occupants for discarding a βζ-dead mention, and
   -- the row below asserts their auxiliary models and erased skeletons.
   --
-  -- **`NoBase` is 18 and its skeleton 16, rather than 10 and 8.** Both gained
-  -- the same eight-record private one-layer certificate, the skeleton through
-  -- `2d8891a` — which classifies a generated owner by its own declaration —
-  -- and `NoBase` itself through `81ad237`, which reads the indexed-fibre
-  -- boundary off the dependency closure. Both counts were unobservable while
-  -- this row's earlier owners were declining. `ProjectionTest` names the eight
-  -- records; this row only counts them.
+  -- **`NoBase` is 18 and its skeleton 8, rather than 10 and 8.** `NoBase` is
+  -- indexed with one constructor, so the *indexed fibre* adapter publishes it
+  -- and adds that route's eight-record private certificate on top of its ten
+  -- public records — through `81ad237`, which reads the indexed-fibre boundary
+  -- off the dependency closure. The skeleton is unindexed and carries no
+  -- certificate at all: it briefly did, through `2d8891a` — which classifies a
+  -- generated owner by its own declaration and so put it on the direct
+  -- one-layer route exactly as an input inductive of that shape — and went
+  -- back to 8 when that route was withdrawn. `ProjectionTest` names the eight
+  -- records and asserts the skeleton has none of them; this row only counts.
   , ("prim_carve",
       [("N", 16), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
@@ -1057,12 +1061,13 @@ def expectedPrim : List Row :=
   -- normalised its telescope once: `DeadLabel` declined
   -- `.shapeUnsupported .incomplete` on `labelFactored`, and `DeadBranch`,
   -- `DeadStruct` and `DeadProp` each aborted the run with an internal tool
-  -- error from arm W's tower split, the one-layer adapter and the Church
-  -- classification respectively. The counts are the ordinary ones for their
-  -- shapes: `DeadLabel` is arm W untagged and carries the core splice,
-  -- `DeadBranch` is arm W tagged behind it, `DeadStruct` is the one-layer
-  -- structure with both intrinsic projections and their ι rules, `DeadProp`
-  -- is the Church route's six.
+  -- error from arm W's tower split, the since-withdrawn direct one-layer
+  -- adapter and the Church classification respectively. The counts are the
+  -- ordinary ones for their shapes: `DeadLabel` is arm W untagged and carries
+  -- the core splice, `DeadBranch` is arm W tagged behind it, `DeadStruct` is
+  -- an ordinary one-constructor structure with both intrinsic projections and
+  -- their ι rules and nothing private underneath, `DeadProp` is the Church
+  -- route's six.
   , ("dead_owner_mention",
       [("P", 15), ("Q", 8), ("DeadLabel", 215), ("_wcore.Subtype", 10), ("PProd'", 9),
        ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
@@ -1152,9 +1157,10 @@ def runOne (root : String) (a : TAcc) (r : Row)
   if name == "prim_w" then
     let emittedNames := decls.flatMap (·.names.toArray)
     -- **A recursive single-constructor owner has no adapter, and that is the
-    -- pin.**  These six are the shapes the withdrawn direct one-layer route
-    -- used to take — three and four recursive fields, bare and infinitary —
-    -- and the whole of what it published is now the simple construction's own
+    -- pin.**  These eleven are the shapes the withdrawn direct one-layer route
+    -- used to take — two, three and four recursive fields, bare and infinitary,
+    -- with and without an ordinary dependent prefix — and the whole of what it
+    -- published is now the simple construction's own
     -- output: the public carrier, its constructor, its recursor, its ι rule
     -- and one intrinsic projection plus literal ι rule per field, with no
     -- private fixpoint, no `roll`/`unroll` pair and no round-trip laws

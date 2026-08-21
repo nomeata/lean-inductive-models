@@ -9,8 +9,11 @@ unchanged, projection-ineligible sibling.
 ## Adapter boundary
 
 1. Classify the entire installed/source block once, but select changed members
-   independently. A changed member must satisfy the existing direct one-layer
-   field analysis; an unchanged sibling receives the identity public carrier
+   independently. A changed member must satisfy the adapter's own field
+   analysis (`MutualOneLayer.lean`'s `classifyMutualOneLayer`: one constructor,
+   at least one direct recursive field, every recursive field in the block
+   direct and independent of later fields); an unchanged sibling receives the
+   identity public carrier
    `P_k := M_k`. Reject an empty changed set and fail closed if a selected
    member's exact source recursor/rules cannot be associated.
 2. Generate the existing mutual tag/aux block as the private implementation

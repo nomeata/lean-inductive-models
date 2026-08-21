@@ -43,9 +43,12 @@ here at three fields — but the mutual adapter requires its `roll` to agree wit
 the private constructor *definitionally*
 (`MutualOneLayer.lean`'s "roll compatibility is not definitional"), so every
 field step in the chain collapses and a chain capped at two fields still checks.
-Reinstating an arity cap in that chain leaves this fixture, and
-`mutualonelayerdiagnostictest` with it, green; what goes red is `prim_w`, whose
-one-layer owners roll through a real private carrier.  So what this pair pins is
+What used to go red at such a cap was `prim_w`, whose owners rolled through a
+real private carrier under the direct one-layer adapter.  That adapter has been
+withdrawn and the mutual one is now the chain's only caller, with the same
+definitional collapse at every owner it takes, so **an arity cap in the chain is
+red nowhere in the corpus** — capping the chain's loop at two field steps leaves
+`test/scripts/run-correctness.sh` entirely green.  What this pair pins is
 the *adapter* past one recursive field per constructor — the member certificate,
 the checker's independent agreement — and not the compatibility proof's arity.
 That is a gap in this fixture rather than in the construction, and it is

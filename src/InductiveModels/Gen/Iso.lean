@@ -172,13 +172,14 @@ structure Iso where
   /-- `(member, the rule's constructor as the export names it, the theorem)`. -/
   iotas : Array (Nat × Name × Name)
   /-- Private fixpoint interface when it differs from the public fields above.
-  `none` means the implementation and public interface are identical.  This is
-  name-only and does not retain a second declaration array. -/
+  `none` means the implementation and public interface are identical, which is
+  every construction but the indexed fibre adapter.  This is name-only and does
+  not retain a second declaration array. -/
   implementation? : Option IsoInterface := none
   /-- Owner-keyed simultaneous implementation certificate for a partial mutual
-  one-layer family.  This is separate from the historical singleton
-  `implementation?` so legacy consumers cannot accidentally interpret a
-  partial mutual prefix as a complete certificate. -/
+  one-layer family.  This is separate from the single-owner `implementation?`
+  above so a consumer of that field cannot accidentally interpret a partial
+  mutual prefix as a complete certificate. -/
   familyImplementation? : Option IsoFamilyImplementation := none
   /-- Checked nested-container maps, one per private mimic. A consumer assigns
   them to exact source occurrence keys; array position is not a consumer
@@ -262,18 +263,6 @@ structure Iso where
   not share any prefix with their owner. -/
   aliases : Naming.AliasMap := .empty
   deriving Inhabited
-
-/-- The exact public family consumed by correspondence, serialization, and
-the statement checker. -/
-def Iso.publicInterface (is : Iso) : IsoInterface :=
-  { selfNames := is.selfNames, ctors := is.ctors, recs := is.recs, iotas := is.iotas }
-
-/-- The family whose recursor and iota proofs implement the public model.
-Ordinary routes share the public family structurally. -/
-def Iso.implementationInterface (is : Iso) : IsoInterface :=
-  match is.implementation? with
-  | some implementation => implementation
-  | none => is.publicInterface
 
 /-- **The export's names rewritten to the model's**: `T._model` for each real
 member, `C._model` for each constructor, and `R._model` for each recursor.

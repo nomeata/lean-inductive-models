@@ -285,9 +285,9 @@ their conclusion indices, exactly as in `w_dependent_field`.
 
 `prim_w` is 46 and not 35 because it gained `TripleInf`, `QuadInf` and
 `TrineInf` — three one-constructor arm-W owners at three and four recursive
-fields, restoring the one-layer adapter over a W carrier past the two
-`TwinInf` has.  Each is one-constructor and so projection-eligible, and their
-three, four and four fields are the whole of the difference.
+fields, which is arm W past the two `TwinInf` has.  Each is one-constructor and
+so projection-eligible, and their three, four and four fields are the whole of
+the difference.
 
 `recursor_field_domain` is 2, and both are the spliced pair's: `P` is a
 two-constructor enumeration and `Owner` is a two-constructor recursive owner,

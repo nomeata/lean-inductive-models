@@ -6,9 +6,10 @@ import InductiveModels.Projection
 /-!
 # Declaration-type views and one-layer interface certificates
 
-The type-bearing view of the public constants an export record introduces,
-its kind and safety checks, and the two recognizers for the first-tranche
-private/public one-layer boundary.  A partial certificate prefix is malformed
+The type-bearing view of the public constants an export record introduces, its
+kind and safety checks, and the two recognizers for a private/public one-layer
+boundary: the indexed fibre adapter's single owner and the plain mutual
+adapter's simultaneous family.  A partial certificate prefix is malformed
 rather than a request to reinterpret the family as legacy output.
 -/
 
@@ -90,11 +91,19 @@ private def rewriteCertificateNames (mapping : Array (Name × Name)) (type : Exp
         if name == source then some (.const target levels) else none
     | _ => none
 
-/-- Recognize the complete first-tranche private/public interface from the
+/-- Recognize the complete single-owner private/public interface from the
 serialized declarations.  Names alone do not select the new contract: every
 private public-facing type, both directions of the equivalence, and both laws
 must be uniquely present and exact.  A partial prefix is malformed rather
-than a request to reinterpret the family as legacy output. -/
+than a request to reinterpret the family as legacy output.
+
+The only route that emits this certificate is the *indexed fibre* adapter, and
+[`InductiveModels.indexedFibreOneLayerProjectionFamily`] below is what says so:
+an unindexed owner carrying these eight names is malformed, not a second route.
+That is deliberate.  A direct adapter for the unindexed single-block owner was
+built and withdrawn, so this recognizer is also what would reject a silent
+reintroduction of it — `test/Test.lean`'s `prim_w` rows assert the eight names
+absent at every constructor and recursive-field count. -/
 def phase1OneLayerCertificate (declarations : DeclarationTypes)
     (ownerType : EIndType) (constructors : Array ECtor) (recursors : Array ERec)
     (family : Family) :

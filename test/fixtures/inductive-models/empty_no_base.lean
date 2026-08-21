@@ -18,7 +18,8 @@
      just as exactly modelled by the lift of `⊥`.  It used to be handed to arm
      W, which built a W-type with no leaves: a spliced `_wcore` fragment, and
      `Classical.choice` beside it, for a carrier that is `⊥`.  It is arm E's
-     now, at 16 declarations against 225.
+     now, at 8 declarations against the whole fragment `NbInf` still pays for
+     below.
    * `NbInf` recurses under a binder whose domain is **inhabited**.  Still
      empty, and still arm W's, because a recursive occurrence under a binder
      carries no inhabitant of the owner to return.  It is what pays for the

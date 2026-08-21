@@ -709,10 +709,11 @@ def main : IO UInt32 := do
   state := state.check "ordered late-lift projection interface is exact" <|
     (Check.check pfpOrdered).all (·.familyOwner != `PFP)
 
-  -- A one-member, unindexed recursive family exposes a public one-layer
-  -- carrier over its private fixpoint.  Both ordinary and infinitary fields
-  -- therefore reduce to the literal mapped constructor field; dependency on
-  -- an earlier field must not reintroduce the old public `Eq.rec` transport.
+  -- A one-member, unindexed recursive family is published by the simple
+  -- construction itself, with no adapter over it.  Both ordinary and
+  -- infinitary fields reduce to the literal mapped constructor field;
+  -- dependency on an earlier field must not reintroduce the old public
+  -- `Eq.rec` transport.
   let wRawOriginal ← readExport "test/fixtures/inductive-models/prim_w.ndjson"
   let (wRawDeclarations, wRawReport) ← runExport wRawOriginal
   let wLateEqOwners := #[`Tree, `Wty, `Triple, `P, `Q, `Wt, `Dep, `Bad, `TwinInf, `Br]
@@ -981,7 +982,7 @@ def main : IO UInt32 := do
   let (directRecursiveDeclarations, directRecursiveReport) ← runExport directRecursiveRaw
   let directRecursiveGenerated := outputExport directRecursiveRaw directRecursiveDeclarations
   let directRecursiveRule := Naming.projectionIotaName `Recursive 0
-  state := state.check "direct recursive one-layer projection rule is literal" <|
+  state := state.check "direct recursive projection rule is literal" <|
     directRecursiveReport.generated.any (·.1 == `Recursive) &&
       directRecursiveReport.stmtErrors.isEmpty &&
       (declarationType? directRecursiveGenerated directRecursiveRule).any fun type =>

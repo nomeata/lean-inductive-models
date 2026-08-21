@@ -34,10 +34,10 @@
 
    * `DeadStruct` — **not recursive at all.** One constructor, one data field,
      one ζ-dead field; `analysePrim`'s `isRec` said recursive, so the
-     one-constructor nonrecursive routes were never reached and the one-layer
-     adapter's pointwise recursor walk aborted on a field that ends in `Q`.
-     It is an ordinary structure and models with both intrinsic projections
-     and their literal ι rules.
+     one-constructor nonrecursive routes were never reached and the
+     since-withdrawn direct one-layer adapter's pointwise recursor walk
+     aborted on a field that ends in `Q`.  It is an ordinary structure and
+     models with both intrinsic projections and their literal ι rules.
 
    * `DeadProp` — the same shape as `DeadLabel` at `Prop`, so the **Church**
      route's `classifyCtor`/`pairArm` classification answers it rather than
