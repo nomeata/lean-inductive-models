@@ -442,7 +442,10 @@ form alone, `max (imax u v) (max u v)` does not normalize to `max u v`, and
 no packaging of the field escapes this: a wrapper that removed the `imax`
 would raise the type's level floor above `Prop`, and `Sort (max u v)` can be
 `Prop`. So this is a limit of Lean's definitional equality on universe
-levels, not an unfinished piece of the tool.
+levels, not an unfinished piece of the tool. Lean's level normalizer is known
+to be incomplete around turning an `imax` into a `max`;
+[leanprover/lean4#12747](https://github.com/leanprover/lean4/issues/12747)
+records a related instance.
 
 Ordinary Lean does not produce this shape: the `inductive` command refuses
 a resulting universe that is only sometimes `Prop`, so declaring `Fun` takes
