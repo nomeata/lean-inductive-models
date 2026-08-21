@@ -386,10 +386,8 @@ the run saying, precisely, that this one declaration gets no model.
 Declines are rare and specific. Run over this repository's entire fixture
 corpus, the tool declines exactly five declarations as unsupported, in two
 fixture files, and they fall into the three situations below; each is shown
-here shrunk to a minimal declaration that still declines. Nested, mutual
-and indexed inductives are *not* among them — they are handled by their own
-constructions and model without comment. Two further behaviours are not
-declines but are still user-visible, and close the list.
+here shrunk to a minimal declaration that still declines. Two further
+behaviours are not declines but are still user-visible, and close the list.
 
 | What you can hit | What the run does |
 | --- | --- |
