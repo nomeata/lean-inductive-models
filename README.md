@@ -380,26 +380,35 @@ A decline is not a failure: the source declaration passes through unchanged and
 the run reaches exit code 2. This table is the whole ledger; the notes after it
 carry the argument for each row.
 
-| Shape | What the run does | A gap? |
+| What you can hit | What the run does | Occupants |
 | --- | --- | --- |
-| anything an arm ought to reach | models it | **no known gap** |
-| a nested occurrence | declines, `outOfScope` | no — a stated boundary |
-| storage no pad or box lands on the carrier's sort | declines, `outOfScope` | no — a stated boundary |
-| a field naming an earlier field the model does not select | models the owner, declines that projection rule | no — unstatable, not unbuilt |
-| a `Prop` structure-like carrying data fields | models the owner, emits no projections at all | no — unstatable at every instantiation |
-| a level gap the elaborator will not close | models it, and counts it | an accepted limitation |
+| a recursive occurrence that is not an application of the owner | declines the owner | `Foreign`, `Foreign0` |
+| storage no pad or box lands on the carrier's sort | declines the owner | `PadImax`, `PadImaxIdx` |
+| a field naming an earlier field the model does not select | models the owner, omits that one projection rule | `EOpaque` |
+| a `Prop` structure-like carrying data fields | models the owner, emits no projections at all | Arena `tutorial/087`, `089` |
+| a level gap the elaborator will not close | models it, and counts the widening | — |
 
-`test/scripts/check-no-known-gap.sh` keeps the first row honest: it fails the
-build the day a decline site says `incomplete` without this ledger being
-rewritten. It counts decline *sites* rather than boundaries, and so reports
-three, because the second boundary below is stated in two arms.
+**Those five are everything.** The first three name every owner in the fixture
+corpus that declines or loses a slot; there is no sixth shape.
+
+Nothing that one construction hands to another appears here. A nested
+occurrence goes to the nested construction and is modelled, and the run reports
+nothing at all — so it is not a limit of the tool, and the reasoning for it
+belongs in the code that routes it, not in this ledger.
+
+`test/scripts/check-no-known-gap.sh` keeps the "no known gap" claim below
+honest: it fails the build the day a decline site says `incomplete` without this
+ledger being rewritten. It counts decline *sites*, of which there are three,
+because the second row above is stated in two arms.
 
 #### No known gap
 
 No shape an arm ought to reach and does not, and no decline site in the code
 says `incomplete`.
 
-The last gap was arm W's eligibility test. A non-indexed recursive owner at a
+The rest of this entry is implementation history rather than a limit anyone can
+hit, and is here only because the argument is recorded nowhere else. The last
+gap was arm W's eligibility test. A non-indexed recursive owner at a
 never-zero sort whose recursion is not linear is arm W's or it is nobody's, and
 the arm used to refuse two further things — a loose-variable test on a binder
 type inside a recursive field's own telescope, and a carrier plan that could not
@@ -426,32 +435,35 @@ The `incomplete` verdict itself is kept, with nothing producing it, because the
 distinction it draws is worth having ready: a guard narrower than its arm must
 be recordable as a gap rather than dressed up as a boundary.
 
-#### Boundary: a nested occurrence
+#### Declined: a recursive occurrence no arm can represent
 
-A field mentioning the owner as anything other than `∀ z⃗, T p⃗ e⃗` after βζ head
-normalization is declined as out of scope: that is nesting, and nesting is the
-nested construction's business. Nothing is missing; a model built here would be
-the wrong layer's.
+Every arm of every route represents a recursive field by replacing an occurrence
+of the shape `∀ z⃗, T p⃗ e⃗`. A field that mentions the owner some other way
+after βζ head normalization carries an occurrence that is not an application of
+`T`, so no arm of any route can represent it and the owner declines. `Foreign`
+and `Foreign0` in `test/fixtures/inductive-models/prim_shape_declines.lean` are
+the occupants; the decline names the offending field and the route facts.
 
-**The export is asked before that boundary is claimed.** The recursor's minor
-premise for `C_j` binds one induction hypothesis per recursive field, so the
-export itself says how many of `C_j`'s fields carry an occurrence, and the
-decline is made only where that number is the number the shape analysis reads.
-The fields it then cannot read are ones the kernel does not treat as recursive
-either — a mention `δ` discards.
+This is **not** the nesting boundary. A nested occurrence is routed to the
+nested construction and modelled, with nothing reported. What is left here is an
+occurrence no layer of the tool can read at all.
 
-Where the export asserts *more*, it asserts a recursive occurrence at a field
-whose domain does not reduce to the owner here. Every arm represents a
-recursive field by replacing an occurrence it can find, so there is no model of
-that recursor to build, and the run fails naming the constructor and the two
-numbers rather than reporting a boundary it is not standing on. The Kernel
-Arena's `bad/rec-missing-ih` is the occupant: its recursive field is a stuck
-`k`-recursor application that Lean's kernel reduces to the owner and
-`Lean.Meta`'s conversion does not. A disagreement can only hide behind a
-decline — wherever a model *is* built, `R._model` carries the exported
+**The export is asked before the decline is made.** The recursor's minor premise
+for `C_j` binds one induction hypothesis per recursive field, so the export
+itself says how many of `C_j`'s fields carry an occurrence, and the decline is
+made only where that number is the number the shape analysis reads. The fields
+it then cannot read are ones the kernel does not treat as recursive either — a
+mention `δ` discards.
+
+Where the export asserts *more*, the run **fails** rather than declining, naming
+the constructor and the two numbers instead of claiming a boundary it is not
+standing on. The Kernel Arena's `bad/rec-missing-ih` is the occupant: its
+recursive field is a stuck `k`-recursor application that Lean's kernel reduces
+to the owner and `Lean.Meta`'s conversion does not. A disagreement can only hide
+behind a decline — wherever a model *is* built, `R._model` carries the exported
 recursor's type verbatim and is kernel-checked as it is produced.
 
-#### Boundary: storage no pad or box lands on the carrier's sort
+#### Declined: storage no pad or box lands on the carrier's sort
 
 A field whose level falls short of `Sort w` has to be padded into it, and the
 pad is the derived exact-sort lift of `⊤` — a `PSigma'.{0,w}`, so it sits at
