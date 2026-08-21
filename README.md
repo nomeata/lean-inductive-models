@@ -255,124 +255,277 @@ off, that declaration class is not kernel-checked.
 
 ## Constructions
 
-Three constructions share one generator core, one decline vocabulary and one
-public correspondence. The driver picks one from the exported declaration's own
-shape; none of them calls the others, and they are not one construction at
-three settings.
+Every inductive declaration the tool models is modelled by exactly one of the
+ten constructions below. Which one is a fact read off the declaration itself —
+its constructor count, whether and how it recurses, whether it is indexed, and
+which universe its carrier lives in — not the result of trying constructions in
+turn until one works. The list runs from the most basic shape to the most
+general one, and that order is also the dependency order: several entries emit
+auxiliary inductives of their own, and every such auxiliary is modelled by an
+entry earlier in the list (once, by a smaller instance of the same entry).
+The dependencies force the whole order except among entries 3 to 6, which
+nothing orders; there, simpler comes first. Where an entry title carries a
+parenthesised name, that is what the source code calls the construction.
 
-- **Nested** — a block the exporter marked nested. The model is a mutual block
-  with one extra member per nested occurrence, a `pack`/`unpack` pair per mimic
-  with both round trips as theorems, and one recursor and ι rule per member. It
-  removes nesting and keeps mutuality.
-- **Mutual** — a plain mutual block with no nesting. One *tag* enumeration
-  carrying each member's index telescope, one indexed auxiliary family over it,
-  and one carrier per member. It removes mutuality.
-- **Simple** — a single non-mutual inductive, reduced to the fixed basis. This
-  is the construction with the routes and arms below.
+Three facts frame the list.
 
-`Eq`, `Nat`, `PUnit` and `PSigma'` are what the simple construction is
-*written in*, and `Quot` is the kernel's. They are not modelled. That is an
-exemption rather than a gap — it is what makes the construction well-founded —
-and it is reported in its own row, outside the decline count.
+**Four inductives are never modelled, and that is an exemption rather than a
+gap.** `Eq`, `PSigma'`, `Nat` and `PUnit` are what the models are *written
+in*, and `Quot` is the kernel's own quotient bundle beside them; the five
+together are the advertised basis. A model of a basis member would have to be
+built out of that member, so a run leaves them unmodelled by definition and
+reports each on its own line, counted in its own row outside the decline
+count. (`PSigma'` is Lean's dependent pair with the built-in universe `1`
+removed from its result sort, so it can pair propositions without leaving
+`Prop`. `Acc` was once a fifth member; entry 6 is how it stopped being one.)
 
-### The universe route
+**A model may not leave an inductive it introduced unmodelled.** With
+`--basic` on, every auxiliary inductive a model splices into the output
+re-enters this same list and is modelled there, and the descent stops only at
+the basis — which is why it stops at all. If a spliced inductive fails to
+model, the whole island is withdrawn and its owner declines, carrying that
+inner reason. So with `--basic` on, the basis is the only unmodelled inductive
+residue in the output. This rule is what the per-entry auxiliary notes below
+stand on.
 
-The simple construction first splits on the carrier's sort `w`, three ways,
-with no preference order between them:
+**The carrier's universe splits the work, and the split is forced.** A
+carrier's sort is one of three kinds: a proposition (`Prop`), never a
+proposition (`Type u` and friends), or *maybe* a proposition — a sort such as
+`Sort u` or `Sort (max u v)`, a proposition at some instantiations of its
+level parameters and not at others. The two workhorse encodings each
+work at one end only. The Church encoding (entry 4) is *impredicative* — it
+defines a proposition by quantifying over all propositions — which the kernel
+permits only at `Sort 0`, or at any sort under a derived lift that raises a
+proposition without forgetting its proof. The tuple tower (entry 2) tags
+values with a `Nat`, and a pair carrying a `Nat` can never be a proposition;
+reading the tag back also takes `Nat`'s *large eliminator* — a recursor
+allowed to build a type, not merely a proof, by recursion, the one grant the
+kernel makes to an inductive declaration that an emitted `def` does not
+inherit. A maybe-`Prop` carrier can host neither directly, which is why
+maybe-`Prop` shapes have entries of their own.
 
-- `w` normalizes to zero — the **`Prop`** route;
-- `w` is never zero — the **`Type`** route;
-- otherwise — the **maybe-zero** route, a `Sort w` that is a proposition at some
-  instantiations of its level parameters and is not at others.
+**1. Field storage at a maybe-`Prop` sort** (the *direct route*). The shape:
+one constructor, no recursion, a maybe-`Prop` carrier. Ordinary Lean refuses
+to declare a result sort that is only sometimes `Prop`, so occupants come from
+raw exports, from the bootstrap option core itself uses to declare `PUnit` and
+`PEmpty` — and, mostly, from this tool's own splices. The typical occupant is
+`PProd'`, the pair the storage entries lean on:
 
-The split is forced by what the two ends need. The Church encoding is
-impredicative and is well formed only at `Sort 0`, or at any `Sort w` under the
-derived exact-sort lift. The tuple tower needs the large eliminator the kernel
-mints for `Nat` only at a `Type`, and it pads its fields to land at exactly
-`Sort w`. A maybe-zero owner has neither, so it is its own route rather than an
-instance of one of the others.
+```lean
+inductive PProd' (α : Sort u) (β : Sort v) : Sort (max u v) where
+  | mk : α → β → PProd' α β
+```
 
-### The arms, in the order the route dispatcher tries them
+The model stores the constructor's fields. A single field whose sort is
+already the carrier's is stored as itself: the carrier *is* the field. A
+single field that is exactly a proposition is stored under the derived lift.
+Any other field list is stored in a right-nested chain of `PSigma'` pairs,
+ending in a unit pad wherever the fields' own levels do not add up to exactly
+the carrier's sort; a field that no later field's type mentions gets a
+binder-free `PProd'` rung instead. The two single-field answers are checked
+before the chain on purpose, so that their carriers stay the field itself and
+the bare lift rather than a pair around either. An *indexed* declaration of
+this shape gets the same chain plus one `Prop`-valued packed equation
+recording which index fibre the stored value sits in; a `Prop` costs no
+universe level, so the carrier still lands exactly on the declared sort.
 
-- **Direct** — field-preserving storage for a one-constructor nonrecursive
-  owner at a maybe-zero sort. The two exact one-field answers come first —
-  *identity* where the single field's sort is already the carrier's, *prop lift*
-  where it is exactly a proposition — and everything else is stored in a
-  right-nested `PSigma'` tower at any field count, ending at the exact-sort pad
-  where the fields' own levels do not reach the carrier's sort. A rung whose
-  field is mentioned by no later field's type has a constant family, and is
-  built at `PProd'` — the same pair without the binder, at the same
-  `Sort (max u v)`. `PProd'` is spliced support rather than a basis member: it
-  is modelled like any inductive a construction introduces, by the plain
-  `PSigma'` tower, since a tower over its own two independent fields would be a
-  `PProd'`. The `Type` route's chain does the same at the same rungs. The
-  *indexed*
-  case wraps that same tower in a `Prop`-valued packed Henry-Ford equation
-  saying which fibre the storage sits in, and is disjoint from the other two by
-  its own guard; the two exact answers are taken before the tower so that their
-  carriers stay the field itself and the bare lift.
-- **F** — the indexed subsingleton, for a large-eliminating one-constructor
-  nonrecursive indexed owner at a `Prop` or maybe-zero sort. The carrier is one
-  packed equation on the index positions that are not pivots; a *pivot* is an
-  index position that is literally one of the constructor's data fields, and the
-  arm recovers that field by **substituting** at it. It recovers data and cannot
-  store it.
-- **C** — an indexed family at a `Type` sort, carved out of its own index
-  erasure. A **stepping stone**: it splices the index-erased skeleton as a real
-  inductive, and that skeleton re-enters the pipeline and is modelled by **arm
-  W**. `Type` is intrinsic rather than incidental — the carve spends the
-  skeleton's large eliminator twice, and a maybe-zero skeleton has none to mint.
-  If the skeleton does not model, the whole island is withdrawn and the owner
-  declines.
-- **E** — every constructor has a *bare* recursive field, so no constructor can
-  be applied and the declaration is empty. Serves the `Type` and maybe-zero
-  routes. The carrier is the empty type at exactly `Sort w`, or — where
-  projections are wanted — a right-nested `PSigma'` tower over the non-recursive
-  fields ending at that emptiness, which is uninhabited because of its tail
-  while genuinely storing everything in front of it.
-- **W** — the tagged W construction, for a non-indexed recursive `Type` owner
-  whose recursion branches or is infinitary. It splices a `_wcore` fragment,
-  which is itself modelled by the same descent arm C's skeleton takes.
-- **Tuple** — the `Nat`-tagged tuple tower, the `Type` route's last arm. Its
-  spine is deliberately linear: one bare recursive field per constructor. That
-  is the whole of what separates it from arm W, and the two are split by cost
-  rather than by reach — the tower costs `Nat`, `PSigma'` and no axiom, and
-  every one of its ι rules is `Eq.refl`. A constructor's chain carries its
-  constant rungs in `PProd'` exactly as the direct route's tower does, and
-  splices the pair where it does; the chain's constructor and destructor read
-  each rung's shape off the carrier's own type rather than deciding it again.
-- **Church**, with **G** inside it — the fallback for the `Prop` and maybe-zero
-  routes, which is why neither of those routes has an unreached shape. The
-  carrier is the impredicative Church encoding, under the derived lift at a
-  maybe-zero sort. Arm **G** replaces the fold with a recursion by its *graph*,
-  and it fires only at a literal `Prop` whose one-constructor recursive owner
-  the kernel granted a large eliminator; at a maybe-zero sort there is no such
-  grant, so the restriction is the kernel's and not a choice. G pays
-  `Classical.choice`, and function extensionality when a recursive field has a
-  binder.
+Auxiliaries: it splices `PProd'` when a chain has such a constant rung, and
+`PProd'` is then modelled by this same entry — necessarily by a plain
+`PSigma'` chain, since a chain over its own two independent fields would *be*
+a `PProd'`.
 
-An inductive a construction splices — arm C's skeleton, arm W's `_wcore`
-fragment, the mutual construction's tag and auxiliary family — re-enters the
-simple pipeline under `--basic` and is modelled there. **A model may not leave
-an inductive it introduced unmodelled**: if a spliced inductive does not model,
-the island is withdrawn and the owner declines carrying that inner reason. With
-`--basic` on, the five-member basis is therefore the only unmodelled inductive
-residue in the output.
+**2. The `Nat`-tagged tuple tower.** The everyday entry: any non-indexed
+declaration at a never-`Prop` sort whose recursion, if it recurses at all, is
+*linear* — each constructor has at most one recursive field, and that field is
+not under a binder. `Bool`, `Fin n`, `Prod`, `Option` and `List` all land here
+(`List.cons : α → List α → List α` — one recursive field).
 
-Above the arms sit two **presentation adapters**. They change what the public
-interface looks like rather than how the shape is represented, and both exist
-so that the intrinsic projections select literally. A one-constructor recursive
-*indexed* `Type` owner whose erasure is bare is published as an indexed fibre
-over arm C's own family. A plain mutual block whose members are unindexed and
-never-zero is published as one simultaneous family in which each selected
+The carrier is a `PSigma'` pair of a `Nat` and a fibre. The `Nat` is the
+constructor tag, and the fibre at tag `j` is constructor `j`'s field chain —
+the same right-nested `PSigma'` chain as entry 1, with the same `PProd'` rungs
+and the same pad to land at exactly the declared sort — and the empty type at
+every tag past the last constructor. For a recursive declaration an outer
+`Nat` additionally counts recursive depth: a step constructor stores its one
+recursive field one depth down, so the representation is unique. The recursor
+reads the tags with `Nat.rec` building a type — the large elimination the
+basis buys, and the reason `Nat` is in it — and then walks the chain. The
+whole entry costs no axiom, and every one of its ι rules is `Eq.refl`.
+
+Auxiliaries: `PProd'` for constant rungs, modelled by entry 1. Basis
+primitives the input does not declare are spliced in at Lean's own shape —
+each reported on a `prelude spliced` line — and stay unmodelled under the
+exemption above.
+
+**3. Empty declarations** (arm E). The shape: recursive, non-indexed, and
+every constructor has a *bare* recursive field — a field whose type is the
+declaration itself, not under a binder — so no constructor can ever be applied
+and the declaration has no elements:
+
+```lean
+inductive Loop : Type where
+  | mk : Loop → Loop
+```
+
+The class is not about linearity — a constructor with two bare recursive
+fields is exactly as unapplicable as one with one — and the entry serves the
+never-`Prop` and maybe-`Prop` sorts on the same terms; a `Prop` of this shape
+is just an unprovable proposition, and entry 4 already covers it. The carrier
+is the empty type at exactly the declared sort, or — where a one-constructor
+owner is asked for projections — a storage chain over the non-recursive fields
+ending at that emptiness: uninhabited because of its tail, while genuinely
+storing everything in front of it. Auxiliaries: none.
+
+**4. The Church encoding.** The fallback for every proposition and every
+maybe-`Prop` shape no other entry takes — which is why neither of those two
+sorts has an unreached shape. A declaration is modelled by what can be
+concluded from it: the carrier for `Or a b` is
+`∀ C : Prop, (a → C) → (b → C) → C`. This is the impredicative encoding from
+the universe note above; at a maybe-`Prop` sort it is wrapped in the derived
+lift. Indices and recursion are carried — the fold becomes a strong
+induction — so `And`, `Exists`, `Iff`, `False` and nearly every proposition in
+a real export land here, as does `Nonempty` (which entry 6 relies on) and
+`PEmpty`, a maybe-`Prop` declaration with no constructors. A Church carrier
+remembers *that* a value was built, not what was in it. That is fine for
+propositions, which are never asked to hand data back — and it is exactly why
+the maybe-`Prop` storage shapes are entry 1's instead. Auxiliaries: none.
+
+**5. The indexed subsingleton** (arm F). The shape: one constructor, no
+recursion, indexed, at a `Prop` or maybe-`Prop` sort, holding the kernel's
+large eliminator — which, for a proposition, exists exactly when every
+constructor field is either a proof or a piece of data that is literally one
+of the conclusion's index arguments. `HEq`, heterogeneous equality, is the
+well-known occupant: its constructor `refl` has no fields at all, and its
+model's carrier is exactly one packed equation saying the caller's indices are
+the constructor's.
+
+A proposition can hand back its proof fields, but it has no way whatever to
+hand back data; the index vector is the only place data can come back from,
+and the kernel's rule above is what guarantees it is there. So the model's
+carrier is one packed equation over the index positions that are *not*
+constructor fields, and at each position that is one — a *pivot*, as in
+mathlib's `CategoryTheory.Functor.IsHomLift` — the recursor recovers the field
+by substituting its own index argument. The entry recovers data and cannot
+store it — which is also its boundary with entry 1's indexed
+case at a maybe-`Prop` sort: a data field the conclusion's indices carry comes
+back by substitution here, and one they do not carry has to be stored there.
+Auxiliaries: none — the packed equation is the basis's own `Eq`.
+
+**6. Recursion by its graph** (arm G). The shape: one constructor, recursive,
+a literal `Prop`, holding the kernel-granted large eliminator. `Acc` — the
+accessibility predicate under every well-founded recursion — is the occupant
+and the reason the entry exists: `Acc` sat in the basis precisely for that
+eliminator, and this entry derives it instead, so `Acc` models like any other
+declaration. The carrier is entry 4's Church encoding; the recursor is defined
+by its *graph* — the relation "eliminating this proof yields this value" — and
+the value is extracted from an existence proof with `Classical.choice`, so the
+ι rule is a theorem rather than `rfl`. The entry pays `Classical.choice`, plus
+function extensionality — derived from `Quot.sound` and spliced as a theorem —
+when a recursive field sits under a binder, as `Acc`'s does. It fires only at
+a literal `Prop`: at a maybe-`Prop` sort the kernel grants no large
+eliminator, so the restriction is the kernel's and not a choice. Auxiliaries:
+no new inductives; `Nonempty`, the domain of `Classical.choice`, models by
+entry 4.
+
+**7. The tagged W construction** (arm W). The shape: non-indexed, recursive,
+never-`Prop`, with recursion that *branches* — some constructor has two or
+more recursive fields, or one under a binder. `Lean.Expr` is the household
+example (`Expr.app : Expr → Expr → Expr` — two recursive fields), and
+`Lean.ParserDescr` another. Entry 2 cannot express these — its spine is one
+`Nat`, and a step constructor takes exactly one predecessor — so the model is
+a tagged well-founded tree instead. The two entries are split by **cost, not
+reach**: entry 2 costs no axiom and every one of its ι rules is `Eq.refl`,
+while this entry splices a whole support fragment, proves its ι rules as
+theorems, and its models admit `propext` and `Quot.sound` (for some shapes
+also `Classical.choice`).
+
+Auxiliaries: the `_wcore` fragment — a fixed, name-prefixed export of the
+W-type toolkit, nineteen inductive blocks (`List`, `Option`, `Sigma`,
+`Subtype`, `Bool`, `Acc`, `WellFounded`, `Or`, `HEq`, …) with the definitions
+and proofs over them — spliced once into the output. Every inductive in it
+re-enters this list: the structures and linear types through entry 2, the
+propositions through entries 4 and 5, `Acc` through entry 6.
+
+**8. Indexed families, carved from their own erasure** (arm C). The shape: an
+indexed family at a never-`Prop` sort whose *index erasure* — the same
+declaration with its indices deleted — is well formed, which requires every
+recursive occurrence to be bare. The classic length-indexed vector is the
+picture:
+
+```lean
+inductive Vec (α : Type u) : Nat → Type u where
+  | nil  : Vec α 0
+  | cons : α → Vec α n → Vec α (n + 1)
+```
+
+Erase the index and `Vec α` becomes `List α`. The model splices that erasure
+into the output as a real inductive — the *skeleton* — and carves the family
+out of it: the carrier at index `ι` is a skeleton value paired with a proof
+that it is well formed at `ι`, with the right indices all the way down. The
+carve spends the skeleton's large eliminator twice, which is why the entry is
+never-`Prop`-only: a maybe-`Prop` skeleton has none to mint, and the same
+shape at a maybe-`Prop` sort is entry 1's indexed case, whose stepping stone
+is a definition rather than a spliced inductive.
+
+Auxiliaries: the skeleton, which re-enters this list and goes wherever its own
+shape sends it — `Vec`'s is linear and takes entry 2; a family whose skeleton
+branches sends it through entry 7, `_wcore` fragment and all. If the skeleton
+does not model, the island is withdrawn and the owner declines: the closure
+rule above, doing its work.
+
+**9. Plain mutual blocks.** The shape: a `mutual` block with no nesting.
+
+```lean
+mutual
+  inductive Even : Type where
+    | zero : Even
+    | succ : Odd → Even
+  inductive Odd : Type where
+    | succ : Even → Odd
+end
+```
+
+The model removes the mutuality: one *tag* enumeration with one constructor
+per member, carrying that member's index values as fields; one auxiliary
+inductive family indexed by the tag; and one carrier per member — `Even`
+becomes the auxiliary family at the `Even` tag. Constructors, recursors and
+ι rules are all read through that encoding, and every ι rule is `Eq.refl`.
+
+Auxiliaries: the tag and the auxiliary family, two new inductives. The tag is
+a plain sum and takes entry 2; the auxiliary family is indexed and takes
+entry 8 for a `Type`-valued block, or entry 4 for a `Prop`-valued one.
+
+**10. Nested declarations.** The shape: a block the exporter marked nested —
+the recursion passes through another inductive. `Lean.Syntax` is the everyday
+example: `Syntax.node : SourceInfo → SyntaxNodeKind → Array Syntax → Syntax`
+recurses through `Array`. The model specialises the nesting away: a mutual
+block with one extra member per nested occurrence — a copy of the container
+at the declaration, `Array`-of-`Syntax` as an inductive of its own — plus a
+`pack`/`unpack` pair per copy with both round trips proved as theorems, and
+one recursor and ι rule per member. Nesting two containers deep costs two
+copies. It removes the nesting and keeps the mutuality.
+
+Auxiliaries: that specialised mutual block, modelled by entry 9 — whose tag
+and auxiliary family then continue down the list, through entries 8 and 2, an
+entry-8 skeleton through entry 7 where it branches, and entry 7's fragment
+through entries 2, 4, 5 and 6. That chain — 10, 9, 8, 7, down to the basis —
+is the longest descent in the list, and the closure rule is what guarantees
+it arrives.
+
+Above the ten entries sit two **presentation adapters**. They change what the
+public interface looks like, never how a shape is represented, and both exist
+so that the intrinsic projections select literally. A one-constructor indexed
+family on entry 8's route is published as an indexed fibre over that entry's
+own family; its `roll`/`unroll` are the identity, so the certificate costs
+aliases and no transport. A plain mutual block whose members are unindexed and
+never-`Prop` is published as one simultaneous family in which each selected
 member exposes a constructor layer over the tag/aux encoding.
 
 There is no adapter for a one-constructor recursive *unindexed* owner. One was
-built and withdrawn: the simple construction already publishes that owner's
-carrier, constructor, recursor, ι rule and intrinsic projections at the exact
-source syntax and with literal projection ι rules, so a private fixpoint with a
-rolled layer over it bought nothing and cost one `Eq.rec` transport per
-recursive field in every ι rule it published.
+built and withdrawn: entries 2 and 7 already publish such an owner's carrier,
+constructor, recursor, ι rules and intrinsic projections at the exact source
+syntax, with literal projection ι rules — so a private fixpoint with a rolled
+layer over it bought nothing, and cost one `Eq.rec` transport per recursive
+field in every ι rule it published.
 
 ### What is covered, and what is not
 
