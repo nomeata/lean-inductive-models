@@ -397,7 +397,20 @@ eliminates exactly one field equation and nothing accumulates: the path is
 supplied only at the end, as the major's own `unroll_roll`.
 
 There is no arity anywhere in this: `n = 0`, `1`, `2` and `n > 2` are the same
-loop, and the caller passes the field data as arrays. -/
+loop, and the caller passes the field data as arrays.
+
+**No caller can reach a step that does not collapse.**  The plain mutual
+adapter is the only route that reaches this construction, and it installs each
+member's `unroll_roll` as a declaration of type `unroll (roll value) = value`
+whose value is the private family's ι rule — an `Eq.refl`, always, by that
+family's own design.  A member whose round trip is only propositional therefore
+publishes a certificate its kernel gate rejects, so every `roundTrips` entry and
+the `roundTripMajor` handed in below prove equations between definitionally
+equal endpoints, and proof irrelevance identifies them all with `Eq.refl`.
+Measured over the whole corpus: every ι rule published through here is accepted
+with `Eq.refl` in place of this entire construction — chain, bridge and all.
+The arity is untested because it is unreachable, not because a fixture is
+missing; see `test/fixtures/inductive-models/mutual_one_layer_boundary.lean`. -/
 def oneLayerNaryCompatibility (eqi : EqInfo) (carrierLevel motiveLevel : Level)
     (publicCarrier publicMotive unrolledMajor agreement : Expr)
     (coreAtPrivate coreIota roundTripMajor : Expr)
