@@ -275,6 +275,135 @@ def shapeCtors (tname : Name) (np : Nat) (cs : Array (Name × Expr)) :
     Array (Name × Expr) :=
   cs.map fun (cn, cty) => (cn, shapeCtorTy tname np cty)
 
+/-! ### The mention that only δ discards
+
+[`InductiveModels.shapeFieldDomain`] answers "does this field carry a
+recursive occurrence" with β and ζ, which is every reduction that can be
+performed without an environment. A field can also mention the owner in a
+position that only **unfolding a definition** discards: `idf (T → Type) (fun _
+=> N) child`, with `idf` the identity, is a domain whose reduct is `N` and
+whose owner mention is as dead as `(fun _ : T => N) k`'s. `T` occurs in it, and
+after full reduction it does not occur anywhere.
+
+**A field is recursive exactly when an owner occurrence survives full
+reduction**, and the three functions below decide it that way — not by naming a
+constant, and not by pattern-matching a shape.
+
+Two facts make the walk cheap and make it sound.
+
+*Cheap*: a subterm with no syntactic mention of the owner cannot acquire one by
+reducing, because **no constant in the environment can mention `T`**. Every
+constant a constructor field's type names was declared before `T` was, and `T`
+is what is being declared. So reduction only ever *removes* mentions, the
+syntactic test is an exact over-approximation, and the walk skips every subterm
+the cheap test clears — which, in a declaration with no dead mention at all, is
+the whole of it at the first question asked.
+
+*Sound as a reduction*: the reduct and the written domain are definitionally
+equal, exactly as the βζ case is. δ is not weaker for the kernel than β is; it
+is only unavailable to a pure function. Nothing here reaches the output —
+[`InductiveModels.PrimSite.sourceCtors`] keeps the export byte for byte and is
+what every emitted statement is spelled from. -/
+
+/-- **Reduction at the kernel's transparency.** The question being asked is the
+kernel's — its positivity check is what decided this field is not recursive —
+and the kernel unfolds every definition it is given. `Meta.whnf` at its default
+setting does not: it stops at `@[irreducible]`, and at a theorem. Reading the
+declaration less strongly than the kernel wrote it would put this analysis back
+in the business of refusing a shape Lean accepts, so it reads at `.all`.
+
+`@[irreducible] def idf` in front of a dead mention is the shape at issue, and
+Lean does mint a recursor with no induction hypothesis for that field. It does
+not reach here as one: an attribute lives in an environment extension and an
+export carries kernel data, so an exported definition always arrives
+semireducible. This is the transparency that stays right if that ever changes,
+and it is what makes the reduction the same reduction the kernel performed. -/
+def whnfKernel (e : Expr) : GenM Expr := withTransparency .all (whnf e)
+
+/-- The expression with every **δ-dead** owner mention discarded, and every
+surviving one left where it stands.
+
+The walk is the reduction restricted to the subterms that mention the owner:
+head-normalise, and if the mention is gone keep the reduct; otherwise descend
+into the parts that still mention it and ask again. A subterm the syntactic
+test clears is returned untouched and never reduced.
+
+The result may still mention the owner — that is the case where the mention is
+live, and [`InductiveModels.deltaFieldDomain`] discards the whole reduct
+there rather than hand back a churned expression. -/
+partial def deltaDeadReduct (tname : Name) (e : Expr) : GenM Expr := do
+  unless mentionsAny #[tname] e do return e
+  let e ← whnfKernel e
+  unless mentionsAny #[tname] e do return e
+  match e with
+  | .app .. =>
+    let f ← deltaDeadReduct tname e.getAppFn
+    let as ← e.getAppArgs.mapM (deltaDeadReduct tname)
+    return mkAppN f as
+  | .forallE x d b bi =>
+    let d ← deltaDeadReduct tname d
+    withLocalDecl x bi d fun z => do
+      mkForallFVars #[z] (← deltaDeadReduct tname (b.instantiate1 z))
+  | .lam x d b bi =>
+    let d ← deltaDeadReduct tname d
+    withLocalDecl x bi d fun z => do
+      mkLambdaFVars #[z] (← deltaDeadReduct tname (b.instantiate1 z))
+  | .mdata _ b => deltaDeadReduct tname b
+  | .proj s i b => return .proj s i (← deltaDeadReduct tname b)
+  | _ => return e
+
+/-- **A field domain with a δ-dead owner mention discarded, and nothing else
+touched** — [`InductiveModels.shapeFieldDomain`] one reduction further on, and
+all-or-nothing for the same reason: a domain whose occurrence survives is
+returned **byte for byte**, so a declaration with no dead mention gets the
+identical expression back and takes the path it took before.
+
+The domain must be closed in the current local context; a raw constructor
+`Π`-nest names the parameters and the earlier fields as loose bound variables,
+and `whnf` answers those with a panic rather than a verdict. -/
+def deltaFieldDomain (tname : Name) (dom : Expr) : GenM Expr := do
+  unless mentionsAny #[tname] dom do return dom
+  let reduced ← deltaDeadReduct tname dom
+  return if mentionsAny #[tname] reduced then dom else reduced
+
+/-- One constructor type with every δ-dead owner mention discarded from a
+**field** domain, its `np` parameter binders and its conclusion untouched —
+[`InductiveModels.shapeCtorTy`] at the reduction a pure function cannot do.
+
+The telescope is *opened* so that each domain is closed and can be reduced, and
+the answers are then written back into the raw `Π`-nest by de Bruijn surgery:
+at field position `i` the abstraction array is the parameters followed by the
+earlier fields, which is the nest's own index order. A constructor with nothing
+to discard is returned unchanged, the same object it arrived as. -/
+def deltaCtorTy (tname : Name) (np : Nat) (cty : Expr) : GenM Expr := do
+  let replacements ← withTeleFVars np cty fun ps rest => do
+    if ps.size < np then return (#[] : Array (Nat × Expr))
+    withTeleFVars (numForalls rest) rest fun fs _ => do
+      let mut replacements : Array (Nat × Expr) := #[]
+      for i in [0:fs.size] do
+        let dom ← ityp fs[i]!
+        let reduced ← deltaFieldDomain tname dom
+        unless reduced == dom do
+          replacements := replacements.push (i, reduced.abstract (ps ++ fs.extract 0 i))
+      return replacements
+  if replacements.isEmpty then return cty
+  let table : Std.HashMap Nat Expr := replacements.foldl (fun m (i, d) => m.insert i d) {}
+  let rec fields (i : Nat) (t : Expr) : Expr :=
+    match t with
+    | .forallE x dom b bi => .forallE x (table.getD i dom) (fields (i + 1) b) bi
+    | _ => t
+  let rec params (k : Nat) (t : Expr) : Expr :=
+    if k == np then fields 0 t else
+    match t with
+    | .forallE x dom b bi => .forallE x dom (params (k + 1) b) bi
+    | _ => t
+  return params 0 cty
+
+/-- [`InductiveModels.deltaCtorTy`] at a whole constructor array, names kept. -/
+def deltaCtors (tname : Name) (np : Nat) (cs : Array (Name × Expr)) :
+    GenM (Array (Name × Expr)) :=
+  cs.mapM fun (cn, cty) => return (cn, ← deltaCtorTy tname np cty)
+
 /-- Explain why the index erasure cannot replace every recursive occurrence
 by its bare skeleton owner.  This walk is monadic solely because a transparent
 former around the owner must be recognized by definitional reduction; its
@@ -317,29 +446,6 @@ application of {tname}"
         return none
     if why.isSome then return why
   return none
-
-/-- **How many of one constructor's fields this analysis reads as a recursive
-occurrence it could replace**: `∀ z⃗, T p⃗ e⃗` after βζ head normalization, which
-is exactly what [`InductiveModels.erasureBareFailure?`] refuses a field for not
-being.
-
-The two walks ask the same question of the same domains and differ only in what
-they do with the answer — that one reports the first field it cannot read, this
-one counts the fields it can. The count exists because the exported recursor
-states the same number from the other side: its minor premise for `C_j` binds
-one induction hypothesis per recursive field, so the two numbers must agree
-before a model of that recursor can be built at all. -/
-def bareRecFieldCount (tname : Name) (np ni : Nat) (cty : Expr) : GenM Nat := do
-  withTeleFVars np cty fun _ rest =>
-    withTeleFVars (numForalls rest) rest fun fields _ => do
-      let mut n := 0
-      for field in fields do
-        let dom := erasureFieldDomain tname (← ityp field)
-        unless mentionsAny #[tname] dom do continue
-        let bare ← withTeleFVars (numForalls dom) dom fun _ core => do
-          return (← ownerAppArgs? tname np ni core).isSome
-        if bare then n := n + 1
-      return n
 
 /-- Which field of a constructor is the recursive one, if any. Declines the
 shapes the tower cannot express, each by name. -/

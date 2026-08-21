@@ -258,9 +258,10 @@ nothing; and arm W applies the W core's propositional ι theorem.
   what Lean's nested specialisation leaves at a container's family parameter —
   is the bare occurrence it reduces to and not a binder; the same head
   normalization is required at layer 1. A field whose type mentions `T`
-  **only inside a binder βζ discards** is not recursive at all; arm C uses the
-  reduct for that internal skeleton field while preserving the public
-  constructor type literally.
+  **only where reduction discards it** is not recursive at all — including
+  where δ is what discards it, as in `idf (T → Type) (fun _ => N) child`, whose
+  reduct is `N`; the internal skeleton field is the reduct while the public
+  constructor type stays literal.
   An indexed family whose erasure is bare is no longer a refusal, **however
   many recursive fields its constructors have**: it is **arm C**
   ([`InductiveModels.primIso`]'s `armC`), a skeleton-plus-`good` construction standing

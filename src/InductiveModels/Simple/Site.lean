@@ -185,10 +185,12 @@ def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (me
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
     (sourceRecursor? : Option ERec := none) : GenM (PrimSite × PrimOut) := do
   let us := lparams.map Level.param
-  -- **βζ-dead owner mentions leave the telescope here, and nowhere else.**
+  -- **Dead owner mentions leave the telescope here, and nowhere else.**
   --
   -- A field written `(fun _ : T => N) k` or `let _u := T; N` mentions the owner
-  -- and reduces to a domain that does not. Every recursion question below —
+  -- and reduces to a domain that does not. So does one written
+  -- `idf (T → Type) (fun _ => N) child`, one reduction further on — see the δ
+  -- pass below. Every recursion question below —
   -- `analysePrim`'s `isRec`, [`InductiveModels.wShapeOf`]'s two towers,
   -- [`InductiveModels.labelFactored`], [`InductiveModels.tagFactored`],
   -- [`InductiveModels.eraseCtorTy`], [`InductiveModels.classifyCtor`],
@@ -200,11 +202,20 @@ def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (me
   --
   -- **This is an analysis-only reduct.** `sourceCtors` keeps the export byte
   -- for byte and is what every emitted constructor, ι rule and recursor
-  -- statement is spelled from; the two are βζ-equal, so the carrier planned
-  -- from the reduced array is a carrier the written statement typechecks
-  -- against, with no unfolding and no transport.
+  -- statement is spelled from; the two are definitionally equal, so the carrier
+  -- planned from the reduced array is a carrier the written statement
+  -- typechecks against, with no transport and no proof — the kernel's own
+  -- conversion reconciles the two while it checks the declaration.
+  --
+  -- **Two passes, because β and ζ are all a pure function can do.**
+  -- `shapeCtors` is the reduction available without an environment;
+  -- [`InductiveModels.deltaCtors`] is the same question asked of the fields it
+  -- leaves a mention in, at the kernel's transparency, with the telescope
+  -- opened so that a domain can be reduced at all. Between them, a field
+  -- domain of `exportCtors` mentions the owner exactly when an occurrence
+  -- survives full reduction, which is exactly when the field is recursive.
   let sourceCtors := exportCtors
-  let exportCtors := shapeCtors tname np exportCtors
+  let exportCtors ← deltaCtors tname np (shapeCtors tname np exportCtors)
   -- **Where the model is built and where it is emitted can differ.** `root` is
   -- the former and `tname` the latter; they are the same name for every
   -- declaration but the handful whose model name is lost to a normalized-name
@@ -309,7 +320,7 @@ def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (me
     while t matches .forallE .. do
       let .forallE _ dom b _ := t | unreachable!
       if mentionsAny #[tname] dom && !erasureRecursive tname dom then
-        badShape s!"{cn} still carries a βζ-dead mention of {tname} in a field domain \
+        badShape s!"{cn} still carries a dead mention of {tname} in a field domain \
 after normalisation"
       t := b
   let analysis ← analysePrim tname lparams np memberTy exportCtors
@@ -822,7 +833,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --
   --   **Its refusal class is empty, and `erasureBare` is what makes the
   --   argument short.** By the time this line runs, `analysePrim` has already
-  --   declined `.outOfScope` unless every recursive field domain is
+  --   failed unless every recursive field domain is
   --   `∀ z⃗, T p⃗ e⃗` with **no binder type `z` mentioning `T`** — that is
   --   exactly [`InductiveModels.erasureBareFailure?`]'s two refusals. So a
   --   binder inside a recursive field's telescope can name an earlier
@@ -850,9 +861,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --   occurrence, while the identical redex as a whole field domain is
   --   `whnf`-ed first and is accepted, which is `nonindexed_vanishing`'s shape.
   --   And an export that spelled it anyway would not get here: it is
-  --   `erasureBareFailure?`'s "binder mention" and is declined `.outOfScope`
+  --   `erasureBareFailure?`'s "binder mention", which `analysePrim` fails on
   --   two hundred lines earlier. `VanishingErasureTest` asserts both spellings
-  --   against the kernel's own message and against that decline.
+  --   against the kernel's own message.
   --
   --   So the guard becomes the invariant [`InductiveModels.wRecDom`] needs:
   --   that builder substitutes only *non-recursive* fields, and a recursive

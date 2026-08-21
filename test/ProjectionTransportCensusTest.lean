@@ -235,11 +235,8 @@ as the fixture it happened in.  The zeros are pinned for the same reason as
 the positive counts — `arm_f_guards`, `arm_f_zip`, `default_ctor_iota`,
 `maybe_zero_indexed`, `maybe_zero_recursive` and `nonindexed_vanishing` model
 no eligible one-constructor record, and a route that starts giving one of them
-a projection has to be looked at rather than absorbed.  `prim_shape_declines`
-is a zero of the other kind: its four declining owners are exactly the shapes
-that reach no arm, and its only model is a two-constructor enumeration, so a
-projection appearing there would mean one of the four had started modelling.
-`maybe_zero_pad` is the complement and is 16: every one of its ten owners but
+a projection has to be looked at rather than absorbed.  `maybe_zero_pad` is the
+complement and is 16: every one of its ten owners but
 the two-constructor `Nt` is a projection-eligible one-constructor record, and
 the count is their fields — one each for `IdOne`, `PropOne`, `PadOne` and
 `PadIdx`, two each for `PadNone`, `PadMany`, `PadMix`, `PadDep` and `PadIdx2`
@@ -254,7 +251,7 @@ would drop them out of this row rather than merely change a carrier.
 `maybe_zero_projection` (10, was 8) and `tight_psigma_prime` (6, was 4) carry
 the same two for the same reason.
 
-**And sixty-three rows carry them now**, because the never-zero chain reaches a
+**And sixty-five rows carry them now**, because the never-zero chain reaches a
 constant rung as well: any export with a `Type`-sorted owner whose stored chain
 has a rung no later field's type mentions splices the pair and models it, and
 the pair's own two fields are then projection-eligible on the same terms every
@@ -269,6 +266,23 @@ by the lift of `⊥`, so the `_wcore` fragment is not spliced there at all and
 the eleven projection iotas its own records carried are gone with it. The
 fixture's public interfaces are unchanged; what left is a fragment it no longer
 needs.
+
+`prim_shape_declines` is 2 and was 0, and both are the spliced pair's.  Its two
+remaining declining owners reach no arm and its three models are a
+two-constructor enumeration and the two owners whose only mention of themselves
+is dead — `Foreign` and `Foreign0`, also two constructors each — so no
+intrinsic projection is asked of any of them.  What moved the row off zero is
+that `Foreign` now models at all: its index erasure has a constant rung, which
+splices the pair.
+
+`delta_dead_mention` is 8: the pair's two plus two each for `Plain`, `ProjDead`
+and `ProjDeadDep`, the three one-constructor records the fixture exists for.
+`ProjDeadDep`'s second is the row's whole point — its codomain is
+`idf (T._model → Type) (fun _ => N) (T._model.proj_0 self)`, a field type that
+names an earlier projection under a former reducing it away, stated literally
+and transported not at all.  A route that stored either owner's dead-mention
+field at its `N` reduct would still emit two projections here and would emit
+them at the wrong type, which is what the literal comparison catches.
 
 `dead_owner_mention` is 13: the eleven the spliced `_wcore` fragment always
 carries plus `DeadStruct`'s two.  `DeadStruct` is the fixture's owner whose
@@ -297,6 +311,7 @@ selecting it. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 23),
     ("dead_owner_mention", 15), ("decline_no_eq", 13), ("default_ctor_iota", 2),
+    ("delta_dead_mention", 8),
     ("degenerate_graph", 1),
     ("dependent_fields", 13), ("e_dependent_field", 20), ("empty_no_base", 18),
     ("filtered/nat_char_equations", 5),
@@ -322,7 +337,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("nonindexed_vanishing", 2), ("poly_nested", 15), ("prim_carve", 19),
     ("prim_declines", 18), ("prim_graph", 8), ("prim_graph_pre", 4), ("prim_idx", 19),
     ("prim_late_basis", 16), ("prim_late_eq", 1),
-    ("prim_prop_skipped_field", 4), ("prim_shape_declines", 0),
+    ("prim_prop_skipped_field", 4), ("prim_shape_declines", 2),
     ("prim_shapes", 24), ("prim_w", 48),
     ("private_constructor", 3), ("prop_projection_boundaries", 12),
     ("prop_recursive_projections", 3), ("recursor_field_domain", 2),

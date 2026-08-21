@@ -12,28 +12,6 @@ open Lean Meta
 
 namespace InductiveModels
 
-/-- **How many induction hypotheses the exported recursor's `j`-th minor
-premise binds**, given that constructor's field count.
-
-The minor premise for `C_j` is `∀ x⃗ ih⃗, M ι⃗_j (C_j p⃗ x⃗)`: one binder per
-field, then one per *recursive* field. Its binder count less the field count is
-therefore the export's own statement of how many of `C_j`'s fields carry a
-recursive occurrence — read off the recursor's type, with nothing reduced and
-no shape decided here.
-
-`0` where the type is shorter than the walk expects; [`InductiveModels.analysePrim`]
-has already refused a recursor whose motive, minor and index counts are not the
-declaration's. -/
-def minorIHCount (rv : RecursorVal) (j nf : Nat) : Nat := Id.run do
-  let mut t := rv.type
-  for _ in [0:rv.numParams + rv.numMotives + j] do
-    match t with
-    | .forallE _ _ b _ => t := b
-    | _ => return 0
-  match t with
-  | .forallE _ dom _ _ => return numForalls dom - nf
-  | _ => return 0
-
 /-- The declaration facts shared by all primitive-model routes.  Keeping this
 phase separate from emission gives the route dispatcher plain data rather than
 closures over the declaration telescope. -/
@@ -149,73 +127,43 @@ def analysePrim (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr
   let erasureBare : Bool := erasureBareWhy.isNone
   let erasureLinear : Bool := erasureWhy.isNone
 
-  -- **A recursive occurrence this construction cannot replace, decided once
-  -- and for every route.**
+  -- **Every occurrence a valid declaration carries is one an arm can replace,
+  -- and this is where that is asserted.**
   --
   -- Every arm below represents a recursive field by *replacing* its occurrence:
   -- the tuple tower with a spine predecessor, arm C with its index erasure, arm
   -- W with a branch of `B'`, the Church routes with the encoding's own `C`. All
-  -- four need the occurrence to be `∀ z⃗, T p⃗ e⃗` after βζ head normalization,
-  -- which is exactly what [`InductiveModels.erasureBareFailure?`] answers, so a
-  -- field that mentions `T` any other way reaches no arm on any route.
+  -- four need the occurrence to be `∀ z⃗, T p⃗ e⃗`, which is exactly what
+  -- [`InductiveModels.erasureBareFailure?`] answers of the *normalised*
+  -- telescope [`InductiveModels.mkPrimSite`] hands this analysis.
   --
-  -- That is **`README`'s routing boundary and not a missing case**: an
-  -- occurrence remaining under a foreign type former is nesting, and nesting is
-  -- layer 1's business — `Driver` sends a block Lean marked nested to
-  -- `Plan.plan` and never here. A binder type naming the declaration is the
-  -- other half: an internal erasure or spine keeps binder types verbatim, so
-  -- retyping the field it names would leave the binder pointing at the wrong
-  -- carrier. Neither is a gap in an arm.
+  -- **This used to be a decline, and its class is empty.** It read as a
+  -- routing boundary: a field mentioning `T` under a foreign type former is
+  -- nesting, and nesting is layer 1's business. But a mention is only a
+  -- boundary if it *survives reduction*, and after the δ pass a domain here
+  -- mentions `T` exactly when an occurrence does. Lean leaves no such
+  -- declaration for this site to catch:
   --
-  -- This used to be raised as an internal tool error, and only on the indexed
-  -- never-zero route. It aborted the whole stream at an owner the contract says
-  -- should pass through unchanged and be reported.
+  -- * an occurrence surviving reduction under a foreign former is what the
+  --   kernel's positivity check rejects outright — `opaque F : Type → Type`
+  --   with a field `F T` is "a non valid occurrence of the datatypes being
+  --   declared", and no export of it exists;
+  -- * an occurrence under an *inductive* former is nesting, which Lean
+  --   compiles away into an auxiliary block and reports as `numNested > 0`;
+  --   `Driver` sends those to `Plan.plan` and never here;
+  -- * a binder type naming the declaration is rejected the same way, whatever
+  --   hides it: the kernel tests that domain syntactically, before reducing it.
+  --
+  -- So what is left is an input asserting `numNested = 0` of a declaration the
+  -- kernel would not accept — a lie about the export's own metadata, which is
+  -- `--type-check-input`'s business and not a shape this tool declines. A hard
+  -- failure, therefore, rather than a decline: a decline would report a
+  -- boundary the construction is not standing on.
   if let some why := erasureBareWhy then
-    -- **The boundary is claimed only where the export itself agrees there is
-    -- nothing recursive here to miss.**
-    --
-    -- The decline below says the occurrence is *nesting*. That is a statement
-    -- about the declaration, and the declaration answers it: the exported
-    -- recursor's minor premise for `C_j` binds one induction hypothesis per
-    -- recursive field, so the export says how many of `C_j`'s fields carry an
-    -- occurrence the elaborator's own reduction found. Where that number is the
-    -- number this analysis reads, the fields it cannot read are ones the
-    -- kernel does not treat as recursive either — a mention that δ discards,
-    -- which is what `prim_shape_declines.lean`'s `Foreign` is — and the
-    -- boundary is a boundary.
-    --
-    -- Where it is larger, the two disagree about the declaration's own shape:
-    -- the export asserts a recursive occurrence at a field whose domain this
-    -- analysis does not reduce to the owner. There is then no model of *that*
-    -- recursor for any arm to build — every arm represents a recursive field
-    -- by replacing an occurrence it can find — and "declined" would report a
-    -- boundary the tool is not standing on. So it fails instead, and says
-    -- which constructor and which two numbers.
-    --
-    -- This is asked here and nowhere else on purpose. A disagreement can only
-    -- hide behind a decline: wherever a model *is* built, `R._model` carries
-    -- the exported recursor's type verbatim and is kernel-checked as it is
-    -- produced, so a construction that read the wrong fields as recursive is
-    -- refused there already.
-    for j in [0:nc] do
-      let (cn, cty) := exportCtors[j]!
-      let nf := numForalls cty - np
-      let asserted := minorIHCount rv j nf
-      let seen ← bareRecFieldCount tname np ni cty
-      unless asserted == seen do
-        badShape s!"{ern}'s minor premise for {cn} binds an induction hypothesis for \
-{asserted} of its fields and this analysis reads {seen} of them as recursive, so the \
-export asserts a recursive occurrence at a field whose domain does not reduce to \
-{tname} here and no model of {ern} can be built ({why})"
-    declineWith (.shapeUnsupported tname .outOfScope
-      s!"a field mentions {tname} other than as `∀ z⃗, {tname} p⃗ e⃗` after βζ head \
-normalization, and every arm of every route represents a recursive field by replacing \
-exactly that occurrence ({why}); route: \
-{match route with | .type => "never-zero" | .prop => "Prop" | .bare => "maybe-zero"}\
-; indices: {ni}; erasure linear: {if erasureLinear then "yes" else "no"}\
-; B factors through the tag: {if tagFactored tname np exportCtors then "yes" else "no"}\
-; through the label: {if labelFactored tname np exportCtors then "yes" else "no"}\
-; carrier is Type u: {if w.normalize.dec.isSome then "yes" else "no"}")
+    badShape s!"a field of {tname} mentions it other than as `∀ z⃗, {tname} p⃗ e⃗` after \
+full head normalisation ({why}), so an occurrence of {tname} survives reduction in a \
+position the kernel's positivity check refuses and the input's numNested = 0 does not \
+describe the declaration it is attached to; run with --type-check-input"
 
   return {
     declaredMemberTy, memberTy, ni, w, isRec, rv, large, v, recLs,

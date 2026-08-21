@@ -552,33 +552,55 @@ def expectedPrim : List Row :=
        ("PadMany", 9), ("PadIdx", 6)],
       [("Eq", "prim model: a basis primitive")])
   -- **The shapes that still reach no arm**, and the claim of this row is the
-  -- *word in the parenthesis* rather than the count. Each of these four
+  -- *word in the parenthesis* rather than the count. Each of these owners
   -- aborted the run until the dispatcher classified them: an unsupported owner
-  -- is supposed to pass through unchanged and be reported, and the four
-  -- messages below are that report. `N` is the control that keeps a run which
-  -- declined everything from passing.
+  -- is supposed to pass through unchanged and be reported, and the messages
+  -- below are that report. `N` is the control that keeps a run which declined
+  -- everything from passing.
   --
-  -- **All four now say out of scope, and the second pair is the one that
-  -- moved.** `Foreign`/`Foreign0` always did — a recursive occurrence under a
-  -- foreign type former is nesting and belongs to layer 1. Where `PadOne` and
-  -- `PadMany` stood and said `incomplete`, `PadImax` and `PadImaxIdx` now say
-  -- `out of scope`: the pad closed the level gap those two named, and what
-  -- survives it is a field whose level retains an `imax`, which no pad can
-  -- reach at a maybe-zero sort in either direction — `max (imax u v) (max u v)`
-  -- is not `max u v` in normal form, and the recursive box that clears an
-  -- `imax` elsewhere costs a `max 1 ·` floor that is never `Prop`. Saying
-  -- `incomplete` there would name an arm nobody can finish, which is the
-  -- mirror image of the mistake this row exists to prevent;
-  -- `test/fixtures/inductive-models/prim_shape_declines.lean` is the argument
-  -- for each verdict.
+  -- **Two of them stopped being shapes at all.** `Foreign`/`Foreign0` used to
+  -- say `out of scope` — a recursive occurrence under a foreign type former is
+  -- nesting and belongs to layer 1 — and they carry no such occurrence: the
+  -- mention is dead and δ is what discards it, which the exported recursor
+  -- states from the other side by binding an induction hypothesis for `child`
+  -- and none for `tag`. A field is recursive exactly when an occurrence
+  -- survives full reduction, and both now model. So this row pins their
+  -- *counts* where it used to pin their refusal, and the site that refused
+  -- them is a hard failure with an empty class rather than a decline.
+  --
+  -- Where `PadOne` and `PadMany` stood and said `incomplete`, `PadImax` and
+  -- `PadImaxIdx` now say `out of scope`: the pad closed the level gap those
+  -- two named, and what survives it is a field whose level retains an `imax`,
+  -- which no pad can reach at a maybe-zero sort in either direction —
+  -- `max (imax u v) (max u v)` is not `max u v` in normal form, and the
+  -- recursive box that clears an `imax` elsewhere costs a `max 1 ·` floor that
+  -- is never `Prop`. Saying `incomplete` there would name an arm nobody can
+  -- finish, which is the mirror image of the mistake this row exists to
+  -- prevent; `test/fixtures/inductive-models/prim_shape_declines.lean` is the
+  -- argument for each verdict.
   , ("prim_shape_declines",
-      [("N", 15)],
+      [("N", 15), ("Foreign", 8), ("Foreign._model._impl.skel", 7), ("PProd'", 9),
+       ("Foreign0", 6)],
       [ ("Eq", "prim model: a basis primitive")
-      , ("Foreign", "prim model shape (out of scope): Foreign reaches no generation arm")
-      , ("Foreign0", "prim model shape (out of scope): Foreign0 reaches no generation arm")
       , ("PadImax", "prim model shape (out of scope): PadImax reaches no generation arm")
       , ("PadImaxIdx",
           "prim model shape (out of scope): PadImaxIdx reaches no generation arm")])
+  -- **The same dead mention at the shapes that project**, which
+  -- `prim_shape_declines` cannot ask because both of its owners have two
+  -- constructors. `ProjDead`'s dead mention names no field and `ProjDeadDep`'s
+  -- names the recursive one, so the second's projection has the codomain
+  -- `idf (T._model → Type) (fun _ => N) (T._model.proj_0 self)` — an earlier
+  -- projection under a former that reduces it away. Both project both fields
+  -- with literal ι rules.
+  --
+  -- `Plain` is the control and is the same owner with the mention spelled `N`.
+  -- Its count is larger by the η rule: Lean's exported `isRec` is syntactic and
+  -- says `true` of `ProjDead`, whose recursor binds no induction hypothesis, so
+  -- the structure route declines to claim η where this construction still
+  -- models the owner. Two questions, two answers, and the row pins both.
+  , ("delta_dead_mention",
+      [("N", 15), ("Plain", 10), ("PProd'", 9), ("ProjDead", 8), ("ProjDeadDep", 8)],
+      [("Eq", "prim model: a basis primitive")])
   -- **A proposition's projectable field behind a field the kernel skips.**
   -- `infer_proj` substitutes an earlier constructor field only where the rest
   -- of the telescope still names it, and asks for that field to be
@@ -1235,18 +1257,33 @@ def runOne (root : String) (a : TAcc) (r : Row)
     -- started carrying the wrong one, would leave the message untouched.
     a := check a
       (rep.shapeScopes.toList ==
-        [(`Foreign, InductiveModels.ShapeScope.outOfScope),
-         (`Foreign0, InductiveModels.ShapeScope.outOfScope),
-         (`PadImax, InductiveModels.ShapeScope.outOfScope),
+        [(`PadImax, InductiveModels.ShapeScope.outOfScope),
          (`PadImaxIdx, InductiveModels.ShapeScope.outOfScope)])
       s!"prim_shape_declines: the shape scopes are {repr rep.shapeScopes}"
     -- Every declined owner is still in the output, at its own record, with no
     -- model family in front of it: that is the contract an abort broke.
     let emittedNames := decls.flatMap (·.names.toArray)
     a := check a
-      ([`Foreign, `Foreign0, `PadImax, `PadImaxIdx].all fun owner =>
+      ([`PadImax, `PadImaxIdx].all fun owner =>
         emittedNames.contains owner && !emittedNames.contains (Naming.modelName owner))
       "prim_shape_declines: a declined owner did not pass through unchanged"
+    -- **The two owners that moved, pinned on the side they moved to.** Their
+    -- dead mention is gone from the shape telescope and from nothing else: the
+    -- emitted constructor is still the source syntax, so `tag`'s type in
+    -- `Foreign0.step._model` still names `idf`, and the kernel's conversion is
+    -- what reconciles it with the term. A model built from a reduced statement
+    -- would pass every other check in this suite and fail here.
+    a := check a
+      ([`Foreign, `Foreign0].all fun owner =>
+        emittedNames.contains (Naming.modelName owner) &&
+          !rep.declined.any (·.1 == owner))
+      "prim_shape_declines: the δ-dead owner mention did not model"
+    a := check a
+      (decls.any fun declaration => match declaration with
+        | .defn n _ ty _ _ _ _ =>
+          n == Naming.modelName `Foreign0.step && InductiveModels.mentions `idf ty
+        | _ => false)
+      "prim_shape_declines: Foreign0.step._model was not stated at the source field type"
   if name == "prim_prop_skipped_field" then
     -- **The hole, by name rather than by count.** Six declarations would also
     -- be six if the generator had projected field 0 and skipped field 1, and
