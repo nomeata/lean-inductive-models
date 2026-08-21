@@ -383,19 +383,20 @@ finishes with exit code `2` instead of `0`. A decline is not a failure —
 every other declaration in the export is still modelled and checked — it is
 the run saying, precisely, that this one declaration gets no model.
 
-Declines are rare and specific. Run over this repository's entire fixture
-corpus, the tool declines exactly five declarations as unsupported, in two
-fixture files, and they fall into the three situations below; each is shown
-here shrunk to a minimal declaration that still declines. Two further
-behaviours are not declines but are still user-visible, and close the list.
+Run over this repository's entire fixture corpus, the tool declines exactly
+five declarations as unsupported, in two fixture files, and they fall into
+the two situations below; each is shown here shrunk to a minimal declaration
+that still declines. That is a count of what this corpus contains, not a
+bound on what other inputs may hit. Two further behaviours are not declines
+but are still user-visible: one shares its cause with the second situation
+and is described inside that entry, the other closes the list.
 
 | What you can hit | What the run does |
 | --- | --- |
 | a constructor field that mentions the type other than by applying it | declines that declaration |
 | a field whose universe level has an `imax` the declared universe only bounds | declines that declaration |
-| a field whose type names an earlier field, behind the same `imax` wall | declines that declaration |
-| a `Prop`-valued structure-like carrying data fields | models it, but silently omits some or all projections |
 | a universe equality Lean's kernel cannot check | models it, and reports every such use |
+| a `Prop`-valued structure-like carrying data fields | models it, but silently omits some or all projections |
 
 #### Declined: a mention of the type that is not an application of it
 
@@ -421,7 +422,20 @@ declaration, naming the constructor that carries it. `Foreign` and
 [`test/fixtures/inductive-models/prim_shape_declines.lean`](test/fixtures/inductive-models/prim_shape_declines.lean)
 are the corpus's two instances.
 
-#### Declined: a universe level that fits but is not equal
+#### Declined or reported: types whose models need a better level comparison than the kernel has
+
+Everything in this entry — two shapes that decline, and one reported
+behaviour — is a single fact met three times: Lean's kernel compares
+universe levels by normal form alone, and that comparison is incomplete.
+When Lean admits an `inductive`, it can check that a field's level fits
+*under* the declared universe with an ordering test. A model has no ordering
+test to appeal to: it is built from ordinary definitions, the universe of a
+definition is computed from the levels of what it stores, and the result has
+to be definitionally *equal* to the declared level. Two levels can be equal
+at every instantiation while their normal forms differ — and then the kernel
+cannot see it, and the model cannot exist.
+
+**The wall itself.**
 
 ```lean
 universe u v
@@ -432,28 +446,27 @@ inductive Fun (α : Sort u) (β : Sort v) : Sort (max u v) where
 
 The field `α → β` lives at `Sort (imax u v)` — `imax`, because a function
 into a proposition is itself a proposition. Lean's kernel admits the
-declaration through an ordering test: `imax u v ≤ max u v` holds at every
-instantiation, so the field fits under the declared universe. A model has no
-ordering test to appeal to. It must build an actual type that holds the
-constructor's fields, the universe of that type is computed from the field
-levels, and the result — a `max` with `imax u v` inside — has to be
-*definitionally equal* to `max u v`. Lean compares universe levels by normal
-form alone, `max (imax u v) (max u v)` does not normalize to `max u v`, and
-no packaging of the field escapes this: a wrapper that removed the `imax`
+declaration through its ordering test: `imax u v ≤ max u v` holds at every
+instantiation, so the field fits under the declared universe. The model must
+build an actual type that holds the constructor's fields, the universe of
+that type is computed from the field levels, and the result — a `max` with
+`imax u v` inside — would have to be definitionally equal to `max u v`. It
+is not: `max (imax u v) (max u v)` does not normalize to `max u v`, and no
+packaging of the field escapes this — a wrapper that removed the `imax`
 would raise the type's level floor above `Prop`, and `Sort (max u v)` can be
-`Prop`. So this is a limit of Lean's definitional equality on universe
-levels, not an unfinished piece of the tool. Lean's level normalizer is known
-to be incomplete around turning an `imax` into a `max`;
+`Prop`. So the tool declines the declaration. Lean's level normalizer is
+known to be incomplete around turning an `imax` into a `max`;
 [leanprover/lean4#12747](https://github.com/leanprover/lean4/issues/12747)
 records a related instance.
 
 Ordinary Lean does not produce this shape: the `inductive` command refuses
 a resulting universe that is only sometimes `Prop`, so declaring `Fun` takes
 a bootstrap option (`set_option bootstrap.inductiveCheckResultingUniverse
-false`) or a raw kernel export. `PadImax` and `PadImaxIdx` in the same
-fixture file as above are the corpus's two instances.
+false`) or a raw kernel export. `PadImax` and `PadImaxIdx` in
+[`test/fixtures/inductive-models/prim_shape_declines.lean`](test/fixtures/inductive-models/prim_shape_declines.lean)
+are the corpus's two instances.
 
-#### Declined: a dependent field the model cannot restate
+**The same wall, met at a dependent field.**
 
 ```lean
 universe u v
@@ -473,18 +486,49 @@ those fields on `E.mk x f h rest`. Here they cannot. Every constructor of
 `E` requires an existing `E`, so the type is empty, and the model's carrier
 is an empty type whose projections are total by elimination rather than by
 selecting a stored field; storing `x`, whose type sits at `Sort (imax u v)`,
-inside a carrier at `Type (max 1 u v)` runs into exactly the universe wall
-of the previous entry. With no well-typed way even to state the rule for
-`h`, the tool declines the declaration — naming the field — rather than
-emit a model with a projection rule missing.
+inside a carrier at `Type (max 1 u v)` runs into exactly the wall above.
+With no well-typed way even to state the rule for `h`, the tool declines the
+declaration — naming the field — rather than emit a model with a projection
+rule missing.
 
-Everything else about the shape is fine: `EOpaque`, the corpus's one
-instance, sits in
+It is the level that declines here, not the dependency: `EOpaque`, the
+corpus's one instance, sits in
 [`test/fixtures/inductive-models/e_dependent_field.lean`](test/fixtures/inductive-models/e_dependent_field.lean)
 beside six variations that drop either the `imax` parameter or the
 dependency, and every one of those models. As the snippet shows, the
 trigger is legal Lean, but the `Sort (imax u v)` must be written by hand;
 ordinary code does not produce it.
+
+**Reported: when the tool's comparison outruns the kernel's.** The tool
+plans universe levels with a complete decision procedure for Lean's level
+algebra — it decides the equalities the kernel's normal-form test misses,
+including the one both declines above run into. That strength cannot
+rescue them, deliberately: their level equation is one the kernel itself
+re-checks when it verifies the generated definitions, so accepting a plan
+the kernel refuses would not widen coverage, it would only turn a visible
+decline into a kernel rejection of the model. Where the comparison is the
+tool's own to make, the complete procedure is used, in one direction only:
+to accept a model that the elaborator's standard comparison would have
+forced it to decline. A model accepted this way may fail to verify under the
+stock kernel. Such a model is not wrong — it is correct under a complete
+theory of levels, and a checker with one accepts it — but the tool never
+lets it pass silently:
+
+- `--type-check-generated` (on by default) kernel-checks every generated
+  declaration, so such a model surfaces as a reported rejection rather than
+  a quiet difference;
+- when a plan needs the complete procedure, a `level widening:` stderr line
+  names the declaration concerned;
+- every run prints `levels: N planner comparisons, M escapes` on stderr,
+  where `M` counts the comparisons only the complete procedure accepted —
+  `M` is `0` across the whole fixture corpus;
+- the Mathlib gate
+  ([`scripts/check-mathlib-result.sh`](scripts/check-mathlib-result.sh))
+  requires `M = 0`, the condition under which this widening was accepted.
+
+This entry is that one incompleteness and nothing else: a kernel with a
+complete level comparison would leave the two declines above without their
+reason, and no widening to report.
 
 #### Silent: a `Prop`-valued structure-like with data fields loses projections
 
@@ -527,42 +571,6 @@ declining them is not an option. In `087`, even a field that is a
 proposition at every instantiation (an `Eq`) gets no projection, because
 its type names an earlier data field. A structure-like whose fields are all
 proofs at every instantiation keeps every projection.
-
-#### Reported: universe comparisons beyond the stock kernel
-
-The tool plans universe levels with a complete decision procedure for
-Lean's level algebra, and uses it in one direction only: to accept a model
-that the elaborator's standard comparison would have forced it to decline.
-The stock kernel's level comparison is the incomplete normal-form test
-above, so a model accepted this way may fail to verify under the stock
-kernel. Such a model is not wrong — it is correct under a complete theory
-of levels, and a checker with one accepts it — but the tool never lets it
-pass silently:
-
-- `--type-check-generated` (on by default) kernel-checks every generated
-  declaration, so such a model surfaces as a reported rejection rather than
-  a quiet difference;
-- when a plan needs the complete procedure, a `level widening:` stderr line
-  names the declaration concerned;
-- every run prints `levels: N planner comparisons, M escapes` on stderr,
-  where `M` counts the comparisons only the complete procedure accepted —
-  `M` is `0` across the whole fixture corpus;
-- the Mathlib gate
-  ([`scripts/check-mathlib-result.sh`](scripts/check-mathlib-result.sh))
-  requires `M = 0`, the condition under which this widening was accepted.
-
-#### No known gap
-
-Every decline above is a stated boundary — two are limits of Lean's
-definitional equality on universe levels, one a deliberately conservative
-reading of recursive occurrences — and none is an unfinished construction:
-there is no known shape that ought to model and does not. The claim is
-enforced mechanically. Each shape-decline site in the source labels itself
-either *out of scope* (a stated boundary) or *incomplete* (a genuine gap),
-and
-[`test/scripts/check-no-known-gap.sh`](test/scripts/check-no-known-gap.sh)
-fails the build the day any site says *incomplete* while this section still
-claims there is none. Today, none does.
 
 ## Copyright and license
 
