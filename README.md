@@ -508,6 +508,12 @@ a data type at every other `u`. The model is generated once, for the
 polymorphic declaration, so it can only carry the projections that are
 sound at *every* instantiation.
 
+Lean tracks this as
+[leanprover/lean4#7637](https://github.com/leanprover/lean4/issues/7637):
+primitive projections are not conservative over recursors, so a projection
+the kernel admits at one instantiation can be inexpressible by the recursor
+— which is what a model has to go through.
+
 The consequence for a consumer: the input may contain a raw `Expr.proj`
 that is perfectly well typed at its own instantiation — say at `u := 0` —
 yet has no `_model.proj_j` counterpart, and the consumer must inline the
