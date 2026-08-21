@@ -297,8 +297,10 @@ entry 3 store a `Nat`, and a pair carrying a `Nat` can never be a
 proposition; reading the tag back also uses `Nat.rec` to build a *type*
 by recursion — "large elimination", a right the kernel grants only to
 inductive declarations, and part of why `Nat` is in the basis. A
-sometimes-`Prop` declaration can host neither directly, which is why such
-shapes have entries of their own.
+sometimes-`Prop` declaration can host neither directly; what serves it
+instead is built from level-generic parts — the exact-sort pair and the
+lift — and entry 2, built entirely from those parts, therefore serves
+plain never-`Prop` structures on the same terms.
 
 ### 1. The basis: five types that are never modelled
 
@@ -321,15 +323,62 @@ Membership is need, not principle: `Acc` was once a fifth inductive member,
 kept only for the recursor the kernel grants it, and entry 7, which derives
 that recursor instead, is how it stopped being one.
 
-### 2. Field storage at a sometimes-`Prop` sort (the *direct* route)
+### 2. Structures outside `Prop`: field storage (the *direct* route)
 
-The shape: one constructor, no recursion, a sometimes-`Prop` sort.
+The shape: one constructor with at least one field, no recursion, at any
+sort that is not a literal `Prop` — never-`Prop` and sometimes-`Prop`
+alike. This is the everyday structure, indexed or not: `Prod`, `Fin n`,
+`Subtype`, `Sigma` and `PSigma` all land here. A literal `Prop` of this
+shape stays with the propositions, because a `Prop` owner is asked for no
+data projections and there is nothing here for storage to retain; where the
+kernel grants it large elimination, entry 6 has already taken it.
+
+The model type stores the constructor's fields, and every part of the
+storage is level-generic — which is why the entry is not confined to either
+end of the sort distinction above. A single field whose universe is already
+the declared one is stored as itself: the model type *is* the field's type.
+A single field that is a proposition is stored under the lift. Any other
+field list is split in two: the fields that some later field's type
+mentions form a right-nested chain of `PSigma'` pairs, and the rest are
+gathered below it into a balanced tree of `PProd'` pairs, ended by a
+trivial one-element component wherever the fields' own universes do not add
+up to exactly the declared sort — that filler is a `PSigma'.{0,w}`, at
+`Sort (max 0 w) = Sort w` for a never-`Prop` `w` exactly as for a
+sometimes-`Prop` one. The two single-field answers are checked before the
+split on purpose, so that their model types stay the field itself and the
+bare lift rather than a pair around either. A never-`Prop` structure used
+to take entry 3's tuple instead, paying a constructor tag that a
+one-constructor declaration can only ever set to `0`, along with the `Nat`
+splice behind it; the storage here is the same chain with none of that.
+
+An *indexed* declaration of this shape gets the same storage plus one
+`Prop`-valued equation recording the index values the stored value was
+built at, each side's index tuple packed into a single value; a proposition
+costs no universe, so the model type still lands exactly on the declared
+sort. Entry 9 could carve the never-`Prop` case too, but it splices the
+family's index erasure as a real inductive, which the closure rule then
+puts back in front of the construction to be modelled in turn — two
+families where the input declared one. The storage here is a definition
+nobody has to model, so where both apply the storage wins, and entry 9
+keeps every indexed family outside this one shape.
+
+Two never-`Prop` corners stay with the entries behind this one, as
+fall-throughs rather than declines: a constructor with no fields has
+nothing to store, and a field whose universe level retains an `imax` can
+miss the declared sort in a way that only entry 3's boxing — a wrapper this
+plain storage does not use — absorbs. Either way the declaration goes where
+it always went, entry 3 unindexed and entry 9 indexed. At a
+sometimes-`Prop` sort there is no construction behind this one and no box
+to fall through to; a field level that misses the sort there is the decline
+this list's last section describes.
+
+The sometimes-`Prop` occupants deserve a word on where they come from.
 Ordinary `inductive` syntax refuses a result sort that is only sometimes
 `Prop` (core itself declares `PUnit` and `PEmpty` under a bootstrap option
-that lifts the refusal), so occupants come from raw exports and, mostly,
-from this tool's own splices. The typical occupant is `PProd'`, a pair
-whose two component types are independent of each other, which the storage
-constructions lean on:
+that lifts the refusal), so they enter from raw exports and, mostly, from
+this tool's own splices. The typical one is `PProd'`, a pair whose two
+component types are independent of each other, which the storage above
+leans on:
 
 ```text
 PProd'    : {α : Sort u} → (β : Sort v) → Sort (max u v)
@@ -337,35 +386,26 @@ PProd'.mk : {α : Sort u} → {β : Sort v} → α → β → PProd' α β
 ```
 
 (Lean's own `PProd` is a `structure`, so it lands at `Sort (max 1 u v)`;
-the primed pair drops the `1` exactly as `PSigma'` does.)
-
-The model type stores the constructor's fields. A single field whose
-universe is already the declared one is stored as itself: the model type
-*is* the field's type. A single field that is a proposition is stored under
-the lift. Any other field list is split in two: the fields that some later
-field's type mentions form a right-nested chain of `PSigma'` pairs, and the
-rest are gathered below it into a balanced tree of `PProd'` pairs, ended by
-a trivial one-element component wherever the fields' own universes do not
-add up to exactly the declared sort. The two single-field answers are
-checked before the split on purpose, so that their model types stay the
-field itself and the bare lift rather than a pair around either. An
-*indexed* declaration of this shape gets the same storage plus one
-`Prop`-valued equation recording the index values the stored value was
-built at, each side's index tuple packed into a single value; a proposition
-costs no universe, so the model type still lands exactly on the declared
-sort.
+the primed pair drops the `1` exactly as `PSigma'` does — and `PProd`
+itself, being never-`Prop`, is stored by this same entry.)
 
 Auxiliaries: `PProd'`, whenever the balanced tree is used. It is then
 modelled by this same entry — necessarily as a plain `PSigma'` chain, since
 storing its own two independent fields the normal way would use a `PProd'`.
 
-### 3. `Nat`-tagged tuples
+### 3. Unindexed never-`Prop` types with at most linear recursion (the tuple tower)
 
-The everyday construction: any non-indexed declaration at a never-`Prop`
-sort whose recursion, if it recurses at all, is *linear* — each constructor
-has at most one recursive field, and that field is not under a binder.
-`Bool`, `Fin n`, `Prod`, `Option` and `List` all land here (`List.cons :
-α → List α → List α` — one recursive field).
+The construction for constructor choice and linear recursion: a non-indexed
+declaration at a never-`Prop` sort with two or more constructors — or none
+at all — whose recursion, if it recurses, is *linear*: each constructor has
+at most one recursive field, and that field is not under a binder. `Bool`,
+`Option` and `List` all land here (`List.cons : α → List α → List α` — one
+recursive field). A one-constructor declaration with no recursion is
+entry 2's, with two exceptions this entry keeps: one with no fields at all,
+and one with a field whose universe level retains an `imax` the plain
+storage cannot absorb — this tower *boxes* such a field, wrapping its
+exposed structure so the level normalizes, and entry 2 deliberately does
+not.
 
 The model type is a `PSigma'` pair of a `Nat` and a payload. The `Nat` is
 the constructor tag, and the payload at tag `j` is constructor `j`'s field
@@ -405,7 +445,7 @@ emptiness — still uninhabited, because of its tail, but genuinely storing
 everything in front of it, so the projections the output contract owes
 exist. Auxiliaries: none.
 
-### 5. The Church encoding
+### 5. Propositions, and the sometimes-`Prop` remainder (the Church encoding)
 
 The fallback for every proposition and every sometimes-`Prop` shape no
 other entry takes — which is why neither of those two sorts has an
@@ -445,7 +485,7 @@ conclusion's indices carry comes back by substitution here, and one they do
 not carry has to be stored there. Auxiliaries: none — the equation is the
 basis's own `Eq`.
 
-### 7. Recursion recovered from its graph (arm G)
+### 7. Recursive subsingletons at `Prop`: recursion recovered from its graph (arm G)
 
 The shape: one constructor, recursive, a literal `Prop`, granted large
 elimination by the kernel. `Acc`, the accessibility predicate under every
@@ -469,7 +509,7 @@ sometimes-`Prop` declaration is granted no large elimination by the kernel
 in the first place. Auxiliaries: `Nonempty`, the domain of
 `Classical.choice`, modelled by entry 5.
 
-### 8. Branching recursion as well-founded trees (arm W)
+### 8. Branching recursion at a never-`Prop` sort, as well-founded trees (arm W)
 
 The shape: non-indexed, recursive, never-`Prop`, with recursion that
 entry 3 cannot express — some constructor has two or more recursive fields, or a
@@ -488,16 +528,20 @@ inductive types (`List`, `Option`, `Sigma`, `Subtype`, `Bool`, `Acc`,
 `WellFounded`, `Or`, `HEq`, …, mostly under a reserved `_wcore` name
 prefix) with the definitions and proofs over them — spliced once into the
 output. Every inductive in it re-enters this list and goes wherever its own
-shape sends it: `_wcore.List` to entry 3, `_wcore.Or` to entry 5,
-`_wcore.HEq` to entry 6, `_wcore.Acc` to entry 7.
+shape sends it: `_wcore.Subtype` to entry 2, `_wcore.List` to entry 3,
+`_wcore.Or` to entry 5, `_wcore.HEq` to entry 6, `_wcore.Acc` to entry 7.
 
-### 9. Indexed families, carved out of an index-free skeleton (arm C)
+### 9. Indexed families at a never-`Prop` sort, carved out of an index-free skeleton (arm C)
 
 The shape: an indexed family at a never-`Prop` sort whose recursive fields
 mention the family only directly — each is, up to reduction, the family
 itself, possibly behind function arguments — so that deleting the indices
-leaves a well-formed unindexed declaration. The classic length-indexed
-vector is the picture:
+leaves a well-formed unindexed declaration; minus the one-constructor
+non-recursive families, which are entry 2's indexed case and cost no
+splice, except the two fall-throughs that entry hands back — a family with
+no fields to store, and one whose field levels only entry 3's boxing
+reaches. Everything with several constructors or recursion is this entry's
+as before. The classic length-indexed vector is the picture:
 
 ```lean
 inductive Vec (α : Type u) : Nat → Type u where
@@ -512,9 +556,10 @@ is a skeleton value paired with a proof that it is well formed at `n`, with
 the right indices all the way down. Both that well-formedness predicate and
 the recursor are built with the skeleton's recursor above `Prop`, which is
 why the entry is never-`Prop`-only: a sometimes-`Prop` skeleton would be
-granted no large elimination. The same shape at a sometimes-`Prop` sort is
-entry 2's indexed case, whose index equation is a definition rather than a
-spliced inductive.
+granted no large elimination. At a sometimes-`Prop` sort there is no carve
+at all — the one-constructor non-recursive family is entry 2's there
+exactly as here, and every other indexed shape belongs to the
+propositions, entries 5 and 6.
 
 Auxiliaries: the skeleton, which re-enters this list and goes wherever its
 own shape sends it. In `test/fixtures/inductive-models/prim_carve.lean`, a
@@ -548,8 +593,9 @@ becomes the auxiliary family at the `Even` tag. Constructors, recursors and
 
 Auxiliaries: the tag and the auxiliary family, two new inductives. The tag
 is a plain non-recursive type and models through entry 3; the family is
-indexed and models through entry 9 for a `Type`-valued block, or with the
-propositions through entry 5 for a `Prop`-valued one.
+indexed and re-enters the list — through entry 9 for a recursive
+`Type`-valued block like this one, or with the propositions through entry 5
+for a `Prop`-valued one.
 
 ### 11. Nested declarations
 
@@ -581,9 +627,10 @@ visibly ends.
 Above the constructions sit two presentation adapters. They change what the
 public interface looks like, never how a shape is represented, and both
 exist so that the intrinsic projections select their field literally. A
-one-constructor indexed family on entry 9's construction is published as a
-family of aliases over that entry's own model, with identity conversions
-and no transported equation. A plain mutual block of recursive, unindexed,
+one-constructor indexed family is published as a family of aliases over its
+own model — entry 2's stored fibre ordinarily, entry 9's carve where
+recursion or a fall-through sends it — with identity conversions and no
+transported equation. A plain mutual block of recursive, unindexed,
 never-`Prop` members is published as one simultaneous family in which each
 member exposes a constructor layer over entry 10's tag-and-family encoding.
 
