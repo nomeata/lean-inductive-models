@@ -631,6 +631,24 @@ def directIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np n
           return (tname, fieldIndex, selector, proof)
   return (declarations, overrides)
 
+/-- The level an unpadded tower reaches: the fields' own max, and at one field
+that field's level unwrapped, since a one-field unpadded tower **is** that
+field's type. -/
+def tightTowerRawLevel (fieldLevels : Array Level) : Level :=
+  if fieldLevels.size == 1 then fieldLevels[0]!
+  else (fieldLevels.foldl mkLevelMax' .zero).normalize
+
+/-- **Does the tower land on `Sort w`, and with which tail?** — the level
+question alone, with no verdict attached. `none` is *neither the bare tower nor
+the pad reaches the sort*; whether that is a decline or a fall-through to
+another arm is the caller's to say. -/
+def tightTowerPad? (fieldLevels : Array Level) (w : Level) :
+    GenM (Option (Option Level)) := do
+  let raw := tightTowerRawLevel fieldLevels
+  if ← isLevelDefEq raw w then return some none
+  if ← isLevelDefEq (mkLevelMax' raw w).normalize w then return some (some w)
+  return none
+
 /-- **Where must the tower end so that it lands on the carrier's sort?** — the
 one level question both unindexed and indexed direct storage asks, asked once.
 
@@ -671,12 +689,9 @@ that did not would not absorb the `imax`. That is a stated boundary and not an
 unfinished arm. -/
 def planTightTower (tname constructorName : Name) (fieldLevels : Array Level) (w : Level)
     (what : String) : GenM (Option Level) := do
-  let raw :=
-    if fieldLevels.size == 1 then fieldLevels[0]!
-    else (fieldLevels.foldl mkLevelMax' .zero).normalize
-  if ← isLevelDefEq raw w then return none
+  if let some pad? ← tightTowerPad? fieldLevels w then return pad?
+  let raw := tightTowerRawLevel fieldLevels
   let padded := (mkLevelMax' raw w).normalize
-  if ← isLevelDefEq padded w then return some w
   declineWith (.shapeUnsupported tname .outOfScope
     s!"{constructorName}'s {what} reaches Sort {raw} and pads to Sort {padded} while the \
 carrier inhabits Sort {w}, so neither the bare tower nor the exact-sort pad lands on the \
@@ -700,10 +715,24 @@ answers. Those two still run first and are still byte for byte what they were;
 what changed is that a one-field owner they *both* refuse now reaches this
 tower with a pad instead of a decline, because a one-field padded tower —
 `Σ'(f : F), unitAt w` — is a tower like any other and the storage, its
-projection and its rule are the ones this file already writes. -/
+projection and its rule are the ones this file already writes.
+
+**`fallback` is whether a *later* arm stores what this tower cannot**, and it
+is the whole of what the never-zero sort adds. A tower that misses `Sort w` is
+the end of the line at a maybe-zero carrier — [`InductiveModels.planTightTower`]
+writes out why no third construction exists there — but at a **never-zero** one
+it is not: the tuple tower's plan retries the same fields **recursively boxed**
+([`InductiveModels.boxTyOf`]), and boxing removes exactly the `imax` a
+`max`-shaped carrier does not absorb. Every boxed level carries a `max 1 ·`
+floor, which is why the retry is unavailable at a maybe-zero `w` and available
+at a never-zero one. So where `fallback` holds this answers *the route does not
+apply* and the owner goes on to the arm that does; where it does not, the
+missed sort is the stated boundary it has always been. Neither side is a
+special case of a shape: the question asked is the same one, and only who owes
+the verdict changes. -/
 def planDirectTightRoute (tname : Name) (eligible : Bool) (np : Nat)
-    (memberTy : Expr) (exportCtors : Array (Name × Expr)) (w : Level) :
-    GenM (Option (Option Level)) := do
+    (memberTy : Expr) (exportCtors : Array (Name × Expr)) (w : Level)
+    (fallback : Bool) : GenM (Option (Option Level)) := do
   unless eligible do return none
   let (constructorName, constructorType) := exportCtors[0]!
   unless numForalls constructorType - np >= 1 do return none
@@ -712,6 +741,7 @@ def planDirectTightRoute (tname : Name) (eligible : Bool) (np : Nat)
     let nf := numForalls tele
     forallBoundedTelescope tele (some nf) fun fields _ => do
       let fieldLevels ← fields.mapM fun field => do ilevel (← ityp field)
+      if fallback then return (← tightTowerPad? fieldLevels w)
       return some (← planTightTower tname constructorName fieldLevels w "tight field tower")
 
 /-- **Can an indexed one-constructor owner's fields be stored at the carrier's
@@ -743,15 +773,26 @@ sort, and where even the pad misses, the boundary is stated rather than
 recorded as an unfinished arm. Settled before anything is spliced, so the owner
 passes through unchanged.
 
-Zero fields is a different answer: every non-proof field is then vacuously one
-of the conclusion's indices, so the kernel minted the large eliminator and arm
-F fired. Reaching this with no fields is a route-classification fault. -/
+Zero fields is a different answer, and which answer depends on the sort. At a
+**maybe-zero** carrier every non-proof field is then vacuously one of the
+conclusion's indices, so the kernel minted the large eliminator and arm F
+fired; reaching this there with no fields is a route-classification fault. At a
+**never-zero** one arm F is not in the chain at all, so a zero-field indexed
+family is an ordinary shape with nothing to store, and it belongs to the arm
+behind this route rather than to this one.
+
+`fallback` is [`InductiveModels.planDirectTightRoute`]'s, for the same reason
+and with the same meaning: at a never-zero sort arm C stands behind this route
+and takes both the zero-field owner and the owner whose fields carry an `imax`
+the tower cannot reach, so neither is a decline here. -/
 def planDirectIndexedRoute (tname : Name) (eligible : Bool) (np : Nat) (memberTy : Expr)
-    (exportCtors : Array (Name × Expr)) (w : Level) : GenM (Option (Option Level)) := do
+    (exportCtors : Array (Name × Expr)) (w : Level) (fallback : Bool) :
+    GenM (Option (Option Level)) := do
   unless eligible do return none
   let (constructorName, constructorType) := exportCtors[0]!
   let nf := numForalls constructorType - np
-  unless nf >= 1 do
+  if nf == 0 then
+    if fallback then return none
     badShape s!"internal: {constructorName} has no fields, so every non-proof field of \
 {tname} is vacuously one of the conclusion's indices and arm F, not the direct routes' \
 indexed case, is the one that models it"
@@ -759,6 +800,7 @@ indexed case, is the one that models it"
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       let fieldLevels ← fields.mapM fun field => do ilevel (← ityp field)
+      if fallback then return (← tightTowerPad? fieldLevels w)
       return some (← planTightTower tname constructorName fieldLevels w "field tower")
 
 /-- **The binder-free pair's support, where a tower will use it** — three
@@ -769,10 +811,13 @@ never installed:
   `PProd'` itself; see [`InductiveModels.TightTower.pairs`].
 * the support to install — `PProd'`, the whole of it now that the pair is
   projected rather than eliminated, spliced if the input has
-  none and validated if it has one, and only where some field is mentioned by
-  nothing later, which is what puts a leaf in the block.  A fully dependent
-  telescope pays nothing.  The test over-approximates by one shape — a block of
-  a single leaf needs no pair — exactly as it did before the block existed.
+  none and validated if it has one, and only where the block holds **two or
+  more** leaves, which is exactly when [`InductiveModels.blockTy`] writes a
+  node rather than returning its one leaf bare.  A fully dependent telescope
+  pays nothing, and so does a telescope with a single unmentioned field and no
+  pad.  The count is the tower's own: the fields no later field's type
+  mentions, plus the pad's leaf where there is a pad — which is why `pad?` is
+  a parameter and the answer is not read off the dependency mask alone.
 * `requires` — `PProd'` where **this** island is the one that spliced it, and
   empty where an earlier island already did.  That is
   [`InductiveModels.Iso.requires`]' rule at arm W's shape exactly: the model
@@ -785,10 +830,13 @@ each of the four constructions opens one or the other; a field that fell into
 the block in only one of them would otherwise reach for `PProd'` in an island
 that never installed it. -/
 def tightBinderFreeSupport (tname : Name) (constructorType modelConstructorType : Expr)
-    (np nf : Nat) : GenM (Bool × Array Declaration × Array Name) := do
+    (np nf : Nat) (pad? : Option Level) :
+    GenM (Bool × Array Declaration × Array Name) := do
   let pairs := tname != `PProd'
-  let anyConstant := fun (ty : Expr) => (tightFieldDepMask ty nf np).contains false
-  unless pairs && (anyConstant constructorType || anyConstant modelConstructorType) do
+  let padLeaves := if pad?.isSome then 1 else 0
+  let node := fun (ty : Expr) =>
+    ((tightFieldDepMask ty nf np).filter (!·)).size + padLeaves >= 2
+  unless pairs && (node constructorType || node modelConstructorType) do
     return (pairs, #[], #[])
   let support ← ensurePProdPrime
   let spliced := support.any fun declaration => declaration.getNames.contains `PProd'
@@ -804,7 +852,7 @@ def emitDirectTightModel (eqi : EqInfo) (tname : Name) (lparams : List Name) (np
     GenM (Array Declaration × Array Name × Array Name ×
       Array (Name × Nat × Expr × Expr)) := do
   let (pairs, pairSupport, requires) ← tightBinderFreeSupport tname constructorType
-    modelConstructorType np (numForalls constructorType - np)
+    modelConstructorType np (numForalls constructorType - np) pad?
   let support ← if pad?.isSome then ensureExactSortLift else ensurePSigmaPrime
   let support := support ++ pairSupport
   let (declarations, overrides) ← directTightModel eqi tname lparams np memberTy
@@ -826,7 +874,7 @@ def emitDirectIndexedModel (eqi : EqInfo) (tname : Name) (lparams : List Name)
     GenM (Array Declaration × Array Name × Array Name ×
       Array (Name × Nat × Expr × Expr)) := do
   let (pairs, pairSupport, requires) ← tightBinderFreeSupport tname constructorType
-    modelConstructorType np (numForalls constructorType - np)
+    modelConstructorType np (numForalls constructorType - np) pad?
   let support ← if pad?.isSome then ensureExactSortLift else ensurePSigmaPrime
   let support := support ++ pairSupport
   let (declarations, overrides) ← directIndexedModel eqi tname lparams np ni constructorName

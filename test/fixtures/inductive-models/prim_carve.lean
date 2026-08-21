@@ -149,6 +149,28 @@
      both interfaces reach the output.  This is the positive composition test
      for deep-imax storage followed by skeleton carving.
 
+     It is also **the arm's first fall-through occupant**.  One constructor,
+     no recursion and an index put it inside the direct routes' indexed case,
+     which is cheaper here — its `Store` is a definition where the carve
+     splices an inductive the splice-closure rule then makes it model.  What
+     keeps `IBox` on the carve is the storage question and not the sort: its
+     field's level is `imax (imax u v) v`, which neither the bare tower nor
+     the exact-sort pad reaches, and the recursive box that does reach it is
+     the tuple tower's and not the tower's.  So the direct route answers *does
+     not apply* rather than declining, and arm C behind it takes the owner
+     exactly as it always did.
+
+   * `Zx` — the fall-through's **other** case, and the one that has nothing to
+     do with levels: one constructor, no recursion, one index and **no
+     fields**.  At a maybe-zero carrier this shape never reaches the direct
+     routes at all — every non-proof field is vacuously a conclusion index, so
+     the kernel grants the large eliminator and arm F fires — and
+     [`InductiveModels.planDirectIndexedRoute`] asserts as much.  Here arm F is
+     not in the chain, so the shape does arrive, there is no tower to build
+     from no fields, and the answer is again *does not apply*.  Without that
+     answer the assertion fires and the run ends in an internal tool error at
+     a declaration nothing is wrong with.
+
    `NoBase` is the opposite control. `NoBase._model._impl.skel` is
    `S | mk : N → S → S`: an uninhabited, linearly recursive inductive with
    no base constructor.  Arm E gives that skeleton the exact empty carrier,
@@ -225,6 +247,9 @@ inductive Bif : N → Type where
 
 inductive IBox (α : Sort u) (β : Sort v) : N → Sort (max 1 u v) where
   | mk : ((α → β) → β) → IBox α β N.z
+
+inductive Zx : N → Type where
+  | mk : Zx N.z
 
 inductive NoBase : N → Type where
   | mk : (n : N) → NoBase n → NoBase (N.s n)

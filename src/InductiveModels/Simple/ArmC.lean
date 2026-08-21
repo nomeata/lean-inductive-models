@@ -43,6 +43,7 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let andCSnd := site.andCSnd
   let mut out := st.out
   let mut spliced := st.spliced
+  let mut requires := st.requires
   -- ════ arm C: an indexed family, carved out of its spliced erasure ════
   --
   -- A skeleton-plus-`good` construction standing on a **real inductive**
@@ -112,6 +113,12 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   addChecked skelDecl
   out := out.push skelDecl
   spliced := spliced.push skelN
+  -- **The arm that splices the skeleton is the arm that owes it a model**
+  -- ([`InductiveModels.Iso.requires`]). Recorded here, at the splice, and no
+  -- longer re-derived by the dispatcher from `armC` — that guard says which
+  -- arm *could* run, not which one did, and a route reached before it leaves
+  -- the same guard true while splicing nothing at all.
+  requires := requires.push skelN
 
   let skelRecN := Name.str skelN "rec"
   let some (.recInfo srv) := (← getEnv).find? skelRecN
@@ -433,6 +440,6 @@ def primArmC (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
       hints := ← hintsFor recVal, safety := .safe }
   addChecked dRec
   out := out.push dRec
-  return { st with out, spliced }
+  return { st with out, spliced, requires }
 
 end InductiveModels

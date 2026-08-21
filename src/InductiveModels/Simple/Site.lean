@@ -619,10 +619,26 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       pure #[]
   let armE := emptySlots.size == nc && nc > 0 && emptySlots.all Option.isSome
 
-  -- A one-field singleton at a maybe-zero sort must retain its field.  The
+  -- A one-field singleton must retain its field.  At a maybe-zero sort the
   -- ordinary Church/lift route records only a proof of inhabitation; at a
   -- positive instantiation two constructor payloads then become equal, so no
   -- intrinsic projection can satisfy both constructor rules.
+  --
+  -- **The sort is not part of that requirement, and the guard no longer says
+  -- it is.** Retaining a field is what a one-constructor owner is asked for
+  -- wherever it is declared, and the two answers below are level-generic: the
+  -- identity carrier is the field's own type, and the `propLift` carrier is
+  -- [`InductiveModels.puliftT`] `w`, a `PSigma'.{0,w}` whose `max 0 w` is `w`
+  -- for a **never-zero** `w` exactly as for a bare one.  What used to stand
+  -- here instead was a *dispatch* fact — a never-zero owner of this shape went
+  -- on to the `Nat`-tagged tuple tower — and the tag it paid for can only ever
+  -- be `0`, since the owner has one constructor.  So the guard now reads the
+  -- shape and not the route, and `Boxed`, `Sub`, `Subtype`, `Sigma`, `PSigma`
+  -- and every other never-`Prop` structure in the corpus is stored rather than
+  -- tagged.  The literal `Prop` route stays out: a `Prop` owner is asked for
+  -- no data projection at all
+  -- ([`InductiveModels.eligibleProjectionFieldsM`]'s `ownerIsProp` gate), so
+  -- there is nothing there for these answers to retain.
   --
   -- There are two field-preserving cases this arm implements.
   -- If the field's sort is definitionally the carrier sort, the field itself
@@ -633,11 +649,12 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   --
   -- **The third case is the tower's, and it is a pad rather than a gap.** A
   -- field at `Sort u` under a carrier at `Sort (max u v)` is retained by
-  -- neither of the two answers here, and the declaration reaches this arm and
-  -- no other: the guard above has already decided that a nonrecursive
-  -- one-constructor maybe-zero owner is Direct's, and the Church fallback below
-  -- would record only inhabitation and lose the field. What retains it is the
-  -- storage tower ending at [`InductiveModels.unitAt`] `w`, which lands at
+  -- neither of the two answers here, and at a maybe-zero sort the declaration
+  -- reaches this arm and no other: the guard above has already decided that a
+  -- nonrecursive one-constructor maybe-zero owner is Direct's, and the Church
+  -- fallback below would record only inhabitation and lose the field. What
+  -- retains it is the storage tower ending at [`InductiveModels.unitAt`] `w`,
+  -- which lands at
   -- `Sort (max u (max u v)) = Sort (max u v)` — the never-zero tuple tower's
   -- pad at the one sort it had not been taken to, and correct there because
   -- the derived exact-sort lift is a `PSigma'.{0,w}` and `max 0 w` is `w` for a
@@ -646,8 +663,8 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- the decline that used to stand here has moved there, and is now the
   -- `outOfScope` residue rather than an unfinished arm.
   let directFieldRoute? : Option DirectFieldRoute ←
-    if (route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
-        numForalls exportCtors[0]!.2 - np == 1 then
+    if (route matches PrimRoute.bare | PrimRoute.type) && nonrecursiveOneConstructor &&
+        ni == 0 && numForalls exportCtors[0]!.2 - np == 1 then
       withParams fun ps => do
         let tele ← instForall exportCtors[0]!.2 ps
         let .forallE _ fieldType _ _ := tele
@@ -665,10 +682,25 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- `directFieldRoute?.isNone` conjunct is what keeps the two exact answers
   -- first: where one of them applies it is the model, and the tower is not
   -- consulted at all.
+  --
+  -- **At a never-zero sort the tower is a cheaper model of the same shape, and
+  -- the last argument is what says so without claiming more.** The tuple tower
+  -- would take this owner too, but it would pay a `Nat` tag that a
+  -- one-constructor owner can only ever set to `0`, plus the `Nat` splice and
+  -- the fibre tower around it; the storage here is the same `PSigma'` chain
+  -- with none of that. What the tuple tower has and this does not is the
+  -- **recursive box** ([`InductiveModels.boxTyOf`]), which removes an `imax` a
+  -- `max`-shaped carrier does not absorb — so a never-zero owner whose tower
+  -- misses `Sort w` is not a decline here but a fall-through to the arm that
+  -- boxes it, and that is the `fallback` argument. `TrL`, `BoxF` and `WBox`
+  -- are the corpus's occupants of that fall-through and stay on the tuple
+  -- tower; `IBox` is the indexed case's own, one guard below. At a maybe-zero sort there is no such arm and no such box —
+  -- every boxed level carries a `max 1 ·` floor and no `max 1 ·` is `Prop` —
+  -- so the verdict there is the stated boundary it has always been.
   let directTightRoute ← planDirectTightRoute tname
-    ((route matches PrimRoute.bare) && nonrecursiveOneConstructor && ni == 0 &&
-      directFieldRoute?.isNone)
-    np memberTy exportCtors w
+    ((route matches PrimRoute.bare | PrimRoute.type) && nonrecursiveOneConstructor &&
+      ni == 0 && directFieldRoute?.isNone)
+    np memberTy exportCtors w (route matches PrimRoute.type)
 
   -- **The direct routes' indexed case**, and the whole of why it is a case of
   -- them rather than an arm beside them.
@@ -710,23 +742,36 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- attempted.
   --
   -- **`Store` is a definition and not a spliced inductive**, which is what
-  -- separates this from arm C. Arm C's erase-and-carve is the same idea — build
-  -- the index-free skeleton, then cut the family out of it — but it splices the
+  -- separates this from arm C — and, at a never-zero sort, what makes it the
+  -- cheaper of the two. Arm C's erase-and-carve is the same idea — build the
+  -- index-free skeleton, then cut the family out of it — but it splices the
   -- skeleton as an *inductive* so the kernel mints its large eliminator, and it
-  -- needs that eliminator twice. A maybe-zero skeleton has no large eliminator
-  -- to mint, so the stepping stone here is the `PSigma'` tower, whose
-  -- projections are structure projections and need no elimination grant at all.
+  -- needs that eliminator twice. A spliced inductive is not free: the
+  -- splice-closure rule ([`InductiveModels.Iso.requires`]) puts it back in
+  -- front of the construction, so the skeleton is itself modelled and the
+  -- owner pays for two families where it declared one. The `PSigma'` tower
+  -- splices nothing and needs no elimination grant at all, because its
+  -- projections are structure projections and carry no motive. A maybe-zero
+  -- skeleton has no large eliminator to mint either, which is why arm C never
+  -- reached there in the first place.
   --
-  -- Restricted to the maybe-zero route on purpose, exactly as the two guards
-  -- above are. At a never-zero sort this shape is arm C's; at a literal `Prop`
+  -- **So the shared shape — one constructor, non-recursive, indexed — is this
+  -- route's at both sorts, and arm C keeps everything else.** `nc == 1` and
+  -- `!isRec` are the whole of the overlap: a multi-constructor or recursive
+  -- indexed family has no storage tower to write and is arm C's exactly as
+  -- before. Where the tower misses `Sort w` at a never-zero carrier this is a
+  -- fall-through and not a decline — the last argument — because arm C is
+  -- behind it and takes the owner; at a maybe-zero sort there is nothing
+  -- behind it and the missed sort is the stated boundary. At a literal `Prop`
   -- the storage would have to land at `Sort 0`, which means every field is a
   -- proof, which means arm F has already fired — and a `Prop` owner is asked
   -- for no data projection in the first place
   -- ([`InductiveModels.eligibleProjectionFieldsM`]'s `ownerIsProp` gate), so
   -- there is nothing there for this route to retain.
   let directIndexedRoute ← planDirectIndexedRoute tname
-    ((route matches PrimRoute.bare) && nc == 1 && !isRec && ni > 0 && !armFNonRec)
-    np memberTy exportCtors w
+    ((route matches PrimRoute.bare | PrimRoute.type) && nc == 1 && !isRec && ni > 0 &&
+      !armFNonRec)
+    np memberTy exportCtors w (route matches PrimRoute.type)
 
   -- The indexed case is disjoint from the other two by its own guard —
   -- `ni > 0` against their `ni == 0` — so it is a selection. The first two are

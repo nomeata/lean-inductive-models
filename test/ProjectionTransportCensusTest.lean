@@ -303,6 +303,17 @@ fields, which is arm W past the two `TwinInf` has.  Each is one-constructor and
 so projection-eligible, and their three, four and four fields are the whole of
 the difference.
 
+`structure_eta` is 11, `structure_projections` 16 and `unitlike` 5 — five
+fewer between them than when their indexed one-constructor owners were arm C's.
+Every one of those five belonged to a `T._model._impl.skel`, the index erasure
+arm C *splices* as an inductive and must then model, projections and rules
+included.  `EtaIndexed`, `Indexed` and `IndexedDep` are one constructor and
+non-recursive, so the direct indexed route stores their fields in a `PSigma'`
+tower instead and splices no inductive at all; the skeletons are gone and so
+are the projections they owned.  No input declaration lost a projection rule
+and none gained a transport: the invariant is over the rules that *are*
+emitted, and it is the owner count and not the rule shape that moved here.
+
 `recursor_field_domain` is 2, and both are the spliced pair's: `P` is a
 two-constructor enumeration and `Owner` is a two-constructor recursive owner,
 so neither is asked for an intrinsic projection at all.  The fixture is about
@@ -342,9 +353,9 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("private_constructor", 3), ("prop_projection_boundaries", 12),
     ("prop_recursive_projections", 3), ("recursor_field_domain", 2),
     ("source_structure_syntax", 7),
-    ("structure_eta", 12), ("structure_projections", 19),
+    ("structure_eta", 11), ("structure_projections", 16),
     ("tight_prop_field_late", 1), ("tight_psigma_prime", 6),
-    ("transparent_owner_aliases", 3), ("unitlike", 6), ("unused_level_param", 0),
+    ("transparent_owner_aliases", 3), ("unitlike", 5), ("unused_level_param", 0),
     ("w_alias", 13),
     ("wide_block", 48),
     ("w_core", 13), ("w_dependent_field", 30), ("w_imax", 13), ("w_late_iff", 13),

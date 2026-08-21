@@ -403,10 +403,21 @@ def run (root : String) : IO UInt32 := do
     actual payloadRule == expectedProjection payloadRule
   state := state.check "indexed family carries the complete one-layer fibre certificate" <|
     certificate.all generatedNames.contains
-  state := state.check "indexed public carrier is the arm-C sigma fibre" <|
-    (declarationValue? generated typePair.model).any fun value =>
-      containsConst `PSigma' value &&
-        (declarationValue? generated (Name.str privateRoot "good")).any (containsConst ``Eq)
+  -- **The carrier is the direct route's stored fibre and no longer arm C's
+  -- carve.**  Both write a `PSigma'` whose second component is an `Eq`; what
+  -- separates them is what sits underneath.  Arm C splices the family's index
+  -- erasure as an *inductive* and carves the family out of it through a
+  -- `good` predicate, so its model owes a model for that skeleton too.  The
+  -- direct indexed route stores the fields in the `PSigma'` tower — a
+  -- definition, taken apart by primitive projections — and pairs it with one
+  -- packed index equation, splicing nothing.  So the skeleton and its `good`
+  -- must **not** be here, and their absence is asserted rather than left
+  -- implied: it is the whole of what this route is cheaper by.
+  state := state.check "indexed public carrier is the direct route's stored fibre" <|
+    (declarationValue? generated typePair.model).any
+        (fun value => containsConst `PSigma' value && containsConst ``Eq value) &&
+      #[Name.str privateRoot "good", Name.str privateRoot "skel"].all fun name =>
+        !generatedNames.contains name
 
   let missingLaw := Check.check <|
     withoutDeclaration generated (Name.str privateRoot "roll_unroll")

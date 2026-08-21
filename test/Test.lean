@@ -678,8 +678,12 @@ def expectedPrim : List Row :=
        ("G1.below", 18), ("G2", 13), ("G5", 13), ("G5.below", 13),
        ("G2.below", 13)],
       [ ("Eq", "prim model: a basis primitive")])
+  -- **`PSigma` is 11 and not 12 because its model no longer tags a tuple.**
+  -- It is one constructor, non-recursive, unindexed and never-`Prop`, so the
+  -- direct tight tower stores its two fields and the `Nat` the tag tower would
+  -- have needed is spliced by nobody in this file.
   , ("prim_graph_pre", [("Ac", 24), ("Nonempty", 4), ("Ac.below", 13),
-      ("PSigma", 12), ("PProd'", 9)],
+      ("PSigma", 11), ("PProd'", 9)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The W arm's foundation.** `w_core.ndjson` is the transitive closure of
   -- the core's six roots — the export `lean4export` emits for
@@ -715,8 +719,15 @@ def expectedPrim : List Row :=
   -- models the `Nonempty` it just wrote, and the input's own record is dropped
   -- against it when the stream reaches it
   -- ([`InductiveModels.canonicalBasisRecordMatches`]). `Subtype`'s 16 becomes
-  -- 19 for the same reason one file earlier: it is the first owner, so `Eq`,
-  -- `PUnit` and `Nat` are written in front of it.
+  -- 19 for the same reason one file earlier: it is the first owner, so `Eq`
+  -- and `PUnit` are written in front of it.
+  --
+  -- **`Nat` is written in front of `List` and not in front of `Subtype`**, and
+  -- that is the whole of the one declaration this row moved. `Subtype` is one
+  -- constructor, non-recursive, unindexed and never-`Prop`, so the direct
+  -- tight tower stores its two fields and its carrier carries no tag; `List`
+  -- is the first owner left that needs the `Nat` a tag tower is indexed by,
+  -- which is its 6 becoming 7.
   --
   -- This is not a scheduler and nothing is reordered: every record is emitted
   -- where the construction reaches it, and what moved is where the declaration
@@ -729,7 +740,7 @@ def expectedPrim : List Row :=
   -- additionally receive one eta theorem; unit-like and K-like declarations
   -- receive their own one-theorem metadata roles.
   , ("w_core",
-      [("Subtype", 20), ("PProd'", 9), ("List", 6), ("Sigma", 9), ("Option", 6),
+      [("Subtype", 19), ("PProd'", 9), ("List", 7), ("Sigma", 9), ("Option", 6),
        ("Exists", 4), ("And", 8), ("False", 2), ("Decidable", 6), ("True", 6),
        ("Or", 6), ("Iff", 8), ("Acc", 14), ("Nonempty", 4), ("WellFounded", 6),
        ("Bool", 6), ("HEq", 5), ("PProd", 9)],
@@ -781,7 +792,13 @@ def expectedPrim : List Row :=
   -- back to 8 when that route was withdrawn. `ProjectionTest` names the eight
   -- records and asserts the skeleton has none of them; this row only counts.
   , ("prim_carve",
-      [("N", 16), ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
+      -- `Zx` and its skeleton are the direct routes' indexed fall-through at
+      -- its second case: one constructor, no recursion, one index, **no
+      -- fields**. There is no tower to store nothing in, so the direct route
+      -- answers *does not apply* and arm C — which is not behind it at a
+      -- maybe-zero sort, where arm F takes this shape instead — models it here.
+      [("N", 16), ("Zx", 14), ("Zx._model._impl.skel", 6),
+       ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),

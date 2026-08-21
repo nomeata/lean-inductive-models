@@ -919,10 +919,21 @@ def main : IO UInt32 := do
   state := state.check "intrinsic projection interface precedes owner"
     modelsBeforeOwner
 
-  state := state.check "projection definitions eliminate with the model recursor" <|
+  -- **The selector is the storage's own projection path, not an elimination.**
+  -- `Dep` is one constructor, non-recursive, unindexed and never-`Prop`, so it
+  -- takes the direct tight route: its carrier is the `PSigma'`/`PProd'` tower
+  -- over its three fields and each intrinsic projection is the primitive
+  -- `.proj` path that reaches its own field.  A primitive projection carries
+  -- no motive, so there is no elimination universe and nothing to transport
+  -- along; the check the tuple carrier needed — eliminate with
+  -- `Dep.rec._model`, contain no `.proj` — was about *that* carrier's shape.
+  -- What both carriers owe is that the selector reaches the field without a
+  -- transport, and that is what this asserts, beside the `Eq.refl` rules above.
+  state := state.check "projection definitions select without transport" <|
     projectionNames.all fun name =>
       (definitionValue? generated name).any fun value =>
-        containsConst (Naming.modelName `Dep.rec) value && !containsProjection value
+        containsProjection value && !containsConst ``Eq.rec value &&
+          !containsConst (Naming.modelName `Dep.rec) value
   state := state.check "payload type uses the preceding projection model literally" <|
     (declarationType? generated payloadModel).any fun type =>
       containsConst keyModel type

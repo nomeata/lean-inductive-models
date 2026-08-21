@@ -228,6 +228,27 @@ question — the intrinsic projections are the tower's own, and every rule is
 `Eq.refl`. Arm F keeps its shapes: the direct guard carries `!armFNonRec`, and
 Direct is the first guard in the dispatch chain.
 
+**And it is the model at a never-zero sort too, where arm C could also have
+carved.** The two overlap at exactly one constructor and no recursion, and
+there the storage is strictly less: a spliced inductive re-enters the
+construction under the splice-closure rule and is modelled in turn, so arm C's
+owner pays for two families where it declared one, while `Store` is a
+definition nobody has to model. Arm C keeps every shape outside that overlap —
+multi-constructor and recursive indexed families have no single tower to
+store — and it also keeps the one-constructor owners whose fields carry an
+`imax` the tower cannot reach, because at a never-zero sort a tower that
+misses `Sort w` falls through to it rather than declining.
+
+**The never-zero unindexed structures come the same way**, and for the same
+reason read one step earlier: a one-constructor owner's `Nat` tag can only
+ever be `0`, so the tuple tower's tag, its `Nat` splice and its fibre tower
+are paid for a choice that does not exist. `.identity`, `.propLift` and the
+`PSigma'` tower are level-generic — each is either the field's own type or a
+`PSigma'.{0,w}`, whose `max 0 w` is `w` at every `w` — so the guards read the
+declaration's shape and no longer its route. What stays with the tuple tower
+is what the tower cannot store: the recursive box for a field whose level
+retains an `imax`.
+
 **Why the maybe-zero collapse is a model and not a cheat.** At a maybe-zero
 sort the contract never forces two provably distinct elements: zero
 constructors and the subsingleton shape large-eliminate and are subsingletons
@@ -379,7 +400,7 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
            spliced := st.spliced
            projectionOverrides := st.projectionOverrides
            emptyCarriers
-           requires := if site.armC then #[site.skelN] else st.requires
+           requires := st.requires
            aliases }
 
 end InductiveModels
