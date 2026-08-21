@@ -232,10 +232,12 @@ family and checks:
 
 The checker is a pure function of the export text: it never asks Lean for
 definitional equality, never appeals to proof irrelevance, and never compares a
-declaration's value. Every correspondence verdict is literal syntactic equality
-of declaration types after simultaneous source-to-model renaming, so an
-accepted slot is exact rather than merely definitionally right, and the verdict
-is independent of the kernel's.
+declaration's value. Every correspondence verdict is syntactic equality of
+declaration types, up to binder names and binder information, after
+simultaneous source-to-model renaming, so an accepted slot is exact rather than
+merely definitionally right, and the verdict is independent of the kernel's.
+Those two are what an export's expression arena is interned modulo, upstream in
+`lean4export` as much as here, so they are not available to compare.
 
 Deciding what to compare against is a separate matter. Enumerating a
 constructor's parameters and fields, deciding whether an owner or a field type
