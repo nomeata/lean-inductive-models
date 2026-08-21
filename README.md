@@ -376,184 +376,186 @@ recursive field in every ι rule it published.
 
 ### What is covered, and what is not
 
-A decline is not a failure: the source declaration passes through unchanged and
-the run reaches exit code 2. This table is the whole ledger; the notes after it
-carry the argument for each row.
+The tool models every inductive declaration it can. When it cannot, it
+**declines** the declaration: the original passes through to the output
+unchanged, a stderr line names the declaration and the reason, and the run
+finishes with exit code `2` instead of `0`. A decline is not a failure —
+every other declaration in the export is still modelled and checked — it is
+the run saying, precisely, that this one declaration gets no model.
 
-| What you can hit | What the run does | Occupants |
-| --- | --- | --- |
-| a recursive occurrence that is not an application of the owner | declines the owner | `Foreign`, `Foreign0` |
-| storage no pad or box lands on the carrier's sort | declines the owner | `PadImax`, `PadImaxIdx` |
-| a field naming an earlier field the model does not select | models the owner, omits that one projection rule | `EOpaque` |
-| a `Prop` structure-like carrying data fields | models the owner, emits no projections at all | Arena `tutorial/087`, `089` |
-| a level gap the elaborator will not close | models it, and counts the widening | — |
+Declines are rare and specific. Run over this repository's entire fixture
+corpus, the tool declines exactly five declarations as unsupported, in two
+fixture files, and they fall into the three situations below; each is shown
+here shrunk to a minimal declaration that still declines. Nested, mutual
+and indexed inductives are *not* among them — they are handled by their own
+constructions and model without comment. Two further behaviours are not
+declines but are still user-visible, and close the list.
 
-**Those five are everything.** The first three name every owner in the fixture
-corpus that declines or loses a slot; there is no sixth shape.
+| What you can hit | What the run does |
+| --- | --- |
+| a constructor field that mentions the type other than by applying it | declines that declaration |
+| a field whose universe level has an `imax` the declared universe only bounds | declines that declaration |
+| a field whose type names an earlier field, behind the same `imax` wall | declines that declaration |
+| a `Prop`-valued structure-like carrying data fields | models it, but silently omits some or all projections |
+| a universe equality Lean's kernel cannot check | models it, and reports every such use |
 
-Nothing that one construction hands to another appears here. A nested
-occurrence goes to the nested construction and is modelled, and the run reports
-nothing at all — so it is not a limit of the tool, and the reasoning for it
-belongs in the code that routes it, not in this ledger.
+#### Declined: a mention of the type that is not an application of it
 
-`test/scripts/check-no-known-gap.sh` keeps the "no known gap" claim below
-honest: it fails the build the day a decline site says `incomplete` without this
-ledger being rewritten. It counts decline *sites*, of which there are three,
-because the second row above is stated in two arms.
+```lean
+universe u
+
+def hide (α : Sort u) (a : α) : α := a
+
+inductive Twisted : Type where
+  | base : Twisted
+  | step (child : Twisted)
+      (tag : hide (Twisted → Type) (fun _ => Nat) child) : Twisted
+```
+
+Lean accepts `Twisted`: its positivity check unfolds `hide`, the type of
+`tag` reduces to `Nat`, and the mention of `Twisted` disappears entirely.
+The tool reads constructor fields without unfolding definitions, so for it
+the mention is still there — and it is not `Twisted` applied to arguments,
+which is the one form of recursive occurrence the model constructions know
+how to replace. Unable to represent the occurrence, the tool declines the
+declaration, naming the constructor that carries it. `Foreign` and
+`Foreign0` in
+[`test/fixtures/inductive-models/prim_shape_declines.lean`](test/fixtures/inductive-models/prim_shape_declines.lean)
+are the corpus's two instances.
+
+#### Declined: a universe level that fits but is not equal
+
+```lean
+universe u v
+
+inductive Fun (α : Sort u) (β : Sort v) : Sort (max u v) where
+  | mk : (α → β) → Fun α β
+```
+
+The field `α → β` lives at `Sort (imax u v)` — `imax`, because a function
+into a proposition is itself a proposition. Lean's kernel admits the
+declaration through an ordering test: `imax u v ≤ max u v` holds at every
+instantiation, so the field fits under the declared universe. A model has no
+ordering test to appeal to. It must build an actual type that holds the
+constructor's fields, the universe of that type is computed from the field
+levels, and the result — a `max` with `imax u v` inside — has to be
+*definitionally equal* to `max u v`. Lean compares universe levels by normal
+form alone, `max (imax u v) (max u v)` does not normalize to `max u v`, and
+no packaging of the field escapes this: a wrapper that removed the `imax`
+would raise the type's level floor above `Prop`, and `Sort (max u v)` can be
+`Prop`. So this is a limit of Lean's definitional equality on universe
+levels, not an unfinished piece of the tool.
+
+Ordinary Lean does not produce this shape: the `inductive` command refuses
+a resulting universe that is only sometimes `Prop`, so declaring `Fun` takes
+a bootstrap option (`set_option bootstrap.inductiveCheckResultingUniverse
+false`) or a raw kernel export. `PadImax` and `PadImaxIdx` in the same
+fixture file as above are the corpus's two instances.
+
+#### Declined: a dependent field the model cannot restate
+
+```lean
+universe u v
+
+def Opaque := Sort (imax u v)
+
+inductive E (α : Opaque.{u, v}) : Type (max 1 u v) where
+  | mk (x : α) (f : α → Nat) (h : Eq (f x) Nat.zero) (rest : E α) : E α
+```
+
+The model of a one-constructor inductive carries a projection for each
+field, and for each projection a rule stating that on a constructor
+application it returns exactly that field. The type of `h` names the
+earlier fields `x` and `f`, so the two sides of `h`'s rule only have the
+same type if the projections for `x` and `f` *compute* — actually reduce to
+those fields on `E.mk x f h rest`. Here they cannot. Every constructor of
+`E` requires an existing `E`, so the type is empty, and the model's carrier
+is an empty type whose projections are total by elimination rather than by
+selecting a stored field; storing `x`, whose type sits at `Sort (imax u v)`,
+inside a carrier at `Type (max 1 u v)` runs into exactly the universe wall
+of the previous entry. With no well-typed way even to state the rule for
+`h`, the tool declines the declaration — naming the field — rather than
+emit a model with a projection rule missing.
+
+Everything else about the shape is fine: `EOpaque`, the corpus's one
+instance, sits in
+[`test/fixtures/inductive-models/e_dependent_field.lean`](test/fixtures/inductive-models/e_dependent_field.lean)
+beside six variations that drop either the `imax` parameter or the
+dependency, and every one of those models. As the snippet shows, the
+trigger is legal Lean, but the `Sort (imax u v)` must be written by hand;
+ordinary code does not produce it.
+
+#### Silent: a `Prop`-valued structure-like with data fields loses projections
+
+```lean
+universe u
+
+inductive P : Prop where
+  | mk (data : PUnit.{u}) (proof : True) : P
+```
+
+This declaration models and the run exits `0`, but the model contains only
+`P._model.proj_1`, for `proof`. There is no `P._model.proj_0` for `data`,
+and nothing on stderr says so.
+
+The reason is the kernel's own rule for projecting out of a proposition: to
+keep data from escaping a proof, Lean allows a projection (`Expr.proj`) on
+a `Prop`-valued structure-like only where the projected field — and every
+earlier field its type can still see — is itself a proof. That test depends
+on the universe instantiation: `PUnit.{u}` is a proposition at `u = 0` and
+a data type at every other `u`. The model is generated once, for the
+polymorphic declaration, so it can only carry the projections that are
+sound at *every* instantiation.
+
+The consequence for a consumer: the input may contain a raw `Expr.proj`
+that is perfectly well typed at its own instantiation — say at `u := 0` —
+yet has no `_model.proj_j` counterpart, and the consumer must inline the
+elimination itself. Structures from ordinary Lean source never hit this,
+because the `structure` command refuses a `Prop`-valued structure with a
+data field ("field must be a proof"); it takes a raw kernel declaration.
+The published Lean Kernel Arena has two, `good/tutorial/087` and
+`good/tutorial/089`: `Prop` structure-likes whose models correctly contain
+no projections at all, and which the Arena requires to be *accepted* — so
+declining them is not an option. In `087`, even a field that is a
+proposition at every instantiation (an `Eq`) gets no projection, because
+its type names an earlier data field. A structure-like whose fields are all
+proofs at every instantiation keeps every projection.
+
+#### Reported: universe comparisons beyond the stock kernel
+
+The tool plans universe levels with a complete decision procedure for
+Lean's level algebra, and uses it in one direction only: to accept a model
+that the elaborator's standard comparison would have forced it to decline.
+The stock kernel's level comparison is the incomplete normal-form test
+above, so a model accepted this way may fail to verify under the stock
+kernel. Such a model is not wrong — it is correct under a complete theory
+of levels, and a checker with one accepts it — but the tool never lets it
+pass silently:
+
+- `--type-check-generated` (on by default) kernel-checks every generated
+  declaration, so such a model surfaces as a reported rejection rather than
+  a quiet difference;
+- when a plan needs the complete procedure, a `level widening:` stderr line
+  names the declaration concerned;
+- every run prints `levels: N planner comparisons, M escapes` on stderr,
+  where `M` counts the comparisons only the complete procedure accepted —
+  `M` is `0` across the whole fixture corpus;
+- the Mathlib gate
+  ([`scripts/check-mathlib-result.sh`](scripts/check-mathlib-result.sh))
+  requires `M = 0`, the condition under which this widening was accepted.
 
 #### No known gap
 
-No shape an arm ought to reach and does not, and no decline site in the code
-says `incomplete`.
-
-The rest of this entry is implementation history rather than a limit anyone can
-hit, and is here only because the argument is recorded nowhere else. The last
-gap was arm W's eligibility test. A non-indexed recursive owner at a
-never-zero sort whose recursion is not linear is arm W's or it is nobody's, and
-the arm used to refuse two further things — a loose-variable test on a binder
-type inside a recursive field's own telescope, and a carrier plan that could not
-put the W core's `Type u` at the declared sort. Both refuse classes that are
-empty, so both are now invariants the arm asserts rather than conditions it
-tests:
-
-- A binder inside a recursive field's telescope cannot name an earlier
-  *recursive* field. Everything reaching that arm has already passed the
-  nested-occurrence boundary below, so every recursive field is `∀ z⃗, T p⃗ e⃗`
-  with no binder mentioning `T`; naming an earlier child then needs a type
-  former whose own domain mentions the type being declared, and no constant,
-  parameter or surviving earlier field is one. The redex spelling that would
-  name a child without a former — `(fun _ : T => N) c` — is a non-positive
-  occurrence to Lean's kernel, which tests a `Π` domain syntactically; the same
-  redex as a whole *field domain* is `whnf`-ed first and is accepted, which is
-  the shape the tool does support.
-- The W core needs `Type u`, and gets it at every never-zero sort: either the
-  level is a syntactic successor, or `max 1 w` converts to `w` and the core runs
-  at `Type` under the exact-sort lift. That conversion succeeds exactly when the
-  level is never-zero, which is the route's own condition.
-
-The `incomplete` verdict itself is kept, with nothing producing it, because the
-distinction it draws is worth having ready: a guard narrower than its arm must
-be recordable as a gap rather than dressed up as a boundary.
-
-#### Declined: a recursive occurrence no arm can represent
-
-Every arm of every route represents a recursive field by replacing an occurrence
-of the shape `∀ z⃗, T p⃗ e⃗`. A field that mentions the owner some other way
-after βζ head normalization carries an occurrence that is not an application of
-`T`, so no arm of any route can represent it and the owner declines. `Foreign`
-and `Foreign0` in `test/fixtures/inductive-models/prim_shape_declines.lean` are
-the occupants; the decline names the offending field and the route facts.
-
-This is **not** the nesting boundary. A nested occurrence is routed to the
-nested construction and modelled, with nothing reported. What is left here is an
-occurrence no layer of the tool can read at all.
-
-**The export is asked before the decline is made.** The recursor's minor premise
-for `C_j` binds one induction hypothesis per recursive field, so the export
-itself says how many of `C_j`'s fields carry an occurrence, and the decline is
-made only where that number is the number the shape analysis reads. The fields
-it then cannot read are ones the kernel does not treat as recursive either — a
-mention `δ` discards.
-
-Where the export asserts *more*, the run **fails** rather than declining, naming
-the constructor and the two numbers instead of claiming a boundary it is not
-standing on. The Kernel Arena's `bad/rec-missing-ih` is the occupant: its
-recursive field is a stuck `k`-recursor application that Lean's kernel reduces
-to the owner and `Lean.Meta`'s conversion does not. A disagreement can only hide
-behind a decline — wherever a model *is* built, `R._model` carries the exported
-recursor's type verbatim and is kernel-checked as it is produced.
-
-#### Declined: storage no pad or box lands on the carrier's sort
-
-A field whose level falls short of `Sort w` has to be padded into it, and the
-pad is the derived exact-sort lift of `⊤` — a `PSigma'.{0,w}`, so it sits at
-exactly `Sort w` at every `w`, maybe-zero included. The storing towers end there
-and land at `Sort (max ℓ⃗ w)`, which is `Sort w` whenever the kernel's own
-`is_geq(w, ℓᵢ)` on the input survives being re-asked as a *conversion*.
-
-Where it does not, the field's level retains an `imax` that no `max`-shaped
-carrier absorbs, and neither side can close it: the recursive box that removes
-an `imax` exposed by a Π leaves an opaque atomic type carrying one, and at a
-maybe-zero sort the box is unavailable outright, because every boxed level
-carries a `max 1 ·` floor and no `max 1 ·` is ever `Prop`. There is no third pad
-to build — one that cleared the `imax` would miss `Prop`, one that reached
-`Prop` would not clear the `imax` — so this is a limit of Lean's definitional
-equality on levels and not an unfinished arm. It is the same fact as the next
-entry, met where storage is the whole carrier rather than an addition to one.
-
-#### Unstatable: a projection whose codomain names an unselected field
-
-A field whose type names an earlier field the model does not select
-definitionally has no well-formed intrinsic projection ι rule to state, so the
-owner declines that rule. The occupant is an owner with a field at an opaque
-`imax` level under a `max`-shaped carrier.
-
-This is a limit of **Lean's definitional equality on levels**, and not a gap in
-this tool's level procedure, which is strictly stronger. The inequality is not
-in doubt: the kernel admitted the input by `is_geq`, which splits an `imax` into
-a stronger `max`-shaped bound and so never reasons about `imax` at all. But
-level conversion is normal-form equality with no ordering test and no absorption
-across differing bases — `max (max u v) w` normalizes to `w` and
-`max (imax u v) w` does not, because an `imax` atom absorbs into no `max` — and
-the storing tower has to *land* at `Sort w` under that equality. The recursive
-box removes the `imax` wherever the field's type can be inspected; at an opaque
-atomic type nothing can.
-
-The model is otherwise complete for such an owner: carrier, constructors,
-recursor and every recursor ι rule are built and check. Only the intrinsic
-projection *rules* are unstatable.
-
-#### Unstatable: projections of a `Prop` structure-like carrying data
-
-`T._model.proj_j` is a function out of the modelled carrier landing in field
-`j`'s type, so it eliminates `T` at the motive `fun _ => A_j`. A `Prop`-valued
-structure-like that carries a data field is exported with no motive universe
-parameter — small elimination only — so the motive exists exactly when the
-kernel's own `infer_proj` walk admits field `j`. That walk asks for more than
-"`A_j` is a `Prop`": every *earlier* field whose binder still occurs in the
-remaining telescope must be a `Prop` too.
-
-Both clauses can fail for reasons that depend on the **instantiation**, and the
-model is generated once for the **polymorphic** declaration. A field at
-`PUnit.{u}` is a `Prop` at `u = 0` and is not at generic `u`. A field that is
-unconditionally a `Prop` — an `Eq`, say — can still be refused because an
-earlier field it names is not one. So the eligible set can be empty at generic
-levels while a consumer's `Expr.proj` at, say, `Owner.{0, 1}` is perfectly well
-typed; and it can stay empty at that instantiation too, for a field that *is* a
-`Prop` there but names an earlier data field.
-
-The owner is modelled either way — carrier, constructor, recursor and its ι rule
-all built and checked — and a raw `Expr.proj` in the input passes through
-unchanged with no `_model.proj_j` to type it against. A checker that meets one
-has to inline the elimination itself. This is a *silent absence* rather than a
-decline: the eligibility walk settles which projection slots exist before any is
-requested, so the decline in the previous entry — a verdict on a slot that *was*
-requested — never fires here. Declining the owner instead is not open either,
-since the Kernel Arena classifies these inputs `good` and requires exit 0.
-
-There is no single polymorphic declaration this tool could write that is sound
-at every instantiation, so this is Lean's polymorphic-versus-instantiated design
-showing through rather than an unfinished arm. An all-`Prop` structure-like is
-unaffected and does get its projections. The shape here cannot be written with
-the `structure` command, so it arises only from raw kernel declarations: the
-Arena's `tutorial/087` and `tutorial/089` are the occupants, and `bad/092` pins
-the earlier-field clause.
-
-#### Accepted: a level gap closed by the complete planner
-
-Where the alternative is a decline, the planner decides a level gap with a
-complete decision procedure for Lean's level algebra, used only to widen the
-elaborator's answer and never to narrow it. A model admitted on that basis can
-be one Lean's stock kernel will not verify, because the stock kernel's level
-conversion is the incomplete normal-form test above. That is accepted and it is
-not a wrong model — it is correct under a complete level theory, and a checker
-with one accepts it.
-
-Every use of the widening is made visible instead: `--type-check-generated` is
-the gate that turns such a plan into a reported generated-kernel rejection, the
-stderr line `levels: N planner comparisons, M escapes` counts every pair the
-widening decided and the elaborator would not, and the Mathlib gate requires
-`M = 0` — the corpus condition under which the limitation was accepted.
+Every decline above is a stated boundary — two are limits of Lean's
+definitional equality on universe levels, one a deliberately conservative
+reading of recursive occurrences — and none is an unfinished construction:
+there is no known shape that ought to model and does not. The claim is
+enforced mechanically. Each shape-decline site in the source labels itself
+either *out of scope* (a stated boundary) or *incomplete* (a genuine gap),
+and
+[`test/scripts/check-no-known-gap.sh`](test/scripts/check-no-known-gap.sh)
+fails the build the day any site says *incomplete* while this section still
+claims there is none. Today, none does.
 
 ## Copyright and license
 
