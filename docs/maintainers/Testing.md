@@ -176,9 +176,10 @@ imported rather than on the day someone remembers to extend the list. Adding a
 genuinely new foundation module to `Check` therefore means editing
 `allowed_closure` in that script, on purpose.
 
-`check-no-known-gap.sh` reads the same tree for a different claim: the
-coverage ledger has **no known gap** — no shape an arm ought to reach and
-does not.  The mechanical form of that is that no decline site names
+`check-no-known-gap.sh` reads the same tree for a different property: there is
+**no known gap** — no shape an arm ought to reach and does not.  The README
+does not advertise this, deliberately; it is a guard against drift, not a
+promise to users.  The mechanical form of that is that no decline site names
 `Decline.ShapeScope.incomplete`, so the script reads every `.shapeUnsupported`
 site in `src/InductiveModels/` and fails if one does.  It counts the
 `.outOfScope` sites too, so a refactor that moved the scope off the

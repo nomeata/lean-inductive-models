@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# `README.md`'s coverage ledger claims there is **no known gap** — no shape an
-# arm ought to reach and does not.
+# No shape an arm ought to reach and does not: nothing in this tool declines
+# with `incomplete`.
 #
 # The vocabulary for a gap is deliberately kept: `Decline.ShapeScope` still has
 # both `incomplete` ("not as complete as it should be") and `outOfScope`
 # ("intentionally does not handle"), because the day a genuine gap appears it
-# must be recordable as one rather than dressed up as a boundary. What the
-# ledger claims is that *nothing produces* the first scope today, and a claim
-# about production is a claim about reach: a decline site added next month is a
-# gap the README no longer describes.
+# must be recordable as one rather than dressed up as a boundary. What holds
+# today is that *nothing produces* the first scope, and a claim about
+# production is a claim about reach: a decline site added next month is a gap
+# nobody wrote down.
 #
 # So the mechanical form of the claim is: no decline site names `.incomplete`.
 # Every producer spells the scope on the same line as the constructor
@@ -53,7 +53,7 @@ for site in "${sites[@]}"; do
 done
 
 if (( ${#gaps[@]} > 0 )); then
-  echo "check-no-known-gap: README claims no known gap, but these sites decline .incomplete:" >&2
+  echo "check-no-known-gap: nothing declined .incomplete before; these sites now do:" >&2
   printf '  %s\n' "${gaps[@]}" >&2
   exit 1
 fi
