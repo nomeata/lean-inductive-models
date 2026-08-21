@@ -83,6 +83,17 @@ def declarationType? (x : Export) (name : Name) : Option (List Name × Expr) :=
       (constructors.find? (·.name == name)).map (fun ctor => (ctor.levelParams, ctor.type)) <|>
       (recursors.find? (·.name == name)).map (fun rec => (rec.levelParams, rec.type))
 
+/-- A published theorem's proof with its telescope stripped.  The one-layer
+adapter's ι rules are `Eq.refl` under `fun p⃗ M⃗ S⃗ f⃗ => …`, and this is what
+reads that back. -/
+partial def theoremBody? (x : Export) (name : Name) : Option Expr :=
+  let rec strip : Expr → Expr
+    | .lam _ _ body _ => strip body
+    | other => other
+  x.decls.findSome? fun declaration => match declaration with
+    | .thm got _ _ value _ => if got == name then some (strip value) else none
+    | _ => none
+
 def replaceDeclarationType (x : Export) (name : Name) (type : Expr) : Export :=
   { x with decls := x.decls.map fun declaration => match declaration with
     | .ax got params _ isUnsafe =>
@@ -401,6 +412,23 @@ def run (root : String) : IO UInt32 := do
       branchCertificate.all generatedNames.contains &&
       (Check.check generated).all fun violation =>
         !#[`MutualBranchA, `MutualBranchB].contains violation.familyOwner
+
+  -- **The rules are `Eq.refl`, and that is a property of the adapter and not
+  -- of these two blocks.**  A public recursor here transports the private
+  -- computation across the owner's `unroll_roll`, which is the private
+  -- family's own ι rule at the tower's projections and therefore reflexivity;
+  -- proof irrelevance collapses every path the rule could carry, at one
+  -- recursive field and at three.  Nothing else in the corpus states this, so
+  -- a rule that stopped reducing would otherwise be caught only by the kernel
+  -- gate, and only as a type error with no name on it.
+  let publishedRules := #[Naming.iotaName `MutualLayerA.rec 0,
+    Naming.iotaName `MutualLayerB.rec 0, Naming.iotaName `MutualLayerB.rec 1,
+    Naming.iotaName `MutualBranchA.rec 0, Naming.iotaName `MutualBranchB.rec 0]
+  state := state.check "every published one-layer iota rule is Eq.refl" <|
+    publishedRules.all fun rule =>
+      (theoremBody? generated rule).any fun body => match body.getAppFn with
+        | .const name _ => name == ``Eq.refl
+        | _ => false
 
   IO.println s!"mutual one-layer diagnostic: {state.passed} passed, {state.failed.size} failed"
   for failure in state.failed do IO.eprintln s!"FAIL: {failure}"

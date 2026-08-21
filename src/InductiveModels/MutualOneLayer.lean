@@ -71,9 +71,10 @@ member is unindexed, unnested, safe, and never-zero.  A changed member has one
 constructor and at least one direct recursive field; all recursive fields in
 the block must be direct and independent of later fields.
 
-**How many** recursive fields a constructor has is never asked: the ι rules
-are proved by [`InductiveModels.oneLayerNaryCompatibility`], which eliminates
-one field per step. -/
+**How many** recursive fields a constructor has is never asked, here or
+anywhere below: a rule's arity does not reach its proof, which is `Eq.refl` at
+every field count.  See the note above
+[`InductiveModels.buildMutualOneLayerRecursors`]. -/
 private def classifyMutualOneLayer (types : Array EIndType)
     (constructors : Array ECtor) : GenM (Option (Array MutualMemberShape)) := do
   unless types.size ≥ 2 do return none
@@ -692,22 +693,17 @@ private def mutualConstructorAgreement (all : Array Name) (constructors : Array 
   transOf eqi shape.level publicCarrier (← mkStep storedFields) storedMajor unrolledMajor
     storageEquality reverse
 
-private structure MutualRecursorPlan where
-  privateMotives : Array Expr
-  privateMinors : Array Expr
-  cores : Array Expr
-  publicRecursors : Array Expr
-  recLevels : List Level
-  deriving Inhabited
-
 /-- One source recursor prefix interpreted simultaneously over the private
-mutual fixpoint.  Public minors are pulled back along every member's `unroll`;
-their results are transported only across the owner-keyed constructor
-agreement. -/
+mutual fixpoint, answering with the block's public recursors — one per member,
+as a lambda over that member's public carrier, in `all` order.  Public minors
+are pulled back along every member's `unroll`; their results are transported
+only across the owner-keyed constructor agreement.  The private motives, the
+private minors and the cores they build are that answer's scaffolding and stay
+inside it. -/
 private def mutualRecursorPlan (types : Array EIndType) (constructors : Array ECtor)
     (members : Array MutualMemberShape) (certificate : IsoFamilyImplementation)
     (eqi : EqInfo) (sourceRecursor : ERec) (parameters publicMotives publicMinors : Array Expr)
-    (levels : List Level) : GenM MutualRecursorPlan := do
+    (levels : List Level) : GenM (Array Expr) := do
   let all := types.map (·.name)
   let lparams := types[0]!.levelParams
   let motiveLevel := if sourceRecursor.levelParams.length == lparams.length + 1 then
@@ -809,7 +805,7 @@ private def mutualRecursorPlan (types : Array EIndType) (constructors : Array EC
         source value equality base (fun result => pure <| mkApp publicMotives[index]! result)
       mkLambdaFVars #[value] transported
     publicRecursors := publicRecursors.push publicRec
-  return { privateMotives, privateMinors, cores, publicRecursors, recLevels }
+  return publicRecursors
 
 /-- Attach exact public constructors and direct layer-projection
 implementations.  `operation = true` above denotes public-to-private `roll`;
@@ -941,9 +937,45 @@ private def replaceMutualRecursorCalls (all : Array Name) (pre : Array Expr)
     return some (mkApp locals[ownerIndex]! arguments[pre.size]!)
   (result, replaced)
 
+/-! ## Why these ι rules are `Eq.refl`
+
+A public recursor here is `publicRec p = Eq.mp (congrArg C (unroll_roll p))
+(core (roll p))`, so its rule at a constructor reads as a transport over the
+private computation and looks like something that has to be *proved*.  It is
+not: every transport in it reduces away, and the rules are `Eq.refl` for the
+same reason the private family's own rules are.
+
+The fact underneath is one per member: **`unroll (roll value)` is
+definitionally `value`.**  For an unselected member `roll` and `unroll` are
+`fun value => value` and it holds by δβ.  For a changed member `roll` is the
+private constructor at the tower's projections and `unroll` is the private
+recursor at minors that rebuild the tower, and the certificate's own
+`unroll_roll` is the *private family's ι rule* at those projections — a rule
+`Mutual.lean` emits as `Eq.refl`, whose right-hand side is the tower rebuilt
+from what was projected out of `value`.  The declaration therefore states
+`unroll (roll value) = value` and is backed by reflexivity, which stands only
+where the two sides already agree definitionally; a member whose round trip
+were merely propositional could not publish that certificate at all.
+
+Two consequences, and they are what this construction rests on.  Each recursive
+field's source `unroll (roll pᵢ)` is definitionally `pᵢ`, so the constructor
+agreement is an equation between identical endpoints; and `Eq` is a `Prop`, so
+proof irrelevance identifies every `unroll_roll` — and with it every path any
+of these rules could transport along — with `Eq.refl`, which `Eq.rec` then
+eliminates.  What is left on both sides of a rule is the same minor at the
+same fields, and the kernel sees it.
+
+This used to be discharged by an n-ary compatibility construction in
+`OneLayer.lean` that eliminated one field equation per recursive field.  It was
+withdrawn once measurement showed what the paragraph above argues: no field
+step it could take was ever between distinct endpoints, at any arity, for any
+input the adapter can publish.  The `isDefEq` below is what remains of it — the
+claim stated where it is used, and refused by name where it fails.
+-/
+
 /-- Attach exact public mutual recursors and source-shaped iota theorems.  The
-definitions and proofs share one `MutualRecursorPlan`, so no installed public
-recursor is used as a syntax oracle. -/
+definitions and proofs share one recursor plan, so no installed public recursor
+is used as a syntax oracle. -/
 def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
     (fieldsIso : Iso) (members : Array MutualMemberShape) : GenM Iso := do
   let .induct sourceTypes sourceConstructors sourceRecursors := source
@@ -980,9 +1012,9 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
       let minors := binders.extract (sourceRecursor.numParams + sourceRecursor.numMotives)
         numPre
       let major := binders[numPre]!
-      let plan ← mutualRecursorPlan types constructors members certificate eqi sourceRecursor
-        parameters motives minors levels
-      mkLambdaFVars binders (mkApp plan.publicRecursors[ownerIndex]! major)
+      let publicRecursors ← mutualRecursorPlan types constructors members certificate eqi
+        sourceRecursor parameters motives minors levels
+      mkLambdaFVars binders (mkApp publicRecursors[ownerIndex]! major)
     let declaration := Declaration.defnDecl
       { name, levelParams := sourceRecursor.levelParams, type, value
         hints := ← hintsFor value, safety := .safe }
@@ -1016,8 +1048,8 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
         let publicMinorTable ← keyedMutualMinors
           (constructors.map fun constructor =>
             (constructor.name, publicConstructor constructor.name)) minors
-        let plan ← mutualRecursorPlan types constructors members certificate eqi sourceRecursor
-          parameters motives minors levels
+        let publicRecursors ← mutualRecursorPlan types constructors members certificate eqi
+          sourceRecursor parameters motives minors levels
         let constructorType := exact constructor.type
         let telescope ← instForall constructorType parameters
         forallBoundedTelescope telescope (some constructor.numFields) fun fields _ => do
@@ -1032,7 +1064,7 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
           let lhs := mkAppN (.const (publicRecursor owner) recLevels) (pre.push publicMajor)
           let rhs := exact rule.rhs |>.beta (pre ++ fields)
           let (localRhs, replaced) := replaceMutualRecursorCalls all pre
-            plan.publicRecursors rhs
+            publicRecursors rhs
           unless replaced == recursiveFields.size do
             badShape s!"{name}'s source rule has {replaced} recursive calls, expected \
               {recursiveFields.size}"
@@ -1040,11 +1072,6 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
             | badShape s!"{name}'s exact source rule has no motive result"
           let alpha := exact alphaSyntax
           let equalityLevel ← ilevel alpha
-          let localProposition := eqi.mk' equalityLevel alpha
-            (mkApp plan.publicRecursors[ownerIndex]! publicMajor) localRhs
-          let ownerPublicCarrier := mkAppN (.const ownerMember.publicSelf levels) parameters
-          let ownerUnroll := mkAppN (.const ownerMember.unroll levels) parameters
-          let ownerUnrollRoll := mkAppN (.const ownerMember.unrollRoll levels) parameters
           let privateConstructor := privateConstructor! ownerMember constructor.name
           let privateMajor := mkAppN (.const privateConstructor levels)
             (parameters ++ privateFields)
@@ -1071,8 +1098,6 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
             return layout
           let targetIndices := recursiveFields.map fun index =>
             all.idxOf fieldShape[index]!.target?.get!
-          let targetMembers := recursiveFields.map fun index =>
-            familyCertificateMember! certificate fieldShape[index]!.target?.get!
           let substitute := fun (values : Array Expr) => Id.run do
             let mut result := fields
             for slot in [0:recursiveFields.size] do
@@ -1089,51 +1114,11 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
                 arguments := arguments.push hypotheses[slot]!
                 slot := slot + 1
             return arguments
-          let layerAt := fun (values : Array Expr) =>
-            pure (mkAppN (.const (publicConstructor constructor.name) levels)
-              (parameters ++ substitute values))
           let minorAt := fun (values hypotheses : Array Expr) =>
             pure (mkAppN publicMinor (minorArguments values hypotheses))
           let publicIHAt := fun (slot : Nat) (value : Expr) =>
-            pure (mkApp plan.publicRecursors[targetIndices[slot]!]! value)
-          let fieldTypes ← recursiveFields.mapM fun index => inferType fields[index]!
-          let sources := recursiveFields.mapIdx fun slot index =>
-            mkAppN (.const targetMembers[slot]!.unroll levels)
-              (parameters.push privateFields[index]!)
+            pure (mkApp publicRecursors[targetIndices[slot]!]! value)
           let targets := recursiveFields.map fun index => fields[index]!
-          let roundTrips := recursiveFields.mapIdx fun slot index =>
-            mkAppN (.const targetMembers[slot]!.unrollRoll levels)
-              (parameters.push fields[index]!)
-          let privateIHs := recursiveFields.mapIdx fun slot index =>
-            mkApp plan.cores[targetIndices[slot]!]! privateFields[index]!
-          let ihAgreements ← (Array.range recursiveFields.size).mapM fun slot => do
-            let index := recursiveFields[slot]!
-            let targetIndex := targetIndices[slot]!
-            let targetShape := familyMember! members fieldShape[index]!.target?.get!
-            let targetMember := targetMembers[slot]!
-            let ihResultType ← inferType privateIHs[slot]!
-            let ihLevel ← ilevel ihResultType
-            let expected := eqi.mk' ihLevel ihResultType
-              (mkApp plan.publicRecursors[targetIndex]! sources[slot]!) privateIHs[slot]!
-            let arguments := #[
-              mkAppN (.const targetMember.privateSelf levels) parameters,
-              mkAppN (.const targetMember.publicSelf levels) parameters,
-              motives[targetIndex]!,
-              mkAppN (.const targetMember.roll levels) parameters,
-              mkAppN (.const targetMember.unroll levels) parameters,
-              mkAppN (.const targetMember.unrollRoll levels) parameters,
-              mkAppN (.const targetMember.rollUnroll levels) parameters,
-              plan.cores[targetIndex]!, privateFields[index]!]
-            match ← applyOneLayerIHCompatibility
-                [targetShape.level.normalize.dec.getD .zero, ihLevel]
-                arguments expected with
-            | .ok proof => pure proof
-            | .error message => badShape s!"{name}'s IH compatibility failed: {message}"
-          let agreement ← mutualConstructorAgreement all constructors members certificate eqi
-            owner constructor parameters privateFields levels
-          let coreIota := mkAppN (.const (privateIota! ownerMember constructor.name)
-              plan.recLevels)
-            (parameters ++ plan.privateMotives ++ plan.privateMinors ++ privateFields)
           let rolledMajor := mkAppN (.const ownerMember.roll levels)
             (parameters.push publicMajor)
           unless ← isDefEq rolledMajor privateMajor do
@@ -1143,17 +1128,14 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
               publicIHAt slot targets[slot]!)
           unless ← withTransparency .all <| isDefEq theoremRhs localRhs do
             badShape s!"{name}'s local minor does not match its exact source rule"
-          let proof ← oneLayerNaryCompatibility eqi ownerShape.level equalityLevel
-            ownerPublicCarrier motives[ownerIndex]!
-            (mkApp ownerUnroll privateMajor) agreement
-            (mkApp plan.cores[ownerIndex]! privateMajor) coreIota
-            (mkApp ownerUnrollRoll publicMajor)
-            fieldTypes sources targets roundTrips privateIHs ihAgreements
-            layerAt minorAt publicIHAt
-          let proof ← match ← checkOneLayerCompatibility s!"{name}'s compatibility"
-              proof localProposition with
-            | .ok proof => pure proof
-            | .error message => badShape message
+          -- The rule itself, asked of the exact statement that is about to be
+          -- emitted and at the transparency the kernel decides it with.  A
+          -- family whose round trip stopped being definitional fails *here*,
+          -- by name, instead of publishing a rule nothing backs.
+          unless ← withTransparency .all <| isDefEq lhs rhs do
+            badShape s!"{name} is not definitional: {publicRecursor owner} at \
+              {constructor.name} does not reduce to the rule's own right-hand side"
+          let proof := eqi.refl' equalityLevel alpha lhs
           let body := eqi.mk' equalityLevel alpha lhs rhs
           let some fieldsType := closeForallsExact? telescope fields body
             | badShape s!"{constructor.name}'s exact field telescope is too short"

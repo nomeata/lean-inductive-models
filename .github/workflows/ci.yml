@@ -147,7 +147,6 @@ jobs:
           }
           compile_only_targets=(
             OneLayerProjectionPrototype
-            OneLayerRecursorProof
           )
           test/scripts/check-ci-serialized-builds.sh
           test/scripts/check-checker-imports.sh

@@ -25,7 +25,6 @@ build_bounded() {
 
 compile_only_targets=(
   OneLayerProjectionPrototype
-  OneLayerRecursorProof
 )
 # One binary, one suite per invocation, named by its first argument. Every
 # suite takes the repository root as its optional first argument or ignores

@@ -59,14 +59,13 @@ build_bounded() {
 }
 ```
 
-The compile-only targets are the two proof oracles — the `lean_lib`s under
-`test/` that no suite module imports, so nothing builds them as a side effect of
+The compile-only targets are the proof oracles — the `lean_lib`s under `test/`
+that no suite module imports, so nothing builds them as a side effect of
 building the test binary:
 
 ```bash
 compile_only_targets=(
   OneLayerProjectionPrototype
-  OneLayerRecursorProof
 )
 ```
 

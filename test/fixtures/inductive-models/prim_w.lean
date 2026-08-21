@@ -182,7 +182,10 @@ inductive Trine (α : Type) : Type where
    layer over exactly this carrier and fold an n-ary compatibility chain over
    that ι rule, and these three were the only occupants of that composition; it
    was withdrawn, and arm W publishes them itself, so what they pin now is the
-   arm's own reach and not a layer over it. -/
+   arm's own reach and not a layer over it.  The chain outlived that adapter by
+   a while and has since gone too — with only the plain mutual adapter left
+   calling it, and that adapter's round trips definitional, no step it took was
+   ever between distinct endpoints. -/
 inductive TripleInf (P Q : Type) : Type where
   | mk : (P → TripleInf P Q) → (Q → TripleInf P Q) → (P → Q → TripleInf P Q) →
       TripleInf P Q
