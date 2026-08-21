@@ -8,6 +8,29 @@ unit-like witnesses, K reductions, structure eta, and intrinsic projections.
 The small exact type synthesizer used by the projection rule reads only
 declaration and local binder types, unfolding transparent export syntax and
 nothing else.
+
+**Every type comparison below is `==`, which is `Expr.eqv`, and that is the
+exact granularity the export format has rather than a laxity.** `Expr.eqv`
+ignores binder names and binder info; `Expr.equal` does not. The stricter test
+is unavailable *through an export* in both directions:
+
+* an export interns its expression arena by `Expr.eqv`
+  ([`InductiveModels.Interner`], and lean4export does the same), so two types
+  that differ only in a binder are one node and carry whichever binder the
+  first of them interned. `nest_fam_arg`'s `PTP` is written
+  `PTP (α : Type) (β : Type)` and its exported type former reads
+  `∀ (α : Type) (α : Type), Type`, while its recursor record kept `α` and `β`.
+  No declaration can agree with both;
+* consequently a written model is not a fixed point of a strict check even when
+  the generator emitted the owner's binders exactly. The generated interface
+  *is* exact in memory — `ComposedRecursorSyntaxTest.runBinderFidelity` pins
+  that with `Expr.equal` — and rendering it can still quantize a binder name
+  onto an earlier eqv-equal node.
+
+So a strict comparison here would reject correct output for a property of
+arena insertion order. Slots the checker reconstructs binders for itself
+(`self`, `x`, `y`, `major`) are subject to the same quantization and have no
+owner record to read a name from at all.
 -/
 
 open Lean

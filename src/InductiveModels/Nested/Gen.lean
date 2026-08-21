@@ -1044,11 +1044,22 @@ structure RecShape where
   ty : Expr
   deriving Inhabited
 
-/-- `Bₖ.rec`'s statement at the model's names — the same table `nested::add`
-restores the *export's* recursor with, one set of names along, so
-`T._model.rec_k` and `T.rec_k` are the same statement about different
-constants. -/
-def recShape (g : Gen) (k : Nat) (heads : Std.HashMap Name (Nat × Expr)) :
+/-- `Bₖ.rec`'s statement at the model's names.
+
+`publicRecursorType?` is the **export's own recursor type under the public
+name rewrite**, which is what the emitted statement is spelled from when the
+export has the record — the recursor's analogue of
+[`InductiveModels.PrimSite.sourceCtors`], and the same treatment
+[`InductiveModels.primIso`] and [`InductiveModels.mutualIso`] already give
+their recursors.  The block recursor Lean minted is the fallback and remains
+the proof and layout oracle either way: the two are the same statement about
+different constants, and differ only where the export's record and the block's
+own telescope disagree about a *binder name*.  They do disagree: an export
+interns expressions up to `Expr.eqv`, which ignores binder names, so a
+declaration whose type former collapsed onto an earlier node carries that
+node's binder names while its recursor record keeps its own. -/
+def recShape (g : Gen) (k : Nat) (heads : Std.HashMap Name (Nat × Expr))
+    (publicRecursorType? : Option Expr := none) :
     GenM RecShape := do
   let src := g.blockRec k
   let .recInfo rv ← constInfo src | badShape s!"{src} is not a recursor"
@@ -1075,7 +1086,7 @@ def recShape (g : Gen) (k : Nat) (heads : Std.HashMap Name (Nat × Expr)) :
   if rv.numMotives != g.members.size then badShape s!"{src} has {rv.numMotives} motives"
   return { k, src, v, lparams := rv.levelParams
            nm := rv.numMotives, nmin := rv.numMinors, nidx := rv.numIndices
-           ty := restore heads rv.type }
+           ty := publicRecursorType?.getD (restore heads rv.type) }
 
 /-- The value of `T._model.rec_k`: the block's recursor at a **shifted motive
 vector** — the caller's own at the root, the caller's composed with `unpack` at

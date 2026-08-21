@@ -516,6 +516,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let mut shapes : Array Gen.RecShape := #[]
   for k in [0:pl.types.size] do
     let sh ← g.recShape k heads
+      ((exportRecursors.find? (·.name == exportRecs[k]!)).map fun exported =>
+        exactSource exported.type)
     let val ← g.recValue sh
     let d := Declaration.defnDecl
       { name := g.recName k, levelParams := sh.lparams, type := sh.ty, value := val
