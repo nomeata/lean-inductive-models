@@ -369,14 +369,29 @@ indexed fibre. Both exist so that the intrinsic projections select literally.
 ### What is covered, and what is not
 
 A decline is not a failure: the source declaration passes through unchanged and
-the run reaches exit code 2. What follows is the whole ledger.
+the run reaches exit code 2. This table is the whole ledger; the notes after it
+carry the argument for each row.
 
-**No known gap** — no shape an arm ought to reach and does not. There is no
-decline site in the code that says `incomplete`, and
-`test/scripts/check-no-known-gap.sh` is what keeps that sentence honest: it
-fails the build the day one is added without this ledger being rewritten.
+| Shape | What the run does | A gap? |
+| --- | --- | --- |
+| anything an arm ought to reach | models it | **no known gap** |
+| a nested occurrence | declines, `outOfScope` | no — a stated boundary |
+| storage no pad or box lands on the carrier's sort | declines, `outOfScope` | no — a stated boundary |
+| a field naming an earlier field the model does not select | models the owner, declines that projection rule | no — unstatable, not unbuilt |
+| a `Prop` structure-like carrying data fields | models the owner, emits no projections at all | no — unstatable at every instantiation |
+| a level gap the elaborator will not close | models it, and counts it | an accepted limitation |
 
-The last one was arm W's eligibility test. A non-indexed recursive owner at a
+`test/scripts/check-no-known-gap.sh` keeps the first row honest: it fails the
+build the day a decline site says `incomplete` without this ledger being
+rewritten. It counts decline *sites* rather than boundaries, and so reports
+three, because the second boundary below is stated in two arms.
+
+#### No known gap
+
+No shape an arm ought to reach and does not, and no decline site in the code
+says `incomplete`.
+
+The last gap was arm W's eligibility test. A non-indexed recursive owner at a
 never-zero sort whose recursion is not linear is arm W's or it is nobody's, and
 the arm used to refuse two further things — a loose-variable test on a binder
 type inside a recursive field's own telescope, and a carrier plan that could not
@@ -403,75 +418,122 @@ The `incomplete` verdict itself is kept, with nothing producing it, because the
 distinction it draws is worth having ready: a guard narrower than its arm must
 be recordable as a gap rather than dressed up as a boundary.
 
-**Two stated boundaries**, which are not gaps.
+#### Boundary: a nested occurrence
 
-- *A nested occurrence*. A field mentioning the owner as anything other than
-  `∀ z⃗, T p⃗ e⃗` after βζ head normalization is declined as out of scope: that
-  is nesting, and nesting is the nested construction's business. Nothing is
-  missing; a model built here would be the wrong layer's.
+A field mentioning the owner as anything other than `∀ z⃗, T p⃗ e⃗` after βζ head
+normalization is declined as out of scope: that is nesting, and nesting is the
+nested construction's business. Nothing is missing; a model built here would be
+the wrong layer's.
 
-  **The export is asked before that boundary is claimed.** The recursor's minor
-  premise for `C_j` binds one induction hypothesis per recursive field, so the
-  export itself says how many of `C_j`'s fields carry an occurrence, and the
-  decline is made only where that number is the number the shape analysis
-  reads. The fields it then cannot read are ones the kernel does not treat as
-  recursive either — a mention `δ` discards. Where the export asserts *more*,
-  it asserts a recursive occurrence at a field whose domain does not reduce to
-  the owner here; every arm represents a recursive field by replacing an
-  occurrence it can find, so there is no model of that recursor to build, and
-  the run fails naming the constructor and the two numbers rather than
-  reporting a boundary it is not standing on. The Kernel Arena's
-  `bad/rec-missing-ih` is the occupant: its recursive field is a stuck
-  `k`-recursor application that Lean's kernel reduces to the owner and
-  `Lean.Meta`'s conversion does not. A disagreement can only hide behind a
-  decline — wherever a model *is* built, `R._model` carries the exported
-  recursor's type verbatim and is kernel-checked as it is produced.
-- *Storage that no pad or box can land on the carrier's sort*. A field whose
-  level falls short of `Sort w` has to be padded into it, and the pad is the
-  derived exact-sort lift of `⊤` — a `PSigma'.{0,w}`, so it sits at exactly
-  `Sort w` at every `w`, maybe-zero included. The storing towers end there and
-  land at `Sort (max ℓ⃗ w)`, which is `Sort w` whenever the kernel's own
-  `is_geq(w, ℓᵢ)` on the input survives being re-asked as a *conversion*. Where
-  it does not, the field's level retains an `imax` that no `max`-shaped carrier
-  absorbs, and neither side can close it: the recursive box that removes an
-  `imax` exposed by a Π leaves an opaque atomic type carrying one, and at a
-  maybe-zero sort the box is unavailable outright, because every boxed level
-  carries a `max 1 ·` floor and no `max 1 ·` is ever `Prop`. There is no third
-  pad to build — one that cleared the `imax` would miss `Prop`, one that
-  reached `Prop` would not clear the `imax` — so this is a limit of Lean's
-  definitional equality on levels and not an unfinished arm. It is the same
-  fact as the projection decline below, met where storage is the whole carrier
-  rather than an addition to one.
+**The export is asked before that boundary is claimed.** The recursor's minor
+premise for `C_j` binds one induction hypothesis per recursive field, so the
+export itself says how many of `C_j`'s fields carry an occurrence, and the
+decline is made only where that number is the number the shape analysis reads.
+The fields it then cannot read are ones the kernel does not treat as recursive
+either — a mention `δ` discards.
 
-**One projection decline.** A field whose type names an earlier field the model
-does not select definitionally has no well-formed intrinsic projection ι rule to
-state, so the owner declines that rule. The occupant is an owner with a field at
-an opaque `imax` level under a `max`-shaped carrier. This is a limit of **Lean's
-definitional equality on levels**, and not a gap in this tool's level procedure,
-which is strictly stronger. The inequality is not in doubt: the kernel admitted
-the input by `is_geq`, which splits an `imax` into a stronger `max`-shaped
-bound and so never reasons about `imax` at all. But level conversion is
-normal-form equality with no ordering test and no absorption across differing
-bases — `max (max u v) w` normalizes to `w` and `max (imax u v) w` does not,
-because an `imax` atom absorbs into no `max` — and the storing tower has to
-*land* at `Sort w` under that equality. The recursive box removes the `imax`
-wherever the field's type can be inspected; at an opaque atomic type nothing
-can. The model is otherwise complete for such an owner: carrier, constructors,
+Where the export asserts *more*, it asserts a recursive occurrence at a field
+whose domain does not reduce to the owner here. Every arm represents a
+recursive field by replacing an occurrence it can find, so there is no model of
+that recursor to build, and the run fails naming the constructor and the two
+numbers rather than reporting a boundary it is not standing on. The Kernel
+Arena's `bad/rec-missing-ih` is the occupant: its recursive field is a stuck
+`k`-recursor application that Lean's kernel reduces to the owner and
+`Lean.Meta`'s conversion does not. A disagreement can only hide behind a
+decline — wherever a model *is* built, `R._model` carries the exported
+recursor's type verbatim and is kernel-checked as it is produced.
+
+#### Boundary: storage no pad or box lands on the carrier's sort
+
+A field whose level falls short of `Sort w` has to be padded into it, and the
+pad is the derived exact-sort lift of `⊤` — a `PSigma'.{0,w}`, so it sits at
+exactly `Sort w` at every `w`, maybe-zero included. The storing towers end there
+and land at `Sort (max ℓ⃗ w)`, which is `Sort w` whenever the kernel's own
+`is_geq(w, ℓᵢ)` on the input survives being re-asked as a *conversion*.
+
+Where it does not, the field's level retains an `imax` that no `max`-shaped
+carrier absorbs, and neither side can close it: the recursive box that removes
+an `imax` exposed by a Π leaves an opaque atomic type carrying one, and at a
+maybe-zero sort the box is unavailable outright, because every boxed level
+carries a `max 1 ·` floor and no `max 1 ·` is ever `Prop`. There is no third pad
+to build — one that cleared the `imax` would miss `Prop`, one that reached
+`Prop` would not clear the `imax` — so this is a limit of Lean's definitional
+equality on levels and not an unfinished arm. It is the same fact as the next
+entry, met where storage is the whole carrier rather than an addition to one.
+
+#### Unstatable: a projection whose codomain names an unselected field
+
+A field whose type names an earlier field the model does not select
+definitionally has no well-formed intrinsic projection ι rule to state, so the
+owner declines that rule. The occupant is an owner with a field at an opaque
+`imax` level under a `max`-shaped carrier.
+
+This is a limit of **Lean's definitional equality on levels**, and not a gap in
+this tool's level procedure, which is strictly stronger. The inequality is not
+in doubt: the kernel admitted the input by `is_geq`, which splits an `imax` into
+a stronger `max`-shaped bound and so never reasons about `imax` at all. But
+level conversion is normal-form equality with no ordering test and no absorption
+across differing bases — `max (max u v) w` normalizes to `w` and
+`max (imax u v) w` does not, because an `imax` atom absorbs into no `max` — and
+the storing tower has to *land* at `Sort w` under that equality. The recursive
+box removes the `imax` wherever the field's type can be inspected; at an opaque
+atomic type nothing can.
+
+The model is otherwise complete for such an owner: carrier, constructors,
 recursor and every recursor ι rule are built and check. Only the intrinsic
 projection *rules* are unstatable.
 
-**One accepted limitation.** Where the alternative is a decline, the planner
-decides a level gap with a complete decision procedure for Lean's level
-algebra, used only to widen the elaborator's answer and never to narrow it. A
-model admitted on that basis can be one Lean's stock kernel will not verify,
-because the stock kernel's level conversion is the incomplete normal-form test
-above. That is accepted and it is not a wrong model — it is correct under a
-complete level theory, and a checker with one accepts it. Every use of the
-widening is made visible instead: `--type-check-generated` is the gate that
-turns such a plan into a reported generated-kernel rejection, the stderr line
-`levels: N planner comparisons, M escapes` counts every pair the widening
-decided and the elaborator would not, and the Mathlib gate requires `M = 0` —
-the corpus condition under which the limitation was accepted.
+#### Unstatable: projections of a `Prop` structure-like carrying data
+
+`T._model.proj_j` is a function out of the modelled carrier landing in field
+`j`'s type, so it eliminates `T` at the motive `fun _ => A_j`. A `Prop`-valued
+structure-like that carries a data field is exported with no motive universe
+parameter — small elimination only — so the motive exists exactly when the
+kernel's own `infer_proj` walk admits field `j`. That walk asks for more than
+"`A_j` is a `Prop`": every *earlier* field whose binder still occurs in the
+remaining telescope must be a `Prop` too.
+
+Both clauses can fail for reasons that depend on the **instantiation**, and the
+model is generated once for the **polymorphic** declaration. A field at
+`PUnit.{u}` is a `Prop` at `u = 0` and is not at generic `u`. A field that is
+unconditionally a `Prop` — an `Eq`, say — can still be refused because an
+earlier field it names is not one. So the eligible set can be empty at generic
+levels while a consumer's `Expr.proj` at, say, `Owner.{0, 1}` is perfectly well
+typed; and it can stay empty at that instantiation too, for a field that *is* a
+`Prop` there but names an earlier data field.
+
+The owner is modelled either way — carrier, constructor, recursor and its ι rule
+all built and checked — and a raw `Expr.proj` in the input passes through
+unchanged with no `_model.proj_j` to type it against. A checker that meets one
+has to inline the elimination itself. This is a *silent absence* rather than a
+decline: the eligibility walk settles which projection slots exist before any is
+requested, so the decline in the previous entry — a verdict on a slot that *was*
+requested — never fires here. Declining the owner instead is not open either,
+since the Kernel Arena classifies these inputs `good` and requires exit 0.
+
+There is no single polymorphic declaration this tool could write that is sound
+at every instantiation, so this is Lean's polymorphic-versus-instantiated design
+showing through rather than an unfinished arm. An all-`Prop` structure-like is
+unaffected and does get its projections. The shape here cannot be written with
+the `structure` command, so it arises only from raw kernel declarations: the
+Arena's `tutorial/087` and `tutorial/089` are the occupants, and `bad/092` pins
+the earlier-field clause.
+
+#### Accepted: a level gap closed by the complete planner
+
+Where the alternative is a decline, the planner decides a level gap with a
+complete decision procedure for Lean's level algebra, used only to widen the
+elaborator's answer and never to narrow it. A model admitted on that basis can
+be one Lean's stock kernel will not verify, because the stock kernel's level
+conversion is the incomplete normal-form test above. That is accepted and it is
+not a wrong model — it is correct under a complete level theory, and a checker
+with one accepts it.
+
+Every use of the widening is made visible instead: `--type-check-generated` is
+the gate that turns such a plan into a reported generated-kernel rejection, the
+stderr line `levels: N planner comparisons, M escapes` counts every pair the
+widening decided and the elaborator would not, and the Mathlib gate requires
+`M = 0` — the corpus condition under which the limitation was accepted.
 
 ## Copyright and license
 
