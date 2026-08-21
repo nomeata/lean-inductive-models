@@ -307,12 +307,11 @@ and each route is a definition over that site.  The chain below is the route
 **order**, and it is the whole of the dispatch: a declaration that satisfies
 two of these conditions takes the earlier one, exactly as it did when the
 seven bodies were seven branches of one definition. -/
-def primIsoWithInterface (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
+def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
-    (sourceRecursor? : Option ERec := none)
-    (interface? : Option PrimInterfaceNames := none) : GenM Iso := do
+    (sourceRecursor? : Option ERec := none) : GenM Iso := do
   let (site, st) ← mkPrimSite tname root lparams np memberTy exportCtors reserved
-    sourceRecursor? interface?
+    sourceRecursor?
   -- **The chain is total on the never-zero route, and this is where that used
   -- to be false.**
   --
@@ -381,17 +380,5 @@ def primIsoWithInterface (tname : Name) (root : Name) (lparams : List Name) (np 
            emptyCarriers
            requires := if site.armC then #[site.skelN] else st.requires
            aliases }
-
-/-- Public entry point for the simple construction.
-
-The implementation is factored from this boundary so a selected recursive
-family can be built once at private names and then adapted to its public
-one-layer interface.  Until that adapter is selected this wrapper is exactly
-the historical call, including collision retry and declaration order. -/
-def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
-    (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
-    (sourceRecursor? : Option ERec := none) : GenM Iso :=
-  primIsoWithInterface tname root lparams np memberTy exportCtors reserved sourceRecursor?
-
 
 end InductiveModels

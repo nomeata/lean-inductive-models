@@ -6,7 +6,7 @@ import InductiveModels.Simple.Tight
 /-!
 # One primitive model's site: everything settled before the route is chosen
 
-`primIsoWithInterface` used to be a single definition whose six arms all read
+`primIso` used to be a single definition whose six arms all read
 one seven-hundred-line `let` context. The context is this record and the arms
 are separate definitions over it, which is what lets the arms be separate
 modules — and separate translation units — without any of them being a copy
@@ -45,7 +45,6 @@ structure PrimSite where
   sourceCtors : Array (Name × Expr)
   reserved : Std.HashSet Name
   sourceRecursor? : Option ERec
-  interface? : Option PrimInterfaceNames
   us : List Level
   model : Name
   impl : Name
@@ -83,7 +82,6 @@ structure PrimSite where
   ctorPairs : Array (Name × Name)
   tbl : Std.HashMap Name (Nat × Expr)
   installedRecTy : Expr
-  exactSource? : Option (Expr → Expr)
   publicSource : Expr → Expr
   publicRecTy : Expr
   emptySlots : Array (Option Nat)
@@ -185,8 +183,7 @@ settled them: the name guards run before the shape analysis, and the shape
 analysis before the route booleans that read it. -/
 def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
-    (sourceRecursor? : Option ERec := none)
-    (interface? : Option PrimInterfaceNames := none) : GenM (PrimSite × PrimOut) := do
+    (sourceRecursor? : Option ERec := none) : GenM (PrimSite × PrimOut) := do
   let us := lparams.map Level.param
   -- **βζ-dead owner mentions leave the telescope here, and nowhere else.**
   --
@@ -217,7 +214,7 @@ def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (me
   -- must not collide with the input — while descendants of `tname` are built
   -- under `root`. An exact raw private constructor need not be a descendant of
   -- its public type name, and then its model name remains raw and exact.
-  let interface := interface?.getD (PrimInterfaceNames.standard tname root exportCtors)
+  let interface := PrimInterfaceNames.standard tname root exportCtors
   unless interface.ctors.size == exportCtors.size && interface.iotas.size == exportCtors.size do
     badShape s!"{tname}'s implementation name bundle has the wrong constructor arity"
   let model := interface.model
@@ -512,19 +509,26 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
     { decls := #[], levelParams := lparams, members := #[], selfNames := #[selfN]
       numAll := 1, ctors := ctorPairs, recs := #[recN], iotas := #[], spliced := #[] }
   let installedRecTy := restore tbl rv.type
-  -- The one-layer adapter publishes the source interface verbatim modulo
-  -- names.  Unlike `restore`, this map retains every source occurrence's
-  -- exact universe arguments; installed metadata remains the proof/layout
-  -- oracle in `installedRecTy`.
-  let exactSource? := interface?.map fun _ => fun expression =>
+  -- **The public interface is published verbatim modulo names.**  Unlike
+  -- `restore`, this map rewrites the owner's, its constructors' and its
+  -- recursor's *names* and touches nothing else, so every source occurrence
+  -- keeps the exact universe arguments it was written at.  `restore` would
+  -- replace each head by the model constant at the model's *own* level
+  -- parameters, which is definitionally the same term and syntactically a
+  -- different one — a source-authored `T.rec (max u 0) v` came back as
+  -- `T.rec._model u v` and the exact statement checker rejected the ι rule it
+  -- appears in.  The model's owner, constructors and recursor carry exactly
+  -- their source's level parameters, so the rename is total and needs no
+  -- level rewriting at all.
+  --
+  -- Installed metadata remains the proof/layout oracle in `installedRecTy`;
+  -- this map only spells public statements.
+  let publicSource := fun expression =>
     mapConstsE (fun name =>
       if name == tname then some selfN
       else if name == ern then some recN
       else ctorPairs.findSome? fun (source, target) =>
         if name == source then some target else none) expression
-  let publicSource := fun expression => match exactSource? with
-    | some exact => exact expression
-    | none => restore tbl expression
   let publicRecTy := publicSource (sourceRecursor?.map (·.type) |>.getD rv.type)
 
   -- **Arm E**: a non-indexed owner every one of whose constructors has a
@@ -1309,7 +1313,7 @@ does not store, which its positivity check should have made unspellable"
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, interface?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armG, eqi, ctorPairs, tbl, installedRecTy, exactSource?, publicSource, publicRecTy, emptySlots, armE, eStored, directRoute?, armF, armC, wTagged, wPlan, armW, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
+  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armG, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armE, eStored, directRoute?, armF, armC, wTagged, wPlan, armW, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
           { out, requires, spliced, projectionOverrides })
 
 end InductiveModels

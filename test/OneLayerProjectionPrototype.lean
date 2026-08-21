@@ -3,9 +3,13 @@ import Lean
 /-!
 # One-layer public carriers: a projection prototype
 
-This is deliberately separate from the generator.  It tests the proposed API
+This is deliberately separate from the generator.  It tests the layered API
 shape on the smallest relevant signature: one ordinary field and one
-infinitary recursive field.
+infinitary recursive field.  A *singleton* owner no longer takes a layered
+route — the simple construction publishes its interface directly — but the
+plain mutual adapter (`InductiveModels.MutualOneLayer`) still rolls a public
+layer over a private carrier exactly like this, so the statement below is the
+shape that adapter's projection rules have to reach.
 
 `M` stands for the current recursive model and remains private.  `P A` is the
 one-layer carrier `F (M A)`.  The public constructor converts its recursive

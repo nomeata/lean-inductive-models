@@ -188,15 +188,6 @@ def propositionProjectionIotaUsesLiteralField (type : EIndType) : Bool :=
   type.all == [type.name] && type.ctors.length == 1 &&
     exactFormerEndsInProp type.type
 
-/-- The first production one-layer carrier tranche: one recursive member, one
-constructor, no indices and no nested occurrences.  Generation and checking
-share this predicate so a failed/collision fallback can never make the checker
-silently accept the new literal contract from an old transported model. -/
-def oneLayerProjectionFamily (types : Array EIndType) (type : EIndType) : Bool :=
-  types.size == 1 && type.all == [type.name] && type.ctors.length == 1 &&
-    type.numIndices == 0 && type.numNested == 0 && type.isRec &&
-    !type.isUnsafe
-
 /-- The literal serialized telescope boundary shared by generation and
 checking.  Deliberately does not unfold a reducible result former: selection
 must not depend on an environment the serialized certificate cannot replay. -/

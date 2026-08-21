@@ -471,13 +471,13 @@ def expectedPrim : List Row :=
   -- its child binder's domain `E0` is empty, so `NbVac` is inhabited, and it
   -- stays on arm W at 21.
   , ("empty_no_base",
-      [("NbLin", 23), ("Nt", 6), ("NbBr", 16), ("NbInf", 224), ("_wcore.Subtype", 10),
+      [("NbLin", 15), ("Nt", 6), ("NbBr", 8), ("NbInf", 215), ("_wcore.Subtype", 10),
        ("PProd'", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
        ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
-       ("_wcore.PProd", 9), ("E0", 2), ("NbVac", 21)],
+       ("_wcore.PProd", 9), ("E0", 2), ("NbVac", 12)],
       [("Eq", "prim model: a basis primitive")])
   -- Lifted arm F at its minimum: one proof field and one constant result
   -- index. The latter forces the packed equation; the existing one-field
@@ -769,7 +769,7 @@ def expectedPrim : List Row :=
        ("Mx._model._impl.skel", 12), ("Two2", 8), ("Two2._model._impl.skel", 6),
        ("Fn", 8), ("Fn._model._impl.skel", 6), ("Sm3", 8),
        ("Sm3._model._impl.skel", 12), ("Br", 8), ("Br._model._impl.skel", 12),
-       ("NoBase", 18), ("NoBase._model._impl.skel", 16), ("Tri3", 8),
+       ("NoBase", 18), ("NoBase._model._impl.skel", 8), ("Tri3", 8),
        ("Tri3._model._impl.skel", 6)],
       [ ("Eq", "prim model: a basis primitive")])
   -- Arm W's two recursive-boxing seams. `WData` stores a non-recursive
@@ -812,62 +812,50 @@ def expectedPrim : List Row :=
   -- instantiation a target took — `#print axioms` does, and that is the report
   -- the section carries: these three at `[propext, Classical.choice,
   -- Quot.sound]` against every other target's `[propext, Quot.sound]`.
-  -- `Twin`, `Mixed`, `TwinInf`, and `Prefix` are the binary one-layer
-  -- public-carrier tranche, and `Triple`, `Quad`, `Trine`, `TripleInf`,
-  -- `QuadInf` and `TrineInf` are the same route at three and four recursive
-  -- fields — the first three on arm E, the last three on arm W. The assertion
-  -- in `runOne` requires the complete one-layer private certificate for each of
-  -- the six: nothing counts fields, so an arity restriction reintroduced
-  -- anywhere shows up here as a missing certificate.
+  -- `Twin`, `Mixed`, `TwinInf`, and `Prefix` are one recursive constructor at
+  -- two recursive fields, and `Triple`, `Quad`, `Trine`, `TripleInf`,
+  -- `QuadInf` and `TrineInf` are the same shape at three and four — the first
+  -- three on arm E, the last three on arm W. A direct one-layer adapter used
+  -- to publish all ten over a private fixpoint; it was withdrawn, and the
+  -- assertion in `runOne` now requires each of them to publish its *complete*
+  -- public family — carrier, constructor, recursor, ι rule and one intrinsic
+  -- projection plus literal ι rule per field — with **no** private certificate
+  -- underneath. Nothing counts fields, so an arity restriction reintroduced
+  -- anywhere shows up here as a missing public face.
   --
-  -- **Six of that tranche are no longer on arm W, and the reason is that they
-  -- are empty.** `Twin`, `Mixed`, `Prefix`, `Triple`, `Quad` and `Trine` were
+  -- **Six of them are no longer on arm W, and the reason is that they are
+  -- empty.** `Twin`, `Mixed`, `Prefix`, `Triple`, `Quad` and `Trine` were
   -- each written with a single constructor and no base, so every one of them
   -- has a bare recursive field in every constructor and is uninhabited; arm E
-  -- now reaches that whole shape class rather than its linear corner and takes
-  -- them, at 16/19/20/18/20/21 declarations against the W construction's
-  -- 22/25/26/24/26/27. The models are exact and cheaper — the carrier really
-  -- is `⊥` — and the one-layer certificate assertion below still holds for
-  -- `Triple`, `Quad` and `Trine`, because the adapter is chosen on the
-  -- declaration's shape and not on the arm. **`InductiveModels.oneLayerNaryCompatibility`
-  -- is therefore still pinned at three and four fields by exactly these rows**:
-  -- reinstating an arity cap in its chain is a type error at `Triple`, on arm E,
-  -- and the counts above are what say the six stay where they are. A base
-  -- constructor would *cost* rather than buy, because
-  -- `InductiveModels.phase1DirectTypeOneLayerEligible` asks for exactly one
-  -- constructor and would drop them off the one-layer route entirely.
+  -- reaches that whole shape class rather than its linear corner and takes
+  -- them. The models are exact and cheaper — the carrier really is `⊥`.
   --
-  -- **What the move did lose is the composition**, and `TripleInf`, `QuadInf`
-  -- and `TrineInf` are what restore it: the one-layer adapter over an *arm-W*
-  -- private model past two recursive fields. There is one way into that
-  -- combination — a single constructor, every recursive occurrence under a
-  -- binder, since a bare one would make the declaration empty and arm E's — so
-  -- these three are `TwinInf`'s shape at three and four fields, `TrineInf`
-  -- with an ordinary field in front of its three. Arm W at those arities is
-  -- itself still exercised elsewhere (`prim_carve`'s `Sm3`, `infinitary`'s
-  -- `GTree`, `nest_fam_arg`'s `Both` and `Key`), but every one of those is
-  -- multi-constructor and so out of the one-layer route's reach.
+  -- `TripleInf`, `QuadInf` and `TrineInf` are the same arities on **arm W**.
+  -- There is one way into that combination — a single constructor, every
+  -- recursive occurrence under a binder, since a bare one would make the
+  -- declaration empty and arm E's — so these three are `TwinInf`'s shape at
+  -- three and four fields, `TrineInf` with an ordinary field in front of its
+  -- three. Arm W at those arities is itself still exercised elsewhere
+  -- (`prim_carve`'s `Sm3`, `infinitary`'s `GTree`, `nest_fam_arg`'s `Both`
+  -- and `Key`), all of them multi-constructor.
   , ("prim_w",
       [("Tree", 225), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
        ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
-       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Triple", 18),
-       ("Wty", 23), ("Q", 8), ("P", 6), ("Dep", 12), ("Bad", 12), ("TwinInf", 23),
-       ("Utd", 14), ("TrineInf", 27), ("Wt", 20), ("Br", 12), ("Trine", 21),
-       ("Mixed", 19), ("Quad", 20), ("QuadInf", 27), ("TripleInf", 25),
-       ("Twin", 16), ("Prefix", 20)],
+       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Triple", 10),
+       ("Wty", 14), ("Q", 8), ("P", 6), ("Dep", 12), ("Bad", 12), ("TwinInf", 14),
+       ("Utd", 14), ("TrineInf", 18), ("Wt", 20), ("Br", 12), ("Trine", 12),
+       ("Mixed", 10), ("Quad", 12), ("QuadInf", 18), ("TripleInf", 16),
+       ("Twin", 8), ("Prefix", 12)],
       [ ("Eq", "prim model: a basis primitive")])
-  -- **The W arm reached without the one-layer adapter's reflexive selectors,
-  -- and the family of dependent fields it now selects on its own.** `prim_w`'s
-  -- `Prefix` and `Wty` are this shape *with* the adapter, so their projection
-  -- rules are proved by `Eq.refl` against a selector the adapter supplies.
-  -- Every owner in `w_dependent_field` hides its result former behind a
-  -- reducible definition — the same idiom `HiddenIndexed` uses in
-  -- `indexed_fibre_boundary` — so
-  -- [`InductiveModels.phase1DirectTypeOneLayerEligible`] refuses it and the
-  -- legacy W arm builds the model instead.
+  -- **The W arm's own dependent-field selectors.** Every owner in
+  -- `w_dependent_field` hides its result former behind a reducible definition
+  -- — the same idiom `HiddenIndexed` uses in `indexed_fibre_boundary` — which
+  -- is what kept them off the withdrawn direct one-layer adapter while it
+  -- existed. The arm has to reach their stored fields itself, and `prim_w`'s
+  -- `Prefix` and `Wty` are the same question without the disguise.
   --
   -- The arm's *recursor* is `WT.Wrec`, whose ι rule is a theorem, and while
   -- that was also its selector `WDep._model.proj_1`'s codomain
@@ -1082,7 +1070,7 @@ def expectedPrim : List Row :=
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
-       ("_wcore.PProd", 9), ("DeadBranch", 12), ("DeadStruct", 16), ("DeadProp", 6)],
+       ("_wcore.PProd", 9), ("DeadBranch", 12), ("DeadStruct", 8), ("DeadProp", 6)],
       [("Eq", "prim model: a basis primitive")])
     -- **The four positions the spine/block split can be in**, on both routes
     -- that store a field telescope. `WFlat` is all block and no spine at the
@@ -1163,34 +1151,55 @@ def runOne (root : String) (a : TAcc) (r : Row)
       "w_core: derived False did not model after fixed Nat support"
   if name == "prim_w" then
     let emittedNames := decls.flatMap (·.names.toArray)
+    -- **A recursive single-constructor owner has no adapter, and that is the
+    -- pin.**  These six are the shapes the withdrawn direct one-layer route
+    -- used to take — three and four recursive fields, bare and infinitary —
+    -- and the whole of what it published is now the simple construction's own
+    -- output: the public carrier, its constructor, its recursor, its ι rule
+    -- and one intrinsic projection plus literal ι rule per field, with no
+    -- private fixpoint, no `roll`/`unroll` pair and no round-trip laws
+    -- underneath. The certificate names are asserted *absent* so a route that
+    -- reintroduces the layer fails here rather than silently costing one
+    -- `Eq.rec` transport per recursive field again.
     let certificate := fun (owner : Name) =>
       let privateRoot := Name.str (Naming.modelName owner) "_impl"
       #[Name.str privateRoot "self", Name.str privateRoot "ctor_0",
         Name.str privateRoot "rec", Name.str privateRoot "rec_iota_0",
         Name.str privateRoot "roll", Name.str privateRoot "unroll",
         Name.str privateRoot "unroll_roll", Name.str privateRoot "roll_unroll"]
-    for owner in [`Triple, `Quad, `Trine, `TripleInf, `QuadInf, `TrineInf] do
+    let fieldCounts : List (Name × Nat) :=
+      [(`Triple, 3), (`Quad, 4), (`Trine, 4), (`TripleInf, 3), (`QuadInf, 4),
+        (`TrineInf, 4), (`Wty, 2), (`Twin, 2), (`TwinInf, 2), (`Mixed, 3),
+        (`Prefix, 4)]
+    for (owner, fields) in fieldCounts do
+      let recursor := Name.str owner "rec"
+      let publicFaces := #[Naming.modelName owner, Naming.modelName recursor,
+        Naming.iotaName recursor 0] ++
+        (Array.range fields).flatMap fun index =>
+          #[Naming.projectionName owner index, Naming.projectionIotaName owner index]
       a := check a
         (rep.generated.any (·.1 == owner) &&
-          emittedNames.contains (Naming.modelName owner) &&
-          (certificate owner).all emittedNames.contains)
-        s!"prim_w: {owner} did not generate with the complete one-layer certificate"
-    -- **Which arm is under each certificate, asserted rather than inferred.**
-    -- The certificate above is arm-blind on purpose, so the split that moved
+          !rep.declined.any (·.1 == owner) &&
+          publicFaces.all emittedNames.contains)
+        s!"prim_w: {owner} did not generate its complete adapter-free public family"
+      a := check a (!(certificate owner).any emittedNames.contains)
+        s!"prim_w: {owner} carries a private one-layer certificate again"
+    -- **Which arm is under each owner, asserted rather than inferred.**
+    -- The check above is arm-blind on purpose, so the split that moved
     -- silently when arm E widened is invisible to it: `Triple`, `Quad` and
     -- `Trine` went from arm W to arm E and nothing went red. Arm W is the only
     -- arm that emits the two towers, so their presence is the arm. The `Inf`
-    -- three are the one-layer route's only occupants past two recursive fields
-    -- on W, and the bare three are arm E's past its old linear corner; a
-    -- widening or a narrowing that moves either group across is a failure here.
+    -- three are W's only occupants past two recursive fields, and the bare
+    -- three are arm E's past its old linear corner; a widening or a narrowing
+    -- that moves either group across is a failure here.
     let tower := fun (owner : Name) =>
       let privateRoot := Name.str (Naming.modelName owner) "_impl"
       #[Name.str privateRoot "wD", Name.str privateRoot "wTel",
         Name.str privateRoot "wB", Name.str privateRoot "wF"]
     for owner in [`TripleInf, `QuadInf, `TrineInf] do
       a := check a ((tower owner).all emittedNames.contains)
-        s!"prim_w: {owner} is not on arm W, so the one-layer adapter no longer runs \
-           over a W carrier past two recursive fields"
+        s!"prim_w: {owner} is not on arm W, so the simple construction no longer \
+           publishes a W carrier past two recursive fields"
     for owner in [`Triple, `Quad, `Trine] do
       a := check a (!(tower owner).any emittedNames.contains)
         s!"prim_w: {owner} is on arm W, so arm E no longer reaches the branching \

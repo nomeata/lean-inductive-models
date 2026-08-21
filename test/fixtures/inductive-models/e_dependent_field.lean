@@ -80,9 +80,10 @@
      bar and rarity justifies nothing.
 
    Every owner hides its result former behind a reducible definition — the same
-   idiom `HiddenIndexed` uses in `indexed_fibre_boundary.lean` — so
-   `InductiveModels.phase1DirectTypeOneLayerEligible` refuses it and the legacy
-   arm is what builds the model.
+   idiom `HiddenIndexed` uses in `indexed_fibre_boundary.lean` — which is what
+   kept them off the withdrawn direct one-layer adapter while it existed.  Arm
+   E builds the model, and does so for every owner of this shape now that the
+   adapter is gone.
 -/
 prelude
 

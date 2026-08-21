@@ -153,11 +153,11 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     -- route can see.  The route states the carrier; this module states the
     -- codomain; the elimination is the only thing that has to know both.
     let emptyCarrier? := (is.emptyCarriers.find? (·.1 == type.name)).map (·.2)
-    let singletonOneLayer ←
-      phase1OneLayerProjectionCertificate type constructor recursor is
+    let indexedFibreOneLayer ←
+      indexedFibreOneLayerProjectionCertificate type constructor recursor is
     let mutualOneLayer ←
       mutualOneLayerProjectionCertificate types constructors recursors type constructorName is
-    let phase1OneLayer := singletonOneLayer || mutualOneLayer
+    let phase1OneLayer := indexedFibreOneLayer || mutualOneLayer
     let modelConstructorInfo ← generatedDeclInfo is modelConstructor
     let modelConstructorType := modelConstructorInfo.type
     let modelTypeInfo ← generatedDeclInfo is modelType
@@ -347,7 +347,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       --
       -- Every construction that reaches a field definitionally satisfies this:
       -- the literal routes above by δι on the carrier's own selectors, the
-      -- direct/one-layer overrides by their reflexive projections, the nested
+      -- direct route's overrides by their reflexive projections, the nested
       -- rung by the block's primitive ι rule, the carved indexed routes by
       -- unfolding onto the layer underneath, and **arm W** by
       -- [`InductiveModels.wStoredFieldRead`] — `_wcore.WT.root`, the label's
@@ -398,10 +398,11 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       let body := eqi.mk' fieldLevel alpha lhs rhs
       let type ← match sourceNormalizer? with
         | some normalizer =>
-          -- The selected one-layer public family is an exact source-name
-          -- rewrite.  Its projection iota must retain even definitionally
-          -- trivial source-authored binder syntax; the legacy structure
-          -- routes continue to use their beta-only constructor telescope.
+          -- A selected one-layer public family — the indexed fibre adapter's
+          -- or the plain mutual one's — is an exact source-name rewrite.  Its
+          -- projection iota must retain even definitionally trivial
+          -- source-authored binder syntax; the legacy structure routes
+          -- continue to use their beta-only constructor telescope.
           let telescope := if phase1OneLayer || propositionLiteral then modelConstructorType
             else betaForallDomains normalizer modelConstructorType
           --

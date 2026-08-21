@@ -6,11 +6,17 @@ private `M` represents the recursive model generated today and its public
 projection rule has the literal input function as its right-hand side and its
 elaborated type contains no `Eq.rec`.
 
-Status: production implements the unindexed, unnested, source-simple
-never-zero `Type` subset for one or two independent recursive fields. The
-indexed, nested, and mutual sections below remain prospective design notes.
-Exact-source simple `Prop` projection literals are implemented separately
-through proof irrelevance.
+Status: **the unindexed singleton route described below was implemented and
+then withdrawn.**  It was measured against the general path and bought
+nothing: the simple construction already publishes that owner's carrier,
+constructor, recursor, ι rule and intrinsic projections at the exact source
+syntax and with literal projection ι rules, so the layer only added eight
+private declarations, one `Eq.rec` transport per recursive field and a
+`funext` splice per function-typed one.  What survives of this design is the
+*indexed fibre* adapter (`roll`/`unroll` the identity over arm C) and the
+*plain mutual* adapter, which does roll a real layer; the sections below are
+read as notes on those.  Exact-source simple `Prop` projection literals are
+implemented separately through proof irrelevance.
 
 ## Production boundary
 

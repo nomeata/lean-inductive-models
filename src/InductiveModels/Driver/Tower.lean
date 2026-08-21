@@ -120,17 +120,23 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
       addSourceStructureModels block projections normalizer reserved is
     | none => addInstalledStructureModels #[tname] projections reserved is
   -- **Route selection is a property of the declaration, not of its
-  -- provenance.** The two phase-1 predicates below read only the block being
-  -- modelled — its exact serialized type, constructor and recursor — so an
-  -- inductive a model spliced (arm C's index erasure, the composition's tag
-  -- and auxiliary) is asked exactly the question an input inductive is asked.
+  -- provenance.** The predicate below reads only the block being modelled —
+  -- its exact serialized type, constructor and recursor — so an inductive a
+  -- model spliced (arm C's index erasure, the composition's tag and
+  -- auxiliary) is asked exactly the question an input inductive is asked.
   -- Gating the question on "did this come from the input stream?" made a
   -- generated owner miss the one-layer implementation certificate that its own
   -- source owner carries, and with it the literal projection-iota contract
   -- ([`InductiveModels.addProjectionModels`]); the erasure skeleton of an
   -- indexed fibre owner was the observable case.
-  let selectOneLayer ← phase1DirectTypeOneLayerEligible tname np ty ctors sourceRecursor?
-  let selectIndexedFibre ← if selectOneLayer then pure false else
+  --
+  -- **An unindexed owner has no adapter at all.** It is the simple
+  -- construction's own, whatever its constructor count: the public carrier,
+  -- constructor, recursor, ι rules and intrinsic projections all come out of
+  -- [`InductiveModels.primIso`] at the exact source syntax, so a private
+  -- fixpoint with a rolled public layer over it bought nothing a route had to
+  -- exist for and cost one `Eq.rec` transport per recursive field.
+  let selectIndexedFibre ←
       match sourceType?, sourceConstructor?, sourceRecursor? with
       | some sourceType, some sourceConstructor, some sourceRecursor =>
         phase1IndexedFibreOneLayerEligible tname np ty ctors sourceType
@@ -140,13 +146,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
   let initial ← match exactTaken with
     | some n => pure (.error (.nameTaken n))
     | none => (do
-        let is ← if selectOneLayer then
-            let some sourceRecursor := sourceRecursor?
-              | badShape s!"{tname}'s selected one-layer family has no exact recursor"
-            let some sourceConstructor := ctors[0]?
-              | badShape s!"{tname}'s selected one-layer family has no constructor"
-            oneLayerIso tname root lparams np ty sourceConstructor sourceRecursor reserved
-          else if selectIndexedFibre then
+        let is ← if selectIndexedFibre then
             let some sourceRecursor := sourceRecursor?
               | badShape s!"{tname}'s selected indexed fibre has no exact recursor"
             let some sourceConstructor := ctors[0]?
@@ -161,13 +161,7 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     setEnv saved
     root := aliasRoot
     res ← (do
-      let is ← if selectOneLayer then
-          let some sourceRecursor := sourceRecursor?
-            | badShape s!"{tname}'s selected one-layer family has no exact recursor"
-          let some sourceConstructor := ctors[0]?
-            | badShape s!"{tname}'s selected one-layer family has no constructor"
-          oneLayerIso tname root lparams np ty sourceConstructor sourceRecursor reserved
-        else if selectIndexedFibre then
+      let is ← if selectIndexedFibre then
           let some sourceRecursor := sourceRecursor?
             | badShape s!"{tname}'s selected indexed fibre has no exact recursor"
           let some sourceConstructor := ctors[0]?

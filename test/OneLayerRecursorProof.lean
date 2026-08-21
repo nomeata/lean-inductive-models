@@ -1,7 +1,7 @@
 import InductiveModels.OneLayer
 
-/-! A handwritten oracle for the equality bookkeeping used by the generated
-one-layer public recursor.
+/-! A handwritten oracle for the equality bookkeeping used by a generated
+one-layer public recursor — today the plain mutual adapter's.
 
 The generator never applies a lemma stated at the owner's arity — there is no
 such lemma to state, because `n` recursive fields need `n` independent field

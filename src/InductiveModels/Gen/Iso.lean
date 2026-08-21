@@ -22,11 +22,11 @@ namespace InductiveModels
 
 Most constructions implement and expose the same family, so [`Iso`] keeps its
 historical fields as the public interface and leaves `implementation?` empty.
-The one-layer recursive construction is different: it implements the fixpoint
-at private names and exposes a separate, exact source-shaped public layer.
-Keeping that distinction explicit prevents later consumers from accidentally
-publishing the private recursor or using the public wrapper as the recursive
-proof oracle. -/
+The indexed fibre adapter is different: it exposes arm C's public family and
+records the same declarations again at private names, so that the certificate
+its consumers read has both sides. Keeping that distinction explicit prevents
+later consumers from accidentally publishing the private recursor or using the
+public wrapper as the recursive proof oracle. -/
 structure IsoInterface where
   selfNames : Array Name
   ctors : Array (Name × Name)

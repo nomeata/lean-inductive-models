@@ -120,9 +120,8 @@ def phase1OneLayerCertificate (declarations : DeclarationTypes)
       recursor.all.contains ownerType.name &&
         recursor.rules.any (·.ctor == sourceConstructor.name)
     | return .malformed privateRecursorName
-  unless oneLayerProjectionFamily #[ownerType] ownerType ||
-      indexedFibreOneLayerProjectionFamily ownerType sourceConstructor
-        sourceRecursor do
+  unless indexedFibreOneLayerProjectionFamily ownerType sourceConstructor
+      sourceRecursor do
     return .malformed privateCarrierName
   let some constructorPair := family.correspondence.constructors[0]?
     | return .malformed privateConstructorName

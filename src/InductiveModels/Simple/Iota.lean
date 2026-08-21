@@ -19,7 +19,6 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
   let np := site.np
   let sourceCtors := site.sourceCtors
   let sourceRecursor? := site.sourceRecursor?
-  let interface? := site.interface?
   let us := site.us
   let impl := site.impl
   let selfN := site.selfN
@@ -86,12 +85,7 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
         let lhs := mkAppN (.const recN recLs) (pre ++ isj ++ #[major])
         let rhsSyntax := publicRule.map (·.rhs) |>.getD rule.rhs
         let rhs := (publicSource rhsSyntax).beta (pre ++ fields)
-        let α ← match interface?, sourceRecursor? with
-          | some _, some sourceRecursor =>
-            let some exactResult := exactRecursorMotiveResult? sourceRecursor j pre fields
-              | badShape s!"{sourceRecursor.name}'s exported rule {j} has no exact motive result"
-            pure (publicSource exactResult)
-          | _, _ => pure (mkAppN motive (isj.push major))
+        let α := mkAppN motive (isj.push major)
         let tel := pre ++ fields
         let proposition := eqi.mk' v α lhs rhs
         let exactFieldTelescope ← match sourceRecursor? with

@@ -22,14 +22,14 @@
    refuses each), so the fields a later field can depend on are exactly the
    ones the data tower stores.
 
-   Every owner below is kept off the phase-1 one-layer adapter the same way:
-   `HiddenType` is a reducible result former, so the serialized owner type does
-   not end in a literal sort and
-   `InductiveModels.phase1DirectTypeOneLayerEligible` declines it. This is the
-   idiom `HiddenIndexed` uses in `indexed_fibre_boundary.lean`, and it is what
-   leaves these owners on the legacy arm rather than on the adapter that
-   supplies reflexive selectors of its own. Each is infinitary in at least one
-   recursive position, so the tuple tower declines them and arm W models them.
+   Every owner below hides its result former behind `HiddenType`, so the
+   serialized owner type does not end in a literal sort. That is the idiom
+   `HiddenIndexed` uses in `indexed_fibre_boundary.lean`, and it is what kept
+   these owners off the withdrawn direct one-layer adapter — the one that used
+   to supply reflexive selectors of its own — while it existed. Arm W supplies
+   them itself, for every owner of this shape now that the adapter is gone.
+   Each is infinitary in at least one recursive position, so the tuple tower
+   declines them and arm W models them.
 
    The five owners are the five spellings of the same question:
 

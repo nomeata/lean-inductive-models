@@ -190,10 +190,13 @@ def eligibleProjectionFieldsM (type : EIndType) (constructor : ECtor) : MetaM (A
         result := result.push fieldIndex
     return result
 
-def phase1OneLayerProjectionCertificate (type : EIndType)
+/-- The indexed fibre adapter's own certificate, read back off the built
+model.  The owner must be in the adapter's exact source shape *and* the eight
+private declarations must be present and correctly keyed; a family that is one
+without the other fails closed rather than being reinterpreted. -/
+def indexedFibreOneLayerProjectionCertificate (type : EIndType)
     (constructor : ECtor) (recursor : ERec) (is : Iso) : GenM Bool := do
-  unless oneLayerProjectionFamily #[type] type ||
-      indexedFibreOneLayerProjectionFamily type constructor recursor do return false
+  unless indexedFibreOneLayerProjectionFamily type constructor recursor do return false
   let constructorName := constructor.name
   let some implementation := is.implementation? | return false
   let some publicModel := is.selfNames[0]? | return false
@@ -207,7 +210,7 @@ def phase1OneLayerProjectionCertificate (type : EIndType)
       implementation.ctors == expected.ctors &&
       implementation.recs == expected.recs &&
       implementation.iotas == expected.iotas do
-    badShape s!"{type.name}'s phase-1 one-layer implementation certificate is malformed"
+    badShape s!"{type.name}'s indexed fibre implementation certificate is malformed"
   for name in #[Name.str impl "roll", Name.str impl "unroll",
       Name.str impl "unroll_roll", Name.str impl "roll_unroll"] do
     let _ ← generatedDeclInfo is name

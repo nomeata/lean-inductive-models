@@ -458,13 +458,13 @@ model's restored telescope and not at the export's.
 
 **Classified through [`InductiveModels.erasureFieldDomain`]**, exactly as
 [`InductiveModels.recSlotOf`], [`InductiveModels.bareRecSlotOf`] and
-[`InductiveModels.spineSwap`] are. This is the one field walk that is *not* reached
-by [`InductiveModels.shapeCtorTy`]'s normalisation, because the one-layer adapter
-runs it on the already public-name-rewritten constructor type
-(`OneLayer.lean`'s `fieldShape`) rather than on the site's array; a βζ-dead
-owner mention there made a plain data field a recursive one and the adapter's
-pointwise recursor walk then aborted on it. The **binder** the walk introduces
-is still the domain as written: only the classification reduces. -/
+[`InductiveModels.spineSwap`] are. Every caller now hands it a telescope
+[`InductiveModels.shapeCtorTy`] has already normalised, so the reduction here
+is a second line of defence rather than the only one; it stays because a
+βζ-dead owner mention makes a plain data field look recursive, and a walk that
+reads a field's *classification* must never depend on which of the two arrays
+it was handed. The **binder** the walk introduces is still the domain as
+written: only the classification reduces. -/
 partial def classifyCtor (tname : Name) (nf : Nat) (tele : Expr)
     (acc : Array PField := #[]) : GenM (Array PField) := do
   if nf == 0 then return acc

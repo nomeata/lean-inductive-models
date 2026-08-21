@@ -74,7 +74,7 @@
    (β-redex, `let`, or a definition), while a dependence without a mention
    would need a constant of type `T → Sort` that does not exist while `T` is
    being declared. The dispatcher classifies it anyway; see
-   `InductiveModels.primIsoWithInterface`. -/
+   `InductiveModels.primIso`. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false

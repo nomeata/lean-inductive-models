@@ -165,6 +165,17 @@ def authoredOuterSortTransport : Expr → Expr
       .lam name (authoredSortTransport level) body info
   | expression => expression
 
+/-- The same redundant level spelling for an arbitrary owner's recursor.  The
+retention it pins is the simple construction's own name-only public rewrite,
+so it is asked of multi-constructor owners too. -/
+def redundantSourceLevelsFor (recursor : Name) (expression : Expr) : Expr :=
+  expression.replace fun
+    | .sort level => some (.sort (.max level .zero))
+    | .const name (motiveLevel :: ownerLevels) =>
+        if name == recursor then some (.const name (.max motiveLevel .zero :: ownerLevels))
+        else none
+    | _ => none
+
 def mapOwnerSyntax (x : Export) (owner : Name) (map : Expr → Expr) : Export :=
   { x with decls := x.decls.map fun declaration =>
       if declaration.names.contains owner then EDecl.mapNames id map declaration
@@ -557,16 +568,19 @@ def main : IO UInt32 := do
     (definitionValue? noBaseGenerated (Naming.modelName noBaseSkel)).any fun value =>
       containsConst `PSigma' value && containsConst `PUnit value && !containsConst `PULiftP value
   -- The skeleton is one recursive constructor without indices or nesting, so
-  -- route selection puts it on the phase-1 one-layer family exactly as it
-  -- would an input inductive of that shape.  The derived recursion is then the
-  -- certificate's implementation recursor and the public slot is the adapter
-  -- over it; the elimination itself is unchanged.
+  -- it is the simple construction's own model with no adapter over it: the
+  -- public recursor *is* the derived recursion and there is no implementation
+  -- slot underneath to look at.  The elimination itself is unchanged.
   state := state.check "no-base recursor projects and eliminates Church false" <|
-    (definitionValue? noBaseGenerated
-        (Name.str (Name.str (Naming.modelName noBaseSkel) "_impl") "rec")).any
+    (definitionValue? noBaseGenerated (Naming.modelName (Name.str noBaseSkel "rec"))).any
       fun value =>
         containsConst `PSigma'.fst value && containsConst `Nat.rec value &&
           containsConst `Eq.rec value && !containsConst `PULiftP.rec value
+  state := state.check "no-base skeleton carries no private one-layer certificate" <|
+    #["self", "ctor_0", "rec", "rec_iota_0", "roll", "unroll", "unroll_roll",
+        "roll_unroll"].all fun slot =>
+      (noBaseDeclarations.filter (·.names.contains
+        (Name.str (Name.str (Naming.modelName noBaseSkel) "_impl") slot))).isEmpty
 
   -- `Fmid` and the original `FChain` keep the one-pivot path pinned in the
   -- broad index-axis fixture.
@@ -720,13 +734,20 @@ def main : IO UInt32 := do
       wLateEqOwners.all (fun owner => wRawReport.generated.any (·.1 == owner)) &&
       wRawReport.spliced.any (fun row => row.2.contains `Eq) &&
       (wRawDeclarations.filter (·.names.contains `Eq)).size == 1
-  state := state.check "dependent recursive singleton carries the complete one-layer certificate" <|
-    wtyCertificate.all wNames.contains
+  -- **The adapter that used to sit here is gone, and its absence is pinned.**
+  -- `Wty` is one recursive constructor without indices or nesting — the exact
+  -- shape the withdrawn direct one-layer route claimed — and the simple
+  -- construction publishes its whole public interface unaided, so none of the
+  -- eight private certificate slots may reappear.
+  state := state.check "dependent recursive singleton carries no one-layer certificate" <|
+    !wtyCertificate.any wNames.contains
   let wtyShape := wRaw.decls.findSome? fun declaration => match declaration with
     | .induct types _ _ => types.toArray.find? (·.name == `Wty)
     | _ => none
-  state := state.check "dependent recursive singleton is in the phase-1 source shape" <|
-    wtyShape.any fun type => oneLayerProjectionFamily #[type] type
+  state := state.check "dependent recursive singleton is a single-block recursive owner" <|
+    wtyShape.any fun type =>
+      type.all == [`Wty] && type.ctors.length == 1 && type.numIndices == 0 &&
+        type.numNested == 0 && type.isRec
   state := state.check "dependent recursive singleton emits every intrinsic field" <|
     wReport.generated.any (·.1 == `Wty) && !wReport.declined.any (·.1 == `Wty) &&
       wReport.unreplayable.isNone && wReport.stmtErrors.isEmpty &&
@@ -741,20 +762,23 @@ def main : IO UInt32 := do
   let wtyPublicStatements := #[Naming.modelName `Wty, Naming.modelName `Wty.mk,
     Naming.modelName `Wty.rec, Naming.iotaName `Wty.rec 0,
     wtyProjection0, wtyProjection1, wtyRule0, wtyRule1]
-  state := state.check "complete direct one-layer public interface introduces no Eq.rec" <|
+  state := state.check "complete adapter-free public interface introduces no Eq.rec" <|
     wtyPublicStatements.all fun name =>
       (declarationType? wGenerated name).any fun type => !containsConst ``Eq.rec type
 
   -- Exact public syntax is a name-only rewrite.  Definitional equality is not
   -- enough here: redundant level spelling from the exporter must survive the
-  -- private adapter, public carrier, recursor/iota, and projection family.
+  -- public carrier, constructor, recursor/iota, and projection family.  The
+  -- rewrite is the simple construction's own and is therefore **not** a
+  -- property of one shape: the multi-constructor owners below pin the same
+  -- retention, which the withdrawn adapter never reached.
   let wExactRaw := mapOwnerSyntax wRaw `Wty redundantSourceLevels
   let (wExactDeclarations, wExactReport) ← runExport wExactRaw
   let wExactGenerated := outputExport wExactRaw wExactDeclarations
   let wExactFaces := #[Naming.modelName `Wty, Naming.modelName `Wty.mk,
     Naming.modelName `Wty.rec, Naming.iotaName `Wty.rec 0,
     wtyProjection0, wtyProjection1, wtyRule0, wtyRule1]
-  state := state.check "one-layer carrier retains the exact redundant source level syntax" <|
+  state := state.check "recursive carrier retains the exact redundant source level syntax" <|
     wExactReport.unreplayable.isNone && wExactReport.stmtErrors.isEmpty &&
       declarationType? wExactGenerated (Naming.modelName `Wty) ==
         declarationType? wExactRaw `Wty &&
@@ -763,59 +787,69 @@ def main : IO UInt32 := do
   state := state.check "redundant source levels span carrier ctor rec iota and projections" <|
     wExactFaces.all fun name =>
       (declarationType? wExactGenerated name).any containsRedundantZeroMax
+  -- **The same retention at a constructor count no adapter ever covered.**
+  -- Every one of these owners has a recursive constructor, and the ι rule for
+  -- such a constructor is where the rebuilt public rewrite used to normalise
+  -- the source's universe arguments away.  `Wt` has five constructors, so it
+  -- exercises four such rules at once.
+  for owner in #[`Tree, `Br, `Dep, `Bad, `Wt] do
+    let recursor := Name.str owner "rec"
+    let exactRaw := mapOwnerSyntax wRaw owner (redundantSourceLevelsFor recursor)
+    let (exactDeclarations, exactReport) ← runExport exactRaw
+    let exactGenerated := outputExport exactRaw exactDeclarations
+    state := state.check
+      s!"{owner}'s recursive constructor rules retain the exact redundant source levels" <|
+      exactReport.unreplayable.isNone && exactReport.stmtErrors.isEmpty &&
+        declarationType? exactGenerated (Naming.modelName owner) ==
+          declarationType? exactRaw owner &&
+        (declarationType? exactGenerated (Naming.modelName recursor)).any
+          containsRedundantZeroMax &&
+        (Check.check exactGenerated).all fun violation =>
+          violation.familyOwner != owner || violation matches .modelNotBefore ..
 
   -- A clean source has no `Eq.rec` in these propositions, but the generator
   -- must not turn that into a blanket erasure rule.  A source-authored,
   -- definitionally trivial transport in the exact recursor telescope remains
-  -- literal in both private and public recursor/iota statements.
+  -- literal in the public recursor and ι statements.
   let wAuthoredRaw := mapRecursorSyntax wRaw `Wty.rec authoredOuterSortTransport
   let (wAuthoredDeclarations, wAuthoredReport) ← runExport wAuthoredRaw
   let wAuthoredGenerated := outputExport wAuthoredRaw wAuthoredDeclarations
-  let wAuthoredFaces := #[Naming.modelName `Wty.rec, Naming.iotaName `Wty.rec 0,
-    Name.str wtyPrivateRoot "rec", Name.str wtyPrivateRoot "rec_iota_0"]
-  state := state.check "source-authored Eq.rec survives one-layer recursor faces" <|
+  let wAuthoredFaces := #[Naming.modelName `Wty.rec, Naming.iotaName `Wty.rec 0]
+  state := state.check "source-authored Eq.rec survives the public recursor faces" <|
     wAuthoredReport.unreplayable.isNone && wAuthoredReport.stmtErrors.isEmpty &&
       wAuthoredFaces.all fun name =>
         (declarationType? wAuthoredGenerated name).any (containsConst ``Eq.rec)
   state := state.check "authored transport family remains an exact checked model" <|
     (Check.check wAuthoredGenerated).all fun violation =>
       violation.familyOwner != `Wty || violation matches .modelNotBefore ..
+  -- **No unindexed owner in this fixture carries a certificate**, whatever its
+  -- constructor or recursive-field count.  `Tree` never did; `Wty` and the
+  -- multi-field owners below did until the direct adapter was withdrawn, and
+  -- their projection rules are stated and proved without it.  Where a
+  -- certificate *is* emitted — the indexed fibre adapter — the checker still
+  -- requires it to be complete and exact, which
+  -- `test/IndexedFibreDiagnosticTest.lean` pins on both the partial and the
+  -- malformed case.
   let treePrivateRoot := `Tree._model._impl
   let treeOneLayerCertificate := #[Name.str treePrivateRoot "self",
     Name.str treePrivateRoot "ctor_0", Name.str treePrivateRoot "rec",
     Name.str treePrivateRoot "rec_iota_0", Name.str treePrivateRoot "roll",
     Name.str treePrivateRoot "unroll", Name.str treePrivateRoot "unroll_roll",
     Name.str treePrivateRoot "roll_unroll"]
-  state := state.check "multi-constructor and multi-recursive Tree stays outside phase one" <|
+  state := state.check "multi-constructor and multi-recursive Tree carries no certificate" <|
     treeOneLayerCertificate.all fun name => !wNames.contains name
-  let missingOneLayerLaw := Check.check <|
-    withoutDeclaration wGenerated (Name.str wtyPrivateRoot "roll_unroll")
-  state := state.check "partial one-layer certificate is rejected, not treated as legacy" <|
-    missingOneLayerLaw.any
-      (hasTypeViolation `Wty (Name.str wtyPrivateRoot "roll_unroll"))
-  let malformedOneLayerMap := Check.check <|
-    replaceDeclarationType wGenerated (Name.str wtyPrivateRoot "roll")
-      (.sort (.succ .zero))
-  state := state.check "malformed one-layer map is rejected structurally" <|
-    malformedOneLayerMap.any (hasTypeViolation `Wty (Name.str wtyPrivateRoot "roll"))
-  -- A projection rule's *proposition* is certificate-independent: its
-  -- right-hand side is the constructor field binder on every route, so
-  -- deleting the whole one-layer certificate cannot change the statement the
-  -- checker rebuilds.  The certificate is still required to be exact where it
-  -- is present, which the partial and malformed cases above pin.
-  let noOneLayerCertificate :=
-    Check.check (wtyCertificate.foldl withoutDeclaration wGenerated)
-  state := state.check "literal recursive rules are certificate-independent" <|
-    #[wtyProjection0, wtyProjection1, wtyRule0, wtyRule1].all fun name =>
-      !noOneLayerCertificate.any (hasTypeViolation `Wty name)
+  state := state.check "literal recursive rules need no certificate" <|
+    !wtyCertificate.any wNames.contains &&
+      #[wtyProjection0, wtyProjection1, wtyRule0, wtyRule1].all fun name =>
+        !(Check.check wGenerated).any (hasTypeViolation `Wty name)
 
-  -- The same private/public compatibility proof, folded once per recursive
-  -- constructor field.  These owners differ only in the recursive suffix:
-  -- direct/direct, direct/infinitary, infinitary/infinitary, an ordinary
-  -- dependent prefix followed by two direct fields, and then *three* and
-  -- *four* recursive fields — past any fixed-arity lemma, and folded by the
-  -- same loop.  Every public proposition remains the literal name-only source
-  -- rewrite; transports are confined to proof values.
+  -- The same public family at every recursive-field count.  These owners
+  -- differ only in the recursive suffix: direct/direct, direct/infinitary,
+  -- infinitary/infinitary, an ordinary dependent prefix followed by two direct
+  -- fields, and then *three* and *four* recursive fields.  Each is the shape
+  -- the withdrawn direct adapter used to fold its compatibility proof over,
+  -- and each now publishes the identical literal interface with no private
+  -- carrier, no equivalence and no transport underneath at all.
   let multiFieldOwners : Array (Name × Nat) :=
     #[(`Twin, 2), (`Mixed, 3), (`TwinInf, 2), (`Prefix, 4),
       (`Triple, 3), (`Quad, 4), (`Trine, 4)]
@@ -829,8 +863,10 @@ def main : IO UInt32 := do
       Naming.modelName (Name.str owner "rec"), Naming.iotaName (Name.str owner "rec") 0] ++
       (Array.range fieldCount).flatMap fun index =>
         #[Naming.projectionName owner index, Naming.projectionIotaName owner index]
-    state := state.check s!"{owner} carries the complete multi-field one-layer certificate" <|
-      certificate.all wNames.contains
+    state := state.check s!"{owner} carries no multi-field one-layer certificate" <|
+      !certificate.any wNames.contains
+    state := state.check s!"{owner} publishes every public face unaided" <|
+      publicFaces.all wNames.contains
     state := state.check s!"{owner} public family is exact and generated" <|
       wReport.generated.any (fun row => row.1 == owner) &&
         !wReport.declined.any (fun row => row.1 == owner) &&
@@ -849,8 +885,7 @@ def main : IO UInt32 := do
   let twinAuthoredGenerated := outputExport twinAuthoredRaw twinAuthoredDeclarations
   state := state.check "multi-field source-authored Eq.rec is preserved" <|
     twinAuthoredReport.unreplayable.isNone && twinAuthoredReport.stmtErrors.isEmpty &&
-      #[Naming.modelName `TwinInf.rec, Naming.iotaName `TwinInf.rec 0,
-        `TwinInf._model._impl.rec, `TwinInf._model._impl.rec_iota_0].all fun name =>
+      #[Naming.modelName `TwinInf.rec, Naming.iotaName `TwinInf.rec 0].all fun name =>
         (declarationType? twinAuthoredGenerated name).any (containsConst ``Eq.rec)
   let (wrapperDeclarations, wrapperReport) ← runExport wrapperRaw
   let wrapperGenerated := outputExport wrapperRaw wrapperDeclarations

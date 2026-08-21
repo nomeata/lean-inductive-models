@@ -109,36 +109,33 @@ inductive Bad : Type where
 inductive Wty (α : Type u) (β : α → Type u) : Type u where
   | mk : (a : α) → (β a → Wty α β) → Wty α β
 
-/- The phase-two one-layer boundary: every declaration below is still one
-   constructor, unindexed and unnested, but its constructor has more than one
-   recursive occurrence.  Their four shapes keep the proof fold honest:
+/- Past the binary boundary: every declaration below is still one constructor,
+   unindexed and unnested, but its constructor has more than one recursive
+   occurrence.  Their four shapes keep the arms honest at a recursive suffix:
    direct/direct, direct/infinitary, infinitary/infinitary, and a dependent
    *ordinary* prefix before the recursive suffix.
 
-   **They are also all uninhabited, and six of them are no longer arm W's.**
+   **They are also all uninhabited, and six of them are arm E's.**
    Each is a single constructor with no base, so every constructor has a bare
    recursive field, and arm E — which reaches that whole shape class rather
    than its linear corner — models `Twin`, `Mixed`, `Prefix`, `Triple`, `Quad`
    and `Trine` by the lift of `⊥`, exactly and with no axiom.  `TwinInf` has no
-   bare occurrence and stays on W.  The one-layer public-carrier claim these
-   were written for survives the move: the adapter is chosen on the
-   declaration's shape and not on the arm, `runOne` still requires the complete
-   private certificate for `Triple`, `Quad` and `Trine`, and
-   [`InductiveModels.oneLayerNaryCompatibility`] is still the construction that
-   proves their ι rules at three and four fields — reinstating an arity cap in
-   it is red at `Triple` today.  **These six therefore stay as they are**: they
-   are now this file's arm-E-past-the-linear-corner column, and a base
-   constructor would cost more than it bought, because
-   [`InductiveModels.phase1DirectTypeOneLayerEligible`] asks for *exactly one*
-   constructor and a second one would drop them off the one-layer route
-   altogether.
+   bare occurrence and stays on W.
 
-   What the move did lose is narrower and is restored by `TripleInf`,
-   `QuadInf` and `TrineInf` below: **the one-layer adapter over an arm-W
-   private model past two recursive fields**.  (Arm W itself still runs at
-   three and four — `prim_carve`'s `Sm3`, `infinitary`'s `GTree` and
-   `nest_fam_arg`'s `Both` and `Key` are its multi-constructor occupants — but
-   every one of those is out of the one-layer route's reach.) -/
+   **These six therefore stay as they are**: they are this file's
+   arm-E-past-the-linear-corner column, and a base constructor would move them
+   off it.  A direct one-layer adapter used to sit over all of them — a private
+   fixpoint, a rolled public layer and one `Eq.rec` transport per recursive
+   field in every ι rule — and was withdrawn once it was established that the
+   simple construction publishes the identical public interface unaided;
+   `test/ProjectionTest.lean` pins its absence at every arity here.
+
+   `TripleInf`, `QuadInf` and `TrineInf` below are the same arities on **arm
+   W**: a one-constructor owner whose every recursive occurrence is under a
+   binder, which is the only way to be on W without a base constructor.  (Arm W
+   also runs at three and four in the multi-constructor fixtures —
+   `prim_carve`'s `Sm3`, `infinitary`'s `GTree` and `nest_fam_arg`'s `Both` and
+   `Key`.) -/
 inductive Twin : Type where
   | mk : Twin → Twin → Twin
 
@@ -165,12 +162,10 @@ inductive Quad : Type where
 inductive Trine (α : Type) : Type where
   | mk : α → Trine α → (α → Trine α) → Trine α → Trine α
 
-/- **Arm W past two recursive fields, under the one-layer adapter**, which is
-   the one combination the six above stopped covering when they became arm E's.
+/- **Arm W past two recursive fields at one constructor**, which is the one
+   combination the six above stopped covering when they became arm E's.
 
-   There is exactly one way to be in it, and these three are it.  The one-layer
-   route asks for a single constructor
-   ([`InductiveModels.phase1DirectTypeOneLayerEligible`]), and a single
+   There is exactly one way to be in it, and these three are it.  A single
    constructor with a **bare** recursive field is empty and arm E's
    ([`InductiveModels.bareRecSlotOf`], `Simple/Site.lean`'s `emptySlots`).  So a
    one-constructor arm W has to put *every* recursive occurrence under a binder
