@@ -234,7 +234,7 @@ jobs:
   # Per ref keeps the property that was actually wanted -- one full-Mathlib run
   # per branch, newest wins -- and lets `main` and a pull request hold one each.
   mathlib:
-    name: Full Mathlib (standard hosted trial)
+    name: Full Mathlib
     runs-on: ubuntu-24.04
     timeout-minutes: 480
     concurrency:
