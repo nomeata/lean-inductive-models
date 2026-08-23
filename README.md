@@ -301,7 +301,7 @@ analysis, not a sequence of failed construction attempts.
 | --- | --- | --- |
 | 1. Nested | a block whose recursion passes through another inductive | plain mutual and simple blocks |
 | 2. Mutual | a non-nested mutual block | single-member and nested blocks |
-| 3. Carve | indexed, never-`Prop`, with erasable direct recursive occurrences; chiefly recursive or multi-constructor families | the cheaper direct-storage singleton when it applies |
+| 3. Carve | indexed, never-`Prop`; chiefly recursive or multi-constructor families | the cheaper direct-storage singleton when it applies |
 | 4. Tree | unindexed, recursive, never-`Prop`, and branching or infinitary, unless empty | linear recursion (entry 9), indexed recursion (entry 3), propositions |
 | 5. Graph | one-constructor recursive literal `Prop` with a large eliminator | nonrecursive owners and small eliminators; sometimes-`Prop` owners |
 | 6. Recovery | one-constructor, nonrecursive, indexed `Prop` or sometimes-`Prop` with a large eliminator | data not present in the indices (entry 10), and recursion (entries 5 or 7) |
@@ -379,15 +379,12 @@ for a `Prop`-valued one.
 
 ### 3. Indexed families at a never-`Prop` sort, carved out of an index-free skeleton (the carve arm)
 
-**Scope.** An indexed family at a never-`Prop` sort whose recursive fields
-mention the family only directly — each is, up to reduction, the family
-itself, possibly behind function arguments — so that deleting the indices
-leaves a well-formed unindexed declaration; minus the one-constructor
-non-recursive families, which are entry 10's indexed case and cost no
-splice, except the two fall-throughs that entry hands back — a family with
-no fields to store, and one whose field levels only entry 9's boxing
-reaches. Everything with several constructors or recursion is this entry's
-as before. The classic length-indexed vector is the picture:
+**Scope.** An indexed family at a never-`Prop` sort, minus the one-constructor
+non-recursive families that entry 10 can store without a splice. Entry 3 also
+keeps the two fall-throughs from entry 10: a family with no fields to store,
+and one whose field levels only entry 9's boxing reaches. Everything with
+several constructors or recursion is this entry's. The classic length-indexed
+vector is the picture:
 
 ```lean
 inductive Vec (α : Type u) : Nat → Type u where
