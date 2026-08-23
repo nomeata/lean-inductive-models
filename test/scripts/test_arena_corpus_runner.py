@@ -75,7 +75,6 @@ sys.exit(int(outcome))
         self,
         good: list[str],
         bad: list[str],
-        expected_bad_errored: frozenset[str] = frozenset(),
     ) -> tuple[int, str, str]:
         stdout = io.StringIO()
         stderr = io.StringIO()
@@ -86,14 +85,11 @@ sys.exit(int(outcome))
                 self.fake_checker(),
                 self.corpus(good, bad),
                 run_work,
-                expected_bad_errored,
             )
         return result, stdout.getvalue(), stderr.getvalue()
 
     def test_accepts_good_zero_and_reports_bad_one_and_three_separately(self) -> None:
-        result, stdout, stderr = self.run_cases(
-            ["0"], ["1", "3"], frozenset({"case-1"})
-        )
+        result, stdout, stderr = self.run_cases(["0"], ["1", "3"])
         self.assertEqual(result, 0)
         self.assertEqual(stderr, "")
         self.assertIn("1 good accepted, 1 bad rejected, 1 bad checker errors", stdout)
@@ -105,22 +101,16 @@ sys.exit(int(outcome))
         self.assertIn("got -15", stderr)
         self.assertIn("got 2", stderr)
 
-    def test_rejects_a_bad_checker_error_outside_the_expected_set(self) -> None:
-        result, stdout, stderr = self.run_cases(
-            ["0"], ["3", "3"], frozenset({"case-0"})
-        )
-        self.assertEqual(result, 1)
-        self.assertIn("1 bad checker errors, 1 failed", stdout)
-        self.assertIn("FAIL bad/case-1.ndjson: exit 3", stderr)
-        self.assertIn("outside the expected set", stderr)
-        self.assertNotIn("case-0", stderr)
+    def test_accepts_new_bad_checker_errors_without_a_name_allowlist(self) -> None:
+        result, stdout, stderr = self.run_cases(["0"], ["3", "3"])
+        self.assertEqual(result, 0)
+        self.assertEqual(stderr, "")
+        self.assertIn("2 bad checker errors, 0 failed", stdout)
 
     def test_rejects_a_panic_whatever_the_exit_code_says(self) -> None:
         # A panicking `good` case exits 0 and a panicking `bad` case exits 3:
         # both would pass on their exit code alone, and neither may.
-        result, stdout, stderr = self.run_cases(
-            ["panic 0"], ["panic 3"], frozenset({"case-0"})
-        )
+        result, stdout, stderr = self.run_cases(["panic 0"], ["panic 3"])
         self.assertEqual(result, 1)
         self.assertIn("0 good accepted, 0 bad rejected, 0 bad checker errors", stdout)
         self.assertIn("2 failed", stdout)

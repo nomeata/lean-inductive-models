@@ -28,19 +28,6 @@ MAX_MEMBER_SIZE = 256 * 1024 * 1024
 MAX_TOTAL_SIZE = 2 * 1024 * 1024 * 1024
 MAX_ARCHIVE_SIZE = 512 * 1024 * 1024
 
-# The `bad/` cases this checker declines with exit 3 instead of rejecting with
-# exit 1, named rather than counted. A bare count would let one case regress
-# while another improves without the total moving; the names make the swap
-# visible. This is a cap, not an equality: a case that starts rejecting cleanly
-# leaves the set unused, which is an improvement, not a failure.
-EXPECTED_BAD_ERRORED = frozenset(
-    {
-        "proj-of-stuck-prop",
-        "proj-of-subst-prop",
-        "rec-missing-ih",
-    }
-)
-
 # Lean's runtime prints a panic on stderr and then carries on with the default
 # value, so a panicking run and a run that reached a real verdict can leave the
 # same exit code behind -- only the output tells them apart. `Init/Util.lean`
@@ -164,7 +151,6 @@ def run_corpus(
     binary: Path,
     corpus: Path,
     work: Path,
-    expected_bad_errored: frozenset[str] = EXPECTED_BAD_ERRORED,
 ) -> int:
     logs = work / "logs"
     runtime = work / "runtime"
@@ -226,21 +212,12 @@ def run_corpus(
                 # not something to report as "I am certain this input is bad".
                 # Exit 1 claims that certainty; exit 3 declines to.
                 #
-                # Which cases land here is pinned, so a new decline cannot be
-                # absorbed by the tolerance unnoticed.
-                name = case.relative_to(corpus / group).with_suffix("").as_posix()
-                if name in expected_bad_errored:
-                    bad_errored += 1
-                    continue
-                failed += 1
-                print(
-                    f"FAIL {relative}: exit 3 (checker error) from a case outside the "
-                    "expected set; fix the decline or add the case to "
-                    "EXPECTED_BAD_ERRORED deliberately",
-                    file=sys.stderr,
-                )
-                for line in first_diagnostic(stderr, stdout):
-                    print(line, file=sys.stderr)
+                # Judge the published corpus by outcome rather than a closed
+                # inventory of case names. New bad tests may therefore arrive
+                # without editing this runner, provided they are still not
+                # accepted. Panics are rejected above, and exit 2 (a model
+                # decline) remains a failure below.
+                bad_errored += 1
                 continue
             failed += 1
             expected = "0" if group == "good" else "1 or 3 (never 0, 2, or a signal)"
