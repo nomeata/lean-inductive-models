@@ -236,7 +236,7 @@ the positive counts — `arm_f_guards`, `arm_f_zip`, `default_ctor_iota`,
 `maybe_zero_indexed`, `maybe_zero_recursive` and `nonindexed_vanishing` model
 no eligible one-constructor record, and a route that starts giving one of them
 a projection has to be looked at rather than absorbed.  `maybe_zero_pad` is the
-complement and is 16: every one of its ten owners but
+complement and is 19: every one of its ten owners but
 the two-constructor `Nt` is a projection-eligible one-constructor record, and
 the count is their fields — one each for `IdOne`, `PropOne`, `PadOne` and
 `PadIdx`, two each for `PadNone`, `PadMany`, `PadMix`, `PadDep` and `PadIdx2`
@@ -245,11 +245,16 @@ rungs are built at, which this export is the first to splice and which the
 splice-closure rule then models like any other spliced inductive. Its two
 fields are projection-eligible on exactly the terms every other
 one-constructor record's are, so it is a row occupant and not an exemption.
+The remaining three are the fields of `PadIdx`'s and `PadIdx2`'s index-erased
+Carve skeletons; the census includes those auxiliary inductives just as it
+includes `PProd'`.
 Four of the ten are the pad's own occupants, and a route that stopped padding
 would drop them out of this row rather than merely change a carrier.
 
-`maybe_zero_projection` (10, was 8) and `tight_psigma_prime` (6, was 4) carry
-the same two for the same reason.
+`maybe_zero_projection` is 17: the old ten, three fields from `MZIdx`'s and
+`MZIdx2`'s Carve skeletons, and four projection rules from the new
+`MZIdxRecursive` source/skeleton pair. `tight_psigma_prime` (6, was 4) carries
+the pair's same two rules.
 
 **And sixty-five rows carry them now**, because the never-zero chain reaches a
 constant rung as well: any export with a `Type`-sorted owner whose stored chain
@@ -330,8 +335,8 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("hard_nested_mutual_index", 13), ("imax_box", 3), ("indexed_container", 13),
     ("indexed_decl", 13), ("indexed_fibre_boundary", 59),
     ("indexed_hidden_erasure", 13), ("infinitary", 25), ("maybe_zero_indexed", 0),
-    ("maybe_zero_pad", 16),
-    ("maybe_zero_projection", 10), ("maybe_zero_recursive", 0), ("mutual_index", 8),
+    ("maybe_zero_pad", 19),
+    ("maybe_zero_projection", 17), ("maybe_zero_recursive", 0), ("mutual_index", 8),
     ("mutual_keying", 2),
     ("mutual_nonrec", 2), ("mutual_odd_shapes", 17),
     ("mutual_one_layer_boundary", 9), ("mutual_one_layer_level", 4),
