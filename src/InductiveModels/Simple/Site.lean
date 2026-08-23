@@ -92,8 +92,8 @@ structure PrimSite where
   constructor count and one level question; see the decision there. -/
   emptyStored : Array Nat
   directRoute? : Option DirectRoute
-  indexedSingletonRoute? : Option IndexedSingletonRoute
-  armCarve : Bool
+  armRecoveryProp : Bool
+  carveRoute? : Option CarveRoute
   wTagged : Bool
   wPlan : WCarrierPlan
   armTree : Bool
@@ -703,6 +703,17 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       ni == 0 && directFieldRoute?.isNone)
     np memberTy exportCtors w (route matches PrimRoute.type)
 
+  -- A nonrecursive one-constructor relational Carve produces exactly this
+  -- unindexed field skeleton.  Ask the ordinary storage planner its level
+  -- question before splicing it, so an impossible skeleton declines at the
+  -- source owner rather than later as an unmodelled implementation detail.
+  -- The answer itself is deliberately discarded: Carve, not Direct, owns the
+  -- indexed representation.
+  let _ ← planDirectTightRoute tname
+    ((route matches PrimRoute.bare) && ni > 0 && nc == 1 && !isRec &&
+      !recoverIndexedSingleton)
+    np memberTy exportCtors w false
+
   -- **The storage half of the indexed-singleton construction.** At a
   -- maybe-zero sort, a small recursor says that some constructor data cannot
   -- be recovered from the indices. Church storage would forget that data, so
@@ -717,11 +728,6 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- every data field is an index pivot and can be substituted instead.
   -- Never-zero indexed families do not enter either branch; Carve owns all of
   -- them, leaving Direct strictly index-free.
-  let indexedSingletonStorageRoute ← planIndexedSingletonStorageRoute tname
-    ((route matches PrimRoute.bare) && nc == 1 && !isRec && ni > 0 &&
-      !recoverIndexedSingleton)
-    np memberTy exportCtors w
-
   -- The two direct cases are **ordered**, and deliberately: the tower with a
   -- pad would model everything
   -- the two exact one-field answers model, and taking them first is what keeps
@@ -750,19 +756,25 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- telescope, which is what brings `MixI`, `SvIx` and
   -- `CategoryTheory.Functor.IsHomLift` inside. The analysis above is what says
   -- which positions those are; everything below reads `gNonPiv`.
-  let indexedSingletonRoute? : Option IndexedSingletonRoute :=
-    if recoverIndexedSingleton then some .recover
-    else indexedSingletonStorageRoute.map .store
+  let armRecoveryProp := (route matches PrimRoute.prop) && recoverIndexedSingleton
 
-  -- **The carve arm**: an indexed family at a never-zero sort, carved out of its own
-  -- index erasure. Gated on the erasure being
+  -- **The Carve route** owns every indexed non-`Prop` family. Never-zero
+  -- carriers compute `good` with the erased skeleton's large recursor;
+  -- maybe-zero carriers use an inductive `Good` relation, except for the
+  -- large-elimination singleton whose fields are recovered from its indices.
+  -- Gated on the erasure being
   -- **bare** — every recursive occurrence a `T p⃗ e⃗` whose whole domain the
   -- erasure can replace — and no longer on its being *linear*: the carve
   -- carries an arbitrary number of recursive slots per constructor, and the
   -- branching skeleton that results is modelled by the tree arm. A family whose
   -- skeleton does not model is still a decline and never an emission, which is
   -- `Iso.requires`' job and not this guard's.
-  let armCarve := (route matches PrimRoute.type) && ni > 0 && erasureBare
+  let carveRoute? : Option CarveRoute :=
+    if ni == 0 || !erasureBare then none
+    else if route matches PrimRoute.type then some .functional
+    else if route matches PrimRoute.bare then
+      if recoverIndexedSingleton then some .recover else some .relational
+    else none
 
   -- **The tree arm**: the tagged W construction, and the **decision** that splits the
   -- non-indexed recursive `Type` class in two.
@@ -1319,7 +1331,7 @@ does not store, which its positivity check should have made unspellable"
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armGraph, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armEmpty, emptyStored, directRoute?, indexedSingletonRoute?, armCarve, wTagged, wPlan, armTree, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
+  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armGraph, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armEmpty, emptyStored, directRoute?, armRecoveryProp, carveRoute?, wTagged, wPlan, armTree, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
           { out, requires, spliced, projectionOverrides })
 
 end InductiveModels

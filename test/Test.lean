@@ -407,8 +407,11 @@ def expectedPrim : List Row :=
     -- pair's element projection; `MRI` crosses both at a changing child fibre.
     -- Each has six public declarations; the first model in each raw export also
     -- pays for the `Eq` and tight-pair/PUnit support records.
-  , ("maybe_zero_indexed", [("MI", 15)], [])
-  , ("maybe_zero_recursive", [("MRI", 15), ("MR", 6)], [])
+  , ("maybe_zero_indexed",
+      [("MI", 16), ("MI._model._impl.skel", 7), ("MI._model._impl.good", 6)], [])
+  , ("maybe_zero_recursive",
+      [("MRI", 16), ("MRI._model._impl.skel", 7),
+       ("MRI._model._impl.good", 6), ("MR", 6)], [])
   -- **Green, and nothing in this table moved to make it so.** The two
   -- maybe-zero rows above are multi-constructor, so nothing asks their model
   -- for a field back. `maybe_zero_projection` is the one-constructor family
@@ -453,7 +456,11 @@ def expectedPrim : List Row :=
     -- untouched: the pair changes a carrier's shape and no public statement.
   , ("maybe_zero_projection",
       [("Nt", 15), ("MZProof", 6), ("MZOne", 7), ("MZData", 8), ("MZSelf", 6),
-       ("MZIdx2", 9), ("PProd'", 9), ("MZIdx", 6)],
+       ("MZIdx2", 10), ("MZIdx2._model._impl.skel", 10), ("PProd'", 9),
+       ("MZIdx2._model._impl.good", 4), ("MZIdxRecursive", 10),
+       ("MZIdxRecursive._model._impl.skel", 8),
+       ("MZIdxRecursive._model._impl.good", 4), ("MZIdx", 8),
+       ("MZIdx._model._impl.skel", 7), ("MZIdx._model._impl.good", 4)],
       [("Eq", "prim model: a basis primitive")])
   -- **Green, and evidence rather than a refusal.** The empty arm models a recursive
   -- declaration every one of whose constructors has a **bare** recursive field
@@ -548,8 +555,10 @@ def expectedPrim : List Row :=
     -- `PSigma'` and only the rest move.
   , ("maybe_zero_pad",
       [("PadDep", 19), ("PProd'", 9), ("PadMix", 9), ("PadOne", 7), ("Nt", 7),
-       ("PadIdx2", 8), ("PropOne", 7), ("IdOne", 7), ("PadNone", 9),
-       ("PadMany", 9), ("PadIdx", 6)],
+       ("PadIdx2", 10), ("PadIdx2._model._impl.skel", 9),
+       ("PadIdx2._model._impl.good", 4), ("PropOne", 7), ("IdOne", 7),
+       ("PadNone", 9), ("PadMany", 9), ("PadIdx", 8),
+       ("PadIdx._model._impl.skel", 7), ("PadIdx._model._impl.good", 4)],
       [("Eq", "prim model: a basis primitive")])
   -- **The shapes that still reach no arm**, and the claim of this row is the
   -- *word in the parenthesis* rather than the count. Each of these owners

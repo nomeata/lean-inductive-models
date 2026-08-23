@@ -24,6 +24,7 @@ import InductiveModels.Simple.Site
 import InductiveModels.Simple.Direct
 import InductiveModels.Simple.ArmRecovery
 import InductiveModels.Simple.ArmCarve
+import InductiveModels.Simple.ArmRelationalCarve
 import InductiveModels.Simple.ArmEmpty
 import InductiveModels.Simple.ArmTree
 import InductiveModels.Simple.ArmTuple
@@ -354,10 +355,13 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- reaches it below. Leaving `armEmpty` out declined six of `prim_w`'s occupants
   -- at the shape they are modelled at.
   let st ←
-    if let some indexedSingletonRoute := site.indexedSingletonRoute? then
-      primArmIndexedSingleton site indexedSingletonRoute st
+    if let some carveRoute := site.carveRoute? then
+      match carveRoute with
+      | .functional => primArmCarve site st
+      | .relational => primArmRelationalCarve site st
+      | .recover => primArmIndexRecovery site st
+    else if site.armRecoveryProp then primArmIndexRecovery site st
     else if let some directRoute := site.directRoute? then primDirect site directRoute st
-    else if site.armCarve then primArmCarve site st
     else if site.armEmpty then primArmEmpty site st
     else if site.armTree then primArmTree site st
     else if site.route matches PrimRoute.type then primArmTuple site st

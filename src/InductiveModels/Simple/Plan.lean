@@ -75,12 +75,14 @@ inductive DirectRoute
   | field (route : DirectFieldRoute)
   | tight (pad? : Option Level)
 
-/-- The two implementations of the indexed-singleton construction. A large
-eliminator lets `recover` substitute data fields from the indices; otherwise
-`store` retains the fields in a tight tower and records its fibre with one
-packed index equation. -/
-inductive IndexedSingletonRoute
+/-- The implementations hidden behind the Carve routing boundary. A
+never-`Prop` family computes its goodness predicate with the skeleton's large
+recursor; a sometimes-`Prop` family represents goodness as an inductive
+relation; the exceptional large-elimination singleton recovers its data from
+the indices. -/
+inductive CarveRoute
+  | functional
+  | relational
   | recover
-  | store (pad? : Option Level)
 
 end InductiveModels

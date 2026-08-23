@@ -144,3 +144,9 @@ inductive MZIdx (a : Sort u) (n : Nt) : Nt → Sort u where
 
 inductive MZIdx2 (a : Sort u) (b : Sort u) (n : Nt) : Nt → Sort u where
   | mk : a → b → MZIdx2 a b n n
+
+/- The indexed corner combines the two obligations that used to be split
+   between the storage and Church routes: retain a data field for projection,
+   and carry an indexed recursive child through the recursor. -/
+inductive MZIdxRecursive (a : Sort u) (n : Nt) : Nt → Sort u where
+  | mk : a → MZIdxRecursive a n n → MZIdxRecursive a n n
