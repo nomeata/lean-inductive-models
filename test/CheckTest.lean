@@ -20,7 +20,9 @@ equal recursor and rule declarations.
 
 Additional cases cover declaration names which contain `_model`, raw private
 names, and a multi-member mutual record whose public slots do not depend on the
-first member or export position.
+first member or export position. A two-record case pins the substitution scope:
+the later record's model keeps references to the earlier source record even
+when that earlier record also has a model.
 -/
 
 open Lean InductiveModels InductiveModels.Check
@@ -296,6 +298,17 @@ def isMissing (owner declaration : Name) : Violation → Bool
 def isTypeMismatch (owner declaration : Name) : Violation → Bool
   | .declarationType gotOwner gotDeclaration =>
       gotOwner == owner && gotDeclaration == declaration
+  | _ => false
+
+partial def containsConst (target : Name) : Expr → Bool
+  | .const name _ => name == target
+  | .proj _ _ subject => containsConst target subject
+  | .app fn argument => containsConst target fn || containsConst target argument
+  | .lam _ type body _ | .forallE _ type body _ =>
+    containsConst target type || containsConst target body
+  | .letE _ type value body _ =>
+    containsConst target type || containsConst target value || containsConst target body
+  | .mdata _ body => containsConst target body
   | _ => false
 
 def isKindMismatch (owner declaration : Name) (expected actual : DeclarationKind) :
@@ -1118,6 +1131,52 @@ def checkMutualMembers (root : String) (state : TestState) : IO (Option TestStat
         (isTypeMismatch bCtor.owner bCtor.model)
   return some state
 
+/-- A later inductive may mention an earlier modeled inductive, but its public
+interface rewrites only its own record.  `Dead.step` contains `N`, so this
+fixture distinguishes the current-group contract from a whole-prefix rewrite. -/
+def checkCurrentGroupScope (root : String) (state : TestState) : IO (Option TestState) := do
+  let mut state := state
+  let path := s!"{root}/test/fixtures/inductive-models/nonindexed_vanishing.ndjson"
+  let text ← IO.FS.readFile path
+  match InductiveModels.parse text with
+  | .error error =>
+      IO.eprintln s!"checktest: could not parse {path}: {error}"
+      state ← state.check "current-group substitution fixture" false
+  | .ok raw =>
+    let some nDecl := ownerIndex? raw `N | do
+      IO.eprintln "checktest: N owner missing"
+      return none
+    let some nTable := correspondenceAt? raw nDecl | do
+      IO.eprintln "checktest: N correspondence missing"
+      return none
+    let nModels := modelDeclarations raw nTable `N._model._impl.helper
+    let withN := withValidModel raw nDecl nModels
+
+    let some deadDecl := ownerIndex? withN `Dead | do
+      IO.eprintln "checktest: Dead owner missing"
+      return none
+    let some deadTable := correspondenceAt? withN deadDecl | do
+      IO.eprintln "checktest: Dead correspondence missing"
+      return none
+    let deadModels := modelDeclarations withN deadTable `Dead._model._impl.helper
+    let valid := withValidModel withN deadDecl deadModels
+    state ← state.check "modeled earlier family remains a source dependency" <|
+      (check valid).isEmpty
+
+    let stepModel := Naming.modelName `Dead.step
+    let some (_, stepType) := exportDeclarationType? valid stepModel | do
+      IO.eprintln "checktest: Dead.step model missing"
+      return none
+    state ← state.check "current-group rewrite leaves earlier source name" <|
+      containsConst `N stepType && !containsConst (Naming.modelName `N) stepType
+
+    let wronglyRewritten := mapConstsE (fun name =>
+      if name == `N then some (Naming.modelName `N) else none) stepType
+    let wrong := withDeclarationType valid stepModel wronglyRewritten
+    state ← state.check "whole-prefix rewrite of earlier family is rejected" <|
+      (check wrong).any (isTypeMismatch `Dead.step stepModel)
+  return some state
+
 def checkUnitlikeMetadata (root : String) (state : TestState) : IO (Option TestState) := do
   let mut state := state
   let unitlikePath := s!"{root}/test/fixtures/inductive-models/unitlike.ndjson"
@@ -1249,6 +1308,7 @@ def run (root : String) : IO UInt32 := do
     let some state ← checkRenamedOwners owner carrier raw valid state | return 1
     let some state ← checkPrivateAliases owner raw state | return 1
     let some state ← checkMutualMembers root state | return 1
+    let some state ← checkCurrentGroupScope root state | return 1
     let some state ← checkUnitlikeMetadata root state | return 1
 
     if state.failed == 0 then

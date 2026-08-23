@@ -177,14 +177,18 @@ that exact constructor-result fibre — an indexed family retains `ı⃗_0` rath
 than quantifying over indices.
 
 `T._model`, `C._model` and `R._model` carry their source declarations' exported
-types under one simultaneous public-name rewrite and nothing else, and
+types under one simultaneous **current-group** rewrite and nothing else. That
+rewrite replaces the type formers, constructors and recursors belonging to the
+same atomic inductive record as `T`; for a mutual record it therefore replaces
+all members together. Names belonging to any other inductive record remain
+source names, whether or not that other record already has a public model.
 `R._model.iota_j` states the exported reduction rule itself under the same
-rewrite — the recursor's own minor premise supplies the motive application,
-constructor levels, parameters, indices and field telescope, and the exported
-rule supplies the right-hand side. The remaining five slots are reconstructed
-from the owner's own exported records — the constructor telescope, the
-recursor's minor premises, the kernel's projection rules — and then rewritten
-the same way; no source `structure` syntax is consulted, and
+current-group rewrite — the recursor's own minor premise supplies the motive
+application, constructor levels, parameters, indices and field telescope, and
+the exported rule supplies the right-hand side. The remaining five slots are
+reconstructed from the owner's own exported records — the constructor
+telescope, the recursor's minor premises, the kernel's projection rules — and
+then rewritten with that same scope; no source `structure` syntax is consulted, and
 `T._model.eta` reconstructs through the intrinsic projection slots rather than
 through any exported field wrapper. An atomic mutual block still exposes one
 interface per member; private mutual bookkeeping and support declarations are
@@ -222,8 +226,9 @@ family and checks:
 - model-before-owner ordering and absence of public backreferences;
 - unique type-former, constructor, recursor, rule, projection, and metadata
   slots at their exact names, with no rule slot beyond the exported rule count;
-- matching universe arities and literal declaration types after simultaneous
-  source-to-model renaming;
+- matching universe arities and literal declaration types after simultaneously
+  renaming exactly the current inductive record's source declarations to their
+  model names;
 - exact recursor-iota and projection-iota propositions; every projection-iota
   right-hand side is the constructor field binder itself, on every route, and
   the checker recomputes exactly that;
@@ -234,8 +239,11 @@ The checker is a pure function of the export text: it never asks Lean for
 definitional equality, never appeals to proof irrelevance, and never compares a
 declaration's value. Every correspondence verdict is syntactic equality of
 declaration types, up to binder names and binder information, after
-simultaneous source-to-model renaming, so an accepted slot is exact rather than
-merely definitionally right, and the verdict is independent of the kernel's.
+that current-group source-to-model renaming. In particular, the checker rejects
+a model type which uses `U._model` in place of an external source constant `U`,
+even when `U` belongs to an earlier modeled inductive record. Thus an accepted
+slot is exact rather than merely definitionally right, and the verdict is
+independent of the kernel's.
 Those two are what an export's expression arena is interned modulo, upstream in
 `lean4export` as much as here, so they are not available to compare.
 

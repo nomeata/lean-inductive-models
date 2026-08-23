@@ -2,11 +2,13 @@ import InductiveModels.Format
 import InductiveModels.Naming
 
 /-!
-# The public constant substitution
+# The current-group public constant substitution
 
 One modeled inductive record's correspondence table, the exact positional
-universe alignment, and the simultaneous constant rewrite that every later
-comparison performs.  Level renaming here deliberately avoids
+universe alignment, and the current-group constant rewrite that every later
+comparison performs.  The rewrite covers every member of this one atomic
+inductive record (so all members of a mutual group), but no declaration from
+another record.  Level renaming here deliberately avoids
 `Level.instantiateParams`, which canonicalizes the exported syntax.
 -/
 
@@ -14,7 +16,7 @@ open Lean
 
 namespace InductiveModels.Check
 
-/-- One entry in the simultaneous public constant substitution. -/
+/-- One entry in the current inductive group's public constant substitution. -/
 structure ConstantPair where
   owner : Name
   model : Name
@@ -23,7 +25,8 @@ structure ConstantPair where
 /-- The public correspondence table for one modeled inductive record.
 
 Recursors and their ordered reduction theorems share this table with type
-formers and constructors, so every comparison uses one simultaneous rewrite. -/
+formers and constructors, so every comparison rewrites the complete current
+group simultaneously. -/
 structure Correspondence where
   typeFormers : Array ConstantPair
   constructors : Array ConstantPair
@@ -69,9 +72,12 @@ def Correspondence.originalOfPublic? (table : Correspondence) (name : Name) : Op
       projection.name == name || projection.iota == name).map (·.owner) <|>
     (table.metadata.find? (·.name == name)).map (·.owner)
 
-/-- Apply the table simultaneously.  Projection type-name fields are constants
-for this purpose just as they are for the backreference invariant. -/
-def Correspondence.substitute (table : Correspondence) (expression : Expr) : Expr :=
+/-- Rewrite exactly the type formers, constructors, and recursors of this
+correspondence's inductive record, simultaneously.  In particular, a constant
+from an earlier or later inductive record remains its source name even if that
+other record also has a public model in the export.  Projection type-name fields
+are constants for this purpose just as they are for the backreference invariant. -/
+def Correspondence.substituteCurrentGroup (table : Correspondence) (expression : Expr) : Expr :=
   let replacements := table.entries.foldl
     (fun map pair => map.insert pair.owner pair.model) ({} : Std.HashMap Name Name)
   mapConstsE (fun name => replacements[name]?) expression
@@ -113,11 +119,12 @@ def renameLevelParamNamesExact (ownerParams modelParams : List Name)
   renameLevelParamsExact renames level
 
 /-- Align the owner's declaration universes with the model declaration's by
-position and then apply the simultaneous public constant substitution.  A
-length mismatch is rejected by the caller rather than truncated here. -/
+position and then apply the current inductive group's simultaneous public
+constant substitution.  A length mismatch is rejected by the caller rather
+than truncated here. -/
 def Correspondence.expectedType (table : Correspondence) (ownerParams modelParams : List Name)
     (type : Expr) : Expr :=
-  table.substitute (renameExprLevelParamsExact ownerParams modelParams type)
+  table.substituteCurrentGroup (renameExprLevelParamsExact ownerParams modelParams type)
 
 /-- Align and rewrite an iota proposition while retaining its outer ambient
 `Eq`.  This distinction matters when the modeled inductive is itself `Eq`: its
@@ -128,11 +135,12 @@ def Correspondence.expectedIotaType (table : Correspondence)
   let aligned := renameExprLevelParamsExact ownerParams modelParams type
   let rec rewrite : Expr → Expr
     | .forallE name domain body info =>
-      .forallE name (table.substitute domain) (rewrite body) info
+      .forallE name (table.substituteCurrentGroup domain) (rewrite body) info
     | body =>
       match body.getAppFn with
-      | .const ``Eq levels => mkAppN (.const ``Eq levels) (body.getAppArgs.map table.substitute)
-      | _ => table.substitute body
+      | .const ``Eq levels =>
+        mkAppN (.const ``Eq levels) (body.getAppArgs.map table.substituteCurrentGroup)
+      | _ => table.substituteCurrentGroup body
   rewrite aligned
 
 end InductiveModels.Check

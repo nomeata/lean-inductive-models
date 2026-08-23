@@ -666,8 +666,8 @@ def checkFamiliesWithIndex (x : Export) (index : SyntaxIndex)
 
 /-- Check order, independence, and every exact public declaration and statement,
 and report the exact number of model families inspected.  All comparisons are
-literal after positional universe alignment and the one simultaneous
-declaration-name substitution. -/
+literal after positional universe alignment and the simultaneous substitution
+of exactly the current inductive record's declaration names. -/
 def checkReport (x : Export) : Report :=
   let index := SyntaxIndex.ofExport x
   let families := discoverWithIndex x index
