@@ -1,119 +1,25 @@
-/- **The one-constructor owners at a maybe-zero sort whose payload the model
-   must retain, and the four different answers to "retain it how".**
+/- **One-constructor owners at a maybe-zero sort whose payload the model
+   must retain.**
 
-   The maybe-zero (`.bare`) route is the Church encoding under the derived
-   exact-sort lift.  That carrier is the lift of a *proposition*, so it is a
-   subsingleton at every positive instantiation of `u`, and its recursor's
-   motive is `Prop`-valued.  For the recursor and its ι rule that is a model
-   and not a collapse — the argument in `InductiveModels.Simple`'s header — and
-   for a multi-constructor owner it is the whole story, because nothing asks
-   for a field back.
+   A lifted Church carrier is a subsingleton, so it cannot support a
+   projection which returns constructor data at a positive instantiation of
+   `u`. Unindexed nonrecursive owners therefore use Direct; unindexed owners
+   with a bare recursive field use the Empty construction.
 
-   A **one constructor** owner does ask.  Intrinsic projections are demanded of
-   every one-constructor owner and of nothing else: `nc == 1` is the entire
-   shape gate (`Driver.lean`'s `addProjectionModels`, and `Format/Exact.lean`
-   says in as many words that the kernel "does not require the owner to be
-   non-recursive or unindexed").  A subsingleton carrier cannot satisfy
-   `proj (mk a) = a` and `proj (mk b) = b` at once, which is exactly what
-   `Simple/Tight.lean` records, and it is why the **direct** routes exist:
-   `.identity` when the field's sort is the carrier's, `.propLift` when the
-   field is exactly a proposition, and the right-nested `PSigma'` tower for two
-   or more.
+   Indexed nonliteral-`Prop` owners use Carve. `MZIdx` and `MZIdx2` exercise
+   nonrecursive data fields. `MZIdxRecursive` combines a data projection with
+   an indexed recursive child: its skeleton supplies the child data, while
+   small elimination on the relational `Good` proof supplies the child's
+   fibre evidence. `MZProof` is the large-elimination control whose proof
+   field is recovered directly from the index construction; `MZOne` is the
+   Direct control.
 
-   Those routes were gated on `nonrecursiveOneConstructor && ni == 0`.
-   **The projection contract is not.**  Both excluded conjuncts are this file,
-   and both are now closed — by two different constructions, because they are
-   two different questions:
-
-   * `MZIdx` — no recursion; an **index**, and a data field. **The storage
-     branch of the indexed-singleton construction.** Its recovery branch
-     carries `large`; `Site.lean` argued that a data field
-     which is not a conclusion index is unreachable there, "because the kernel
-     mints that recursor only when every non-proof field is literally
-     recoverable as a conclusion index".  That premise is correct and the
-     conclusion drawn from it was not: the kernel does not refuse such a
-     declaration, it mints a **small** recursor for it, so `large` is false and
-     the shape fell through to Church.  `MZIdx.rec`'s motive really is
-     `Prop`-valued; read the export. What recovery cannot do here is *store* the
-     field — its carrier is a Church conjunction of proofs, and it recovers
-     data only by substituting at a pivot. The other implementation stores the
-     fields in the tight tower and discharges the index by the same packed
-     Henry-Ford equation:
-     `T p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, with `Store`
-     the tight `PSigma'` tower as a **definition**.  The projection is the
-     tower's own, so it selects definitionally and its rule is `Eq.refl`.
-   * `MZIdx2` — the same at two data fields, which is the tight tower's own
-     shape with an index in front of it.  **Green, on the same route and the
-     same tower.**
-   * `MZSelf` — recursion alone, and the minimum of the whole family.  The one
-     projected field *is* the carrier, at `Sort u`.  **The empty arm.**
-   * `MZData` — the same with a data field in front of the child.  **The empty arm.**
-
-   `MZOne` and `MZProof` are the controls on either side: the first is the
-   direct `.identity` route (`ni == 0`, not recursive), the second is the recovery
-   branch of the indexed-singleton construction
-   proper (every field a proof, so the kernel does mint the large eliminator).
-   Both model, and both are untouched by either closure. `ni == 0` selects one
-   of the unindexed direct cases; the empty arm is reached only past both.
-
-   **`MZSelf` and `MZData` are not a storage problem; they are empty.**  The
-   reading that kept them red asked where a *recursive* field could be stored —
-   the tight tower would have to hold an inhabitant of the type being declared,
-   which a definition cannot mention — and concluded that nothing retains the
-   field, leaving open whether such an owner should be asked for a projection
-   at all.  The question does not arise.  Each of these constructors has a
-   **bare** recursive field, so applying it already needs an inhabitant of the
-   carrier: `MZSelf` and `MZData a` are uninhabited at every instantiation of
-   `u`.  That is exactly the class the empty arm models, by
-   `emptyAt w = PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})` — the
-   derived exact-sort lift of Church `⊥`.
-
-   **And the *non*-recursive field is stored after all.**  What makes a
-   `PSigma'` uninhabited is one uninhabited component, so
-   `Σ'(x : a), emptyAt u` is empty because of its tail while holding `MZData`'s
-   data field in front of it, and that tail is a constant — it does not mention
-   the carrier, so the carrier is still a definition.  `MZSelf` has no such
-   field and its carrier is the bare `emptyAt u`; `MZData`'s is a one-component
-   tower, its field 0 is the tower's own `PSigma'.fst`, and its ι rule is
-   `Eq.refl`.  Neither owner's *recursive* field is stored, and by positivity
-   no codomain can ever name one.
-
-   **The universe question is the one the lift already answers.**  `∀ p : Sort u, p`
-   is empty too, but it lives at `Sort (imax (u+1) u)` and so misses the
-   declared sort; the lift instead puts an empty *proposition* at
-   `Sort (max 0 w) = Sort w` for a **bare** `w` exactly as for a never-zero
-   one.  So the empty arm was never sort-specific, and its guard no longer says it is:
-   it reads `route matches .type | .bare`, `ni == 0`, `isRec`, and
-   `bareRecSlotOf` at every constructor.  Nothing about the class is about
-   linearity, a base constructor, or a `Type`-valued carrier.
-
-   Everything the contract asks for then follows from emptiness, with no
-   axiom:
-
-   * the carrier ends at `emptyAt u`, with the constructor's non-recursive
-     fields stored in front of it;
-   * `mk` is `⟨f⃗, drop t⟩` for its own bare recursive field `t`, whose descent
-     `drop` already carries that emptiness — so it manufactures nothing;
-   * `rec` eliminates its major premise.  This is a genuine change of model —
-     Church handled the recursor adequately and this replaces it — and it is
-     adequate for the same interface and more: both owners' kernel recursors
-     are **small** (`MZSelf`'s field is not a proof and is not a conclusion
-     index, so the subsingleton rule declines it, and `MZData`'s data field
-     likewise), and `emptyAtElim` serves at every result universe, so the empty arm
-     would deliver a large eliminator too if the kernel had minted one, which
-     the Church fold could not.  The empty arm's `large` guard is therefore an
-     invariant of the never-zero route and not a precondition of the arm;
-   * every ι rule is on the literal contract with the constructor's own binder
-     on the right, exactly as everywhere else — `Eq.refl` for a stored field,
-     whose projection is the tower's own and reduces by π, and an elimination
-     of the descended major for the recursor's and the recursive field's.
-
-   The carrier level and the descent travel from the arm to the common
-   projection driver as `Iso.emptyCarriers`, which is a stated property of the
-   emitted model and not a name, a count or a fixture:
-   `Driver.addProjectionModels` reads it, and where it is present the recursive
-   fields' selector and rule are eliminations through that descent and there is
-   no other route to fall back to. -/
+   `MZSelf` and `MZData` are the Empty cases. Their constructors already
+   require an inhabitant of the type being defined, so the carrier may end in
+   the exact-sort lift of Church `False`; `MZData` stores its nonrecursive
+   field in front of that empty tail. All requested projection rules remain
+   on their literal constructor fields and are checked by the generated
+   kernel fixture. -/
 prelude
 
 set_option bootstrap.inductiveCheckResultingUniverse false

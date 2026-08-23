@@ -684,18 +684,19 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- first: where one of them applies it is the model, and the tower is not
   -- consulted at all.
   --
-  -- **At a never-zero sort the tower is a cheaper model of the same shape, and
-  -- the last argument is what says so without claiming more.** The tuple tower
-  -- would take this owner too, but it would pay a `Nat` tag that a
-  -- one-constructor owner can only ever set to `0`, plus the `Nat` splice and
-  -- the fibre tower around it; the storage here is the same `PSigma'` chain
-  -- with none of that. What the tuple tower has and this does not is the
+  -- **At a never-zero sort this tower is the simpler model of the same shape,
+  -- and the last argument is what says so without claiming more.** The tuple
+  -- tower would take this owner too, but its `Nat` tag represents constructor
+  -- choice that a one-constructor owner does not have; the storage here is the
+  -- same `PSigma'` chain without that extra layer. What the tuple tower has and
+  -- this does not is the
   -- **recursive box** ([`InductiveModels.boxTyOf`]), which removes an `imax` a
   -- `max`-shaped carrier does not absorb — so a never-zero owner whose tower
   -- misses `Sort w` is not a decline here but a fall-through to the arm that
   -- boxes it, and that is the `fallback` argument. `TrL`, `BoxF` and `WBox`
   -- are the corpus's occupants of that fall-through and stay on the tuple
-  -- tower; `IBox` is the indexed case's own, one guard below. At a maybe-zero sort there is no such arm and no such box —
+  -- tower; an indexed `IBox` reaches the same fallback through its Carve
+  -- skeleton. At a maybe-zero sort there is no such arm and no such box —
   -- every boxed level carries a `max 1 ·` floor and no `max 1 ·` is `Prop` —
   -- so the verdict there is the stated boundary it has always been.
   let directTightRoute ← planDirectTightRoute tname
@@ -714,20 +715,6 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       !recoverIndexedSingleton)
     np memberTy exportCtors w false
 
-  -- **The storage half of the indexed-singleton construction.** At a
-  -- maybe-zero sort, a small recursor says that some constructor data cannot
-  -- be recovered from the indices. Church storage would forget that data, so
-  -- retain the fields in [`InductiveModels.tightTowerTy`] and record the fibre
-  -- with one packed equation:
-  --
-  --     T p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗
-  --
-  -- A `Prop` costs no level (`max w 0` is `w`), so the carrier lands on
-  -- `Sort w` exactly when the field tower does. The construction's other
-  -- branch is selected by `recoverIndexedSingleton`: a large recursor means
-  -- every data field is an index pivot and can be substituted instead.
-  -- Never-zero indexed families do not enter either branch; Carve owns all of
-  -- them, leaving Direct strictly index-free.
   -- The two direct cases are **ordered**, and deliberately: the tower with a
   -- pad would model everything
   -- the two exact one-field answers model, and taking them first is what keeps
@@ -788,13 +775,10 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- refusals complemented — so the class partitions on it with no overlap and
   -- no remainder.
   --
-  -- **`!erasureLinear` is therefore a decision, not a refusal boundary**, and
-  -- what decides it is cost rather than reach: on the linear side the tower
-  -- costs `Nat`, `PSigma'` and no axiom and every ι rule is `Eq.refl`, while
-  -- the tree arm splices a two-hundred-declaration core and proves its ι rules
-  -- through `WT.Wrec_iota`. Taking the tree arm wherever it *applies* would
-  -- move six thousand
-  -- models onto the heavier construction for nothing. Neither side is a
+  -- **`!erasureLinear` is therefore a decision, not a refusal boundary.** On
+  -- the linear side a depth-indexed `PSigma'` spine is the direct account and
+  -- every ι rule is `Eq.refl`; the tree arm's generality requires its support
+  -- core and theorem-proved `WT.Wrec_iota`. Neither side is a
   -- fallback for the other: a declaration this sends to the tree arm is one the
   -- tower cannot express, and a declaration it sends to the tower is one the
   -- tree arm would overcharge.

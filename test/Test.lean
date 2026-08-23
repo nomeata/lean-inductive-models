@@ -401,59 +401,21 @@ def expectedPrim : List Row :=
     -- route emits its six public declarations.
     ("nonindexed_vanishing", [("N", 15), ("Dead", 7), ("PProd'", 9)],
       [("Eq", "prim model: a basis primitive")])
-  -- The two small-elimination seams under the derived exact-sort lift. `MI` forces the pair
-    -- motive at two distinct result indices; `MR.step` forces a recursive
-    -- carrier through `down` in the constructor and through `down`/`up` in the
-    -- pair's element projection; `MRI` crosses both at a changing child fibre.
-    -- Each has six public declarations; the first model in each raw export also
-    -- pays for the `Eq` and tight-pair/PUnit support records.
+  -- The relational Carve seams at a sometimes-`Prop` sort. `MI` has two result
+    -- indices; `MRI` adds recursion at a changing child fibre. Their index-free
+    -- skeletons and `Good` relations are modelled in the same output.
   , ("maybe_zero_indexed",
       [("MI", 16), ("MI._model._impl.skel", 7), ("MI._model._impl.good", 6)], [])
   , ("maybe_zero_recursive",
       [("MRI", 16), ("MRI._model._impl.skel", 7),
-       ("MRI._model._impl.good", 6), ("MR", 6)], [])
-  -- **Green, and nothing in this table moved to make it so.** The two
-  -- maybe-zero rows above are multi-constructor, so nothing asks their model
-  -- for a field back. `maybe_zero_projection` is the one-constructor family
-  -- beside them, which does ask: intrinsic projections are demanded of every
-  -- one-constructor owner and of nothing else (`Driver.lean`'s `nc == 1`
-  -- gate), while the direct field/tight routes that retain a field are gated
-  -- on `nonrecursiveOneConstructor && ni == 0`. Either excluded conjunct —
-  -- recursion, or an index — used to drop the owner onto the Church/lift
-  -- route, whose carrier is a subsingleton and whose recursor eliminates only
-  -- into `Prop`, and the emitted projection was then refused by Lean's kernel.
-  --
-  -- **The index conjunct is the indexed-singleton construction's storage
-  -- branch.** `MZIdx` and `MZIdx2` take the same storage tower `.identity` and
-  -- `.tight` use, with the recovery branch's packed Henry-Ford equation saying which fibre the stored
-  -- value sits in, `Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, whose
-  -- projections are the storage tower's own and therefore select
-  -- definitionally.
-  --
-  -- **The recursion conjunct is the empty arm's.** `MZSelf` and `MZData` each have a
-  -- constructor with a **bare** recursive field, so applying it would already
-  -- need an inhabitant of the carrier and both types are *empty* at every
-  -- instantiation of `u`. That is the empty arm's stated class, and the only thing
-  -- that used to keep it off them was a `route matches .type` in its guard:
-  -- its carrier `PSigma'.{0,w} (∀ p : Prop, p) (fun _ => PUnit.{w})` is empty
-  -- at every `w` and lands at exactly `Sort w` for a bare `w` too, which is
-  -- the whole of the universe question the exact-sort lift exists to answer.
-  -- The projections and their ι rules are then eliminations of the major, and
-  -- the recursor is one as well — a real change of model from the Church fold,
-  -- and adequate for the same small eliminator the kernel mints here and for a
-  -- large one it does not.
-  --
-  -- **No count in this row moves for any of it.** Six, seven and eight are the
-  -- same public interfaces they always were; what says the four moved is the
-  -- kernel's verdict and `runOne`'s carrier assertion below, not this table.
-  -- `MZOne` (direct `.identity`) and `MZProof` (the recovery arm proper) are the controls
-  -- and are untouched: the direct route and the recovery arm are tried before both.
-    -- `MZIdx2` is 9 and not 8, and `PProd'` is a row of its own, because
-    -- `MZIdx2` is the first owner here whose stored tower has a rung no later
-    -- field's type mentions: its island splices the binder-free pair — the
-    -- inductive record, which is the pair's whole bundle — and then models it,
-    -- which is the splice-closure rule and not an extra. Every other count is
-    -- untouched: the pair changes a carrier's shape and no public statement.
+       ("MRI._model._impl.good", 6), ("MRIWide", 8),
+       ("MRIWide._model._impl.skel", 6), ("MRIWide._model._impl.good", 6),
+       ("MR", 6)], [])
+  -- One-constructor indexed families exercise Carve's intrinsic projections.
+  -- `MZIdx` and `MZIdx2` retain ordinary data; `MZIdxRecursive` additionally
+  -- projects an indexed recursive child, forcing its skeleton value and
+  -- relational evidence to be reconstructed together. `MZProof`, `MZOne`,
+  -- `MZSelf` and `MZData` remain the recovery, Direct and Empty controls.
   , ("maybe_zero_projection",
       [("Nt", 15), ("MZProof", 6), ("MZOne", 7), ("MZData", 8), ("MZSelf", 6),
        ("MZIdx2", 10), ("MZIdx2._model._impl.skel", 10), ("PProd'", 9),

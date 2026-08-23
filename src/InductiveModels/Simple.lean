@@ -201,34 +201,19 @@ Three recursors:
   At a maybe-zero sort, that proposition is carried under the derived lift and the
   same recursor uses `down` before extraction and `up` in its motive.
 
-**The other half of that index axis is not a Church route at all**, but the
-storage branch of the same **indexed-singleton construction**. A
-maybe-zero one-constructor owner whose constructor has a data field the
-conclusion's index vector does *not* carry gets a **small** eliminator from the
-kernel — its subsingleton rule is exactly "every non-proof field is one of the
-conclusion's indices" — so recovery has nothing to substitute and
-the Church encoding, which remembers only inhabitation, cannot return the field
-either. The model therefore stores the fields and records which fibre the
-stored value sits in, using the same packed equation recovery uses for its
-non-pivots:
-
-```text
-T._model.self p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗
-```
-
-`Store` is the right-nested `PSigma'` tower over the fields
-([`InductiveModels.tightTowerTy`], at one field and no pad the field's own type
-— so the unindexed `.identity`, `.tight` and this share one storage function,
-and one pad decision with it), and it is
-a **definition**: the carve arm's erase-and-carve is the same idea but splices its
-skeleton as an inductive so the kernel mints the large eliminator it needs
-twice, and a maybe-zero skeleton has no large eliminator to mint. The pair sits
-at `max w 0` — a `Prop` costs no level, which is why one guard
-([`InductiveModels.planIndexedSingletonStorageRoute`]) asks the unindexed tower's own
-question — the intrinsic projections are the tower's own, and every rule is
-`Eq.refl`. Together, recovery and storage handle indexed nonrecursive
-singletons at a maybe-zero sort. Every indexed never-zero family goes through
-Carve, so no later never-zero construction has an indexed case.
+**Indexed nonliteral propositions are Carve's, not Church's.** The lifted
+Church carrier remembers only inhabitation and therefore cannot return a data
+field at a positive universe instantiation. Carve instead pairs an index-free
+skeleton with an inductive `Good : skeleton → indices → Prop` relation. The
+skeleton retains every constructor field, while recursion on the `Good` proof
+delivers exactly the small recursor the source was granted. A never-zero Carve
+keeps the older functional `good`, computed by the skeleton's large recursor:
+using the relation there would lose the source's large elimination because a
+proof of `Good` can eliminate only into `Prop`. The exceptional indexed
+large-elimination singleton still uses recovery above, since its data is
+already present in the indices and erasing those indices would lose the
+kernel's special large-elimination grant. Thus every indexed non-`Prop`
+family is settled before the unindexed routes below.
 
 **The never-zero unindexed structures come the same way**, and for the same
 reason read one step earlier: a one-constructor owner's `Nat` tag can only

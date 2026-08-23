@@ -301,13 +301,13 @@ exported inductive
    ├─ literal Prop
    │  ├─ recursive large-elimination singleton       →  5. Graph
    │  ├─ indexed nonrecursive large-elimination singleton
-   │  │                                                →  6. Indexed singleton
+   │  │                                                →  6. Index recovery
    │  └─ otherwise                                   →  7. Church
    └─ sometimes-Prop
-      ├─ indexed nonrecursive singleton               →  6. Indexed singleton
-      │    ├─ large eliminator: recover fields from indices
-      │    └─ small eliminator: store fields and their fibre
-      ├─ unindexed nonrecursive singleton, storable    → 10. Direct storage
+      ├─ indexed                                      →  3. Carve
+      ├─ unindexed nonrecursive singleton with fields
+      │  ├─ storable                                  → 10. Direct storage
+      │  └─ otherwise                                 → unsupported
       ├─ unindexed, recursive, necessarily empty       →  8. Empty
       └─ otherwise                                    →  7. Church
 ```
@@ -316,10 +316,11 @@ Indices and recursion do not by themselves rule out Church: it carries both,
 which is why indexed recursive propositions normally end there. A recursive
 large-elimination singleton instead uses Graph, whose carrier is the same
 Church encoding but whose graph construction supplies the large recursor.
-The other proposition-like exceptions likewise owe an interface plain Church
-cannot provide: a large eliminator, or a projection returning constructor data
-at a positive universe instantiation. Never-`Prop` families cannot use a
-lifted Church proposition at all, because that carrier is a subsingleton.
+Index recovery supplies the other large eliminator that plain Church cannot
+provide. Indexed sometimes-`Prop` families use Carve because, at a positive
+universe instantiation, their constructor data may have to be returned by a
+projection; a lifted Church proposition is a subsingleton and cannot retain
+that data. Never-`Prop` families cannot use that carrier for the same reason.
 
 The leaves state ownership, not the maximum reach of each idea. A specialised
 route may also be chosen because it gives a simpler uniform account of its
@@ -393,10 +394,11 @@ indexed and re-enters the list — through entry 3 for a recursive
 `Type`-valued block like this one, or with the propositions through entry 7
 for a `Prop`-valued one.
 
-### 3. Indexed families at a never-`Prop` sort, carved out of an index-free skeleton (the carve arm)
+### 3. Indexed non-`Prop` families, carved out of an index-free skeleton (the carve arm)
 
-**Scope.** Every indexed family at a never-`Prop` sort. The classic
-length-indexed vector is the picture:
+**Scope.** Every indexed family whose result is not literally `Prop`: both
+never-`Prop` and sometimes-`Prop` sorts. The classic length-indexed vector is
+the picture:
 
 ```lean
 inductive Vec (α : Type u) : Nat → Type u where
@@ -406,17 +408,24 @@ inductive Vec (α : Type u) : Nat → Type u where
 
 **Idea.** Delete the index and `Vec α` becomes `List α`. The model splices that
 index-free declaration into the output as a real inductive — the
-*skeleton* — and carves the family out of it: the model type at index `n`
-is a skeleton value paired with a proof that it is well formed at `n`, with
-the right indices all the way down.
+*skeleton* — and pairs a skeleton value with evidence that it belongs at the
+requested index, with the right indices all the way down.
 
-**Why this route.** Both that well-formedness predicate and
-the recursor are built with the skeleton's recursor above `Prop`, which is
-why the entry is never-`Prop`-only: a sometimes-`Prop` skeleton would be
-granted no large elimination. At a sometimes-`Prop` sort there is no carve:
-indexed nonrecursive singletons use entry 6, and every other indexed shape
-belongs to entry 7. Giving Carve the whole never-`Prop` class creates a useful
-boundary: no later never-`Prop` construction has to account for indices.
+There are two ways to express that evidence. At a never-`Prop` sort, `good` is
+a predicate computed by the skeleton's large recursor. At a sometimes-`Prop`
+sort, the skeleton has only small elimination, so `Good` is instead a spliced
+inductive relation mirroring the source constructors; the source recursor is
+built by recursion on its proof. The large-elimination singleton is the one
+special implementation inside this route: erasing its indices would discard
+the fact that the kernel grants it large elimination, so entry 6 recovers its
+data directly from those indices.
+
+**Why this route.** It removes indices once, before any later representation
+has to care about them, while retaining constructor data and recursive fibres.
+The relational form is not also used at a never-`Prop` sort: its `Good : Prop`
+recursor could eliminate only into `Prop`, whereas the source recursor may
+eliminate into an arbitrary `Sort`. There the skeleton's large recursor is the
+simple way to compute both goodness and recursion.
 
 **Dependencies.** The skeleton, which re-enters this list and goes wherever its
 own shape sends it. In `test/fixtures/inductive-models/prim_carve.lean`, a
@@ -425,7 +434,8 @@ in 6 declarations, while `Bif`, whose constructors branch, sends its
 skeleton through entry 4 at 215 declarations — nearly all of them the
 support library, paid once per output. If the skeleton does not model, the
 model is withdrawn and the declaration declines: the closure rule from the
-introduction, doing its work.
+introduction, doing its work. A relational `Good` is an ordinary proposition
+and re-enters at entry 7. The large singleton subcase uses entry 6.
 
 ### 4. Branching recursion at a never-`Prop` sort, as well-founded trees (the tree arm)
 
@@ -438,10 +448,11 @@ recursive field under a binder, except when entry 8 proves the owner empty.
 
 **Idea and reason.** Entry 9's depth counter takes exactly one
 predecessor per step, so the model here is a tagged well-founded tree
-instead. The two constructions are split by cost, not reach: entry 9 uses
-no axiom and proves every ι rule by `Eq.refl`, while this one splices a
-whole support library, proves its ι rules as theorems, and its models admit
-`propext` and `Quot.sound` — for some shapes also `Classical.choice`.
+instead. Linear recursion stays with entry 9 because a depth-indexed storage
+spine is the simpler representation there: it uses no axiom and every ι rule
+is `Eq.refl`. Branching and infinitary recursion need the general tree, its
+support library, and theorem-proved ι rules; its models admit `propext` and
+`Quot.sound` — for some shapes also `Classical.choice`.
 
 **Dependencies.** The support library (the source calls it the `_wcore`
 fragment) — a fixed export of the well-founded-tree toolkit, twenty
@@ -478,39 +489,31 @@ in the first place. **Dependencies:** `Classical.choice`; function
 extensionality derived from `Quot.sound` when needed; and `Nonempty`, the
 domain of `Classical.choice`, modelled by entry 7.
 
-### 6. Indexed singletons: recover or store the constructor data
+### 6. Large indexed propositions: recover constructor data from the indices
 
-**Scope.** One constructor, no recursion, indexed, at a `Prop` or
-sometimes-`Prop` sort. This is one shape with two implementations, selected by
-the eliminator Lean grants it.
+**Scope.** One constructor, no recursion, indexed, and granted large
+elimination at a literal `Prop` or sometimes-`Prop` sort. A literal `Prop`
+reaches this entry directly; a sometimes-`Prop` family reaches it as the
+large-singleton implementation of Carve. `HEq.refl` is the familiar
+zero-field example.
 
-- With a large eliminator, every data field is literally one of the index
-  arguments in the constructor's conclusion. The construction recovers those
-  fields from the recursor's indices and packs the proof fields with one
-  equation over the remaining index positions. `HEq.refl` is the familiar
-  zero-field example.
-- With a small eliminator, some data is not present in the indices. At a
-  positive universe instantiation that data still has to support projections,
-  so the construction stores the fields in a tight `PSigma'` tower and pairs
-  it with one packed equation saying which fibre it inhabits.
-
-**Idea and reason.** Both implementations answer the same question: where does
-the constructor data come from at a requested index? Recovering avoids storing
-data already supplied by the indices; storing is necessary when the indices
-do not supply it. Keeping both answers here settles indexed proposition-like
-singletons in one place and leaves Direct entirely index-free.
-**Dependencies:** the basis, plus `PProd'` when stored fields need a balanced
-pair tree; no auxiliary inductive family is introduced.
+**Idea and reason.** The kernel grants the large eliminator only when every
+data field is literally one of the index arguments in the constructor's
+conclusion. The construction therefore reads those fields from the recursor's
+indices, keeps the proof fields in a Church conjunction, and records one
+equation over the remaining index positions. This preserves the kernel's
+large eliminator without asking an index-erased skeleton to inherit that
+special privilege. **Dependencies:** only the basis; no auxiliary inductive
+family is introduced.
 
 ### 7. Propositions, and the sometimes-`Prop` remainder (the Church encoding)
 
 **Scope.** This is the complete construction for every proposition outside
-the specialised cases in entries 5 and 6, and for every
-sometimes-`Prop` shape no other entry takes. Entry 5 reuses its model type but
-supplies a different recursor; entry 6 either recovers fields with a
-Church-style conjunction and index equation or stores the indexed fibre. This
-coverage is why neither literal
-`Prop` nor sometimes-`Prop` has an unsupported recursive shape.
+the specialised cases in entries 5 and 6, and for every unindexed
+sometimes-`Prop` shape no earlier entry takes. Entry 5 reuses its model type
+but supplies a different recursor; entry 3 also uses Church later to model its
+spliced `Good` relation. This coverage is why literal `Prop` has no unsupported
+recursive shape.
 
 **Idea.** A declaration is modelled by what can be concluded from
 it: the model type of `Or a b` is `∀ C : Prop, (a → C) → (b → C) → C`.
@@ -518,12 +521,13 @@ This is the impredicative encoding from the universe note above; at a
 sometimes-`Prop` sort it travels under the lift. Indices are carried, and
 recursion is too — the encoding's fold is strengthened into an induction —
 so `And`, `Exists`, `Iff`, `False` and most propositions in a real export
-land here, as do `Nonempty` (which entry 5 relies on) and `PEmpty`, a
-sometimes-`Prop` declaration with no constructors. A Church-encoded value
+land here, as do indexed recursive propositions, `Nonempty` (which entry 5
+relies on), and `PEmpty`, a sometimes-`Prop` declaration with no constructors.
+A Church-encoded value
 remembers *that* something was concluded, not what it was built from. That
 is fine for propositions, which are never asked to hand data back — and it
-is exactly why data-bearing indexed singletons use entry 6 and unindexed ones
-use entry 10 instead.
+is exactly why indexed nonliteral-`Prop` families use entry 3 and unindexed
+data-bearing singletons use entry 10 instead.
 Thus Church is used where proof irrelevance makes that loss harmless, not as
 the representation for data-bearing structures. **Dependencies:** only the
 basis; it introduces no auxiliary inductive.
@@ -541,8 +545,7 @@ inductive Loop : Type where
 ```
 
 **Idea and reason.** The class is not about linearity — a constructor with two
-bare recursive
-fields is exactly as unusable as one with one — and the construction serves
+bare recursive fields is exactly as unusable as one with one — and the construction serves
 never-`Prop` and sometimes-`Prop` sorts on the same terms; a `Prop` of this
 shape is just an unprovable proposition, which entry 7 already covers. The
 model type is an empty type at exactly the declared sort. Where the
@@ -579,8 +582,8 @@ recursive depth: a constructor with a recursive field stores that field's
 value one depth down. The recursor reads the tags with `Nat.rec` building a
 type — the large elimination the basis buys — and then walks the storage.
 The whole construction uses no axiom, and every one of its ι rules holds by
-`Eq.refl`. That low cost is why linear declarations use this route rather
-than entry 4's more general well-founded trees.
+`Eq.refl`. This direct depth-and-storage account is why linear declarations
+use this route rather than entry 4's more general well-founded trees.
 
 **Dependencies.** `PProd'` for the balanced trees, modelled by entry 10. Basis
 members the input does not declare are spliced in at Lean's own shape and
