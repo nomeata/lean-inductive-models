@@ -200,16 +200,16 @@ Three recursors:
   At a maybe-zero sort, that proposition is carried under the derived lift and the
   same recursor uses `down` before extraction and `up` in its motive.
 
-**The other half of that index axis is not a Church route at all**, and it is
-not a separate arm either: it is the **direct routes' indexed case**. A
+**The other half of that index axis is not a Church route at all**, but the
+storage branch of the same **indexed-singleton construction**. A
 maybe-zero one-constructor owner whose constructor has a data field the
 conclusion's index vector does *not* carry gets a **small** eliminator from the
 kernel — its subsingleton rule is exactly "every non-proof field is one of the
-conclusion's indices" — so the recovery arm's substitution has nothing to substitute and
+conclusion's indices" — so recovery has nothing to substitute and
 the Church encoding, which remembers only inhabitation, cannot return the field
-either. The model has to store it, which is precisely what the direct routes
-do; an index does not change the storage, it only says which fibre the stored
-value sits in, and it says it the way the recovery arm discharges its non-pivots:
+either. The model therefore stores the fields and records which fibre the
+stored value sits in, using the same packed equation recovery uses for its
+non-pivots:
 
 ```text
 T._model.self p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗
@@ -223,21 +223,11 @@ a **definition**: the carve arm's erase-and-carve is the same idea but splices i
 skeleton as an inductive so the kernel mints the large eliminator it needs
 twice, and a maybe-zero skeleton has no large eliminator to mint. The pair sits
 at `max w 0` — a `Prop` costs no level, which is why one guard
-([`InductiveModels.planDirectIndexedRoute`]) asks the unindexed tower's own
+([`InductiveModels.planIndexedSingletonStorageRoute`]) asks the unindexed tower's own
 question — the intrinsic projections are the tower's own, and every rule is
-`Eq.refl`. The recovery arm keeps its shapes: the direct guard carries `!armRecoveryNonRec`, and
-Direct is the first guard in the dispatch chain.
-
-**And it is the model at a never-zero sort too, where the carve arm could also have
-carved.** The two overlap at exactly one constructor and no recursion, and
-there the storage is strictly less: a spliced inductive re-enters the
-construction under the splice-closure rule and is modelled in turn, so the carve arm's
-owner pays for two families where it declared one, while `Store` is a
-definition nobody has to model. The carve arm keeps every shape outside that overlap —
-multi-constructor and recursive indexed families have no single tower to
-store — and it also keeps the one-constructor owners whose fields carry an
-`imax` the tower cannot reach, because at a never-zero sort a tower that
-misses `Sort w` falls through to it rather than declining.
+`Eq.refl`. Together, recovery and storage handle indexed nonrecursive
+singletons at a maybe-zero sort. Every indexed never-zero family goes through
+Carve, so no later never-zero construction has an indexed case.
 
 **The never-zero unindexed structures come the same way**, and for the same
 reason read one step earlier: a one-constructor owner's `Nat` tag can only
@@ -364,8 +354,9 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
   -- reaches it below. Leaving `armEmpty` out declined six of `prim_w`'s occupants
   -- at the shape they are modelled at.
   let st ←
-    if let some directRoute := site.directRoute? then primDirect site directRoute st
-    else if site.armRecovery then primArmRecovery site st
+    if let some indexedSingletonRoute := site.indexedSingletonRoute? then
+      primArmIndexedSingleton site indexedSingletonRoute st
+    else if let some directRoute := site.directRoute? then primDirect site directRoute st
     else if site.armCarve then primArmCarve site st
     else if site.armEmpty then primArmEmpty site st
     else if site.armTree then primArmTree site st

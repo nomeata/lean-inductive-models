@@ -267,14 +267,6 @@ Different inductive shapes use different constructions rather than one
 construction that handles everything. This keeps each construction focused and
 lets the constructions for more general shapes build on the simpler ones.
 
-The first routing decision is made by the exported declaration:
-
-- a block marked as nested uses entry 1;
-- a non-nested block with several mutually declared members uses entry 2;
-- a single, non-nested member uses one of entries 3–10 according to its
-  constructor count, indices, recursion and result sort;
-- the five names in entry 11 are the fixed stopping point and are exempt.
-
 Some terminology used below:
 
 - A result sort is *never-`Prop`* when its universe is always positive
@@ -291,27 +283,37 @@ Large elimination and lifts matter most at a sometimes-`Prop` sort: a
 `Nat`-tagged representation can never instantiate to `Prop`, while an unlifted
 Church proposition has the wrong sort at positive instantiations.
 
-The following table is the short route map. Where rows appear to overlap, the
-last column names the more specialised or cheaper route that owns the shape.
-The numbered order follows dispatch from the outer shape of an exported block
-toward the simpler representations and, finally, the basis. Routing is shape
-analysis, not a sequence of failed construction attempts.
+Here is the complete routing tree. A basis member is part of the routing: it is
+handled by emitting no model.
 
-| Entry | In scope | Deliberately handled elsewhere |
-| --- | --- | --- |
-| 1. Nested | a block whose recursion passes through another inductive | plain mutual and simple blocks |
-| 2. Mutual | a non-nested mutual block | single-member and nested blocks |
-| 3. Carve | indexed, never-`Prop`; chiefly recursive or multi-constructor families | the cheaper direct-storage singleton when it applies |
-| 4. Tree | unindexed, recursive, never-`Prop`, and branching or infinitary, unless empty | linear recursion (entry 9), indexed recursion (entry 3), propositions |
-| 5. Graph | one-constructor recursive literal `Prop` with a large eliminator | nonrecursive owners and small eliminators; sometimes-`Prop` owners |
-| 6. Recovery | one-constructor, nonrecursive, indexed `Prop` or sometimes-`Prop` with a large eliminator | data not present in the indices (entry 10), and recursion (entries 5 or 7) |
-| 7. Church | literal propositions outside entries 5 and 6, plus the sometimes-`Prop` remainder; entry 5 reuses its carrier | data-bearing singleton shapes that need direct storage or recovery; empty shapes already handled by entry 8 |
-| 8. Empty | recursive and unindexed, with a bare recursive field in every constructor | inhabited shapes; literal propositions, for which Church already represents falsity |
-| 9. Tuple tower | unindexed, never-`Prop`, with at most one unbound recursive field per constructor, outside entries 8 and 10 | indexed owners, propositions, branching or infinitary recursion, owners known empty, and direct-storage singletons |
-| 10. Direct storage | one constructor, no recursion, at least one field, not literal `Prop`; indices are allowed | propositions; recursive or multi-constructor owners; level shapes needing the tuple box or carve skeleton |
-| 11. Basis | exactly `Eq`, `PSigma'`, `Nat`, `PUnit` and the `Quot` bundle | every other owner |
+```text
+exported inductive
+├─ basis owner                                      → 11. Basis (exempt)
+├─ block marked nested                              →  1. Nested
+├─ non-nested block with several members            →  2. Mutual
+└─ single, non-nested member
+   ├─ never-Prop
+   │  ├─ indexed                                     →  3. Carve
+   │  ├─ unindexed, recursive, necessarily empty     →  8. Empty
+   │  ├─ unindexed, recursive, branching/infinitary  →  4. Tree
+   │  ├─ unindexed, nonrecursive singleton, storable → 10. Direct storage
+   │  └─ otherwise                                   →  9. Tuple tower
+   ├─ literal Prop
+   │  ├─ recursive large-elimination singleton       →  5. Graph
+   │  ├─ indexed nonrecursive large-elimination singleton
+   │  │                                                →  6. Indexed singleton
+   │  └─ otherwise                                   →  7. Church
+   └─ sometimes-Prop
+      ├─ indexed nonrecursive singleton               →  6. Indexed singleton
+      │    ├─ large eliminator: recover fields from indices
+      │    └─ small eliminator: store fields and their fibre
+      ├─ unindexed nonrecursive singleton, storable    → 10. Direct storage
+      ├─ unindexed, recursive, necessarily empty       →  8. Empty
+      └─ otherwise                                    →  7. Church
+```
 
-The detailed entries follow that dispatch order. Whenever a model splices an
+The entries below stay in topological order, from specialised source shapes
+toward the more general representations they depend on. Whenever a model splices an
 auxiliary inductive, that auxiliary resumes the walk at a later entry (or, for
 `PProd'`, at a smaller use of entry 10). Thus the longest chain runs from
 nested to mutual to indexed to tree and eventually reaches the basis. With
@@ -379,12 +381,8 @@ for a `Prop`-valued one.
 
 ### 3. Indexed families at a never-`Prop` sort, carved out of an index-free skeleton (the carve arm)
 
-**Scope.** An indexed family at a never-`Prop` sort, minus the one-constructor
-non-recursive families that entry 10 can store without a splice. Entry 3 also
-keeps the two fall-throughs from entry 10: a family with no fields to store,
-and one whose field levels only entry 9's boxing reaches. Everything with
-several constructors or recursion is this entry's. The classic length-indexed
-vector is the picture:
+**Scope.** Every indexed family at a never-`Prop` sort. The classic
+length-indexed vector is the picture:
 
 ```lean
 inductive Vec (α : Type u) : Nat → Type u where
@@ -401,12 +399,10 @@ the right indices all the way down.
 **Why this route.** Both that well-formedness predicate and
 the recursor are built with the skeleton's recursor above `Prop`, which is
 why the entry is never-`Prop`-only: a sometimes-`Prop` skeleton would be
-granted no large elimination. At a sometimes-`Prop` sort there is no carve
-at all — the one-constructor non-recursive family is entry 10's there
-exactly as here, and every other indexed shape belongs to the
-propositions, entries 6 and 7. Within the never-`Prop` overlap, direct
-storage still wins for a nonrecursive singleton because it needs no spliced
-skeleton.
+granted no large elimination. At a sometimes-`Prop` sort there is no carve:
+indexed nonrecursive singletons use entry 6, and every other indexed shape
+belongs to entry 7. Giving Carve the whole never-`Prop` class creates a useful
+boundary: no later never-`Prop` construction has to account for indices.
 
 **Dependencies.** The skeleton, which re-enters this list and goes wherever its
 own shape sends it. In `test/fixtures/inductive-models/prim_carve.lean`, a
@@ -468,36 +464,38 @@ in the first place. **Dependencies:** `Classical.choice`; function
 extensionality derived from `Quot.sound` when needed; and `Nonempty`, the
 domain of `Classical.choice`, modelled by entry 7.
 
-### 6. Propositions whose indices carry their data (the recovery arm)
+### 6. Indexed singletons: recover or store the constructor data
 
 **Scope.** One constructor, no recursion, indexed, at a `Prop` or
-sometimes-`Prop` sort, and granted large elimination by the kernel — which,
-for a proposition, happens exactly when every constructor field is either a
-proof or a piece of data that is literally one of the index arguments in
-the constructor's conclusion. `HEq`, heterogeneous equality, is the
-well-known occupant: its constructor `HEq.refl` has no fields at all, and
-its model reduces to a single equation saying that the caller's indices are
-the constructor's, each side's index tuple packed into one value.
+sometimes-`Prop` sort. This is one shape with two implementations, selected by
+the eliminator Lean grants it.
 
-**Idea and reason.** A proposition can hand back its proof fields, but it has no way whatever to
-hand back data; the indices are the only place data can come back from, and
-the kernel's condition above is what guarantees it is there. So the model
-packs the proof fields together with one equation over the index positions
-that are *not* constructor fields, and at each position that is one, the
-recursor recovers the field from its own index argument. The construction
-recovers data and cannot store it — which is its exact boundary with
-entry 10's indexed case at a sometimes-`Prop` sort: a data field the
-conclusion's indices carry comes back by substitution here, and one they do
-not carry has to be stored there. **Dependencies:** no auxiliary inductive;
-the packed equation uses the basis's own `Eq`.
+- With a large eliminator, every data field is literally one of the index
+  arguments in the constructor's conclusion. The construction recovers those
+  fields from the recursor's indices and packs the proof fields with one
+  equation over the remaining index positions. `HEq.refl` is the familiar
+  zero-field example.
+- With a small eliminator, some data is not present in the indices. At a
+  positive universe instantiation that data still has to support projections,
+  so the construction stores the fields in a tight `PSigma'` tower and pairs
+  it with one packed equation saying which fibre it inhabits.
+
+**Idea and reason.** Both implementations answer the same question: where does
+the constructor data come from at a requested index? Recovering avoids storing
+data already supplied by the indices; storing is necessary when the indices
+do not supply it. Keeping both answers here settles indexed proposition-like
+singletons in one place and leaves Direct entirely index-free.
+**Dependencies:** the basis, plus `PProd'` when stored fields need a balanced
+pair tree; no auxiliary inductive family is introduced.
 
 ### 7. Propositions, and the sometimes-`Prop` remainder (the Church encoding)
 
 **Scope.** This is the complete construction for every proposition outside
-the specialised large-elimination cases in entries 5 and 6, and for every
+the specialised cases in entries 5 and 6, and for every
 sometimes-`Prop` shape no other entry takes. Entry 5 reuses its model type but
-supplies a different recursor; entry 6 uses its own Church-style conjunction
-of fields and an index equation. This coverage is why neither literal
+supplies a different recursor; entry 6 either recovers fields with a
+Church-style conjunction and index equation or stores the indexed fibre. This
+coverage is why neither literal
 `Prop` nor sometimes-`Prop` has an unsupported recursive shape.
 
 **Idea.** A declaration is modelled by what can be concluded from
@@ -510,7 +508,8 @@ land here, as do `Nonempty` (which entry 5 relies on) and `PEmpty`, a
 sometimes-`Prop` declaration with no constructors. A Church-encoded value
 remembers *that* something was concluded, not what it was built from. That
 is fine for propositions, which are never asked to hand data back — and it
-is exactly why the sometimes-`Prop` storage shapes are entry 10's instead.
+is exactly why data-bearing indexed singletons use entry 6 and unindexed ones
+use entry 10 instead.
 Thus Church is used where proof irrelevance makes that loss harmless, not as
 the representation for data-bearing structures. **Dependencies:** only the
 basis; it introduces no auxiliary inductive.
@@ -573,15 +572,14 @@ than entry 4's more general well-founded trees.
 members the input does not declare are spliced in at Lean's own shape and
 reported on `prelude spliced` lines, unmodelled under entry 11's exemption.
 
-### 10. Structures outside `Prop`: field storage (the *direct* route)
+### 10. Unindexed structures outside `Prop`: field storage (the *direct* route)
 
 **Scope.** One constructor with at least one field, no recursion, at any
 sort that is not a literal `Prop` — never-`Prop` and sometimes-`Prop`
-alike. This is the everyday structure, indexed or not: `Prod`, `Fin n`,
+alike — and no indices. This is the everyday structure: `Prod`, `Fin n`,
 `Subtype`, `Sigma` and `PSigma` all land here. A literal `Prop` of this
 shape stays with the propositions, because a `Prop` owner is asked for no
-data projections and there is nothing here for storage to retain; where the
-kernel grants it large elimination, entry 6 has already taken it.
+data projections and there is nothing here for storage to retain.
 
 **Idea.** The model type stores the constructor's fields, and every part of the
 storage is level-generic — which is why the entry is not confined to either
@@ -601,24 +599,12 @@ to take entry 9's tuple instead, paying a constructor tag that a
 one-constructor declaration can only ever set to `0`, along with the `Nat`
 splice behind it; the storage here is the same chain with none of that.
 
-**Why not the more general indexed construction.** An *indexed* declaration
-of this shape gets the same storage plus one
-`Prop`-valued equation recording the index values the stored value was
-built at, each side's index tuple packed into a single value; a proposition
-costs no universe, so the model type still lands exactly on the declared
-sort. Entry 3 could carve the never-`Prop` case too, but it splices the
-family's index erasure as a real inductive, which the closure rule then
-puts back in front of the construction to be modelled in turn — two
-families where the input declared one. The storage here is a definition
-nobody has to model, so where both apply the storage wins, and entry 3
-keeps every indexed family outside this one shape.
-
 **Boundary.** Two never-`Prop` corners use another route rather than decline:
 a constructor with no fields has nothing to store, and a field whose universe
 level retains an `imax` can miss the declared sort in a way that only entry
 9's boxing — a wrapper this plain storage does not use — absorbs. Either way
-the declaration goes where it always went, entry 9 unindexed and entry 3
-indexed. At a sometimes-`Prop` sort there is no alternate box; a field level
+the declaration goes to entry 9. At a sometimes-`Prop` sort there is no
+alternate box; a field level
 that misses the sort there is the decline this list's last section describes.
 
 **Typical sometimes-`Prop` input.** The sometimes-`Prop` occupants deserve a
@@ -679,8 +665,7 @@ The *indexed-fibre adapter* applies to a safe, single-member,
 one-constructor, indexed, never-`Prop` family with a non-K recursor, whose
 recursive occurrences, if any, are direct and do not affect the result indices
 or later field types. It publishes aliases over the family's existing model —
-entry 10's stored fibre when nonrecursive, entry 3's carve when recursive or
-when direct storage falls through — with identity `roll`/`unroll` conversions.
+entry 3's carve — with identity `roll`/`unroll` conversions.
 It is not a new representation and it does not apply to unindexed owners,
 mutual blocks or
 `Prop`/sometimes-`Prop` families.

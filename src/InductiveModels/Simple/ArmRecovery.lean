@@ -3,14 +3,14 @@ import InductiveModels.Simple.RecoveryKit
 import InductiveModels.Simple.GraphKit
 
 /-!
-# The recovery arm: the indexed subsingleton, by one packed index equation
+# Indexed singletons
 -/
 
 open Lean Meta
 
 namespace InductiveModels
 
-def primArmRecovery (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
+private def primArmIndexedSingletonRecover (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- The site, under the names this arm has always read it by.
   let tname := site.tname
   let lparams := site.lparams
@@ -282,5 +282,29 @@ def primArmRecovery (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   addChecked dRec
   out := out.push dRec
   return { st with out, spliced }
+
+/-- Store the fields of a small-elimination, sometimes-`Prop` indexed
+singleton and pair them with the equation selecting its fibre. The carrier
+generator is shared with tight direct storage, but this branch belongs to the
+indexed-singleton construction: Direct itself is index-free. -/
+private def primArmIndexedSingletonStore (site : PrimSite) (pad? : Option Level)
+    (st : PrimOut) : GenM PrimOut := do
+  let (cn0, cty0) := site.exportCtors[0]!
+  let modelCtorTy := site.publicSource site.sourceCtors[0]!.2
+  let (decls, newSpliced, newRequires, overrides) ← emitDirectIndexedModel site.eqi
+    site.tname site.lparams site.np site.ni cn0 site.memberTy cty0 modelCtorTy
+    site.declaredMemberTy site.selfN (site.ctorN 0) site.recN site.rv.levelParams
+    site.installedRecTy site.publicRecTy site.w site.v pad?
+  return { st with
+    out := st.out ++ decls
+    spliced := st.spliced ++ newSpliced
+    requires := st.requires ++ newRequires
+    projectionOverrides := st.projectionOverrides ++ overrides }
+
+def primArmIndexedSingleton (site : PrimSite) (route : IndexedSingletonRoute)
+    (st : PrimOut) : GenM PrimOut :=
+  match route with
+  | .recover => primArmIndexedSingletonRecover site st
+  | .store pad? => primArmIndexedSingletonStore site pad? st
 
 end InductiveModels

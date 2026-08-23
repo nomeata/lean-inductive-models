@@ -420,9 +420,9 @@ def expectedPrim : List Row :=
   -- route, whose carrier is a subsingleton and whose recursor eliminates only
   -- into `Prop`, and the emitted projection was then refused by Lean's kernel.
   --
-  -- **The index conjunct is the direct routes' indexed case.** `MZIdx` and
-  -- `MZIdx2` take the very storage tower `.identity` and `.tight` use, with
-  -- the recovery arm's packed Henry-Ford equation over it saying which fibre the stored
+  -- **The index conjunct is the indexed-singleton construction's storage
+  -- branch.** `MZIdx` and `MZIdx2` take the same storage tower `.identity` and
+  -- `.tight` use, with the recovery branch's packed Henry-Ford equation saying which fibre the stored
   -- value sits in, `Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, whose
   -- projections are the storage tower's own and therefore select
   -- definitionally.
@@ -796,11 +796,8 @@ def expectedPrim : List Row :=
   -- back to 8 when that route was withdrawn. `ProjectionTest` names the eight
   -- records and asserts the skeleton has none of them; this row only counts.
   , ("prim_carve",
-      -- `Zx` and its skeleton are the direct routes' indexed fall-through at
-      -- its second case: one constructor, no recursion, one index, **no
-      -- fields**. There is no tower to store nothing in, so the direct route
-      -- answers *does not apply* and the carve arm — which is not behind it at a
-      -- maybe-zero sort, where the recovery arm takes this shape instead — models it here.
+      -- `Zx` is the zero-field indexed control. Its never-`Prop` result sends
+      -- it directly to Carve, whose unindexed skeleton is then modelled too.
       [("N", 16), ("Zx", 14), ("Zx._model._impl.skel", 6),
        ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
        ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),

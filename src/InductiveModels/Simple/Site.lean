@@ -92,7 +92,7 @@ structure PrimSite where
   constructor count and one level question; see the decision there. -/
   emptyStored : Array Nat
   directRoute? : Option DirectRoute
-  armRecovery : Bool
+  indexedSingletonRoute? : Option IndexedSingletonRoute
   armCarve : Bool
   wTagged : Bool
   wPlan : WCarrierPlan
@@ -419,7 +419,8 @@ after normalisation"
   -- `Acc.below` — fell through the gap between them.
   -- `test/fixtures/inductive-models/prim_idx.lean` is the grid.
   let armGraphRec := (route matches PrimRoute.prop) && large && nc == 1 && isRec
-  let armRecoveryNonRec := ((route matches PrimRoute.prop) || (route matches PrimRoute.bare)) &&
+  let recoverIndexedSingleton :=
+    ((route matches PrimRoute.prop) || (route matches PrimRoute.bare)) &&
     large && nc == 1 && ni > 0 && !isRec
   let mut gIsData : Array Bool := #[]
   let mut gIdxPos : Array Nat := #[]
@@ -430,7 +431,7 @@ after normalisation"
   let mut gPivotTransports : Array (Nat × Nat) := #[]
   -- The index positions that are **not** pivots, in telescope order.
   let mut gNonPiv : Array Nat := #[]
-  if armGraphRec || armRecoveryNonRec then
+  if armGraphRec || recoverIndexedSingleton then
     if armGraphRec then for n in graphNames do taken n
     let (a, b, cc, npv, pt) ← forallBoundedTelescope memberTy (some np) fun ps _ => do
       let (cn, cty) := exportCtors[0]!
@@ -463,7 +464,7 @@ after normalisation"
             -- kernel mints that recursor only when every non-proof field is
             -- literally recoverable as a conclusion index. A declaration may
             -- contain an unrecoverable data field and still be accepted, but
-            -- its recursor is small and `armRecoveryNonRec` / `armGraphRec` are false.
+            -- its recursor is small and `recoverIndexedSingleton` / `armGraphRec` are false.
             -- `arm_f_guards` pins that route boundary. Only a raw export whose
             -- recursor metadata contradicts the installed kernel declaration
             -- can arrive here, and that remains a named decline rather than a
@@ -702,90 +703,34 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
       ni == 0 && directFieldRoute?.isNone)
     np memberTy exportCtors w (route matches PrimRoute.type)
 
-  -- **The direct routes' indexed case**, and the whole of why it is a case of
-  -- them rather than an arm beside them.
-  --
-  -- The two guards above are `ni == 0`, and that conjunct was a narrowness and
-  -- not a boundary. What the direct routes do is **store** the constructor's
-  -- fields, in [`InductiveModels.tightTowerTy`], at the carrier's exact sort,
-  -- because a one-constructor owner is asked for its fields back and the
-  -- Church encoding underneath remembers only inhabitation. An index changes
-  -- nothing about that storage; it only asks which fibre of the family the
-  -- stored value sits in, and the answer is one `Prop`-valued packed equation
-  -- over the same tower:
+  -- **The storage half of the indexed-singleton construction.** At a
+  -- maybe-zero sort, a small recursor says that some constructor data cannot
+  -- be recovered from the indices. Church storage would forget that data, so
+  -- retain the fields in [`InductiveModels.tightTowerTy`] and record the fibre
+  -- with one packed equation:
   --
   --     T p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗
   --
-  -- A `Prop` costs no level (`max w 0` is `w`), so the carrier still lands on
-  -- `Sort w` exactly when the tower does — which is why
-  -- [`InductiveModels.planDirectIndexedRoute`] asks
-  -- [`InductiveModels.planDirectTightRoute`]'s question and not a second one.
-  --
-  -- **`!armRecoveryNonRec` is what keeps the recovery arm's shapes with it.**
-  -- `armRecoveryNonRec` is
-  -- the same declaration shape asked one question: is every non-proof field
-  -- literally one of the conclusion's index arguments? That is the kernel's own
-  -- subsingleton rule, so the answer is `large` and the two are one fact read
-  -- at two places. Where the answer is **yes**, the recovery arm
-  -- **substitutes**: it reads
-  -- each data field off the recursor's own index argument and Church-conjoins
-  -- the proof fields, because at a maybe-zero carrier there is no room to store
-  -- anything — `Acc.intro`'s `x : α` sits at a level the `Prop` carrier cannot
-  -- hold, and the index vector is the only place it can come back from. That is
-  -- a genuinely different construction, it reaches shapes storage cannot
-  -- (`MZProof`, every proof field, no tower to build), and this conjunct leaves
-  -- it every shape it had. Direct is the *first* dispatch guard, so without the
-  -- conjunct it would steal them.
-  --
-  -- Where the answer is **no**, the recovery arm is not merely narrower but unavailable: a
-  -- data field the index vector does not mention is recoverable from nothing at
-  -- all, so the model has to store it, which is this route. Neither side is a
-  -- fallback for the other and the decision is read off the shape, not
-  -- attempted.
-  --
-  -- **`Store` is a definition and not a spliced inductive**, which is what
-  -- separates this from the carve arm — and, at a never-zero sort, what makes it the
-  -- cheaper of the two. The carve arm's erase-and-carve is the same idea — build the
-  -- index-free skeleton, then cut the family out of it — but it splices the
-  -- skeleton as an *inductive* so the kernel mints its large eliminator, and it
-  -- needs that eliminator twice. A spliced inductive is not free: the
-  -- splice-closure rule ([`InductiveModels.Iso.requires`]) puts it back in
-  -- front of the construction, so the skeleton is itself modelled and the
-  -- owner pays for two families where it declared one. The `PSigma'` tower
-  -- splices nothing and needs no elimination grant at all, because its
-  -- projections are structure projections and carry no motive. A maybe-zero
-  -- skeleton has no large eliminator to mint either, which is why the carve arm never
-  -- reached there in the first place.
-  --
-  -- **So the shared shape — one constructor, non-recursive, indexed — is this
-  -- route's at both sorts, and the carve arm keeps everything else.** `nc == 1` and
-  -- `!isRec` are the whole of the overlap: a multi-constructor or recursive
-  -- indexed family has no storage tower to write and is the carve arm's exactly as
-  -- before. Where the tower misses `Sort w` at a never-zero carrier this is a
-  -- fall-through and not a decline — the last argument — because the carve arm is
-  -- behind it and takes the owner; at a maybe-zero sort there is nothing
-  -- behind it and the missed sort is the stated boundary. At a literal `Prop`
-  -- the storage would have to land at `Sort 0`, which means every field is a
-  -- proof, which means the recovery arm has already fired — and a `Prop` owner is asked
-  -- for no data projection in the first place
-  -- ([`InductiveModels.eligibleProjectionFieldsM`]'s `ownerIsProp` gate), so
-  -- there is nothing there for this route to retain.
-  let directIndexedRoute ← planDirectIndexedRoute tname
-    ((route matches PrimRoute.bare | PrimRoute.type) && nc == 1 && !isRec && ni > 0 &&
-      !armRecoveryNonRec)
-    np memberTy exportCtors w (route matches PrimRoute.type)
+  -- A `Prop` costs no level (`max w 0` is `w`), so the carrier lands on
+  -- `Sort w` exactly when the field tower does. The construction's other
+  -- branch is selected by `recoverIndexedSingleton`: a large recursor means
+  -- every data field is an index pivot and can be substituted instead.
+  -- Never-zero indexed families do not enter either branch; Carve owns all of
+  -- them, leaving Direct strictly index-free.
+  let indexedSingletonStorageRoute ← planIndexedSingletonStorageRoute tname
+    ((route matches PrimRoute.bare) && nc == 1 && !isRec && ni > 0 &&
+      !recoverIndexedSingleton)
+    np memberTy exportCtors w
 
-  -- The indexed case is disjoint from the other two by its own guard —
-  -- `ni > 0` against their `ni == 0` — so it is a selection. The first two are
-  -- **ordered**, and deliberately: the tower with a pad would model everything
+  -- The two direct cases are **ordered**, and deliberately: the tower with a
+  -- pad would model everything
   -- the two exact one-field answers model, and taking them first is what keeps
   -- `.identity`'s carrier the field itself and `.propLift`'s the bare lift,
   -- rather than wrapping either in a pair nothing needs. The tower's guard
   -- carries `directFieldRoute?.isNone`, so the order is stated in the guard and
   -- not only in this `<|>`.
   let directRoute? : Option DirectRoute := directFieldRoute?.map DirectRoute.field <|>
-    directTightRoute.map DirectRoute.tight <|>
-    directIndexedRoute.map DirectRoute.indexed
+    directTightRoute.map DirectRoute.tight
 
   -- The indexed subsingleton has a different carrier from the Church routes —
   -- a packed index equation, not a fold — so it branches before them. At a
@@ -805,7 +750,9 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- telescope, which is what brings `MixI`, `SvIx` and
   -- `CategoryTheory.Functor.IsHomLift` inside. The analysis above is what says
   -- which positions those are; everything below reads `gNonPiv`.
-  let armRecovery := armRecoveryNonRec
+  let indexedSingletonRoute? : Option IndexedSingletonRoute :=
+    if recoverIndexedSingleton then some .recover
+    else indexedSingletonStorageRoute.map .store
 
   -- **The carve arm**: an indexed family at a never-zero sort, carved out of its own
   -- index erasure. Gated on the erasure being
@@ -1372,7 +1319,7 @@ does not store, which its positivity check should have made unspellable"
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armGraph, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armEmpty, emptyStored, directRoute?, armRecovery, armCarve, wTagged, wPlan, armTree, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
+  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armGraph, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armEmpty, emptyStored, directRoute?, indexedSingletonRoute?, armCarve, wTagged, wPlan, armTree, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
           { out, requires, spliced, projectionOverrides })
 
 end InductiveModels

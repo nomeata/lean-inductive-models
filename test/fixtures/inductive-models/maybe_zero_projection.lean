@@ -25,20 +25,20 @@
    and both are now closed — by two different constructions, because they are
    two different questions:
 
-   * `MZIdx` — no recursion; an **index**, and a data field.  **Green on the
-     direct routes' indexed case.**  The route that was supposed to cover it is
-     the recovery arm, whose guard carries `large`; `Site.lean` argued that a data field
+   * `MZIdx` — no recursion; an **index**, and a data field. **The storage
+     branch of the indexed-singleton construction.** Its recovery branch
+     carries `large`; `Site.lean` argued that a data field
      which is not a conclusion index is unreachable there, "because the kernel
      mints that recursor only when every non-proof field is literally
      recoverable as a conclusion index".  That premise is correct and the
      conclusion drawn from it was not: the kernel does not refuse such a
      declaration, it mints a **small** recursor for it, so `large` is false and
      the shape fell through to Church.  `MZIdx.rec`'s motive really is
-     `Prop`-valued; read the export.  What the recovery arm cannot do here is *store* the
+     `Prop`-valued; read the export. What recovery cannot do here is *store* the
      field — its carrier is a Church conjunction of proofs, and it recovers
-     data only by substituting at a pivot — so the shape is not the recovery arm's after
-     all.  Storing it is what the direct routes already do, and the index is
-     discharged by the recovery arm's packed Henry-Ford equation over that same storage:
+     data only by substituting at a pivot. The other implementation stores the
+     fields in the tight tower and discharges the index by the same packed
+     Henry-Ford equation:
      `T p⃗ ι⃗ := Σ'(t : Store p⃗), pack ι⃗_ctor(proj⃗ t) = pack ι⃗`, with `Store`
      the tight `PSigma'` tower as a **definition**.  The projection is the
      tower's own, so it selects definitionally and its rule is `Eq.refl`.
@@ -50,12 +50,11 @@
    * `MZData` — the same with a data field in front of the child.  **The empty arm.**
 
    `MZOne` and `MZProof` are the controls on either side: the first is the
-   direct `.identity` route (`ni == 0`, not recursive), the second is the recovery arm
+   direct `.identity` route (`ni == 0`, not recursive), the second is the recovery
+   branch of the indexed-singleton construction
    proper (every field a proof, so the kernel does mint the large eliminator).
-   Both model, and both are untouched by either closure.  The indexed case's
-   guard carries `!armRecoveryNonRec`, so every shape whose data the index vector
-   *does* carry stays the recovery arm's; `ni == 0` selects one of the two unindexed
-   cases; and the empty arm is reached only past both.
+   Both model, and both are untouched by either closure. `ni == 0` selects one
+   of the unindexed direct cases; the empty arm is reached only past both.
 
    **`MZSelf` and `MZData` are not a storage problem; they are empty.**  The
    reading that kept them red asked where a *recursive* field could be stored —

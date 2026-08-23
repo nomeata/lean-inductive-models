@@ -463,7 +463,7 @@ half of one axis rather than two ideas.
 **Why the pair is at exactly the carrier's sort.** The tower lands at
 `max ℓ⃗` unpadded and at `max ℓ⃗ w` padded, and the route guard has already
 equated whichever one it plans with `w`
-([`InductiveModels.planDirectIndexedRoute`]); the equation is a `Prop`, so the
+([`InductiveModels.planIndexedSingletonStorageRoute`]); the equation is a `Prop`, so the
 pair is at `max w 0` — literally `w` after normalization. The pad is inside
 the storage and never around it, which is why an index costs the plan nothing.
 
@@ -744,19 +744,10 @@ def planDirectTightRoute (tname : Name) (eligible : Bool) (np : Nat)
       if fallback then return (← tightTowerPad? fieldLevels w)
       return some (← planTightTower tname constructorName fieldLevels w "tight field tower")
 
-/-- **Can an indexed one-constructor owner's fields be stored at the carrier's
-exact sort?** — the question that decides the direct routes' *indexed* case,
-and the one piece of it that must be settled before anything is spliced.
-
-**Why this is a case of the direct routes and not an arm beside them.** The
-storage is [`InductiveModels.tightTowerTy`], the very tower
-[`InductiveModels.planDirectTightRoute`] admits, asked of the very same fields;
-what the index telescope adds is a `Prop`-valued equation saying which fibre
-that storage sits in, and a `Prop` changes no level. So the question the two
-guards ask is one question — *does the tower land on `Sort w`?* — and the
-answer settles both. Keeping the indexed case as a separate construction would
-have been two copies of that question, free to drift apart, and would have hid
-that the direct guard's `ni == 0` was a narrowness rather than a boundary.
+/-- **Can a sometimes-`Prop` indexed singleton's fields be stored at the
+carrier's exact sort?** This is the storage branch of the indexed-singleton
+construction. It reuses [`InductiveModels.tightTowerTy`], but ownership stays
+with indexed singletons; the Direct construction is strictly index-free.
 
 The tower's level is the max of the field levels at any field count, plus the
 pad's own `w` where a pad is planned. Wrapping it in the index equation adds
@@ -765,7 +756,7 @@ nothing to that level (`max ℓ 0` is `ℓ`), so the whole carrier lands at exac
 
 **A tower that misses the carrier's sort is the same answer
 [`InductiveModels.planTightTower`] gives everywhere else**, and for the same
-reason: the case is reached only after the recovery arm has been ruled out, which means
+reason: the case is reached only after recovery has been ruled out, which means
 the constructor has a data field the conclusion's index vector does not carry,
 so the model must store it and the Church encoding underneath — which remembers
 only inhabitation — cannot. The pad is what takes that storage to the declared
@@ -773,34 +764,24 @@ sort, and where even the pad misses, the boundary is stated rather than
 recorded as an unfinished arm. Settled before anything is spliced, so the owner
 passes through unchanged.
 
-Zero fields is a different answer, and which answer depends on the sort. At a
-**maybe-zero** carrier every non-proof field is then vacuously one of the
-conclusion's indices, so the kernel minted the large eliminator and the recovery arm
-fired; reaching this there with no fields is a route-classification fault. At a
-**never-zero** one the recovery arm is not in the chain at all, so a zero-field indexed
-family is an ordinary shape with nothing to store, and it belongs to the arm
-behind this route rather than to this one.
-
-`fallback` is [`InductiveModels.planDirectTightRoute`]'s, for the same reason
-and with the same meaning: at a never-zero sort the carve arm stands behind this route
-and takes both the zero-field owner and the owner whose fields carry an `imax`
-the tower cannot reach, so neither is a decline here. -/
-def planDirectIndexedRoute (tname : Name) (eligible : Bool) (np : Nat) (memberTy : Expr)
-    (exportCtors : Array (Name × Expr)) (w : Level) (fallback : Bool) :
+With zero fields, every non-proof field is vacuously present in the indices,
+so the kernel minted the large eliminator and the recovery branch has already
+fired; reaching this planner is a route-classification fault. -/
+def planIndexedSingletonStorageRoute (tname : Name) (eligible : Bool) (np : Nat)
+    (memberTy : Expr)
+    (exportCtors : Array (Name × Expr)) (w : Level) :
     GenM (Option (Option Level)) := do
   unless eligible do return none
   let (constructorName, constructorType) := exportCtors[0]!
   let nf := numForalls constructorType - np
   if nf == 0 then
-    if fallback then return none
     badShape s!"internal: {constructorName} has no fields, so every non-proof field of \
-{tname} is vacuously one of the conclusion's indices and the recovery arm, not the direct routes' \
-indexed case, is the one that models it"
+{tname} is vacuously one of the conclusion's indices and the recovery branch of the \
+indexed-singleton construction is the one that models it"
   forallBoundedTelescope memberTy (some np) fun ps _ => do
     let tele ← instForall constructorType ps
     forallBoundedTelescope tele (some nf) fun fields _ => do
       let fieldLevels ← fields.mapM fun field => do ilevel (← ityp field)
-      if fallback then return (← tightTowerPad? fieldLevels w)
       return some (← planTightTower tname constructorName fieldLevels w "field tower")
 
 /-- **The binder-free pair's support, where a tower will use it** — three
@@ -962,7 +943,7 @@ def directFieldModel (route : DirectFieldRoute) (eqi : EqInfo) (tname : Name)
 splice. Keeping this case split outside [`InductiveModels.primIso`] leaves the main
 dispatcher with one compact direct-model branch. -/
 def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
-    (lparams : List Name) (np ni : Nat) (constructorName : Name)
+    (lparams : List Name) (np : Nat)
     (memberTy constructorType modelConstructorType declaredMemberTy : Expr)
     (selfN constructorN recursorN : Name) (recursorLevelParams : List Name)
     (recursorProofType recursorPublicType : Expr) (w v : Level) :
@@ -980,9 +961,5 @@ def emitDirectModel (route : DirectRoute) (eqi : EqInfo) (tname : Name)
     emitDirectTightModel eqi tname lparams np memberTy constructorType modelConstructorType
       declaredMemberTy selfN constructorN recursorN recursorLevelParams
       recursorProofType recursorPublicType pad?
-  | .indexed pad? =>
-    emitDirectIndexedModel eqi tname lparams np ni constructorName memberTy constructorType
-      modelConstructorType declaredMemberTy selfN constructorN recursorN recursorLevelParams
-      recursorProofType recursorPublicType w v pad?
 
 end InductiveModels

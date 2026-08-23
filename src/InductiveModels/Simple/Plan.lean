@@ -56,16 +56,10 @@ inductive PrimRoute | type | prop | bare
 `propLift` lifts an exactly proposition-valued field to that sort. -/
 inductive DirectFieldRoute | identity | propLift
 
-/-- The complete field-preserving direct routes. The two exact-sort one-field
-shapes are [`InductiveModels.directFieldModel`]'s; `tight` is the `PSigma'`
-tower over the constructor's fields; `indexed` is that same storage with the
-conclusion's index telescope discharged by one packed equation over it.
-
-`indexed` is not a third construction. It stores the constructor's fields in
-the very tower `tight` stores them in — [`InductiveModels.tightTowerTy`] — and
-then says which fibre of the family that storage sits in. What distinguishes
-the cases is the index telescope, not the storage, which is why they are one
-route with several shapes rather than separate arms.
+/-- The complete field-preserving direct routes for unindexed singleton
+owners. The two exact-sort one-field shapes are
+[`InductiveModels.directFieldModel`]'s; `tight` is the `PSigma'` tower over the
+constructor's fields.
 
 **`pad?` is the tower's tail and the whole of the level gap it closes.** With
 `none` the tower ends at its last field and lands at `Sort (max ℓ⃗)`, which is
@@ -80,6 +74,13 @@ taken to ([`InductiveModels.padsAt`]). -/
 inductive DirectRoute
   | field (route : DirectFieldRoute)
   | tight (pad? : Option Level)
-  | indexed (pad? : Option Level)
+
+/-- The two implementations of the indexed-singleton construction. A large
+eliminator lets `recover` substitute data fields from the indices; otherwise
+`store` retains the fields in a tight tower and records its fibre with one
+packed index equation. -/
+inductive IndexedSingletonRoute
+  | recover
+  | store (pad? : Option Level)
 
 end InductiveModels
