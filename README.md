@@ -312,6 +312,20 @@ exported inductive
       └─ otherwise                                    →  7. Church
 ```
 
+Indices and recursion do not by themselves rule out Church: it carries both,
+which is why indexed recursive propositions normally end there. A recursive
+large-elimination singleton instead uses Graph, whose carrier is the same
+Church encoding but whose graph construction supplies the large recursor.
+The other proposition-like exceptions likewise owe an interface plain Church
+cannot provide: a large eliminator, or a projection returning constructor data
+at a positive universe instantiation. Never-`Prop` families cannot use a
+lifted Church proposition at all, because that carrier is a subsingleton.
+
+The leaves state ownership, not the maximum reach of each idea. A specialised
+route may also be chosen because it gives a simpler uniform account of its
+shape; for example, some proof-only unindexed singletons could use Church, but
+Direct handles the whole storable singleton class as ordinary field storage.
+
 The entries below stay in topological order, from specialised source shapes
 toward the more general representations they depend on. Whenever a model splices an
 auxiliary inductive, that auxiliary resumes the walk at a later entry (or, for
