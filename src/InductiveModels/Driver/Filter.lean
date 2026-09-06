@@ -67,6 +67,7 @@ private structure FilterContext (α : Type) where
   source : Export
   checkRecursors : Bool
   generation : Cli.Config
+  native : NativeSupport
   retention : RetentionMode
   exactTransform : EDecl → EDecl
   sourceSyntax : Check.SyntaxIndex
@@ -246,94 +247,7 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
   let declinedBefore := rep.declined.size
   let exemptBefore := rep.exempt.size
   let splicedBefore := rep.spliced.size
-  -- The model, if this is a nested declaration. Generated **before** the
-  -- declaration is added: nothing in the model mentions `T`.
-  if let .induct ts cs inputRecursors := replayD then
-    -- **A mutual block whose members nest is one block, not several.** Lean
-    -- specialises the whole block at once — `nest_mutual_both`'s `A`/`B`
-    -- become four members with four recursors over one shared motive vector
-    -- — so the model does too, under the first member's `_model` namespace
-    -- and with one carrier per real member.
-    if let t :: _ := ts then
-      if generation.nested && ts.any (·.numNested > 0) &&
-          basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
-        let all := ts.toArray.map (·.name)
-        let ctorsOfMember := fun (n : Name) =>
-          (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
-        let ptypes : Array PType := ts.toArray.map fun m =>
-          { name := m.name, type := m.type, ctors := ctorsOfMember m.name }
-        match plan (← getEnv) t.levelParams t.numParams ptypes with
-        | .error e => rep := { rep with declined := rep.declined.push (t.name, e) }
-        | .ok none => pure ()
-        | .ok (some pl) =>
-          let saved ← getEnv
-          let ctors := all.map ctorsOfMember
-          let mut result ← (do
-            let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray
-              pl reserved
-            addStructureModels ts.toArray cs.toArray inputRecursors.toArray
-              #[] reserved is).run
-          if let .error (.nameLost _) := result then
-            setEnv saved
-            result ← (do
-              let is ← iso all t.levelParams t.numParams ctors inputRecursors.toArray pl reserved
-                (some (Naming.retryRoot t.name))
-              addStructureModels ts.toArray cs.toArray inputRecursors.toArray
-                #[] reserved is).run
-          match result with
-          | .error dec =>
-            setEnv saved
-            rep := rep.withDecline t.name dec "nested"
-          | .ok is =>
-            let serialised ← serialiseIso replayD is exactTransform context.observer?
-            if let some observation := serialised.observation? then
-              islandObservations := islandObservations.push observation
-            let records := serialised.records
-            let is := serialised.model
-            out := appendModelRecords out records t.name
-            rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
-            unless is.spliced.isEmpty do
-              rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
-            pending := pending.push { spliced := is.spliced }
-            -- The model of the generated mutual block remains in this same
-            -- atomic owner transition.
-            if generation.mutualModels && is.members.size > 1 then
-              let saved2 ← getEnv
-              let (tys2, ctors2) ← blockOf is.members
-              let composedRoot := is.members[0]!
-              let exactBlock ← serialised.exactBlocks.require composedRoot
-              let mut mutualResult ← (do
-                let is2 ← mutualIso is.members is.levelParams t.numParams
-                  tys2 ctors2 reserved (sourceBlock? := some exactBlock)
-                addInstalledStructureModels is.members #[] reserved is2).run
-              if let .error (.nameLost _) := mutualResult then
-                setEnv saved2
-                mutualResult ← (do
-                  let is2 ← mutualIso is.members is.levelParams t.numParams
-                    tys2 ctors2 reserved (some (Naming.retryRoot composedRoot))
-                      (sourceBlock? := some exactBlock)
-                  addInstalledStructureModels is.members #[] reserved is2).run
-              match mutualResult with
-              | .error dec =>
-                setEnv saved2
-                rep := rep.withDecline is.members[0]! dec "mutual"
-              | .ok is2 =>
-                let serialised2 ←
-                  serialiseIso exactBlock is2 exactTransform context.observer?
-                if let some observation := serialised2.observation? then
-                  islandObservations := islandObservations.push observation
-                let records := serialised2.records
-                let is2 := serialised2.model
-                out := appendModelRecords out records is.members[0]!
-                rep := { rep with
-                  generated := rep.generated.push (is.members[0]!, is2.decls.size) }
-                pending := pending.push { spliced := is2.spliced }
-                if generation.simple then
-                  let st3 ← primCompose is2.members is2.levelParams
-                    t.numParams reserved generation.basic serialised2.exactBlocks
-                      (out, rep, pending, islandObservations) exactTransform
-                      context.observer?
-                  (out, rep, pending, islandObservations) ← pure st3
+  let nativeBefore := rep.native.size
   -- Replay the source record between its pre-owner and post-owner generation
   -- phases.  An unreplayable source record terminates the complete machine and
   -- discards every private island, matching the historical loop return.
@@ -381,29 +295,17 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
     | .error decline =>
       invalidBasis := invalidBasis.insert root
       rep := rep.withDecline root decline "prim"
-  -- Plain mutual and direct-simple routes read recursor metadata installed by
-  -- the replay above and therefore remain the post-owner half of this single
-  -- transition.
-  if let .induct ts cs _ := replayD then
-    if let t :: _ := ts then
-      if generation.mutualModels && ts.length > 1 && !ts.any (·.numNested > 0) &&
-          basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
-        let all := ts.toArray.map (·.name)
-        let ctors := all.map fun n =>
-          (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
-        let tys := ts.toArray.map (·.type)
-        let st3 ← genMutual all t.levelParams t.numParams tys ctors #[] reserved
-          generation.simple generation.basic (out, rep, pending, islandObservations)
-          (some replayD) exactTransform context.observer?
-        (out, rep, pending, islandObservations) ← pure st3
-      if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
-          basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
-        let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
-        let st ← genPrim t.name t.levelParams t.numParams t.type ctors
-          #[] reserved generation.basic (out, rep, pending, islandObservations)
-          (some (replayD, constructionNormalizer)) exactTransform
-          context.observer?
-        (out, rep, pending, islandObservations) ← pure st
+  -- **Every route reads the replayed block**, so generation is the post-owner
+  -- half of this single transition: the nested construction reads the
+  -- recursors the export declares, the mutual and simple ones read the
+  -- recursor metadata the replay above installed. Each island is still
+  -- emitted before its owner and kernel-checked owner-free at close, which is
+  -- what keeps a model from mentioning what it models.
+  if basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
+    let routing : Routing := { generation, native := context.native }
+    let st ← modelBlock replayD .input routing reserved constructionNormalizer
+      (out, rep, pending, islandObservations) exactTransform context.observer?
+    (out, rep, pending, islandObservations) ← pure st
   if d matches .induct .. then
     let generated := out
     let islandModels := pending
@@ -422,6 +324,8 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
       exempt := rep.exempt.extract 0 exemptBefore ++
         (rep.exempt.extract exemptBefore rep.exempt.size).map fun (name, reason) =>
           (islandAliases.exactName name, islandAliases.exactMessage reason)
+      native := rep.native.extract 0 nativeBefore ++
+        (rep.native.extract nativeBefore rep.native.size).map islandAliases.exactName
       spliced := rep.spliced.extract 0 splicedBefore ++
         (rep.spliced.extract splicedBefore rep.spliced.size).map fun (name, names) =>
           (islandAliases.exactName name, names.map islandAliases.exactName) }
@@ -639,7 +543,8 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
     (retention : RetentionMode)
     (exactTransform : EDecl → EDecl := id) (collectTrace : Bool := false)
     (observer? : Option (IslandObserver α) := none)
-    (outputEmitter? : Option StreamOutputEmitter := none) :
+    (outputEmitter? : Option StreamOutputEmitter := none)
+    (native : NativeSupport := NativeSupport.none) :
     MetaM (Array EDecl × Report × CompactPlan × Array FilterSourceStep ×
       Array α) := do
   -- **The two per-record accumulators that are not part of a verdict** — the
@@ -695,7 +600,7 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   let constructionReserved := reserved.fold (init := reserved) fun names name =>
     (sourceAliases.buildDerivedNames name).foldl (fun names build => names.insert build) names
   let context : FilterContext α := {
-    source := x, checkRecursors, generation, retention, exactTransform,
+    source := x, checkRecursors, generation, native, retention, exactTransform,
     sourceSyntax, constructionSyntax, constructionNormalizer, sourceAliases,
     sourceSummaries, sourceGlobalExtras, sourceFamilyRecords,
     rawOrdinals, reserved, constructionReserved, collectTrace, observer?,
@@ -720,10 +625,10 @@ private def runFilterCore (x : Export) (checkRecursors : Bool) (generation : Cli
   return (decls, report, compact, state.sourceSteps, state.observations)
 
 /-- **The filter.** -/
-def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
-    MetaM (Array EDecl × Report) := do
+def runFilter (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
+    (native : NativeSupport := NativeSupport.none) : MetaM (Array EDecl × Report) := do
   let (decls, report, _, _, _) ←
-    runFilterCore (α := Unit) x checkRecursors generation .fullOutput
+    runFilterCore (α := Unit) x checkRecursors generation .fullOutput (native := native)
   return (decls, report)
 
 /-- **The one entry point that observes islands at all.** The observer sees
@@ -763,10 +668,10 @@ def runFilterWithExactBlockTransform (x : Export) (checkRecursors : Bool)
 /-- AST-dropping no-output generation. Accepted generated records are
 summarized at island close, optionally kernel-checked according to the generated
 gate, then discarded without opening a workspace or retaining a physical span. -/
-def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.Config) :
-    MetaM (Report × CompactPlan) := do
+def runFilterDiscarding (x : Export) (checkRecursors : Bool) (generation : Cli.Config)
+    (native : NativeSupport := NativeSupport.none) : MetaM (Report × CompactPlan) := do
   let (_, report, compact, _, _) ←
-    runFilterCore (α := Unit) x checkRecursors generation .compactDiscard
+    runFilterCore (α := Unit) x checkRecursors generation .compactDiscard (native := native)
   return (report, compact)
 
 /-- Declaration-wise generated output. The callback sees a generated island
@@ -774,8 +679,8 @@ only after compact structural capture and its optional kernel gate, then sees
 the corresponding exact source declaration. No output declaration is retained
 after its callback returns. -/
 def runFilterStreaming (x : Export) (checkRecursors : Bool)
-    (generation : Cli.Config) (emit : StreamOutputEmitter) :
-    MetaM (Report × CompactPlan) := do
+    (generation : Cli.Config) (emit : StreamOutputEmitter)
+    (native : NativeSupport := NativeSupport.none) : MetaM (Report × CompactPlan) := do
   let (_, report, compact, _, _) ← runFilterCore (α := Unit) x checkRecursors generation
-    .streamOutput (outputEmitter? := some emit)
+    .streamOutput (outputEmitter? := some emit) (native := native)
   return (report, compact)

@@ -41,7 +41,7 @@ correctness_suites=(
   deepimaxbox psigmaprime exactsortlift
   tightpsigmaprimeroute vanishingerasure
   transparentowneralias exportsyntaxnormalization
-  basisvalidation arenaformat
+  basisvalidation arenaformat nativesupport
 )
 
 build_bounded lean-inductive-models

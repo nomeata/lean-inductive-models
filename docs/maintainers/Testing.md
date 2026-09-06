@@ -98,7 +98,7 @@ correctness_suites=(
   deepimaxbox psigmaprime exactsortlift
   tightpsigmaprimeroute vanishingerasure
   transparentowneralias exportsyntaxnormalization
-  basisvalidation arenaformat
+  basisvalidation arenaformat nativesupport
 )
 ```
 
@@ -144,6 +144,7 @@ lake exe test transparentowneralias "$PWD"
 lake exe test exportsyntaxnormalization "$PWD"
 lake exe test basisvalidation "$PWD"
 lake exe test arenaformat "$PWD"
+lake exe test nativesupport "$PWD"
 test/scripts/check_arena_corpus.py
 test/scripts/check-hard-nested-a.sh
 test/scripts/check-hard-nested-c.sh
@@ -214,6 +215,13 @@ given on the command line.
 record spelling the Kernel Arena accepts, sparse and repeated arena IDs behave
 as the exporter's parser does, and the persistent declaration-stream writer is
 byte-identical to whole-export rendering.
+
+`nativesupport` pins the library entry a Lean checker uses to say which
+inductive blocks it handles itself (`InductiveModels.NativeSupport`): under
+"plain structures" the input's structures, the `PProd'` a model splices and the
+skeleton the carve arm splices are all emitted unmodelled, their consumers
+still model, and the generated islands still pass the kernel; under "nothing"
+the run is unchanged; under "everything" the output is the input.
 
 `fixtures` runs each fixture with `typeCheckGenerated` at its default, so every
 accepted island goes through `checkGeneratedIn`, and `runOne` reads the verdict

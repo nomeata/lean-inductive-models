@@ -79,8 +79,9 @@ This file is a facade: it only re-exports the fourteen modules below, so
 * [`InductiveModels.Driver.Serialise`] — one completed `Iso` as exact records
 * [`InductiveModels.Driver.Readiness`] — the export's recursor metadata against
   what Lean actually built
-* [`InductiveModels.Driver.Tower`] — `genPrim`, `primCompose`, `genMutual`:
-  where the three constructions meet
+* [`InductiveModels.Driver.Tower`] — `modelBlock`, the one entry every
+  inductive block passes through, and `genNested`, `genMutual`, `genPrim`
+  under it: where the three constructions meet
 * [`InductiveModels.Driver.Census`] — what the source export says about itself
 * [`InductiveModels.Driver.Filter`] — the declaration-wise fold and the six
   public routes over it
@@ -100,8 +101,10 @@ another:
                   Island             │
                      │             Census      Readiness
                  Serialise           │             │
-                     │               │             │
-                   Tower ────────────┴─── Filter ──┘
+                     └───────────────┼─────────────┤
+                                     │           Tower
+                                     │             │
+                                   Filter ─────────┘
 
 `Types`, `GeneratedInfo`, `StructureRecursor`, `Records` and `Readiness` import
 no other part of the driver; `Filter` is the only leaf, and it is the only part

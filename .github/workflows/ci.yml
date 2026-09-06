@@ -180,7 +180,7 @@ jobs:
                 structureeta deepimaxbox
                 psigmaprime exactsortlift tightpsigmaprimeroute
                 vanishingerasure transparentowneralias
-                exportsyntaxnormalization basisvalidation arenaformat
+                exportsyntaxnormalization basisvalidation arenaformat nativesupport
               )
               for suite in "${focused_suites[@]}"; do
                 lake exe test "$suite" "$GITHUB_WORKSPACE"

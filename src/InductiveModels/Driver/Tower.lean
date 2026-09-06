@@ -1,12 +1,18 @@
 import InductiveModels.Driver.Serialise
+import InductiveModels.Driver.Readiness
 
 /-!
-# Composing the rungs
+# The one entry, and the rungs under it
 
-The three entry points that turn a replayed block into an island:
-[`genPrim`] models one member from the primitive basis, [`primCompose`] runs
-`genPrim` over the members of a block and composes the results, and
-[`genMutual`] takes the mutual route and falls back to composition.
+[`modelBlock`] is the one way an inductive block gets a model. The stream
+hands it every input block after replay; a model hands it every block it
+introduced — the tag and auxiliary a mutual model composes into, the members a
+nested model specialises into, the skeletons and pairs a simple model splices —
+and those go through the same head: the basis is exempt, the consumer's
+[`NativeSupport`] is asked, and only then is a construction chosen by the shape
+of the block alone. Under it, [`genNested`], [`genMutual`] and [`genPrim`] are
+the three constructions, and each one closes its own introductions by calling
+back up into the entry.
 
 This is where the three constructions meet; nothing above it knows there is
 more than one.
@@ -60,32 +66,177 @@ def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr))
           if env.constants.contains n then return some n
   return none
 
+/-- Where a block reached the entry from. The construction chosen never
+depends on this ([`modelBlock`] reads the block alone); two things do, and
+both are about the CLI rather than about shapes. `--simple` and `--basic`
+select by provenance: an input's ordinary inductives against its bootstrap
+ones and everything a model introduced to reach the basis. And a bound model
+name means two different things: for an input block it is a collision to
+report, for a spliced one it is this run's own earlier model of the same
+support, and modelling it again would bind the same names twice. -/
+inductive BlockOrigin where
+  /-- A block of the input export. -/
+  | input
+  /-- A block a mutual or nested model composes into: the implementation tag
+  and auxiliary, or the specialised members. -/
+  | composed
+  /-- A block a model spliced to write itself in: a skeleton, a pair, a core. -/
+  | spliced
+  deriving Repr, BEq
+
+/-- What the driver hands the entry: the route gates the command line set,
+and what the consumer of the output handles itself. -/
+structure Routing where
+  generation : Cli.Config
+  native : NativeSupport := NativeSupport.none
+
+/-- A block's construction inputs as the environment holds them. The exact
+export record decides syntax and the environment decides construction, and the
+two are kept apart on purpose: a test seam may perturb the exact records a
+composed consumer sees, and that must reach the statement comparison rather
+than be built from. -/
+private def installedBlock (all : Array Name) :
+    MetaM (Array Expr × Array (Array (Name × Expr))) :=
+  blockOf all
+
+mutual
+
+/-- **The one entry every inductive block passes through.** Basis members are
+left as they are without a word: they are what every construction is written
+in, and the input's own basis records are validated and reported by the stream
+before they get here. A block the consumer's [`NativeSupport`] accepts is
+reported on the `native` row and left as it is. What remains is routed by
+shape: nesting to [`genNested`], several members to [`genMutual`], one member
+to [`genPrim`]; each route is behind its command-line gate, and a gate that is
+off leaves the block untouched and unreported, as it always has. -/
+partial def modelBlock (block : EDecl) (origin : BlockOrigin) (routing : Routing)
+    (reserved : Std.HashSet Name) (normalizer : ExactNormalizationEnv)
+    (st : ModelIslandState α) (exactTransform : EDecl → EDecl := id)
+    (observer? : Option (IslandObserver α) := none) : MetaM (ModelIslandState α) := do
+  let .induct ts cs recs := block | return st
+  let t :: _ := ts | return st
+  let all := ts.toArray.map (·.name)
+  let generation := routing.generation
+  if all.any inductiveBasis.contains then return st
+  if routing.native block then
+    let (out, rep, pending, observations) := st
+    return (out, { rep with native := rep.native.push t.name }, pending, observations)
+  if origin matches .spliced then
+    -- Already modelled: the declaration-local carrier itself is the key.
+    if (← getEnv).constants.contains (Naming.modelName t.name) then return st
+  if ts.any (·.numNested > 0) then
+    unless generation.nested do return st
+    genNested block ts cs recs routing reserved st exactTransform observer?
+  else if ts.length > 1 then
+    unless generation.mutualModels do return st
+    let (tys, ctors) ← installedBlock all
+    genMutual all t.levelParams t.numParams tys ctors #[] reserved routing st
+      (some block) (presentation := origin matches .input) exactTransform observer?
+  else
+    let selected := match origin with
+      | .spliced => generation.basic
+      | .input | .composed => generation.modelsSimpleInput t.name
+    unless selected do return st
+    let (tys, ctors) ← installedBlock all
+    genPrim t.name t.levelParams t.numParams tys[0]! ctors[0]! #[] reserved routing st
+      (some (block, normalizer)) exactTransform observer?
+
+/-- The blocks a model introduced, each through the entry once. `members` is
+how a model names what it introduced — every member of a composed block,
+everything spliced — and several members may share one block, which is asked
+once. A spliced name that is not an inductive type (`Eq.refl`, `funext`,
+`Nat.rec`) has no block to ask about; a basis member is not looked up at all,
+since it has no generated block snapshot and the entry would say nothing
+about it anyway. -/
+partial def modelMembers (members : Array Name) (blocks : ExactGeneratedBlocks)
+    (origin : BlockOrigin) (routing : Routing) (reserved : Std.HashSet Name)
+    (st : ModelIslandState α) (exactTransform : EDecl → EDecl := id)
+    (observer? : Option (IslandObserver α) := none) : MetaM (ModelIslandState α) := do
+  let mut st := st
+  let mut asked : Std.HashSet Name := {}
+  for n in members do
+    if inductiveBasis.contains n then continue
+    let some (.inductInfo _) := (← getEnv).constants.find? n | continue
+    let block ← blocks.require n
+    let .induct (root :: _) _ _ := block | continue
+    if asked.contains root.name then continue
+    asked := asked.insert root.name
+    -- Generated projection-iota closing uses only `ExactNormalizationEnv.beta`;
+    -- that operation deliberately consults no named definition, so a
+    -- one-block normalizer cannot lose persistent/source aliases.
+    let normalizer := ({ metaLine := .null, decls := #[block] } : Export).exactNormalizationEnv
+    st ← modelBlock block origin routing reserved normalizer st exactTransform observer?
+  return st
+
+/-- One nested declaration's model, generated and accounted for —
+[`InductiveModels.iso`] over the plan [`InductiveModels.plan`] drew. The
+model specialises the declaration into a mutual block and proves the export's
+recursors over it; that block is then a block like any other and goes back
+through the entry, which is where the mutual construction and, under it, the
+simple one take over.
+
+The model must not mention the declaration it models — every island is
+emitted before its owner and kernel-checked in an owner-free environment — and
+it is written not to; the owner-free check at island close is what enforces it. -/
+partial def genNested (block : EDecl) (ts : List EIndType) (cs : List ECtor) (recs : List ERec)
+    (routing : Routing) (reserved : Std.HashSet Name) (st : ModelIslandState α)
+    (exactTransform : EDecl → EDecl := id)
+    (observer? : Option (IslandObserver α) := none) : MetaM (ModelIslandState α) := do
+  let (out, rep, pending, observations) := st
+  let t :: _ := ts | return st
+  let all := ts.toArray.map (·.name)
+  let (tys, ctors) ← installedBlock all
+  let ptypes : Array PType := (Array.range all.size).map fun i =>
+    { name := all[i]!, type := tys[i]!, ctors := ctors[i]! }
+  match plan (← getEnv) t.levelParams t.numParams ptypes with
+  | .error e => return (out, { rep with declined := rep.declined.push (t.name, e) },
+      pending, observations)
+  | .ok none => return st
+  | .ok (some pl) =>
+    let saved ← getEnv
+    let inputRecursors := recs.toArray
+    let generate := fun (buildRoot? : Option Name) => do
+      let is ← iso all t.levelParams t.numParams ctors inputRecursors pl reserved buildRoot?
+      addStructureModels ts.toArray cs.toArray inputRecursors #[] reserved is
+    let mut result ← (generate none).run
+    if let .error (.nameLost _) := result then
+      setEnv saved
+      result ← (generate (some (Naming.retryRoot t.name))).run
+    match result with
+    | .error dec =>
+      setEnv saved
+      return (out, rep.withDecline t.name dec "nested", pending, observations)
+    | .ok is =>
+      let serialised ← serialiseIso block is exactTransform observer?
+      let records := serialised.records
+      let is := serialised.model
+      let out := appendModelRecords out records t.name
+      let mut rep := { rep with generated := rep.generated.push (t.name, is.decls.size) }
+      unless is.spliced.isEmpty do
+        rep := { rep with spliced := rep.spliced.push (t.name, is.spliced) }
+      let observations := serialised.observation?.elim observations observations.push
+      let pending := pending.push { spliced := is.spliced }
+      -- The model of the specialised block remains in this same atomic owner
+      -- transition.
+      modelMembers is.members serialised.exactBlocks .composed routing reserved
+        (out, rep, pending, observations) exactTransform observer?
+
 /-- One simple inductive's model from the primitives, generated and
-accounted for — [`InductiveModels.primIso`], selected by `--simple`. Shared by the
-input's own simple inductives and the composition (the single inductives the
-other two constructions emit).
+accounted for — [`InductiveModels.primIso`], selected by `--simple` for an
+input block and `--basic` for a spliced one. Shared by the input's own simple
+inductives and everything the other two constructions compose into.
 
-**And, with `basicModels`, models for whatever that model had to splice.**
-
-The second half closes a structural hole rather than adding a convenience.
-`ensurePrim` and friends put a spliced inductive into the environment and into
-the output, and nothing ever ran the third construction over it — so layer 3
-was **unable to model anything it introduced**, and no coverage figure could
-show it, because a spliced declaration was never a candidate to begin with.
-Earlier coverage figures therefore measured only declarations from the input.
-
-Only *non-basis* splices are modelled: the four on
-[`InductiveModels.inductiveBasis`] are the exemption that makes the construction
-well-founded and must stay unmodelled. That is also what bounds the recursion
-— a model's own splices are basis members or already present.
-
-**Ordering is constructive.** A spliced inductive enters the private forest as
-part of its consumer's model. Its model is placed immediately before that exact
-owner record while retaining the parent's earlier dependency prefix. -/
+**And models for whatever that model had to splice**, through the entry.
+A spliced inductive enters the private forest as part of its consumer's
+model, so a model's own introductions are the next blocks to ask about; the
+basis is the exemption that makes this well-founded, and a spliced block the
+entry has already modelled is asked no second time. Its model is placed
+immediately before that exact owner record while retaining the parent's
+earlier dependency prefix. -/
 partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     (ctors : Array (Name × Expr))
     (projections : Array EProjection)
-    (reserved : Std.HashSet Name) (basicModels : Bool)
+    (reserved : Std.HashSet Name) (routing : Routing)
     (st : ModelIslandState α) (sourceBlock? : Option (EDecl × ExactNormalizationEnv) := none)
     (exactTransform : EDecl → EDecl := id)
     (observer? : Option (IslandObserver α) := none) :
@@ -192,42 +343,29 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
     unless is.spliced.isEmpty do
       rep := { rep with spliced := rep.spliced.push (tname, is.spliced) }
     let observations := serialised.observation?.elim observations observations.push
-    let mut st2 := (out, rep, pending.push { spliced := is.spliced }, observations)
-    if basicModels then
-      for n in is.spliced do
-        if inductiveBasis.contains n then continue
-        let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
-        -- the block's own name only, and only a simple one
-        unless iv.all == [n] && iv.numNested == 0 do continue
-        -- Already modeled: the declaration-local carrier itself is the key.
-        if (← getEnv).constants.contains (Naming.modelName n) then continue
-        let mut cts : Array (Name × Expr) := #[]
-        for cn in iv.ctors do
-          if let some ci := (← getEnv).constants.find? cn then cts := cts.push (cn, ci.type)
-        let exactBlock ← serialised.exactBlocks.require n
-        -- Generated projection-iota closing uses only `ExactNormalizationEnv.beta`;
-        -- that operation deliberately consults no named definition, so a
-        -- one-block normalizer cannot lose persistent/source aliases.
-        let normalizer := ({ metaLine := .null, decls := #[exactBlock] } : Export).exactNormalizationEnv
-        st2 ←
-          genPrim n iv.levelParams iv.numParams iv.type cts #[] reserved
-            basicModels st2 (some (exactBlock, normalizer)) exactTransform
-            (observer? := observer?)
+    let st2 := (out, rep, pending.push { spliced := is.spliced }, observations)
+    let st2 ← modelMembers is.spliced serialised.exactBlocks .spliced routing reserved st2
+      exactTransform observer?
     -- **A model may not leave an inductive it introduced unmodelled.** The carve arm
     -- splices the index erasure of the family it is
     -- carving, so its output contains an inductive that was in nobody's
     -- input; if the descent above could not model it, emitting would put a
     -- additional unmodelled inductive in front of a consumer, which splice
-    -- closure prevents.
+    -- closure prevents. An inductive the consumer handles natively is closed
+    -- as it stands.
     -- So the whole model is withdrawn and the declaration declines.
     --
     -- Checked **after** the descent and not predicted before it. A cheap test
     -- that says "this skeleton will model" is the shape of "skip is not
     -- pass": it reports success and leaves the hole open on the case it got
     -- wrong. This asks the environment.
-    if basicModels then
+    if routing.generation.basic then
       for n in is.requires do
-        unless (← getEnv).constants.contains (Naming.modelName n) do
+        let closed ← do
+          if (← getEnv).constants.contains (Naming.modelName n) then pure true
+          else if inductiveBasis.contains n then pure true
+          else pure (routing.native (← serialised.exactBlocks.require n))
+        unless closed do
           -- **Withdraw everything**, and off `st` rather than off the locals:
           -- `out`, `rep` and `pending` have all been added to by the emission
           -- and the descent above, and returning any of those would leave the
@@ -252,53 +390,39 @@ partial def genPrim (tname : Name) (lparams : List Name) (np : Nat) (ty : Expr)
             st.2.2.1, st.2.2.2)
     return st2
 
-/-- **The composition's third step**: the implementation inductives a mutual
-model just emitted — `T._model._impl.tag` and `T._model._impl.aux` — are
-declarations of the output like any other, so the simple branch runs on them
-too. The tag is a plain sum and models; the auxiliary is indexed and takes
-the carve arm. Their own public carriers are the declaration-local names
+/-- One plain mutual block's model, generated and accounted for —
+[`InductiveModels.mutualIso`], or under `presentation` the mutual one-layer
+adapter where the block qualifies. The adapter presents an input's interface,
+and the entry asks for it for input blocks only: a block a nested model
+specialised into never had it — the nested route called the construction
+directly — and asking for it there costs two and a half times the
+declarations and, on `nested_default_iota`, does not yet spell the composed
+recursor's ι rule literally. Whether it should extend to composed blocks is a
+question about the adapter, left where the old seam left it.
+
+The implementation inductives the model composes into —
+`T._model._impl.tag` and `T._model._impl.aux` — are declarations of the output
+like any other and go back through the entry: the tag is a plain sum and takes
+the simple construction, the auxiliary is indexed and takes the carve arm.
+Their own public carriers are the declaration-local names
 `T._model._impl.tag._model` and `T._model._impl.aux._model`.
 
 Composition completes in the same disposable environment as the mutual model;
 retaining a job after its generated owner
 would retain precisely the ownerful state this pass is designed to discard. -/
-def primCompose (members : Array Name) (lparams : List Name) (np : Nat)
-    (reserved : Std.HashSet Name) (basicModels : Bool)
-    (blocks : ExactGeneratedBlocks) (st : ModelIslandState α)
-    (exactTransform : EDecl → EDecl := id)
-    (observer? : Option (IslandObserver α) := none) : MetaM (ModelIslandState α) := do
-  let mut st := st
-  for n in members do
-    let some (.inductInfo iv) := (← getEnv).constants.find? n | continue
-    let mut cts : Array (Name × Expr) := #[]
-    for cn in iv.ctors do
-      let some ci := (← getEnv).constants.find? cn | continue
-      cts := cts.push (cn, ci.type)
-    let exactBlock ← blocks.require n
-    let normalizer := ({ metaLine := .null, decls := #[exactBlock] } : Export).exactNormalizationEnv
-    st ←
-      genPrim n lparams np iv.type cts #[] reserved basicModels st
-        (some (exactBlock, normalizer)) exactTransform
-        (observer? := observer?)
-  return st
-
-/-- One plain mutual block's model, generated and accounted for.
-
-A separate function keeps the block path and the nested composition path on
-one implementation. The basic layer controls the support closure of each
-generated implementation tag and auxiliary model. -/
-def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
+partial def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
     (tys : Array Expr) (ctors : Array (Array (Name × Expr)))
     (projections : Array EProjection)
-    (reserved : Std.HashSet Name) (simpleModels basicModels : Bool)
+    (reserved : Std.HashSet Name) (routing : Routing)
     (st : ModelIslandState α) (sourceBlock? : Option EDecl := none)
+    (presentation : Bool := true)
     (exactTransform : EDecl → EDecl := id)
     (observer? : Option (IslandObserver α) := none) : MetaM (ModelIslandState α) := do
   let (out, rep, pending, observations) := st
   let saved ← getEnv
   let generate := fun (buildRoot? : Option Name) => do
     let selected ← match sourceBlock? with
-      | some source => mutualOneLayerEligible source
+      | some source => if presentation then mutualOneLayerEligible source else pure false
       | none => pure false
     if selected then
       let some source := sourceBlock?
@@ -332,11 +456,10 @@ def genMutual (all : Array Name) (lparams : List Name) (np : Nat)
       rep := { rep with spliced := rep.spliced.push (all[0]!, is.spliced) }
     let observations := serialised.observation?.elim observations observations.push
     let st := (out, rep, pending.push { spliced := is.spliced }, observations)
-    if simpleModels then
-      primCompose is.members is.levelParams np reserved basicModels serialised.exactBlocks st
-        exactTransform observer?
-    else
-      return st
+    modelMembers is.members serialised.exactBlocks .composed routing reserved st
+      exactTransform observer?
+
+end
 
 /-- Generation settings used by the aggregate fixture suite: nested and mutual
 models remain enabled, while simple models and their bootstrap closure move

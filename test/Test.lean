@@ -1870,7 +1870,7 @@ def runCollisionProbe (a : TAcc) : IO TAcc := do
 Axes 1–4 call `runFilter` directly and so cannot see the process boundary at
 all — and the boundary is where reasons can be lost: a consumer that passes
 `--quiet` to keep stdout export-clean receives no decline report. The stream
-split is documented in `src/Main.lean`.
+split is documented in `src/InductiveModels/Main.lean`.
 
 So this runs the binary and **captures stdout and stderr separately**, which is
 the only way to observe the split. `infinitary` is the input that distinguishes
@@ -1898,9 +1898,14 @@ def runCli (root : String) (a : TAcc) : IO TAcc := do
     s!"CLI: stderr does not carry the models: {r.stderr}"
   -- **A splice is reported.** `infinitary` declares no `funext`, so its report
   -- has to say which declarations were not the input's — permissive splicing
-  -- still has to be observable.
-  a := check a ((r.stderr.splitOn "prelude spliced").length == 4)
-    s!"CLI: stderr does not carry the three splice lines: {r.stderr}"
+  -- still has to be observable. Four lines: three owners' `funext` and the
+  -- quotient, and the composed block `ZTree._model._impl.0`, which is the
+  -- first model in this stream to splice `PSigma'` and `PUnit`. A block a
+  -- nested model composes into is reported like any other; it once was not,
+  -- when the nested route ran the mutual construction by hand instead of
+  -- through `modelBlock`.
+  a := check a ((r.stderr.splitOn "prelude spliced").length == 5)
+    s!"CLI: stderr does not carry the four splice lines: {r.stderr}"
   a := check a ((r.stderr.splitOn "HTree: prelude spliced — Quot, Quot.mk, Quot.lift, \
       Quot.ind, Quot.sound, HTree._model._impl.funext").length == 2)
     s!"CLI: the splice line does not name what was spliced: {r.stderr}"

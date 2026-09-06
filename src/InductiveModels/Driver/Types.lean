@@ -19,6 +19,30 @@ open Lean Meta
 
 namespace InductiveModels
 
+/-- **What the consumer of the output handles natively.**
+
+The models exist because a checker downstream may support no inductive types
+beyond the [`InductiveModels.inductiveBasis`]. A checker that supports more —
+say, structures with no indices and no recursion — has no use for models of
+those, and this is how it says so: a predicate over an inductive block, as the
+export record it is or would be written as. Every block that is about to be
+modelled is put to it first, whether the block came from the input or was
+introduced by a model of something else (the tag and auxiliary of a mutual
+model, the skeleton of an indexed family, a spliced pair), and a block it
+accepts is emitted as it stands and reported on the run's `native` row.
+
+The basis is native regardless of what the predicate says: it is what every
+construction is written in, so it is not the predicate's to decide. -/
+def NativeSupport := EDecl → Bool
+
+namespace NativeSupport
+
+/-- Nothing beyond the basis, which is what a checker for Lean's kernel export
+format supports when it supports no inductive types at all. -/
+def none : NativeSupport := fun _ => false
+
+end NativeSupport
+
 /-- What one run did. -/
 structure Report where
   generated : Array (Name × Nat) := #[]
@@ -31,6 +55,10 @@ structure Report where
   a number it then had to walk back in the next sentence. Reported on their own
   lines and counted in their own row. -/
   exempt : Array (Name × String) := #[]
+  /-- **Inductive blocks the consumer declared it handles itself**
+  ([`InductiveModels.NativeSupport`]), left unmodelled for that reason. Like
+  the basis, not a decline: nothing was asked of a construction. -/
+  native : Array Name := #[]
   /-- **Prelude constants the input did not declare and a model spliced in**,
   per declaration. `Eq`, the quotient and `Quot.sound` come out under Lean's
   own names and `funext` under the model's; `InductiveModels.ensureEq` and

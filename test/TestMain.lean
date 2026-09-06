@@ -30,6 +30,7 @@ import TransparentOwnerAliasTest
 import ExportSyntaxNormalizationTest
 import BasisValidationTest
 import ArenaFormatTest
+import NativeSupportTest
 import MemoryProbe
 
 /-!
@@ -110,6 +111,7 @@ def correctnessSuites : List Suite :=
   , suite "exportsyntaxnormalization"  ExportSyntaxNormalizationTest.main
   , suite "basisvalidation"            (fun _ => BasisValidationTest.main)
   , suite "arenaformat"                ArenaFormatTest.main
+  , suite "nativesupport"              (fun _ => NativeSupportTest.main)
   ]
 
 /-- Diagnostics. Useful during development, not correctness suites, and not run
