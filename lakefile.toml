@@ -50,7 +50,6 @@ roots = [
   "PSigmaPrimeTest", "ExactSortLiftTest", "TightPSigmaPrimeRouteTest",
   "VanishingErasureTest", "TransparentOwnerAliasTest",
   "ExportSyntaxNormalizationTest", "BasisValidationTest", "ArenaFormatTest",
-  "NativeSupportTest",
   "MemoryProbe",
 ]
 

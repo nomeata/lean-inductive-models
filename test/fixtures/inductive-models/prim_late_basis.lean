@@ -6,10 +6,10 @@
    not, and therefore remains an ordinary modelled owner at its source position.
 
    **What this file adds is that available fixed support reaches composition.**
-   The `_model._impl.tag` and `_model._impl.aux` a mutual model just emitted go
-   back through [`InductiveModels.modelBlock`] as composed blocks. That runs
-   inside the same disposable island as `genMutual` or the nested arm, with the
-   exact fixed support already installed in the persistent prefix.
+   [`InductiveModels.primCompose`] is the third step over the `_model._impl.tag` and
+   `_model._impl.aux` a mutual model just emitted. It runs inside the same
+   disposable island as `genMutual` or the nested arm, with the exact
+   fixed support already installed in the persistent prefix.
 
    The layout is the whole fixture:
 

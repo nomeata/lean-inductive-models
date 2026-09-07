@@ -96,43 +96,6 @@ Exit codes follow the Lean Kernel Arena checker contract:
 | `2` | A requested generation route declined an unsupported owner. |
 | `3` | Parser, I/O, CLI, or internal tool error. |
 
-### As a library, for a checker that handles some inductives itself
-
-The models exist for a checker that supports no inductive types beyond the
-basis. A checker that supports more — say, structures with no indices and no
-recursion — has no use for models of those, and there are too many ways to
-slice the space of inductive types for a command-line option per slice. So the
-tool is a library function, `InductiveModels.main`, and a checker written in
-Lean makes it its own `main` with a predicate saying which inductive blocks it
-handles itself:
-
-```lean
-import InductiveModels.Main
-
-open InductiveModels in
-def plain : NativeSupport := fun block =>
-  match block with
-  | .induct [type] ctors _ =>
-    type.numIndices == 0 && !type.isRec && type.numNested == 0 && ctors.length == 1
-  | _ => false
-
-def main (args : List String) : IO UInt32 :=
-  InductiveModels.main args (native := plain)
-```
-
-The predicate sees an inductive block as the export record it is or would be
-written as, and it is put to every block before a construction is chosen —
-the input's blocks and the ones a model introduces alike, so under `plain`
-above the `PProd'` a model splices and the index-free skeleton the carve arm
-introduces for an indexed family are emitted as they stand as well. A block it
-accepts is left unmodelled and reported on a `native` line of its own
-(`Dep: native — left to the consumer`), outside the decline count. The basis
-is always native and is not the predicate's to decide.
-
-The output then reduces to the basis *plus what the predicate accepted*, and
-that is the whole of the contract's change: everything the checker did not
-claim is modelled exactly as before.
-
 ## Building
 
 The Lean version is pinned by [`lean-toolchain`](lean-toolchain).
@@ -716,10 +679,7 @@ written in, and
 **Why a basis.** These five are the trusted basis from the Idea section
 above, and their "construction" is that nothing is built: a model of a basis
 member would have to be built out of that member. A run
-leaves all five unmodelled. They are the fixed part of what the consumer
-handles natively; a consumer that handles more says so through the library
-entry (see *As a library* under Usage), and what it claims is left unmodelled
-in just the same way. A basis member the input declares is reported
+leaves all five unmodelled. A basis member the input declares is reported
 on an exempt line of its own (`Nat: exempt — …`) and counted in a row of
 its own, outside the decline count; one the input does not declare is
 written into the output at Lean's own shape at the first point a
