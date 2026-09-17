@@ -184,7 +184,7 @@ Sort {wW}, so the data tower does not land at the W core's sort"
             -- is not a nested container, and its result is definitionally
             -- the owner at precisely these parameters.
             let self := mkAppN (.const tname us) ps
-            unless ← isDefEq res self do
+            unless ← kernelDefEq res self do
               badShape s!"{cn}'s recursive field {i} does not reduce to {tname} at its \
 own parameters under its binders, so it is nested rather than infinitary"
             if let some ℓ ← wTowerLevelOf wW zs then

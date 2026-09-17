@@ -368,7 +368,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
       -- bridge them and is no longer part of the contract
       -- (`test/ProjectionTransportCensusTest.lean`), so the owner declines
       -- rather than emitting a proposition the kernel refuses.
-      unless ← isDefEq alpha (← inferType rhs) do
+      unless ← kernelDefEq alpha (← inferType rhs) do
         declineWith (.projectionCodomain type.name fieldIndex)
       let proof ← match override?, nestedBlock? with
         | some (_, _, _, proof), _ => pure (proof.beta arguments)

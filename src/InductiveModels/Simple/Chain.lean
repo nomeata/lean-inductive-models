@@ -325,7 +325,7 @@ scrut)`. Descending by projection therefore threads each rung's dependency at
 the earlier rungs' own paths, definitionally, which is exactly the substitution
 `rest.instantiate1` performs on the telescope below. Selection stays
 definitional: these are the same paths [`InductiveModels.tightTowerProjs`] hands
-the projection overrides, and those are gated on `isDefEq` against the field's
+the projection overrides, and those are gated on kernel conversion against the field's
 intrinsic codomain before an owner may emit them.
 
 ### What still says rung `k` and leaf `k` are source field `k`

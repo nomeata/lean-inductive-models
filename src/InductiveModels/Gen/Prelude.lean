@@ -96,9 +96,10 @@ def quotSoundType (eqN : Name) (lu : Level) : MetaM Expr := do
 
 /-- **`funext`'s statement**, as `Init/Core.lean` declares it: `∀ {α : Sort u}
 {β : α → Sort v} {f g : ∀ x, β x}, (∀ x, Eq (f x) (g x)) → Eq f g`. One builder
-for both uses — the input's own is compared against it with `isDefEq`, which is
-indifferent to binder names and binder info where a syntactic comparison would
-not be, and the spliced one is declared at it. -/
+for both uses — the input's own is compared against it with
+[`InductiveModels.kernelDefEq`], whose conversion is indifferent to binder names
+and binder info where a syntactic comparison would not be, and the spliced one
+is declared at it. -/
 def funextType (eqN : Name) (lu lv : Level) : MetaM Expr := do
   withLocalDecl `α .implicit (.sort lu) fun α => do
     withLocalDecl `β .implicit (← mkArrow α (.sort lv)) fun β => do
@@ -169,8 +170,8 @@ def funextDecl (eqi : EqInfo) (nm : Name) : MetaM Declaration := do
 /-- **The input's own `funext`, if it has one and it is Lean's.** Checked
 against the statement Lean's own carries by building that type at the found
 declaration's own two level parameters ([`InductiveModels.funextType`]) and asking
-`isDefEq`, which is indifferent to binder names and binder info where a
-syntactic comparison would not be.
+[`InductiveModels.kernelDefEq`], whose conversion is indifferent to binder names
+and binder info where a syntactic comparison would not be.
 
 `none` is *not* a decline. It means the model's proofs will use a `funext` of
 their own, derived and spliced — [`InductiveModels.ensureFunext`]. This is asked
@@ -180,7 +181,7 @@ def usableFunext? (eqi : EqInfo) : GenM (Option Name) := do
   let n := `funext
   let some ci := (← getEnv).constants.find? n | return none
   let [u, v] := ci.levelParams | return none
-  unless ← isDefEq ci.type (← funextType eqi.eqN (.param u) (.param v)) do return none
+  unless ← kernelDefEq ci.type (← funextType eqi.eqN (.param u) (.param v)) do return none
   return some n
 
 /-- **The `Eq` the round trips are written at.** The input's own if it declares
@@ -239,7 +240,7 @@ def ensureFunext (model : Name) (eqi : EqInfo) (reserved : Std.HashSet Name) :
     let [su] := ci.levelParams
       | declineWith (.notLeans `Quot.sound
           s!"it has {ci.levelParams.length} level parameters, where Lean's has 1")
-    unless ← isDefEq ci.type (← quotSoundType eqi.eqN (.param su)) do
+    unless ← kernelDefEq ci.type (← quotSoundType eqi.eqN (.param su)) do
       declineWith (.notLeans `Quot.sound "its statement is not Lean's")
   | none =>
     let d := Declaration.axiomDecl

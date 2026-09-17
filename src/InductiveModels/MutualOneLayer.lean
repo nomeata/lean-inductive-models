@@ -633,11 +633,11 @@ private def mutualTowerValue (stage : String) (level : Level) (carrier : Expr)
         badShape s!"{stage}: a mutual one-layer PSigma' is malformed"
       let alpha := arguments[0]!
       let beta := arguments[1]!
-      unless ← isDefEq (← inferType values[index]!) alpha do
+      unless ← kernelDefEq (← inferType values[index]!) alpha do
         badShape s!"{stage}: stored field {index} has type {← inferType values[index]!}, expected {alpha}"
       let tail ← build (index + 1) (mkApp beta values[index]!)
       return psigmaMk (← ilevel alpha) level alpha beta values[index]! tail
-    unless ← withTransparency .all <| isDefEq current (unitAt level) do
+    unless ← kernelDefEq current (unitAt level) do
       badShape s!"{stage}: a mutual one-layer carrier does not terminate in PUnit"
     return unitAtCanon level
   build 0 carrier
@@ -969,7 +969,7 @@ This used to be discharged by an n-ary compatibility construction in
 `OneLayer.lean` that eliminated one field equation per recursive field.  It was
 withdrawn once measurement showed what the paragraph above argues: no field
 step it could take was ever between distinct endpoints, at any arity, for any
-input the adapter can publish.  The `isDefEq` below is what remains of it — the
+input the adapter can publish.  The kernel conversion below is what remains of it — the
 claim stated where it is used, and refused by name where it fails.
 -/
 
@@ -1121,18 +1121,18 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
           let targets := recursiveFields.map fun index => fields[index]!
           let rolledMajor := mkAppN (.const ownerMember.roll levels)
             (parameters.push publicMajor)
-          unless ← isDefEq rolledMajor privateMajor do
+          unless ← kernelDefEq rolledMajor privateMajor do
             badShape s!"{constructor.name}'s roll compatibility is not definitional"
           let theoremRhs ← minorAt targets
             (← (Array.range recursiveFields.size).mapM fun slot =>
               publicIHAt slot targets[slot]!)
-          unless ← withTransparency .all <| isDefEq theoremRhs localRhs do
+          unless ← kernelDefEq theoremRhs localRhs do
             badShape s!"{name}'s local minor does not match its exact source rule"
           -- The rule itself, asked of the exact statement that is about to be
           -- emitted and at the transparency the kernel decides it with.  A
           -- family whose round trip stopped being definitional fails *here*,
           -- by name, instead of publishing a rule nothing backs.
-          unless ← withTransparency .all <| isDefEq lhs rhs do
+          unless ← kernelDefEq lhs rhs do
             badShape s!"{name} is not definitional: {publicRecursor owner} at \
               {constructor.name} does not reduce to the rule's own right-hand side"
           let proof := eqi.refl' equalityLevel alpha lhs

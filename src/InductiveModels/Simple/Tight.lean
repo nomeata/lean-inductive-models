@@ -326,7 +326,7 @@ directly. Emitting the rung's `rec'` bought nothing but the motive: `rec'`
 either way and paid for `m` motives on top. The tight route already reads the
 spine this way where it matters most — [`InductiveModels.tightTowerProjs`] is
 what the projection overrides are built from, and each of those is checked to
-**select** its field by `isDefEq` before it may be emitted, so the paths applied
+**select** its field by kernel conversion before it may be emitted, so the paths applied
 below are the same paths that contract already certifies reduce to their fields.
 They are now the same *call*: the recursor's body and this route's projection
 overrides are one function's output, where they used to be two constructions —

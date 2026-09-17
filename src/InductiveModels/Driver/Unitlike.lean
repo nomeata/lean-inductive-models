@@ -137,7 +137,7 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
           current := body.instantiate1 value
         let .forallE _ majorType _ _ := current
           | badShape s!"{modelRecursor} has no major premise"
-        unless ← isDefEq majorType carrier do
+        unless ← kernelDefEq majorType carrier do
           badShape s!"{modelRecursor}'s major premise is not {modelType}"
         pure (mkAppN (.const modelRecursor recLevels) (args.push major))
 

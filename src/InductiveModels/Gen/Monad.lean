@@ -249,6 +249,66 @@ def validateExactRecursorLayout (expected : ERec) (actual : RecursorVal) : GenM 
     unless exported.ctor == installed.ctor && exported.nfields == installed.nfields do
       badShape s!"{expected.name}'s exact rule {index} layout differs from its installed metadata"
 
+/-- **Definitional equality, asked of the checker that will judge the result.**
+
+Every conversion question this tool asks is a question about the *kernel's*
+conversion: whether a projection selects its field, whether a round trip is
+definitional, whether a recursive occurrence reduces to the owner, whether a
+declaration the input already holds is the one this tool would have written.
+Lean's kernel is what decides every one of those when the emitted island is
+submitted ([`InductiveModels.checkGeneratedIn`]), so a gate that consults a
+different oracle can only ever disagree with the final verdict in two useless
+directions: decline a shape the kernel would have accepted, or accept one the
+kernel then rejects.  `Lean.Kernel.isDefEq` is that oracle, and it is what
+every gate here uses.
+
+**It is the *available* oracle too, which is not automatic.** The kernel type
+checker does not support metavariables; this construction has none — nothing
+under `src/` creates one, and `.mvar` appears only as an exhaustive-match arm
+or as an explicit "the elaborator may assign one; we may not"
+(`src/InductiveModels/LevelAlgebra.lean`).  Nor does any gate want restricted
+transparency: the only non-default mode this tool ever asked for was `.all`,
+at the three mutual one-layer gates and the tight tower's `whnf`, which is
+`MetaM` spelling out kernel conversion by hand.
+
+Kernel conversion is **indifferent to binder names and binder info**, so it
+satisfies the reason the basis-validation gates give for not comparing
+syntactically ([`InductiveModels.usableFunext?`] and its neighbours):
+`∀ (x : α), β` and
+`∀ {y : α}, β` convert, `fun (x : α) => x` and `fun ⦃z : α⦄ => z` convert, and
+a differing domain still does not.
+
+**The environment is why this is not merely a preference.** A run starts from
+an empty environment and each island is a disposable extension of it, so the
+constants that exist at any point are the source records consumed so far plus
+the basis declarations generation has written — there is no prelude
+underneath, and the tool never installs one.  `Meta.isDefEq` is written
+against the environment it is given with one exception: `isDefEqOffset`
+recognizes a `Nat` offset by *constant name* — `Nat.succ`, `Nat.add`,
+`Add.add`, `HAdd.hAdd`, `OfNat.ofNat` — and confirms the instance argument
+against `instAddNat` and `@instHAdd Nat instAddNat`, none of which is read
+from the terms being compared.  It asks `isOffset?` *before* its own
+`ifNatExpr` type guard (`Lean/Meta/Offset.lean:113` against `:118`), so a
+`G`-valued `+` at any carrier pays a `Nat` instance lookup, and an input that
+binds those names — every algebraic hierarchy, `Mathlib`'s included — took
+`Unknown constant` in a disposable environment that legitimately had neither
+name.  That is how the wrong oracle became visible; it is not the reason the
+right one is right.
+
+**A kernel exception is this tool's bug, not a decline.** The kernel raises
+one when it is handed something ill-formed for the environment it is given —
+a constant that is not there, an expression the construction built wrong —
+and every term reaching a gate here was built by this tool from records it has
+already installed.  So it reaches [`InductiveModels.badShape`]'s containment
+boundary as an internal failure, rather than being read as `false` and
+reported as a shape this tool declines to model. -/
+def kernelDefEq (a b : Expr) : MetaM Bool := do
+  match Lean.Kernel.isDefEq (← getEnv) (← getLCtx) a b with
+  | .ok verdict => return verdict
+  | .error exception =>
+    throwError "kernel conversion failed on a construction term: \
+      {← (exception.toMessageData {}).toString}\n  left:  {a}\n  right: {b}"
+
 def hintsFor (v : Expr) : GenM ReducibilityHints := do
   return .regular (getMaxHeight (← getEnv) v + 1)
 

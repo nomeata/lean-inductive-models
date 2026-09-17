@@ -142,6 +142,28 @@ Each of these is written by the tool itself, at a fixed declaration, wherever a
 generated island needs one — never taken from a record the input declares later
 in the stream. See the output contract below for what happens to such a record.
 
+**And nothing else is in the environment.** A run starts from an empty
+environment; each island is a disposable extension of it, so the constants
+that exist at any point are exactly the source records consumed so far plus
+the basis declarations generation has written. There is no prelude
+underneath, and the tool never installs one.
+
+**Every conversion question is put to Lean's kernel.** Whether a projection
+selects its field, whether a round trip is definitional, whether a recursive
+occurrence reduces to its owner, whether a basis declaration the input already
+holds is the one this tool would have written — each of those is decided by
+`Lean.Kernel.isDefEq` against the construction environment, not by the
+elaborator's `Meta.isDefEq`
+([`src/InductiveModels/Gen/Monad.lean`](src/InductiveModels/Gen/Monad.lean)).
+The kernel is what judges the emitted island, so any other oracle could only
+disagree with the final verdict in two useless directions: decline a shape the
+kernel would accept, or accept one it then rejects. It is also the oracle that
+suits the environment above — it asks for no constant that is not in the terms
+it is given, where the elaborator's `Nat`-offset acceleration reaches for
+`instAddNat` on the strength of a constant *name*. A kernel exception at one of
+these gates is this tool's own bug and reaches its containment boundary; it is
+never read as a shape the tool declines to model.
+
 A consumer using models as an inductive front end must therefore implement the
 five-member basis and admit the standard axioms of whichever generated route
 fired. With `--basic` on, that basis is the only unmodelled inductive residue

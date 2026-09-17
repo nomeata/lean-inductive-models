@@ -445,9 +445,9 @@ def checkNonempty (env : Environment) : Except String Unit := do
   | _ => throw "it is not `Sort u → Prop`"
 
 /-- `Classical.choice`'s statement: `{α : Sort u} → Nonempty α → α`. One
-builder for both uses — the input's own is compared against it with `isDefEq`
-and a spliced one is declared at it, exactly as [`InductiveModels.funextType`] serves
-`funext`. -/
+builder for both uses — the input's own is compared against it with
+[`InductiveModels.kernelDefEq`] and a spliced one is declared at it, exactly as
+[`InductiveModels.funextType`] serves `funext`. -/
 def choiceType (lu : Level) : Expr :=
   .forallE `α (.sort lu)
     (.forallE `h (.app (.const `Nonempty [lu]) (.bvar 0)) (.bvar 1) .default) .implicit
@@ -498,7 +498,7 @@ def iffDecl : Declaration :=
 /-- `propext`'s statement, as `Init/Core.lean` declares it:
 `{a b : Prop} → Iff a b → Eq a b`. Stated at the `Eq` the caller names, the
 way [`InductiveModels.quotSoundType`] and [`InductiveModels.funextType`] are, and
-compared against the input's own with `isDefEq`. -/
+compared against the input's own with [`InductiveModels.kernelDefEq`]. -/
 def propextType (eqN : Name) : MetaM Expr := do
   let prop : Expr := .sort .zero
   withLocalDecl `a .implicit prop fun a =>
@@ -566,7 +566,7 @@ def ensureChoice : GenM (Array Declaration) := do
     let [su] := ci.levelParams
       | declineWith (.notLeans `Classical.choice
           s!"it has {ci.levelParams.length} level parameters, where Lean's has 1")
-    unless ← isDefEq ci.type (choiceType (.param su)) do
+    unless ← kernelDefEq ci.type (choiceType (.param su)) do
       declineWith (.notLeans `Classical.choice "its statement is not Lean's")
     return #[]
   | none =>
@@ -669,7 +669,8 @@ def psigmaPrimeDerivedDecls : GenM (Array Declaration) := do
 
 /-- Every declaration of a derived pair bundle, already present, is the one
 this tool would have written.  `what` names the bundle in the diagnostics; the
-comparison is `isDefEq` at the present declaration's own level parameters. -/
+comparison is [`InductiveModels.kernelDefEq`] at the present declaration's own
+level parameters. -/
 private def checkDerivedPairBundle (what : String) (expected : Array Declaration) :
     GenM Unit := do
   for declaration in expected do
@@ -691,9 +692,9 @@ private def checkDerivedPairBundle (what : String) (expected : Array Declaration
     let levels := actualLevels.map Level.param
     let expectedType := expectedType.instantiateLevelParams expectedLevels levels
     let expectedValue := expectedValue.instantiateLevelParams expectedLevels levels
-    unless ← isDefEq actualType expectedType do
+    unless ← kernelDefEq actualType expectedType do
       declineWith (.notLeans name "its type is not the projection-derived interface type")
-    unless ← isDefEq actualValue expectedValue do
+    unless ← kernelDefEq actualValue expectedValue do
       declineWith (.notLeans name "its value is not the projection-derived implementation")
 
 /-- Ensure the exact tight-pair bundle. The inductive is the one new basis

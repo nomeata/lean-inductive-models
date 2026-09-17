@@ -1105,6 +1105,33 @@ def expectedPrim : List Row :=
        ("WFlat", 29), ("WMixed", 19), ("WChain", 15), ("WBox", 13),
        ("BFlat", 21), ("BMixed", 17), ("BChain", 13)],
       [("Eq", "prim model: a basis primitive")])
+  -- **The projection gate, decided by the checker that judges the result.**
+  -- `Sg._model.proj_1`'s codomain names `proj_0` at the major where the
+  -- constructor's binder names the field, so the gate is a δι question and
+  -- [`InductiveModels.kernelDefEq`] asks the kernel it. Asking the elaborator
+  -- instead used to kill the run: `isDefEqOffset` recognizes a `Nat` offset by
+  -- constant name, confirms the instance against `instAddNat` before it checks
+  -- that either side is a `Nat` at all, and this tool's environments have no
+  -- prelude under them — so an algebraic hierarchy's own `HAdd.hAdd` took
+  -- `Unknown constant`, exit 3 on an input that is in scope.
+  --
+  -- `Add`'s 8 and `Sg`'s 16 are the ordinary counts plus what each writes in
+  -- front of itself: `Eq` for the first, the nine-record tight-pair bundle for
+  -- the tower.
+  , ("offset_names",
+      [("Add", 8), ("HAdd", 7), ("Sg", 16)],
+      [("Eq", "prim model: a basis primitive")])
+  -- **The same owner with the input's own `Nat` record behind it.** `Cnt`
+  -- writes `Nat` and `Eq` in front of itself, so `Sg` is modelled with `Nat`
+  -- present and `instAddNat` still absent — under the old gate a *different*
+  -- failure at a different constant, which is why installing a basis member
+  -- was never the repair — and the input's own later `Nat` record is dropped
+  -- against the written one. Every count here is smaller than its
+  -- `offset_names` twin by exactly the support `Cnt` already installed.
+  , ("offset_names_late",
+      [("Cnt", 16), ("Add", 7), ("HAdd", 7), ("Sg", 9), ("Use", 6)],
+      [ ("Eq", "prim model: a basis primitive")
+      , ("Nat", "prim model: a basis primitive")])
   ]
 
 structure TAcc where
