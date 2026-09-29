@@ -50,7 +50,7 @@ permissions:
 
 jobs:
   arena:
-    name: Arena corpus with model generation
+    name: Arena corpus and fixture verdicts with model generation
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
@@ -93,6 +93,9 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 test/scripts/test_arena_corpus_runner.py
           lake build lean-inductive-models
           test/scripts/check_arena_corpus.py
+          # con-leche's fixtures and the DAG towers, each held to its verdict
+          # row and to a 1 GiB resident bound; see docs/maintainers/DagSafety.md.
+          test/scripts/check_fixture_verdicts.py
 
   test:
     name: ${{ matrix.suite }}

@@ -113,18 +113,20 @@ expected_direct_builds=(
   'lake build "$target"'
 )
 
-arena_script="$root/test/scripts/check_arena_corpus.py"
-for arena_flag in \
-    --inductives --check-input --check-output --type-check-input --type-check-generated --no-output; do
-  if ! grep -Fq "\"$arena_flag\"" "$arena_script"; then
-    echo "Arena corpus checker is missing $arena_flag" >&2
+for arena_script in "$root/test/scripts/check_arena_corpus.py" \
+    "$root/test/scripts/check_fixture_verdicts.py"; do
+  for arena_flag in \
+      --inductives --check-input --check-output --type-check-input --type-check-generated --no-output; do
+    if ! grep -Fq "\"$arena_flag\"" "$arena_script"; then
+      echo "$(basename "$arena_script") is missing $arena_flag" >&2
+      exit 1
+    fi
+  done
+  if grep -Fq '"--no-inductives"' "$arena_script" || grep -Fq '"--no-check"' "$arena_script"; then
+    echo "$(basename "$arena_script") disables generation or structural checks" >&2
     exit 1
   fi
 done
-if grep -Fq '"--no-inductives"' "$arena_script" || grep -Fq '"--no-check"' "$arena_script"; then
-  echo "Arena corpus checker disables generation or structural checks" >&2
-  exit 1
-fi
 sorted_direct_builds="$(printf '%s\n' "${direct_builds[@]}" | LC_ALL=C sort)"
 sorted_expected_builds="$(
   printf '%s\n' "${expected_direct_builds[@]}" | LC_ALL=C sort

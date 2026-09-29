@@ -1,0 +1,24 @@
+# Expected outcome of every DAG-tower fixture, in the format of
+# test/fixtures/con-leche/expected.txt (read by
+# test/scripts/check_fixture_verdicts.py, which also enforces the resource
+# bounds that make these fixtures a gate: see docs/maintainers/DagSafety.md).
+#
+# Every stream here is a complete kernel export that Lean's kernel accepts, and
+# every owner in it is in scope, so every row is `0 accept`.  The third column
+# is con-leche's verdict on its own, prelude-less spelling of the same tower
+# (`-` for fixtures that are not ported from con-leche).
+0 accept  - ctor_field_towers.ndjson
+0 accept  - tower_basis.ndjson
+0 accept  2 tower_axiom.ndjson
+0 accept  2 tower_axiom_nonstd.ndjson
+0 accept  2 tower_axiom_pin.ndjson
+0 accept  0 tower_beqpair.ndjson
+0 accept  0 tower_mutual.ndjson
+0 accept  0 tower_nested.ndjson
+0 accept  0 tower_prelude.ndjson
+0 accept  0 tower_proj.ndjson
+0 accept  2 tower_quot.ndjson
+0 accept  0 tower_recfield.ndjson
+0 accept  0 tower_struct.ndjson
+0 accept  0 tower_thm.ndjson
+0 accept  0 tower_usedlater.ndjson

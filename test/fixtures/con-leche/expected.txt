@@ -1,0 +1,280 @@
+# Expected outcome of every con-leche fixture under `lean-inductive-models`,
+# run as the Lean Kernel Arena runs it (`--type-check-input --no-output`, all
+# generation routes and checks on).  Read by test/scripts/check_fixture_verdicts.py.
+#
+# Line format:  <exit> <class> <con-leche exit> <path>  [# note]
+#
+# <exit> is this tool's exit code (0 accept, 1 reject, 2 decline, 3 error).
+# <class> is the verdict of Lean's kernel on the stream as written, and what
+# this tool must do with it; the runner enforces the pairing:
+#
+#   accept   Lean's kernel accepts it; so must we (exit 0).
+#   reject   Lean's kernel rejects it; so must we (exit 1).  Never 0.
+#   scope    Lean's kernel accepts it; we decline an owner our documented
+#            scope excludes (exit 2).
+#   defect   Lean's kernel accepts it and we do not: a known defect, found by
+#            this port and out of the DAG-safety change that brought it in.
+#            Exit 1 or 3, never 0.  Fixing one changes its exit and fails this
+#            table until the row moves to `accept`.
+#   foreign  Not a conforming lean4export 3.1.0 stream; we refuse to parse it
+#            (exit 3).  Lean's kernel never sees it.
+#
+# <con-leche exit> is upstream's own expectation (upstream/e2e-expected.txt,
+# upstream/annot-expected.txt), kept for provenance.  It differs from the kernel
+# verdict wherever con-leche is not Lean's kernel: it brings its own prelude
+# (the hand-written tower streams mention `Nat` and `Eq` without declaring
+# them), declines what its set model cannot yet certify, and rejects a few
+# streams the kernel accepts.  The kernel verdict here was taken with this
+# tool's `--type-check-input` replay, which is Lean's kernel.
+#
+# The tower streams upstream writes without a prelude are rejected here for
+# exactly that; test/fixtures/dag-towers/ holds the same towers as complete
+# kernel exports, which is where they gate the traversals.
+0 accept  1 e2e/acc_rec_opaque.ndjson                   # con-leche rejects; Lean's kernel accepts
+0 accept  0 e2e/and_rec_def.ndjson
+0 accept  0 e2e/and_rec_opaque.ndjson
+3 foreign 2 annot/annot_decline_forall.ndjson           # a record omits `hints`, which format 3.1.0 requires
+3 foreign 2 annot/annot_decline_lam_chain.ndjson        # a record omits `hints`, which format 3.1.0 requires
+3 foreign 2 annot/annot_decline_lam_leaf.ndjson         # a record omits `hints`, which format 3.1.0 requires
+3 foreign 0 annot/annot_fill_forall.ndjson              # a record omits `all`, which format 3.1.0 requires
+3 foreign 0 annot/annot_fill_lam_chain.ndjson           # a record omits `all`, which format 3.1.0 requires
+3 foreign 0 annot/annot_fill_lam_leaf.ndjson            # a record omits `all`, which format 3.1.0 requires
+3 foreign 0 annot/annot_id.ndjson                       # a record omits `hints`, which format 3.1.0 requires
+3 foreign 0 annot/annot_imax.ndjson                     # a record omits `hints`, which format 3.1.0 requires
+3 foreign 0 annot/annot_max.ndjson                      # a record omits `hints`, which format 3.1.0 requires
+3 foreign 0 annot/annot_prop.ndjson                     # a record omits `all`, which format 3.1.0 requires
+3 foreign 0 annot/annot_pw_thread.ndjson                # a record omits `hints`, which format 3.1.0 requires
+3 foreign 1 annot/annot_split_bad.ndjson                # a record omits `hints`, which format 3.1.0 requires
+3 foreign 1 annot/annot_split_bad2.ndjson               # a record omits `hints`, which format 3.1.0 requires
+3 foreign 0 annot/annot_split_good.ndjson               # a record omits `hints`, which format 3.1.0 requires
+3 foreign 0 annot/annot_type_absent.ndjson              # a record omits `hints`, which format 3.1.0 requires
+0 accept  0 e2e/basis_binderinfo.ndjson
+0 accept  0 e2e/basis_binderinfo_rec.ndjson
+0 accept  0 e2e/binder_name_proj.ndjson
+0 accept  0 e2e/binder_shared_local.ndjson
+1 reject  0 e2e/budget_block.ndjson                     # Lean's kernel: unknown constant 'Eq'; con-leche accepts with its built-in prelude
+0 accept  0 e2e/budget_model.ndjson.gz
+0 accept  2 e2e/custom_axiom_declined.ndjson            # con-leche declines
+0 accept  0 e2e/dag_tower.ndjson.gz
+0 accept  0 e2e/dag_tower_unfold.ndjson.gz
+0 accept  0 e2e/delta_chain.ndjson
+0 accept  0 e2e/direct_fix_acc.ndjson
+0 accept  0 e2e/direct_fix_acc_large.ndjson
+0 accept  0 e2e/direct_fix_le.ndjson
+0 accept  0 e2e/direct_fix_nat.ndjson
+1 reject  1 e2e/direct_fix_nat_ih_bad.ndjson
+1 reject  1 e2e/direct_fix_nat_neg_bad.ndjson
+0 accept  0 e2e/direct_fix_prop.ndjson
+0 accept  0 e2e/direct_fix_prop_large.ndjson
+0 accept  0 e2e/direct_fix_refl.ndjson
+1 reject  1 e2e/direct_fix_refl_ih_bad.ndjson
+1 reject  1 e2e/direct_fix_refl_neg_bad.ndjson
+1 reject  1 e2e/direct_fix_struct_eta.ndjson
+0 accept  0 e2e/direct_fix_struct_proj.ndjson
+1 reject  1 e2e/direct_fix_struct_proj_idx_bad.ndjson
+1 reject  1 e2e/direct_fix_struct_proj_iota_bad.ndjson
+0 accept  0 e2e/direct_fix_term.ndjson
+0 accept  0 e2e/direct_fix_tree.ndjson
+0 accept  0 e2e/direct_fix_vec.ndjson
+1 reject  1 e2e/direct_fix_vec_idx_occ_bad.ndjson
+1 reject  1 e2e/direct_fix_vec_ih_idx_bad.ndjson
+1 reject  1 e2e/direct_fix_vec_res_occ_bad.ndjson
+0 accept  0 e2e/direct_fix_wtype.ndjson
+1 reject  1 e2e/direct_fix_wtype_ih_bad.ndjson
+1 reject  1 e2e/direct_fix_wtype_neg_bad.ndjson
+0 accept  0 e2e/direct_idx_defhead.ndjson
+0 accept  0 e2e/direct_idx_eq.ndjson
+0 accept  0 e2e/direct_idx_prop.ndjson
+1 reject  1 e2e/direct_idx_prop_idx_bad.ndjson
+1 reject  1 e2e/direct_idx_prop_large_bad.ndjson
+0 accept  0 e2e/direct_idx_vec.ndjson
+0 accept  0 e2e/direct_nested_dep.ndjson
+0 accept  0 e2e/direct_struct_raw.ndjson
+0 accept  0 e2e/direct_sum_enum.ndjson
+0 accept  0 e2e/direct_sum_option.ndjson
+0 accept  0 e2e/direct_sum_or.ndjson
+1 reject  1 e2e/direct_sum_or_large_bad.ndjson
+0 accept  1 e2e/empty_redefined.ndjson                  # con-leche rejects; Lean's kernel accepts
+1 reject  1 e2e/false_rec_bad.ndjson
+1 reject  1 e2e/false_redefined.ndjson
+0 accept  1 e2e/iff_rec_opaque.ndjson                   # con-leche rejects; Lean's kernel accepts
+1 reject  1 e2e/ind_ctor_cidx_bad.ndjson
+1 reject  1 e2e/ind_ctor_induct_bad.ndjson
+1 reject  1 e2e/ind_ctor_numfields_bad.ndjson
+3 defect  0 e2e/ind_ctor_order.ndjson                   # defect: internal error: Color.rec's exact rule 0 layout differs from its installed metadata
+1 reject  1 e2e/ind_ctors_dup_bad.ndjson
+1 reject  1 e2e/ind_ctors_missing_bad.ndjson
+0 accept  0 e2e/ind_defhead_fix.ndjson
+3 defect  0 e2e/ind_defhead_k.ndjson                    # defect: generated statement differs: U._model.unitlike does not literally model the type of U
+3 defect  2 e2e/ind_defhead_mutual.ndjson               # defect: internal error: a mutual one-layer owner does not end in a sort
+0 accept  0 e2e/ind_defhead_struct.ndjson
+0 accept  0 e2e/ind_empty_idx.ndjson
+0 accept  0 e2e/ind_former_redex.ndjson
+0 accept  0 e2e/ind_idx_defhead_sort.ndjson
+0 accept  0 e2e/ind_mutual_idxsort.ndjson
+1 reject  1 e2e/ind_mutual_idxsort_bad.ndjson
+1 reject  1 e2e/ind_mutual_param_bad.ndjson
+0 accept  0 e2e/ind_mutual_param_defeq.ndjson
+1 reject  1 e2e/ind_mutual_sort_bad.ndjson
+1 defect  0 e2e/ind_mutual_sort_defeq.ndjson            # defect: generated kernel check rejected MC._model.proj_0 (application type mismatch)
+3 defect  0 e2e/ind_mutual_three.ndjson                 # defect: generated statements differ: unexpected intrinsic projection PA._model.proj_0(.iota)
+0 accept  0 e2e/ind_mutual_zero_ctor.ndjson
+0 accept  2 e2e/ind_nest_inf.ndjson                     # con-leche declines
+0 accept  0 e2e/ind_nest_prop.ndjson
+0 accept  0 e2e/ind_nest_two_pins.ndjson
+0 accept  2 e2e/ind_nest_via_refl.ndjson                # con-leche declines
+1 reject  1 e2e/ind_numparams_bad.ndjson
+1 reject  0 e2e/ind_numparams_indices.ndjson            # the record's numIndices is not what Lean's kernel computes for it; con-leche accepts
+3 defect  0 e2e/ind_pos_whnf_fn.ndjson                  # defect: internal error: a field of R 'mentions it other than as ∀ z⃗, R p⃗ e⃗' — the kernel accepts it
+0 accept  0 e2e/ind_pos_whnf_id.ndjson
+0 accept  2 e2e/ind_proj_mutual_nested.ndjson           # con-leche declines
+1 reject  1 e2e/ind_rec_k_bad.ndjson
+0 accept  0 e2e/ind_rec_struct_proj.ndjson
+0 accept  2 e2e/ind_rec_struct_proj_raw.ndjson          # con-leche declines
+0 accept  0 e2e/ind_redundant_fields.ndjson
+0 accept  0 e2e/ind_reflexive_tool.ndjson
+1 reject  1 e2e/ind_rule_binder_bad.ndjson
+0 accept  0 e2e/ind_sort_u.ndjson
+1 reject  1 e2e/ind_stub_pos.ndjson
+1 reject  1 e2e/ind_stub_rec.ndjson
+1 reject  1 e2e/ind_stub_reclps.ndjson
+1 reject  1 e2e/ind_stub_recname.ndjson
+1 reject  1 e2e/ind_stub_resid.ndjson
+1 reject  1 e2e/ind_stub_univ.ndjson
+3 defect  2 e2e/ind_unsafe.ndjson                       # defect: internal error on an unsafe inductive: 'a binder of Bad.mk's recursive field mentions Bad'
+0 accept  0 e2e/indexed_nested_aux.ndjson.gz
+0 accept  0 e2e/indexed_one_ctor.ndjson
+0 accept  2 e2e/indexed_one_ctor_proj.ndjson            # con-leche declines
+0 accept  0 e2e/indexed_vec.ndjson
+0 accept  0 e2e/inmodel_groups.ndjson
+0 accept  0 e2e/inmodel_mutual.ndjson
+0 accept  0 e2e/inmodel_mutual_idx.ndjson
+0 accept  0 e2e/inmodel_mutual_refl.ndjson
+0 accept  0 e2e/inmodel_nested.ndjson
+1 reject  0 e2e/irrel_commit.ndjson                     # Lean's kernel: declaration type mismatch; con-leche accepts
+0 accept  0 e2e/k_major_raw.ndjson
+1 reject  1 e2e/let_bad_thm.ndjson
+1 reject  1 e2e/let_bad_type.ndjson
+1 reject  1 e2e/let_bad_value.ndjson
+1 reject  1 e2e/let_bad_value_used.ndjson
+0 accept  0 e2e/let_rec_rhs.ndjson.gz
+3 foreign 3 e2e/malformed_midstream.ndjson              # truncated record: parse error: offset 16: unexpected end of input
+0 accept  0 e2e/model_name_plain.ndjson
+0 accept  0 e2e/mutual_struct_proj.ndjson
+1 reject  2 e2e/nat_add_levelpoly.ndjson                # Lean's kernel: wrong number of universe levels for 'Nat.add'; con-leche declines
+1 reject  1 e2e/nat_add_wrong.ndjson
+0 accept  - e2e/nat_beq_bad_base.ndjson
+1 reject  1 e2e/nat_beq_wrong.ndjson
+0 accept  - e2e/nat_ble_bad_base.ndjson
+1 reject  1 e2e/nat_ble_wrong.ndjson
+0 accept  0 e2e/nat_div_declined.ndjson
+0 accept  0 e2e/nat_divmod_ok.ndjson
+0 accept  0 e2e/nat_gcd_ok.ndjson.gz
+0 accept  2 e2e/nat_gcd_perturbed.ndjson.gz             # con-leche declines
+0 accept  0 e2e/nat_land_cone.ndjson.gz
+0 accept  0 e2e/nat_land_ok.ndjson.gz
+0 accept  2 e2e/nat_land_perturbed.ndjson.gz            # con-leche declines
+0 accept  0 e2e/nat_log2_ok.ndjson.gz
+0 accept  0 e2e/nat_lor_ok.ndjson.gz
+0 accept  2 e2e/nat_lor_perturbed.ndjson.gz             # con-leche declines
+0 accept  2 e2e/nat_mod_perturbed.ndjson                # con-leche declines
+1 reject  1 e2e/nat_mul_wrong.ndjson
+0 accept  0 e2e/nat_ops.ndjson
+0 accept  - e2e/nat_ops_bad_base.ndjson
+0 accept  0 e2e/nat_ops_edge.ndjson
+0 accept  2 e2e/nat_ops_nonstandard.ndjson              # con-leche declines
+1 reject  1 e2e/nat_pow_wrong.ndjson
+1 reject  1 e2e/nat_pred_wrong.ndjson
+0 accept  0 e2e/nat_shiftleft_ok.ndjson.gz
+0 accept  2 e2e/nat_shiftleft_perturbed.ndjson.gz       # con-leche declines
+0 accept  0 e2e/nat_shiftright_ok.ndjson.gz
+0 accept  2 e2e/nat_shiftright_perturbed.ndjson.gz      # con-leche declines
+1 reject  1 e2e/nat_sub_wrong.ndjson
+0 accept  0 e2e/nat_xor_ok.ndjson.gz
+0 accept  2 e2e/nat_xor_perturbed.ndjson.gz             # con-leche declines
+0 accept  0 e2e/natop_arg_order.ndjson
+0 accept  0 e2e/natop_before_ble.ndjson
+0 accept  0 e2e/natop_before_eq.ndjson
+0 accept  0 e2e/natop_order.ndjson
+1 reject  0 e2e/nested_aux_clash.ndjson                 # Lean's kernel: constant has already been declared '_nested.List_2.cons'; con-leche accepts
+0 accept  0 e2e/nested_bvar_field.ndjson
+0 accept  2 e2e/nested_comp_tower.ndjson                # con-leche declines
+0 accept  0 e2e/nested_lam_pin_prop.ndjson
+0 accept  2 e2e/nested_lam_pin_refl.ndjson              # con-leche declines
+0 accept  0 e2e/nested_nonuniform_param.ndjson
+0 accept  2 e2e/nested_p01.ndjson                       # con-leche declines
+0 accept  0 e2e/nested_p02.ndjson
+0 accept  0 e2e/nested_p03.ndjson
+0 accept  0 e2e/nested_p04.ndjson
+0 accept  0 e2e/nested_p05.ndjson
+0 accept  0 e2e/nested_p06.ndjson
+0 accept  1 e2e/nested_p07.ndjson                       # con-leche rejects; Lean's kernel accepts
+0 accept  2 e2e/nested_p10.ndjson                       # con-leche declines
+0 accept  0 e2e/nested_p13.ndjson
+0 accept  0 e2e/nested_p20.ndjson
+0 accept  0 e2e/nested_p22.ndjson
+0 accept  0 e2e/nested_p24.ndjson
+0 accept  0 e2e/nested_p25.ndjson
+0 accept  0 e2e/nested_p26.ndjson
+0 accept  0 e2e/nested_p30.ndjson
+0 accept  2 e2e/nested_p31.ndjson                       # con-leche declines
+0 accept  2 e2e/nested_pi_field.ndjson                  # con-leche declines
+3 defect  1 e2e/nested_pin_collide.ndjson               # defect: internal error: a mutually recursive mimic group has no matching recursor family
+3 defect  1 e2e/nested_pin_collide2.ndjson              # defect: internal error: a mutually recursive mimic group has no matching recursor family
+1 reject  1 e2e/nested_pin_collide2_nomodel.ndjson
+1 reject  1 e2e/nested_pin_collide_nomodel.ndjson
+0 accept  0 e2e/nested_pin_names.ndjson.gz
+0 accept  0 e2e/nested_pin_nocollide.ndjson
+0 accept  2 e2e/nested_pin_prop_cod.ndjson              # con-leche declines
+0 accept  0 e2e/nested_prop_idx.ndjson
+0 accept  0 e2e/nested_rec.ndjson
+0 accept  0 e2e/nested_redex_owner.ndjson
+0 accept  2 e2e/nested_redex_tower.ndjson               # con-leche declines
+0 accept  2 e2e/nested_refl_pin.ndjson                  # con-leche declines
+0 accept  0 e2e/nested_struct_proj.ndjson
+1 reject  1 e2e/nested_unused_param.ndjson
+0 accept  0 e2e/opaque_decl.ndjson
+2 scope   0 e2e/pre_decline_imax_field.ndjson           # out-of-scope decline: a tight field tower at `Sort imax u v`; con-leche accepts
+1 reject  1 e2e/prelude_bool_redefined.ndjson
+0 accept  0 e2e/presieve_ofarrows_cone.ndjson.gz
+0 accept  0 e2e/proj_share.ndjson
+1 reject  1 e2e/proj_typename_bad.ndjson
+0 accept  0 e2e/prop_proj.ndjson
+0 accept  0 e2e/prop_proj_raw.ndjson
+0 accept  0 e2e/psigma_rec_eta.ndjson
+0 accept  0 e2e/reducenat_guard.ndjson
+0 accept  0 e2e/sorry_unused.ndjson
+0 accept  2 e2e/sorry_use.ndjson                        # con-leche declines
+3 foreign 2 e2e/sorry_use_before_invalid.ndjson         # a record omits `hints`, which format 3.1.0 requires
+3 foreign 2 e2e/sorry_use_midstream.ndjson              # a record omits `hints`, which format 3.1.0 requires
+0 accept  0 e2e/std_axioms.ndjson
+0 accept  0 e2e/str_lit.ndjson
+1 reject  2 e2e/str_lit_declined.ndjson                 # Lean's kernel: unknown constant 'String'; con-leche declines with its built-in prelude
+0 accept  0 e2e/str_proj.ndjson
+0 accept  2 e2e/str_proj_declined.ndjson                # con-leche declines
+0 accept  1 e2e/subject_reduction_redex.ndjson          # con-leche rejects; Lean's kernel accepts
+0 accept  0 e2e/tolerated_axiom_unused.ndjson
+0 accept  2 e2e/tolerated_axiom_use.ndjson              # con-leche declines
+1 reject  2 e2e/tower_axiom.ndjson                      # Lean's kernel: unknown constant 'Eq'; con-leche declines with its built-in prelude
+1 reject  2 e2e/tower_axiom_nonstd.ndjson               # Lean's kernel: unknown constant 'Eq'; con-leche declines with its built-in prelude
+1 reject  2 e2e/tower_axiom_pin.ndjson                  # Lean's kernel: unknown constant 'Eq'; con-leche declines with its built-in prelude
+1 reject  0 e2e/tower_beqpair.ndjson                    # Lean's kernel: unknown constant 'Eq'; con-leche accepts with its built-in prelude
+1 reject  0 e2e/tower_mutual.ndjson                     # Lean's kernel: unknown constant 'Nat'; con-leche accepts with its built-in prelude
+1 reject  0 e2e/tower_nested.ndjson                     # Lean's kernel: unknown constant 'Nat'; con-leche accepts with its built-in prelude
+1 reject  0 e2e/tower_prelude.ndjson                    # Lean's kernel: unknown constant 'Eq'; con-leche accepts with its built-in prelude
+1 reject  0 e2e/tower_proj.ndjson                       # Lean's kernel: unknown constant 'Eq'; con-leche accepts with its built-in prelude
+1 reject  2 e2e/tower_quot.ndjson                       # Lean's kernel: unknown constant 'Eq'; con-leche declines with its built-in prelude
+1 reject  0 e2e/tower_recfield.ndjson                   # Lean's kernel: unknown constant 'Nat'; con-leche accepts with its built-in prelude
+1 reject  0 e2e/tower_struct.ndjson                     # Lean's kernel: unknown constant 'Eq'; con-leche accepts with its built-in prelude
+1 reject  0 e2e/tower_thm.ndjson                        # Lean's kernel: unknown constant 'Eq'; con-leche accepts with its built-in prelude
+1 reject  0 e2e/tower_usedlater.ndjson                  # Lean's kernel: unknown constant 'Nat'; con-leche accepts with its built-in prelude
+0 accept  0 e2e/trust_family.ndjson
+1 reject  1 e2e/trust_native_use.ndjson
+0 accept  2 e2e/trust_reduce_perturbed.ndjson           # con-leche declines
+0 accept  0 e2e/unit_sizeof_rescue.ndjson
+1 reject  1 e2e/yolo_arg_escape.ndjson
+1 reject  1 e2e/yolo_arg_escape_univs.ndjson
+1 reject  1 e2e/yolo_decline_vs_accept.ndjson
+0 accept  0 e2e/zero_ctor.ndjson
+1 reject  1 e2e/zero_ctor_bad_rec.ndjson
+1 reject  1 e2e/zero_ctor_false_proof.ndjson

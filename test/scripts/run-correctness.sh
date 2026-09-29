@@ -53,6 +53,7 @@ for suite in "${correctness_suites[@]}"; do
 done
 
 test/scripts/check_arena_corpus.py
+test/scripts/check_fixture_verdicts.py
 test/scripts/check-hard-nested-a.sh
 test/scripts/check-hard-nested-c.sh
 test/scripts/check-mathlib-result.sh

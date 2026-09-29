@@ -68,9 +68,15 @@ def readExport (path : System.FilePath) : IO Export := do
   | .ok x => return x
   | .error error => throw <| IO.userError s!"cannot parse {path}: {error}"
 
+/-- Every committed export under `test/fixtures` except con-leche's.  That
+directory is a verbatim copy of another project's fixtures, including streams
+that are deliberately malformed or not format 3.1.0 at all, and it has its own
+verdict table and runner (`test/scripts/check_fixture_verdicts.py`). -/
 def fixturePaths (root : String) : IO (Array System.FilePath) := do
   let paths ← System.FilePath.walkDir s!"{root}/test/fixtures"
-  return (paths.filter fun path => path.extension == some "ndjson").qsort
+  let foreign := s!"{root}/test/fixtures/con-leche/"
+  return (paths.filter fun path =>
+      path.extension == some "ndjson" && !path.toString.startsWith foreign).qsort
     (fun left right => left.toString < right.toString)
 
 def summary (ordinal : Nat) (introduced : Array Name)
