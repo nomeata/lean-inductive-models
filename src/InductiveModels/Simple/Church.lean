@@ -51,7 +51,7 @@ out-of-range case is a native panic, and "this tower has no constructors" is a
 shape, not a fault. -/
 partial def stepTower (v w : Level) (eqi : EqInfo) (fib : Expr)
     (tgt : Expr → Expr) (minorOf : Nat → Array Expr → Expr)
-    (cs : Array PCtor) (j : Nat) (scrut : Expr) : GenM Expr := do
+    (cs : Array PCtor) (j : Nat) (scrut : Expr) (noSlots : Bool := false) : GenM Expr := do
   let natT : Expr := .const `Nat []
   let mkAt := fun (tag tup : Expr) => psigmaMk (.succ .zero) w natT fib tag tup
   if cs.isEmpty then
@@ -67,7 +67,8 @@ partial def stepTower (v w : Level) (eqi : EqInfo) (fib : Expr)
       let target := fun (tup : Expr) => pure (tgt (mkAt (natNumeral j) tup))
       let minorAt := minorOf j
       mkLambdaFVars #[f]
-        (← chainDestruct v eqi c.pairs c.pad? c.boxed c.nf c.tele c.chain f id target minorAt)
+        (← chainDestruct v eqi c.pairs c.pad? c.boxed c.nf c.tele c.chain f id target minorAt
+          (noSlots := noSlots))
   let sc ← withLocalDeclD `m natT fun m => do
     let inner ←
       if j + 1 == cs.size then
@@ -75,7 +76,7 @@ partial def stepTower (v w : Level) (eqi : EqInfo) (fib : Expr)
         withLocalDeclD `f (emptyAt w) fun f => do
           mkLambdaFVars #[f] (← emptyAtElim eqi v w (tgt (mkAt tag f)) f)
       else
-        stepTower v w eqi fib tgt minorOf cs (j + 1) m
+        stepTower v w eqi fib tgt minorOf cs (j + 1) m noSlots
     withLocalDeclD `ih (mkApp mot m).headBeta fun ih =>
       mkLambdaFVars #[m, ih] inner
   return natRec (mkLevelIMax' w v).normalize mot zc sc scrut

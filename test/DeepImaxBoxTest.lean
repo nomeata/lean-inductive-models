@@ -143,8 +143,8 @@ def main : IO UInt32 := do
   let bindRec := Naming.modelName `WBind.rec
   let bindIotas := #[Naming.iotaName `WBind.rec 0, Naming.iotaName `WBind.rec 1]
   state := state.check "W data and binder imax shapes generate at their pinned sizes" <|
-    wReport.generated.any (· == (`WData, 224)) &&
-      wReport.generated.any (· == (`WBind, 12)) &&
+    wReport.generated.any (· == (`WData, 226)) &&
+      wReport.generated.any (· == (`WBind, 14)) &&
       #[`WData, `WBind].all fun owner => !wReport.declined.any (·.1 == owner)
   state := state.check "W imax shapes have constructors, recursors, and both iotas" <|
     (#[dataModel, dataRec, bindModel, bindRec] ++ dataCtors ++ dataIotas ++

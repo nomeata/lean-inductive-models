@@ -23,7 +23,7 @@ recursive field and `drop` is the `snd` chain that takes any inhabitant back to
 the emptiness it ends in: the constructor manufactures nothing it was not
 handed. The intrinsic projections of the stored fields are the tower's own
 `PSigma'` projections and reduce on that constructor, so their ι rules are
-`Eq.refl`; the recursor, its ι rules and the projections of the *recursive*
+`Eq.refl`, or the box's round-trip lemma for a boxed field; the recursor, its ι rules and the projections of the *recursive*
 fields still eliminate, now through `drop`.
 
 Where the shape does not admit storage — two or more constructors, or a field
@@ -56,8 +56,10 @@ reduces to no field, because no field is there.
 
 **The tower puts the fields there.** `T._model.mk p⃗ f⃗` δβ-reduces to
 `⟨f⃗, drop t⟩`, so the tower's own `PSigma'.fst` after `q` `snd`s is `f_q` by π
-alone, `unbox (box v) ≡ v` closes a boxed component, and the rule is `Eq.refl`
-at the constructor's own binder and its own declared type. The driver states it
+alone, and the rule is `Eq.refl` at the constructor's own binder and its own
+declared type. A boxed component comes back as `unbox (box f_q)`, and its rule
+is the box's round-trip lemma instead ([`InductiveModels.boxRtOf`]): the
+conversion would cost the field type's tree. The driver states it
 at the intrinsic codomain — field `j`'s type with each earlier field replaced by
 *its* modeled projection at this major — and because every earlier projection in
 that codomain is one of these selectors, the two statements are the same one.
@@ -91,8 +93,14 @@ private def emptyStoredFieldOverrides (site : PrimSite) :
       forallBoundedTelescope tele (some (numForalls tele)) fun fields _ => do
         let selected := fields[site.emptyStored[q]!]!
         let fieldType ← ityp selected
-        mkLambdaFVars (ps ++ fields)
-          (eqi.refl' (← ilevel fieldType) fieldType selected)
+        -- A boxed field comes back as `unbox (box f)`, which is `f` by its
+        -- box's round-trip lemma and not by a conversion the kernel would pay
+        -- for with the field type's tree ([`InductiveModels.boxRtOf`]).
+        let level ← ilevel fieldType
+        let proof ← if levelHasIMax level.normalize then
+            pure (mkApp (← boxRtOf fieldType) selected)
+          else pure (eqi.refl' level fieldType selected)
+        mkLambdaFVars (ps ++ fields) proof
     overrides := overrides.push (site.tname, site.emptyStored[q]!, selector, proof)
   return overrides
 
@@ -195,6 +203,16 @@ def primArmEmpty (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   addChecked dRec
   out := out.push dRec
   let projectionOverrides := st.projectionOverrides ++ (← emptyStoredFieldOverrides site)
-  return { st with out, spliced, projectionOverrides }
+  -- A stored boxed field no later field names is selected only
+  -- propositionally, which structure eta rewrites along.
+  let propositionalFields ← if site.emptyStored.isEmpty then pure #[] else do
+    let boxedMask ← site.withParams fun ps => do
+      let tele ← instForall exportCtors[0]!.2 ps
+      forallBoundedTelescope tele (some (numForalls tele)) fun fields _ =>
+        fields.mapIdxM fun i field => do
+          if !site.emptyStored.contains i then return false
+          return levelHasIMax (← ilevel (← ityp field)).normalize
+    pure (chainSlotFields exportCtors[0]!.2 np boxedMask)
+  return { st with out, spliced, projectionOverrides, propositionalFields }
 
 end InductiveModels

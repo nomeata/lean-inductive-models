@@ -512,8 +512,8 @@ recursive field under a binder, except when entry 8 proves the owner empty.
 **Idea and reason.** Entry 9's depth counter takes exactly one
 predecessor per step, so the model here is a tagged well-founded tree
 instead. Linear recursion stays with entry 9 because a depth-indexed storage
-spine is the simpler representation there: it uses no axiom and every ι rule
-is `Eq.refl`. Branching and infinitary recursion need the general tree, its
+spine is the simpler representation there: without a boxed field it uses no
+axiom and every ι rule is `Eq.refl`. Branching and infinitary recursion need the general tree, its
 support library, and theorem-proved ι rules; its models admit `propext` and
 `Quot.sound` — for some shapes also `Classical.choice`.
 
@@ -644,9 +644,26 @@ constructor. For a recursive declaration an outer `Nat` additionally counts
 recursive depth: a constructor with a recursive field stores that field's
 value one depth down. The recursor reads the tags with `Nat.rec` building a
 type — the large elimination the basis buys — and then walks the storage.
-The whole construction uses no axiom, and every one of its ι rules holds by
-`Eq.refl`. This direct depth-and-storage account is why linear declarations
-use this route rather than entry 4's more general well-founded trees.
+Without a boxed field the whole construction uses no axiom, and every one of
+its ι rules holds by `Eq.refl`. This direct depth-and-storage account is why
+linear declarations use this route rather than entry 4's more general
+well-founded trees.
+
+**A boxed field costs `funext`.** Boxing a function field converts its argument
+one way and its result the other, recursively, and unboxing converts back.
+That the two round trips give back the original value is true by computation,
+but Lean's kernel can only confirm it by taking the function apart at every
+arrow of its type, once per arrow *counted as a tree* — so a field type with
+many shared subterms, small as written, can make that check astronomically
+large. The tower therefore never asks the kernel for it: each round trip is a
+proved lemma, built once per distinct part of the field's type from lemmas
+about its parts, and those lemmas use function extensionality, `funext`,
+which comes from `Quot.sound`. Where a boxed field is one no later field
+mentions, the recursor transports the minor's result along that lemma, the ι
+rule is a theorem that uses it, and so does the projection rule of a
+one-constructor declaration. A boxed field that a later field's type does
+mention is still converted by the kernel: the later field's type is stated at
+the unboxed value, and that is a question only conversion answers.
 
 **Dependencies.** `PProd'` for the balanced trees, modelled by entry 10. Basis
 members the input does not declare are spliced in at Lean's own shape and

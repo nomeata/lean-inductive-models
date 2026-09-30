@@ -400,9 +400,12 @@ shared limit.
 `((α → β) → β)` keeps an `imax` inside the outer domain after a shallow
 codomain box, but recursive boxing transforms the whole Π tree.  Every atomic
 leaf gains a never-`Prop` `PSigma'` codomain, every `imax` therefore normalizes
-to `max`, and the forward and inverse maps are definitionally inverse.  The
-seven declarations recorded below include its intrinsic projection and eta;
-no level-normalizer relaxation or axiom is involved.
+to `max`, and the forward and inverse maps are inverse.  Nothing later names
+the field, so the tower reaches it through the box's round-trip lemmas rather
+than by conversion: the fourteen declarations recorded below are the model,
+its intrinsic projection and eta, and seven for the box — the two arrow
+coercions, `boxFix`, `boxFix_iota`, `arrRt`, `arrSec` and `funext`, which the
+lemmas use with `Quot.sound`.  No level-normalizer relaxation is involved.
 
 **Where a row carries `PProd'`, and where a count moved by one to pay for it.**
 The fields no later field's type mentions need no binder, and both towers carry
@@ -484,7 +487,7 @@ def expectedPrim : List Row :=
        ("Conj3", 10), ("PU", 6), ("Sv", 5), ("PE", 2), ("MNm", 8), ("IdxS", 5),
        ("Dec", 6), ("Conj", 8), ("TagS2", 8), ("TagS", 6), ("PT", 8), ("Tor", 8),
        ("Hq", 5), ("Boxed", 9), ("PI", 7), ("Sub", 9), ("UL", 7), ("Lst", 6),
-       ("TrL", 7), ("Big", 7), ("PF", 7)],
+       ("TrL", 17), ("Big", 7), ("PF", 7)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **`Branch` and `Binder` are on the other side of the boundary now**, and
   -- this row is where that is recorded: they are the two shapes this file was
@@ -504,7 +507,7 @@ def expectedPrim : List Row :=
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
        ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
        ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("MixI", 4), ("Inf.below", 18),
-       ("Binder", 12), ("BoxF", 7), ("SvIx", 4)],
+       ("Binder", 12), ("BoxF", 14), ("SvIx", 4)],
       [ ("Eq", "prim model: a basis primitive")])
   -- **The exact-sort pad at a maybe-zero sort**, and the one level relation
   -- the whole row is. A nonrecursive one-constructor owner at a maybe-`Prop`
@@ -802,7 +805,7 @@ def expectedPrim : List Row :=
        ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("Cf", 8),
        ("Cf._model._impl.skel", 12), ("Inf2", 8), ("Inf2._model._impl.skel", 12),
        ("Vec", 8), ("Vec._model._impl.skel", 6), ("Bl", 10),
-       ("Bl._model._impl.skel", 8), ("IBox", 16), ("IBox._model._impl.skel", 7),
+       ("Bl._model._impl.skel", 8), ("IBox", 16), ("IBox._model._impl.skel", 14),
        ("Vc", 8), ("Vc._model._impl.skel", 6), ("Mx", 8),
        ("Mx._model._impl.skel", 12), ("Two2", 8), ("Two2._model._impl.skel", 6),
        ("Fn", 8), ("Fn._model._impl.skel", 6), ("Sm3", 8),
@@ -814,14 +817,15 @@ def expectedPrim : List Row :=
   -- `((α → β) → β)` in the label tower; `WBind` stores the same type
   -- as an infinitary child's binder in the branch tower. The former is first
   -- and therefore carries the W fragment, while the latter is the arm's own
-  -- twelve declarations. Both remain on the tagged W instantiation.
+  -- twelve declarations and the box's two arrow coercions. Both remain on the
+  -- tagged W instantiation.
   , ("w_imax",
-      [("WData", 224), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
+      [("WData", 226), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
        ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
-       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("WBind", 12)],
+       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("WBind", 14)],
       [("Eq", "prim model: a basis primitive")])
   -- **The tree arm**, and this row is three claims at once.
   --
@@ -1125,7 +1129,7 @@ def expectedPrim : List Row :=
     -- block splices it.
   , ("wide_block",
       [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 7), ("PProd'", 9),
-       ("WFlat", 29), ("WMixed", 19), ("WChain", 15), ("WBox", 13),
+       ("WFlat", 29), ("WMixed", 19), ("WChain", 15), ("WBox", 22),
        ("BFlat", 21), ("BMixed", 17), ("BChain", 13)],
       [("Eq", "prim model: a basis primitive")])
   -- **The projection gate, decided by the checker that judges the result.**

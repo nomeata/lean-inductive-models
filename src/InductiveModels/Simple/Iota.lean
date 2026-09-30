@@ -3,9 +3,11 @@ import InductiveModels.Simple.Site
 /-!
 # The ι rules, one per constructor
 
-Every one is `Eq.refl` except the empty, graph and tree arms, and the *statement* is the
-shared one in all three cases — which is what keeps the oracle's syntactic
-comparison honest across the arms.
+Every one is `Eq.refl` except the empty, graph and tree arms, and the tuple
+tower's at a constructor that stores a boxed field through a slot
+([`InductiveModels.PrimOut.iotaProof?`]); the *statement* is the shared one in
+every case — which is what keeps the oracle's syntactic comparison honest
+across the arms.
 -/
 
 open Lean Meta
@@ -98,7 +100,9 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
           | badShape s!"{modelC}'s public recursor telescope has fewer fields than its installed type"
         let some theoremType := closeForallsExact? publicRecTy pre fieldsType
           | badShape s!"{ern}'s exported telescope is shorter than its recursor prefix"
-        -- **Every ι theorem is `Eq.refl` except the empty, graph and tree arms.**
+        -- **Every ι theorem is `Eq.refl` except the empty, graph and tree arms**,
+        -- and the tuple tower's where a boxed slot makes it a theorem about the
+        -- box's round-trip lemma (the arm's `iotaProof?`).
         --
         -- The graph arm's value is a `Classical.choice` application, which reduces to
         -- nothing, so the rule is proved instead: both sides are graph points
@@ -135,7 +139,13 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
             -- other proposition.  With nothing stored the descent is the
             -- identity and this is the field itself, as before.
             emptyAtElim eqi .zero w (eqi.mk' v α lhs rhs) (← site.emptyDrop ps fields[k]!)
-          else if !armGraph then pure (eqi.refl' v α lhs) else do
+          else if !armGraph then do
+            match st.iotaProof? with
+            | some hook => match ← hook j pre fields lhs rhs α with
+              | some proof => pure proof
+              | none => pure (eqi.refl' v α lhs)
+            | none => pure (eqi.refl' v α lhs)
+          else do
             let rsI := (Array.range gNf).filter fun i => gRecNb[i]!.isSome
             let atSlot := fun (nm : Name) => rsI.mapM fun i => do
               let fty ← ityp fields[i]!

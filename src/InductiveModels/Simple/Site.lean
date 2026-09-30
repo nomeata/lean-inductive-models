@@ -146,6 +146,16 @@ structure PrimOut where
   requires : Array Name
   spliced : Array Name
   projectionOverrides : Array (Name × Nat × Expr × Expr)
+  /-- **The ι proofs an arm owes instead of `Eq.refl`**, where a constructor
+  stores a boxed field through a propositional round trip
+  ([`InductiveModels.chainFinish`]): given the constructor index, the
+  recursor's prefix, the constructor's fields, and the rule's two sides and
+  their type, the proof, or `none` for `Eq.refl`. -/
+  iotaProof? : Option (Nat → Array Expr → Array Expr → Expr → Expr → Expr →
+    GenM (Option Expr)) := none
+  /-- The fields of a one-constructor owner that its model selects only
+  propositionally: boxed fields no later field names. -/
+  propositionalFields : Array Nat := #[]
 
 /-- Open the declaration's parameter telescope. Universe-polymorphic in the
 continuation's result, which is why it is a definition over the site rather

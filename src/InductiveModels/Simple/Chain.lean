@@ -51,6 +51,19 @@ construction: a balanced `PSigma'` forces `fun p => …` motives and turns a
 field reference into a deep projection path into a pair, and neither applies to
 a pair with no family whose leaves reference nothing inside it.
 
+### A boxed field nothing later names is a slot
+
+The recursor hands the minor the unboxed value and owes `motive` at the value it
+read, so a boxed field's round trip `box (unbox p) ≡ p` is a conversion the
+kernel must decide — by taking `p` apart at every Π of the field type, counted
+as a tree. Where a later field names the field, that conversion is forced: the
+later field's type is stated at the unboxed value, and the tuple holding it is
+typed at the stored one. Where nothing does, the field is a **slot**
+([`InductiveModels.ChainSlot`]): the destructor goes through the box's
+`boxFix` instead, and the constructor's ι rule is proved by the box's `rt`
+([`InductiveModels.chainFinish`]). The split is `rest.hasLooseBVar 0`, the same
+question the block/spine split asks.
+
 `pairs` is false at one owner only, the pair itself, which may not be modelled
 by a tower built out of it; there the whole telescope stays on the spine and a
 field nothing mentions gets a constant family rather than a block leaf. The
@@ -270,13 +283,132 @@ The three walks that have to agree agree because they are one walk: `chainTy`,
 `chainTuple` and this function all descend the telescope by
 `rest.hasLooseBVar 0` and split the leaf range by
 [`InductiveModels.blockSplit`], which is a function of the leaf count alone. -/
-def blockFill (leaves : Array BlockLeaf) (paths vals : Array Expr) :
-    GenM (Array Expr) := do
+def blockFill (leaves : Array BlockLeaf) (paths vals : Array Expr) : Array Expr := Id.run do
   let mut vals := vals
   for l in [0:leaves.size] do
-    if let some (idx, bx, t) := leaves[l]! then
-      vals := vals.set! idx (← if bx then unboxValOf t paths[l]! else pure paths[l]!)
+    if let some (idx, false, _) := leaves[l]! then
+      vals := vals.set! idx paths[l]!
   return vals
+
+/-- **The fields a constructor's chain reads through a slot**: boxed, and
+named by nothing after them — not by a later field's type and not by the
+result type. `tele` is the constructor's type with its `np` parameters still
+bound or already instantiated; either way index `0` under a field's binder is
+that field. This is the chain walkers' own question
+(`rest.hasLooseBVar 0`), asked once for the whole telescope. -/
+def chainSlotFields (tele : Expr) (np : Nat) (boxed : Array Bool) : Array Nat := Id.run do
+  let mut cur := tele
+  for _ in [0:np] do
+    if let .forallE _ _ b _ := cur then cur := b
+  let mut out := #[]
+  for i in [0:boxed.size] do
+    if let .forallE _ _ rest _ := cur then
+      if boxed[i]! && !rest.hasLooseBVar 0 then out := out.push i
+      cur := rest
+  return out
+
+/-- A spine rung the destructor descended through: its pair and the value it
+holds, which is what rebuilds the chain above a slot. -/
+structure ChainRung where
+  ℓt : Level
+  ℓi : Level
+  st : Expr
+  β : Expr
+  value : Expr
+  deriving Inhabited
+
+/-- Where a boxed field that nothing later names is stored in the chain. -/
+inductive SlotAt
+  | leaf (l : Nat)
+  | rung (r : Nat)
+  | whole
+  deriving Inhabited
+
+/-- **A boxed field no later field names**, which the destructor hands to the
+minor through the box's generic `boxFix` ([`InductiveModels.boxFixName`])
+rather than by asking the kernel for its round trip. -/
+structure ChainSlot where
+  src : Nat
+  ty : Expr
+  at' : SlotAt
+  path : Expr
+  deriving Inhabited
+
+/-- The ι rule of a constructor with such slots, as the destructor is asked to
+prove it: the constructor's own field values at source indices, the rule's two
+sides and their type. -/
+structure ChainIota where
+  fields : Array Expr
+  lhs : Expr
+  rhs : Expr
+  α : Expr
+
+/-- **The destructor's value once the fields are read**, and the one place a
+boxed field's round trip is paid for.
+
+Each slot `i` is a boxed field nothing later names. The minor is applied to the
+unboxed value `b`, and its type then says `motive (ctor … b …)`, where the
+constructor stores `box b`; the destructor owes `motive` of the value it read,
+which stores `p`. The kernel would close that by converting `box (unbox p)` to
+`p` — a round trip — so instead each slot goes through `boxFix`, which applies
+the minor at `unbox p` and transports along `sec p`. The slots nest, the first
+outermost: slot `i`'s motive rebuilds the chain with `box` of the earlier slots'
+values, the variable at slot `i`, and the read values after it.
+
+Given `iota?`, the same term is built at the constructor's own values and the
+ι rule proved from it instead: one `boxFix_iota` per slot, chained by
+transitivity, which is `rt` of each slot's box and never its conversion. -/
+partial def chainFinish (v : Level) (eqi : EqInfo) (vals : Array Expr)
+    (slots : Array ChainSlot) (rebuild : Array (Option Expr) → GenM Expr)
+    (target : Expr → GenM Expr) (minorAt : Array Expr → Expr)
+    (iota? : Option ChainIota) : GenM Expr := do
+  if slots.isEmpty then
+    return match iota? with
+      | some io => eqi.refl' v io.α io.lhs
+      | none => minorAt vals
+  let fixN ← boxFixName
+  let k := slots.size
+  let parts := fun (i : Nat) => do
+    let s := slots[i]!
+    let n ← boxNode s.ty
+    return (s, n, n.bty, n.box, n.unbox, ← boxSecOfNode n)
+  -- The term at a prefix of slot values: `none` at the full prefix.
+  let rec fixAll (pre : Array Expr) : GenM (Expr × Option (Expr × Expr)) := do
+    let i := pre.size
+    if i == k then
+      let vs := (Array.range k).foldl (fun vs m => vs.set! slots[m]!.src pre[m]!) vals
+      return (minorAt vs, none)
+    let (s, n, bt, bx, ubx, sec) ← parts i
+    let boxedPre ← (Array.range i).mapM fun m => do
+      boxValOf slots[m]!.ty pre[m]!
+    let motive ← withLocalDeclD `z bt fun z => do
+      let ov := (Array.range k).map fun m =>
+        if m < i then some boxedPre[m]! else if m == i then some z else none
+      mkLambdaFVars #[z] (← target (← rebuild ov))
+    let minor ← withLocalDeclD `b s.ty fun bv => do
+      mkLambdaFVars #[bv] (← fixAll (pre.push bv)).1
+    let term := mkAppN (.const fixN [n.uT, n.uB, v])
+      #[s.ty, bt, bx, ubx, sec, motive, minor, s.path]
+    return (term, some (motive, minor))
+  let some io := iota? | return (← fixAll #[]).1
+  -- `lhs = X₁ = … = X_k ≡ rhs`, where `Xᵢ` is the term at the first `i` field
+  -- values and each step is one slot's `boxFix_iota`.
+  let trans := fun (a b c h1 h2 : Expr) =>
+    transportAlong eqi .zero v io.α b c h2 h1 fun z => pure (eqi.mk' v io.α a z)
+  let iotaN ← boxFixIotaName
+  let values := slots.map fun s => io.fields[s.src]!
+  let mut acc := eqi.refl' v io.α io.rhs
+  for i' in [0:k] do
+    let i := k - 1 - i'
+    let (s, n, bt, bx, ubx, sec) ← parts i
+    let (xi, some (motive, minor)) ← fixAll (values.extract 0 i)
+      | badShape "a slot's boxFix term has no motive"
+    let a := if i == 0 then io.lhs else xi
+    let next := (← fixAll (values.extract 0 (i + 1))).1
+    let inst := mkAppN (.const iotaN [n.uT, n.uB, v])
+      #[s.ty, bt, bx, ubx, sec, ← boxRtOfNode n, motive, minor, values[i]!]
+    acc ← trans a next io.rhs inst acc
+  return acc
 
 /-- The recursor's destructor for one chain: from `scrut : chain`, an
 element of `target (wrap scrut)` — `wrap` embeds a suffix value into the
@@ -352,17 +484,37 @@ The three walks that have to agree agree because they are one walk: `chainTy`,
 `rest.hasLooseBVar 0` and split the leaf range by
 [`InductiveModels.blockSplit`], which is a function of the leaf count alone. -/
 partial def chainDestruct (v : Level) (eqi : EqInfo) (pairs : Bool)
-    (pad? : Option Pad) (boxed : Array Bool) (nf : Nat) (tele : Expr) (chain : Expr)
-    (scrut : Expr)
+    (pad? : Option Pad) (boxed : Array Bool) (nf : Nat)
+    (tele : Expr) (chain : Expr) (scrut : Expr)
     (wrap : Expr → Expr) (target : Expr → GenM Expr)
-    (minorAt : Array Expr → Expr) (vals : Array Expr := #[]) (i : Nat := 0)
-    (leaves : Array BlockLeaf := #[]) : GenM Expr := do
+    (minorAt : Array Expr → Expr) (iota? : Option ChainIota := none)
+    (noSlots : Bool := false)
+    (vals : Array Expr := #[]) (i : Nat := 0)
+    (leaves : Array BlockLeaf := #[]) (rungs : Array ChainRung := #[])
+    (slots : Array ChainSlot := #[]) : GenM Expr := do
+  -- The chain above the current point, rebuilt at the given rung values.
+  let above := fun (rv : Array Expr) (z : Expr) =>
+    wrap ((Array.range rungs.size).foldr (fun r acc =>
+      let g := rungs[r]!
+      psigmaMk g.ℓt g.ℓi g.st g.β rv[r]! acc) z)
+  let rungVals := fun (ov : Array (Option Expr)) => Id.run do
+    let mut rv := rungs.map (·.value)
+    for m in [0:slots.size] do
+      if let (.rung r, some e) := (slots[m]!.at', ov[m]!) then rv := rv.set! r e
+    return rv
   if nf == 0 then
     let leaves := if pad?.isSome then leaves.push none else leaves
     if leaves.isEmpty then badShape "a chain with no fields needs a pad"
     let n := leaves.size
     let paths := blockPaths (Array.replicate n scrut) scrut 0 n
-    let vals ← blockFill leaves paths vals
+    let mut vals := blockFill leaves paths vals
+    -- Every slot a leaf holds reads its value off the block; a selector reads
+    -- it unboxed instead.
+    let mut slots := slots
+    for l in [0:n] do
+      if let some (idx, true, t) := leaves[l]! then
+        if noSlots then vals := vals.set! idx (← unboxValOf t paths[l]!)
+        else slots := slots.push { src := idx, ty := t, at' := .leaf l, path := paths[l]! }
     -- **The pad, and the one place a chain can still transport.** A canonical
     -- pad costs nothing — the path that reaches it is defeq to the pad's
     -- canonical element, so the applied minor already has the target type and
@@ -372,33 +524,56 @@ partial def chainDestruct (v : Level) (eqi : EqInfo) (pairs : Bool)
     -- application that proof is a closed self-equality which K-like reduction on
     -- `Eq.rec` erases — ι stays `Eq.refl` on both. The block is rebuilt here and
     -- only here, because only here is there a term to state the transport about.
-    let some p := pad? | return minorAt vals
-    if p.canonical then return minorAt vals
+    let padFixed := match pad? with
+      | some p => if p.canonical then paths else paths.set! (n - 1) p.canon
+      | none => paths
+    let rebuild := fun (ov : Array (Option Expr)) => do
+      let mut ps' := padFixed
+      for m in [0:slots.size] do
+        if let (.leaf l, some e) := (slots[m]!.at', ov[m]!) then ps' := ps'.set! l e
+      return above (rungVals ov) (← blockTuple chain ps' 0 n)
+    let body ← chainFinish v eqi vals slots rebuild target minorAt iota?
+    let some p := pad? | return body
+    if p.canonical then return body
+    if iota?.isSome then
+      badShape "a chain with a non-canonical pad has no propositional ι rule"
     return ← transportAlong eqi v p.lv p.ty p.canon paths[n - 1]!
-      (unitAtUniq eqi p.lv paths[n - 1]!) (minorAt vals)
-      (fun z => do target (wrap (← blockTuple chain (paths.set! (n - 1) z) 0 n)))
+      (unitAtUniq eqi p.lv paths[n - 1]!) body
+      (fun z => do target (above (rungVals #[]) (← blockTuple chain (paths.set! (n - 1) z) 0 n)))
   let .forallE _ t rest _ := tele | badShape "field telescope shorter than the field count"
   let bx := boxed[i]?.getD false
   if nf == 1 && pad?.isNone && leaves.isEmpty then
+    if bx && !noSlots && !rest.hasLooseBVar 0 then
+      let slots := slots.push { src := i, ty := t, at' := .whole, path := scrut }
+      let rebuild := fun (ov : Array (Option Expr)) =>
+        pure (above (rungVals ov) (ov[slots.size - 1]!.getD scrut))
+      return ← chainFinish v eqi (vals.push default) slots rebuild target minorAt iota?
     let rv ← if bx then unboxValOf t scrut else pure scrut
-    return minorAt (vals.push rv)
+    return ← chainFinish v eqi (vals.push rv) slots
+      (fun ov => pure (above (rungVals ov) scrut)) target minorAt iota?
   if pairs && !rest.hasLooseBVar 0 then
     -- A block leaf: nothing is bound here, and the placeholder `vals` grows by
     -- one so that a field's slot is its source index throughout.
     return ← chainDestruct v eqi pairs pad? boxed (nf - 1) (rest.lowerLooseBVars 1 1) chain
-      scrut wrap target minorAt (vals.push scrut) (i + 1) (leaves.push (some (i, bx, t)))
+      scrut wrap target minorAt iota? noSlots (vals.push scrut) (i + 1)
+      (leaves.push (some (i, bx, t))) rungs slots
   let (ℓt, ℓi, st, β) ← chainRung chain
   -- **A spine rung is read, not eliminated.** The rung's binder name goes
   -- unused: the value is the projection path into `scrut`, and the recursion
   -- descends into the tail's own path rather than under a lambda.
   let xv := Expr.proj `PSigma' 0 scrut
-  let rv ← if bx then unboxValOf t xv else pure xv
+  let slot := bx && !noSlots && !rest.hasLooseBVar 0
+  let rv ← if slot then pure default else if bx then unboxValOf t xv else pure xv
+  let slots := if slot then
+      slots.push { src := i, ty := t, at' := .rung rungs.size, path := xv }
+    else slots
   -- The tail's chain type, which the rung's family already carries: the
   -- descent happens at the very value the family abstracts, so this is what
   -- rebuilding the tail would have returned. It is the tail path's own type.
   let tailChain := (mkApp β xv).headBeta
-  let wrap' := fun (z : Expr) => wrap (psigmaMk ℓt ℓi st β xv z)
-  chainDestruct v eqi pairs pad? boxed (nf - 1) (rest.instantiate1 rv) tailChain
-    (.proj `PSigma' 1 scrut) wrap' target minorAt (vals.push rv) (i + 1) leaves
+  let tailTele := if slot then rest.lowerLooseBVars 1 1 else rest.instantiate1 rv
+  chainDestruct v eqi pairs pad? boxed (nf - 1) tailTele tailChain
+    (.proj `PSigma' 1 scrut) wrap target minorAt iota? noSlots (vals.push rv) (i + 1) leaves
+    (rungs.push { ℓt, ℓi, st, β, value := xv }) slots
 
 end InductiveModels

@@ -116,10 +116,33 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
         let proposition := eqi.mk' carrierLevel carrier x (reconstruct x)
         let targetMotive ← withLocalDeclD `z carrier fun z =>
           mkLambdaFVars #[z] (eqi.mk' carrierLevel carrier z (reconstruct z))
+        -- **A field the model selects only propositionally is rewritten along
+        -- its projection rule** ([`InductiveModels.Iso.propositionalFields`]);
+        -- every other projection reduces to its field and conversion closes it.
+        -- No later field names such a field, so the constructor stays well
+        -- typed with any value in its slot, one slot at a time.
+        let propositional := (is.propositionalFields.filter (·.1 == type.name)).map (·.2)
         let targetMinor ← forallBoundedTelescope constructorTail
             (some constructor.numFields) fun fields _ => do
           let major := mkAppN (.const modelConstructor us) (params ++ fields)
-          mkLambdaFVars fields (eqi.refl' carrierLevel carrier major)
+          let projected := modelProjections.map fun projection =>
+            mkAppN (.const projection us) (params.push major)
+          let mut slots := fields
+          let mut proof := eqi.refl' carrierLevel carrier major
+          for j in propositional do
+            let some (_, _, _, rule) := is.projections.find? fun entry =>
+                entry.1 == type.name && entry.2.1 == j
+              | badShape s!"{type.name} has no projection rule for field {j}"
+            let fieldType ← inferType fields[j]!
+            let fieldLevel ← ilevel fieldType
+            let ruleAt := mkAppN (.const rule us) (params ++ fields)
+            let h ← symmOf eqi fieldLevel fieldType projected[j]! fields[j]! ruleAt
+            let before := slots
+            proof ← transportAlong eqi .zero fieldLevel fieldType fields[j]! projected[j]! h proof
+              fun b => pure (eqi.mk' carrierLevel carrier major
+                (mkAppN (.const modelConstructor us) (params ++ before.set! j b)))
+            slots := slots.set! j projected[j]!
+          mkLambdaFVars fields proof
         let recLevels ←
           if recursorInfo.levelParams.length == is.levelParams.length + 1 then
             pure (.zero :: us)

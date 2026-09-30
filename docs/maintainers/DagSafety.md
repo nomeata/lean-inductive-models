@@ -137,18 +137,78 @@ here so that nobody mistakes it for one of ours.
 
 `boxValOf`/`unboxValOf` (`src/InductiveModels/Simple/Box.lean`) are not walks:
 they *construct* a coercion between a field type and its recursively boxed
-form, and at `Π d, b` the coercion is a λ around a coercion at `d` applied to a
-fresh variable and a coercion at `b`. The variables are fresh, so nothing
-repeats and nothing can be shared: the coercion for a `Π` tower whose domain
-and codomain share structure is as large as that structure's *tree*. Memoizing
-cannot help; only a different construction — coercions bound once and applied,
-rather than inlined — could. The box's type walk (`boxTyOf`) and level walk
-(`boxLevelOf`) are memoized and are linear. A field that needs the box and whose
-type is an arrow tower over an `imax` level — `(α → γ) → (α → γ)` nested, with
-`α : Sort u`, `γ : Sort v` — therefore still costs `2^depth`: at depth 10 it
-takes 1.1·10^10 instructions, at depth 20 it does not finish. That
-construction change is open, and until it is made this is the one known input
-shape on which the tool is exponential.
+form, and at `Π d, b` the coercion mentions a coercion at `d` and one at `b`.
+Written as λ-terms, with the sub-coercions inlined under a fresh variable each,
+the coercion for a `Π` tower whose domain and codomain share structure was as
+large as that structure's *tree*: a field of type `(α → γ) → (α → γ)` nested,
+with `α : Sort u`, `γ : Sort v`, cost 1.1·10^10 instructions at depth 12 and
+did not finish at depth 20. The box now writes every coercion as an
+application of a generic combinator (`arrBox uD bC`, `arrUnbox bD uC`, and
+dependent forms) to its children's coercions, memoized on the type, so the
+coercion terms are a DAG as large as the field type's.
+
+**That is not enough on its own, because the kernel converts the round trip.**
+Every ι rule of a boxed model rests on `unbox (box v) ≡ v`, and the recursor on
+`box (unbox p) ≡ p`. Both hold by βδι and function eta, and Lean's kernel
+decides them by eta-expanding the value at every `Π` and comparing the
+argument's own round trip at a *fresh* variable, and so on down: one question
+per node of the tree. Its caches cannot share those questions — each is about
+a different free variable, so no two are the same pair. Stating the round
+trip over closed per-node functions, `(fun x => unbox (box x)) = (fun x => x)`,
+does not help either: the kernel opens both sides with one fresh variable and
+the recurring pairs below are again open. Measured against Lean's kernel on
+v4.35.0-rc3 (the plain pair cache that replaced the union-find one,
+leanprover/lean4#14806), with the coercions as shared constants, the
+`Eq.refl` check of the round trip costs 6.3·10^7, 1.9·10^8, 6.8·10^8 and
+2.6·10^9 instructions at depths 8, 10, 12 and 14, in the pointwise and the
+closed form alike: a factor of four every two levels. v4.33.0 measured the
+same.
+
+So the round trips are **lemmas**: every node has `rt : ∀ v, unbox (box v) = v`
+and `sec : ∀ w, box (unbox w) = w`, again applications of four generic lemmas
+(`arrRt`, `arrSec`, `depRt`, `depSec`) to the children's, each proved once
+about variables from one `Eq.rec` and one `funext`. Where no later field names
+a boxed field, the tuple tower's destructor applies the minor at the unboxed
+value and transports the result along `sec` through one generic `boxFix`; its
+ι rule is proved by one generic `boxFix_iota` per such field, which takes the
+field's `rt`; its selectors and the empty arm's return `unbox (box f)`, whose
+projection rule is `rt f`. The transports are definitions at reducibility
+height `0` — the kernel unfolds them last, so the `Eq.rec` inside, whose K-like
+reduction would ask the very round trip, is reached only where the other side
+is stuck — and at a *regular* height rather than an opaque one, because the
+kernel compares two applications of the same definition argument by argument
+before unfolding them only for regular definitions. The cost is `funext`, and
+with it `Quot.sound`, in every such model's ι proofs.
+
+A boxed field that a later field's type names is still converted: that type is
+stated at the unboxed value, the tuple holding it at the stored one, and the
+projection rule's statement needs the conversion to be well typed at all.
+
+The whole model of the depth-`k` tower now costs, instructions for the run
+with every check on, on v4.35.0-rc3:
+
+| depth | `main` | now |
+| ---: | ---: | ---: |
+| 8 | 9.5·10^8 | 4.9·10^8 |
+| 12 | 1.1·10^10 | 5.8·10^8 |
+| 14 | 4.6·10^10 | 6.5·10^8 |
+| 30 | — | 2.1·10^9 |
+| 60 | — | 1.7·10^10 |
+| 120 | — | 2.1·10^11 |
+
+The growth past depth 30 is the open-tower cost described above (structural
+caches degrading on copies), not the box's: an unboxed field of the same shape,
+`α → α → …` over `α : Sort u`, costs 1.9·10^10 and 2.8·10^11 at depths 60 and
+120.
+
+**Still open: the tree arm and the mutual one-layer route.** They box stored
+fields and recursive binders the same way, but their recursor, eta lemma and
+ι rules still convert the round trips; a boxed arrow tower in an owner either
+of them models is still exponential — 3.2·10^9 and 8.9·10^9 instructions at
+depths 12 and 14 for a branching `WBoxT` with such a leaf. Their ι rules are
+the core's `WT.Wrec_iota` up to conversion, with the round trips inside an
+`Eq.rec` whose K-like reduction asks for them, so moving them to the lemmas is
+a change to those proofs rather than to the box.
 
 ## The fixtures that gate it
 
@@ -159,8 +219,9 @@ parameter, open over an earlier field, in `Prop`, in an index, as the domain of
 a function field), projection bodies, recursive and mutual and nested blocks,
 theorem types and values, axiom and quotient types, `Prod` towers of the
 instance-tower kind, and arrow towers that no reduction shrinks. Most are
-con-leche's, ported as complete kernel exports; `ctor_field_towers` is this
-repository's own. `test/scripts/check_fixture_verdicts.py` runs each one and
+con-leche's, ported as complete kernel exports; `ctor_field_towers` and
+`box_tower` are this repository's own — the latter the recursive box's
+construction gate rather than a walk gate. `test/scripts/check_fixture_verdicts.py` runs each one and
 fails it if it is not accepted, if its peak resident set exceeds 1 GiB, or if
 it needs more than 120 s of CPU.
 
@@ -169,7 +230,8 @@ fixture near 100 MiB and well under a second; a walk that expands any tower once
 cannot stay under 1 GiB — or, if it expands without allocating, cannot finish in
 any time — whatever machine it runs on. The CPU bound only decides how long
 that takes to observe. On the `main` of 2026-09-29 eight of the fifteen tower
-fixtures fail it: six are killed at 1 GiB, and two exhaust the CPU bound.
+fixtures fail it: six are killed at 1 GiB, and two exhaust the CPU bound. On
+`435f7c1` `box_tower` is killed at 1 GiB.
 
 A new walk is not covered because a fixture happens to pass: the rule above is
 the contract, and the fixtures only catch the walks their records reach. When a

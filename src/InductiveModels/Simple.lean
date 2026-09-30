@@ -158,9 +158,12 @@ field to store and `MZData`'s one data field sits in a one-component tower.
   an `imax` under a `max`.  Every exposed Π domain and codomain is recursively
   boxed, with each atomic leaf stored as `Σ'(_ : S), D 1`; all transformed
   codomains are therefore never `Prop`, so every `imax` normalizes to `max`.
-  The minor receives the recursively unboxed value, and
-  `unbox (box v) ≡ v` by βι, structure eta, proof irrelevance and function
-  eta, with no transport.
+  The minor receives the recursively unboxed value. `unbox (box v) ≡ v`
+  holds by βι, structure eta, proof irrelevance and function eta, but the
+  kernel pays for that conversion with the field type's tree, so the tuple
+  tower and the empty arm never ask for it at a field no later field names:
+  they transport along the box's round-trip lemmas, and the ι and projection
+  rules are theorems that use them ([`InductiveModels.chainFinish`]).
 
 **Church routes** — carrier sort literally `0`, or **maybe-zero**. One
 construction serves both. The carrier is the impredicative Church encoding
@@ -308,79 +311,87 @@ seven bodies were seven branches of one definition. -/
 def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (memberTy : Expr)
     (exportCtors : Array (Name × Expr)) (reserved : Std.HashSet Name)
     (sourceRecursor? : Option ERec := none) : GenM Iso := do
-  let (site, st) ← mkPrimSite tname root lparams np memberTy exportCtors reserved
-    sourceRecursor?
-  -- **The chain is total on the never-zero route, and this is where that used
-  -- to be false.**
-  --
-  -- `primArmChurch` is the chain's fallback and reaches every `Prop` and
-  -- maybe-zero shape, so a declaration that satisfies none of the earlier
-  -- conditions there still models. The never-zero route has no such fallback:
-  -- `primArmTuple` is its last arm and the tower is deliberately *linear*, so a
-  -- non-indexed recursive declaration whose recursion is branching or
-  -- infinitary is the tree arm's or it is nobody's. When the tree arm's guard said no, the
-  -- chain fell into the tower anyway and the tower raised an internal tool
-  -- error carrying the tree arm's own bill — an abort, at a shape the dispatcher had
-  -- already decided no arm would take. A `.shapeUnsupported .incomplete`
-  -- decline stood here to stop that, and it was the tool's only one.
-  --
-  -- **It is gone because `armTree` now *is* that class.** The two conditions that
-  -- could turn the arm off for a declaration in it —
-  -- [`InductiveModels.labelFactored`] and a carrier plan with no level to write
-  -- the core at — refuse classes that are empty, for reasons written out at
-  -- [`InductiveModels.mkPrimSite`], and are asserted there rather than tested.
-  -- So `site.armTree` holds for exactly the declarations this decline described
-  -- (`ni == 0 && isRec && !erasureLinear && !armEmpty` on the never-zero route),
-  -- the test below would be `false` by construction, and an unreachable
-  -- decline is a worse record of the situation than none.
-  --
-  -- **`!armEmpty` remains part of that class because the empty arm is in the chain.** A
-  -- branching declaration with no base constructor is in it by every question
-  -- above and is *empty*; the empty arm models it exactly, by the lift of `⊥`, and
-  -- reaches it below. Leaving `armEmpty` out declined six of `prim_w`'s occupants
-  -- at the shape they are modelled at.
-  let st ←
-    if let some carveRoute := site.carveRoute? then
-      match carveRoute with
-      | .functional => primArmCarve site st
-      | .relational => primArmRelationalCarve site st
-      | .recover => primArmIndexRecovery site st
-    else if site.armRecoveryProp then primArmIndexRecovery site st
-    else if let some directRoute := site.directRoute? then primDirect site directRoute st
-    else if site.armEmpty then primArmEmpty site st
-    else if site.armTree then primArmTree site st
-    else if site.route matches PrimRoute.type then primArmTuple site st
-    else primArmChurch site st
-  let (st, iotas) ← primIotaRules site st
+  -- The recursive box's generic declarations are named in the implementation
+  -- namespace, and the site already boxes while it plans the tree arm.
+  let boxDepth ← boxScopeOpen (Name.str (Naming.modelName root) "_impl") reserved
+  try
+    let (site, st) ← mkPrimSite tname root lparams np memberTy exportCtors reserved
+      sourceRecursor?
+    -- **The chain is total on the never-zero route, and this is where that used
+    -- to be false.**
+    --
+    -- `primArmChurch` is the chain's fallback and reaches every `Prop` and
+    -- maybe-zero shape, so a declaration that satisfies none of the earlier
+    -- conditions there still models. The never-zero route has no such fallback:
+    -- `primArmTuple` is its last arm and the tower is deliberately *linear*, so a
+    -- non-indexed recursive declaration whose recursion is branching or
+    -- infinitary is the tree arm's or it is nobody's. When the tree arm's guard said no, the
+    -- chain fell into the tower anyway and the tower raised an internal tool
+    -- error carrying the tree arm's own bill — an abort, at a shape the dispatcher had
+    -- already decided no arm would take. A `.shapeUnsupported .incomplete`
+    -- decline stood here to stop that, and it was the tool's only one.
+    --
+    -- **It is gone because `armTree` now *is* that class.** The two conditions that
+    -- could turn the arm off for a declaration in it —
+    -- [`InductiveModels.labelFactored`] and a carrier plan with no level to write
+    -- the core at — refuse classes that are empty, for reasons written out at
+    -- [`InductiveModels.mkPrimSite`], and are asserted there rather than tested.
+    -- So `site.armTree` holds for exactly the declarations this decline described
+    -- (`ni == 0 && isRec && !erasureLinear && !armEmpty` on the never-zero route),
+    -- the test below would be `false` by construction, and an unreachable
+    -- decline is a worse record of the situation than none.
+    --
+    -- **`!armEmpty` remains part of that class because the empty arm is in the chain.** A
+    -- branching declaration with no base constructor is in it by every question
+    -- above and is *empty*; the empty arm models it exactly, by the lift of `⊥`, and
+    -- reaches it below. Leaving `armEmpty` out declined six of `prim_w`'s occupants
+    -- at the shape they are modelled at.
+    let st ←
+      if let some carveRoute := site.carveRoute? then
+        match carveRoute with
+        | .functional => primArmCarve site st
+        | .relational => primArmRelationalCarve site st
+        | .recover => primArmIndexRecovery site st
+      else if site.armRecoveryProp then primArmIndexRecovery site st
+      else if let some directRoute := site.directRoute? then primDirect site directRoute st
+      else if site.armEmpty then primArmEmpty site st
+      else if site.armTree then primArmTree site st
+      else if site.route matches PrimRoute.type then primArmTuple site st
+      else primArmChurch site st
+    let (st, iotas) ← primIotaRules site st
+    let (out2, ruleKs, ruleK?) ← primRuleK site.eqi site.rv site.tname site.root site.model
+      site.ern site.reserved (site.iotaN 0) st.out
 
-  let (out2, ruleKs, ruleK?) ← primRuleK site.eqi site.rv site.tname site.root site.model
-    site.ern site.reserved (site.iotaN 0) st.out
-
-  let aliases := primAliasMap site.tname site.root site.model site.ern site.recN
-    site.exportCtors site.ctorN site.iotaN ruleK? out2
-  -- **The one arm whose carrier is empty says so here**, at the place the arm
-  -- was chosen, so the common projection driver reads a stated property of the
-  -- emitted model rather than re-deriving one.  The entry carries the descent
-  -- as well as the level: the empty arm's carrier is
-  -- [`InductiveModels.emptyAt`] `w` bare where it stores nothing and a
-  -- `PSigma'` tower ending at that emptiness where it does, and
-  -- [`InductiveModels.PrimSite.emptyDrop`] is what makes the two one thing for a
-  -- consumer.  Every other arm's carrier is inhabited or its inhabitation is
-  -- not this file's claim.
-  let emptyCarriers : Array (Name × Level × Expr) ←
-    if site.armEmpty then do
-      let descent ← site.withParams fun ps => do
-        withLocalDeclD `self (mkAppN (.const site.selfN site.us) ps) fun self => do
-          mkLambdaFVars (ps.push self) (← site.emptyDrop ps self)
-      pure #[(site.tname, site.w, descent)]
-    else pure #[]
-  return { decls := out2, levelParams := site.lparams, members := #[]
-           selfNames := #[site.selfN]
-           numAll := 1, ctors := site.ctorPairs, recs := #[site.recN], iotas, ruleKs
-           spliced := st.spliced
-           projectionOverrides := st.projectionOverrides
-           emptyCarriers
-           requires := st.requires
-           aliases }
+    let aliases := primAliasMap site.tname site.root site.model site.ern site.recN
+      site.exportCtors site.ctorN site.iotaN ruleK? out2
+    -- **The one arm whose carrier is empty says so here**, at the place the arm
+    -- was chosen, so the common projection driver reads a stated property of the
+    -- emitted model rather than re-deriving one.  The entry carries the descent
+    -- as well as the level: the empty arm's carrier is
+    -- [`InductiveModels.emptyAt`] `w` bare where it stores nothing and a
+    -- `PSigma'` tower ending at that emptiness where it does, and
+    -- [`InductiveModels.PrimSite.emptyDrop`] is what makes the two one thing for a
+    -- consumer.  Every other arm's carrier is inhabited or its inhabitation is
+    -- not this file's claim.
+    let emptyCarriers : Array (Name × Level × Expr) ←
+      if site.armEmpty then do
+        let descent ← site.withParams fun ps => do
+          withLocalDeclD `self (mkAppN (.const site.selfN site.us) ps) fun self => do
+            mkLambdaFVars (ps.push self) (← site.emptyDrop ps self)
+        pure #[(site.tname, site.w, descent)]
+      else pure #[]
+    -- The recursive box's generic declarations, which the arm, its ι rules and
+    -- the descent above built as they went ([`InductiveModels.boxScopeInsert`]).
+    let (out2, spliced) ← boxScopeInsert boxDepth out2 st.spliced
+    return { decls := out2, levelParams := site.lparams, members := #[]
+             selfNames := #[site.selfN]
+             numAll := 1, ctors := site.ctorPairs, recs := #[site.recN], iotas, ruleKs
+             spliced
+             projectionOverrides := st.projectionOverrides
+             emptyCarriers
+             propositionalFields := st.propositionalFields.map (site.tname, ·)
+             requires := st.requires
+             aliases }
+  finally boxScopeRestore boxDepth
 
 end InductiveModels

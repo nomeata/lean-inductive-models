@@ -1152,7 +1152,18 @@ def buildMutualOneLayerRecursors (source : EDecl) (reserved : Std.HashSet Name)
 /-- Complete bounded plain-mutual one-layer adapter. -/
 def mutualOneLayerIso (source : EDecl) (reserved : Std.HashSet Name)
     (buildRoot? : Option Name := none) : GenM Iso := do
-  let (fields, members) ← mutualOneLayerFields source reserved buildRoot?
-  buildMutualOneLayerRecursors source reserved fields members
+  let .induct types _ _ := source | badShape "a mutual one-layer source is not an inductive block"
+  let some first := types[0]? | badShape "a mutual one-layer block has no member"
+  -- A stored field whose level retains an `imax` is boxed by the field towers
+  -- ([`InductiveModels.wTowerBoxed`]); the box's generic declarations are
+  -- named under the block's first model.
+  let depth ← boxScopeOpen (Name.str (Naming.modelName (buildRoot?.getD first.name)) "_box")
+    reserved
+  try
+    let (fields, members) ← mutualOneLayerFields source reserved buildRoot?
+    let is ← buildMutualOneLayerRecursors source reserved fields members
+    let (decls, spliced) ← boxScopeInsert depth is.decls is.spliced
+    return { is with decls, spliced }
+  finally boxScopeRestore depth
 
 end InductiveModels

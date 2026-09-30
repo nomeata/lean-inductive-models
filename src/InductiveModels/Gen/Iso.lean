@@ -238,6 +238,14 @@ structure Iso where
   elimination of the major, at whatever codomain the driver computed.  Empty
   for every other construction. -/
   emptyCarriers : Array (Name × Level × Expr) := #[]
+  /-- **Fields a one-constructor owner's model selects only propositionally**:
+  `(owner, zero-based field index)`. The model's projection reaches such a
+  field through a transport along a round-trip lemma rather than by
+  reduction, so its projection rule is proved by the model recursor's ι
+  theorem and structure eta rewrites along that rule. Every other field is
+  selected definitionally. Empty for every construction but the recursive
+  box's ([`InductiveModels.chainFinish`]). -/
+  propositionalFields : Array (Name × Nat) := #[]
   /-- **Prelude constants the input did not declare and this model spliced in**
   — a subset of `Eq`, `Eq.refl`, the four quotient names, `Quot.sound` and
   `T._model.funext`, in the order they were emitted, and **empty** for every

@@ -416,6 +416,116 @@ this constructor")
       hints := ← hintsFor recVal, safety := .safe }
   addChecked dRec
   out := out.push dRec
-  return { st with out, spliced, requires }
+
+  -- ── the ι rules a boxed slot owes ──
+  -- A constructor whose chain reads a boxed field through a slot
+  -- ([`InductiveModels.chainFinish`]) has an ι rule that holds by the box's
+  -- round-trip lemma and not by conversion. It is proved from the same
+  -- destructor the recursor runs, at the constructor's own tuple.
+  let recLs := site.recLs
+  let slotCtors := (Array.range nc).filter fun j =>
+    !(chainSlotFields exportCtors[j]!.2 np plans[j]!.boxed).isEmpty
+  let iotaProof? : Option (Nat → Array Expr → Array Expr → Expr → Expr → Expr →
+      GenM (Option Expr)) :=
+    if slotCtors.isEmpty then none else some fun j pre fields lhs rhs α => do
+      unless slotCtors.contains j do return none
+      let ps := pre.extract 0 np
+      let motive := pre[np]!
+      let minors := pre.extract (np + 1) (np + 1 + nc)
+      let io : ChainIota := { fields, lhs, rhs, α }
+      if !isRec then
+        let (cs, fib) ← fibreAt ps
+        let c := cs[j]!
+        let tup ← chainTuple pairs c.pad? c.boxed c.nf c.tele c.chain fields
+        let target := fun (t : Expr) =>
+          pure (mkApp motive (psigmaMk (.succ .zero) w natT fib (natNumeral j) t))
+        return some (← chainDestruct v eqi c.pairs c.pad? c.boxed c.nf c.tele c.chain tup
+          id target (fun vs => mkAppN minors[j]! vs) (some io))
+      let spine ← spineAt ps
+      let mkOuter := fun (n t : Expr) => psigmaMk (.succ .zero) w natT spine n t
+      match slots[j]! with
+      | none =>
+        let (bcs, bfib) ← towerAt ps baseJ (.sort w)
+        let c := bcs[tagOf[j]!]!
+        let tup ← chainTuple pairs c.pad? c.boxed c.nf c.tele c.chain fields
+        let target := fun (t : Expr) => pure (mkApp motive (mkOuter (natNumeral 0)
+          (psigmaMk (.succ .zero) w natT bfib (natNumeral tagOf[j]!) t)))
+        return some (← chainDestruct v eqi c.pairs c.pad? c.boxed c.nf c.tele c.chain tup
+          id target (fun vs => mkAppN minors[j]! vs) (some io))
+      | some k =>
+        let r := fields[k]!
+        let rn := psigmaFst (.succ .zero) w natT spine r
+        let rv2 := psigmaSnd (.succ .zero) w natT spine r
+        let (scs, sfib) ← towerAt ps stepJ (mkApp spine rn).headBeta
+        let c := scs[tagOf[j]!]!
+        let fields' := fields.set! k rv2
+        let tup ← chainTuple pairs c.pad? c.boxed c.nf c.tele c.chain fields'
+        let nsucc := Expr.app (.const `Nat.succ []) rn
+        let target := fun (t : Expr) => pure (mkApp motive (mkOuter nsucc
+          (psigmaMk (.succ .zero) w natT sfib (natNumeral tagOf[j]!) t)))
+        let minorAt := fun (vs : Array Expr) =>
+          let sv := vs[k]!
+          mkAppN minors[j]! ((vs.set! k (mkOuter rn sv)).push
+            (mkAppN (.const recN recLs) (pre.push (mkOuter rn sv))))
+        return some (← chainDestruct v eqi c.pairs c.pad? c.boxed c.nf c.tele c.chain tup
+          id target minorAt (some { io with fields := fields' }))
+  let propositionalFields :=
+    if nc == 1 then chainSlotFields exportCtors[0]!.2 np plans[0]!.boxed else #[]
+
+  -- ── the selectors of a boxed one-constructor owner ──
+  -- The recursor reaches a slot's field only through `boxFix`, and so would a
+  -- projection built from it: `proj_j (mk f⃗)` would reduce to `f_j` only once
+  -- the kernel converted the slot's round trip. So a structure-like owner that
+  -- stores anything boxed gets **selectors** instead — the same tag cascade
+  -- and chain paths, read without a slot, each boxed field unboxed in place —
+  -- which reduce on the constructor by δβι alone. A boxed field's rule then
+  -- holds by its box's `rt`, every other field's by `Eq.refl`, and the
+  -- codomain of a later field names the earlier selectors, which reduce to
+  -- exactly the values the chain's own types were instantiated at.
+  let mut projectionOverrides := st.projectionOverrides
+  if nc == 1 && !isRec && plans[0]!.boxed.any id then
+    let us := lparams.map Level.param
+    let (_, cty) := exportCtors[0]!
+    let nf0 := numForalls cty - np
+    let overrides ← site.withParams fun ps => do
+      let (cs, fib) ← fibreAt ps
+      let c := cs[0]!
+      let carrier := mkAppN (.const selfN us) ps
+      let tele ← instForall cty ps
+      let codomainAt := fun (sels : Array (Expr → Expr)) (j : Nat) (s : Expr) => do
+        let mut cur := tele
+        for k in [0:j] do
+          let .forallE _ _ rest _ := cur | badShape s!"{tname}'s constructor has too few fields"
+          cur := rest.instantiate1 (sels[k]! s)
+        let .forallE _ d _ _ := cur | badShape s!"{tname}'s constructor has too few fields"
+        return d
+      let mut sels : Array (Expr → Expr) := #[]
+      let mut values : Array Expr := #[]
+      for j in [0:nf0] do
+        let (level, motive, minor) ← withLocalDeclD `s carrier fun s => do
+          let level ← ilevel (← codomainAt sels j s)
+          let motive ← mkLambdaFVars #[s] (← codomainAt sels j s)
+          let minor ← withLocalDeclD `n natT fun n =>
+            withLocalDeclD `f (mkApp fib n).headBeta fun f => do
+              let tower ← stepTower level w eqi fib (fun z => (motive.beta #[z]))
+                (fun _ vs => vs[j]!) cs 0 n (noSlots := true)
+              mkLambdaFVars #[n, f] (mkApp tower f).headBeta
+          return (level, motive, minor)
+        let sel := fun (s : Expr) => psigmaRec level (.succ .zero) w natT fib motive minor s
+        sels := sels.push sel
+        values := values.push (← withLocalDeclD `self carrier fun self =>
+          mkLambdaFVars (ps.push self) (sel self))
+      let boxed := c.boxed
+      (Array.range nf0).mapM fun j => do
+        let proof ← forallBoundedTelescope tele (some nf0) fun fields _ => do
+          let selected := fields[j]!
+          let fieldType ← inferType selected
+          let body ← if boxed[j]?.getD false then
+              pure (mkApp (← boxRtOf fieldType) selected)
+            else pure (eqi.refl' (← ilevel fieldType) fieldType selected)
+          mkLambdaFVars (ps ++ fields) body
+        return (tname, j, values[j]!, proof)
+    projectionOverrides := projectionOverrides ++ overrides
+  return { st with out, spliced, requires, iotaProof?, propositionalFields, projectionOverrides }
 
 end InductiveModels
