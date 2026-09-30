@@ -244,6 +244,21 @@ def expectedOwn : List Row :=
   , ("nest_cycle_group",
       [("Tree", 15), ("Tree._model._impl.0", 14), ("U", 23), ("U._model._impl.0", 20),
        ("V", 30), ("V._model._impl.0", 34)], [])
+    -- **A container whose own recursion collapses at the occurrence**, which is
+    -- con-leche's `nested_pin_collide`: `J α β`'s recursion has two `Pair`
+    -- members, `J C C` makes them one mimic, and `pack` is only one of the two
+    -- components. Each `C*` is a second shape of the coherence that bridges
+    -- them (`packCoh`): a class of two (`C1`), of three (`C3`), a class whose
+    -- members' own fields sit at different members of another class (`CK`),
+    -- the collapsed position under a binder (`CB`), at an indexed container
+    -- (`CI`), and the root nesting into the collapsed mimic itself (`CP`).
+  , ("nest_pin_collapse",
+      [("J", 21), ("J._model._impl.0", 32), ("J3", 28), ("J3._model._impl.0", 32),
+       ("K", 35), ("K._model._impl.0", 36), ("JB", 21), ("JB._model._impl.0", 24),
+       ("JI", 21), ("JI._model._impl.0", 24), ("C1", 23), ("C1._model._impl.0", 22),
+       ("C3", 23), ("C3._model._impl.0", 22), ("CK", 31), ("CK._model._impl.0", 28),
+       ("CB", 23), ("CB._model._impl.0", 22), ("CI", 23), ("CI._model._impl.0", 22),
+       ("CP", 23), ("CP._model._impl.0", 22)], [])
   , ("nest_mutual_cycle",
       [("Tree", 15), ("Tree._model._impl.0", 14), ("P", 37), ("P._model._impl.0", 32),
        ("R", 21), ("R._model._impl.0", 20)], [])

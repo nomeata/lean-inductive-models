@@ -14,14 +14,35 @@ namespace InductiveModels
 
 /-- Where one packed position of a rule stands in the transport fold. -/
 inductive Move where
-  /-- At `unpackᵢ (packᵢ f)`, where the reduced left-hand side leaves it. -/
+  /-- Where the reduced left-hand side leaves it: at `unpackᵢ (packᵢ f)`, or at
+  `unpackᵢ (P_a f)` for a position the pack recursion reaches through a
+  *collapsed* family member `a` ([`InductiveModels.AltPack`]). -/
   | source
+  /-- A collapsed position, at the block value `z` its `Eq.rec` along
+  `packCohᵢ` is abstracting. -/
+  | block (z hz : Expr)
+  /-- A collapsed position after that transport: at `unpackᵢ (packᵢ f)`, which
+  is where every other position starts. -/
+  | packed
   /-- At `f`, having been transported along `unpackPackᵢ f`. -/
   | target
   /-- At the motive's own variable, along the motive's own equation — the
   position this step of the fold is abstracting. -/
   | abstract (x hx : Expr)
   deriving Inhabited
+
+/-- **A packed position the pack recursion reaches through a collapsed family
+member.** `J α β | node (x : Pair α (J α β)) (y : Pair β (J α β))` nested at
+`J C C` has one `Pair` mimic for two members of `J`'s recursion, `packᵢ` is the
+first one's component `P₁`, and `J.node`'s ι rule leaves its `y` at the other,
+`P₂ y`. The position therefore starts one `Eq.rec` further out, along
+`packCohᵢ`'s conjunct `P₂ y = packᵢ y`. -/
+structure AltPack where
+  f : Gen.Family
+  /-- The pack recursion's components, [`InductiveModels.Gen.packFamily`]. -/
+  P : Array Expr
+  /-- The collapsed family member. -/
+  a : Nat
 
 /-- **One ι rule of `T._model.rec_k`, under construction.**
 
@@ -65,6 +86,8 @@ structure Rule where
   ihTys : Array (Option Expr)
   /-- The fields at a **mimic**, in order — the positions the fold moves. -/
   moving : Array Nat
+  /-- The positions the pack recursion reaches through a collapsed member. -/
+  alt : Array (Option AltPack)
 
 namespace Rule
 
@@ -133,6 +156,60 @@ def packedAt (r : Rule) (x m nb : Nat) (blk : Array Expr) :
     let (y, w, h) ← at' res fx
     return ((← mkLambdaFVars xs y).eta, ← mkLambdaFVars xs w, ← g.funextFor xs y fx h)
 
+/-- **A collapsed position's source terms**, `fun x⃗ => unpackₒ (z x⃗)` and the
+block recursor's hypothesis at `z`, for a block-side value `z` — the pack
+recursion's own `fun x⃗ => P_a (f x⃗)` at the source, `packCoh`'s abstracted
+variable in between, and `fun x⃗ => packₒ (f x⃗)` after. -/
+def blockAt (r : Rule) (x m nb : Nat) (blk : Array Expr) (z : Expr) :
+    GenM (Expr × Expr) := do
+  let g := r.g
+  let o := g.mimicOf m
+  let at' := fun (res v : Expr) =>
+    let idxs := g.idxOf m res
+    (g.call (g.unpackName o) r.ps idxs v, mkAppN (g.blockRecAt m r.v) (blk ++ idxs ++ #[v]))
+  if nb == 0 then return at' r.extTys[x]! z
+  forallBoundedTelescope r.extTys[x]! (some nb) fun xs res => do
+    let (y, w) := at' res (z.beta xs)
+    return ((← mkLambdaFVars xs y).eta, ← mkLambdaFVars xs w)
+
+/-- A collapsed position's block-side value at the source, `fun x⃗ => P_a (f
+x⃗)`, and after, `fun x⃗ => packₒ (f x⃗)`, and `packCoh`'s proof they are
+equal — pointwise, and closed with `funext` under a binder. -/
+def cohAt (r : Rule) (x m nb : Nat) (al : AltPack) : GenM (Expr × Expr × Expr) := do
+  let g := r.g
+  let o := g.mimicOf m
+  let at' := fun (res v : Expr) => do
+    let idxs := g.idxOf m res
+    return (g.famPack al.f al.P r.ps al.a idxs v, g.call (g.packName o) r.ps idxs v,
+      ← g.cohAt al.f al.a r.ps idxs v)
+  if nb == 0 then at' r.extTys[x]! r.fields[x]!
+  else forallBoundedTelescope r.extTys[x]! (some nb) fun xs res => do
+    let fx := r.fields[x]!.beta xs
+    let (l0, l1, h) ← at' res fx
+    return ((← mkLambdaFVars xs l0).eta, (← mkLambdaFVars xs l1).eta,
+      ← g.funextFor xs l0 l1 h (some (← ityp l1)))
+
+/-- `Eq (unpack⃗ l₀) (unpack⃗ l)` from `h : Eq l₀ l` at a block-side value,
+under the position's binders. -/
+def congrUnpack (r : Rule) (x m nb : Nat) (l0 l h : Expr) : GenM Expr := do
+  let g := r.g
+  let o := g.mimicOf m
+  let unp := fun (z : Expr) =>
+    Gen.underBinders nb r.extTys[x]! z fun _ res v =>
+      return g.call (g.unpackName o) r.ps (g.idxOf m res) v
+  -- `l`'s type and not `l₀`'s: `l₀` is the pack recursion's own component, and
+  -- a nested container's auxiliary recursor is invisible to `inferType`.
+  g.congrOne (← ityp l) r.extTys[x]! unp l0 l h
+
+/-- **The source proof of a position's current value**, `Eq y₀ v`, from the
+proof `h : Eq y v` the fold holds for it, `y₀` being the position's source
+value. For an ordinary position `y₀` is `y` and this is `h`; a collapsed one
+prefixes `packCoh`'s congruence. -/
+def fromSource (r : Rule) (x m nb : Nat) (y0 y v h : Expr) : GenM Expr := do
+  let some al := r.alt[x]! | return h
+  let (l0, l1, e) ← r.cohAt x m nb al
+  r.g.eqTrans r.extTys[x]! y0 y v (← r.congrUnpack x m nb l0 l1 e) h
+
 /-- `fun x⃗ => packₒ (val x⃗)` — a value at the *block's* side of a packed
 position, which is where `T._model.ctor_j` holds it. -/
 def packAt (r : Rule) (x m nb : Nat) (val : Expr) : GenM Expr :=
@@ -168,9 +245,17 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
     -- below writes no lambda for it.
     | some (m, nb) =>
       let (y, w, h) ← r.packedAt x m nb blk
-      srcVals := srcVals.push y; srcIhs := srcIhs.push w
+      let (y0, w0) ← match r.alt[x]! with
+        | none => pure (y, w)
+        | some al => do r.blockAt x m nb blk (← r.cohAt x m nb al).1
+      srcVals := srcVals.push y0; srcIhs := srcIhs.push w0
       match mv[x]! with
       | .source =>
+        vals := vals.push y0; ihs := ihs.push w0
+      | .block z _ =>
+        let (yz, wz) ← r.blockAt x m nb blk z
+        vals := vals.push yz; ihs := ihs.push wz
+      | .packed =>
         vals := vals.push y; ihs := ihs.push w
       -- Already moved: the value is the field and the hypothesis is
       -- `T._model.rec_m` at it, which δ-unfolds to exactly the transport the
@@ -255,6 +340,9 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
               let (_, _, h) ← r.packedAt x m nb blk
               pure (some (← cg srcVals[x]! vals[x]! h))
             | .abstract xv hv => do pure (some (← cg srcVals[x]! xv hv))
+            -- A root constructor packs with `packₒ` itself, so no position of
+            -- its rule is collapsed.
+            | .block .. | .packed => badShape "a collapsed position in a root rule"
           proofs := proofs.push pf
         | none =>
           blLhs := blLhs.push vals[x]!
@@ -277,13 +365,19 @@ def sides (r : Rule) (mv : Array Move) : GenM (Expr × Expr × Expr) := do
       for x in [0:r.n] do
         match r.packed[x]! with
         | some (m, nb) =>
+          let (y, _, h) ← r.packedAt x m nb blk
           proofs := proofs.push <| ←
             match mv[x]! with
             | .source => pure none
-            | .target => do
-              let (_, _, h) ← r.packedAt x m nb blk
-              pure (some h)
-            | .abstract _ hv => pure (some hv)
+            | .block z hz => do
+              let some al := r.alt[x]! | badShape "a block move at an ordinary position"
+              pure (some (← r.congrUnpack x m nb (← r.cohAt x m nb al).1 z hz))
+            | .packed => do
+              let some al := r.alt[x]! | badShape "a block move at an ordinary position"
+              let (l0, l1, e) ← r.cohAt x m nb al
+              pure (some (← r.congrUnpack x m nb l0 l1 e))
+            | .target => do pure (some (← r.fromSource x m nb srcVals[x]! y vals[x]! h))
+            | .abstract xv hv => do pure (some (← r.fromSource x m nb srcVals[x]! y xv hv))
         | none => proofs := proofs.push none
       let uocc ← ilevel occ
       let p ← g.foldCongr occ r.extTys srcVals vals proofs r.build
@@ -308,7 +402,9 @@ def statement (r : Rule) : GenM Expr := do
 
 /-- The proof: `Eq.refl` with nothing to move, and otherwise one `Eq.rec` on
 `unpackPackᵢ f` per packed position, from a base where every one of them is
-still at the source and both sides are the same term. -/
+still at the source and both sides are the same term — preceded, at a position
+the pack recursion reaches through a collapsed family member, by one on
+`packCohᵢ`. -/
 def value (r : Rule) : GenM Expr := do
   let g := r.g
   let mut mv := Array.replicate r.n Move.source
@@ -319,6 +415,19 @@ def value (r : Rule) : GenM Expr := do
     let some (m, nb) := r.packed[x]! | badShape "a moving position with no member"
     let f := r.fields[x]!
     let (y, _, h) ← r.packedAt x m nb blk
+    -- **A collapsed position first moves on the block's side**, from the pack
+    -- recursion's `P_a f` to `packₒ f` along `packCoh`; at `z := P_a f` and
+    -- `hz := Eq.refl` the motive is the accumulator's own type again.
+    if let some al := r.alt[x]! then
+      let (l0, l1, e) ← r.cohAt x m nb al
+      let bty ← ityp l1
+      let ub ← ilevel bty
+      let mot ← withLocalDeclD `z bty fun zv =>
+        withLocalDeclD `hz (g.eqi.mk' ub bty l0 zv) fun hz => do
+          let (ty2, l2, r2) ← r.sides (mv.set! x (.block zv hz))
+          mkLambdaFVars #[zv, hz] (g.eqi.mk' r.v ty2 l2 r2)
+      acc := g.eqi.recAt .zero ub bty l0 mot acc l1 e
+      mv := mv.set! x Move.packed
     -- **The occurrence, or the function into it.** `extTys` is the export's own
     -- field type, which is `occₒ ι⃗` with no binder and `∀ x⃗, occₒ ι⃗` with one,
     -- and either way it is what this step abstracts.

@@ -219,8 +219,8 @@
 0 accept  0 e2e/nested_p30.ndjson
 0 accept  2 e2e/nested_p31.ndjson                       # con-leche declines
 0 accept  2 e2e/nested_pi_field.ndjson                  # con-leche declines
-3 defect  1 e2e/nested_pin_collide.ndjson               # defect: internal error: a mutually recursive mimic group has no matching recursor family
-3 defect  1 e2e/nested_pin_collide2.ndjson              # defect: internal error: a mutually recursive mimic group has no matching recursor family
+0 accept  1 e2e/nested_pin_collide.ndjson               # con-leche rejects; Lean's kernel accepts
+0 accept  1 e2e/nested_pin_collide2.ndjson              # con-leche rejects; Lean's kernel accepts
 1 reject  1 e2e/nested_pin_collide2_nomodel.ndjson
 1 reject  1 e2e/nested_pin_collide_nomodel.ndjson
 0 accept  0 e2e/nested_pin_names.ndjson.gz

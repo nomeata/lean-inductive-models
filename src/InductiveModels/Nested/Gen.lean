@@ -231,23 +231,30 @@ these paths write no lambda and ask for no `funext`. -/
 b` in the scope of `x⃗`, `Eq (fun x⃗ => a) (fun x⃗ => b)`. Each step η-reduces
 its two sides, so closing over `f x⃗` gives `f` back rather than its
 η-expansion and the fold downstream compares equal to the field. -/
-def funextFor (g : Gen) (xs : Array Expr) (a b p : Expr) : GenM Expr := do
+def funextFor (g : Gen) (xs : Array Expr) (a b p : Expr) (aTy? : Option Expr := none) :
+    GenM Expr := do
   -- `g.fx` is set by [`InductiveModels.ensureFunext`] for exactly the declarations
   -- that have a packed position under a binder, which is exactly the
   -- declarations that reach here; `none` is an internal inconsistency and not
   -- an input's shortcoming.
   let some fx := g.fx | badShape "a packed position under a binder without a funext"
   let mut a := a; let mut b := b; let mut p := p
+  -- `a`'s type is passed in where `inferType` cannot see it: a collapsed
+  -- family's component is a nested container's auxiliary recursor.
+  let mut aTy ← match aTy? with
+    | some t => pure t
+    | none => ityp a
   for i in [0:xs.size] do
     let x := xs[xs.size - 1 - i]!
     let α ← ityp x
     let lu ← ilevel α
-    let lv ← ilevel (← ityp a)
-    let β ← mkLambdaFVars #[x] (← ityp a)
+    let lv ← ilevel aTy
+    let β ← mkLambdaFVars #[x] aTy
     let la := (← mkLambdaFVars #[x] a).eta
     let lb := (← mkLambdaFVars #[x] b).eta
     p := mkAppN (.const fx [lu, lv]) #[α, β, la, lb, ← mkLambdaFVars #[x] p]
     a := la; b := lb
+    aTy ← mkForallFVars #[x] aTy
   return p
 
 /-- Is `t` a field the block holds at a **mimic**, possibly under a binder
@@ -288,12 +295,16 @@ abstracts both over `x⃗` and closes the equation with [`InductiveModels.Gen.fu
 which is the only place in this module an equality Lean did not write is used —
 and it is read from the export, never fabricated. -/
 def underEq (g : Gen) (nb : Nat) (ty f : Expr)
-    (k : Array Expr → Expr → Expr → GenM (Expr × Expr)) : GenM (Expr × Expr) := do
+    (k : Array Expr → Expr → Expr → GenM (Expr × Expr)) (typeFromField := false) :
+    GenM (Expr × Expr) := do
   if nb == 0 then k #[] ty f
   else forallBoundedTelescope ty (some nb) fun xs res => do
     let fx := f.beta xs
     let (l, p) ← k xs res fx
-    return ((← mkLambdaFVars xs l).eta, ← g.funextFor xs l fx p)
+    -- The moved value's type is the field's; `typeFromField` reads it there,
+    -- for a value `inferType` cannot see (a collapsed family's component).
+    let lTy? ← if typeFromField then some <$> ityp fx else pure none
+    return ((← mkLambdaFVars xs l).eta, ← g.funextFor xs l fx p lTy?)
 
 /-- `(member, constructor)` for every constructor of the block, in the order
 `Bₖ.rec` binds its minors. -/
@@ -508,9 +519,36 @@ structure Family where
   /-- `(family member, its constructor)` in the order the family's recursors
   bind their minors: every member's rules, member by member. -/
   rules : Array (Nat × Name)
+  /-- **Which family member each induction hypothesis of rule `t` is at**, in
+  the minor's own hypothesis order. Read off the recursor, not off the field's
+  type: once two members *collapse* onto one mimic their occurrences are the
+  same expression, and only the recursor still says which of the two a
+  hypothesis is. -/
+  ihMem : Array (Array Nat)
 
-/-- Which family member mimic `i` is. -/
+/-- **Which family member stands for mimic `i`** — its *primary* member, the
+first one at it. `packᵢ` is that member's component of the recursion. -/
 def Family.indexOf (f : Family) (i : Nat) : Nat := (f.mimic.findIdx? (· == i)).getD 0
+
+/-- The primary member of family member `j`'s mimic. -/
+def Family.prim (f : Family) (j : Nat) : Nat := f.indexOf f.mimic[j]!
+
+/-- **The other family members at member `j`'s mimic** — empty unless the
+family *collapses* there. `J α β | node (x : Pair α (J α β)) (y : Pair β (J α
+β))` has three members, `J`, `Pair α (J α β)` and `Pair β (J α β)`; a block
+nesting through `J C C` makes the last two one expression, and so one mimic. -/
+def Family.others (f : Family) (j : Nat) : Array Nat :=
+  (Array.range f.mimic.size).filter fun s => s != j && f.mimic[s]! == f.mimic[j]!
+
+/-- Does any mimic stand for more than one family member? -/
+def Family.collapsed (f : Family) : Bool :=
+  (Array.range f.mimic.size).any fun j => f.prim j != j
+
+/-- The rule of member `j` for the container constructor `cn`. -/
+def Family.ruleOf (f : Family) (j : Nat) (cn : Name) : GenM Nat := do
+  let some t := f.rules.findIdx? (· == (j, cn))
+    | badShape s!"family member {j} has no rule for {cn}"
+  return t
 
 /-- Family member `j`'s constructors are the real container's at *its* own
 parameters, which the member's type carries: `List (Tree α)`'s `cons` is
@@ -557,14 +595,18 @@ Lean already generated it — `Tree.rec` and `Tree.rec_1`, over a single motive
 and minor vector. This finds that vector by trying each mimic in the group as
 the anchor and asking whether its container's family covers the group exactly.
 
-**Exactly** is required in both directions. A family member the group does not
-contain would need a motive this cannot invent, and a group member outside the
-family would have no component to be. -/
+**Exactly** is required in both directions. A family member at no mimic of the
+group would need a motive this cannot invent, and a group member outside the
+family would have no component to be. **The map need not be one-to-one**:
+members whose occurrences coincide at these parameters are one mimic — the
+kernel mints one auxiliary type per distinct occurrence — and the family is
+then larger than the group ([`InductiveModels.Gen.Family.others`],
+[`InductiveModels.Gen.cohValue`]). -/
 def familyFor (g : Gen) (grp : Array Nat) (ps : Array Expr) : GenM Family := do
   for anchor in grp do
     let (c, cls, qs) ← g.container anchor ps
     let recs ← familyRecs c
-    if recs.size != grp.size then continue
+    if recs.size < grp.size then continue
     let .recInfo rv ← constInfo recs[0]! | continue
     let ty ← instForall
       (rv.type.instantiateLevelParams rv.levelParams (← contRecLs recs[0]! g.u cls)) qs
@@ -586,7 +628,9 @@ def familyFor (g : Gen) (grp : Array Nat) (ps : Array Expr) : GenM Family := do
     let doms := doms?.map fun d => (d.getD default).1
     let fidx := doms?.map fun d => (d.getD default).2
     -- Every family member is one of the group's occurrences, and every one of
-    -- the group's is a family member.
+    -- the group's is a family member. **Not one-to-one**: two members whose
+    -- occurrences coincide at these parameters are one mimic, and the family
+    -- is then larger than the group (`Family.others`).
     let mimic? := doms.map fun d => grp.find? (g.occAt · ps == d)
     if mimic?.any (·.isNone) then continue
     let mimic := mimic?.map (·.getD 0)
@@ -595,12 +639,28 @@ def familyFor (g : Gen) (grp : Array Nat) (ps : Array Expr) : GenM Family := do
     for j in [0:recs.size] do
       let .recInfo rj ← constInfo recs[j]! | badShape s!"{recs[j]!} is not a recursor"
       for rl in rj.rules do rules := rules.push (j, rl.ctor)
-    return { recs, cls, qs, doms, fidx, mimic, rules }
+    -- Each hypothesis's member, from the minor types at **variable** motives:
+    -- a hypothesis is `∀ x⃗, Mₐ ι⃗ (f x⃗)`, and its head names `a`.
+    let ihMem ← forallBoundedTelescope ty (some rv.numMotives) fun ms rest =>
+      forallBoundedTelescope rest (some rules.size) fun mins _ => do
+        unless mins.size == rules.size do
+          badShape s!"{recs[0]!} binds {mins.size} minors for {rules.size} rules"
+        (Array.range rules.size).mapM fun t => do
+          let n ← numFieldsOf rules[t]!.2
+          forallTelescope (← ityp mins[t]!) fun bs _ =>
+            (bs.extract n bs.size).mapM fun ih => do
+              forallTelescope (← ityp ih) fun _ res => do
+                let some a := ms.findIdx? (· == res.getAppFn)
+                  | badShape s!"{rules[t]!.2}'s hypothesis is at no motive of {recs[0]!}"
+                return a
+    return { recs, cls, qs, doms, fidx, mimic, rules, ihMem }
   -- **This exit is an internal error on purpose, and the purpose is statable.**
   -- The anchor loop is a *lookup* and not a search over constructions: nothing
-  -- is installed or spliced by an anchor that does not fit, and the five
+  -- is installed or spliced by an anchor that does not fit, and the
   -- `continue`s above are the one exactness criterion the docstring states,
-  -- asked once per candidate. What reaching here would mean is that a group
+  -- asked once per candidate. (That criterion once also demanded as many
+  -- family members as mimics, which a collapsing family —
+  -- `nest_pin_collapse.lean` — refutes: it reached this exit.) What reaching here would mean is that a group
   -- [`InductiveModels.mimicGroups`] calls mutually recursive has no Lean-generated
   -- simultaneous recursion covering it — and a cycle among mimics exists only
   -- when some container in it is *itself* a nested inductive, whose own block
@@ -646,10 +706,11 @@ def packFamMinor (g : Gen) (f : Family) (ps : Array Expr) (j : Nat) (cn : Name)
         args := args.push fields[x]!
     mkLambdaFVars bs (g.blockCtorAt (f.mimic[j]! + g.numAll) cn ps args)
 
-/-- **`pack` for family member `j`**, as the `j`-th component of one recursion
-over the whole family — the same motive and minor vector for every component,
-so `pack₀` and `pack₁` never mention each other. -/
-def packFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM Expr := do
+/-- **The whole pack recursion, one partial application per family member**:
+`Pₜ := C.rec_t q⃗ M⃗ S⃗`, awaiting the member's indices and its major — the same
+motive and minor vector for every component, so `pack₀` and `pack₁` never
+mention each other. -/
+def packFamily (g : Gen) (f : Family) (ps : Array Expr) : GenM (Array Expr) := do
   let motives ← (Array.range f.doms.size).mapM fun t =>
     f.withIndices t fun idxs =>
       withLocalDeclD `x (mkAppN f.doms[t]! idxs) fun x =>
@@ -657,7 +718,187 @@ def packFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM Ex
   let minors ← g.withFamilyMinors f g.u motives fun mtys =>
     (Array.range f.rules.size).mapM fun t =>
       g.packFamMinor f ps f.rules[t]!.1 f.rules[t]!.2 mtys[t]!
-  return mkAppN (← contRecAt f.recs[j]! g.u f.cls) (f.qs ++ motives ++ minors)
+  (Array.range f.recs.size).mapM fun j => do
+    return mkAppN (← contRecAt f.recs[j]! g.u f.cls) (f.qs ++ motives ++ minors)
+
+/-- **`pack` for family member `j`**, as the `j`-th component of the family's
+one recursion. -/
+def packFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM Expr := do
+  return (← g.packFamily f ps)[j]!
+
+/-- **Family member `j`'s component of the pack recursion at `v`.** A primary
+member's is `packᵢ` itself, by name; a collapsed member's has no name and is
+written out, `Pⱼ ι⃗ v` — the term the pack recursion's own ι rule leaves at a
+field that member's hypothesis covers. The two are δ-equal for a primary
+member, and only propositionally equal otherwise ([`InductiveModels.Gen.cohValue`]). -/
+def famPack (g : Gen) (f : Family) (P : Array Expr) (ps : Array Expr) (j : Nat)
+    (idxs : Array Expr) (v : Expr) : Expr :=
+  if f.prim j == j then g.call (g.packName f.mimic[j]!) ps idxs v
+  else mkAppN P[j]! (idxs.push v)
+
+/-! ### a collapsed family's coherence
+
+Once two family members are one mimic, the pack recursion has two components
+of the same type, `P₁` and `P₂`, and `pack` can only be one of them. They are
+not definitionally equal — each is stuck on a variable major under its own
+recursor — but their minors agree, so a simultaneous induction proves them
+equal. That equation is what the round trips and the ι rules transport along
+wherever the recursion's own ι rule hands them the other component.
+
+A class may have more than two members, so the induction's motive is a
+**conjunction**, and the basis has no `And`: it is Church-encoded, `∀ C : Prop,
+(E₁ → … → Eₙ → C) → C`, which is a `Prop` by impredicativity and needs no
+declaration. A single conjunct is written bare. -/
+
+/-- `E₁ ∧ … ∧ Eₙ`, Church-encoded; `E₁` itself when `n = 1`. -/
+def conjOf (es : Array Expr) : GenM Expr := do
+  if es.size == 1 then return es[0]!
+  withLocalDeclD `C (.sort .zero) fun c => do
+    let k := es.foldr (fun e acc => Expr.forallE `h e acc .default) c
+    mkForallFVars #[c] (.forallE `k k c .default)
+
+/-- The conjunction's introduction from one proof per conjunct. -/
+def conjIntro (es pfs : Array Expr) : GenM Expr := do
+  if pfs.size == 1 then return pfs[0]!
+  withLocalDeclD `C (.sort .zero) fun c => do
+    let kty := es.foldr (fun e acc => Expr.forallE `h e acc .default) c
+    withLocalDeclD `k kty fun k => mkLambdaFVars #[c, k] (mkAppN k pfs)
+
+/-- Conjunct `i` of `h : E₁ ∧ … ∧ Eₙ`. The conjuncts are read off `h`'s own
+type. -/
+def conjProj (h : Expr) (i n : Nat) : GenM Expr := do
+  if n == 1 then return h
+  let .forallE _ _ (.forallE _ kty _ _) _ ← whnf (← ityp h)
+    | badShape "a conjunction that is not Church-encoded"
+  let mut es : Array Expr := #[]
+  let mut cur := kty
+  for _ in [0:n] do
+    let .forallE _ d b _ := cur | badShape "a conjunction with too few conjuncts"
+    es := es.push d; cur := b
+  let sel ← withLocalDeclsDND (es.map (`h, ·)) fun xs => mkLambdaFVars xs xs[i]!
+  return mkAppN h #[es[i]!, sel]
+
+/-- `packCohᵢ`'s name. -/
+def cohName (g : Gen) (i : Nat) : Name := .str g.model s!"packCoh_{i}"
+
+/-- **Conjunct `P_a ι⃗ y = packᵢ ι⃗ y` of `packCohᵢ`**, for a collapsed member
+`a` at mimic `i`. -/
+def cohAt (g : Gen) (f : Family) (a : Nat) (ps idxs : Array Expr) (y : Expr) :
+    GenM Expr := do
+  let p := f.prim a
+  let os := f.others p
+  let some c := os.findIdx? (· == a) | badShape s!"family member {a} is not collapsed"
+  conjProj (g.call (g.cohName f.mimic[p]!) ps idxs y) c os.size
+
+/-- `Eq α a c` from `p : Eq α a b` and `q : Eq α b c`. -/
+def eqTrans (g : Gen) (α a b c p q : Expr) : GenM Expr := do
+  let u ← ilevel α
+  let mot ← withLocalDeclD `x α fun x =>
+    withLocalDeclD `hx (g.eqi.mk' u α b x) fun hx =>
+      mkLambdaFVars #[x, hx] (g.eqi.mk' u α a x)
+  return g.eqi.recAt .zero u α b mot p c q
+
+/-- **The coherence of a collapsed family**, as the recursion over the whole
+family at `Prop` whose `t`-th motive is `⋀_{s ∈ others t} Pₛ y = Pₜ y`.
+
+A constructor's minor rebuilds both sides: `Pₛ (c f⃗)` and `Pₜ (c f⃗)` are the
+same block constructor, differing only at a field whose hypothesis is at
+*different* members `a ≠ a'` of one class, and there the field's own hypothesis
+has the conjunct `P_a f = P_a' f`. `packCohᵢ` is the primary member's
+component, where `Pₜ` is `packᵢ`. -/
+def cohValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM Expr := do
+  let P ← g.packFamily f ps
+  let blkAt := fun (t : Nat) (idxs : Array Expr) =>
+    mkAppN (g.memAt (f.mimic[t]! + g.numAll) ps) idxs
+  let stmts := fun (t : Nat) (idxs : Array Expr) (y : Expr) =>
+    (f.others t).map fun s =>
+      g.eqi.mk' g.u (blkAt t idxs) (g.famPack f P ps s idxs y) (g.famPack f P ps t idxs y)
+  let motives ← (Array.range f.doms.size).mapM fun t =>
+    f.withIndices t fun idxs =>
+      withLocalDeclD `y (mkAppN f.doms[t]! idxs) fun y => do
+        mkLambdaFVars (idxs.push y) (← conjOf (stmts t idxs y))
+  let minors ← g.withFamilyMinors f .zero motives fun mtys =>
+    (Array.range f.rules.size).mapM fun rt => do
+      let (t, cn) := f.rules[rt]!
+      let n ← numFieldsOf cn
+      -- Bounded: the motive is itself a `∀` when it is a conjunction.
+      forallBoundedTelescope mtys[rt]! (some (n + f.ihMem[rt]!.size)) fun bs _ => do
+        let fields := bs.extract 0 n
+        let ihs := bs.extract n bs.size
+        let ftys ← fields.mapM ftyp
+        let mut recs : Array (Nat × Nat) := #[]
+        for x in [0:n] do
+          if let some (_, nb) ← f.memberUnder? ftys[x]! then recs := recs.push (x, nb)
+        let memT := f.ihMem[rt]!
+        unless recs.size == ihs.size && memT.size == ihs.size do
+          badShape s!"{cn}'s recursive positions and hypotheses do not line up"
+        -- Member `m`'s component at the field, as its own ι rule writes it:
+        -- `fun x⃗ => P_m ι⃗ (f x⃗)` under a binder.
+        let at' := fun (m x nb : Nat) =>
+          underBinders nb ftys[x]! fields[x]! fun _ res v =>
+            return g.famPack f P ps m ((f.memberAt? res).map (·.2) |>.getD #[]) v
+        let args := fun (mem : Array Nat) => do
+          let mut out : Array Expr := #[]
+          for x in [0:n] do
+            if let some o := recs.findIdx? (·.1 == x) then
+              out := out.push (← at' mem[o]! x recs[o]!.2)
+            else if let some (o', nb) ← g.occOfUnder? ps ftys[x]! then
+              out := out.push (← underBinders nb ftys[x]! fields[x]! fun _ res v =>
+                return g.call (g.packName o') ps ((g.occIdx? o' ps res).getD #[]) v)
+            else
+              out := out.push fields[x]!
+          return out
+        let (ccls, cqs) := f.ctorPrefix t
+        let major := mkAppN (.const cn ccls) (cqs ++ fields)
+        let idxs := (f.memberAt? (← ftyp major)).map (·.2) |>.getD #[]
+        let rhs ← args memT
+        let rebuild := fun (a : Array Expr) => g.blockCtorAt (f.mimic[t]! + g.numAll) cn ps a
+        -- **Every type here is written, never inferred**: a nested container's
+        -- auxiliary recursors are in the kernel's map but not in the one
+        -- `MetaM` reads, so `inferType` cannot see `Pₜ`.
+        let goalTy := mkAppN (g.memAt (f.mimic[t]! + g.numAll) ps) idxs
+        let atys ← fieldTypesAt (← instCtor (.str g.members[f.mimic[t]! + g.numAll]! (lastStr cn))
+          g.us ps) rhs
+        let pfs ← (f.others t).mapM fun s => do
+          let memS := f.ihMem[← f.ruleOf s cn]!
+          unless memS.size == memT.size do
+            badShape s!"{cn} has differently many hypotheses at family members {s} and {t}"
+          let lhs ← args memS
+          let mut proofs : Array (Option Expr) := #[]
+          for x in [0:n] do
+            match recs.findIdx? (·.1 == x) with
+            | some o =>
+              let (a, a') := (memS[o]!, memT[o]!)
+              if a == a' then proofs := proofs.push none
+              else
+                let os := f.others a'
+                let some c := os.findIdx? (· == a)
+                  | badShape s!"family members {a} and {a'} are at different mimics"
+                let nb := recs[o]!.2
+                let pf ← if nb == 0 then conjProj ihs[o]! c os.size
+                  else forallBoundedTelescope ftys[x]! (some nb) fun xs res => do
+                    let idxs := (f.memberAt? res).map (·.2) |>.getD #[]
+                    let fx := fields[x]!.beta xs
+                    g.funextFor xs (g.famPack f P ps a idxs fx) (g.famPack f P ps a' idxs fx)
+                      (← conjProj (mkAppN ihs[o]! xs) c os.size)
+                      (some (mkAppN (g.memAt (f.mimic[a]! + g.numAll) ps) idxs))
+                proofs := proofs.push (some pf)
+            | none => proofs := proofs.push none
+          g.foldCongr goalTy atys lhs rhs proofs rebuild
+        mkLambdaFVars bs (← conjIntro (stmts t idxs major) pfs)
+  return mkAppN (← contRecAt f.recs[j]! .zero f.cls) (f.qs ++ motives ++ minors)
+
+/-- `packCohᵢ`'s statement: `∀ p⃗ ι⃗ y, ⋀_{a ∈ others} P_a ι⃗ y = packᵢ ι⃗ y`,
+for the mimic whose primary member is `j`. -/
+def cohType (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM Expr := do
+  let P ← g.packFamily f ps
+  let i := f.mimic[j]!
+  g.withOccIndices i ps fun idxs => do
+    withLocalDeclD `y (g.occAtIdx i ps idxs) fun y => do
+      let blk := mkAppN (g.memAt (i + g.numAll) ps) idxs
+      let es := (f.others j).map fun s =>
+        g.eqi.mk' g.u blk (g.famPack f P ps s idxs y) (g.call (g.packName i) ps idxs y)
+      mkForallFVars (ps ++ idxs ++ #[y]) (← conjOf es)
 
 /-- **The retraction for family member `j`**, likewise simultaneous: the same
 recursion at `Prop`, whose `j`-th motive is `unpackⱼ ∘ packⱼ = id`. A field at
@@ -665,16 +906,21 @@ a sibling member gets the sibling's own induction hypothesis, which is that
 sibling's retraction up to proof irrelevance — the same identification the
 one-at-a-time path already makes between `ih` and `unpackPack_o f`. -/
 def retractFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM Expr := do
-  let trip := fun (o : Nat) (idxs : Array Expr) (x : Expr) =>
-    g.call (g.unpackName o) ps idxs (g.call (g.packName o) ps idxs x)
+  -- **Member `t`'s round trip goes through member `t`'s component**, which for
+  -- a collapsed member is not `packₒ`: its hypothesis is what the pack
+  -- recursion's ι rule leaves at a field that member covers.
+  let P ← if f.collapsed then g.packFamily f ps else pure #[]
+  let trip := fun (t : Nat) (idxs : Array Expr) (x : Expr) =>
+    g.call (g.unpackName f.mimic[t]!) ps idxs (g.famPack f P ps t idxs x)
   let motives ← (Array.range f.doms.size).mapM fun t =>
     f.withIndices t fun idxs => do
       let dom := mkAppN f.doms[t]! idxs
       withLocalDeclD `l dom fun l =>
-        mkLambdaFVars (idxs.push l) (g.eqi.mk' g.u dom (trip f.mimic[t]! idxs l) l)
+        mkLambdaFVars (idxs.push l) (g.eqi.mk' g.u dom (trip t idxs l) l)
   let minors ← g.withFamilyMinors f .zero motives fun mtys =>
     (Array.range f.rules.size).mapM fun t => do
       let (jj, cn) := f.rules[t]!
+      let ihMem := f.ihMem[t]!
       forallTelescope mtys[t]! fun bs _ => do
         let n ← numFieldsOf cn
         let fields := bs.extract 0 n
@@ -683,20 +929,24 @@ def retractFamilyValue (g : Gen) (f : Family) (j : Nat) (ps : Array Expr) : GenM
         let mut recs : Array Nat := #[]
         for x in [0:n] do
           if (← f.memberUnder? ftys[x]!).isSome then recs := recs.push x
+        unless recs.size == ihMem.size do
+          badShape s!"{cn}'s recursive positions and hypotheses do not line up"
         let mut lhs : Array Expr := #[]
         let mut proofs : Array (Option Expr) := #[]
         for x in [0:n] do
           if let some t' := recs.findIdx? (· == x) then
-            let (d, nb) := (← f.memberUnder? ftys[x]!).getD (0, 0)
+            let nb := ((← f.memberUnder? ftys[x]!).getD (0, 0)).2
+            let d := ihMem[t']!
             let (l, pf) ← g.underEq nb ftys[x]! fields[x]! fun xs res v => do
               let idxs := (f.memberAt? res).map (·.2) |>.getD #[]
-              return (trip f.mimic[d]! idxs v, mkAppN ihs[t']! xs)
+              return (trip d idxs v, mkAppN ihs[t']! xs)
             lhs := lhs.push l
             proofs := proofs.push (some pf)
           else if let some (o, nb) ← g.occOfUnder? ps ftys[x]! then
             let (l, pf) ← g.underEq nb ftys[x]! fields[x]! fun _ res v => do
               let idxs := (g.occIdx? o ps res).getD #[]
-              return (trip o idxs v, g.call (g.retractName o) ps idxs v)
+              return (g.call (g.unpackName o) ps idxs (g.call (g.packName o) ps idxs v),
+                      g.call (g.retractName o) ps idxs v)
             lhs := lhs.push l
             proofs := proofs.push (some pf)
           else
@@ -871,8 +1121,13 @@ def sectionMotive (g : Gen) (k : Nat) (ty : Expr) (ps idxs : Array Expr) (x : Ex
 
 /-- `packUnpackᵢ : ∀p⃗ b, Eq (packᵢ p⃗ (unpackᵢ p⃗ b)) b`, by the block's
 recursor. -/
-def sectionValue (g : Gen) (member : Nat) (ps : Array Expr) (live : Nat → Bool) :
-    GenM Expr := do
+def sectionValue (g : Gen) (member : Nat) (ps : Array Expr) (live : Nat → Bool)
+    (fam? : Option Family := none) : GenM Expr := do
+  -- **A collapsed family's section.** `packₖ (unpackₖ (c b⃗))` reduces through
+  -- the pack recursion's ι rule, which leaves a field at a group mimic at the
+  -- component its *hypothesis* is at — `P_a (unpack b)`, not `packₒ (unpack
+  -- b)` when `a` is a collapsed member — and `packCohₒ` bridges the two.
+  let famP? ← (fam?.filter (·.collapsed)).mapM fun f => do return (f, ← g.packFamily f ps)
   let motives ← (Array.range g.members.size).mapM fun k =>
     g.withIndices k ps fun idxs => do
       let mem := mkAppN (g.memAt k ps) idxs
@@ -897,20 +1152,49 @@ def sectionValue (g : Gen) (member : Nat) (ps : Array Expr) (live : Nat → Bool
         if !live k then
           mkLambdaFVars bs (g.eqi.refl' g.u ty (rebuild fields))
         else
+          -- Which family member each field at a group mimic is at, when the
+          -- family collapses: the hypotheses of the primary member's rule for
+          -- this constructor, in field order.
+          let famMem? : Option (Family × Array Expr × Array Nat) ← do
+            match famP? with
+            | some (f, P) =>
+              if f.mimic.contains (g.mimicOf k) then
+                let real ← g.realCtor (g.mimicOf k) ps cn
+                pure (some (f, P, f.ihMem[← f.ruleOf (f.indexOf (g.mimicOf k)) real]!))
+              else pure none
+            | none => pure none
+          let mut ord := 0
           let mut lhs : Array Expr := #[]
           let mut proofs : Array (Option Expr) := #[]
           for x in [0:n] do
             match ← g.mimicUnder? ftys[x]! with
             | some (m, nb) =>
+              -- The family member this field is at, if it is a collapsed one.
+              let alt? : Option (Family × Array Expr × Nat) ←
+                match famMem? with
+                | some (f, P, mem) =>
+                  if f.mimic.contains (g.mimicOf m) then
+                    let some a := mem[ord]? | badShape s!"{cn} has too few hypotheses"
+                    ord := ord + 1
+                    pure (if f.prim a == a then none else some (f, P, a))
+                  else pure none
+                | none => pure none
               if live m then
                 let some t := ihPos[x]! | badShape "no hypothesis for a member field"
                 let o := g.mimicOf m
                 -- Under a binder the hypothesis is pointwise and funext closes
                 -- it; with none, `underEq` writes neither.
-                let (l, pf) ← g.underEq nb ftys[x]! fields[x]! fun xs res v => do
+                let (l, pf) ← g.underEq nb ftys[x]! fields[x]! (typeFromField := alt?.isSome)
+                    fun xs res v => do
                   let fidx := g.idxOf m res
-                  return (g.call (g.packName o) ps fidx (g.call (g.unpackName o) ps fidx v),
-                          mkAppN ihs[t]! xs)
+                  let uv := g.call (g.unpackName o) ps fidx v
+                  let pu := g.call (g.packName o) ps fidx uv
+                  match alt? with
+                  | none => return (pu, mkAppN ihs[t]! xs)
+                  | some (f, P, a) =>
+                    let raw := g.famPack f P ps a fidx uv
+                    return (raw, ← g.eqTrans (← ityp v) raw pu v
+                      (← g.cohAt f a ps fidx uv) (mkAppN ihs[t]! xs))
                 lhs := lhs.push l
                 proofs := proofs.push (some pf)
               else

@@ -24,7 +24,8 @@ theorem)`. The constructor is the key the *installed* `T.rec_k` files its rule
 under — `Tree.node` at the root, `List.cons` at a mimic — so a consumer can line
 the two up without knowing how the block was named. -/
 def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name × Expr))
-    (sourceRecursor? : Option ERec := none) (exactSource : Expr → Expr := id) :
+    (sourceRecursor? : Option ERec := none) (exactSource : Expr → Expr := id)
+    (grp? : Option (Array Nat) := none) :
     GenM (Array (Name × Name × Declaration)) := do
   let minorBase := (Array.range sh.k).foldl (fun a i => a + g.blockCtors[i]!.size) 0
   -- The export's constructors are flattened in `all` order, so a **real**
@@ -81,10 +82,28 @@ def Gen.iotaDecls (g : Gen) (sh : Gen.RecShape) (ctorTys : Array (Name × Name �
         for a in ihAt do
           if a.isSome then ihTys := ihTys.push ihTyVec[t]?; t := t + 1
           else ihTys := ihTys.push none
+        -- **The positions `packₖ`'s reduct holds at a collapsed family
+        -- member**, read off the hypotheses of the primary member's rule for
+        -- this constructor: a mimic in a cyclic group packs through its
+        -- family's recursion, and that recursion's ι rule decides.
+        let mut alt : Array (Option AltPack) := Array.replicate blkTys.size none
+        if let some grp := grp? then
+          let f ← g.familyFor grp ps
+          let o := g.mimicOf sh.k
+          let mem := f.ihMem[← f.ruleOf (f.indexOf o) head]!
+          if mem.any (fun a => f.prim a != a) then
+            let P ← g.packFamily f ps
+            let mut ord := 0
+            for x in [0:blkTys.size] do
+              if let some (m, _) := packed[x]! then
+                if f.mimic.contains (g.mimicOf m) then
+                  let some a := mem[ord]? | badShape s!"{head} has too few hypotheses"
+                  ord := ord + 1
+                  if f.prim a != a then alt := alt.set! x (some { f, P, a })
         let r : Rule :=
           { g, k := sh.k, v := sh.v, ps, motives, minors, minorIx
             head, headLevels := hls, headPrefix := hpre
-            fields, extTys, bcn, blkTys, mem, packed, ihAt, ihTys, moving }
+            fields, extTys, bcn, blkTys, mem, packed, ihAt, ihTys, moving, alt }
         let tel := pre ++ fields
         let installedStatement ← r.statement
         let (statement, fieldTelescope, recursorTelescope) ← match sourceRecursor? with
@@ -255,7 +274,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   for k in [0:pl.types.size] do helpers := helpers.push (Name.str (b k) "rec")
   for i in [0:pl.mimics.size] do
     for suffix in [s!"pack_{i}", s!"unpack_{i}", s!"unpackPack_{i}",
-        s!"packUnpack_{i}", s!"congrPack_{i}"] do
+        s!"packCoh_{i}", s!"packUnpack_{i}", s!"congrPack_{i}"] do
       helpers := helpers.push (Name.str model suffix)
   helpers := helpers.push (Name.str model "funext")
   let exactHelper := fun n =>
@@ -452,6 +471,19 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
           else do let f ← g.familyFor grp ps; g.retractFamilyValue f (f.indexOf i) ps)
         return (ty, val)
       out := out.push (← emit (g.retractName i) ty val true)
+    -- **A collapsed family's coherence**, one theorem per mimic that more than
+    -- one family member is at: the section and the ι rules transport along it
+    -- wherever the pack recursion's ι rule leaves the other member's component.
+    unless solo do
+      for i in grp do
+        let some (ty, val) ← withParams fun ps => do
+            let f ← g.familyFor grp ps
+            let p := f.indexOf i
+            if (f.others p).isEmpty then return none
+            return some (← g.cohType f p ps, ← mkLambdaFVars ps (← g.cohValue f p ps))
+          | pure ()
+        taken (g.cohName i)
+        out := out.push (← emit (g.cohName i) ty val true)
     -- The section is proved by the **block's** recursor, so the whole group is
     -- live at once and one call proves every component.
     let live := fun (k : Nat) =>
@@ -464,7 +496,8 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
             mkForallFVars (ps ++ idxs ++ #[x])
               (eqi.mk' u mem
                 (g.call (g.packName i) ps idxs (g.call (g.unpackName i) ps idxs x)) x)
-        let val ← mkLambdaFVars ps (← g.sectionValue (i + r) ps live)
+        let fam? ← if solo then pure none else some <$> g.familyFor grp ps
+        let val ← mkLambdaFVars ps (← g.sectionValue (i + r) ps live fam?)
         return (ty, val)
       out := out.push (← emit (g.sectionName i) ty val true)
     for i in grp do done := done.set! i true
@@ -547,7 +580,9 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     let sourceRecursor? := if g.isReal k then
         exportRecursors.find? (·.name == exportRecs[k]!)
       else none
-    for (key, nm, d) in ← g.iotaDecls shapes[k]! ctorTys sourceRecursor? exactSource do
+    let grp? := if g.isReal k then none else
+      (groups.find? (·.contains (g.mimicOf k))).filter (·.size > 1)
+    for (key, nm, d) in ← g.iotaDecls shapes[k]! ctorTys sourceRecursor? exactSource grp? do
       taken nm
       addChecked d
       out := out.push d

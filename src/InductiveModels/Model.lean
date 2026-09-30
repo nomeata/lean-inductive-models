@@ -82,6 +82,21 @@ one component. Only `pack` and the retraction change — `unpack` never calls
 another `unpack`, and the section already runs on the block's recursor, which
 does every member at once.
 
+**The family can be larger than the group.** `J α β | node (x : Pair α (J α
+β)) (y : Pair β (J α β))` has three family members, and a block nesting through
+`J C C` makes the two `Pair` members one expression and so one mimic — the
+kernel's auxiliary construction mints one copy per distinct occurrence
+(con-leche's `nested_pin_collide`, whose *pins* these members are). `packᵢ` is
+then the first such member's component, and the pack recursion's own ι rule
+leaves a field at the other member at *its* component, which is equal to
+`packᵢ` but not definitionally. [`InductiveModels.Gen.cohValue`] proves the
+components of each collapsed class equal, by one more recursion over the family
+at `Prop` (a Church-encoded conjunction when a class has more than two), and
+emits it as `packCohᵢ`. The retraction's motive follows each member's own
+component; the section and the ι rules transport along `packCohᵢ` at exactly
+the positions the pack recursion reaches through a collapsed member.
+`test/fixtures/inductive-models/nest_pin_collapse.lean` holds the shapes.
+
 ## Where this module's contents went
 
 This file is a facade. The construction it used to hold is split along the
