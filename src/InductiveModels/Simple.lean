@@ -382,6 +382,8 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
       else pure #[]
     -- The recursive box's generic declarations, which the arm, its ι rules and
     -- the descent above built as they went ([`InductiveModels.boxScopeInsert`]).
+    if ← boxScopeIsPropositional boxDepth then
+      boxPropositionalOwners.modify (·.push tname)
     let (out2, spliced) ← boxScopeInsert boxDepth out2 st.spliced
     return { decls := out2, levelParams := site.lparams, members := #[]
              selfNames := #[site.selfN]

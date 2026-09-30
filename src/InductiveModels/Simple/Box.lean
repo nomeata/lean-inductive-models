@@ -256,6 +256,17 @@ def boxScopeClose (depth : Nat) : GenM (Array Declaration × Array Name) := do
   | some s => return (s.decls, s.spliced)
   | none => return (#[], #[])
 
+/-- **Owners whose model states a boxed round trip as a lemma**: a generic
+round-trip lemma or `boxFix` went into it, and with that `funext`. Reported
+once per run, for the gates to read. -/
+initialize boxPropositionalOwners : IO.Ref (Array Name) ← IO.mkRef #[]
+
+/-- Does the scope at `depth` hold a generic declaration that states a round
+trip propositionally? -/
+def boxScopeIsPropositional (depth : Nat) : GenM Bool := do
+  let some s := (← boxScopeRef.get)[depth]? | return false
+  return ["boxFix", "arrRt", "arrSec", "depRt", "depSec"].any s.support.contains
+
 /-- Close the scope and put what it installed into an emitted declaration
 sequence: after the support the construction spliced and before its first own
 declaration, since a box names the former and nothing the latter defines. -/

@@ -663,7 +663,12 @@ mentions, the recursor transports the minor's result along that lemma, the ι
 rule is a theorem that uses it, and so does the projection rule of a
 one-constructor declaration. A boxed field that a later field's type does
 mention is still converted by the kernel: the later field's type is stated at
-the unboxed value, and that is a question only conversion answers.
+the unboxed value, and that is a question only conversion answers. A run
+names every declaration whose model states a round trip as a lemma, on a
+`boxed round trips proved` stderr line; over Mathlib that is `Coe`, `CoeFun`,
+`CoeHead`, `CoeHTC`, `CoeHTCT`, `CoeOTC`, `CoeOut`, `CoeSort`, `CoeTail`,
+`CoeTC`, `DFunLike`, `Equiv`, `EquivLike`, `Function.Embedding`,
+`Lean.Data.AC.EvalInformation`, `Plausible.SampleableExt` and `Trans`.
 
 **Dependencies.** `PProd'` for the balanced trees, modelled by entry 10. Basis
 members the input does not declare are spliced in at Lean's own shape and

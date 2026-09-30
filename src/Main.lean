@@ -48,6 +48,11 @@ def reportGeneration (config : InductiveModels.Cli.Config) (rep : InductiveModel
   for (name, names) in rep.spliced do
     IO.eprintln s!"{name}: prelude spliced — {", ".intercalate (names.map toString).toList}"
   for (name, why) in rep.exempt do IO.eprintln s!"{name}: exempt — {why}"
+  let mut seen : Std.HashSet Name := {}
+  for name in ← InductiveModels.boxPropositionalOwners.get do
+    unless seen.contains name do
+      seen := seen.insert name
+      IO.eprintln s!"{name}: boxed round trips proved — ι and projection rules use the box's lemmas and funext"
   for (name, why) in rep.declined do IO.eprintln s!"{name}: declined — {why}"
   unless rep.stmtChecked == 0 do
     IO.eprintln s!"statements: {rep.stmtChecked} compared, {rep.stmtErrors.size} differ"
