@@ -7,8 +7,10 @@ import InductiveModels.Check.Correspondence
 The literal propositions the checker expects a model to prove — recursor
 rules, unit-like witnesses and K reductions — reconstructed from the owner's
 own export records, plus the correspondence table each inductive record
-determines and the discovered-family record built on it.  Nothing is inferred,
-unfolded, or compared definitionally.
+determines and the discovered-family record built on it.  Nothing is inferred
+or compared definitionally; the export's own transparent definitions are
+unfolded only where the kernel's shape analysis unfolds them — to decide
+recursion and unit-likeness, and to read a former's result sort.
 -/
 
 open Lean
@@ -88,18 +90,24 @@ def iotaProposition? (x : Export) (ownerDecl : Nat) (recursorName : Name)
     (ruleIndex : Nat) : Option (List Name × Expr) :=
   iotaPropositionWith? x (constructorRecords x) ownerDecl recursorName ruleIndex
 
-/-- The literal unit-like proposition for one exported member.  The carrier is
+/-- The literal unit-like proposition for one exported member, read with
+`normalizer` — the index's, which sees the source prefix the owner's sort may
+be defined in, not only the island at hand.  The carrier is
 still named by the original here; [`Correspondence.expectedIotaType`] performs
 the same simultaneous, ambient-`Eq`-preserving rewrite as it does for recursor
 rules. -/
-def unitlikeProposition? (x : Export) (ownerDecl : Nat) (owner : Name) :
-    Option (List Name × Expr) := do
+def unitlikeProposition? (x : Export) (normalizer : ExactNormalizationEnv)
+    (ownerDecl : Nat) (owner : Name) : Option (List Name × Expr) := do
   let .induct types constructors _ ← x.decls[ownerDecl]? | none
   let type ← types.find? (·.name == owner)
-  unless type.isKernelUnitlike constructors x.exactNormalizationEnv do none
+  unless type.isKernelUnitlike constructors normalizer do none
   let (allBinders, result) := openForalls ((`_check.unitlike).append owner) type.type
   unless allBinders.size == type.numParams do none
-  let .sort _ := result | none
+  -- The equality lives in the carrier's sort, which is the former's result
+  -- **after** the export's own head normalization — `inductive U : MyProp`
+  -- with `def MyProp := Prop` is a proposition, and its witness is an
+  -- `Eq.{0}` — exactly as `checkEta` reads the same sort.
+  let .sort level := normalizer.whnf result | none
   let params := allBinders.map (·.value)
   let carrier := mkAppN (.const owner (type.levelParams.map Level.param)) params
   let xBinder : OpenBinder :=
@@ -108,7 +116,6 @@ def unitlikeProposition? (x : Export) (ownerDecl : Nat) (owner : Name) :
   let yBinder : OpenBinder :=
     { name := `y, type := carrier, info := .default
       value := mkFVar (FVarId.mk ((`_check.unitlike.y).append owner)) }
-  let level := match result with | .sort level => level | _ => .zero
   let equality := mkAppN (.const ``Eq [level])
     #[carrier, xBinder.value, yBinder.value]
   return (type.levelParams, closeForalls (allBinders ++ #[xBinder, yBinder]) equality)

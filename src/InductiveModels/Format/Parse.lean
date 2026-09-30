@@ -209,6 +209,36 @@ private def readIndType (c : RCtx) (j : Json) : Except String EIndType := do
     numNested := ← jNat j "numNested", isRec := ← jBool j "isRec"
     isReflexive := ← jBool j "isReflexive", isUnsafe := ← jBool j "isUnsafe" }
 
+/-- Stably reorder `xs` by where `key x` stands in `order`; an element whose key
+`order` does not list keeps its relative place after every listed one. -/
+private def orderBy (order : List Name) (key : α → Name) (xs : List α) : List α :=
+  let rank : Std.HashMap Name Nat :=
+    (order.zipIdx.foldl fun m (n, i) => m.insertIfNew n i) {}
+  let ranked := xs.map fun x => (rank.getD (key x) order.length, x)
+  (ranked.mergeSort fun a b => a.1 ≤ b.1).map (·.2)
+
+/-- **An inductive record's two arrays, in the order of the block they declare.**
+
+The `types` and `ctors` arrays of an `inductive` record are a bag of member and
+constructor records; the *block* they describe is ordered by the first member's
+`all` and, within each member, by that member's `ctors` list. That is the order
+Lean's kernel generated the block in and the order the Kernel Arena replays it
+in ([`KernelCheck.replayDeclaration`]): a stream whose constructor array is
+permuted — con-leche's `ind_ctor_order`, `Color` with `green` written before
+`red` — declares the very same block, and Lean's kernel accepts it.
+
+Everything downstream of the reader reads the block off the arrays, so the
+reader puts them in block order once, here, rather than every consumer
+re-deriving it. The reordering is a permutation: no record is dropped or
+invented, and a record the lists do not name — a malformed block — is kept, at
+the end, for Lean's kernel to refuse. -/
+private def blockOrder (types : List EIndType) (ctors : List ECtor) :
+    List EIndType × List ECtor :=
+  let types := match types with
+    | first :: _ => orderBy first.all (·.name) types
+    | [] => types
+  (types, orderBy (types.flatMap (·.ctors)) (·.name) ctors)
+
 private def readHints (j : Json) : Except String EHints :=
   match j with
   | .str "abbrev" => .ok .abbrev
@@ -326,9 +356,10 @@ def readLine (c : RCtx) (j : Json) : Except String (RCtx × Option EDecl) := do
       (← c.exprF o "type") kind)
   | some .induct =>
     let o ← jField j "inductive"
-    return (c, some <| .induct
+    let (types, ctors) := blockOrder
       (← (← jArr o "types").toList.mapM (readIndType c))
       (← (← jArr o "ctors").toList.mapM (readCtor c))
+    return (c, some <| .induct types ctors
       (← (← jArr o "recs").toList.mapM (readRec c)))
 
 /-- Parse a whole export. -/

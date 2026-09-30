@@ -79,14 +79,14 @@ def checkIota (x : Export) (constructors : Constructors) (family : Family)
     violations := violations.push (.declarationType iota.recursor iota.name)
   return violations
 
-def checkUnitlike (x : Export) (family : Family)
+def checkUnitlike (x : Export) (normalizer : ExactNormalizationEnv) (family : Family)
     (declarations : DeclarationTypes) (metadata : Naming.Metadata) : Array Violation := Id.run do
   let models := declarations.findD metadata.name #[]
   if models.isEmpty then return #[.missingPublic metadata.owner metadata.name]
   if models.size != 1 then
     return #[.duplicatePublic metadata.owner metadata.name models.size]
   let some (ownerParams, ownerType) :=
-      unitlikeProposition? x family.ownerDecl metadata.owner
+      unitlikeProposition? x normalizer family.ownerDecl metadata.owner
     | return #[.declarationType metadata.owner metadata.name]
   let model := models[0]!
   let mut violations : Array Violation := #[]

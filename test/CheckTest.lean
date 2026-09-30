@@ -188,7 +188,7 @@ def modelMetadataTheorem (table : Correspondence) (x : Export) (ownerDecl : Nat)
   if metadata.kind == .eta then
     return ← modelEtaTheorem table x ownerDecl metadata
   let (ownerParams, ownerType) ← match metadata.kind with
-    | .unitlike => unitlikeProposition? x ownerDecl metadata.owner
+    | .unitlike => unitlikeProposition? x x.exactNormalizationEnv ownerDecl metadata.owner
     | .ruleK => ruleKProposition? x ownerDecl metadata.owner
     | _ => none
   let params := modelParams ownerParams

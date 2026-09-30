@@ -136,14 +136,19 @@ def analysePrim (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr
   -- encoding's own `C`. All
   -- four need the occurrence to be `∀ z⃗, T p⃗ e⃗`, which is exactly what
   -- [`InductiveModels.erasureBareFailure?`] answers of the *normalised*
-  -- telescope [`InductiveModels.mkPrimSite`] hands this analysis.
+  -- telescope [`InductiveModels.mkPrimSite`] hands this analysis. That
+  -- telescope carries every live occurrence in its
+  -- [`InductiveModels.positivityForm`] — the kernel's own positivity walk,
+  -- which weak-head-normalises at every `Π` it peels — so a field `Fn T` with
+  -- `Fn α := Nat → α` arrives here as `Nat → T`, and not as a mention this
+  -- test cannot read.
   --
   -- **This used to be a decline, and its class is empty.** It read as a
   -- routing boundary: a field mentioning `T` under a foreign type former is
   -- nesting, and nesting is layer 1's business. But a mention is only a
   -- boundary if it *survives reduction*, and after the δ pass a domain here
-  -- mentions `T` exactly when an occurrence does. Lean leaves no such
-  -- declaration for this site to catch:
+  -- mentions `T` exactly when an occurrence does, in the form the kernel
+  -- read it in. Lean leaves no such declaration for this site to catch:
   --
   -- * an occurrence surviving reduction under a foreign former is what the
   --   kernel's positivity check rejects outright — `opaque F : Type → Type`
@@ -153,7 +158,9 @@ def analysePrim (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr
   --   compiles away into an auxiliary block and reports as `numNested > 0`;
   --   `Driver` sends those to `Plan.plan` and never here;
   -- * a binder type naming the declaration is rejected the same way, whatever
-  --   hides it: the kernel tests that domain syntactically, before reducing it.
+  --   hides it: the kernel tests each peeled `Π`'s domain syntactically.
+  -- * an `unsafe` block, which the kernel admits without the positivity check
+  --   at all, is exempt in `Driver` and never reaches here.
   --
   -- So what is left is an input asserting `numNested = 0` of a declaration the
   -- kernel would not accept — a lie about the export's own metadata, which is

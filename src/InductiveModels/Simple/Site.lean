@@ -29,9 +29,10 @@ structure PrimSite where
   np : Nat
   memberTy : Expr
   /-- **The constructor types every shape question is asked of**: the export's,
-  with each field domain's βζ-*dead* owner mention discarded once by
-  [`InductiveModels.shapeCtors`]. Identical to `sourceCtors` for a declaration that
-  has none, which is all but a handful. Nothing built from this array is ever
+  with each field domain's βζδ-*dead* owner mention discarded once by
+  [`InductiveModels.shapeCtors`] and [`InductiveModels.deltaCtors`], and each live
+  occurrence spelled in its [`InductiveModels.positivityForm`]. Identical to
+  `sourceCtors` for a declaration that has neither, which is all but a handful. Nothing built from this array is ever
   emitted; see `sourceCtors`. -/
   exportCtors : Array (Name × Expr)
   /-- **The exported constructor types, byte for byte**, and the only array a
@@ -39,7 +40,7 @@ structure PrimSite where
   emitted constructor to be the exact source syntax under the simultaneous
   public-name rewrite, and the structural checker compares it literally.
 
-  It is definitionally equal to `exportCtors` by βζ alone, which is what lets
+  It is definitionally equal to `exportCtors` by βζδ alone, which is what lets
   the carrier be planned from the reduced array and the constructor still be
   emitted, and typecheck, at the written one. -/
   sourceCtors : Array (Name × Expr)
@@ -213,7 +214,9 @@ def mkPrimSite (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (me
   -- leaves a mention in, at the kernel's transparency, with the telescope
   -- opened so that a domain can be reduced at all. Between them, a field
   -- domain of `exportCtors` mentions the owner exactly when an occurrence
-  -- survives full reduction, which is exactly when the field is recursive.
+  -- survives full reduction, which is exactly when the field is recursive;
+  -- and a recursive one is spelled as the kernel's positivity check read it,
+  -- `∀ z⃗, T p⃗ e⃗` with every `Π` exposed ([`InductiveModels.positivityForm`]).
   let sourceCtors := exportCtors
   let exportCtors ← deltaCtors tname np (shapeCtors tname np exportCtors)
   -- **Where the model is built and where it is emitted can differ.** `root` is

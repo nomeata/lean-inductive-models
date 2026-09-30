@@ -101,11 +101,11 @@
 1 reject  1 e2e/ind_ctor_cidx_bad.ndjson
 1 reject  1 e2e/ind_ctor_induct_bad.ndjson
 1 reject  1 e2e/ind_ctor_numfields_bad.ndjson
-3 defect  0 e2e/ind_ctor_order.ndjson                   # defect: internal error: Color.rec's exact rule 0 layout differs from its installed metadata
+0 accept  0 e2e/ind_ctor_order.ndjson                   # constructor array permuted; the reader restores block order
 1 reject  1 e2e/ind_ctors_dup_bad.ndjson
 1 reject  1 e2e/ind_ctors_missing_bad.ndjson
 0 accept  0 e2e/ind_defhead_fix.ndjson
-3 defect  0 e2e/ind_defhead_k.ndjson                    # defect: generated statement differs: U._model.unitlike does not literally model the type of U
+0 accept  0 e2e/ind_defhead_k.ndjson
 0 accept  2 e2e/ind_defhead_mutual.ndjson               # con-leche declines
 0 accept  0 e2e/ind_defhead_struct.ndjson
 0 accept  0 e2e/ind_empty_idx.ndjson
@@ -125,7 +125,7 @@
 0 accept  2 e2e/ind_nest_via_refl.ndjson                # con-leche declines
 1 reject  1 e2e/ind_numparams_bad.ndjson
 1 reject  0 e2e/ind_numparams_indices.ndjson            # the record's numIndices is not what Lean's kernel computes for it; con-leche accepts
-3 defect  0 e2e/ind_pos_whnf_fn.ndjson                  # defect: internal error: a field of R 'mentions it other than as ∀ z⃗, R p⃗ e⃗' — the kernel accepts it
+0 accept  0 e2e/ind_pos_whnf_fn.ndjson
 0 accept  0 e2e/ind_pos_whnf_id.ndjson
 0 accept  2 e2e/ind_proj_mutual_nested.ndjson           # con-leche declines
 1 reject  1 e2e/ind_rec_k_bad.ndjson
@@ -141,7 +141,7 @@
 1 reject  1 e2e/ind_stub_recname.ndjson
 1 reject  1 e2e/ind_stub_resid.ndjson
 1 reject  1 e2e/ind_stub_univ.ndjson
-3 defect  2 e2e/ind_unsafe.ndjson                       # defect: internal error on an unsafe inductive: 'a binder of Bad.mk's recursive field mentions Bad'
+0 accept  2 e2e/ind_unsafe.ndjson                       # an unsafe block is exempt, not declined; con-leche declines
 0 accept  0 e2e/indexed_nested_aux.ndjson.gz
 0 accept  0 e2e/indexed_one_ctor.ndjson
 0 accept  2 e2e/indexed_one_ctor_proj.ndjson            # con-leche declines

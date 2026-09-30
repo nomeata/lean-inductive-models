@@ -317,6 +317,14 @@ gained or lost a projection rule and none gained a transport; the census also
 counts projection-eligible auxiliary inductives, so the construction boundary
 changes these fixture totals.
 
+`positivity_whnf` is 18, `unsafe_inductive` 2 and `defhead_unitlike` 0, and
+none of them is a source owner's. Every owner in the first has two
+constructors; the eighteen are the spliced `_wcore` support and pair that its
+first reflexive owner, `R`, brings in. The two in `unsafe_inductive` are the
+pair's, spliced for the safe `List`; its `unsafe` owners are exempt and have no
+model at all. `defhead_unitlike`'s owners are unit-like: one constructor, no
+field to project.
+
 `recursor_field_domain` is 2, and both are the spliced pair's: `P` is a
 two-constructor enumeration and `Owner` is a two-constructor recursive owner,
 so neither is asked for an intrinsic projection at all.  The fixture is about
@@ -325,6 +333,7 @@ selecting it. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 23),
     ("dead_owner_mention", 15), ("decline_no_eq", 13), ("default_ctor_iota", 2),
+    ("defhead_unitlike", 0),
     ("delta_dead_mention", 8),
     ("degenerate_graph", 1),
     ("dependent_fields", 13), ("e_dependent_field", 20), ("empty_no_base", 18),
@@ -350,7 +359,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("nested_keying", 13), ("nested_mutual_indexed_container", 13),
     ("nested_one_layer", 19), ("nested_shapes", 19), ("nested_value_dependency", 27),
     ("nonindexed_vanishing", 2), ("offset_names", 4), ("offset_names_late", 5),
-    ("poly_nested", 15), ("prim_carve", 19),
+    ("poly_nested", 15), ("positivity_whnf", 18), ("prim_carve", 19),
     ("prim_declines", 18), ("prim_graph", 8), ("prim_graph_pre", 4), ("prim_idx", 19),
     ("prim_late_basis", 16), ("prim_late_eq", 1),
     ("prim_prop_skipped_field", 4), ("prim_shape_declines", 2),
@@ -360,7 +369,8 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("source_structure_syntax", 7),
     ("structure_eta", 12), ("structure_projections", 19),
     ("tight_prop_field_late", 1), ("tight_psigma_prime", 6),
-    ("transparent_owner_aliases", 3), ("unitlike", 6), ("unused_level_param", 0),
+    ("transparent_owner_aliases", 3), ("unitlike", 6), ("unsafe_inductive", 2),
+    ("unused_level_param", 0),
     ("w_alias", 13),
     ("wide_block", 48),
     ("w_core", 13), ("w_dependent_field", 30), ("w_imax", 13), ("w_late_iff", 13),

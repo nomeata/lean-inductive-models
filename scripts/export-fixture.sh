@@ -75,13 +75,18 @@ for source in "${SOURCES[@]}"; do
   declare -a ONLY=()
   while IFS= read -r name; do ONLY+=("$name"); done \
     < <(sed -n 's/^--#export  *//p' "$source" | tr ' ' '\n' | grep -v '^$')
+  # `--#export-flags` passes exporter options, e.g. `--export-unsafe`.
+  declare -a FLAGS=()
+  while IFS= read -r flag; do FLAGS+=("$flag"); done \
+    < <(sed -n 's/^--#export-flags  *//p' "$source" | tr ' ' '\n' | grep -v '^$')
   if ((${#ONLY[@]})); then
-    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$EXPORTER_BIN" "$module" -- "${ONLY[@]}" \
-      > "$OUT/$base.ndjson"
+    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$EXPORTER_BIN" ${FLAGS[@]+"${FLAGS[@]}"} "$module" \
+      -- "${ONLY[@]}" > "$OUT/$base.ndjson"
   else
-    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$EXPORTER_BIN" "$module" > "$OUT/$base.ndjson"
+    LEAN_PATH="$WORK:$EXPORT_LEAN_PATH" "$EXPORTER_BIN" ${FLAGS[@]+"${FLAGS[@]}"} "$module" \
+      > "$OUT/$base.ndjson"
   fi
-  unset ONLY
+  unset ONLY FLAGS
 
   if ((FILTER)); then
     ensure_inductive_models

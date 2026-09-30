@@ -1140,6 +1140,36 @@ def expectedPrim : List Row :=
       [("Cnt", 16), ("Add", 7), ("HAdd", 7), ("Sg", 9), ("Use", 6)],
       [ ("Eq", "prim model: a basis primitive")
       , ("Nat", "prim model: a basis primitive")])
+  -- **A recursive occurrence one definition away** (`positivity_whnf.lean`).
+  -- The kernel's positivity check reduces a field type before reading it, so
+  -- `node (f : Fn R)` with `Fn α := Nat → α` is a reflexive field; these used
+  -- to stop at an internal error. `R` is con-leche's `ind_pos_whnf_fn`, the
+  -- others the same occurrence two unfoldings deep, under a written `Π`,
+  -- indexed, in `Prop`, and behind a parameter.
+  , ("positivity_whnf",
+      [("R", 224), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
+       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
+       ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
+       ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9),
+       ("Bool", 6), ("R2", 12), ("R3", 12), ("OfNat", 7), ("HAdd", 7), ("Add", 7),
+       ("PProd", 9), ("V", 8), ("V._model._impl.skel", 12), ("P", 6), ("Tr", 12)],
+      [ ("Nat", "prim model: a basis primitive")
+      , ("PUnit", "prim model: a basis primitive")])
+  -- **Unit-like owners whose sort is a definition** (`defhead_unitlike.lean`).
+  -- The checker reads the former's result sort after the export's own head
+  -- normalisation, so the witness's `Eq` level is the unfolded sort's.
+  -- `U` is con-leche's `ind_defhead_k`.
+  , ("defhead_unitlike", [("U", 7), ("UT", 15), ("UP", 6)], [])
+  -- **`unsafe` blocks are exempt, on every route** (`unsafe_inductive.lean`):
+  -- negative (`Bad`, con-leche's `ind_unsafe`), plain, nested, mutual. Only
+  -- the safe `List` is modelled.
+  , ("unsafe_inductive", [("List", 16), ("PProd'", 9)],
+      [ ("Nat", "prim model: a basis primitive")
+      , ("Bad", "unsafe inductive: outside Lean's logic")
+      , ("UTree", "unsafe inductive: outside Lean's logic")
+      , ("UList", "unsafe inductive: outside Lean's logic")
+      , ("UA", "unsafe inductive: outside Lean's logic")])
   ]
 
 structure TAcc where
@@ -1431,10 +1461,16 @@ def runOne (root : String) (a : TAcc) (r : Row)
   -- **Exempt then declined.** The basis primitives are their own row in the
   -- report now and this list covers both, so a row that
   -- names `Eq` still pins it; the extra claim below is that nothing but a
-  -- basis primitive ever lands in the exempt row.
+  -- basis primitive or an `unsafe` block ever lands in the exempt row.
   let gotD := (rep.exempt ++ rep.declined).toList.map fun (n, w) => (n.toString, w)
-  a := check a (rep.exempt.all fun (n, _) => InductiveModels.inductiveBasis.contains n)
-    s!"{name}: the exempt row holds a non-basis name: {rep.exempt.map (·.1)}"
+  let unsafeOwners : Std.HashSet Name := x.decls.foldl (init := {}) fun owners d =>
+    match d with
+    | .induct (type :: _) _ _ => if type.isUnsafe then owners.insert type.name else owners
+    | _ => owners
+  a := check a (rep.exempt.all fun (n, _) =>
+      InductiveModels.inductiveBasis.contains n || unsafeOwners.contains n)
+    s!"{name}: the exempt row holds a name that is neither basis nor unsafe: \
+       {rep.exempt.map (·.1)}"
   -- By **prefix**: which shape stopped the generator is the claim, and a
   -- kernel diagnostic quoted inside the message is not.
   let declinesMatch :=

@@ -23,13 +23,14 @@ namespace InductiveModels
 structure Report where
   generated : Array (Name × Nat) := #[]
   declined : Array (Name × String) := #[]
-  /-- **The inductive-basis exemption, which is not a decline**
-  ([`InductiveModels.inductiveBasis`]).
-  `Eq`, `Nat`, `PSigma'`, and `PUnit` are the primitives
-  the third construction is written in, so a run leaves them unmodelled *by
-  definition*; counting them among the declines makes every coverage report
-  a number it then had to walk back in the next sentence. Reported on their own
-  lines and counted in their own row. -/
+  /-- **The exemptions, which are not declines.** Two classes of inductive
+  are unmodelled *by definition*. The basis ([`InductiveModels.inductiveBasis`]):
+  `Eq`, `Nat`, `PSigma'`, and `PUnit` are the primitives the third
+  construction is written in. And `unsafe` blocks, which are outside the logic
+  a model is for ([`InductiveModels.unsafeExemptReason`]). Counting either
+  among the declines makes every coverage report a number it then had to walk
+  back in the next sentence. Reported on their own lines and counted in their
+  own row. -/
   exempt : Array (Name × String) := #[]
   /-- **Prelude constants the input did not declare and a model spliced in**,
   per declaration. `Eq`, the quotient and `Quot.sound` come out under Lean's

@@ -253,6 +253,13 @@ already carries it, and a record that is *not* that declaration rejects the
 run rather than being silently replaced. Every other source declaration is
 retained.
 
+An inductive record is retained **in the order of the block it declares**:
+its `types` array in the first member's `all` order and its `ctors` array in
+the members' own `ctors` lists. That is the order Lean's kernel generated the
+block in and the order the Kernel Arena replays it in, so a stream that
+permutes either array declares the same block, and is read and written back
+in that order.
+
 ## Checker contract
 
 The structural checker discovers a family whenever any public model slot for
@@ -776,6 +783,15 @@ closes the list.
 | a `mutual` block at a sometimes-`Prop` sort with a one-constructor member that has a data field | declines that declaration |
 | a universe equality Lean's kernel cannot check | models it, and reports every such use |
 | a `Prop`-valued structure-like carrying data fields | models it, but silently omits some or all projections |
+
+**`unsafe` inductives are exempt, not declined.** Lean's kernel admits an
+`unsafe inductive` without its positivity check and forbids every safe
+declaration from naming one, so such a block is outside the logic the models
+are for: nothing safe that a consumer translates can depend on it, and a safe
+model of a negative one — `unsafe inductive Bad | mk : (Bad → Nat) → Bad` —
+would prove `False`. The tool passes the block through unchanged and reports
+it on an `exempt` line, as it reports the basis, and the run still exits `0`.
+Lean Kernel Arena replay skips these records the same way.
 
 #### Declined or reported: types whose models need a better level comparison than the kernel has
 

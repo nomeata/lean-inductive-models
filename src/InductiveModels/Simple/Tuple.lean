@@ -368,11 +368,37 @@ where
     | .proj s i b => return .proj s i (← go b)
     | _ => return e
 
-/-- **A field domain with a δ-dead owner mention discarded, and nothing else
-touched** — [`InductiveModels.shapeFieldDomain`] one reduction further on, and
-all-or-nothing for the same reason: a domain whose occurrence survives is
-returned **byte for byte**, so a declaration with no dead mention gets the
-identical expression back and takes the path it took before.
+/-- **A live occurrence, read the way the kernel's positivity check reads it.**
+
+`check_positivity` weak-head-normalises the field type, and does so again
+under every `Π` it peels: a binder type must not mention the owner, and what
+is left at the bottom must be an application of it. So the kernel accepts a
+field `Fn T` with `def Fn α := Nat → α` — its occurrence is `∀ z : Nat, T`,
+one unfolding away — and mints a recursor with an induction hypothesis for
+it (con-leche's `ind_pos_whnf_fn`). Every arm reads a recursive field as
+the literal `∀ z⃗, T p⃗ e⃗` it peels; this is that literal form, spelled once
+here, so no arm has to learn to reduce before it peels.
+
+The answer is definitionally equal to `dom` by δβζ alone, which is what the
+analysis array promises. `none` means the domain is not in that form after
+the kernel's own reduction — an occurrence the kernel would have refused —
+and the domain is then left as written, for the analysis to report. -/
+partial def positivityForm (tname : Name) (e : Expr) : GenM (Option Expr) := do
+  match ← whnfKernel e with
+  | .forallE x d b bi =>
+    if mentionsAny #[tname] d then return none
+    withLocalDecl x bi d fun z => do
+      let some body ← positivityForm tname (b.instantiate1 z) | return none
+      return some (← mkForallFVars #[z] body)
+  | core => return if core.getAppFn.isConstOf tname then some core else none
+
+/-- **A field domain with a δ-dead owner mention discarded, or a live one
+spelled as the kernel's positivity check reads it** — [`InductiveModels.shapeFieldDomain`]
+one reduction further on. A domain whose mention is dead comes back as its
+reduct, which no longer mentions the owner. A domain whose occurrence survives
+comes back as its [`InductiveModels.positivityForm`]; that is the domain itself,
+structurally, whenever it is already written `∀ z⃗, T p⃗ e⃗`, so an ordinary
+recursive field is replaced by nothing and takes the path it took before.
 
 The domain must be closed in the current local context; a raw constructor
 `Π`-nest names the parameters and the earlier fields as loose bound variables,
@@ -380,7 +406,10 @@ and `whnf` answers those with a panic rather than a verdict. -/
 def deltaFieldDomain (tname : Name) (dom : Expr) : GenM Expr := do
   unless mentionsAny #[tname] dom do return dom
   let reduced ← deltaDeadReduct tname dom
-  return if mentionsAny #[tname] reduced then dom else reduced
+  if mentionsAny #[tname] reduced then
+    return (← positivityForm tname dom).getD dom
+  return reduced
+
 
 /-- One constructor type with every δ-dead owner mention discarded from a
 **field** domain, its `np` parameter binders and its conclusion untouched —

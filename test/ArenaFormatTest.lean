@@ -138,6 +138,46 @@ where
         (cs.map (fun c => (c.name, c.levelParams))).toArray ++
         (rs.map (fun r => (r.name, r.levelParams))).toArray
 
+/-! ## An inductive record is read in the order of the block it declares
+
+`types` and `ctors` are two bags of records; the block is ordered by the first
+member's `all` and each member's `ctors`, which is how Lean's kernel generated
+it and how the Kernel Arena replays it. A stream that permutes either array —
+con-leche's `ind_ctor_order` swaps `Color`'s two constructors — declares the
+same block, so the reader returns the same `EDecl`. -/
+
+def blockType (name : Name) (ctors : List Name) : EIndType :=
+  { name, levelParams := [], type := .sort (.succ .zero), all := [`MA, `MB], ctors
+    numParams := 0, numIndices := 0, numNested := 0, isRec := true
+    isReflexive := false, isUnsafe := false }
+
+def blockCtor (name induct : Name) (cidx : Nat) (type : Expr) : ECtor :=
+  { name, levelParams := [], type, cidx, numParams := 0
+    numFields := numForallsOf type, induct, isUnsafe := false }
+where
+  numForallsOf : Expr → Nat
+    | .forallE _ _ body _ => numForallsOf body + 1
+    | _ => 0
+
+def blockTypes : List EIndType :=
+  [blockType `MA [`MA.a, `MA.z], blockType `MB [`MB.b]]
+
+def blockCtors : List ECtor :=
+  [ blockCtor `MA.a `MA 0 (.forallE `b (.const `MB []) (.const `MA []) .default)
+  , blockCtor `MA.z `MA 1 (.const `MA [])
+  , blockCtor `MB.b `MB 0 (.forallE `a (.const `MA []) (.const `MB []) .default)]
+
+/-- The block in its own order, and the same records written permuted. -/
+def canonicalBlock : EDecl := .induct blockTypes blockCtors []
+def permutedBlock : EDecl :=
+  .induct blockTypes.reverse [blockCtors[2]!, blockCtors[1]!, blockCtors[0]!] []
+
+/-- A constructor record no member lists stays, at the end, for the kernel to
+refuse: the reorder is a permutation and never drops a record. -/
+def strayCtor : ECtor := blockCtor `MA.stray `MA 2 (.const `MA [])
+def strayBlock : EDecl := .induct blockTypes (strayCtor :: blockCtors) []
+def strayCanonical : EDecl := .induct blockTypes (blockCtors ++ [strayCtor]) []
+
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
   let scratch := s!"{root}/_tmp"
@@ -197,6 +237,18 @@ def main (args : List String) : IO UInt32 := do
       secondSplit.after == { nextName := 7, nextLevel := 3, nextExpr := 2 }
   state := state.check "cross-island structural duplicates are permitted" <|
     firstSplit.arena.size == 5 && secondSplit.arena.size == 5
+
+  let blockPath := s!"{scratch}/arena-format-block-order.ndjson"
+  for (label, written, expected) in
+      [("a permuted inductive record reads in block order", permutedBlock, canonicalBlock),
+       ("a block in its own order reads unchanged", canonicalBlock, canonicalBlock),
+       ("an unlisted constructor record is kept, after the listed ones",
+         strayBlock, strayCanonical)] do
+    let text := Export.render { metaLine := .null, decls := #[written] }
+    IO.FS.writeFile blockPath text
+    let streamed ← parseHandleAt blockPath
+    state := state.check label <| bothHaveDecls (InductiveModels.parse text) streamed #[expected]
+  removeIfPresent blockPath
 
   -- Within one island, the ordinary structural maps still share the common
   -- name prefix, level and expression.

@@ -508,6 +508,11 @@ type mismatch 'x'` rather than crashing. `kernelcheck` pins that message.
 test/scripts/export-inductive-models.sh prim_shapes
 ```
 
+A source restricts the export to named roots with a `--#export NAME …` line,
+and passes options to the exporter with `--#export-flags …` —
+`unsafe_inductive.lean` uses `--#export-flags --export-unsafe`, without which
+`lean4export` omits `unsafe` declarations.
+
 The DAG towers ported from con-leche are generated rather than exported, from
 the `Eq`/`Nat` prelude in `test/fixtures/dag-towers/tower_basis.ndjson`:
 

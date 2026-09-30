@@ -249,7 +249,8 @@ def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
     violations := violations ++ checkTheoremSlot
       index.declarations metadata.owner metadata.name
     if metadata.kind == .unitlike then
-      violations := violations ++ checkUnitlike x family index.declarations metadata
+      violations := violations ++ checkUnitlike
+        x index.normalizer family index.declarations metadata
     else if metadata.kind == .eta then
       violations := violations ++ checkEta
         x index.normalizer family index.declarations metadata

@@ -83,6 +83,12 @@ private structure FilterContext (α : Type) where
   observer? : Option (IslandObserver α) := none
   outputEmitter? : Option StreamOutputEmitter := none
 
+/-- The report line of an `unsafe` inductive block, which is exempt rather than
+declined (see `FilterState.feedSource`). -/
+def unsafeExemptReason : String :=
+  "unsafe inductive: outside Lean's logic — no safe declaration may name it — so \
+there is nothing to model"
+
 /-- Cheap summary-first test for whether an exhaustive record rewrite can
 change anything. `all` fields are bookkeeping rather than dependencies, so
 they are the only constant-bearing fields not already covered by a summary. -/
@@ -220,6 +226,22 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
     | .induct types _ _ => types.findSome? fun type =>
         if inductiveBasis.contains type.name then some type.name else none
     | _ => none
+  -- **An `unsafe` block is outside Lean's logic, so it has no model to have.**
+  -- The kernel skips its positivity check — `unsafe inductive Bad | mk : (Bad →
+  -- Nat) → Bad` is accepted — and a safe declaration may not name it, so no
+  -- safe declaration an extensional consumer translates can depend on it. A
+  -- model made of safe definitions would not merely be unnecessary: of a
+  -- negative block like `Bad` it would be a proof of `False`. The block is
+  -- therefore exempt, like the basis — reported on its own line, never counted
+  -- as a decline — and passes through unchanged. Lean's kernel submits a block
+  -- with one safety flag, the first member's (`toDeclaration`), and that is
+  -- the flag read here.
+  let unsafeRoot? := match replayD with
+    | .induct (type :: _) _ _ => if type.isUnsafe then some type.name else none
+    | _ => none
+  if let some root := unsafeRoot? then
+    if generation.nested || generation.mutualModels || generation.modelsSimpleInput root then
+      rep := { rep with exempt := rep.exempt.push (root, unsafeExemptReason) }
   -- No model declaration is ever installed in `mainEnv`. All constructors
   -- below work in the ambient disposable fork; closing an inductive record
   -- restores this exact source prefix plus accepted reusable support.
@@ -256,7 +278,8 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
     -- and with one carrier per real member.
     if let t :: _ := ts then
       if generation.nested && ts.any (·.numNested > 0) &&
-          basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
+          basisRoot?.isNone && unsafeRoot?.isNone && invalidBasis.isEmpty &&
+          !dropCanonicalBasisRecord then
         let all := ts.toArray.map (·.name)
         let ctorsOfMember := fun (n : Name) =>
           (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
@@ -387,7 +410,8 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
   if let .induct ts cs _ := replayD then
     if let t :: _ := ts then
       if generation.mutualModels && ts.length > 1 && !ts.any (·.numNested > 0) &&
-          basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
+          basisRoot?.isNone && unsafeRoot?.isNone && invalidBasis.isEmpty &&
+          !dropCanonicalBasisRecord then
         let all := ts.toArray.map (·.name)
         let ctors := all.map fun n =>
           (cs.filter (·.induct == n)).toArray.map fun c => (c.name, c.type)
@@ -397,7 +421,8 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
           (some replayD) exactTransform context.observer?
         (out, rep, pending, islandObservations) ← pure st3
       if generation.modelsSimpleInput t.name && ts.length == 1 && t.numNested == 0 &&
-          basisRoot?.isNone && invalidBasis.isEmpty && !dropCanonicalBasisRecord then
+          basisRoot?.isNone && unsafeRoot?.isNone && invalidBasis.isEmpty &&
+          !dropCanonicalBasisRecord then
         let ctors := (cs.filter (·.induct == t.name)).toArray.map fun c => (c.name, c.type)
         let st ← genPrim t.name t.levelParams t.numParams t.type ctors
           #[] reserved generation.basic (out, rep, pending, islandObservations)
