@@ -186,7 +186,7 @@ def phase1OneLayerCertificate (declarations : DeclarationTypes)
     return .malformed privateIotaName
   -- The carrier restates the owner's declared type; its parameters, indices
   -- and sort are read as the kernel reads them.
-  let some publicCarrierFormer := normalizer.kernelFormer? publicCarrier.type
+  let some publicCarrierFormer := normalizer.kernelFormer? publicCarrier.type ownerType.all
     | return .malformed publicCarrierName
   let (parameters, result) := openForalls
     ((`_check.oneLayerCertificate).append ownerType.name) publicCarrierFormer
@@ -273,7 +273,7 @@ def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
   for ownerType in ownerTypes do
     -- The member's sort as the kernel reads it: it may be a definition that
     -- unfolds to a sort.
-    let some ownerFormer := normalizer.kernelFormer? ownerType.type
+    let some ownerFormer := normalizer.kernelFormer? ownerType.type ownerType.all
       | return .malformed (privateSelf ownerType.name)
     let (_, some carrierLevel) := exposedFormerShape ownerFormer
       | return .malformed (privateSelf ownerType.name)
@@ -391,7 +391,7 @@ def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
         return .malformed ruleName
     -- The carrier restates the owner's declared type; its parameters and sort
     -- are read as the kernel reads them.
-    let some publicCarrierFormer := normalizer.kernelFormer? publicCarrier.type
+    let some publicCarrierFormer := normalizer.kernelFormer? publicCarrier.type ownerType.all
       | return .malformed publicCarrierName
     let (parameters, result) := openForalls
       ((`_check.mutualOneLayerCertificate).append owner) publicCarrierFormer

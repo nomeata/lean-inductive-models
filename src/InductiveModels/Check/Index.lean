@@ -62,14 +62,17 @@ structure SyntaxIndex where
 
 /-- Mutable construction state for an immutable [`SyntaxIndex`].  The builder
 is fed in declaration order. It retains declaration-facing syntax tables plus
-compact inductive owner seeds until `freeze`; recursor types/rule RHS graphs
-and complete `EDecl` values die after each callback. -/
+compact inductive owner seeds until `freeze`, and each recursor's arities and
+rule right-hand sides for the owner-former reading's ι steps
+([`InductiveModels.ExactIotaRecursor`]); recursor types and complete `EDecl`
+values die after each callback. -/
 structure SyntaxIndex.Builder where
   private declarations : DeclarationTypes := {}
   private constructors : Constructors := {}
   private structures : StructureOwners := {}
   private ruleSlots : IotaSlots := {}
   private definitions : Std.HashMap Name ExactNormalizationDef := {}
+  private iota : Std.HashMap Name ExactIotaEntry := {}
   private records : Std.HashMap Name (Array Nat) := {}
   private names : Lean.PersistentHashSet Name := {}
   private owners : Array SourceFamilySeed := #[]
@@ -111,7 +114,12 @@ def SyntaxIndex.Builder.push (builder : SyntaxIndex.Builder)
   let builder := { builder with constructors := constructors }
   let builder := { builder with structures := structures }
   let builder := { builder with ruleSlots := ruleSlots }
+  let iota := match declaration with
+    | .induct _ constructors recursors =>
+      ExactNormalizationEnv.addIotaEntries builder.iota constructors recursors
+    | _ => builder.iota
   let builder := { builder with definitions := definitions }
+  let builder := { builder with iota := iota }
   let builder := { builder with records := records }
   let builder := { builder with names := names }
   let builder := { builder with owners := owners }
@@ -169,15 +177,17 @@ def SyntaxIndex.withReplayRecords (source : SyntaxIndex)
     for name in exact.names do
       declarations := declarations.erase name
       normalizer := normalizer.eraseDefinition name
+      normalizer := normalizer.eraseIota name
     if let .induct types ctors _ := exact then
       for type in types do structures := structures.erase type.name
       for ctor in ctors do constructors := constructors.erase ctor.name
     for info in declTypes replay do
       declarations := declarations.insert info.name #[info]
       names := names.insert info.name
-    if let .induct types ctors _ := replay then
+    if let .induct types ctors recursors := replay then
       for ctor in ctors do constructors := constructors.insert ctor.name ctor
       for type in types do structures := structures.insert type.name (type, ctors)
+      normalizer := normalizer.insertInductive ctors recursors
     if let .defn name levelParams _ value .. := replay then
       normalizer := normalizer.insertDefinition name { levelParams, value }
   return { source with
@@ -221,6 +231,14 @@ def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
   let ownerTypes : Array EIndType := match x.decls[family.ownerDecl]! with
     | .induct types _ _ => types.toArray
     | _ => #[]
+  -- Every statement below is spelled from the owner's telescope as the kernel
+  -- reads it; a member the checker cannot read that way fails the family here,
+  -- with the reason, rather than through whichever comparison first misses it.
+  for type in ownerTypes do
+    match index.normalizer.readKernelFormer type.type type.all with
+    | .former _ => pure ()
+    | .stuck => violations := violations.push (.ownerFormer family.owner type.name false)
+    | .outOfFuel => violations := violations.push (.ownerFormer family.owner type.name true)
   let ownerConstructors : Array ECtor := match x.decls[family.ownerDecl]! with
     | .induct _ constructors _ => constructors.toArray
     | _ => #[]
@@ -305,6 +323,8 @@ def SyntaxIndex.prependRecords (source : SyntaxIndex) (records : Array EDecl) :
   for declaration in records.reverse do
     if let .defn name levelParams _ value .. := declaration then
       normalizer := normalizer.insertDefinition name { levelParams, value }
+    if let .induct _ ctors recursors := declaration then
+      normalizer := normalizer.insertInductive ctors recursors
   -- `discoverWithIndex` may consume the resulting index together with the
   -- literal combined view `records ++ source`. Base source occurrences retain
   -- their map and acquire one offset; existing overlay occurrences are already
@@ -353,7 +373,7 @@ private def intrinsicProjectionFieldsWithIndex (index : SyntaxIndex)
   let some constructor := constructors.find? fun constructor =>
       constructor.name == constructorName && constructor.induct == type.name
     | return #[]
-  let ownerIsProp := index.normalizer.isPropositionFormer type.type
+  let ownerIsProp := index.normalizer.isPropositionFormer type.type type.all
   let mut current := constructor.type
   let mut locals : ExactLocals := #[]
   for parameterIndex in [:type.numParams] do
@@ -466,7 +486,7 @@ def SyntaxIndex.Builder.freeze (builder : SyntaxIndex.Builder) : SyntaxIndex := 
       constructors := builder.constructors
       structures := builder.structures
       ruleSlots := builder.ruleSlots
-      normalizer := { definitions := builder.definitions }
+      normalizer := { definitions := builder.definitions, iota := builder.iota }
       records := builder.records
       names := builder.names }
   let mut families : Array Family := #[]
@@ -541,7 +561,7 @@ def globalExtraRecordsWithIndex (index : SyntaxIndex)
           .type type.name (intrinsicProjectionFieldsWithIndex index type constructors)
             (type.isKernelUnitlike constructors index.normalizer)
             (type.isKernelStructureLike constructors index.normalizer &&
-              !index.normalizer.isPropositionFormer type.type)) ++
+              !index.normalizer.isPropositionFormer type.type type.all)) ++
         recursors.toArray.map fun recursor => .recursor recursor.name recursor.k }
     | _ => { names := declaration.names.toArray, templates := #[] }
 

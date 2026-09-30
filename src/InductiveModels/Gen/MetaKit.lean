@@ -77,12 +77,13 @@ parameters, indices and sort off it; every **public** declaration still restates
 the declared type, which is definitionally equal to it by δβζ. A type that is
 already written that way is returned unchanged, without a reduction. The same
 reading on the statement checker's side is
-[`InductiveModels.ExactNormalizationEnv.kernelFormer?`], with the export's own
-bounded normaliser; the two agree because each step is a head δ-unfolding and
-β/ζ-reduction, which both perform identically. The kernel's `whnf` can also
-take an ι or projection step the bounded normaliser cannot, and a block whose
-type needs one stops the run in `Driver/Filter.lean` before any construction,
-so every type that reaches here is one both sides open alike.
+[`InductiveModels.ExactNormalizationEnv.readKernelFormer`], with the export's
+own head normaliser: δ, β and ζ, and ι and projection steps on literal
+constructor applications, with the export's recursor rules. The kernel's
+`whnf` can do more — K, structure η, `Nat` literal arithmetic — so
+`Driver/Filter.lean` requires the two readings to be the same expression on
+every owner the tool models and stops the run before any construction
+otherwise; every type that reaches here is one both sides open alike.
 
 Parameters are read here too, although the kernel's nested-inductive pre-pass
 requires the *first* member's parameters to be written: every later member of a

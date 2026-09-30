@@ -193,7 +193,7 @@ normaliser over the same source definitions, so they cannot disagree. -/
 def propositionProjectionIotaUsesLiteralField (normalizer : ExactNormalizationEnv)
     (type : EIndType) : Bool :=
   type.all == [type.name] && type.ctors.length == 1 &&
-    normalizer.isPropositionFormer type.type
+    normalizer.isPropositionFormer type.type type.all
 
 /-- The owner-type boundary of the indexed fibre adapter, shared by
 generation and checking: a parameter-and-index telescope of the exported arity
@@ -204,8 +204,8 @@ the kernel as one that writes them, and takes the same adapter. Both sides
 read it with the same bounded normaliser over the source definitions, which
 the certificate check has in hand, so they select alike. -/
 def indexedFibreOneLayerTypeShape (normalizer : ExactNormalizationEnv)
-    (numParams numIndices : Nat) (type : Expr) : Bool :=
-  match normalizer.kernelFormer? type with
+    (numParams numIndices : Nat) (type : Expr) (block : List Name) : Bool :=
+  match normalizer.kernelFormer? type block with
   | none => false
   | some former => match exposedFormerShape former with
     | (arity, some level) => arity == numParams + numIndices && level.normalize.isNeverZero
@@ -329,7 +329,7 @@ def indexedFibreOneLayerProjectionFamily (normalizer : ExactNormalizationEnv)
       recursor.numParams == type.numParams && recursor.numIndices == type.numIndices &&
       recursor.numMotives == 1 && recursor.numMinors == 1 && !recursor.k &&
       !recursor.isUnsafe && indexedFibreOneLayerTypeShape normalizer
-        type.numParams type.numIndices type.type do return false
+        type.numParams type.numIndices type.type type.all do return false
   let [rule] := recursor.rules | return false
   unless rule.ctor == constructor.name && rule.nfields == constructor.numFields do
     return false

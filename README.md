@@ -301,8 +301,11 @@ owner's parameters and indices and reading its sort, enumerating a
 constructor's parameters and fields, deciding whether an owner or a field type
 is a proposition, and deciding which fields admit an intrinsic projection apply
 the kernel's own rules; that shape analysis does unfold transparent
-definitions and read their values — δ, β and ζ, and nothing else. It settles which slots must exist and how
-their statements are spelled. It never loosens the comparison itself.
+definitions and read their values — δ, β and ζ, and nothing else — except
+where it reads an owner's own type, which also takes ι and projection steps on
+literal constructor applications, as described under *Stopped: a type former
+the checker cannot read as the kernel does*. It settles which slots must exist
+and how their statements are spelled. It never loosens the comparison itself.
 
 `--check-input` runs it on models already in the input. `--check-output` runs
 it on the final transformed stream, validating the compact incremental and
@@ -819,7 +822,7 @@ the run without a verdict, and the last closes the list.
 | --- | --- |
 | a field whose universe level has an `imax` the declared universe only bounds | declines that declaration |
 | a `mutual` block at a sometimes-`Prop` sort with a one-constructor member that has a data field | declines that declaration |
-| an inductive whose type reaches its sort only by ι or projection reduction | stops with exit `3` |
+| an inductive whose type reaches its sort only by K, structure η or `Nat` arithmetic | stops with exit `3` |
 | a universe equality Lean's kernel cannot check | models it, and reports every such use |
 | a `Prop`-valued structure-like carrying data fields | models it, but silently omits some or all projections |
 
@@ -976,45 +979,77 @@ resulting universe that is only sometimes `Prop`. `NC` in
 [`test/fixtures/inductive-models/mutual_kernel_sorts.lean`](test/fixtures/inductive-models/mutual_kernel_sorts.lean)
 is the corpus's instance.
 
-#### Stopped: a type former computed by ι or projection
+#### Stopped: a type former the checker cannot read as the kernel does
 
 ```lean
-def pick : Bool → Type 1
-  | true => Nat → Type
-  | false => Type
-
-inductive XM : pick true where
-  | mk : Nat → XM 0
+inductive XK (h : (0 : Nat) = 0) :
+    @Eq.rec Nat 0 (fun _ _ => Type 1) (Nat → Type) 0 h where
+  | mk : Nat → XK h 0
 ```
 
 Lean's kernel reads an inductive's parameters, indices and sort by weak-head
-normalising its type, and its normalisation includes ι and projection
-reduction, so `XM` is an indexed family with one index. The constructions
-read owners the same way, but the structural checker restates each owner's
-telescope with the export's own deliberately bounded normaliser — it unfolds
-definitions and β/ζ-reduces and does nothing else, because it is a pure
-function of the export text and not a second kernel — so it could verify no
-model of `XM`. The run stops before any construction, with exit `3` and a line
-naming the member. This is not a decline, which would call the input valid and
-merely unmodelled. That claim would rest on Lean's kernel alone, because the
-checker cannot restate the owner, and this shape is where a specific,
-since-fixed kernel bug lived; the shape itself is not unsound. The Kernel
-Arena's `bad/bugs/proj-of-stuck-prop`, `proj-of-subst-prop` and
-`rec-of-subst-prop` prove `False` with an owner whose sort is `Prop` in one
-context and stuck in another. Up to Lean v4.33.0, the kernel's `is_prop` check
-answered "not a proposition" for a type whose sort was stuck, so data could be
-taken out of a proof. It was fixed by
-[leanprover/lean4#14807](https://github.com/leanprover/lean4/pull/14807),
-which makes `is_prop` require the inferred type to reduce to a sort. The first
-of the three also relies on the order-dependent definitional-equality cache
-that [#14806](https://github.com/leanprover/lean4/pull/14806) replaced. Both are in
-Lean v4.34.0 and later. On this repository's toolchain, `--type-check-input`
-rejects all three (exit `1`) before this check runs. A type
-former reached through definitions alone (`def MyFam := Nat → Type`, chains of
-them, irreducible ones) is in scope on every route. The elaborator writes this
-shape only when a type is *written* as a `match` or a projection;
-[`test/fixtures/unverifiable/defhead_beyond_delta.lean`](test/fixtures/unverifiable/defhead_beyond_delta.lean)
-holds `XM` and a projection twin `XP`.
+normalising its type, so a type may be *computed*: behind a definition, a
+`match`, a `casesOn`, a projection of a structure literal. The constructions
+read owners with the kernel's own `whnf`. The structural checker restates each
+owner's telescope with its own reading, because it is a pure function of the
+export text and not a second kernel. That reading unfolds definitions and
+β/ζ-reduces, and takes an ι or projection step **only on a literal constructor
+application**: `T.rec … (C a⃗)` steps to `C`'s rule exactly as the export
+states `T.rec`'s rules, and `(C a⃗).i` to the field. A `Nat` literal counts as
+`Nat.zero`/`Nat.succ`, as it does in the kernel. So
+`def pick : Bool → Type 1 | true => Nat → Type | false => Type` and
+`inductive XM : pick true` is read as the kernel reads it, an indexed family
+with one index, and is modelled and verified like any other owner;
+[`test/fixtures/inductive-models/defhead_beyond_delta.lean`](test/fixtures/inductive-models/defhead_beyond_delta.lean)
+holds that and ten more: `casesOn`, a projection, nested ι, `Nat` literals,
+computed indices and sorts, a structure and a mutual block.
+
+The reading deliberately stops short of the kernel in three places:
+
+* **K.** `XK` above: `Eq.rec` reduces in the kernel on any proof of `0 = 0`,
+  including the variable `h`, by replacing it with `Eq.refl 0`. To the checker
+  the recursor is stuck on a variable.
+* **Structure η.** `PUnit.rec … u` on a variable `u` reduces in the kernel by
+  expanding `u` to `PUnit.unit`. To the checker it is stuck.
+* **Proof irrelevance, quotients, and `Nat`/`String` literal arithmetic.** The
+  kernel evaluates `1 + 1` on literals natively to `2`; the checker's reading
+  reaches the same number through `Nat.add`'s definition, but not as the
+  same expression.
+
+And it never steps through the recursors or constructors of the owner's own
+block: those rules are what the checker validates models against, so they must
+not also decide what it compares. A well-scoped type cannot mention its own
+block, so this excludes nothing Lean accepts. The rules it does use belong to
+earlier inductives, and are the kernel's own wherever the input is kernel
+checked: `--type-check-input` requires every exported recursor's rules to equal
+the ones Lean's kernel mints for its block.
+
+These three are where the published kernel exploits live: the Kernel
+Arena's `bad/bugs/*` cases that compute an owner's sort do it on a stuck term,
+which this reading never reduces, and every one of the Arena's `bad` cases ends
+the same way with and without the ι and projection steps, with the input kernel
+check and without it. Every reading is also bounded: one that takes more than
+100,000 reduction steps is abandoned.
+
+Where the checker's reading does not reach a sort, runs out of steps, or
+reaches a *different* former from the kernel's — the driver compares the two
+on every owner it models, before any construction — the run stops with exit
+`3` and a line naming the member. That is not a decline, which would call the
+input valid and merely unmodelled: the claim would rest on Lean's kernel alone,
+because the checker cannot restate the owner, and this shape is where a
+specific, since-fixed kernel bug lived. Up to Lean v4.33.0, the kernel's
+`is_prop` answered "not a proposition" for a type whose sort was stuck, so
+data could be taken out of a proof, and the Arena's `bad/bugs/proj-of-stuck-prop`,
+`proj-of-subst-prop` and `rec-of-subst-prop` prove `False` with it. It was
+fixed by [leanprover/lean4#14807](https://github.com/leanprover/lean4/pull/14807);
+the first of the three also relies on the order-dependent
+definitional-equality cache that
+[#14806](https://github.com/leanprover/lean4/pull/14806) replaced. Both are in
+Lean v4.34.0 and later, and on this repository's toolchain
+`--type-check-input` rejects all three (exit `1`) before this check runs. The
+elaborator writes these shapes only when a type is *written* with a recursor
+application on a variable, or with arithmetic; `test/fixtures/unverifiable/`
+holds one of each (`iota_needs_k`, `iota_needs_eta`, `iota_nat_arith`).
 
 #### Silent: a `Prop`-valued structure-like with data fields loses projections
 

@@ -70,7 +70,7 @@ def phase1IndexedFibreOneLayerEligible (tname : Name) (np : Nat)
     | .ok reason => pure reason.isNone
     | .error _ => pure false
   let normalizer := ExactNormalizationEnv.ofEnvironment (← getEnv)
-  return indexedFibreOneLayerTypeShape normalizer np type.numIndices memberTy &&
+  return indexedFibreOneLayerTypeShape normalizer np type.numIndices memberTy type.all &&
     indexedFibreOneLayerProjectionFamily normalizer sourceType sourceConstructor
       sourceRecursor && erasureBare && exportCtors.size == 1 &&
     type.all == [tname] && type.ctors.length == 1 && type.numIndices > 0 &&

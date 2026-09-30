@@ -144,8 +144,8 @@ def compareExport (count : AgreementCount) (label : String) (x : Export)
       count := count.check s!"{label}: beta {root}"
         (exportNormalizer.beta expression == environmentNormalizer.beta expression)
       count := count.check s!"{label}: isPropositionFormer {root}"
-        (exportNormalizer.isPropositionFormer expression ==
-          environmentNormalizer.isPropositionFormer expression)
+        (exportNormalizer.isPropositionFormer expression [] ==
+          environmentNormalizer.isPropositionFormer expression [])
     -- Projection eligibility folds `whnf`, `isPropositionFormer` and
     -- `inferExactSortLevel?` together over the constructor telescope, so it is
     -- the sharpest single shape query available.
@@ -316,6 +316,46 @@ def run (root : String) : IO UInt32 := do
         .letE `X (.sort (.succ .zero)) (.sort .zero) (.bvar 0) false)
   state := state.check "normalization does not rewrite declaration types"
     (declarationType? synthetic `Literal == some literalType)
+
+  -- **The owner-former reading** (`defhead_beyond_delta`): ι and projection
+  -- steps on literal constructor applications, never through the block under
+  -- test, never on a stuck major premise, and within a fixed step budget.
+  let beyond ← readExport s!"{root}/test/fixtures/inductive-models/defhead_beyond_delta.ndjson"
+  let beyondNormalizer := beyond.exactNormalizationEnv
+  let formerShape? := fun (reading : KernelFormerReading) => match reading with
+    | .former former => some (exposedFormerShape former)
+    | _ => none
+  let isStuck := fun (reading : KernelFormerReading) => match reading with
+    | .stuck => true
+    | _ => false
+  let isOutOfFuel := fun (reading : KernelFormerReading) => match reading with
+    | .outOfFuel => true
+    | _ => false
+  let typeOne : Level := .succ .zero
+  for (owner, arity) in #[(`XP, 1), (`XM, 1), (`XC, 1), (`XN, 1), (`XL, 2), (`XI, 3),
+      (`XT, 0), (`XR, 0), (`MA, 1), (`MB, 0)] do
+    let some type := declarationType? beyond owner
+      | throw <| IO.userError s!"defhead_beyond_delta does not declare {owner}"
+    state := state.check s!"{owner}'s type reads as the kernel reads it"
+      (formerShape? (beyondNormalizer.readKernelFormer type [owner]) ==
+        some (arity, some typeOne))
+  let some xprType := declarationType? beyond `XPr
+    | throw <| IO.userError "defhead_beyond_delta does not declare XPr"
+  state := state.check "XPr's sort reads as Prop through ι"
+    (formerShape? (beyondNormalizer.readKernelFormer xprType [`XPr]) == some (0, some .zero))
+  let some xmType := declarationType? beyond `XM
+    | throw <| IO.userError "defhead_beyond_delta does not declare XM"
+  state := state.check "the reading never steps through the block under test"
+    (isStuck (beyondNormalizer.readKernelFormer xmType [`Bool]))
+  state := state.check "a recursor stuck on a variable major premise stays stuck"
+    (isStuck (beyondNormalizer.readKernelFormer
+      (mkApp (.const `pick []) (mkFVar (FVarId.mk `_test.b))) []))
+  state := state.check "a Nat literal major premise reads as Nat.succ"
+    (formerShape? (beyondNormalizer.readKernelFormer
+      (mkApp (.const `byNat []) (.lit (.natVal 5))) []) == some (5, some typeOne))
+  state := state.check "a reading past its step budget is out of fuel, not a former"
+    (isOutOfFuel (beyondNormalizer.readKernelFormer
+      (mkApp (.const `byNat []) (.lit (.natVal kernelFormerFuel))) []))
 
   let prim ← readExport s!"{root}/test/fixtures/inductive-models/prim_declines.ndjson"
   let some svIxDecl := prim.decls.findIdx? fun declaration =>

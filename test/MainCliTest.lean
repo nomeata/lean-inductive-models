@@ -191,18 +191,27 @@ def main (args : List String) : IO UInt32 := do
     malformedBasisRun.exitCode == 2 && malformedBasisRun.stdout.isEmpty &&
       (malformedBasisRun.stderr.splitOn "input's Eq is not Lean's").length > 1
 
-  -- An owner whose type reaches its sort only by ι or a projection stops the
-  -- run without a verdict: the structural checker cannot restate its
-  -- telescope, and a decline would vouch for the input on the kernel's word
-  -- alone, on the shape where leanprover/lean4#14807 fixed a kernel soundness
-  -- bug (the Arena's `bad/bugs/*-subst-prop` and `proj-of-stuck-prop`).
-  let beyondDelta ← runInductiveModels binary [
-    "--inductives", "--check-input", "--check-output", "--type-check-input",
-    "--type-check-generated", "--no-output",
-    s!"{root}/test/fixtures/unverifiable/defhead_beyond_delta.ndjson"]
-  state := state.check "a type former beyond δβζ stops with exit 3 and names the owner" <|
-    beyondDelta.exitCode == 3 && beyondDelta.stdout.isEmpty &&
-      beyondDelta.stderr.contains "XP's type reaches its sort only by ι or projection reduction"
+  -- An owner whose type the statement checker cannot read as Lean's kernel
+  -- does stops the run without a verdict: the checker reads an owner's
+  -- telescope with δβζ and with ι and projection steps on literal constructor
+  -- applications only, and a decline would vouch for the input on the
+  -- kernel's word alone, on the shape where leanprover/lean4#14807 fixed a
+  -- kernel soundness bug (the Arena's `bad/bugs/*-subst-prop` and
+  -- `proj-of-stuck-prop`). K and structure η on a variable major premise
+  -- leave its reading stuck; `Nat` arithmetic the kernel evaluates natively
+  -- gives it a different former, which the driver refuses to compare against.
+  for (fixture, owner, message) in #[
+      ("iota_needs_k", "XK", "'s type does not reach a sort by δβζ reduction"),
+      ("iota_needs_eta", "XE", "'s type does not reach a sort by δβζ reduction"),
+      ("iota_nat_arith", "XA",
+        "'s type: the statement checker's reading of its parameters, indices and sort \
+          differs from Lean's kernel's")] do
+    let run ← runInductiveModels binary [
+      "--inductives", "--check-input", "--check-output", "--type-check-input",
+      "--type-check-generated", "--no-output",
+      s!"{root}/test/fixtures/unverifiable/{fixture}.ndjson"]
+    state := state.check s!"{fixture}: the checker's unreadable former stops with exit 3" <|
+      run.exitCode == 3 && run.stdout.isEmpty && run.stderr.contains (owner ++ message)
 
   -- The Arena CI path exercises the complete tool: all generation branches,
   -- both structural checks, the input kernel gate, and the generated-island

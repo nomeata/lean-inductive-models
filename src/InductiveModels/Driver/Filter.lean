@@ -242,32 +242,48 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
   if let some root := unsafeRoot? then
     if generation.nested || generation.mutualModels || generation.modelsSimpleInput root then
       rep := { rep with exempt := rep.exempt.push (root, unsafeExemptReason) }
-  -- **A member type the statement checker cannot open stops the run.** The
-  -- kernel reads an inductive's parameters, indices and sort off its type by
-  -- whnf ([`InductiveModels.kernelFormer`]), and so does every construction
-  -- here. The structural checker restates the same telescope with the
-  -- export's bounded normaliser, which unfolds definitions and β/ζ-reduces
-  -- and does nothing else ([`InductiveModels.ExactNormalizationEnv.kernelFormer?`]).
-  -- A type that reaches its sort only through ι or a projection —
-  -- `inductive X : pick true` with `pick` defined by `match` — is one whose
-  -- model the checker could not verify. That is not a decline, which would
-  -- assert a valid input this tool merely leaves unmodelled: that assertion
-  -- would rest on Lean's kernel alone, and this shape is where a since-fixed
-  -- kernel bug lived. Up to Lean v4.33.0 `is_prop` answered "not a
-  -- proposition" for a stuck sort, and the Kernel Arena's
-  -- `bad/bugs/proj-of-stuck-prop`, `proj-of-subst-prop` and `rec-of-subst-prop`
-  -- prove `False` through it; leanprover/lean4#14807 (in v4.34.0) fixed it,
-  -- and `--type-check-input` now rejects all three before this point. So the
-  -- run stops without a verdict (exit 3), before any construction, and says
-  -- why. Every block whose types are reached by definitions alone is
-  -- unaffected.
+  -- **A member type the statement checker cannot read as the kernel does
+  -- stops the run.** The kernel reads an inductive's parameters, indices and
+  -- sort off its type by whnf ([`InductiveModels.kernelFormer`]), and so does
+  -- every construction here. The structural checker restates the same
+  -- telescope with the export's own head normaliser, which takes δ, β and ζ
+  -- steps, and ι and projection steps only on a literal constructor
+  -- application ([`InductiveModels.ExactNormalizationEnv.readKernelFormer`]).
+  -- Where it reads no former — a recursor stuck on a variable, a major
+  -- premise only K or structure η would turn into a constructor, a reading
+  -- past its fuel — the checker could verify no model of the owner. Where it
+  -- reads a *different* former from the kernel's, the checker would compare
+  -- every model statement against the wrong telescope. Either is not a
+  -- decline, which would assert a valid input this tool merely leaves
+  -- unmodelled: that assertion would rest on Lean's kernel alone, on the
+  -- shape where a since-fixed kernel bug lived (up to Lean v4.33.0 `is_prop`
+  -- answered "not a proposition" for a stuck sort, and the Kernel Arena's
+  -- `bad/bugs/proj-of-stuck-prop`, `proj-of-subst-prop` and
+  -- `rec-of-subst-prop` prove `False` through it; leanprover/lean4#14807, in
+  -- v4.34.0, fixed it, and `--type-check-input` rejects all three before this
+  -- point). So the run stops without a verdict (exit 3), before any
+  -- construction, and says why.
   if let .induct types@(root :: _) _ _ := replayD then
     if unsafeRoot?.isNone && basisRoot?.isNone &&
         (generation.nested || generation.mutualModels || generation.modelsSimpleInput root.name) then
-      if let some member := types.find? (constructionNormalizer.kernelFormer? ·.type |>.isNone) then
-        throwError "{member.name}'s type reaches its sort only by ι or projection reduction; \
-          the statement checker's δβζ normaliser cannot restate its telescope, so no model \
-          of it could be verified"
+      for member in types do
+        match constructionNormalizer.readKernelFormer member.type member.all with
+        | .stuck =>
+          throwError "{member.name}'s type does not reach a sort by δβζ reduction and by ι \
+            and projection reduction on constructor applications; the statement checker \
+            cannot restate its telescope, so no model of it could be verified"
+        | .outOfFuel =>
+          throwError "{member.name}'s type does not reach a sort within {kernelFormerFuel} \
+            reduction steps of the statement checker's reading; no model of it could be \
+            verified"
+        | .former checkerFormer =>
+          let generatorFormer ← withoutModifyingEnv do
+            setEnv mainEnv
+            kernelFormer member.type
+          unless checkerFormer == generatorFormer do
+            throwError "{member.name}'s type: the statement checker's reading of its \
+              parameters, indices and sort differs from Lean's kernel's, so no model of it \
+              could be verified"
   -- No model declaration is ever installed in `mainEnv`. All constructors
   -- below work in the ambient disposable fork; closing an inductive record
   -- restores this exact source prefix plus accepted reusable support.

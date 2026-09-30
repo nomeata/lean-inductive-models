@@ -53,6 +53,11 @@ inductive Violation where
   | declarationKind (owner declaration : Name) (expected actual : DeclarationKind)
   /-- A public implementation definition is not marked exactly `safe`. -/
   | declarationSafety (owner declaration : Name) (actual : String)
+  /-- The checker cannot read an owner member's type as the kernel reads it
+  ([`InductiveModels.ExactNormalizationEnv.readKernelFormer`]): it reaches no
+  sort, or the reading ran out of steps. Every statement of the family would
+  be compared against a telescope the checker does not have. -/
+  | ownerFormer (owner member : Name) (outOfFuel : Bool)
   deriving Repr, BEq
 
 /-- Stable text for a structural violation, shared by the CLI and the
@@ -84,6 +89,13 @@ def Violation.message : Violation → String
       s!"{declaration}, modeling {owner}, is a {repr actual}; expected a {repr expected}"
   | .declarationSafety owner declaration actual =>
       s!"{declaration}, modeling {owner}, has safety {actual}; expected safe"
+  | .ownerFormer owner member outOfFuel =>
+      if outOfFuel then
+        s!"model of {owner}: {member}'s type does not reach a sort within the \
+          reduction steps the checker's reading allows"
+      else
+        s!"model of {owner}: {member}'s type does not reach a sort by δβζ reduction and \
+          by ι and projection reduction on constructor applications"
 
 /-- The owner named by a diagnostic, for callers checking one family in a
 larger export. -/
@@ -94,7 +106,7 @@ def Violation.familyOwner : Violation → Name
       .extraRule owner .. | .extraMetadata owner .. |
       .universeArity owner .. |
       .declarationType owner .. | .declarationKind owner .. |
-      .declarationSafety owner .. => owner
+      .declarationSafety owner .. | .ownerFormer owner .. => owner
 
 /-- The observable result of one complete structural check.  `familiesChecked`
 counts the exact public model families discovered in the checked export; it is

@@ -513,15 +513,21 @@ type mismatch 'x'` rather than crashing. `kernelcheck` pins that message.
 
 `test/fixtures/unverifiable/` is outside the fixture sweeps too, for a
 different reason: its exports are kernel-valid, but the tool stops on them without a
-verdict (exit 3), and `maincli` pins that exit and message.
-`defhead_beyond_delta` is an owner whose type reaches its sort only by ι or
-projection reduction, which the structural checker's δβζ normaliser cannot
-restate (README, *Stopped: a type former computed by ι or projection*). Export
-it with its directory named:
+verdict (exit 3), and `maincli` pins each exit and message. Each is an owner
+whose type the structural checker cannot read as Lean's kernel does (README,
+*Stopped: a type former the checker cannot read as the kernel does*):
+`iota_needs_k` reaches its sort through K on a variable proof and
+`iota_needs_eta` through structure η on a variable, both of which leave the
+checker's reading stuck, and `iota_nat_arith` through `Nat` arithmetic the
+kernel evaluates natively, where the two readings differ and the driver refuses
+to compare against the checker's. Owners whose type reaches its sort by ι or a
+projection on constructor applications are ordinary fixtures,
+`test/fixtures/inductive-models/defhead_beyond_delta.lean`. Export the
+unverifiable ones with their directory named:
 
 ```console
 FIXTURE_DIR="$PWD/test/fixtures/unverifiable" LEAN_INDUCTIVE_MODELS_FILTER=0 \
-  scripts/export-fixture.sh defhead_beyond_delta.lean
+  scripts/export-fixture.sh iota_needs_k.lean iota_needs_eta.lean iota_nat_arith.lean
 ```
 
 A source restricts the export to named roots with a `--#export NAME …` line,

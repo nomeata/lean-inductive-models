@@ -105,7 +105,7 @@ def unitlikeProposition? (x : Export) (normalizer : ExactNormalizationEnv)
   -- The former as the kernel reads it: the equality lives in the carrier's
   -- sort, which for `inductive U : MyProp` with `def MyProp := Prop` is `Prop`
   -- only after unfolding, so its witness is an `Eq.{0}`.
-  let former ← normalizer.kernelFormer? type.type
+  let former ← normalizer.kernelFormer? type.type type.all
   let (allBinders, result) := openForalls ((`_check.unitlike).append owner) former
   unless allBinders.size == type.numParams do none
   let .sort level := result | none
@@ -201,7 +201,7 @@ def correspondenceForParts (normalizer : ExactNormalizationEnv)
     if recursor.k then some (Naming.Metadata.ofOwner .ruleK recursor.name) else none
   let etaMetadata := types.toArray.filterMap fun type =>
     if type.isKernelStructureLike ctors normalizer &&
-        !normalizer.isPropositionFormer type.type then
+        !normalizer.isPropositionFormer type.type type.all then
       some (Naming.Metadata.ofOwner .eta type.name)
     else none
   let mut projections : Array Naming.Projection := #[]

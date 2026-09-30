@@ -80,11 +80,24 @@ A walk that follows only a spine — a binder telescope, an application spine,
 one child per step — needs no memo. `openForalls`, `peelParams`, `headNorm`,
 `instantiateForalls*` and the `whnf` loops are of that kind. So are the two
 readings of an owner's type as the kernel reads it, `kernelFormer` (generator)
-and `ExactNormalizationEnv.kernelFormer?` (checker): each step is one `whnf`
-and one memoized `instantiate1`/`abstract` (or `mkForallFVars`) of what is
-left, so the cost is the binder count times one linear pass, and a type already
-written as `∀ p⃗ i⃗, Sort u` — every type Lean's elaborator writes without a
-definition in the way — returns after reading its spine alone.
+and `ExactNormalizationEnv.readKernelFormer` (checker): each step is one head
+normalisation and one memoized `instantiate1`/`abstract` (or `mkForallFVars`)
+of what is left, and a type already written as `∀ p⃗ i⃗, Sort u` — every type
+Lean's elaborator writes without a definition in the way — returns after
+reading its spine alone.
+
+The checker's head normalisation there is not only a spine walk, because an ι
+or projection step head-normalises a second term first: the recursor's major
+premise, or the projected structure. It stays linear and bounded in three ways.
+Each head normalisation is memoized on the expression (`Dag.Key`) for the
+whole reading, so a major premise that recurs is reduced once. Every rewrite
+it performs is one of Lean's memoized ones (`instantiate1`, `instantiateLevelParams`,
+`Expr.beta`, `mkAppN`), applied to a rule's right-hand side or a definition's
+body as the export shares it. And every δ, β, ζ, ι and projection step spends
+one unit of a fixed budget (`kernelFormerFuel`, 100,000 steps per reading):
+evaluation by recursion can be arbitrarily long in a well-typed input, so the
+budget is what bounds it, and a reading that exhausts it stops the run with a
+message saying so rather than returning a partial answer.
 
 ## Lean's own walks
 

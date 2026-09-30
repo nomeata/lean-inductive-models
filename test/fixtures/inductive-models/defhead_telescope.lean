@@ -42,9 +42,9 @@
    `PMA`/`PMB`, where `PMB`'s parameter is behind `PT := Type → Type`; and
    `QA`/`QB`, where `QB`'s parameter and index are behind `PIT`.
 
-   A type former that reaches its sort only by ι or a projection is not here:
-   the statement checker cannot restate it, and the run stops;
-   `test/fixtures/unverifiable/defhead_beyond_delta.lean` pins that.
+   A type former that reaches its sort only by ι or a projection is in
+   `defhead_beyond_delta.lean`; one that needs K or structure η stops the run,
+   and `test/fixtures/unverifiable/` pins that.
 -/
 import Lean
 

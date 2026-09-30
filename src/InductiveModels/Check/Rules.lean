@@ -145,7 +145,7 @@ def checkEta (x : Export) (normalizer : ExactNormalizationEnv) (family : Family)
       candidate.name == constructorName && candidate.induct == metadata.owner
     | return #[.declarationType metadata.owner metadata.name]
   unless ownerType.isKernelStructureLike constructors normalizer &&
-      !normalizer.isPropositionFormer ownerType.type do
+      !normalizer.isPropositionFormer ownerType.type ownerType.all do
     return #[.declarationType metadata.owner metadata.name]
   if ownerType.levelParams.length != model.levelParams.length then
     return #[.universeArity metadata.owner metadata.name
@@ -158,7 +158,7 @@ def checkEta (x : Export) (normalizer : ExactNormalizationEnv) (family : Family)
     | return #[.declarationType metadata.owner metadata.name]
   let levels := model.levelParams.map Level.param
   -- The owner's parameters and sort as the kernel reads them.
-  let some ownerFormer := normalizer.kernelFormer? ownerType.type
+  let some ownerFormer := normalizer.kernelFormer? ownerType.type ownerType.all
     | return #[.declarationType metadata.owner metadata.name]
   let mappedOwnerType := family.correspondence.expectedType
     ownerType.levelParams model.levelParams ownerFormer
@@ -240,7 +240,14 @@ private partial def inferExactTypeNode (structures : StructureOwners)
   | .const name levels => do
       let some declaration := (declarations.findD name #[])[0]? | failure
       if declaration.levelParams.length != levels.length then failure
-      return declaration.type.instantiateLevelParams declaration.levelParams levels
+      -- An inductive type's type is its former as the kernel reads it: the
+      -- one head-normalisation that may take ι and projection steps
+      -- ([`InductiveModels.ExactNormalizationEnv.kernelFormer?`]).
+      let type := match structures.find? name with
+        | some (owner, _) =>
+          (normalizer.kernelFormer? declaration.type owner.all).getD declaration.type
+        | none => declaration.type
+      return type.instantiateLevelParams declaration.levelParams levels
   | .app function argument => do
       let functionType := normalizer.whnf
         (← OptionT.mk (inferExactTypeM structures normalizer declarations locals function))
@@ -280,7 +287,7 @@ private partial def inferExactTypeNode (structures : StructureOwners)
       for param in params do
         let .forallE _ _ body _ := normalizer.whnf current | failure
         current := body.instantiate1 param
-      let ownerIsProp := normalizer.isPropositionFormer type.type
+      let ownerIsProp := normalizer.isPropositionFormer type.type type.all
       for earlier in [0:fieldIndex + 1] do
         let .forallE _ fieldType rest _ := normalizer.whnf current | failure
         let fieldLevel : Option Level ← (monadLift
@@ -378,7 +385,7 @@ def checkProjection (x : Export) (structures : StructureOwners)
   let some typePair := family.correspondence.typeFormers.find? (·.owner == projection.owner)
     | return #[.declarationType projection.owner projection.name]
   -- The owner's parameters and indices as the kernel reads them.
-  let some ownerFormer := normalizer.kernelFormer? ownerType.type
+  let some ownerFormer := normalizer.kernelFormer? ownerType.type ownerType.all
     | return #[.declarationType projection.owner projection.name]
   let mappedOwnerType := family.correspondence.expectedType
     ownerType.levelParams model.levelParams ownerFormer

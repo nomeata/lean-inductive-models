@@ -1231,6 +1231,21 @@ def expectedPrim : List Row :=
       [ ("Nat", "prim model: a basis primitive")
       , ("PUnit", "prim model: a basis primitive")
       , ("Eq", "prim model: a basis primitive")])
+  -- **Owners whose type former is computed by ι or projection**
+  -- (`defhead_beyond_delta.lean`): a `match`, a `casesOn`, a projection of a
+  -- pair literal, nested ι, ι on a `Nat` literal, computed indices and sorts,
+  -- a structure and a mutual block. The statement checker reads each with ι
+  -- and projection steps on literal constructor applications; each used to
+  -- stop the run with exit 3.
+  , ("defhead_beyond_delta",
+      [("Prod", 18), ("PProd'", 9), ("OfNat", 7), ("XP", 16), ("XP._model._impl.skel", 7),
+       ("Bool", 7), ("XM", 16), ("XM._model._impl.skel", 7), ("XC", 16),
+       ("XC._model._impl.skel", 7), ("XN", 16), ("XN._model._impl.skel", 7), ("PProd", 9),
+       ("XL", 14), ("XL._model._impl.skel", 6), ("XI", 16), ("XI._model._impl.skel", 7),
+       ("XT", 6), ("XPr", 6), ("XR", 9), ("MA", 14), ("MA._model._impl.tag", 6),
+       ("MA._model._impl.aux", 10), ("MA._model._impl.aux._model._impl.skel", 8)],
+      [ ("Nat", "prim model: a basis primitive")
+      , ("PUnit", "prim model: a basis primitive")])
   -- **`unsafe` blocks are exempt, on every route** (`unsafe_inductive.lean`):
   -- negative (`Bad`, con-leche's `ind_unsafe`), plain, nested, mutual. Only
   -- the safe `List` is modelled.
