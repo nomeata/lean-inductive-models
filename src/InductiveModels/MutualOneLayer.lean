@@ -34,8 +34,9 @@ private def ensureFresh (reserved : Std.HashSet Name) (name : Name) : GenM Unit 
   if reserved.contains name || (← getEnv).constants.contains name then
     declineWith (.nameTaken name)
 
-private def exactCarrierLevel (memberTy : Expr) (np : Nat) : GenM Level :=
-  forallBoundedTelescope memberTy (some np) fun _ result => match result with
+private def exactCarrierLevel (memberTy : Expr) (np : Nat) : GenM Level := do
+  forallBoundedTelescope (← exposeMemberType np memberTy) (some np) fun _ result =>
+    match result with
     | .sort level => pure level
     | _ => badShape "a mutual one-layer owner does not end in a sort"
 

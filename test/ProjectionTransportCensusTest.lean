@@ -337,7 +337,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("indexed_hidden_erasure", 13), ("infinitary", 25), ("maybe_zero_indexed", 0),
     ("maybe_zero_pad", 19),
     ("maybe_zero_projection", 17), ("maybe_zero_recursive", 0), ("mutual_index", 8),
-    ("mutual_keying", 2),
+    ("mutual_keying", 2), ("mutual_kernel_sorts", 9),
     ("mutual_nonrec", 2), ("mutual_odd_shapes", 17),
     ("mutual_one_layer_boundary", 9), ("mutual_one_layer_level", 4),
     ("mutual_prop", 1), ("mutual_shapes", 20),

@@ -269,7 +269,10 @@ def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
   for ownerType in ownerTypes do
     let (_, carrierResult) := openForalls
       ((`_check.mutualOneLayerShape).append ownerType.name) ownerType.type
-    let .sort carrierLevel := carrierResult | return .malformed (privateSelf ownerType.name)
+    -- The kernel whnf's an inductive type's result, so it may be a definition
+    -- that unfolds to a sort.
+    let .sort carrierLevel := normalizer.whnf carrierResult
+      | return .malformed (privateSelf ownerType.name)
     unless carrierLevel.normalize.isNeverZero do
       return .malformed (privateSelf ownerType.name)
     let ownerConstructors := constructors.filter (·.induct == ownerType.name)
@@ -385,7 +388,7 @@ def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
     let (parameters, result) := openForalls
       ((`_check.mutualOneLayerCertificate).append owner) publicCarrier.type
     unless parameters.size == ownerType.numParams do return .malformed publicCarrierName
-    let .sort carrierLevel := result | return .malformed publicCarrierName
+    let .sort carrierLevel := normalizer.whnf result | return .malformed publicCarrierName
     let levels := publicCarrier.levelParams.map Level.param
     let parameterValues := parameters.map (·.value)
     let publicCarrierType := mkAppN (.const publicCarrierName levels) parameterValues

@@ -106,7 +106,7 @@
 1 reject  1 e2e/ind_ctors_missing_bad.ndjson
 0 accept  0 e2e/ind_defhead_fix.ndjson
 3 defect  0 e2e/ind_defhead_k.ndjson                    # defect: generated statement differs: U._model.unitlike does not literally model the type of U
-3 defect  2 e2e/ind_defhead_mutual.ndjson               # defect: internal error: a mutual one-layer owner does not end in a sort
+0 accept  2 e2e/ind_defhead_mutual.ndjson               # con-leche declines
 0 accept  0 e2e/ind_defhead_struct.ndjson
 0 accept  0 e2e/ind_empty_idx.ndjson
 0 accept  0 e2e/ind_former_redex.ndjson
@@ -116,8 +116,8 @@
 1 reject  1 e2e/ind_mutual_param_bad.ndjson
 0 accept  0 e2e/ind_mutual_param_defeq.ndjson
 1 reject  1 e2e/ind_mutual_sort_bad.ndjson
-1 defect  0 e2e/ind_mutual_sort_defeq.ndjson            # defect: generated kernel check rejected MC._model.proj_0 (application type mismatch)
-3 defect  0 e2e/ind_mutual_three.ndjson                 # defect: generated statements differ: unexpected intrinsic projection PA._model.proj_0(.iota)
+2 scope   0 e2e/ind_mutual_sort_defeq.ndjson            # out-of-scope decline: a kernel projection onto data at a maybe-zero sort whose recursor is Prop-only; con-leche accepts
+0 accept  0 e2e/ind_mutual_three.ndjson
 0 accept  0 e2e/ind_mutual_zero_ctor.ndjson
 0 accept  2 e2e/ind_nest_inf.ndjson                     # con-leche declines
 0 accept  0 e2e/ind_nest_prop.ndjson

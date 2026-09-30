@@ -120,6 +120,32 @@ open Lean Meta
 
 namespace InductiveModels
 
+/-- **A block member's type as the kernel reads it**: a syntactic `∀`-telescope
+of parameters and indices ending in a `Sort`.
+
+The kernel whnf's an inductive type while it reads the telescope and its
+result, so a member may be declared at a definition that unfolds to a sort
+(`inductive A : MyType`, `def MyType := Type`) or to part of its index
+telescope. The construction reads indices and the sort off the type
+syntactically, so it works on this exposed form; the declared type is still the
+one every public declaration restates. Unfolds at `.all`, as the kernel does, so
+an irreducible definition is exposed too. A type that is already exposed is
+returned unchanged. -/
+def exposeMemberType (np : Nat) (memberTy : Expr) : GenM Expr := do
+  let rec syntactic (params : Nat) : Expr → Bool
+    | .forallE _ _ body _ => syntactic (params - 1) body
+    | .sort _ => params == 0
+    | _ => false
+  if syntactic np memberTy then return memberTy
+  withTransparency .all <| forallBoundedTelescope memberTy (some np) fun ps rest => do
+    unless ps.size == np do
+      badShape "a block member has fewer binders than the block has parameters"
+    forallTelescopeReducing rest fun idxs result => do
+      let result ← whnf result
+      unless result matches .sort _ do
+        badShape "a block member does not land in a sort, even after unfolding its type"
+      mkForallFVars (ps ++ idxs) result
+
 /-- Open one member's **index** telescope at the block's parameter `fvar`s.
 
 A separate definition rather than a `let` in [`InductiveModels.mutualIso`] because it
@@ -196,6 +222,8 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
   let r := all.size
   unless r ≥ 2 && memberTys.size == r && exportCtors.size == r do
     badShape "not a mutual block"
+  let declaredMemberTys := memberTys
+  let memberTys ← memberTys.mapM (exposeMemberType np)
   let root := all[0]!
   let buildRoot := buildRoot?.getD root
   -- Tag, auxiliary carrier and their constructors are implementation details.
@@ -398,7 +426,7 @@ def mutualIso (all : Array Name) (lparams : List Name) (np : Nat)
       mkLambdaFVars (ps ++ idxs)
         (mkAppN (.const auxN us) (ps.push (mkAppN (.const (tagCtorN k) us) (ps ++ idxs))))
     let d := Declaration.defnDecl
-      { name := selfNames[k]!, levelParams := lparams, type := memberTys[k]!, value := val
+      { name := selfNames[k]!, levelParams := lparams, type := declaredMemberTys[k]!, value := val
         hints := ← hintsFor val, safety := .safe }
     addChecked d
     out := out.push d

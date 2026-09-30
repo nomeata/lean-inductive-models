@@ -159,7 +159,7 @@ where
 fixture in the sweep below is expected to be accepted (exit 0), so this one
 list pins the disposition of all of them. -/
 def sweepDeclinedFixtures : Array String :=
-  #["e_dependent_field.ndjson", "prim_shape_declines.ndjson"]
+  #["e_dependent_field.ndjson", "mutual_kernel_sorts.ndjson", "prim_shape_declines.ndjson"]
 
 def main (args : List String) : IO UInt32 := do
   let root := args.head?.getD "."
@@ -1238,6 +1238,11 @@ def main (args : List String) : IO UInt32 := do
   -- one left: its first field is opaque at `Sort (imax u v)`, no `max` absorbs
   -- an `imax` and no box can inspect an opaque type far enough to normalize its
   -- level, so nothing stores it and field 2 names it.
+  --
+  -- `mutual_kernel_sorts` is on it for one block out of five: `NC`/`ND` sit at a
+  -- bare `Sort u`, so their recursors eliminate only into `Prop` while the
+  -- kernel still grants `NC` a projection onto `ND`, and no mutual route can
+  -- select that field. The other four blocks model.
   --
   -- `w_dependent_field` used to be on this list for the same verdict. The tree arm
   -- now selects its *stored* fields definitionally — through `_wcore.WT.root`

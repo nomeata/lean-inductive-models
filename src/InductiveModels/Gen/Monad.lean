@@ -158,6 +158,21 @@ inductive Decline where
   longer part of the contract, and `test/ProjectionTransportCensusTest.lean`
   holds it out, so there is nothing left to emit: the owner declines. -/
   | projectionCodomain (owner : Name) (field : Nat)
+  /-- **A kernel projection onto data whose owner's recursor eliminates only
+  into `Prop`**, where the route supplied no selector of its own.
+
+  `infer_proj` refuses a data field only when the owner's sort is *literally*
+  `Prop`, while Lean mints a large eliminator only when the sort is never zero
+  or the block passes the subsingleton test. An owner at a sometimes-`Prop`
+  sort — a mutual block at `Sort u` is the case no route here serves — can
+  therefore have a projection its own recursor cannot express
+  ([leanprover/lean4#7637](https://github.com/leanprover/lean4/issues/7637)).
+  Every modeled projection that no route overrides is an elimination of the
+  major with the model recursor, whose statement is the owner's, so there is no
+  well-typed selector to emit and the owner declines.  The question is the
+  kernel's level conversion of the field's sort against `Prop`, asked at
+  [`InductiveModels.addProjectionModels`] before the selector is written. -/
+  | projectionElimination (owner : Name) (field : Nat)
   /-- **A shape the route dispatcher settled on before any arm ran, and no arm
   represents.**
 
@@ -202,6 +217,9 @@ well-founded)"
     s!"{what} model shape: {owner}'s field {field} names an earlier field whose modeled \
 projection does not select it definitionally, so the literal projection rule for that \
 field would equate two terms of different types"
+  | .projectionElimination owner field =>
+    s!"{what} model shape: {owner}'s field {field} is a kernel projection onto a \
+non-proof, but {owner}'s recursor eliminates only into Prop and no route selects the field"
   | .shapeUnsupported owner scope why =>
     s!"{what} model shape ({scope.tag}): {owner} reaches no generation arm — {why}"
 

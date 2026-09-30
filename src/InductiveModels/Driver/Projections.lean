@@ -33,12 +33,39 @@ private partial def betaForallDomains (normalizer : ExactNormalizationEnv) : Exp
 /-- A model recursor's level list at a selected motive sort: the motive
 universe in front of the model's own when the recursor carries one, and the
 model's own alone when its block eliminates only into `Prop` and Lean minted
-none. -/
-private def recursorLevels (recursor : Name) (recursorLevelParams modelLevelParams : List Name)
-    (motiveLevel : Level) (modelLevels : List Level) : GenM (List Level) :=
+none.
+
+**A `Prop`-only recursor reaches a `Prop` motive and nothing else**, and the
+kernel grants an intrinsic projection by a different rule than it grants large
+elimination. `infer_proj` refuses a data field only when the owner's sort is
+*literally* `Prop`; the recursor is `Prop`-only whenever the sort is merely
+*maybe* zero and the block is mutual, has several constructors, or has a field
+that is neither a proof nor an index. So an owner at `Sort u`, or at
+`Sort (max u v)`, can have a kernel projection onto data that its own
+recursor cannot select: `mutual NC : Sort u | mk : ND → NC …` projects `NC`
+onto `ND`, while `NC.rec` eliminates only into `Prop`.
+
+Every model here reads a field by eliminating the major with the model
+recursor, unless its route supplied a selector of its own (an override) or
+stated an empty carrier, and the model recursor is the owner's recursor at the
+owner's statement. At such a field there is no elimination to write, so the
+owner declines ([`InductiveModels.Decline.projectionElimination`]): no mutual
+route builds a carrier with a data selector at a maybe-zero sort, and the
+simple route's direct and empty arms, which do for many single-member owners,
+supply overrides or an empty carrier and never reach this.
+Lean's elaborator does not produce the shape — it requires an inductive's
+resulting universe to be `Prop` or never zero unless
+`bootstrap.inductiveCheckResultingUniverse` is off — so it arrives only in
+hand-built or bootstrap streams.  The question is asked of the kernel's own
+level conversion, which is what judges the motive the elimination would pass. -/
+private def recursorLevels (owner : Name) (field : Nat) (recursor : Name)
+    (recursorLevelParams modelLevelParams : List Name)
+    (motiveLevel : Level) (modelLevels : List Level) : GenM (List Level) := do
   if recursorLevelParams.length == modelLevelParams.length + 1 then
     pure (motiveLevel :: modelLevels)
   else if recursorLevelParams.length == modelLevelParams.length then
+    unless ← kernelDefEq (.sort motiveLevel) (.sort .zero) do
+      declineWith (.projectionElimination owner field)
     pure modelLevels
   else
     badShape s!"{recursor} carries unexpected universe parameters"
@@ -270,7 +297,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
             let selector := Name.str block.member "rec"
             let .recInfo blockRecursor ← constInfo selector
               | badShape s!"{selector} is not the nested block's own recursor"
-            let recLevels ← recursorLevels selector blockRecursor.levelParams
+            let recLevels ← recursorLevels type.name fieldIndex selector blockRecursor.levelParams
               is.levelParams resultLevel us
             -- The block's minor binds the block's own field telescope, so the
             -- selected field arrives packed and comes back through its
@@ -287,7 +314,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
                 nestedSourceField us params packed? field
             pure (selector, recLevels, pre)
           | _, _ => do
-            let recLevels ← recursorLevels modelRecursor modelRecursorInfo.levelParams
+            let recLevels ← recursorLevels type.name fieldIndex modelRecursor modelRecursorInfo.levelParams
               is.levelParams resultLevel us
             let pre ← structureRecursorPreArguments eqi recursor modelRecursor
               modelConstructor motiveIndex params (carrier (params ++ indices))
@@ -393,7 +420,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
           let targetMotive ← forallBoundedTelescope
               (← instantiateForall projectionType params) (some (type.numIndices + 1))
               fun motiveArguments result => mkLambdaFVars motiveArguments result
-          let recLevels ← recursorLevels modelRecursor modelRecursorInfo.levelParams
+          let recLevels ← recursorLevels type.name fieldIndex modelRecursor modelRecursorInfo.levelParams
             is.levelParams fieldLevel us
           let pre ← structureRecursorPreArguments eqi recursor modelRecursor
             modelConstructor motiveIndex params (carrier (params ++ indices))

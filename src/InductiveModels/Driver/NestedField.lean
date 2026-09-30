@@ -164,6 +164,21 @@ def nestedProjectionProof (eqi : EqInfo) (block : NestedProjectionBlock)
       (params ++ indices ++ #[applied])
     nestedFunextClose fx binders roundTrip applied pointwise
 
+/-- The kernel's `is_prop`: the whnf of the type's type is *literally*
+`Sort 0`. `Meta.isProp` answers `isAlwaysZero` of a normalized level instead,
+so it calls a type at `Sort (max 0 0)` a proposition, which `infer_proj` does
+not; the field walk below has to agree with the kernel and with the statement
+checker's own walk (`projectionFieldEligibleWithIndex`), not with `MetaM`. -/
+private def kernelIsProp (type : Expr) : MetaM Bool := do
+  let sort ← withTransparency .all <| whnf (← inferType type)
+  return sort == .sort .zero
+
+/-- The kernel's reading of an owner former as `Prop`: its telescope's result,
+unfolded as the kernel unfolds it, is literally `Sort 0`. -/
+private def kernelIsPropFormer (type : Expr) : MetaM Bool :=
+  withTransparency .all <| forallTelescopeReducing type fun _ result => do
+    return (← whnf result) == .sort .zero
+
 private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : Nat)
     (current : Expr) : MetaM Bool := do
   let current ← whnf current
@@ -172,7 +187,7 @@ private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : 
     if fieldIndex == 0 then return true
     return ← withLocalDecl name info fieldType fun value =>
       projectionFieldEligibleM false (fieldIndex - 1) (body.instantiate1 value)
-  let fieldIsProp ← isProp fieldType
+  let fieldIsProp ← kernelIsProp fieldType
   if fieldIndex == 0 then return !ownerIsProp || fieldIsProp
   if ownerIsProp && body.hasLooseBVars && !fieldIsProp then return false
   withLocalDecl name info fieldType fun value =>
@@ -182,7 +197,7 @@ private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : 
 project proof fields, and may not cross an earlier data field on which the
 remaining constructor telescope depends. -/
 def eligibleProjectionFieldsM (type : EIndType) (constructor : ECtor) : MetaM (Array Nat) := do
-  let ownerIsProp ← isPropFormerType type.type
+  let ownerIsProp ← kernelIsPropFormer type.type
   forallBoundedTelescope constructor.type (some type.numParams) fun _ fieldsType => do
     let mut result := #[]
     for fieldIndex in [:constructor.numFields] do

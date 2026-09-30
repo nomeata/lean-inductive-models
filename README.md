@@ -411,7 +411,11 @@ visibly ends.
 ### 2. Mutual blocks
 
 **Scope.** A `mutual` block with no nesting. A single-member block is handled
-by entries 3–10, while any block marked nested is handled by entry 1.
+by entries 3–10, while any block marked nested is handled by entry 1. Members
+are read as the kernel reads them, so a block declared at a definition that
+unfolds to its sort or index telescope is in scope; a block at a
+sometimes-`Prop` sort with a data projection its recursor cannot express is
+not (see [What is covered, and what is not](#what-is-covered-and-what-is-not)).
 
 ```lean
 mutual
@@ -758,16 +762,18 @@ every other declaration in the export is still modelled and checked — it is
 the run saying, precisely, that this one declaration gets no model.
 
 Run over this repository's entire fixture corpus, the tool declines exactly
-three declarations as unsupported, in two fixture files, and they all fall
-into the one situation below; it is shown here shrunk to a minimal
-declaration that still declines. That is a count of what this corpus
-contains, not a bound on what other inputs may hit. Two further behaviours
-are not declines but are still user-visible: one shares its cause with that
-situation and is described inside the same entry, the other closes the list.
+four declarations as unsupported, in three fixture files. Three of them fall
+into the first situation below and the fourth into the second; each is shown
+shrunk to a minimal declaration that still declines. That is a count of what
+this corpus contains, not a bound on what other inputs may hit. Two further
+behaviours are not declines but are still user-visible: one shares its cause
+with the first situation and is described inside the same entry, the other
+closes the list.
 
 | What you can hit | What the run does |
 | --- | --- |
 | a field whose universe level has an `imax` the declared universe only bounds | declines that declaration |
+| a `mutual` block at a sometimes-`Prop` sort with a one-constructor member that has a data field | declines that declaration |
 | a universe equality Lean's kernel cannot check | models it, and reports every such use |
 | a `Prop`-valued structure-like carrying data fields | models it, but silently omits some or all projections |
 
@@ -878,6 +884,42 @@ lets it pass silently:
 This entry is that one incompleteness and nothing else: a kernel with a
 complete level comparison would leave the two declines above without their
 reason, and no widening to report.
+
+#### Declined: a projection onto data that the recursor cannot express
+
+```lean
+universe u
+
+mutual
+  inductive NC : Sort u where
+    | mk : ND → NC
+  inductive ND : Sort u where
+    | nil : ND
+    | cons : NC → ND
+end
+```
+
+Lean's kernel grants two eliminations here by two different rules, and they
+disagree. The recursors eliminate only into `Prop`: a mutual block at a sort
+that *may* be `Prop` never gets a large eliminator. The projection
+`Expr.proj NC 0`, however, is refused only when the owner's sort is
+*literally* `Prop`, and `Sort u` is not — so the kernel admits `NC.0 : NC →
+ND`, which at every `u ≥ 1` returns data. A model has to supply that
+projection, and every model here reads a field by eliminating the owner with
+its recursor, whose statement is fixed by the owner's own: a `Prop`-only
+recursor cannot return an `ND`. The mutual encoding (entry 2) has no other
+eliminator to offer — its carriers are one auxiliary family with several
+constructors at the same sometimes-`Prop` sort — so the tool declines the
+block, naming the field. The simple construction serves many single-member
+owners in the same position — its direct and empty arms store the field
+rather than eliminate for it — but not every one; no mutual route does.
+
+This is the same fact as the next entry, seen from the other side
+([leanprover/lean4#7637](https://github.com/leanprover/lean4/issues/7637)).
+Ordinary Lean does not produce it: the `inductive` command refuses a
+resulting universe that is only sometimes `Prop`. `NC` in
+[`test/fixtures/inductive-models/mutual_kernel_sorts.lean`](test/fixtures/inductive-models/mutual_kernel_sorts.lean)
+is the corpus's instance.
 
 #### Silent: a `Prop`-valued structure-like with data fields loses projections
 

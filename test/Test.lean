@@ -304,6 +304,14 @@ def expectedOwn : List Row :=
     -- declaration-local contract it is irrelevant, so both mutual blocks
     -- model; this preserves the regression test that a legacy name is ignored.
   , ("mutual_keying", [("KA", 43), ("GA", 35)], [])
+    -- Sorts the kernel reads differently from their syntax. `DA`, `FA` and `IA`
+    -- are declared at definitions that unfold to a sort (`FA` to its index
+    -- telescope too, `IA` irreducibly); `PA`'s `PB` sits at `Sort (max 0 0)`,
+    -- which `infer_proj` does not call `Prop`, so `PA` has no projection; and
+    -- `NC`/`ND` at a bare `Sort u` have a kernel projection onto data that
+    -- their `Prop`-only recursors cannot select, so the block declines.
+  , ("mutual_kernel_sorts", [("DA", 44), ("FA", 14), ("IA", 35), ("PA", 12)],
+      [("NC", "mutual model shape: NC's field 0 is a kernel projection onto a non-proof")])
     -- ── the two composed constructions ────────────────────────────────────
     --
     -- **The axis only the composition reaches.** Lean's nested specialisation
