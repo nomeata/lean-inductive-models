@@ -26,3 +26,12 @@ the resource bound `test/scripts/check_fixture_verdicts.py` enforces.
   instance towers are, with an exported projection, and arrow towers, whose `Π`
   nodes nothing can reduce away. Its export is regenerated with
   `FIXTURE_DIR=$PWD/test/fixtures/dag-towers LEAN_INDUCTIVE_MODELS_FILTER=0 scripts/export-fixture.sh ctor_field_towers.lean`.
+* `box_tower.lean` is this repository's own too: an owner whose one field
+  needs the recursive box (its level is an `imax` the declared universe only
+  bounds) and has the arrow-tower type `bt 60`, `bt (k+1) = bt k → bt k` over
+  `bt 0 = α → γ`. Unlike every other fixture here it gates a *construction*,
+  not a walk: the box's coercions, and the kernel's check that unboxing undoes
+  boxing, cost the field type's `Π` tree unless both are built from shared
+  lemmas, which is what `docs/maintainers/DagSafety.md` describes. Regenerate
+  with
+  `FIXTURE_DIR=$PWD/test/fixtures/dag-towers LEAN_INDUCTIVE_MODELS_FILTER=0 scripts/export-fixture.sh box_tower.lean`.
