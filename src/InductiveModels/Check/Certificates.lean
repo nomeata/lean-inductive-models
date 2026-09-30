@@ -105,7 +105,7 @@ built and withdrawn, so this recognizer is also what would reject a silent
 reintroduction of it — `test/Test.lean`'s `prim_w` rows assert the eight names
 absent at every constructor and recursive-field count. -/
 def phase1OneLayerCertificate (declarations : DeclarationTypes)
-    (ownerType : EIndType) (constructors : Array ECtor) (recursors : Array ERec)
+    (normalizer : ExactNormalizationEnv) (ownerType : EIndType) (constructors : Array ECtor) (recursors : Array ERec)
     (family : Family) :
     Phase1OneLayerCertificate := Id.run do
   let publicCarrierName := Naming.modelName ownerType.name
@@ -129,7 +129,7 @@ def phase1OneLayerCertificate (declarations : DeclarationTypes)
       recursor.all.contains ownerType.name &&
         recursor.rules.any (·.ctor == sourceConstructor.name)
     | return .malformed privateRecursorName
-  unless indexedFibreOneLayerProjectionFamily ownerType sourceConstructor
+  unless indexedFibreOneLayerProjectionFamily normalizer ownerType sourceConstructor
       sourceRecursor do
     return .malformed privateCarrierName
   let some constructorPair := family.correspondence.constructors[0]?
@@ -184,8 +184,12 @@ def phase1OneLayerCertificate (declarations : DeclarationTypes)
     return .malformed privateRecursorName
   unless privateIota.type == rewriteCertificateNames mapping publicIota.type do
     return .malformed privateIotaName
+  -- The carrier restates the owner's declared type; its parameters, indices
+  -- and sort are read as the kernel reads them.
+  let some publicCarrierFormer := normalizer.kernelFormer? publicCarrier.type
+    | return .malformed publicCarrierName
   let (parameters, result) := openForalls
-    ((`_check.oneLayerCertificate).append ownerType.name) publicCarrier.type
+    ((`_check.oneLayerCertificate).append ownerType.name) publicCarrierFormer
   unless parameters.size == ownerType.numParams + ownerType.numIndices do
     return .malformed publicCarrierName
   let .sort carrierLevel := result | return .malformed publicCarrierName
@@ -267,11 +271,11 @@ def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
   let mut anyChanged := false
   let mut edges : Array (Name × Name) := #[]
   for ownerType in ownerTypes do
-    let (_, carrierResult) := openForalls
-      ((`_check.mutualOneLayerShape).append ownerType.name) ownerType.type
-    -- The kernel whnf's an inductive type's result, so it may be a definition
-    -- that unfolds to a sort.
-    let .sort carrierLevel := normalizer.whnf carrierResult
+    -- The member's sort as the kernel reads it: it may be a definition that
+    -- unfolds to a sort.
+    let some ownerFormer := normalizer.kernelFormer? ownerType.type
+      | return .malformed (privateSelf ownerType.name)
+    let (_, some carrierLevel) := exposedFormerShape ownerFormer
       | return .malformed (privateSelf ownerType.name)
     unless carrierLevel.normalize.isNeverZero do
       return .malformed (privateSelf ownerType.name)
@@ -385,10 +389,14 @@ def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
           iotaDecl.levelParams == publicIotaDecl.levelParams &&
           ruleDecl.levelParams == iotaDecl.levelParams && ruleDecl.type == iotaDecl.type do
         return .malformed ruleName
+    -- The carrier restates the owner's declared type; its parameters and sort
+    -- are read as the kernel reads them.
+    let some publicCarrierFormer := normalizer.kernelFormer? publicCarrier.type
+      | return .malformed publicCarrierName
     let (parameters, result) := openForalls
-      ((`_check.mutualOneLayerCertificate).append owner) publicCarrier.type
+      ((`_check.mutualOneLayerCertificate).append owner) publicCarrierFormer
     unless parameters.size == ownerType.numParams do return .malformed publicCarrierName
-    let .sort carrierLevel := normalizer.whnf result | return .malformed publicCarrierName
+    let .sort carrierLevel := result | return .malformed publicCarrierName
     let levels := publicCarrier.levelParams.map Level.param
     let parameterValues := parameters.map (·.value)
     let publicCarrierType := mkAppN (.const publicCarrierName levels) parameterValues

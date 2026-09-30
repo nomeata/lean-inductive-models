@@ -492,6 +492,10 @@ Human-readable sources and committed exports live in
 `test/fixtures/inductive-models/`. Regenerate them
 with the pinned exporter:
 
+```console
+test/scripts/export-inductive-models.sh prim_shapes
+```
+
 `test/fixtures/rejected/` is separate and deliberately outside every fixture
 sweep: it holds malformed exports that exist to be *refused*, so no generation
 or census target should attempt to model them. `kernelcheck` names each one
@@ -504,8 +508,17 @@ only ever reduces, and killed the process with SIGSEGV. Lean 4.30.0 taught
 4.33.0 the kernel itself refuses the record — reporting a `let-declaration
 type mismatch 'x'` rather than crashing. `kernelcheck` pins that message.
 
+`test/fixtures/unverifiable/` is outside the fixture sweeps too, for a
+different reason: its exports are kernel-valid, but the tool stops on them without a
+verdict (exit 3), and `maincli` pins that exit and message.
+`defhead_beyond_delta` is an owner whose type reaches its sort only by ι or
+projection reduction, which the structural checker's δβζ normaliser cannot
+restate (README, *Stopped: a type former computed by ι or projection*). Export
+it with its directory named:
+
 ```console
-test/scripts/export-inductive-models.sh prim_shapes
+FIXTURE_DIR="$PWD/test/fixtures/unverifiable" LEAN_INDUCTIVE_MODELS_FILTER=0 \
+  scripts/export-fixture.sh defhead_beyond_delta.lean
 ```
 
 A source restricts the export to named roots with a `--#export NAME …` line,

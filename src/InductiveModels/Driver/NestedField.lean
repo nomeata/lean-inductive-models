@@ -173,12 +173,6 @@ private def kernelIsProp (type : Expr) : MetaM Bool := do
   let sort ← withTransparency .all <| whnf (← inferType type)
   return sort == .sort .zero
 
-/-- The kernel's reading of an owner former as `Prop`: its telescope's result,
-unfolded as the kernel unfolds it, is literally `Sort 0`. -/
-private def kernelIsPropFormer (type : Expr) : MetaM Bool :=
-  withTransparency .all <| forallTelescopeReducing type fun _ result => do
-    return (← whnf result) == .sort .zero
-
 private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : Nat)
     (current : Expr) : MetaM Bool := do
   let current ← whnf current
@@ -197,7 +191,7 @@ private partial def projectionFieldEligibleM (ownerIsProp : Bool) (fieldIndex : 
 project proof fields, and may not cross an earlier data field on which the
 remaining constructor telescope depends. -/
 def eligibleProjectionFieldsM (type : EIndType) (constructor : ECtor) : MetaM (Array Nat) := do
-  let ownerIsProp ← kernelIsPropFormer type.type
+  let ownerIsProp ← kernelFormerIsProp type.type
   forallBoundedTelescope constructor.type (some type.numParams) fun _ fieldsType => do
     let mut result := #[]
     for fieldIndex in [:constructor.numFields] do
@@ -211,7 +205,8 @@ private declarations must be present and correctly keyed; a family that is one
 without the other fails closed rather than being reinterpreted. -/
 def indexedFibreOneLayerProjectionCertificate (type : EIndType)
     (constructor : ECtor) (recursor : ERec) (is : Iso) : GenM Bool := do
-  unless indexedFibreOneLayerProjectionFamily type constructor recursor do return false
+  unless indexedFibreOneLayerProjectionFamily (.ofEnvironment (← getEnv))
+      type constructor recursor do return false
   let constructorName := constructor.name
   let some implementation := is.implementation? | return false
   let some publicModel := is.selfNames[0]? | return false

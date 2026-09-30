@@ -44,8 +44,9 @@ the family boundary even though there is no intrinsic projection loop. -/
 inductive IndexedUnit : FibreIx -> Type where
   | mk : IndexedUnit FibreIx.here
 
-/-- Reducible result former intentionally hidden in serialized syntax.  The
-generator and checker must both leave this owner on the legacy route. -/
+/-- Result former hidden behind a definition in serialized syntax.  The kernel
+reads it through the definition, and so do the generator and the checker, so
+this owner takes the indexed fibre adapter exactly as its written twin would. -/
 def HiddenIndexedResult (index : FibreIx) := Type
 
 inductive HiddenIndexed : (index : FibreIx) -> HiddenIndexedResult index where

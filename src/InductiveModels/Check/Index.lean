@@ -230,7 +230,7 @@ def checkFamilyWithIndex (x : Export) (index : SyntaxIndex)
   let mutualCertificate := phase1MutualOneLayerCertificate index.declarations
     ownerTypes ownerConstructors ownerRecursors index.normalizer family
   let certificates := ownerTypes.map fun ownerType =>
-    let singleton := phase1OneLayerCertificate index.declarations ownerType
+    let singleton := phase1OneLayerCertificate index.declarations index.normalizer ownerType
       ownerConstructors ownerRecursors family
     (ownerType.name, if singleton matches .absent then mutualCertificate else singleton)
   for (owner, certificate) in certificates do
@@ -353,9 +353,7 @@ private def intrinsicProjectionFieldsWithIndex (index : SyntaxIndex)
   let some constructor := constructors.find? fun constructor =>
       constructor.name == constructorName && constructor.induct == type.name
     | return #[]
-  let mut ownerType := type.type
-  while ownerType.isForall do ownerType := ownerType.bindingBody!
-  let ownerIsProp := index.normalizer.isPropositionFormer ownerType
+  let ownerIsProp := index.normalizer.isPropositionFormer type.type
   let mut current := constructor.type
   let mut locals : ExactLocals := #[]
   for parameterIndex in [:type.numParams] do

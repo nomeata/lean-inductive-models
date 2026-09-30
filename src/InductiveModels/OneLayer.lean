@@ -138,7 +138,9 @@ def indexedFibreOneLayerIso (tname root : Name) (lparams : List Name)
   let eqi ← match EqInfo.check (← getEnv) with
     | .ok information => pure information
     | .error message => badShape s!"{tname}'s indexed fibre needs Eq ({message})"
-  let ownerType ← generatedType names.publicNames.self
+  -- The carrier restates the owner's declared type; the certificate is stated
+  -- over its parameters and indices as the kernel reads them.
+  let ownerType ← kernelFormer (← generatedType names.publicNames.self)
   let arity := numForalls ownerType
   let equivalenceType ← forallBoundedTelescope ownerType (some arity) fun arguments _ =>
     withLocalDeclD `value (mkAppN (.const names.publicNames.self us) arguments) fun value =>

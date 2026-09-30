@@ -46,6 +46,81 @@ def numForalls : Expr → Nat
   | .forallE _ _ b _ => numForalls b + 1
   | _ => 0
 
+/-- **Weak head normal form, asked of the kernel.** `Lean.Kernel.whnf` in the
+current local context: the reduction the kernel itself performs, so a question
+answered through it cannot disagree with the verdict on the emitted island. A
+kernel exception is a construction fault, as for
+[`InductiveModels.kernelDefEq`]. -/
+def kernelWhnf (e : Expr) : MetaM Expr := do
+  match Lean.Kernel.whnf (← getEnv) (← getLCtx) e with
+  | .ok e => return e
+  | .error exception =>
+    throwError "kernel whnf failed on a construction term: \
+      {← (exception.toMessageData {}).toString}\n  term: {e}"
+
+/-- **An inductive's type as the kernel reads it** — the one place the generator
+reads an owner's telescope and sort.
+
+The kernel does not read an inductive's type as written. `add_inductive` whnf's
+the type, peels a `Π`, and whnf's again, until what is left is a `Sort`; the
+binders it peeled are the parameters and then the indices, and that sort is the
+block's. So a member may be declared at a definition that unfolds to its sort
+(`inductive U : MyType`, `def MyType := Type`), to part or all of its index
+telescope (`inductive SF : MyFam`, `def MyFam := Nat → Type`), to a chain of
+such definitions, or to an irreducible one — the kernel knows no reducibility —
+and the exported `numIndices` and recursor are the ones for the *exposed*
+telescope.
+
+This returns that exposed form, `∀ p⃗ i⃗, Sort u` with every binder written
+syntactically, by the kernel's own `whnf` at each step. Every construction reads
+parameters, indices and sort off it; every **public** declaration still restates
+the declared type, which is definitionally equal to it by δβζ. A type that is
+already written that way is returned unchanged, without a reduction. The same
+reading on the statement checker's side is
+[`InductiveModels.ExactNormalizationEnv.kernelFormer?`], with the export's own
+bounded normaliser; the two agree because each step is a head δ-unfolding and
+β/ζ-reduction, which both perform identically. The kernel's `whnf` can also
+take an ι or projection step the bounded normaliser cannot, and a block whose
+type needs one stops the run in `Driver/Filter.lean` before any construction,
+so every type that reaches here is one both sides open alike.
+
+Parameters are read here too, although the kernel's nested-inductive pre-pass
+requires the *first* member's parameters to be written: every later member of a
+block, and every index, may hide behind a definition. -/
+partial def kernelFormer (type : Expr) : MetaM Expr := do
+  if written type then return type
+  go type
+where
+  written : Expr → Bool
+    | .forallE _ _ body _ => written body
+    | .sort _ => true
+    | _ => false
+  go (type : Expr) : MetaM Expr := do
+    match ← kernelWhnf type with
+    | .forallE x dom body bi =>
+      withLocalDecl x bi dom fun xv => do mkForallFVars #[xv] (← go (body.instantiate1 xv))
+    | .sort u => return .sort u
+    | _ => throwError "an inductive type does not land in a sort, even as the kernel reads it"
+
+/-- The arity and sort of a former in [`InductiveModels.kernelFormer`]'s exposed
+form, which always ends in a `Sort`; the last arm is unreachable on it. -/
+def formerShape (exposed : Expr) : Nat × Level :=
+  go 0 exposed
+where
+  go (n : Nat) : Expr → Nat × Level
+    | .forallE _ _ body _ => go (n + 1) body
+    | .sort u => (n, u)
+    | _ => (n, .zero)
+
+/-- **The kernel's `is_prop` of an inductive's sort**: its former, read by
+[`InductiveModels.kernelFormer`], ends in *literally* `Sort 0`, which is the
+question `infer_proj` asks and the one the statement checker's
+`ExactNormalizationEnv.isPropositionFormer` answers. `Meta.isPropFormerType`
+opens the telescope without unfolding, so `inductive SP : MyPred` with
+`def MyPred := Nat → Prop` is not a proposition to it. -/
+def kernelFormerIsProp (type : Expr) : MetaM Bool :=
+  return (formerShape (← kernelFormer type)).2 == .zero
+
 /-- **A constructor field's type**, with any leading `let` gone. Every place in
 this module that asks which member a field sits at reads it through here. -/
 def ftyp (e : Expr) : GenM Expr := return zetaHead (← inferType e)

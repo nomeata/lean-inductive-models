@@ -78,7 +78,13 @@ Three things make a memo sound:
 
 A walk that follows only a spine — a binder telescope, an application spine,
 one child per step — needs no memo. `openForalls`, `peelParams`, `headNorm`,
-`instantiateForalls*` and the `whnf` loops are of that kind.
+`instantiateForalls*` and the `whnf` loops are of that kind. So are the two
+readings of an owner's type as the kernel reads it, `kernelFormer` (generator)
+and `ExactNormalizationEnv.kernelFormer?` (checker): each step is one `whnf`
+and one memoized `instantiate1`/`abstract` (or `mkForallFVars`) of what is
+left, so the cost is the binder count times one linear pass, and a type already
+written as `∀ p⃗ i⃗, Sort u` — every type Lean's elaborator writes without a
+definition in the way — returns after reading its spine alone.
 
 ## Lean's own walks
 

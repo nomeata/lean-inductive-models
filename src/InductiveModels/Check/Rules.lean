@@ -157,14 +157,17 @@ def checkEta (x : Export) (normalizer : ExactNormalizationEnv) (family : Family)
       (·.owner == constructorName)
     | return #[.declarationType metadata.owner metadata.name]
   let levels := model.levelParams.map Level.param
+  -- The owner's parameters and sort as the kernel reads them.
+  let some ownerFormer := normalizer.kernelFormer? ownerType.type
+    | return #[.declarationType metadata.owner metadata.name]
   let mappedOwnerType := family.correspondence.expectedType
-    ownerType.levelParams model.levelParams ownerType.type
+    ownerType.levelParams model.levelParams ownerFormer
   let (parameterBinders, ownerResult) : Array OpenBinder × Expr := openForalls
     ((`_check.structureEtaOwner).append metadata.owner) mappedOwnerType
   unless parameterBinders.size == ownerType.numParams && ownerType.numIndices == 0 do
     return #[.declarationType metadata.owner metadata.name]
   let params := parameterBinders.map fun binder => binder.value
-  let .sort carrierLevel := normalizer.whnf ownerResult
+  let .sort carrierLevel := ownerResult
     | return #[.declarationType metadata.owner metadata.name]
   let carrier := mkAppN (.const typePair.model levels) params
   let selfValue := mkFVar (FVarId.mk
@@ -361,7 +364,7 @@ def checkProjection (x : Export) (structures : StructureOwners)
   -- binder type. Mirror exactly that step for the theorem's outer binders, but
   -- retain written `let`s and named model constants so the public statement
   -- remains literal. The unnormalized binders below still drive the RHS.
-  let propositionLiteral := propositionProjectionIotaUsesLiteralField ownerType
+  let propositionLiteral := propositionProjectionIotaUsesLiteralField normalizer ownerType
   let theoremBinders := if oneLayerCertificate matches .valid || propositionLiteral then
       constructorBinders
     else constructorBinders.map fun binder =>
@@ -374,8 +377,11 @@ def checkProjection (x : Export) (structures : StructureOwners)
   let levels := model.levelParams.map Level.param
   let some typePair := family.correspondence.typeFormers.find? (·.owner == projection.owner)
     | return #[.declarationType projection.owner projection.name]
+  -- The owner's parameters and indices as the kernel reads them.
+  let some ownerFormer := normalizer.kernelFormer? ownerType.type
+    | return #[.declarationType projection.owner projection.name]
   let mappedOwnerType := family.correspondence.expectedType
-    ownerType.levelParams model.levelParams ownerType.type
+    ownerType.levelParams model.levelParams ownerFormer
   let (ownerBinders, _) : Array OpenBinder × Expr := openForalls
     ((`_check.intrinsicProjectionOwner).append projection.name) mappedOwnerType
   let ownerArity := ownerType.numParams + ownerType.numIndices

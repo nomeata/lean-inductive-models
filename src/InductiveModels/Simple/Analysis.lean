@@ -37,34 +37,15 @@ def analysePrim (tname : Name) (lparams : List Name) (np : Nat) (memberTy : Expr
     (exportCtors : Array (Name × Expr)) : GenM PrimAnalysis := do
   let us := lparams.map Level.param
   let nc := exportCtors.size
-  let peel : Expr → Option (Nat × Level) := fun ty => Id.run do
-    let mut cur := ty
-    for _ in [0:np] do
-      match cur with
-      | .forallE _ _ b _ => cur := b
-      | _ => return none
-    let mut n := 0
-    while cur matches .forallE .. do
-      let .forallE _ _ b _ := cur | unreachable!
-      cur := b
-      n := n + 1
-    match cur with
-    | .sort w => return some (n, w)
-    | _ => return none
+  -- Parameters, indices and sort are read off the type as the kernel reads
+  -- it ([`InductiveModels.kernelFormer`]); `declaredMemberTy` is what the
+  -- public carrier restates.
   let declaredMemberTy := memberTy
-  let (memberTy, ni, w) ←
-    match peel memberTy with
-    | some (n, w) => pure (memberTy, n, w)
-    | none => do
-      let exposed ← forallBoundedTelescope memberTy (some np) fun ps rest =>
-        forallTelescopeReducing rest fun is res => do
-          unless (← whnf res) matches .sort _ do
-            badShape "the declaration does not land in a sort, even after unfolding \
-              its result type"
-          mkForallFVars (ps ++ is) (← whnf res)
-      let some (n, w) := peel exposed
-        | badShape "the declaration does not land in a sort"
-      pure (exposed, n, w)
+  let memberTy ← kernelFormer memberTy
+  let (arity, w) := formerShape memberTy
+  unless np ≤ arity do
+    badShape "the declaration has fewer binders than parameters, even as the kernel reads it"
+  let ni := arity - np
   let isRec := exportCtors.any fun (_, cty) => Id.run do
     let mut t := cty
     for _ in [0:np] do

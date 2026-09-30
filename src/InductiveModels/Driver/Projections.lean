@@ -233,7 +233,11 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
     -- a field the remaining telescope names is one the eligibility walk
     -- required to be a proposition, hence eligible itself, and this loop
     -- emits fields in index order.
-    let projectionType ← forallBoundedTelescope modelTypeInfo.type (some ownerArity)
+    -- The owner's parameters and indices as the kernel reads them: the model's
+    -- declared type restates the owner's, which may reach its indices only
+    -- through a definition ([`InductiveModels.kernelFormer`]).
+    let modelFormer ← kernelFormer modelTypeInfo.type
+    let projectionType ← forallBoundedTelescope modelFormer (some ownerArity)
         fun ownerArguments _ => do
       let params := ownerArguments.extract 0 type.numParams
       let fieldsType ← instantiateForall modelConstructorType params
@@ -250,15 +254,14 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
             -- `closeForallsExact?` walks the same expression with the same
             -- instantiation. It can only answer `none` if the walk runs out of
             -- `∀`s first, which would mean the telescope opened a binder that
-            -- is not syntactically there — `modelTypeInfo.type` is a generated
-            -- model type former's declared type, built by `mkForallFVars` over
-            -- params and indices, so its leading `ownerArity` binders are
-            -- written. This is the same statement the other eight call sites
+            -- is not syntactically there — `modelFormer` is the model type
+            -- former in the kernel's exposed form, every parameter and index
+            -- binder written. This is the same statement the other eight call sites
             -- make, and it fails the same way rather than quietly rebuilding
             -- the type from the local context and losing the exact binder
             -- syntax the retention exists for.
             let some projectionType :=
-                closeForallsExact? modelTypeInfo.type ownerArguments selfType
+                closeForallsExact? modelFormer ownerArguments selfType
               | badShape s!"{modelType}'s public type does not open as \
                 {ownerArguments.size} written binders"
             return projectionType
@@ -343,7 +346,7 @@ def addProjectionModels (types : Array EIndType) (constructors : Array ECtor)
         badShape s!"{modelConstructor}'s result has {majorArguments.size} arguments, expected {ownerArity}"
       let indices := majorArguments.extract type.numParams ownerArity
       let lhs := mkAppN (.const modelProjection us) (params ++ indices ++ #[major])
-      let propositionLiteral := propositionProjectionIotaUsesLiteralField type
+      let propositionLiteral := propositionProjectionIotaUsesLiteralField sourceRecursion type
       let legacyLiteral := projectionIotaUsesLiteralField types type constructors.toList
         sourceRecursion || propositionLiteral
       unless nestedBlock?.isSome == types.any (·.numNested > 0) do

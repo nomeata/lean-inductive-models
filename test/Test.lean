@@ -1176,6 +1176,44 @@ def expectedPrim : List Row :=
   -- normalisation, so the witness's `Eq` level is the unfolded sort's.
   -- `U` is con-leche's `ind_defhead_k`.
   , ("defhead_unitlike", [("U", 7), ("UT", 15), ("UP", 6)], [])
+  -- **Owners whose parameters, indices or sort are a definition**
+  -- (`defhead_telescope.lean`). The kernel reads an inductive's type by whnf
+  -- at every binder, and so does every construction and the statement
+  -- checker; `SF : MyFam` used to stop at an internal error in the projection
+  -- builder.
+  , ("defhead_telescope",
+      [("OfNat", 8), ("SF", 23), ("SF._model._impl.skel", 7), ("HAdd", 7), ("Add", 7),
+       ("PProd", 10), ("PProd'", 9), ("IF", 8), ("IF._model._impl.skel", 6), ("PI", 16),
+       ("PI._model._impl.skel", 7), ("NF", 16), ("NF._model._impl.skel", 7), ("PW", 16),
+       ("PW._model._impl.skel", 7), ("Bool", 6), ("DF", 16), ("DF._model._impl.skel", 7),
+       ("LB", 16), ("LB._model._impl.skel", 7), ("STy", 9), ("LTy", 6), ("EF", 4),
+       ("EF._model._impl.skel", 2), ("ET", 2), ("UF", 14), ("UF._model._impl.skel", 6),
+       ("Ev", 6), ("True", 6), ("SP", 6), ("PS", 6), ("List", 6), ("NT", 15),
+       ("NT._model._impl.0", 14), ("NT._model._impl.0._model._impl.tag", 6),
+       ("NT._model._impl.0._model._impl.aux", 10),
+       ("NT._model._impl.0._model._impl.aux._model._impl.skel", 217),
+       ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
+       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
+       ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6),
+       ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
+       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("NI", 15),
+       ("NI._model._impl.0", 14), ("NI._model._impl.0._model._impl.tag", 6),
+       ("NI._model._impl.0._model._impl.aux", 12),
+       ("NI._model._impl.0._model._impl.aux._model._impl.skel", 16), ("Box", 16),
+       ("Box._model._impl.skel", 7), ("NB", 14), ("NB._model._impl.0", 14),
+       ("NB._model._impl.0._model._impl.tag", 6),
+       ("NB._model._impl.0._model._impl.aux", 10),
+       ("NB._model._impl.0._model._impl.aux._model._impl.skel", 8), ("MA", 14),
+       ("MA._model._impl.tag", 6), ("MA._model._impl.aux", 8),
+       ("MA._model._impl.aux._model._impl.skel", 6), ("SS", 9), ("CS", 7), ("IRF", 16),
+       ("IRF._model._impl.skel", 7), ("IRS", 9), ("UIP", 6), ("PMA", 35),
+       ("PMA._model._impl.tag", 6), ("PMA._model._impl.aux", 10),
+       ("PMA._model._impl.aux._model._impl.skel", 8), ("QA", 16),
+       ("QA._model._impl.tag", 6), ("QA._model._impl.aux", 10),
+       ("QA._model._impl.aux._model._impl.skel", 8)],
+      [ ("Nat", "prim model: a basis primitive")
+      , ("PUnit", "prim model: a basis primitive")
+      , ("Eq", "prim model: a basis primitive")])
   -- **`unsafe` blocks are exempt, on every route** (`unsafe_inductive.lean`):
   -- negative (`Bad`, con-leche's `ind_unsafe`), plain, nested, mutual. Only
   -- the safe `List` is modelled.

@@ -34,11 +34,9 @@ private def ensureFresh (reserved : Std.HashSet Name) (name : Name) : GenM Unit 
   if reserved.contains name || (← getEnv).constants.contains name then
     declineWith (.nameTaken name)
 
-private def exactCarrierLevel (memberTy : Expr) (np : Nat) : GenM Level := do
-  forallBoundedTelescope (← exposeMemberType np memberTy) (some np) fun _ result =>
-    match result with
-    | .sort level => pure level
-    | _ => badShape "a mutual one-layer owner does not end in a sort"
+/-- A member's sort, read as the kernel reads it ([`InductiveModels.kernelFormer`]). -/
+private def exactCarrierLevel (memberTy : Expr) : GenM Level :=
+  return (formerShape (← kernelFormer memberTy)).2
 
 private def directMutualTarget? (all : Array Name) (np : Nat) (type : Expr) :
     GenM (Option Name) := do
@@ -95,7 +93,7 @@ private def classifyMutualOneLayer (types : Array EIndType)
   let mut edges : Array (Name × Name) := #[]
   let mut anyChanged := false
   for type in types do
-    let level ← exactCarrierLevel type.type np
+    let level ← exactCarrierLevel type.type
     unless level.normalize.isNeverZero do return none
     let mut constructorFields := #[]
     for constructorName in type.ctors do
@@ -474,7 +472,7 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
     let member := familyCertificateMember! certificate type.name
     let privateCarrier := fun parameters =>
       mkAppN (.const member.privateSelf levels) parameters
-    let value ← forallBoundedTelescope type.type (some np) fun parameters _ => do
+    let value ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ => do
       if shape.changed then
         let constructor := constructors.find? (·.induct == type.name) |>.get!
         let privateConstructorType ← generatedType (privateConstructor! member constructor.name)
@@ -495,11 +493,11 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
   for type in types do
     let shape := familyMember! members type.name
     let member := familyCertificateMember! certificate type.name
-    let rollType ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+    let rollType ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ =>
       withLocalDeclD `value (mkAppN (.const member.publicSelf levels) parameters) fun value =>
         mkForallFVars (parameters.push value)
           (mkAppN (.const member.privateSelf levels) parameters)
-    let rollValue ← forallBoundedTelescope type.type (some np) fun parameters _ => do
+    let rollValue ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ => do
       if shape.changed then
         let constructor := constructors.find? (·.induct == type.name) |>.get!
         let privateConstructorType ← generatedType
@@ -524,11 +522,11 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
   for type in types do
     let shape := familyMember! members type.name
     let member := familyCertificateMember! certificate type.name
-    let unrollType ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+    let unrollType ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ =>
       withLocalDeclD `value (mkAppN (.const member.privateSelf levels) parameters) fun value =>
         mkForallFVars (parameters.push value)
           (mkAppN (.const member.publicSelf levels) parameters)
-    let unrollValue ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+    let unrollValue ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ =>
       withLocalDeclD `value (mkAppN (.const member.privateSelf levels) parameters) fun value => do
         let body ← if shape.changed then
             let plan ← mutualUnrollPlan all constructors members certificate type.name
@@ -548,13 +546,13 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
     let member := familyCertificateMember! certificate type.name
     let publicCarrierAt := fun ps => mkAppN (.const member.publicSelf levels) ps
     let privateCarrierAt := fun ps => mkAppN (.const member.privateSelf levels) ps
-    let unrollRollType ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+    let unrollRollType ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ =>
       withLocalDeclD `value (publicCarrierAt parameters) fun value => do
         let rolled := mkAppN (.const member.roll levels) (parameters.push value)
         let lhs := mkAppN (.const member.unroll levels) (parameters.push rolled)
         mkForallFVars (parameters.push value)
           (eqi.mk' shape.level (publicCarrierAt parameters) lhs value)
-    let unrollRollValue ← forallBoundedTelescope type.type (some np) fun parameters _ => do
+    let unrollRollValue ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ => do
       if shape.changed then
         let constructor := constructors.find? (·.induct == type.name) |>.get!
         let privateConstructorType ← generatedType
@@ -578,13 +576,13 @@ def mutualOneLayerBase (source : EDecl) (reserved : Std.HashSet Name)
         value := unrollRollValue }
     addChecked unrollRoll
     declarations := declarations.push unrollRoll
-    let rollUnrollType ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+    let rollUnrollType ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ =>
       withLocalDeclD `value (privateCarrierAt parameters) fun value => do
         let unrolled := mkAppN (.const member.unroll levels) (parameters.push value)
         let lhs := mkAppN (.const member.roll levels) (parameters.push unrolled)
         mkForallFVars (parameters.push value)
           (eqi.mk' shape.level (privateCarrierAt parameters) lhs value)
-    let rollUnrollValue ← forallBoundedTelescope type.type (some np) fun parameters _ =>
+    let rollUnrollValue ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ =>
       withLocalDeclD `value (privateCarrierAt parameters) fun value => do
         let proof ← if shape.changed then
             let plan ← mutualRollUnrollPlan all constructors members certificate eqi type.name
@@ -870,7 +868,7 @@ def buildMutualOneLayerFields (source : EDecl) (reserved : Std.HashSet Name)
       |>.map (·.2) |>.getD #[]
     let privateConstructorType ← generatedType (privateConstructor! member constructor.name)
     for index in [0:constructor.numFields] do
-      let projectionValue ← forallBoundedTelescope type.type (some np) fun parameters _ => do
+      let projectionValue ← forallBoundedTelescope (← kernelFormer type.type) (some np) fun parameters _ => do
         let telescope ← instForall privateConstructorType parameters
         forallBoundedTelescope telescope (some constructor.numFields) fun fields _ =>
           withLocalDeclD `self (mkAppN (.const member.publicSelf levels) parameters)

@@ -325,6 +325,13 @@ pair's, spliced for the safe `List`; its `unsafe` owners are exempt and have no
 model at all. `defhead_unitlike`'s owners are unit-like: one constructor, no
 field to project.
 
+`defhead_telescope` is 51: its owners are declared at definitions that unfold
+to their indices or sort, and each one-constructor owner — `SF`, `PI`, `NF`,
+`PW`, `DF`, `LB`, `IRF`, `Box`, the structures, the propositions' proof
+fields — has the intrinsic projections the same owner written out would have,
+plus the spliced skeletons', `_wcore` and pair support its nested owners bring
+in.
+
 `recursor_field_domain` is 2, and both are the spliced pair's: `P` is a
 two-constructor enumeration and `Owner` is a two-constructor recursive owner,
 so neither is asked for an intrinsic projection at all.  The fixture is about
@@ -333,7 +340,7 @@ selecting it. -/
 def expectedProjectionIotas : Array (String × Nat) :=
   #[("arm_f_guards", 0), ("arm_f_zip", 0), ("compose_sorts", 23),
     ("dead_owner_mention", 15), ("decline_no_eq", 13), ("default_ctor_iota", 2),
-    ("defhead_unitlike", 0),
+    ("defhead_telescope", 51), ("defhead_unitlike", 0),
     ("delta_dead_mention", 8),
     ("degenerate_graph", 1),
     ("dependent_fields", 13), ("e_dependent_field", 20), ("empty_no_base", 18),

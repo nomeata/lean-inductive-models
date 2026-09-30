@@ -193,6 +193,12 @@ definitions**; every `iota_j`, `unitlike`, `ruleK` and `eta` slot is a
 | `T._model.eta` | `T` is *structure-like* and not a proposition | `∀ p⃗ (x : T._model p⃗), x = C._model p⃗ (T._model.proj_0 p⃗ x) … (T._model.proj_{n-1} p⃗ x)` |
 | `R._model.ruleK` | `R` is exported with `k = true` | `∀ p⃗ M⃗ m⃗ (x : T._model p⃗ ı⃗_0), R._model p⃗ M⃗ m⃗ ı⃗_0 x = rhs_0` |
 
+`p⃗`, `i⃗` and `w` are read the way Lean's kernel reads them: it weak-head
+normalises the type former before each binder it peels, so `inductive SF :
+MyFam` with `def MyFam := Nat → Type` has one index, and `SF._model.proj_j`
+binds it, although `SF._model` restates the declared `MyFam`. A constructor's
+telescope, which the kernel reads as written, is read as written.
+
 `rhs_j` is the exported rule's own right-hand side — for a plain block, `m_j`
 applied to `x⃗` and to `R._model` at each recursive field. *Structure-like* is
 the kernel's own predicate: nonrecursive, unindexed, exactly one constructor.
@@ -290,11 +296,12 @@ independent of the kernel's.
 Those two are what an export's expression arena is interned modulo, upstream in
 `lean4export` as much as here, so they are not available to compare.
 
-Deciding what to compare against is a separate matter. Enumerating a
+Deciding what to compare against is a separate matter. Enumerating an
+owner's parameters and indices and reading its sort, enumerating a
 constructor's parameters and fields, deciding whether an owner or a field type
 is a proposition, and deciding which fields admit an intrinsic projection apply
-the kernel's own projection rules; that shape analysis does unfold transparent
-definitions and read their values. It settles which slots must exist and how
+the kernel's own rules; that shape analysis does unfold transparent
+definitions and read their values — δ, β and ζ, and nothing else. It settles which slots must exist and how
 their statements are spelled. It never loosens the comparison itself.
 
 `--check-input` runs it on models already in the input. `--check-output` runs
@@ -419,8 +426,9 @@ visibly ends.
 
 **Scope.** A `mutual` block with no nesting. A single-member block is handled
 by entries 3–10, while any block marked nested is handled by entry 1. Members
-are read as the kernel reads them, so a block declared at a definition that
-unfolds to its sort or index telescope is in scope; a block at a
+are read as the kernel reads them, as every owner is, so a block declared at a
+definition that unfolds to its sort, index telescope, or a later member's
+parameters is in scope; a block at a
 sometimes-`Prop` sort with a data projection its recursor cannot express is
 not (see [What is covered, and what is not](#what-is-covered-and-what-is-not)).
 
@@ -772,15 +780,16 @@ Run over this repository's entire fixture corpus, the tool declines exactly
 four declarations as unsupported, in three fixture files. Three of them fall
 into the first situation below and the fourth into the second; each is shown
 shrunk to a minimal declaration that still declines. That is a count of what
-this corpus contains, not a bound on what other inputs may hit. Two further
+this corpus contains, not a bound on what other inputs may hit. Three further
 behaviours are not declines but are still user-visible: one shares its cause
-with the first situation and is described inside the same entry, the other
-closes the list.
+with the first situation and is described inside the same entry, one stops
+the run without a verdict, and the last closes the list.
 
 | What you can hit | What the run does |
 | --- | --- |
 | a field whose universe level has an `imax` the declared universe only bounds | declines that declaration |
 | a `mutual` block at a sometimes-`Prop` sort with a one-constructor member that has a data field | declines that declaration |
+| an inductive whose type reaches its sort only by ι or projection reduction | stops with exit `3` |
 | a universe equality Lean's kernel cannot check | models it, and reports every such use |
 | a `Prop`-valued structure-like carrying data fields | models it, but silently omits some or all projections |
 
@@ -936,6 +945,35 @@ Ordinary Lean does not produce it: the `inductive` command refuses a
 resulting universe that is only sometimes `Prop`. `NC` in
 [`test/fixtures/inductive-models/mutual_kernel_sorts.lean`](test/fixtures/inductive-models/mutual_kernel_sorts.lean)
 is the corpus's instance.
+
+#### Stopped: a type former computed by ι or projection
+
+```lean
+def pick : Bool → Type 1
+  | true => Nat → Type
+  | false => Type
+
+inductive XM : pick true where
+  | mk : Nat → XM 0
+```
+
+Lean's kernel reads an inductive's parameters, indices and sort by weak-head
+normalising its type, and its normalisation includes ι and projection
+reduction, so `XM` is an indexed family with one index. The constructions
+read owners the same way, but the structural checker restates each owner's
+telescope with the export's own deliberately bounded normaliser — it unfolds
+definitions and β/ζ-reduces and does nothing else, because it is a pure
+function of the export text and not a second kernel — so it could verify no
+model of `XM`. The run stops before any construction, with exit `3` and a line
+naming the member. This is not a decline, which would call the input valid and
+merely unmodelled: Lean's kernel is unsound on inductives whose sort is
+computed this way, and the Kernel Arena's `bad/bugs/proj-of-stuck-prop`,
+`proj-of-subst-prop` and `rec-of-subst-prop` prove `False` through it. A type
+former reached through definitions alone (`def MyFam := Nat → Type`, chains of
+them, irreducible ones) is in scope on every route. The elaborator writes this
+shape only when a type is *written* as a `match` or a projection;
+[`test/fixtures/unverifiable/defhead_beyond_delta.lean`](test/fixtures/unverifiable/defhead_beyond_delta.lean)
+holds `XM` and a projection twin `XP`.
 
 #### Silent: a `Prop`-valued structure-like with data fields loses projections
 

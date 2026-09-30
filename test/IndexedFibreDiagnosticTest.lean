@@ -464,10 +464,15 @@ def run (root : String) : IO UInt32 := do
     Name.str hiddenRoot "rec", Name.str hiddenRoot "rec_iota_0",
     Name.str hiddenRoot "roll", Name.str hiddenRoot "unroll",
     Name.str hiddenRoot "unroll_roll", Name.str hiddenRoot "roll_unroll"]
-  state := state.check "reducible-hidden result former stays structurally legacy" <|
+  -- A result sort behind a definition is the same owner to the kernel as one
+  -- written out, and both sides read the former as the kernel does
+  -- (`kernelFormer`, `ExactNormalizationEnv.kernelFormer?`), so it takes the
+  -- same adapter. It used to stay on the legacy route because selection read
+  -- the type as written.
+  state := state.check "reducible-hidden result former takes the indexed fibre adapter" <|
     boundaryReport.generated.any (·.1 == `HiddenIndexed) &&
-      hiddenCertificate.all fun name => !boundaryNames.contains name
-  state := state.check "hidden-result legacy model is complete and checked" <|
+      hiddenCertificate.all boundaryNames.contains
+  state := state.check "hidden-result model is complete and checked" <|
     #[Naming.modelName `HiddenIndexed, Naming.modelName `HiddenIndexed.mk,
       Naming.modelName `HiddenIndexed.rec, Naming.iotaName `HiddenIndexed.rec 0].all
         boundaryNames.contains &&

@@ -46,7 +46,7 @@ def exactPrimNameTaken? (tname : Name) (ctors : Array (Name × Expr))
     let .induct blockTypes blockCtors _ ← indEDecl info.all.toArray | return none
     let some type := blockTypes.find? (·.name == tname) | return none
     if type.isKernelStructureLike blockCtors (.ofEnvironment env) &&
-        !(← isPropFormerType info.type) then
+        !(← kernelFormerIsProp info.type) then
       let n := Naming.etaName tname
       if env.constants.contains n then return some n
     if ctors.size == 1 then

@@ -242,6 +242,28 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
   if let some root := unsafeRoot? then
     if generation.nested || generation.mutualModels || generation.modelsSimpleInput root then
       rep := { rep with exempt := rep.exempt.push (root, unsafeExemptReason) }
+  -- **A member type the statement checker cannot open stops the run.** The
+  -- kernel reads an inductive's parameters, indices and sort off its type by
+  -- whnf ([`InductiveModels.kernelFormer`]), and so does every construction
+  -- here. The structural checker restates the same telescope with the
+  -- export's bounded normaliser, which unfolds definitions and β/ζ-reduces
+  -- and does nothing else ([`InductiveModels.ExactNormalizationEnv.kernelFormer?`]).
+  -- A type that reaches its sort only through ι or a projection —
+  -- `inductive X : pick true` with `pick` defined by `match` — is one whose
+  -- model the checker could not verify. That is not a decline, which would
+  -- assert a valid input this tool merely leaves unmodelled: Lean's kernel is
+  -- itself unsound on inductives whose sort is computed this way (the Kernel
+  -- Arena's `bad/bugs/proj-of-stuck-prop`, `proj-of-subst-prop` and
+  -- `rec-of-subst-prop` prove `False` through one), so the run stops without a
+  -- verdict (exit 3), before any construction, and says why. Every block whose
+  -- types are reached by definitions alone is unaffected.
+  if let .induct types@(root :: _) _ _ := replayD then
+    if unsafeRoot?.isNone && basisRoot?.isNone &&
+        (generation.nested || generation.mutualModels || generation.modelsSimpleInput root.name) then
+      if let some member := types.find? (constructionNormalizer.kernelFormer? ·.type |>.isNone) then
+        throwError "{member.name}'s type reaches its sort only by ι or projection reduction; \
+          the statement checker's δβζ normaliser cannot restate its telescope, so no model \
+          of it could be verified"
   -- No model declaration is ever installed in `mainEnv`. All constructors
   -- below work in the ambient disposable fork; closing an inductive record
   -- restores this exact source prefix plus accepted reusable support.

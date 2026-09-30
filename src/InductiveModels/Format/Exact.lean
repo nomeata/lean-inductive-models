@@ -162,15 +162,54 @@ constants literally. -/
 def ExactNormalizationEnv.beta (env : ExactNormalizationEnv) (expression : Expr) : Expr :=
   env.whnfCore expression false false {}
 
-/-- Whether an exported former ends in `Prop` after exact syntax-only
-normalization.  Π binders remain part of the former; only their final codomain
-decides propositionhood. -/
-partial def ExactNormalizationEnv.isPropositionFormer
+/-- **An inductive's type as the kernel reads it**, on the statement checker's
+side: the one place the checker, and every walk here that generation and
+checking share, reads an owner's parameters, indices and sort.
+
+`add_inductive` does not read an inductive's type as written: it whnf's the
+type, peels a `Π`, and whnf's again until a `Sort` is left, so a member may be
+declared at a definition that unfolds to its sort or to any part of its index
+telescope, through any chain of definitions. This is that walk with this
+module's bounded normaliser, returning `∀ p⃗ i⃗, Sort u` with every binder
+written, or `none` when no sort is reached that way. A type already written so
+is returned as it is, without a reduction.
+
+The generator's reading is `InductiveModels.kernelFormer`, which asks Lean's
+kernel itself. Each step of either is a head δ-unfolding and β/ζ-reduction,
+which both perform identically, so they expose the same binders; where the
+kernel would need more than this normaliser has — ι, a projection — the
+checker finds no former and fails closed. -/
+partial def ExactNormalizationEnv.kernelFormer? (env : ExactNormalizationEnv)
+    (type : Expr) : Option Expr :=
+  if written type then some type else go 0 type
+where
+  written : Expr → Bool
+    | .forallE _ _ body _ => written body
+    | .sort _ => true
+    | _ => false
+  go (depth : Nat) (type : Expr) : Option Expr :=
+    match env.whnf type with
+    | .forallE name domain body info =>
+      let value := mkFVar (FVarId.mk ((`_format.kernelFormer).mkNum depth))
+      (go (depth + 1) (body.instantiate1 value)).map fun rest =>
+        .forallE name domain (rest.abstract #[value]) info
+    | .sort level => some (.sort level)
+    | _ => none
+
+/-- The sort a former in [`ExactNormalizationEnv.kernelFormer?`]'s exposed form
+ends in, and how many binders precede it. -/
+def exposedFormerShape : Expr → Nat × Option Level
+  | .forallE _ _ body _ => let (n, level) := exposedFormerShape body; (n + 1, level)
+  | .sort level => (0, some level)
+  | _ => (0, none)
+
+/-- Whether an exported former ends in *literally* `Prop`, read as the kernel
+reads it ([`ExactNormalizationEnv.kernelFormer?`]). -/
+def ExactNormalizationEnv.isPropositionFormer
     (env : ExactNormalizationEnv) (expression : Expr) : Bool :=
-  match env.whnf expression with
-  | .forallE _ _ body _ => env.isPropositionFormer body
-  | .sort .zero => true
-  | _ => false
+  match env.kernelFormer? expression with
+  | some former => (exposedFormerShape former).2 == some .zero
+  | none => false
 
 /-! ### Recursion, decided by what survives reduction
 
@@ -444,9 +483,7 @@ def Export.intrinsicProjectionFieldsWith (x : Export)
       constructor.name == constructorName && constructor.induct == type.name
     | return #[]
   let declarations := exactDeclarationTypes x
-  let mut ownerType := type.type
-  while ownerType.isForall do ownerType := ownerType.bindingBody!
-  let ownerIsProp := normalizer.isPropositionFormer ownerType
+  let ownerIsProp := normalizer.isPropositionFormer type.type
   let mut current := constructor.type
   let mut locals : ExactLocals := #[]
   for parameterIndex in [:type.numParams] do

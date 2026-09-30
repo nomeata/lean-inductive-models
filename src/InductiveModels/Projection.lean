@@ -157,17 +157,6 @@ def projectionIotaUsesLiteralField (types : Array EIndType) (type : EIndType)
       (types.size == 1 && type.numIndices == 0 && type.numNested == 0 &&
         !normalizer.blockRecurses type constructors))
 
-/-- Whether the exact exported former ends in the literal sort `Prop`.
-
-This deliberately performs no unfolding or level normalization. Generation
-and checking both receive the same exported `EIndType`, so a reducible alias or
-a maybe-zero `Sort u` cannot make one side opt into the proof-irrelevant
-projection contract while the other does not. -/
-private partial def exactFormerEndsInProp : Expr → Bool
-  | .forallE _ _ body _ => exactFormerEndsInProp body
-  | .sort .zero => true
-  | _ => false
-
 /-- A kernel-projectable field of a one-constructor proposition has a literal
 projection rule on the source-simple route, independently of recursion or
 indices.
@@ -194,22 +183,33 @@ against the raw source syntax there. `all` pins that exclusion — and pins it
 by the same single-member reading that the rest of this predicate uses.
 
 Maybe-zero formers are also intentionally excluded: at a positive
-instantiation their fields and values need not be proof-irrelevant. -/
-def propositionProjectionIotaUsesLiteralField (type : EIndType) : Bool :=
+instantiation their fields and values need not be proof-irrelevant. The sort
+is read as the kernel reads it
+([`InductiveModels.ExactNormalizationEnv.isPropositionFormer`]), so `inductive
+SP : MyPred` with `def MyPred := Nat → Prop` is a proposition exactly as
+`inductive SP : Nat → Prop` is, and the level is compared literally, so
+`Sort (max 0 0)` is not. Generation and checking ask this of the same bounded
+normaliser over the same source definitions, so they cannot disagree. -/
+def propositionProjectionIotaUsesLiteralField (normalizer : ExactNormalizationEnv)
+    (type : EIndType) : Bool :=
   type.all == [type.name] && type.ctors.length == 1 &&
-    exactFormerEndsInProp type.type
+    normalizer.isPropositionFormer type.type
 
-/-- The literal serialized telescope boundary shared by generation and
-checking.  Deliberately does not unfold a reducible result former: selection
-must not depend on an environment the serialized certificate cannot replay. -/
-def indexedFibreOneLayerTypeShape (numParams numIndices : Nat)
-    (type : Expr) : Bool := Id.run do
-  let mut type := type
-  for _ in [0:numParams + numIndices] do
-    let .forallE _ _ body _ := type | return false
-    type := body
-  let .sort level := type | return false
-  return level.normalize.isNeverZero
+/-- The owner-type boundary of the indexed fibre adapter, shared by
+generation and checking: a parameter-and-index telescope of the exported arity
+ending in a never-zero sort, read as the kernel reads the owner's type
+([`InductiveModels.ExactNormalizationEnv.kernelFormer?`]). An owner whose
+indices sit behind a definition (`inductive SF : MyFam`) is the same owner to
+the kernel as one that writes them, and takes the same adapter. Both sides
+read it with the same bounded normaliser over the source definitions, which
+the certificate check has in hand, so they select alike. -/
+def indexedFibreOneLayerTypeShape (normalizer : ExactNormalizationEnv)
+    (numParams numIndices : Nat) (type : Expr) : Bool :=
+  match normalizer.kernelFormer? type with
+  | none => false
+  | some former => match exposedFormerShape former with
+    | (arity, some level) => arity == numParams + numIndices && level.normalize.isNeverZero
+    | (_, none) => false
 
 /-- Does `needle` occur in `expression`?  Memoized: a field type here can be
 a DAG whose tree is astronomically large. -/
@@ -319,7 +319,7 @@ The owner's index telescope has no bound.  `roll`/`unroll` are the identity at
 the owner's whole parameter-and-index arity and their laws are reflexivity, so
 an index is an argument the certificate carries, never a condition on it.  A
 single-member block is pinned by `all`; the caller's array is not consulted. -/
-def indexedFibreOneLayerProjectionFamily
+def indexedFibreOneLayerProjectionFamily (normalizer : ExactNormalizationEnv)
     (type : EIndType) (constructor : ECtor) (recursor : ERec) : Bool := Id.run do
   unless type.all == [type.name] &&
       type.ctors == [constructor.name] &&
@@ -328,7 +328,7 @@ def indexedFibreOneLayerProjectionFamily
       recursor.all == [type.name] && recursor.name == Name.str type.name "rec" &&
       recursor.numParams == type.numParams && recursor.numIndices == type.numIndices &&
       recursor.numMotives == 1 && recursor.numMinors == 1 && !recursor.k &&
-      !recursor.isUnsafe && indexedFibreOneLayerTypeShape
+      !recursor.isUnsafe && indexedFibreOneLayerTypeShape normalizer
         type.numParams type.numIndices type.type do return false
   let [rule] := recursor.rules | return false
   unless rule.ctor == constructor.name && rule.nfields == constructor.numFields do

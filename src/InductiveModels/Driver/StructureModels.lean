@@ -40,7 +40,7 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
   for k in [0:types.size] do
     let type := types[k]!
     if type.isKernelStructureLike constructors.toList normalizer &&
-        !(← isPropFormerType type.type) then
+        !(← kernelFormerIsProp type.type) then
       eligible := eligible.push k
   if eligible.isEmpty then return is
   unless types.size == is.numAll && is.selfNames.size == is.numAll do
@@ -103,7 +103,7 @@ def addStructureEtaTheorems (types : Array EIndType) (constructors : Array ECtor
         | badShape s!"{type.name} has no intrinsic modeled projection for field {fieldIndex}"
       modelProjections := modelProjections.push modelProjection
 
-    let declaration ← forallBoundedTelescope typeInfo.type (some type.numParams)
+    let declaration ← forallBoundedTelescope (← kernelFormer typeInfo.type) (some type.numParams)
         fun params _ => do
       let carrier := mkAppN (.const modelType us) params
       let carrierLevel ← ilevel carrier

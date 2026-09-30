@@ -191,6 +191,18 @@ def main (args : List String) : IO UInt32 := do
     malformedBasisRun.exitCode == 2 && malformedBasisRun.stdout.isEmpty &&
       (malformedBasisRun.stderr.splitOn "input's Eq is not Lean's").length > 1
 
+  -- An owner whose type reaches its sort only by ι or a projection stops the
+  -- run without a verdict: the structural checker cannot restate its
+  -- telescope, and Lean's kernel is unsound on that shape (the Arena's
+  -- `bad/bugs/*-subst-prop` and `proj-of-stuck-prop`), so it is not a decline.
+  let beyondDelta ← runInductiveModels binary [
+    "--inductives", "--check-input", "--check-output", "--type-check-input",
+    "--type-check-generated", "--no-output",
+    s!"{root}/test/fixtures/unverifiable/defhead_beyond_delta.ndjson"]
+  state := state.check "a type former beyond δβζ stops with exit 3 and names the owner" <|
+    beyondDelta.exitCode == 3 && beyondDelta.stdout.isEmpty &&
+      beyondDelta.stderr.contains "XP's type reaches its sort only by ι or projection reduction"
+
   -- The Arena CI path exercises the complete tool: all generation branches,
   -- both structural checks, the input kernel gate, and the generated-island
   -- kernel gate. A

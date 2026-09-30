@@ -463,7 +463,8 @@ def main (args : List String) : IO UInt32 := do
   let mut unparsable := 0
   let mut corpusFailures : Array String := #[]
   for directory in #["test/fixtures/inductive-models",
-      "test/fixtures/inductive-models/filtered", "test/fixtures/rejected"] do
+      "test/fixtures/inductive-models/filtered", "test/fixtures/rejected",
+      "test/fixtures/unverifiable"] do
     let path : System.FilePath := s!"{root}/{directory}"
     unless ← path.isDir do continue
     let mut entries : Array System.FilePath := #[]

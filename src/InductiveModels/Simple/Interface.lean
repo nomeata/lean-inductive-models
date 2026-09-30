@@ -69,8 +69,9 @@ def phase1IndexedFibreOneLayerEligible (tname : Name) (np : Nat)
   let erasureBare ← match ← (erasureBareFailure? tname np type.numIndices exportCtors).run with
     | .ok reason => pure reason.isNone
     | .error _ => pure false
-  return indexedFibreOneLayerTypeShape np type.numIndices memberTy &&
-    indexedFibreOneLayerProjectionFamily sourceType sourceConstructor
+  let normalizer := ExactNormalizationEnv.ofEnvironment (← getEnv)
+  return indexedFibreOneLayerTypeShape normalizer np type.numIndices memberTy &&
+    indexedFibreOneLayerProjectionFamily normalizer sourceType sourceConstructor
       sourceRecursor && erasureBare && exportCtors.size == 1 &&
     type.all == [tname] && type.ctors.length == 1 && type.numIndices > 0 &&
     type.numNested == 0 && type.isRec == sourceType.isRec && !type.isUnsafe

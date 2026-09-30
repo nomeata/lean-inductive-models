@@ -100,7 +100,15 @@ private structure SpCtx where
 
 private abbrev SpM := ReaderT SpCtx (StateT SpState (Except String))
 
-/-- Peel `n` `∀` binders, collecting their types. -/
+/-- Peel `n` `∀` binders, collecting their types.
+
+**Syntactic on purpose, and only ever asked of parameters.** The kernel reads
+a nested block's parameters exactly this way: its nested-inductive pre-pass
+opens the first member's parameters with `get_params`, which requires written
+`Π`s and refuses a declaration whose parameters hide behind a definition, and
+it instantiates a container's parameters with `instantiate_pi_params`, which
+does the same. Indices and sorts, which the kernel does whnf, are read
+elsewhere ([`InductiveModels.kernelFormer`]). -/
 def peelParams (ty : Expr) (n : Nat) : Except String (Array Expr) := do
   let mut out := #[]
   let mut cur := ty
@@ -114,7 +122,9 @@ def peelParams (ty : Expr) (n : Nat) : Except String (Array Expr) := do
 def wrapParams (ps : Array Expr) (body : Expr) : Expr :=
   ps.foldr (fun t b => .forallE `p t b .default) body
 
-/-- Peel `args.size` binders and substitute, leaving the residual type. -/
+/-- Peel `args.size` binders and substitute, leaving the residual type.
+Syntactic for the reason [`InductiveModels.peelParams`] gives: only a
+container's or member's parameters are peeled here. -/
 private def atParams (ty : Expr) (args : Array Expr) : Except String Expr := do
   let mut cur := ty
   for a in args do

@@ -10,7 +10,8 @@ own export records, plus the correspondence table each inductive record
 determines and the discovered-family record built on it.  Nothing is inferred
 or compared definitionally; the export's own transparent definitions are
 unfolded only where the kernel's shape analysis unfolds them — to decide
-recursion and unit-likeness, and to read a former's result sort.
+recursion and unit-likeness, and to read a former's parameters, indices and
+sort ([`InductiveModels.ExactNormalizationEnv.kernelFormer?`]).
 -/
 
 open Lean
@@ -91,8 +92,8 @@ def iotaProposition? (x : Export) (ownerDecl : Nat) (recursorName : Name)
   iotaPropositionWith? x (constructorRecords x) ownerDecl recursorName ruleIndex
 
 /-- The literal unit-like proposition for one exported member, read with
-`normalizer` — the index's, which sees the source prefix the owner's sort may
-be defined in, not only the island at hand.  The carrier is
+`normalizer` — the index's, which sees the source prefix the owner's parameters
+and sort may be defined in, not only the island at hand.  The carrier is
 still named by the original here; [`Correspondence.expectedIotaType`] performs
 the same simultaneous, ambient-`Eq`-preserving rewrite as it does for recursor
 rules. -/
@@ -101,13 +102,13 @@ def unitlikeProposition? (x : Export) (normalizer : ExactNormalizationEnv)
   let .induct types constructors _ ← x.decls[ownerDecl]? | none
   let type ← types.find? (·.name == owner)
   unless type.isKernelUnitlike constructors normalizer do none
-  let (allBinders, result) := openForalls ((`_check.unitlike).append owner) type.type
+  -- The former as the kernel reads it: the equality lives in the carrier's
+  -- sort, which for `inductive U : MyProp` with `def MyProp := Prop` is `Prop`
+  -- only after unfolding, so its witness is an `Eq.{0}`.
+  let former ← normalizer.kernelFormer? type.type
+  let (allBinders, result) := openForalls ((`_check.unitlike).append owner) former
   unless allBinders.size == type.numParams do none
-  -- The equality lives in the carrier's sort, which is the former's result
-  -- **after** the export's own head normalization — `inductive U : MyProp`
-  -- with `def MyProp := Prop` is a proposition, and its witness is an
-  -- `Eq.{0}` — exactly as `checkEta` reads the same sort.
-  let .sort level := normalizer.whnf result | none
+  let .sort level := result | none
   let params := allBinders.map (·.value)
   let carrier := mkAppN (.const owner (type.levelParams.map Level.param)) params
   let xBinder : OpenBinder :=

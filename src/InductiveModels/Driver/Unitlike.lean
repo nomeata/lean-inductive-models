@@ -105,7 +105,7 @@ def addUnitlikeTheorems (types : Array EIndType) (constructors : Array ECtor)
     let ctorInfo ← generatedDeclInfo is modelConstructor
     let ctorType := ctorInfo.type.instantiateLevelParams ctorInfo.levelParams us
 
-    let declaration ← forallBoundedTelescope typeInfo.type (some type.numParams) fun ps _ => do
+    let declaration ← forallBoundedTelescope (← kernelFormer typeInfo.type) (some type.numParams) fun ps _ => do
       let carrier := mkAppN (.const modelType us) ps
       let constructor ← do
         let ctorTail ← instForall ctorType ps

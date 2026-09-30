@@ -217,30 +217,27 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
   let r := pl.numAll
   let some root := all[0]? | badShape "the declaration has no members"
   let buildRoot := buildRoot?.getD root
-  let some rootT := pl.types[0]? | badShape "the plan has no members"
+  unless pl.types.size > 0 do badShape "the plan has no members"
   -- The block's resultant sort and each member's index count. **The
   -- declaration's indices are carried**: what is left after the parameters is
   -- an index telescope, and every index vector in the model is read off a type
   -- in hand rather than rebuilt. **Every real member's sort, not just the
   -- first's**: a mutual block whose members land at different sorts would give
   -- `Eq` two universes and one `g.u` to write them at.
-  let sortOf : Expr → GenM (Nat × Level) := fun t => do
-    let mut cur := t
-    for _ in [0:np] do
-      match cur with
-      | .forallE _ _ b _ => cur := b
-      | _ => badShape "the declaration has fewer binders than parameters"
-    let mut ni := 0
-    repeat
-      match cur with
-      | .forallE _ _ b _ => cur := b; ni := ni + 1
-      | _ => break
-    let .sort u := cur | badShape "a block member does not land in a sort"
-    return (ni, u)
-  let nidx ← pl.types.mapM fun t => do return (← sortOf t.type).1
-  let u := (← sortOf rootT.type).2
+  -- Each member's type as the kernel reads it ([`InductiveModels.kernelFormer`]):
+  -- a member — or a mimic, whose type is its container's at the occurrence —
+  -- may sit at a definition that unfolds to its indices or its sort. The
+  -- internal block is declared at these; each public carrier restates the
+  -- member's declared type.
+  let formers ← pl.types.mapM fun t => kernelFormer t.type
+  let sortOf : Expr → GenM (Nat × Level) := fun former => do
+    let (arity, u) := formerShape former
+    unless np ≤ arity do badShape "the declaration has fewer binders than parameters"
+    return (arity - np, u)
+  let nidx ← formers.mapM fun t => do return (← sortOf t).1
+  let u := (← sortOf formers[0]!).2
   for k in [0:r] do
-    unless (← sortOf pl.types[k]!.type).2 == u do
+    unless (← sortOf formers[k]!).2 == u do
       badShape "a mutual block whose members land at different sorts"
   let primaryCarrier := Naming.modelName buildRoot
   let exactPrimaryCarrier := Naming.modelName root
@@ -317,7 +314,7 @@ def iso (all : Array Name) (lparams : List Name) (numParams : Nat)
     (Array.range pl.types.size).foldl
       (fun m i => m.insert pl.types[i]!.name (0, .const (b i) us)) {}
   let its : List InductiveType := (Array.range pl.types.size).toList.map fun i =>
-    { name := b i, type := pl.types[i]!.type
+    { name := b i, type := formers[i]!
       ctors := (Array.range pl.types[i]!.ctors.size).toList.map fun j =>
         { name := blockCtors[i]![j]!, type := restore ren pl.types[i]!.ctors[j]!.2 } }
   let blockDecl := Declaration.inductDecl lparams np its false

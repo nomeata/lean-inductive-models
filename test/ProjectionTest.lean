@@ -469,7 +469,7 @@ def main : IO UInt32 := do
       (Check.check propGenerated).all (fun violation => violation.familyOwner != `PropRecIdx)
   state := state.check "maybe-zero formers do not enter the Prop literal contract" <|
     (ownerAndRecursor? primRaw `PI).any fun (type, _) =>
-      !propositionProjectionIotaUsesLiteralField type
+      !propositionProjectionIotaUsesLiteralField primRaw.exactNormalizationEnv type
 
   -- Literal means source-literal, not transport-free. The fixture writes a
   -- definitionally trivial Eq.rec in the dependent proof field's domain. It
@@ -496,10 +496,10 @@ def main : IO UInt32 := do
   let mutualBoundaryRule := Naming.projectionIotaName `MutualPropA 1
   state := state.check "the nested Prop owner enters the propositional literal tranche" <|
     (ownerAndRecursor? propBoundaryRaw `NestedProp).any fun (type, _) =>
-      propositionProjectionIotaUsesLiteralField type
+      propositionProjectionIotaUsesLiteralField propBoundaryRaw.exactNormalizationEnv type
   state := state.check "the plain-mutual Prop owner stays outside it" <|
     (ownerAndRecursor? propBoundaryRaw `MutualPropA).all fun (type, _) =>
-      !propositionProjectionIotaUsesLiteralField type
+      !propositionProjectionIotaUsesLiteralField propBoundaryRaw.exactNormalizationEnv type
   state := state.check "nested and mutual Prop controls expose dependent proof fields" <|
     intrinsicFieldsFor propBoundaryRaw `NestedProp == #[0, 1, 2] &&
       intrinsicFieldsFor propBoundaryRaw `MutualPropA == #[0, 1, 2] &&
