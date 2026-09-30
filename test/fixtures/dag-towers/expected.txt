@@ -7,7 +7,9 @@
 # every owner in it is in scope, so every row is `0 accept`.  The third column
 # is con-leche's verdict on its own, prelude-less spelling of the same tower
 # (`-` for fixtures that are not ported from con-leche).
+0 accept  - box_mutual_tower.ndjson
 0 accept  - box_tower.ndjson
+0 accept  - box_tree_tower.ndjson
 0 accept  - ctor_field_towers.ndjson
 0 accept  - tower_basis.ndjson
 0 accept  2 tower_axiom.ndjson
