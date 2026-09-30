@@ -524,14 +524,26 @@ and under the same rule: where nothing later mentions it, the recursor, the
 ι rules and a one-constructor declaration's projection rule use the box's
 round-trip lemmas instead of asking the kernel to confirm the round trip.
 
+**Levels.** The tree is built at the declaration's own sort, whatever
+never-`Prop` level that is — including one with no predecessor, such as
+`Sort (max 1 u)` holding a field at `Sort u`, for which no `Type ℓ` would
+do. That is why the support library below is written with `Sort`-valued
+paths, labels and edges rather than `List`, `Option` and `Sigma`.
+
 **Dependencies.** The support library (the source calls it the `_wcore`
 fragment) — a fixed export of the well-founded-tree toolkit, twenty
-inductive types (`List`, `Option`, `Sigma`, `Subtype`, `Bool`, `Acc`,
-`WellFounded`, `Or`, `HEq`, …, mostly under a reserved `_wcore` name
+inductive types (its own `PList` and `POption`, `PSigma`, `Subtype`, `Bool`,
+`Acc`, `WellFounded`, `Or`, `HEq`, …, mostly under a reserved `_wcore` name
 prefix) with the definitions and proofs over them — spliced once into the
 output. Every inductive in it re-enters this list and goes wherever its own
-shape sends it: `_wcore.Subtype` to entry 10, `_wcore.List` to entry 9,
+shape sends it: `_wcore.Subtype` to entry 10, `_wcore.WT.PList` to entry 9,
 `_wcore.Or` to entry 7, `_wcore.HEq` to entry 6, `_wcore.Acc` to entry 5.
+The `_wcore` names are reserved. An input that already declares the library —
+this tool's own output fed back in — has it reused, but only if the
+constants the tree arm names state what this version's do; an input that
+declares a `_wcore` name otherwise, such as the output of an earlier version
+whose library was `Type`-valued, has the owner that needs the library
+declined with `name taken`.
 
 ### 5. Recursive subsingletons at `Prop`: recursion recovered from its graph (the graph arm)
 

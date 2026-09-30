@@ -237,7 +237,7 @@
 0 accept  0 e2e/opaque_decl.ndjson
 2 scope   0 e2e/pre_decline_imax_field.ndjson           # out-of-scope decline: a tight field tower at `Sort imax u v`; con-leche accepts
 1 reject  1 e2e/prelude_bool_redefined.ndjson
-0 accept  0 e2e/presieve_ofarrows_cone.ndjson.gz
+2 scope   0 e2e/presieve_ofarrows_cone.ndjson.gz        # out-of-scope decline: an earlier version's output, declaring that version's `Type`-valued `_wcore` W core under the names this tool reserves for its own; con-leche accepts
 0 accept  0 e2e/proj_share.ndjson
 1 reject  1 e2e/proj_typename_bad.ndjson
 0 accept  0 e2e/prop_proj.ndjson

@@ -4,12 +4,21 @@ transitive closure — which is what makes this a fragment of ~250 declarations
 rather than the whole of `Init`.
 
 **One construction, two instantiations.** The core below is generic in `K`,
-`B' : K → Type u` and `tg : A → K`. The tagged and untagged W are that one
+`B' : K → Sort u` and `tg : A → K`. The tagged and untagged W are that one
 core at `K := Nat, tg := PSigma'.fst`
-and at `K := A, tg := id`. `K : Type w` and not `K : Type` for exactly that
-reason, and widening it cost no proof change at all: `Edge`, `PTree` and `W`
-land at `Type (max w u)`, which normalises to `Type u` at `w := 0` and at
-`w := u` alike.
+and at `K := A, tg := id`. `K : Sort w` and not `K : Type` for exactly that
+reason: `Edge`, `PTree` and `W` land at `Sort (max 1 w u)`, which normalises
+to `Sort (max 1 u)` at `w := 1` and at `w := u` alike.
+
+**Every sort is a `Sort`, never a `Type`.** A tree-arm owner's sort is any
+never-`Prop` level, and `Sort (max 1 u)` is one with no predecessor: a `W`
+fixed at `Type ℓ` has no `ℓ` for it — `ℓ + 1` would have to be `1` at
+`u := 0` and `u` at `u := 5`. So the paths and the labels are the
+`Sort`-valued `PList` and `POption` below rather than `List` and `Option`,
+the edge is `PSigma` rather than `Sigma`, and `W` lands at
+`Sort (max 1 w u)`, which is the owner's own sort whenever `u` is — the
+tree arm instantiates `u` at that sort itself
+(`test/fixtures/inductive-models/tree_sort_level.lean`).
 
 **The last two roots are not part of the construction**; they are the
 `DecidableEq K` each instantiation needs, and **the closure of the other four
@@ -53,27 +62,49 @@ Every binder below is written out rather than taken from a `section variable`.
 mentions only `A` and `K` — and once one definition needs it explicit, mixing
 the two through section variables is more confusing than the repetition. -/
 
+/-- A path: a list at any sort. `List` is `Type`-valued, and a path over
+branch types at `Sort u` must not lift them. -/
+inductive PList (α : Sort u) : Sort (max 1 u) where
+  | nil : PList α
+  | cons (head : α) (tail : PList α) : PList α
+
+/-- An optional label at any sort, for the same reason. -/
+inductive POption (α : Sort u) : Sort (max 1 u) where
+  | none : POption α
+  | some (val : α) : POption α
+
+def POption.isSome {α : Sort u} : POption α → Bool
+  | .none => false
+  | .some _ => true
+
+def POption.get {α : Sort u} : (o : POption α) → o.isSome = true → α
+  | .some a, _ => a
+
+theorem POption.some_get {α : Sort u} : (o : POption α) → (h : o.isSome = true) →
+    POption.some (o.get h) = o
+  | .some _, _ => rfl
+
 /-- One step of a path: which constructor-tag, and which of its branches. -/
-abbrev Edge (K : Type w) (B' : K → Type u) : Type (max w u) := Σ t : K, B' t
+abbrev Edge (K : Sort w) (B' : K → Sort u) : Sort (max 1 w u) := PSigma B'
 
 /-- A raw tree: a partial labelling of paths. The label at a path is the
 **whole** `A`, so nothing about the constructor's data is lost by recording
 only the tag on the path itself. -/
-abbrev PTree (K : Type w) (B' : K → Type u) (A : Type u) : Type (max w u) :=
-  List (Edge K B') → Option A
+abbrev PTree (K : Sort w) (B' : K → Sort u) (A : Sort u) : Sort (max 1 w u) :=
+  PList (Edge K B') → POption A
 
-variable {K : Type w} {A : Type u} {B' : K → Type u}
+variable {K : Sort w} {A : Sort u} {B' : K → Sort u}
 
-def subt (t : PTree K B' A) (x : Edge K B') : PTree K B' A := fun p => t (x :: p)
+def subt (t : PTree K B' A) (x : Edge K B') : PTree K B' A := fun p => t (.cons x p)
 
-def nowhere : PTree K B' A := fun _ => none
+def nowhere : PTree K B' A := fun _ => .none
 
 /-- One step of unfolding whose least fixpoint is "is a well-founded tree". The
 third clause — subtrees hanging off a *tag* other than the node's own are
 empty — is what makes `canon` provable. It quantifies over tags rather than
 labels. -/
 def Step (tg : A → K) (S : PTree K B' A → Prop) (t : PTree K B' A) : Prop :=
-  ∃ a : A, t [] = some a ∧ (∀ b : B' (tg a), S (subt t ⟨tg a, b⟩)) ∧
+  ∃ a : A, t .nil = .some a ∧ (∀ b : B' (tg a), S (subt t ⟨tg a, b⟩)) ∧
     ∀ x : Edge K B', x.1 ≠ tg a → subt t x = nowhere
 
 theorem Step.mono {tg : A → K} {S S' : PTree K B' A → Prop} (hss : ∀ u, S u → S' u)
@@ -92,7 +123,7 @@ theorem Good.post {tg : A → K} {t : PTree K B' A} (h : Good tg t) : Step tg (G
   h (Step tg (Good tg)) (fun _u hu => Step.mono (fun _v hv => Good.pre hv) hu)
 
 /-- The carrier. `B'` is explicit because nothing else determines it. -/
-def W (B' : K → Type u) (tg : A → K) : Type (max w u) := {t : PTree K B' A // Good tg t}
+def W (B' : K → Sort u) (tg : A → K) : Sort (max 1 w u) := {t : PTree K B' A // Good tg t}
 
 /-- The raw tree of a node labelled `a` with children `f`.
 
@@ -101,12 +132,12 @@ guarding at the full label type would instead require a decision procedure
 there. Everything downstream costs what it costs because of this one line. -/
 def mk [DecidableEq K] (tg : A → K) (a : A) (f : B' (tg a) → PTree K B' A) :
     PTree K B' A
-  | [] => some a
-  | x :: p => if h : x.1 = tg a then f (h ▸ x.2) p else none
+  | .nil => .some a
+  | .cons x p => if h : x.1 = tg a then f (h ▸ x.2) p else .none
 
 variable [DecidableEq K] {tg : A → K}
 
-theorem mk_nil (a : A) (f : B' (tg a) → PTree K B' A) : mk tg a f [] = some a := rfl
+theorem mk_nil (a : A) (f : B' (tg a) → PTree K B' A) : mk tg a f .nil = .some a := rfl
 
 theorem mk_sub (a : A) (f : B' (tg a) → PTree K B' A) (b : B' (tg a)) :
     subt (mk tg a f) ⟨tg a, b⟩ = f b := by
@@ -120,16 +151,16 @@ def sup (a : A) (f : B' (tg a) → W B' tg) : W B' tg :=
   ⟨mk tg a (fun b => (f b).1),
    Good.pre ⟨a, rfl, fun b => by rw [mk_sub]; exact (f b).2, fun x hx => mk_ne _ _ x hx⟩⟩
 
-theorem isSome_root (w : W B' tg) : (w.1 []).isSome := by
+theorem isSome_root (w : W B' tg) : (w.1 .nil).isSome := by
   obtain ⟨a, ha, _, _⟩ := w.2.post
   rw [ha]; rfl
 
-def root (w : W B' tg) : A := (w.1 []).get (isSome_root w)
+def root (w : W B' tg) : A := (w.1 .nil).get (isSome_root w)
 
-theorem root_spec (w : W B' tg) : w.1 [] = some (root w) := (Option.some_get _).symm
+theorem root_spec (w : W B' tg) : w.1 .nil = .some (root w) := (POption.some_get _ _).symm
 
-theorem root_eq {w : W B' tg} {a : A} (h : w.1 [] = some a) : root w = a := by
-  rw [root_spec] at h; exact Option.some.inj h
+theorem root_eq {w : W B' tg} {a : A} (h : w.1 .nil = .some a) : root w = a := by
+  rw [root_spec] at h; exact POption.some.inj h
 
 theorem good_sub (w : W B' tg) (b : B' (tg (root w))) :
     Good tg (subt w.1 ⟨tg (root w), b⟩) := by
@@ -147,17 +178,17 @@ theorem canon (w : W B' tg) : w = sup (root w) (kids w) := by
   subst hra
   funext p
   match p with
-  | [] => exact ha
-  | ⟨x1, x2⟩ :: p =>
+  | .nil => exact ha
+  | PList.cons ⟨x1, x2⟩ p =>
     by_cases h : x1 = tg (root w)
     · subst h
-      show w.1 (⟨tg (root w), x2⟩ :: p)
+      show w.1 (PList.cons ⟨tg (root w), x2⟩ p)
           = subt (mk tg (root w) (fun b => (kids w b).1)) ⟨tg (root w), x2⟩ p
       rw [mk_sub]
       rfl
     · have := congrFun (hm ⟨x1, x2⟩ h) p
-      show w.1 (⟨x1, x2⟩ :: p) = mk tg (root w) (fun b => (kids w b).1) (⟨x1, x2⟩ :: p)
-      rw [show w.1 (⟨x1, x2⟩ :: p) = subt w.1 ⟨x1, x2⟩ p from rfl, this]
+      show w.1 (PList.cons ⟨x1, x2⟩ p) = mk tg (root w) (fun b => (kids w b).1) (PList.cons ⟨x1, x2⟩ p)
+      rw [show w.1 (PList.cons ⟨x1, x2⟩ p) = subt w.1 ⟨x1, x2⟩ p from rfl, this]
       simp [mk, nowhere, h]
 
 theorem root_sup (a : A) (f : B' (tg a) → W B' tg) : root (sup a f) = a := root_eq rfl

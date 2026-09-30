@@ -43,7 +43,6 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
   let publicRecTy := site.publicRecTy
   let emptySlots := site.emptySlots
   let armEmpty := site.armEmpty
-  let wPlan := site.wPlan
   let armTree := site.armTree
   let wFN := site.wFN
   let uL := site.uL
@@ -53,7 +52,6 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
   let wBFn := site.wBFn
   let wTgAt := site.wTgAt
   let wDecEq := site.wDecEq
-  let wLowSelfAt := site.wLowSelfAt
   let wCtorParts := site.wCtorParts
   let mut out := st.out
   -- ── the ι rules ──
@@ -130,9 +128,8 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
             -- lemmas ([`InductiveModels.PrimSite.wIotaAt`]).
             if let some proof ← site.wIotaAt pre j fields lhs α then pure proof else
             let (a, disp) ← wCtorParts ps j fields
-            let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
             pure (mkAppN (.const wCoreIota [uL, v, wKL])
-              #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, coreMotive,
+              #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, motive,
                 mkAppN (.const wFN recLs) pre, a, disp])
           else if armEmpty then do
             let some k := emptySlots[j]!

@@ -61,12 +61,12 @@ partial def levelFamily : Nat → Array Level
     let imaxes := previous.flatMap fun a => previous.map fun b => mkLevelIMax' a b
     previous ++ succs ++ maxes ++ imaxes
 
-/-- **The tree arm's carrier plan delivers at every never-zero sort.**
+/-- **The tree arm's core lands at the owner's sort at every never-zero sort.**
 
-The W core fixes its `A` and `B'` at `Type u`, so the arm needs the public
-`Sort w` to be a successor level or to be reachable from a `Type` core by the
-constrained lift, whose result sort is `max 1 w`.  `wCarrierPlan` takes the
-second road exactly when `isLevelDefEq (max 1 w) w`.
+The W core takes `A` and `B'` at `Sort u` and lands at `Sort (max 1 w u)`;
+the arm instantiates `u` at the owner's sort `w` and the core's `w` at `1` or
+at `w`, so its carrier is at `Sort (max 1 w)`, and the arm asserts
+`isLevelDefEq (max 1 w) w` as an invariant of every owner it is given.
 
 That test succeeds for **every** never-zero `w`, and it is not a coincidence of
 the specimens in the corpus: Lean's level normal form drops an explicit numeral
@@ -78,29 +78,18 @@ property, and this enumeration says so over the whole depth-2 grammar rather
 than over the levels that happen to appear in a fixture.
 
 The returned triple is (levels tested, never-zero levels, failures). -/
-def auditCarrierPlans : MetaM (Nat × Nat × Array Level) := do
+def auditCoreLevels : MetaM (Nat × Nat × Array Level) := do
   let mut neverZero := 0
   let mut bad : Array Level := #[]
   let family := levelFamily 2
   for w in family do
-    let normal := w.normalize
-    unless normal.isNeverZero do
-      -- The complement is asserted too: a level that may be zero must *not*
-      -- take the lift, or the arm would claim an exact sort it cannot land at.
-      if (← isLevelDefEq (mkLevelMax' (.succ .zero) w) w) then bad := bad.push w
-      continue
-    neverZero := neverZero + 1
-    let plan ← (wCarrierPlan true w).run
-    match plan with
-    | .error _ => bad := bad.push w
-    | .ok plan =>
-      -- What the arm needs: the core level is a successor, so `uL` exists, and
-      -- the plan's carrier lands at the declared sort.
-      let usable := plan.coreLevel.normalize.dec.isSome
-      let exact ←
-        if plan.lifted then isLevelDefEq (mkLevelMax' plan.coreLevel w) w
-        else pure (normal.dec.isSome)
-      unless usable && exact do bad := bad.push w
+    let exact ← isLevelDefEq (mkLevelMax' (.succ .zero) w) w
+    -- The complement is asserted too: a level that may be zero must *not*
+    -- pass, or the arm would claim an exact sort it cannot land at.
+    if w.normalize.isNeverZero then
+      neverZero := neverZero + 1
+      unless exact do bad := bad.push w
+    else if exact then bad := bad.push w
   return (family.size, neverZero, bad)
 
 def main : IO UInt32 := do
@@ -112,7 +101,7 @@ def main : IO UInt32 := do
   let .ok (names, punitExact, idempotent, noLegacy, defeqs, basisClean) := result
     | IO.eprintln "exact-sort lift support declined"; return 1
   let ((tested, neverZero, badPlans), _) ←
-    Core.CoreM.toIO (MetaM.run' auditCarrierPlans) context { env }
+    Core.CoreM.toIO (MetaM.run' auditCoreLevels) context { env }
   let complete :=
     [`PSigma', `PSigma'.mk, `PSigma'.fst, `PSigma'.snd, `PSigma'.rec',
       `PSigma'.fst_mk, `PSigma'.snd_mk, `PSigma'.rec'_mk,
@@ -124,12 +113,12 @@ def main : IO UInt32 := do
     ("derived expressions contain no PULiftP", noLegacy),
     ("down, arbitrary rec iota, and full eta are definitional", defeqs),
     ("PULiftP is absent from the primitive basis", basisClean),
-    ("the tree arm's carrier plan delivers at every never-zero level", badPlans.isEmpty),
+    ("the tree arm's core lands at the owner's sort at exactly the never-zero levels", badPlans.isEmpty),
     ("the level family is populated on both sides", tested == 1200 && neverZero == 234)]
   for (label, passed) in checks do
     unless passed do IO.eprintln s!"FAIL: {label}"
   unless badPlans.isEmpty do
-    IO.eprintln s!"carrier plan undelivered at: {(badPlans.toList.take 8).map toString}"
+    IO.eprintln s!"core level misses the owner's sort at: {(badPlans.toList.take 8).map toString}"
   IO.eprintln s!"levels tested: {tested}, never-zero: {neverZero}"
   let passed := (checks.filter (·.2)).size
   IO.println s!"exact-sort lift: {passed} passed, {checks.size - passed} failed"

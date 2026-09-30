@@ -334,8 +334,8 @@ def primIso (tname : Name) (root : Name) (lparams : List Name) (np : Nat) (membe
     --
     -- **It is gone because `armTree` now *is* that class.** The two conditions that
     -- could turn the arm off for a declaration in it —
-    -- [`InductiveModels.labelFactored`] and a carrier plan with no level to write
-    -- the core at — refuse classes that are empty, for reasons written out at
+    -- [`InductiveModels.labelFactored`] and a never-zero sort the core's
+    -- `Sort (max 1 w)` does not convert to — refuse classes that are empty, for reasons written out at
     -- [`InductiveModels.mkPrimSite`], and are asserted there rather than tested.
     -- So `site.armTree` holds for exactly the declarations this decline described
     -- (`ni == 0 && isRec && !erasureLinear && !armEmpty` on the never-zero route),

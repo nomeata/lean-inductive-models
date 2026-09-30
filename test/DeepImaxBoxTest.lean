@@ -168,9 +168,10 @@ def main : IO UInt32 := do
       axioms.contains `propext && axioms.contains `Quot.sound &&
         !axioms.contains `Classical.choice && axioms.size == 2
 
-  -- `max 1 u` is positive but has no syntactic predecessor. The tree arm therefore
-  -- builds its core in `Type` and exposes it at the literal public sort through
-  -- the constrained lift `PSigma' low (fun _ => PSigma' True (fun _ => PUnit))`.
+  -- `max 1 u` is positive but has no syntactic predecessor. The W core lands at
+  -- `Sort (max 1 w u)` and the tree arm runs it at the owner's own sort, so the
+  -- carrier is the core itself, with no lift around it — the same shape as a
+  -- successor-level carrier.
   --
   -- The statement and family counts below carry the binder-free pair as well.
   -- Both of these exports have a stored chain with a rung no later field's type
@@ -185,10 +186,9 @@ def main : IO UInt32 := do
       !maxReport.declined.any (·.1 == `WMax)
   state := state.check "predecessor-free W keeps its exact recursor statements" <|
     maxReport.stmtChecked == 73 && maxReport.stmtErrors.isEmpty
-  state := state.check "predecessor-free W carrier uses the derived constrained lift" <|
+  state := state.check "predecessor-free W carrier is the direct core shape" <|
     (declarationValue? maxGenerated maxModel).any fun value =>
-      containsConst `PSigma' value && containsConst `PUnit value &&
-        !containsConst `PSigma value && !containsConst `PULiftP value
+      bodyHeadIs `_wcore.WT.W value && !containsConst `PULiftP value
   let maxOutputCheck := Check.checkReport maxGenerated
   let maxSerialized ← match parse maxGenerated.render with
     | .ok output => pure output

@@ -6,9 +6,8 @@ namespace InductiveModels
 
 /-! ## The tree arm's kit
 
-This arm directly emits the tagged W scheme. For a declaration at
-`Sort w = Type u`
-with constructors `c⃗`:
+This arm directly emits the tagged W scheme. For a declaration at a
+never-`Prop` `Sort w` with constructors `c⃗`:
 
     D   p⃗ t   := Σ' (a : nrᵗ₁), … Σ' (a : nrᵗₖ), 𝟙        -- ⊥ off the end
     Tel p⃗ t j := Σ' (x : Xⱼ,₁), … Σ' (x : Xⱼ,ₘ), 𝟙        -- ⊥ off the end
@@ -17,16 +16,17 @@ with constructors `c⃗`:
     tg  p⃗     := PSigma'.fst
 
 **Both towers end in a unit at exactly `Sort w` and neither may collapse**, and
-that is what makes the universes come out: the core fixes `A` and `B'` at the
-same `Type u`, a tower over the field types alone lands at `Type (max v⃗)` —
-below `u` in general — and there is no `ULift` here to close the gap. Ending
+that is what makes the universes come out: the core takes `A` and `B'` at the
+same `Sort w`, a tower over the field types alone lands at `Sort (max v⃗)` —
+below `w` in general — and there is no `ULift` here to close the gap. Ending
 every tower at [`InductiveModels.unitAt`] `w`, which is at exactly `Sort w`, makes the
 max exactly `w` for free at every arity including zero.
 
-`Σ'` is `PSigma'` rather than the fragment's `Sigma` for a second reason beside
-the levels: a non-recursive field may sit at `Prop`, and `Sigma`'s domain may
-not. `PSigma'` is on [`InductiveModels.inductiveBasis`] and its eta is the kernel's
-structure eta.
+`Σ'` is `PSigma'` rather than the fragment's `PSigma` because it is tight:
+`PSigma` lands at `Sort (max 1 u v)`, which is not `Sort (max u v)` when
+both components are propositions, while `PSigma'` lands at exactly the max
+of its components. `PSigma'` is on [`InductiveModels.inductiveBasis`] and its
+eta is the kernel's structure eta.
 
 **The junk is uninhabited in both directions and that is load-bearing for
 elaboration, not only for correctness.** `D p⃗ t` for `t ≥ nc` and `Tel p⃗ t j`
@@ -404,56 +404,5 @@ mutual
     return mkApp (← natCascade s 1 motAt armAt junkAt 0 t) d
 
 end
-
-/-- The two universe levels at which the tree arm exposes and builds its carrier.
-
-Most declarations expose the W core directly, so both levels are the public
-carrier level.  A predecessor-free, provably positive public level instead
-uses a small `Type` core and stores it in the exact-sort `PSigma'` described by
-[`WCarrierPlan.carrier`].  Keeping this plan and its term builders outside
-`primIso` is also important: that definition is already close to Lean's
-default elaboration budget. -/
-structure WCarrierPlan where
-  publicLevel : Level
-  coreLevel : Level
-  lifted : Bool
-
-/-- Choose the constrained lift exactly when `w` has no syntactic predecessor
-but `max 1 w` is definitionally `w`. -/
-def wCarrierPlan (eligible : Bool) (w : Level) : GenM WCarrierPlan := do
-  let lifted ← if eligible && w.normalize.dec.isNone then
-      isLevelDefEq (mkLevelMax' (.succ .zero) w) w
-    else pure false
-  return { publicLevel := w, coreLevel := if lifted then .succ .zero else w, lifted }
-
-def WCarrierPlan.liftFam (p : WCarrierPlan) (lowTy : Expr) : Expr :=
-  .lam `low lowTy (puliftT p.publicLevel trueP) .default
-
-/-- Expose `lowTy : Sort core` at the plan's exact public carrier sort. -/
-def WCarrierPlan.carrier (p : WCarrierPlan) (lowTy : Expr) : Expr :=
-  if p.lifted then
-    psigmaT p.coreLevel p.publicLevel lowTy (p.liftFam lowTy)
-  else lowTy
-
-/-- Insert the canonical proof carried only to make the constrained lift land
-at the exact public sort. -/
-def WCarrierPlan.wrap (p : WCarrierPlan) (lowTy low : Expr) : Expr :=
-  if p.lifted then
-    psigmaMk p.coreLevel p.publicLevel lowTy (p.liftFam lowTy) low
-      (unitAtCanon p.publicLevel)
-  else low
-
-def WCarrierPlan.unwrap (p : WCarrierPlan) (lowTy value : Expr) : Expr :=
-  if p.lifted then
-    psigmaFst p.coreLevel p.publicLevel lowTy (p.liftFam lowTy) value
-  else value
-
-/-- Pull a public motive back along `wrap`, for the low W recursor. -/
-def WCarrierPlan.motive (p : WCarrierPlan) (lowTy motive : Expr) : GenM Expr := do
-  if p.lifted then
-    withLocalDeclD `low lowTy fun low =>
-      mkLambdaFVars #[low] (mkApp motive (p.wrap lowTy low))
-  else
-    pure motive
 
 end InductiveModels

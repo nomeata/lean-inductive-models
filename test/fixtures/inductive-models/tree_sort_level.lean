@@ -9,13 +9,15 @@
 
    The tree arm (README entry 4) is the route this pins. A W core at
    `Type ℓ` has no `ℓ` for a carrier at `Sort (max 1 u)` holding `Sort u`
-   data: `ℓ + 1` would have to be `1` at `u = 0` and `u` at `u = 5`. The arm
-   lifts a `Type` tree into `Sort (max 1 u)`, and stops every tree-arm owner
-   below with an internal error. The owners cover the level shapes around
-   it — `Sort (max 1 u)`, `Sort (max 1 u v)`, `Sort (max (u+1) v)` — with
-   fields at `Sort u`, `Sort v`, `Prop`, an `imax` level (boxed) and a type
-   field at `Sort u` itself, in the data tower and as a recursive field's
-   binder, with one constructor and with several.
+   data: `ℓ + 1` would have to be `1` at `u = 0` and `u` at `u = 5`. A core
+   that lifted a `Type` tree into `Sort (max 1 u)` stopped every owner below
+   with an internal error, and the core is now at `Sort (max 1 w u)` and run
+   at the owner's own sort (`w_core.lean`). The owners cover the level
+   shapes around it — `Sort (max 1 u)`, `Sort (max 1 u v)`,
+   `Sort (max (u+1) v)` — with fields at `Sort u`, `Sort v`, `Prop`, an
+   `imax` level (boxed) and a type field at `Sort u` itself, in the data
+   tower and as a recursive field's binder, with one constructor and with
+   several.
 
    The sibling routes are here on the same levels: the tuple tower
    (entry 9, linear recursion), the empty arm (entry 8) and the direct

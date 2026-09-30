@@ -468,7 +468,7 @@ def expectedPrim : List Row :=
   -- inhabited, and it stays on the tree arm at 12.
   , ("empty_no_base",
       [("NbLin", 15), ("Nt", 6), ("NbBr", 8), ("NbInf", 215), ("_wcore.Subtype", 10),
-       ("PProd'", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
+       ("PProd'", 9), ("_wcore.WT.PList", 6), ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6),
        ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
@@ -501,8 +501,8 @@ def expectedPrim : List Row :=
   -- graph arm splices neither wherever the core has already gone in.
   , ("prim_declines",
       [("P", 15), ("Idx", 5), ("Inf", 16), ("Nonempty", 4), ("Branch", 213),
-       ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
-       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+       ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.WT.PList", 6),
+       ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
        ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
@@ -723,25 +723,27 @@ def expectedPrim : List Row :=
   -- 19 for the same reason one file earlier: it is the first owner, so `Eq`
   -- and `PUnit` are written in front of it.
   --
-  -- **`Nat` is written in front of `List` and not in front of `Subtype`**, and
-  -- that is the whole of the one declaration this row moved. `Subtype` is one
-  -- constructor, non-recursive, unindexed and never-`Prop`, so the direct
-  -- tight tower stores its two fields and its carrier carries no tag; `List`
-  -- is the first owner left that needs the `Nat` a tag tower is indexed by,
-  -- which is its 6 becoming 7.
+  -- **`Nat` is written in front of `WT.PList` and not in front of `Subtype`**,
+  -- and that is the whole of the one declaration this row moved. `Subtype` is
+  -- one constructor, non-recursive, unindexed and never-`Prop`, so the direct
+  -- tight tower stores its two fields and its carrier carries no tag;
+  -- `WT.PList` is the first owner left that needs the `Nat` a tag tower is
+  -- indexed by, which is its 6 becoming 7. `WT.PList`, `WT.POption` and
+  -- `PSigma` are the core's `Sort`-valued paths, labels and edges, where it
+  -- used to take `List`, `Option` and `Sigma` at `Type`.
   --
   -- This is not a scheduler and nothing is reordered: every record is emitted
   -- where the construction reaches it, and what moved is where the declaration
   -- is *written*, not where a source record sits.
   --
-  -- `Subtype`, `Sigma`, `And`, `Iff`, `WellFounded`, and `PProd` expose
+  -- `Subtype`, `PSigma`, `And`, `Iff`, `WellFounded`, and `PProd` expose
   -- intrinsic projection roles. Their larger
   -- counts include the exact model definition and literal reduction theorem
   -- for each primitive projection. Non-propositional structure-like carriers
   -- additionally receive one eta theorem; unit-like and K-like declarations
   -- receive their own one-theorem metadata roles.
   , ("w_core",
-      [("Subtype", 19), ("PProd'", 9), ("List", 7), ("Sigma", 9), ("Option", 6),
+      [("Subtype", 19), ("PProd'", 9), ("WT.PList", 7), ("PSigma", 9), ("WT.POption", 6),
        ("Exists", 4), ("And", 8), ("False", 2), ("Decidable", 6), ("True", 6),
        ("Or", 6), ("Iff", 8), ("Acc", 14), ("Nonempty", 4), ("WellFounded", 6),
        ("Bool", 6), ("HEq", 5), ("PProd", 9)],
@@ -797,8 +799,8 @@ def expectedPrim : List Row :=
       -- it directly to Carve, whose unindexed skeleton is then modelled too.
       [("N", 16), ("Zx", 14), ("Zx._model._impl.skel", 6),
        ("P", 6), ("Bif", 8), ("Bif._model._impl.skel", 215),
-       ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
-       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+       ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.WT.PList", 6),
+       ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
        ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
@@ -821,8 +823,8 @@ def expectedPrim : List Row :=
   -- lemmas and transports its slot needs. Both remain on the tagged W
   -- instantiation.
   , ("w_imax",
-      [("WData", 231), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
-       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+      [("WData", 231), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.WT.PList", 6),
+       ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
        ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
@@ -832,8 +834,8 @@ def expectedPrim : List Row :=
   -- tower, in the branch tower and at a one-constructor owner's selectors;
   -- `WSlotDep` is on the untagged W instantiation.
   , ("w_box_slots",
-      [("WSlotDep", 231), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
-       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+      [("WSlotDep", 231), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.WT.PList", 6),
+       ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
        ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
@@ -911,8 +913,8 @@ def expectedPrim : List Row :=
   -- (`prim_carve`'s `Sm3`, `infinitary`'s `GTree`, `nest_fam_arg`'s `Both`
   -- and `Key`), all of them multi-constructor.
   , ("prim_w",
-      [("Tree", 225), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
-       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+      [("Tree", 225), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.WT.PList", 6),
+       ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
        ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
@@ -947,8 +949,8 @@ def expectedPrim : List Row :=
   -- so it is the one that carries the fragment splice.
   , ("w_dependent_field",
       [("N", 15), ("Vec", 8), ("Vec._model._impl.skel", 7), ("PProd'", 9), ("WDep", 219),
-       ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
-       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
+       ("_wcore.Subtype", 9), ("_wcore.WT.PList", 6), ("_wcore.PSigma", 9),
+       ("_wcore.WT.POption", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
        ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
@@ -1024,7 +1026,7 @@ def expectedPrim : List Row :=
   , ("nest_fam_arg",
       [("N", 15), ("Opt", 6), ("L", 7), ("PProd'", 9), ("Vec", 8),
        ("Vec._model._impl.skel", 6), ("RB", 215), ("_wcore.Subtype", 9),
-       ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
+       ("_wcore.WT.PList", 6), ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6),
        ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
@@ -1098,8 +1100,8 @@ def expectedPrim : List Row :=
        ("Nd._model._impl.0", 14), ("Nd._model._impl.0._model._impl.tag", 6),
        ("Nd._model._impl.0._model._impl.aux", 12),
        ("Nd._model._impl.0._model._impl.aux._model._impl.skel", 219),
-       ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
-       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
+       ("_wcore.Subtype", 9), ("_wcore.WT.PList", 6), ("_wcore.PSigma", 9),
+       ("_wcore.WT.POption", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6),
        ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4),
        ("_wcore.Acc", 13), ("_wcore.WellFounded", 6), ("_wcore.Bool", 6),
@@ -1141,7 +1143,7 @@ def expectedPrim : List Row :=
   -- recursor it minted binds no induction hypothesis.
   , ("dead_owner_mention",
       [("P", 15), ("Q", 8), ("DeadLabel", 215), ("_wcore.Subtype", 10), ("PProd'", 9),
-       ("_wcore.List", 6), ("_wcore.Sigma", 9), ("_wcore.Option", 6),
+       ("_wcore.WT.PList", 6), ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6),
        ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
@@ -1196,8 +1198,8 @@ def expectedPrim : List Row :=
   -- others the same occurrence two unfoldings deep, under a written `Π`,
   -- indexed, in `Prop`, and behind a parameter.
   , ("positivity_whnf",
-      [("R", 224), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
-       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
+      [("R", 224), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.WT.PList", 6),
+       ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6), ("_wcore.Exists", 4), ("_wcore.And", 8),
        ("_wcore.False", 2), ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
        ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
        ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9),
@@ -1226,8 +1228,8 @@ def expectedPrim : List Row :=
        ("NT._model._impl.0", 14), ("NT._model._impl.0._model._impl.tag", 6),
        ("NT._model._impl.0._model._impl.aux", 10),
        ("NT._model._impl.0._model._impl.aux._model._impl.skel", 217),
-       ("_wcore.Subtype", 9), ("_wcore.List", 6), ("_wcore.Sigma", 9),
-       ("_wcore.Option", 6), ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
+       ("_wcore.Subtype", 9), ("_wcore.WT.PList", 6), ("_wcore.PSigma", 9),
+       ("_wcore.WT.POption", 6), ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
        ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6),
        ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
        ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("NI", 15),

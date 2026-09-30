@@ -96,7 +96,6 @@ structure PrimSite where
   armRecoveryProp : Bool
   carveRoute? : Option CarveRoute
   wTagged : Bool
-  wPlan : WCarrierPlan
   armTree : Bool
   wW : Level
   wDN : Name
@@ -124,7 +123,7 @@ structure PrimSite where
   wTgAt : Array Expr → Expr
   wDecEq : Array Expr → Expr
   wSup : Array Expr → Expr → Expr → Expr
-  wLowSelfAt : Array Expr → Expr
+  wSelfAt : Array Expr → Expr
   wBranch : Array Expr → Expr → Expr → Expr → GenM Expr
   wDataTy : Array Expr → Nat → GenM Expr
   wNrProjs : Array Expr → Nat → Expr → GenM (Array Expr)
@@ -838,25 +837,28 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   -- "the construction that owns this is short a piece" are different facts —
   -- but this arm has no instance of the second.
   --
-  -- * **the internal carrier is `Type u`.** `WT.W.{u,w}` fixes `A` and `B'`
-  --   at `Type u`. Ordinarily the public carrier already has that shape; at a
-  --   never-zero carrier with no syntactic predecessor the arm runs the core
-  --   at `Type` and stores that low carrier in a `PSigma'` whose second
-  --   component is the derived lift of `True`, landing at the exact public
-  --   `Sort w` with no cumulative definition conversion assumed.
-  --
-  --   **One of the two always applies, at every never-zero `w`.** The lift is
-  --   taken when `max 1 w` converts to `w`, and that conversion succeeds
-  --   exactly when `w` is never-zero: Lean's level normal form drops an
-  --   explicit numeral `k` from a `max` whenever a sibling argument has offset
-  --   at least `k`, a normalized never-zero level has such a sibling by
-  --   definition, and `mkLevelIMax'` has already rewritten an `imax` with a
-  --   never-zero second argument into a `max`. Since this arm is only reached
-  --   on the never-zero route, `wCarrierPlan` cannot come back empty-handed.
+  -- * **the carrier is at the owner's own sort.** `WT.W.{u,w}` takes `A`
+  --   and `B'` at `Sort u` and `K` at `Sort w`, and lands at
+  --   `Sort (max 1 w u)`; the arm instantiates `u` at the owner's sort `w`
+  --   itself and the core's `w` at `1` (tagged, `K := Nat`) or at `w`
+  --   (untagged, `K := A`), so `W` lands at `Sort (max 1 w)`. That converts
+  --   to `Sort w` exactly when `w` is never zero: Lean's level normal form
+  --   drops an explicit numeral `k` from a `max` whenever a sibling argument
+  --   has offset at least `k`, a normalized never-zero level has such a
+  --   sibling by definition, and `mkLevelIMax'` has already rewritten an
+  --   `imax` with a never-zero second argument into a `max`.
   --   `ExactSortLiftTest` enumerates the depth-two level grammar over two
-  --   parameters and asserts it at all 234 never-zero levels in it — and
-  --   asserts that the lift is taken at none of the others.
-  -- * **`labelFactored`.** The core is generic in `K`, `B' : K → Type u` and
+  --   parameters and asserts the conversion at all 234 never-zero levels in
+  --   it — and asserts it at none of the others.
+  --
+  --   **The core used to be fixed at `Type u`**, and that had no answer at a
+  --   never-zero sort with no syntactic predecessor. The arm ran the core at
+  --   `Type` and lifted it to `Sort w` in a `PSigma'`, which was exact only
+  --   while every field fitted in `Type`: `Sort (max 1 u)` with a field at
+  --   `Sort u` has *no* `ℓ` with `ℓ + 1` between the two, and was an
+  --   internal error (`test/fixtures/inductive-models/tree_sort_level.lean`).
+  --   A core at `Sort` removes the question, and the lift with it.
+  -- * **`labelFactored`.** The core is generic in `K`, `B' : K → Sort u` and
   --   `tg : A → K`, and the arm runs it at **two** instantiations of one
   --   construction. At `K := Nat`, `tg := PSigma'.fst` the branch type is a
   --   function of the *tag* and cannot see the label's data, which is
@@ -920,7 +922,6 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
   let wTagged := tagFactored tname np exportCtors
   let armTree :=
     (route matches PrimRoute.type) && ni == 0 && isRec && !erasureLinear && !armEmpty
-  let wPlan ← wCarrierPlan armTree w
   -- **The two invariants the arm stands on, stated where the arm is chosen.**
   -- Both were conjuncts of `armTree` until the classes they refuse were shown
   -- empty; neither can be re-derived from the booleans above, so each is a
@@ -931,11 +932,12 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
 an earlier recursive field, which `erasureBare` and Lean's positivity check between them \
 leave no spelling of; `wRecDom` substitutes only non-recursive fields and would leave a \
 dangling local in the branch tower"
-    unless w.normalize.dec.isSome || wPlan.lifted do
-      badShape s!"{tname} reaches the tree arm at the never-zero sort {w}, whose carrier plan \
-delivered neither a syntactic predecessor for the `Type u` core nor the constrained lift; \
-`max 1 w` converts to `w` at every never-zero `w`, so this state is unreachable"
-  let wW := wPlan.coreLevel
+    unless ← isLevelDefEq (mkLevelMax' (.succ .zero) w) w do
+      badShape s!"{tname} reaches the tree arm at the sort {w}, where the core's \
+`Sort (max 1 w)` does not convert to `Sort w`; `max 1 w` converts to `w` at every \
+never-zero `w`, so this state is unreachable"
+  -- The level the towers and the core are written at: the owner's own.
+  let wW := w
   -- The tree arm's **internal** names, guarded exactly like the carve arm's
   -- and the graph arm's, and only when the arm is taken.
   let wDN := Name.str impl "wD"
@@ -967,15 +969,14 @@ delivered neither a syntactic predecessor for the `Type u` core nor the constrai
   -- that never calls it, and every one of these declines rather than returning
   -- a wrong answer when it is called at a shape the tree arm does not reach.
   let wNatT : Expr := .const `Nat []
-  -- `Type u` for the internal `Sort wW` carrier. Meaningless — and unused —
-  -- unless `armTree`, whose carrier plan proved `wW` successor-shaped.
-  let uL := wW.normalize.dec.getD .zero
+  -- The core's `A`/`B'` level: the carrier's own sort.
+  let uL := wW
   -- **The core's `K` level**, and the one place the two instantiations differ
-  -- in the level lists rather than in a term: `K = Nat : Type 0` tagged and
-  -- `K = A p⃗ : Type u` untagged. The core's own binders are
+  -- in the level lists rather than in a term: `K = Nat : Sort 1` tagged and
+  -- `K = A p⃗ : Sort w` untagged. The core's own binders are
   -- `WT.W.{u,w}`, `WT.sup.{u,w}`, `WT.Wrec.{u,v,w}` and
   -- `WT.Wrec_iota.{u,v,w}` with `w` last, so every list below gains it there.
-  let wKL := if wTagged then Level.zero else uL
+  let wKL := if wTagged then Level.succ .zero else uL
 
   -- **Constructor `k`'s field split**, as positions into its own telescope.
   -- The data tower holds the non-recursive fields and the branch tower the
@@ -1131,13 +1132,8 @@ does not store, which its positivity check should have made unspellable"
   let wSup : Array Expr → Expr → Expr → Expr := fun ps a f =>
     mkAppN (.const wCoreSup [uL, wKL])
       #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, a, f]
-  let wLowSelfAt : Array Expr → Expr := fun ps =>
+  let wSelfAt : Array Expr → Expr := fun ps =>
     mkAppN (.const wCoreSelf [uL, wKL]) #[wKTy ps, wAAt ps, wBFn ps, wTgAt ps]
-  -- At the constrained-lift instantiation the low W lives in `Type` while the
-  -- public carrier must live in the literal `Sort w`. `PSigma'` supplies that
-  -- exact result sort; the second field is a canonical inhabitant of
-  -- the derived lift of `True`, so wrapping and unwrapping reduce by the structure
-  -- projection and eta rules and add no axiom.
   -- `⟨j, tel⟩ : B' p⃗ key`, with the branch index as an expression for the same
   -- reason.
   let wBranch : Array Expr → Expr → Expr → Expr → GenM Expr := fun ps key j tel =>
@@ -1189,7 +1185,7 @@ does not store, which its positivity check should have made unspellable"
       (Nat → Array Expr → Array Expr → GenM Expr) → Expr → GenM Expr :=
     fun ps k key nrv child sc => do
     let (_, rcs) ← wShapeOf k
-    let selfTy := wLowSelfAt ps
+    let selfTy := wSelfAt ps
     let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[key, jj])
     let s ← ilevel (.forallE `tel (dom (natNumeral 0)) selfTy .default)
     let motAt : Nat → GenM Expr := fun r =>
@@ -1258,7 +1254,7 @@ does not store, which its positivity check should have made unspellable"
   let wEtaAt : Array Expr → Nat → Expr → Array Expr → Expr → GenM Expr :=
     fun ps k key nrv f => do
     let (_, rcs) ← wShapeOf k
-    let selfTy := wLowSelfAt ps
+    let selfTy := wSelfAt ps
     let dom := fun (jj : Expr) => mkAppN (.const wTelN us) (ps ++ #[key, jj])
     let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
       return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs vs))
@@ -1311,7 +1307,7 @@ does not store, which its positivity check should have made unspellable"
       let nrv := nrs.map (fields[·]!)
       let tower ← wTowerMkOf wW nrv nrv
       let child : Nat → Array Expr → Array Expr → GenM Expr := fun r _ vs =>
-        return wPlan.unwrap (wLowSelfAt ps) (mkAppN fields[rcs[r]!]! vs).headBeta
+        return (mkAppN fields[rcs[r]!]! vs).headBeta
       -- The branch tower is written at the constructor's **own** fields here
       -- rather than at projections of the tower it just built: the two are
       -- definitionally equal by `PSigma'`'s ι rule, and the fields are what the
@@ -1329,8 +1325,7 @@ does not store, which its positivity check should have made unspellable"
   -- does not.
   let wArmParts : Array Expr → Expr → Array Expr → Nat → Expr → Expr → Expr → Array Expr →
       GenM WArm := fun ps motive minors kk t f ih projs => do
-    let selfTy := wLowSelfAt ps
-    let coreMotive ← wPlan.motive selfTy motive
+    let selfTy := wSelfAt ps
     let (nrs, rcs) ← wShapeOf kk
     let tag := natNumeral kk
     let a := wLabel ps tag t
@@ -1346,7 +1341,7 @@ does not store, which its positivity check should have made unspellable"
     for r in [0:rcs.size] do
       let (kd, ihv) ← forallTelescope (← wRecDom ps kk r projs) fun zs _ => do
         let bv ← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs zs)
-        return (← mkLambdaFVars zs (wPlan.wrap (wLowSelfAt ps) (mkApp f bv)),
+        return (← mkLambdaFVars zs (mkApp f bv),
           ← mkLambdaFVars zs (mkApp ih bv))
       kids := kids.push kd
       ihs := ihs.push ihv
@@ -1366,7 +1361,7 @@ does not store, which its positivity check should have made unspellable"
       mkAppN minors[kk]! (layout.map (fun (d, i) => if d then projs[i]! else ks[i]!) ++ hs)
     let h ← wEtaAt ps kk key projs f
     let αf := Expr.forallE `b (← wBAt ps key) selfTy .default
-    let fam ← withLocalDeclD `z αf fun z => mkLambdaFVars #[z] (mkApp coreMotive (wSup ps a z))
+    let fam ← withLocalDeclD `z αf fun z => mkLambdaFVars #[z] (mkApp motive (wSup ps a z))
     return { disp, kids, ihs, minorAt, eta := h, αf, fam
              cast := ← wHasBinderSlots ps kk projs }
   -- The arm's value. A branch with a boxed slot makes the eta lemma a theorem
@@ -1380,10 +1375,9 @@ does not store, which its positivity check should have made unspellable"
     let base := p.minorAt p.kids p.ihs
     if p.cast then
       return mkAppN (.const (← boxCastName) [← ilevel p.αf, v]) #[p.αf, p.disp, f, p.fam, p.eta, base]
-    let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
     let a := wLabel ps (natNumeral kk) t
     transportAlong eqi v wW p.αf p.disp f p.eta base fun z =>
-      pure (mkApp coreMotive (wSup ps a z))
+      pure (mkApp motive (wSup ps a z))
   -- **The arm at the data `d`**, as the terms the recursor and the ι rules
   -- share: `d`'s components, its slots, and the arm's value at a data value and
   -- its components, a function of the children and hypotheses. The arm itself
@@ -1393,15 +1387,14 @@ does not store, which its positivity check should have made unspellable"
   -- label, and with it the slot.
   let wArmSetup : Array Expr → Expr → Array Expr → Nat → Expr → GenM WArmSetup :=
     fun ps motive minors kk d => do
-    let selfTy := wLowSelfAt ps
-    let coreMotive ← wPlan.motive selfTy motive
+    let selfTy := wSelfAt ps
     let tag := natNumeral kk
     let frameAt : Expr → (Expr → Expr → GenM Expr) → GenM Expr := fun t k => do
       let key := if wTagged then tag else wLabel ps tag t
       let bt ← wBAt ps key
       withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
         let ihT ← withLocalDeclD `b bt fun b =>
-          mkForallFVars #[b] (mkApp coreMotive (mkApp f b))
+          mkForallFVars #[b] (mkApp motive (mkApp f b))
         withLocalDeclD `ih ihT fun ih => k f ih
     let (nrs, _) ← wShapeOf kk
     let slots ← wDataSlots ps kk
@@ -1418,7 +1411,7 @@ does not store, which its positivity check should have made unspellable"
       frameAt (← at' vs) fun f ih => do
         mkLambdaFVars #[f, ih] (← wArmBody ps motive minors kk (← at' vs) f ih vs)
     let target := fun (t : Expr) => frameAt t fun f ih => do
-      mkForallFVars #[f, ih] (mkApp coreMotive (wSup ps (wLabel ps tag t) f))
+      mkForallFVars #[f, ih] (mkApp motive (wSup ps (wLabel ps tag t) f))
     return { comps, slots, target, rebuild := fun ov => pure (rebuild ov), minorAt := body
              at' , level := ← ilevel (← target d) }
   let wArmAt : Array Expr → Expr → Array Expr → Nat → Expr → GenM Expr :=
@@ -1434,8 +1427,7 @@ does not store, which its positivity check should have made unspellable"
   -- transport inside each arm, and the junk arm discharged from the emptiness
   -- of `D`. This is the term whose construction validates the emitted shape.
   let wMkF : Array Expr → Expr → Array Expr → GenM Expr := fun ps motive minors => do
-    let selfTy := wLowSelfAt ps
-    let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
+    let selfTy := wSelfAt ps
     -- The frame every arm and the motive share: `(d : D p⃗ t)
     -- (f : B' p⃗ key → self) (ih : (b : B' p⃗ key) → C (f b))`, and the label
     -- `⟨t, d⟩` built from `d`.
@@ -1452,11 +1444,11 @@ does not store, which its positivity check should have made unspellable"
           let bt ← wBAt ps key
           withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
             let ihT ← withLocalDeclD `b bt fun b =>
-              mkForallFVars #[b] (mkApp coreMotive (mkApp f b))
+              mkForallFVars #[b] (mkApp motive (mkApp f b))
             withLocalDeclD `ih ihT fun ih => k d f ih a key
     let motBody : Nat → Expr → GenM Expr := fun kk t =>
       frame (natSuccs kk t) fun d f ih a _ =>
-        mkForallFVars #[d, f, ih] (mkApp coreMotive (wSup ps a f))
+        mkForallFVars #[d, f, ih] (mkApp motive (wSup ps a f))
     let s ← withLocalDeclD `t wNatT fun t => do ilevel (← motBody 0 t)
     let motAt : Nat → GenM Expr := fun kk =>
       withLocalDeclD `t wNatT fun t => do mkLambdaFVars #[t] (← motBody kk t)
@@ -1470,7 +1462,7 @@ does not store, which its positivity check should have made unspellable"
       let tag := natSuccs nc t
       frame tag fun d f ih a _ => do
         mkLambdaFVars #[d, f, ih]
-          (← emptyAtElim eqi v wW (mkApp coreMotive (wSup ps a f)) d)
+          (← emptyAtElim eqi v wW (mkApp motive (wSup ps a f)) d)
     withLocalDeclD `a (wAAt ps) fun a => do
       let a1 := psigmaFst (.succ .zero) wW wNatT (wDAt ps) a
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
@@ -1501,12 +1493,10 @@ does not store, which its positivity check should have made unspellable"
     let dataSlots ← wDataSlots ps j
     let binderSlots ← wHasBinderSlots ps j nrv
     if dataSlots.isEmpty && !binderSlots then return none
-    let selfTy := wLowSelfAt ps
-    let coreMotive ← wPlan.motive selfTy motive
     let (a, dispC) ← wCtorParts ps j fields
     let d0 := a.appArg!
     let wIota := mkAppN (.const wCoreIota [uL, v, wKL])
-      #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, coreMotive,
+      #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, motive,
         mkAppN (.const wFN recLs) pre, a, dispC]
     let fa := (← ityp wIota).appArg!
     let ih0 := fa.appArg!
@@ -1539,7 +1529,7 @@ does not store, which its positivity check should have made unspellable"
           mkLambdaFVars zs (mkAppN (.const recN recLs) (pre.push (mkAppN k zs)))
       let gAt := fun (ks : Array Expr) => do return p.minorAt ks (← ihsOf ks)
       let dAt := fun (ks : Array Expr) => wDispLam ps j key vsFinal fun r _ vs =>
-        return wPlan.unwrap selfTy (mkAppN ks[r]! vs).headBeta
+        return (mkAppN ks[r]! vs).headBeta
       let castN ← boxCastName
       let lαf ← ilevel p.αf
       let gF ← gAt p.kids
@@ -1572,7 +1562,7 @@ does not store, which its positivity check should have made unspellable"
       cur := last
     return some acc
 
-  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armGraph, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armEmpty, emptyStored, directRoute?, armRecoveryProp, carveRoute?, wTagged, wPlan, armTree, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF, wIotaAt },
+  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armGraph, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armEmpty, emptyStored, directRoute?, armRecoveryProp, carveRoute?, wTagged, armTree, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF, wIotaAt },
           { out, requires, spliced, projectionOverrides })
 
 end InductiveModels

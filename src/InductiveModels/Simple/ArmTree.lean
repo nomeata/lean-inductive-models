@@ -18,8 +18,7 @@ constructor. The tree arm's recursor cannot do it: `WT.Wrec` is a well-founded
 recursion whose ι rule is the theorem `WT.Wrec_iota`.
 
 **Its carrier can, for exactly the fields it stores.** A node is
-`WT.sup ⟨t, d⟩ dispatch` (under the constrained lift, wrapped in a `PSigma'`
-whose projection reduces), and [`InductiveModels.wCoreRootFn`] takes it back to
+`WT.sup ⟨t, d⟩ dispatch`, and [`InductiveModels.wCoreRootFn`] takes it back to
 the label `⟨t, d⟩` by βιπ alone — `root (sup a f) ≡ a`. The label's two
 `PSigma'` projections give the tag and the data, one `Nat.rec` cascade over the
 tag lands on the owner's single constructor, and the data tower's own
@@ -75,7 +74,7 @@ does not store, which its positivity check should have made unspellable"
         withLocalDeclD `self (mkAppN (.const site.selfN us) ps) fun self => do
           let label := mkAppN (.const wCoreRootFn [site.uL, site.wKL])
             #[site.wKTy ps, site.wAAt ps, site.wBFn ps, site.wDecEq ps, site.wTgAt ps,
-              site.wPlan.unwrap (site.wLowSelfAt ps) self]
+              self]
           let tag := psigmaFst (.succ .zero) w natT (site.wDAt ps) label
           let data := psigmaSnd (.succ .zero) w natT (site.wDAt ps) label
           mkLambdaFVars (ps.push self)
@@ -124,7 +123,6 @@ def primArmTree (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let publicSource := site.publicSource
   let publicRecTy := site.publicRecTy
   let wTagged := site.wTagged
-  let wPlan := site.wPlan
   let wW := site.wW
   let wDN := site.wDN
   let wTelN := site.wTelN
@@ -145,7 +143,7 @@ def primArmTree (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   let wTgAt := site.wTgAt
   let wDecEq := site.wDecEq
   let wSup := site.wSup
-  let wLowSelfAt := site.wLowSelfAt
+  let wSelfAt := site.wSelfAt
   let wDataTy := site.wDataTy
   let wNrProjs := site.wNrProjs
   let wTelTy := site.wTelTy
@@ -172,7 +170,7 @@ def primArmTree (site : PrimSite) (st : PrimOut) : GenM PrimOut := do
   -- written with codomain level `wW`, so every field and every recursive
   -- field's binder must satisfy `max ℓ wW ≡ wW`. Exposed `imax` components are
   -- measured after the same recursive boxing the towers will use; anything
-  -- still too large fails here rather than 528 KB later.
+  -- still too large fails here rather than 620 KB later.
   site.withParams fun ps => do
     for k in [0:nc] do
       let (cn, cty) := exportCtors[k]!
@@ -334,7 +332,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
 
   -- ── the carrier ──
   let selfVal ← site.withParams fun ps => mkLambdaFVars ps
-    (wPlan.carrier (wLowSelfAt ps))
+    (wSelfAt ps)
   let dSelf := Declaration.defnDecl
     { name := selfN, levelParams := lparams, type := declaredMemberTy, value := selfVal
       hints := ← hintsFor selfVal, safety := .safe }
@@ -348,7 +346,7 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
       let rtele ← instForall ty ps
       forallBoundedTelescope rtele (some (numForalls rtele)) fun fs _ => do
         let (a, disp) ← wCtorParts ps j fs
-        mkLambdaFVars (ps ++ fs) (wPlan.wrap (wLowSelfAt ps) (wSup ps a disp))
+        mkLambdaFVars (ps ++ fs) (wSup ps a disp)
     let d := Declaration.defnDecl
       { name := ctorN j, levelParams := lparams, type := ty, value := val
         hints := ← hintsFor val, safety := .safe }
@@ -365,15 +363,14 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
   let fTy ← forallBoundedTelescope installedRecTy (some (np + 1 + nc)) fun pre _ => do
     let ps := pre.extract 0 np
     let motive := pre[np]!
-    let selfTy := wLowSelfAt ps
-    let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
+    let selfTy := wSelfAt ps
     withLocalDeclD `a (wAAt ps) fun a => do
       let bt ← wBAt ps (mkApp (wTgAt ps) a)
       withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
         let ihT ← withLocalDeclD `b bt fun b =>
-          mkForallFVars #[b] (mkApp coreMotive (mkApp f b))
+          mkForallFVars #[b] (mkApp motive (mkApp f b))
         withLocalDeclD `ih ihT fun ih =>
-          mkForallFVars (pre ++ #[a, f, ih]) (mkApp coreMotive (wSup ps a f))
+          mkForallFVars (pre ++ #[a, f, ih]) (mkApp motive (wSup ps a f))
   let fVal ← forallBoundedTelescope installedRecTy (some (np + 1 + nc)) fun pre _ => do
     mkLambdaFVars pre
       (← wMkF (pre.extract 0 np) pre[np]! (pre.extract (np + 1) (np + 1 + nc)))
@@ -388,11 +385,10 @@ carrier is Sort {wW}, so the branch tower does not land at the W core's sort"
       (some (np + 1 + nc + 1)) fun bs _ => do
     let ps := bs.extract 0 np
     let major := bs[bs.size - 1]!
-    let coreMotive ← wPlan.motive (wLowSelfAt ps) bs[np]!
     mkLambdaFVars bs (mkAppN (.const wCoreRec [uL, v, wKL])
-      #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, coreMotive,
+      #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, bs[np]!,
         mkAppN (.const wFN recLs) (bs.extract 0 (np + 1 + nc)),
-        wPlan.unwrap (wLowSelfAt ps) major])
+        major])
   let dRec := Declaration.defnDecl
     { name := recN, levelParams := rv.levelParams, type := publicRecTy, value := recVal
       hints := ← hintsFor recVal, safety := .safe }

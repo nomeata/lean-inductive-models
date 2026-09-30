@@ -18,8 +18,8 @@ namespace InductiveModels
 
 The tagged W construction is the only thing this tool generates that it does not
 *build*: `Wrec`'s well-founded recursion, `canon`, `sub_wf` and `Wrec_key` are
-thirty-line tactic proofs over `List`, `Option`, `Sigma`, `Subtype`, `Acc` and
-`WellFounded`, and writing them as `Expr` builders is not a bigger version of
+thirty-line tactic proofs over `WT.PList`, `WT.POption`, `PSigma`, `Subtype`,
+`Acc` and `WellFounded`, and writing them as `Expr` builders is not a bigger version of
 what `Simple.lean` already does. So the construction's whole constant closure
 is carried as an **export fragment** and spliced.
 
@@ -31,11 +31,17 @@ Compiling the closure in and copying its `ConstantInfo`s would bypass that
 exact emitted-record boundary. -/
 
 /-- The fragment: what `lean4export` emits for `WT.W WT.sup WT.Wrec
-WT.Wrec_iota instDecidableEqNat` over the W core. 528 KB, 163
-records over 206 names — 19 inductive blocks, 78 definitions, 60 theorems, 4
-quotient records and 2 axioms. It splices as **160** `Declaration`s, three
-fewer than the record count, because the four quotient records are one
+WT.Wrec_iota instDecidableEqNat WT.decEqAll` over the W core. 620 KB, 208
+records — 20 inductive blocks, 95 definitions, 86 theorems, 4 quotient
+records and 3 axioms. It splices as **205** `Declaration`s, three fewer than
+the record count, because the four quotient records are one
 `Declaration.quotDecl`.
+
+**Every sort in it is a `Sort`.** The paths and labels are the fragment's
+own `WT.PList` and `WT.POption`, and the edge is `PSigma`, so that `WT.W`
+lands at `Sort (max 1 w u)` rather than at a `Type`: the tree arm runs it at
+the owner's own sort, which need have no predecessor
+(`test/fixtures/inductive-models/w_core.lean`).
 
 **The fifth root is the tag scheme's one demand on the fragment.** The generic
 construction fixes `K := Nat` for every declaration rather than minting an
@@ -92,8 +98,8 @@ private def wCoreGenerationOrder (declarations : Array EDecl) : Except String (A
   return rawPrefix ++ readiness ++ remainder
 
 /-- The prefix every fragment name gets, bar the shared ones below. The
-fragment's names are Lean core's, so splicing its `List` into an input that
-already declares one is a kernel rejection; prefixing makes the core
+fragment's names are mostly Lean core's, so splicing its `PSigma` into an
+input that already declares one is a kernel rejection; prefixing makes the core
 self-contained and costs only duplicates. -/
 def wCoreRoot : Name := `_wcore
 
@@ -176,9 +182,9 @@ def wCoreExpr (e : Expr) : Expr :=
   mapConstsE (fun n => if wCoreShared.contains n then none else some (wCoreRoot ++ n)) e
 
 /-- The carrier the fragment defines, `WT.W` under the prefix. Doubles as the
-**sentinel**: once the reserved-name guard below has passed, nothing but this
-function can have put it in the environment, so its presence means the fragment
-is already spliced and this run must not splice it twice. -/
+**sentinel**: its presence means a fragment is already in, spliced by this run
+or declared earlier by the input, and [`InductiveModels.checkPresentWCore`] is
+what tells the two apart before it is reused. -/
 def wCoreSelf : Name := wCoreRoot ++ `WT.W
 
 /-- Names whose generated declarations are reusable support rather than part
@@ -252,6 +258,50 @@ equality throughout. Prefixed like any other ordinary definition: nothing
 downstream keys on the name. -/
 def wCoreFunext : Name := wCoreRoot ++ `funext
 
+/-- The fragment's records in splice order, parsed once per process: a
+closed term, so it is evaluated once and shared by every call. -/
+def wCoreRecords : Except String (Array EDecl) := do
+  let ex ← InductiveModels.parse wCoreText
+  wCoreGenerationOrder ex.decls
+
+/-- **The fragment constants the tree arm names**, whose statements every
+generated tree-arm model is typed against. -/
+def wCoreInterface : List Name :=
+  [wCoreSelf, wCoreSup, wCoreRootFn, wCoreRec, wCoreIota, wCoreDecEqNat,
+    wCoreDecEqAll, wCoreFunext]
+
+/-- **A fragment already in the environment is reused only if it is this
+one.** Once the reserved-name guard has passed, a present `_wcore.WT.W` was
+either spliced by this run or declared *earlier* by the input — and an input
+that is the output of another version of this tool carries that version's
+fragment under the same names. `test/fixtures/con-leche/e2e/presieve_ofarrows_cone`
+is one: its `_wcore.WT.W` is the `Type`-valued core this tool no longer
+builds, and a model written against this fragment's `Sort`-valued one is
+ill-typed there.
+
+The comparison is of the **statements of the constants the arm names**
+([`InductiveModels.wCoreInterface`]), at the record's own universe names:
+that is the interface every generated term is typed against, and it is small
+where the whole fragment is 620 KB. A present fragment that agrees on it and
+differs underneath is not a typing hazard, and the exact generated island's
+kernel check sees any conversion that goes differently. A mismatch is the
+input owning a name this construction reserves, which is
+[`InductiveModels.Decline.nameTaken`] — the same decline the splice below
+gives a reserved name the input declares later. -/
+def checkPresentWCore (records : Array EDecl) : GenM Unit := do
+  let env ← getEnv
+  for record in records do
+    let some (name, levelParams, type) := (match record with
+      | .defn n lp t .. | .thm n lp t .. | .ax n lp t .. | .opaq n lp t .. => some (n, lp, t)
+      | _ => none) | continue
+    let name := wCoreName name
+    unless wCoreInterface.contains name do continue
+    let some info := env.constants.find? name | declineWith (.nameTaken name)
+    unless info.levelParams.length == levelParams.length do declineWith (.nameTaken name)
+    let expected := (wCoreExpr type).instantiateLevelParams levelParams
+      (info.levelParams.map Level.param)
+    unless info.type == expected do declineWith (.nameTaken name)
+
 /-- **The W core in the environment, and the declarations that had to be added
 to put it there** — `#[]` when it is already in, which is every call after the
 first in a run.
@@ -262,9 +312,10 @@ Three things can happen to a fragment record:
   shared twelve and the input had it, so it is the *input's* and this skips it;
 * it is new — the reserved guard runs and it is installed in the disposable
   construction environment;
-* some of its names are present and some are not, which can only happen to a
-  shared declaration and means the input has half of a quotient or of `Eq`.
-  That is a shape this cannot repair, and it says so.
+* one of its names outside the shared list is already present: the input
+  has declared a `_wcore` name itself, earlier in the stream. The input owns
+  a name the splice needs, and that is [`InductiveModels.Decline.nameTaken`],
+  as it is for one the input declares later.
 
 **No shared declaration is separately checked against Lean's statement, and it
 does not need to be.** If the input's `Eq` or `Iff` or `propext` is not Lean's,
@@ -272,14 +323,12 @@ the fragment's 200-odd proofs are stated and proved against it. With output
 checking enabled, the exact generated island is then checked once at its close
 boundary. -/
 def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
-  if (← getEnv).constants.contains wCoreSelf then return #[]
-  let ex ←
-    match InductiveModels.parse wCoreText with
-    | .ok ex => pure ex
-    | .error msg => badShape s!"the W core fragment does not parse ({msg})"
-  let declarations ← match wCoreGenerationOrder ex.decls with
+  let declarations ← match wCoreRecords with
     | .ok declarations => pure declarations
-    | .error msg => badShape msg
+    | .error msg => badShape s!"the W core fragment does not load ({msg})"
+  if (← getEnv).constants.contains wCoreSelf then
+    checkPresentWCore declarations
+    return #[]
   let mut out : Array Declaration := #[]
   for d0 in declarations do
     let d := EDecl.mapNames wCoreName wCoreExpr d0
@@ -288,7 +337,7 @@ def ensureWCore (reserved : Std.HashSet Name) : GenM (Array Declaration) := do
     let present := ns.filter (env.constants.contains ·)
     if !present.isEmpty then
       unless ns.all wCoreShared.contains do
-        badShape s!"the W core's {ns} would redeclare {present}"
+        declineWith (.nameTaken present[0]!)
       continue
     -- **A name the input introduces later is not ours to write** — for the
     -- prefixed rest. The shared names are canonical basis names and are
