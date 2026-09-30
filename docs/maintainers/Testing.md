@@ -426,7 +426,7 @@ is the direction the criterion wants.
 Measured locally against the pinned export
 (`gzip -dc mathlib.ndjson.gz | lean-inductive-models - --no-output
 --no-type-check-input --type-check-generated`, `LEAN_NUM_THREADS=4`), reporting
-`generated kernel checks: 6639` and `output check: 6882 model families checked`.
+`generated kernel checks: 6639` and `output check: 6883 model families checked`.
 To take the measurement deliberately, run exactly that under `/usr/bin/time -v`;
 nothing in CI will do it for you. One thing keeps the number from being as
 roomy as it looks: the interner's key array is a power-of-two table sitting at
