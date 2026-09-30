@@ -145,13 +145,23 @@ lake exe test exportsyntaxnormalization "$PWD"
 lake exe test basisvalidation "$PWD"
 lake exe test arenaformat "$PWD"
 test/scripts/check_arena_corpus.py
+test/scripts/check_fixture_verdicts.py
 test/scripts/check-hard-nested-a.sh
 test/scripts/check-hard-nested-c.sh
 test/scripts/check-mathlib-result.sh
 test/scripts/check-ci-serialized-builds.sh
 test/scripts/check-checker-imports.sh
 test/scripts/check-no-known-gap.sh
+test/scripts/check-dag-safe-calls.sh
 ```
+
+`check-dag-safe-calls.sh` needs no build either: it fails if a file under
+`src/` calls one of Lean's expression walks that is not memoized
+(`Expr.containsFVar`, `Expr.hasAnyFVar`, `replaceNoCache`,
+`sizeWithoutSharing`, `dbgToString`). Every walk over an `Expr` here has to be
+linear in the expression's DAG, and
+[`DagSafety.md`](DagSafety.md) is the rule, the reasons, the memoized kit to
+write one with, and which of Lean's own walks qualify.
 
 Two of those suites test the built binary rather than the library: `fixtures`
 (its `runCli` section) and `maincli` spawn
@@ -189,7 +199,8 @@ right edit is to rewrite the ledger and this check together, not to reach for
 `outOfScope` because it is the one the build accepts.
 
 The out-of-process checks — `check_arena_corpus.py`,
-`check-hard-nested-a.sh`, `check-hard-nested-c.sh` — spawn the same binary but
+`check_fixture_verdicts.py`, `check-hard-nested-a.sh`, `check-hard-nested-c.sh`
+— spawn the same binary but
 are not Lake targets, so they still require an explicit
 `lake build lean-inductive-models` first (`run-correctness.sh` does this, and
 each script fails loudly when the binary is absent).
@@ -200,6 +211,33 @@ The Arena corpus runner accepts every
 published `good/` case and requires each `bad/` case to be rejected or to stop
 at the documented internal-invariant boundary; unsupported exit 2 is a corpus
 failure.
+
+`check_fixture_verdicts.py` runs two verdict tables, each fixture with the
+Arena's command line (every generation route and check on, `--no-output`):
+
+* [`test/fixtures/con-leche/`](../../test/fixtures/con-leche/) is every test
+  fixture of [con-leche](https://github.com/leanprover/con-leche), copied
+  verbatim at the revision the Arena runs, with its Apache-2.0 license and its
+  own expectations kept beside it. Each row of `expected.txt` pairs this tool's
+  exit code with the verdict of Lean's kernel on the stream as written —
+  `accept`, `reject`, `scope` (an out-of-scope decline), `defect` (a
+  kernel-accepted stream this tool does not yet model) or `foreign` (not a
+  conforming format-3.1.0 stream) — and the runner refuses a table in which a
+  kernel-rejected stream is expected to be accepted. con-leche's own verdicts
+  differ in places, because it brings its own prelude and its own scope; the
+  table header says how.
+* [`test/fixtures/dag-towers/`](../../test/fixtures/dag-towers/) are the DAG
+  towers — depth-60 towers, `2^60` nodes as a tree, in every record position —
+  which must all be accepted.
+
+Every run is also held to a resident bound (1 GiB, by the child's own
+`ru_maxrss`, with a watchdog that kills it on crossing) and a CPU backstop
+(120 s, `RLIMIT_CPU`). That bound is what makes the towers a deterministic
+gate on the tool's traversals rather than a benchmark; see
+[`DagSafety.md`](DagSafety.md). Every file under a table's directory must have
+a row. The recursive fixture sweep in `incrementalorder` leaves
+`test/fixtures/con-leche/` out, because some of those streams are deliberately
+unparsable. CI runs this in the Arena job.
 
 `order` compares the compatibility retained-array path, declaration-event
 collection, and sink-free compact discard over the same generation fixtures.
@@ -288,8 +326,8 @@ The `memoryprobe` suite and the `envprobe` and `levelfuzz` executables are
 diagnostics, not correctness suites; `memoryprobe` is registered in
 `test/TestMain.lean` apart from `correctnessSuites` for that reason. `.github/workflows/ci.yml` is the only workflow file, and it holds
 five jobs on one trigger set — push to `main`, every pull request, a Monday
-03:17 UTC cron, and manual dispatch. Four of them are fast: an Arena corpus job
-and a three-way `fixtures`/`focused`/`cli` matrix, each capped at 30 minutes.
+03:17 UTC cron, and manual dispatch. Four of them are fast: an Arena corpus job,
+which also runs the con-leche and DAG-tower verdict tables, and a three-way `fixtures`/`focused`/`cli` matrix, each capped at 30 minutes.
 The fifth is the `mathlib` job, which runs `scripts/ci-mathlib.sh` and is
 budgeted at 30–50 minutes on a cold runner against an 8-hour cap — the single
 pass dropped the 5.9 GB output write and the artifact re-read that cost 19:44
@@ -321,6 +359,9 @@ mappings, and `MIMALLOC_ARENA_RESERVE` does not change it — while its peak RSS
 is unchanged at roughly 2.0 GiB. Under a 12 GiB `ulimit -v` no module builds at
 all, aborting with `failed to create thread`; a cap high enough for `lean` to
 start no longer says anything about memory. **RSS is the quantity of interest.**
+That is why the one per-process bound CI does enforce — the verdict tables'
+1 GiB per fixture — is measured on RSS by the runner itself (`ru_maxrss`, plus
+an RSS-sampling watchdog) rather than set with `ulimit`.
 
 The Mathlib job sets no memory limit and takes no memory measurement. It used
 to run every phase under `TIME_BIN -v` and fail the run when a phase's peak RSS
@@ -466,6 +507,25 @@ type mismatch 'x'` rather than crashing. `kernelcheck` pins that message.
 ```console
 test/scripts/export-inductive-models.sh prim_shapes
 ```
+
+The DAG towers ported from con-leche are generated rather than exported, from
+the `Eq`/`Nat` prelude in `test/fixtures/dag-towers/tower_basis.ndjson`:
+
+```console
+test/scripts/mk_con_leche_towers.py
+```
+
+`tower_basis.ndjson` and `ctor_field_towers.ndjson` are exported from their
+adjacent sources like any other fixture, with the directory named:
+
+```console
+FIXTURE_DIR="$PWD/test/fixtures/dag-towers" LEAN_INDUCTIVE_MODELS_FILTER=0 \
+  scripts/export-fixture.sh ctor_field_towers.lean
+```
+
+`test/fixtures/con-leche/` is never regenerated: it is a verbatim copy, and
+refreshing it means copying a newer upstream revision and rewriting its
+`expected.txt`.
 
 `.github/workflows/ci.yml` remains the authority for hosted-runner resource
 limits and artifact retention.

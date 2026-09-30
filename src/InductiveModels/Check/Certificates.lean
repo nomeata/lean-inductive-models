@@ -299,7 +299,7 @@ def phase1MutualOneLayerCertificate (declarations : DeclarationTypes)
           edges := edges.push (ownerType.name, target?.get!)
           let fieldId := fieldValues[fieldIndex]!.fvarId!
           for later in [fieldIndex + 1:fields.size] do
-            if fieldTypes[later]!.containsFVar fieldId then
+            if fieldTypes[later]!.containsFVarDag fieldId then
               return .malformed (privateConstructor ownerType.name constructor.name)
           changed := true
     anyChanged := anyChanged || (ownerType.ctors.length == 1 && changed)

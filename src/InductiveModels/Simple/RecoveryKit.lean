@@ -47,7 +47,7 @@ partial def recoveryZipPrefix (eqi : EqInfo) (memberTy ctorTy : Expr) (ni : Nat)
           let lhsValues := sel.map fun j => rawIdx[j]!.replaceFVars previous fields
           for value in lhsValues do
             for later in raw.extract i raw.size do
-              if value.containsFVar later.fvarId! then
+              if value.containsFVarDag later.fvarId! then
                 badShape s!"a transported pivot at index {position} has a constructor prefix depending on an unrecovered field"
           let lhs ← packChain position pk lhsValues 0
           let rhs ← packChain position pk (sel.map (is[·]!)) 0

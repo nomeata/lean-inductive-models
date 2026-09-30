@@ -1,5 +1,6 @@
 import Lean
 import InductiveModels.Naming
+import InductiveModels.ExprDag
 /-!
 # Export record types
 
@@ -186,14 +187,32 @@ which is exactly how this was found, splicing a fragment whose `Sigma.fst` is a
 `proj` at `Sigma`. Binder names are not constants and are deliberately not
 touched.
 
-`f` returns `none` to mean "not mine", which both keeps the walk allocation-free
-on the common subterm and, at a `proj`, lets `Expr.replace` recurse into the
-structure the ordinary way. -/
-partial def mapConstsE (f : Name → Option Name) (e : Expr) : Expr :=
-  e.replace fun sub => match sub with
-    | .const n us => (f n).map (Expr.const · us)
-    | .proj n i s => (f n).map (fun n' => Expr.proj n' i (mapConstsE f s))
-    | _ => none
+`f` returns `none` to mean "not mine", which keeps the walk allocation-free on
+the common subterm.
+
+**One walk, memoized, however many projections it renames.**  A renamed
+`proj` has to rewrite its structure argument too, and `Expr.replace`'s callback
+cannot hand that back to the walk it is part of; recursing into a fresh
+`Expr.replace` there starts a fresh cache, so every renamed projection re-walks
+everything below it and a chain of them is quadratic.  An expression with no
+renamed projection — nearly all of them — takes `Expr.replace` itself, the C++
+walk with a pointer-keyed cache; one with a renamed projection takes
+[`InductiveModels.Dag.mapRec`], whose callback recurses through the same memo. -/
+def mapConstsE (f : Name → Option Name) (e : Expr) : Expr :=
+  let renamesProj := Dag.any e fun
+    | .proj n _ _ => (f n).isSome
+    | _ => false
+  if !renamesProj then
+    e.replace fun
+      | .const n us => (f n).map (Expr.const · us)
+      | _ => none
+  else
+    Dag.mapRec (e := e) fun visit sub => match sub with
+      | .const n us => return (f n).map (Expr.const · us)
+      | .proj n i s => match f n with
+        | some n' => return some (.proj n' i (← visit s))
+        | none => return none
+      | _ => return none
 
 /-- One export record with **every name it carries** rewritten — every name it
 introduces, every name it refers to, and every constant inside its expressions.

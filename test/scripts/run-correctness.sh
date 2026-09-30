@@ -60,3 +60,4 @@ test/scripts/check-mathlib-result.sh
 test/scripts/check-ci-serialized-builds.sh
 test/scripts/check-checker-imports.sh
 test/scripts/check-no-known-gap.sh
+test/scripts/check-dag-safe-calls.sh

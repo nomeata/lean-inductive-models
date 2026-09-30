@@ -130,30 +130,50 @@ partial def levelHasIMax : Level → Bool
 /-- The universe of [`InductiveModels.boxTyOf`] without constructing its `PSigma'`
 terms. The tree arm asks its tower-level question before primitives are spliced,
 so this level-only mirror keeps that early, rollback-free guard while using the
-same recursive Π shape as the actual box. -/
-partial def boxLevelOf (t : Expr) : GenM Level := do
-  match ← whnf t with
-  | .forallE name domain body info =>
-    let domainLevel ← boxLevelOf domain
-    withLocalDecl name info domain fun x => do
-      let bodyLevel ← boxLevelOf (body.instantiate1 x)
-      return (mkLevelIMax domainLevel bodyLevel).normalize
-  | atomic =>
-    let level ← ilevel atomic
-    return (mkLevelMax' (.succ .zero) level).normalize
+same recursive Π shape as the actual box.
+
+Memoized on the type: a `Π` whose domain and codomain share a subterm would
+otherwise be visited once per path through it. -/
+partial def boxLevelOf (t : Expr) : GenM Level :=
+  (go t).run' {}
+where
+  go (t : Expr) : StateT (Dag.Memo Level) GenM Level := Dag.memo t fun _ => do
+    match ← whnf t with
+    | .forallE name domain body info =>
+      let domainLevel ← go domain
+      withLocalDecl name info domain fun x => do
+        let bodyLevel ← go (body.instantiate1 x)
+        return (mkLevelIMax domainLevel bodyLevel).normalize
+    | atomic =>
+      let level ← ilevel atomic
+      return (mkLevelMax' (.succ .zero) level).normalize
 
 mutual
 
   /-- The recursively boxed type.  Atomic leaves are paired with `D 1`; a Π
   recursively boxes its domain and codomain, substituting the unboxed domain
-  value into the dependent codomain. -/
-  partial def boxTyOf (t : Expr) : GenM Expr := do
+  value into the dependent codomain.
+
+  The type is memoized on the (open) type it boxes, and a codomain that does
+  not depend on its binder is boxed without building the unboxed value it would
+  not mention, so the *type* walk is linear in the DAG.  The value coercions
+  below are not: `boxValOf`/`unboxValOf` at `Π d, b` build a coercion at `d`
+  and one at `b` around a fresh variable, so the coercion term at a `Π` whose
+  domain and codomain share structure is as large as that structure's tree.
+  That is the construction's own size, not a walk's; see
+  `docs/maintainers/DagSafety.md`. -/
+  partial def boxTyOf (t : Expr) : GenM Expr :=
+    (boxTyOfM t).run' {}
+
+  partial def boxTyOfM (t : Expr) : StateT (Dag.Memo Expr) GenM Expr := Dag.memo t fun _ => do
     match ← whnf t with
     | .forallE name domain body info =>
-      let boxedDomain ← boxTyOf domain
+      let boxedDomain ← boxTyOfM domain
       withLocalDecl name info boxedDomain fun boxedValue => do
-        let value ← unboxValOf domain boxedValue
-        let boxedBody ← boxTyOf (body.instantiate1 value)
+        let body ← if body.hasLooseBVars then
+            pure (body.instantiate1 (← unboxValOf domain boxedValue))
+          else pure body
+        let boxedBody ← boxTyOfM body
         mkForallFVars #[boxedValue] boxedBody
     | atomic =>
       let level ← ilevel atomic

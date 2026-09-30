@@ -155,7 +155,7 @@ def noDepOnPacked (packed : Array Expr) (fs tys : Array Expr) : GenM Unit := do
   for i in [0:tys.size] do
     let ti := headNorm tys[i]!
     for j in [0:i] do
-      if packed.contains fs[j]! && ti.containsFVar fs[j]!.fvarId! then
+      if packed.contains fs[j]! && ti.containsFVarDag fs[j]!.fvarId! then
         badShape "a field type depends on an earlier packed field"
 
 /-- Read `n` minor premise types off a recursor application. -/

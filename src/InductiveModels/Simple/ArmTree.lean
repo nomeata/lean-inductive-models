@@ -67,7 +67,7 @@ private def treeStoredFieldOverrides (site : PrimSite) :
         let reachable := xs.extract 0 q
         let stray := fs.filter fun f => !reachable.any fun x => x.fvarId! == f.fvarId!
         let fieldType ← ityp xs[q]!
-        if fieldType.hasAnyFVar fun id => stray.any fun f => f.fvarId! == id then
+        if fieldType.hasAnyFVarDag fun id => stray.any fun f => f.fvarId! == id then
           badShape s!"{site.exportCtors[0]!.1}'s field {nrs[q]!} names a field the tree arm \
 does not store, which its positivity check should have made unspellable"
         withLocalDeclD `self (mkAppN (.const site.selfN us) ps) fun self => do

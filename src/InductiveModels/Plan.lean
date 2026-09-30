@@ -1,5 +1,6 @@
 import Lean
 import InductiveModels.Format
+import InductiveModels.ExprDag
 
 /-!
 # Specialising a nested inductive into a mutual block
@@ -85,6 +86,10 @@ structure Plan where
 private structure SpState where
   members : Array Name
   mimics : Array Mimic
+  /-- [`spec`]'s answers, by node and binder depth: the walk is linear in the
+  constructor types' DAG size, and a shared subterm is specialised to one
+  shared result. -/
+  specMemo : Dag.DepthMemo Expr := {}
 
 private structure SpCtx where
   env : Environment
@@ -175,7 +180,8 @@ private def mimicFor (occ : Expr) (c : Name) (ls : List Level) (d : Nat) : SpM N
         let cs := fv.ctors.toArray.map fun cn =>
           (Name.str name (lastStr cn), mkAppN (.const cn ls) occArgs)
         set (σ := SpState)
-          { members := cur.members.push name, mimics := cur.mimics.push ⟨name, familyOcc, cs⟩ }
+          { cur with members := cur.members.push name,
+                     mimics := cur.mimics.push ⟨name, familyOcc, cs⟩ }
         pure name
     if family == c then answer? := some name
   let some answer := answer? | throw s!"{c} is absent from its own mutual block"
@@ -184,40 +190,44 @@ private def mimicFor (occ : Expr) (c : Name) (ls : List Level) (d : Nat) : SpM N
 /-- Specialise one expression at binder depth `d`, which counts *all* binders
 opened so far, of which the outermost `numParams` are the block's. -/
 private partial def spec (e : Expr) (d : Nat) : SpM Expr := do
-  match e with
-  | .app .. | .const .. =>
-    let h := e.getAppFn
-    let args := e.getAppArgs
-    if let .const c ls := h then
-      if let some np ← containerArity c args.size then
-        let occ := mkAppN h (args.extract 0 np)
-        let st ← get
-        if mentionsAny st.members occ then
-          let ctx ← read
-          if d < ctx.numParams then
-            throw s!"a nested occurrence in {ctx.root} sits inside a parameter"
-          let name ← mimicFor occ c ls d
-          let ps := (List.range ctx.numParams).toArray.map fun l => Expr.bvar (d - 1 - l)
-          let head := mkAppN (.const name ctx.us) ps
-          let rest ← (args.extract np args.size).mapM (spec · d)
-          return mkAppN head rest
-    let args ← args.mapM (spec · d)
-    -- **The head too, when it is not a constant.** A container's parameter may
-    -- be a *family* — `RBNode α β`'s `β : α → Type` — and then instantiating it
-    -- leaves the constructor field as the redex `(fun x => …) k`, whose lambda
-    -- body is where the nesting is. `getAppFn` hands back the lambda, so a
-    -- sweep over the arguments alone never enters it and an occurrence in
-    -- there — `RB N (fun _ => L Deep)`, `RB N (fun k => Vec Idx k)`, both in
-    -- `test/fixtures/inductive-models/nest_fam_arg.lean` — gets no mimic at all.
-    -- Nothing else reaches here with a compound head: a
-    -- `bvar`/`fvar`/`sort` head falls through the catch-all unchanged.
-    let h ← if h.isConst then pure h else spec h d
-    return mkAppN h args
-  | .lam n t b bi => return .lam n (← spec t d) (← spec b (d + 1)) bi
-  | .forallE n t b bi => return .forallE n (← spec t d) (← spec b (d + 1)) bi
-  | .letE n t v b nd => return .letE n (← spec t d) (← spec v d) (← spec b (d + 1)) nd
-  | .proj tn i s => return .proj tn i (← spec s d)
-  | _ => return e
+  if let some r := (← get).specMemo[((e : Dag.Key), d)]? then return r
+  let r ← show SpM Expr from do
+      match e with
+      | .app .. | .const .. =>
+        let h := e.getAppFn
+        let args := e.getAppArgs
+        if let .const c ls := h then
+          if let some np ← containerArity c args.size then
+            let occ := mkAppN h (args.extract 0 np)
+            let st ← get
+            if mentionsAny st.members occ then
+              let ctx ← read
+              if d < ctx.numParams then
+                throw s!"a nested occurrence in {ctx.root} sits inside a parameter"
+              let name ← mimicFor occ c ls d
+              let ps := (List.range ctx.numParams).toArray.map fun l => Expr.bvar (d - 1 - l)
+              let head := mkAppN (.const name ctx.us) ps
+              let rest ← (args.extract np args.size).mapM (spec · d)
+              return mkAppN head rest
+        let args ← args.mapM (spec · d)
+        -- **The head too, when it is not a constant.** A container's parameter may
+        -- be a *family* — `RBNode α β`'s `β : α → Type` — and then instantiating it
+        -- leaves the constructor field as the redex `(fun x => …) k`, whose lambda
+        -- body is where the nesting is. `getAppFn` hands back the lambda, so a
+        -- sweep over the arguments alone never enters it and an occurrence in
+        -- there — `RB N (fun _ => L Deep)`, `RB N (fun k => Vec Idx k)`, both in
+        -- `test/fixtures/inductive-models/nest_fam_arg.lean` — gets no mimic at all.
+        -- Nothing else reaches here with a compound head: a
+        -- `bvar`/`fvar`/`sort` head falls through the catch-all unchanged.
+        let h ← if h.isConst then pure h else spec h d
+        return mkAppN h args
+      | .lam n t b bi => return .lam n (← spec t d) (← spec b (d + 1)) bi
+      | .forallE n t b bi => return .forallE n (← spec t d) (← spec b (d + 1)) bi
+      | .letE n t v b nd => return .letE n (← spec t d) (← spec v d) (← spec b (d + 1)) nd
+      | .proj tn i s => return .proj tn i (← spec s d)
+      | _ => return e
+  modify fun st => { st with specMemo := st.specMemo.insert (e, d) r }
+  return r
 
 /-- The mimic's own declaration: the container's type and constructors at the
 occurrence's parameters, specialised in turn. -/

@@ -14,23 +14,12 @@ open Lean Meta
 
 namespace InductiveModels
 
-private partial def findConstructorApp? (targetConstructor : Name)
+/-- The first application of `targetConstructor` in `expression`, in preorder;
+memoized ([`InductiveModels.Dag.findSome?`]). -/
+private def findConstructorApp? (targetConstructor : Name)
     (expression : Expr) : Option Expr :=
-  if expression.getAppFn.isConstOf targetConstructor then some expression
-  else match expression with
-    | .app fn argument =>
-      findConstructorApp? targetConstructor fn <|>
-        findConstructorApp? targetConstructor argument
-    | .lam _ type body _ | .forallE _ type body _ =>
-      findConstructorApp? targetConstructor type <|>
-        findConstructorApp? targetConstructor body
-    | .letE _ type value body _ =>
-      findConstructorApp? targetConstructor type <|>
-        findConstructorApp? targetConstructor value <|>
-        findConstructorApp? targetConstructor body
-    | .mdata _ body => findConstructorApp? targetConstructor body
-    | .proj _ _ struct => findConstructorApp? targetConstructor struct
-    | _ => none
+  Dag.findSome? (fun s => if s.getAppFn.isConstOf targetConstructor then some s else none)
+    expression
 
 /-- Build the parameter/motive/minor prefix for one selected member of a
 mutual model recursor.  The callback supplies the body of the selected minor;

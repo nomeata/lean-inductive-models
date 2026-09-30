@@ -37,12 +37,14 @@ driver_root=Driver
 # `Name`/`Expr` construction with no generator monad in it. `Format` is a
 # facade over `Format.*`, and `Check` is now a facade over `Check.*`, so both
 # sets of parts are named here too: the closure is deliberately exact, and a
-# split of an allowed module widens it.
+# split of an allowed module widens it. `ExprDag` is the memoized-traversal kit
+# every walk over an `Expr` uses, the checker's as much as the generator's; it
+# depends on nothing but `Lean`.
 allowed_closure=(
   Check Check.Violation Check.Kit Check.Correspondence Check.Family
   Check.Reference Check.Certificates Check.Rules Check.Index Check.Compact
   Check.Statements
-  EqKit Naming Plan Projection
+  EqKit ExprDag Naming Plan Projection
   Format Format.Types Format.Alias Format.Export Format.Exact Format.Parse
   Format.Write
 )

@@ -331,26 +331,42 @@ test clears is returned untouched and never reduced.
 The result may still mention the owner — that is the case where the mention is
 live, and [`InductiveModels.deltaFieldDomain`] discards the whole reduct
 there rather than hand back a churned expression. -/
-partial def deltaDeadReduct (tname : Name) (e : Expr) : GenM Expr := do
-  unless mentionsAny #[tname] e do return e
-  let e ← whnfKernel e
-  unless mentionsAny #[tname] e do return e
-  match e with
-  | .app .. =>
-    let f ← deltaDeadReduct tname e.getAppFn
-    let as ← e.getAppArgs.mapM (deltaDeadReduct tname)
-    return mkAppN f as
-  | .forallE x d b bi =>
-    let d ← deltaDeadReduct tname d
-    withLocalDecl x bi d fun z => do
-      mkForallFVars #[z] (← deltaDeadReduct tname (b.instantiate1 z))
-  | .lam x d b bi =>
-    let d ← deltaDeadReduct tname d
-    withLocalDecl x bi d fun z => do
-      mkLambdaFVars #[z] (← deltaDeadReduct tname (b.instantiate1 z))
-  | .mdata _ b => deltaDeadReduct tname b
-  | .proj s i b => return .proj s i (← deltaDeadReduct tname b)
-  | _ => return e
+partial def deltaDeadReduct (tname : Name) (e : Expr) : GenM Expr :=
+  (go e).run' ({}, {})
+where
+  /-- Memoized twice, on the node: its reduct, and whether it mentions the
+  owner — the question every visited node asks of itself and of its reduct. -/
+  go (e : Expr) : StateT (Dag.Memo Expr × Dag.Memo Bool) GenM Expr := do
+    if let some r := (← get).1[(e : Dag.Key)]? then return r
+    let r ← reduct e
+    modify fun (answers, mentions) => (answers.insert e r, mentions)
+    return r
+  mentions (e : Expr) : StateT (Dag.Memo Expr × Dag.Memo Bool) GenM Bool :=
+    modifyGet fun (answers, table) =>
+      let (r, table) := (Dag.anyMemo (fun
+        | .const n _ => n == tname
+        | _ => false) e).run table
+      (r, (answers, table))
+  reduct (e : Expr) : StateT (Dag.Memo Expr × Dag.Memo Bool) GenM Expr := do
+    unless ← mentions e do return e
+    let e ← whnfKernel e
+    unless ← mentions e do return e
+    match e with
+    | .app .. =>
+      let f ← go e.getAppFn
+      let as ← e.getAppArgs.mapM go
+      return mkAppN f as
+    | .forallE x d b bi =>
+      let d ← go d
+      withLocalDecl x bi d fun z => do
+        mkForallFVars #[z] (← go (b.instantiate1 z))
+    | .lam x d b bi =>
+      let d ← go d
+      withLocalDecl x bi d fun z => do
+        mkLambdaFVars #[z] (← go (b.instantiate1 z))
+    | .mdata _ b => go b
+    | .proj s i b => return .proj s i (← go b)
+    | _ => return e
 
 /-- **A field domain with a δ-dead owner mention discarded, and nothing else
 touched** — [`InductiveModels.shapeFieldDomain`] one reduction further on, and

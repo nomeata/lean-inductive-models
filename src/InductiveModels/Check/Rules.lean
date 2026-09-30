@@ -198,6 +198,20 @@ abbrev ExactLocals := Array (FVarId × Expr)
 private def ExactLocals.typeOf? (locals : ExactLocals) (id : FVarId) : Option Expr :=
   (locals.find? (·.1 == id)).map (·.2)
 
+/-- The state of one exact type inference: the next fresh local, and the
+answers so far by expression.  Every local the inference opens is fresh, so an
+expression mentioning it has one type wherever it recurs and the answer is
+memoized on the expression alone: the walk is linear in the DAG.  Unmemoized,
+a `Π` whose domain and body share a subterm costs one visit per path. -/
+private structure ExactInferState where
+  next : Nat := 0
+  memo : Dag.Memo (Option Expr) := {}
+
+private abbrev ExactInferM := StateM ExactInferState
+
+private def freshExactLocal (tag : Name) : ExactInferM Expr :=
+  modifyGet fun st => (mkFVar (FVarId.mk (tag.mkNum st.next)), { st with next := st.next + 1 })
+
 mutual
 
 /-- A deliberately small, exact type synthesizer for the result of an
@@ -205,78 +219,98 @@ exported projection declaration. Declaration and local binder types suffice;
 when their head is hidden, it unfolds only transparent definitions in the
 export syntax. The projection case follows the exact recovered primitive
 projection interface. -/
-private partial def inferExactType? (structures : StructureOwners)
+private partial def inferExactTypeM (structures : StructureOwners)
     (normalizer : ExactNormalizationEnv)
     (declarations : DeclarationTypes)
-    (locals : ExactLocals) : Expr → Option Expr
-  | .sort level => some (.sort (.succ level))
-  | .fvar id => locals.typeOf? id
+    (locals : ExactLocals) (e : Expr) : ExactInferM (Option Expr) := do
+  if let some r := (← get).memo[(e : Dag.Key)]? then return r
+  let r ← (inferExactTypeNode structures normalizer declarations locals e).run
+  modify fun st => { st with memo := st.memo.insert e r }
+  return r
+
+private partial def inferExactTypeNode (structures : StructureOwners)
+    (normalizer : ExactNormalizationEnv)
+    (declarations : DeclarationTypes)
+    (locals : ExactLocals) : Expr → OptionT ExactInferM Expr
+  | .sort level => return .sort (.succ level)
+  | .fvar id => OptionT.mk (pure (locals.typeOf? id))
   | .const name levels => do
-      let declaration ← (declarations.findD name #[])[0]?
-      if declaration.levelParams.length != levels.length then none
+      let some declaration := (declarations.findD name #[])[0]? | failure
+      if declaration.levelParams.length != levels.length then failure
       return declaration.type.instantiateLevelParams declaration.levelParams levels
   | .app function argument => do
       let functionType := normalizer.whnf
-        (← inferExactType? structures normalizer declarations locals function)
-      let .forallE _ _ body _ := functionType | none
+        (← OptionT.mk (inferExactTypeM structures normalizer declarations locals function))
+      let .forallE _ _ body _ := functionType | failure
       return body.instantiate1 argument
   | .lam name domain body info => do
-      let value := mkFVar (FVarId.mk ((`_check.exactLam).mkNum locals.size))
-      let bodyType ← inferExactType? structures normalizer declarations
-        (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
+      let value ← freshExactLocal `_check.exactLam
+      let bodyType ← OptionT.mk (inferExactTypeM structures normalizer declarations
+        (locals.push (value.fvarId!, domain)) (body.instantiate1 value))
       return .forallE name domain (bodyType.abstract #[value]) info
-  | .forallE name domain body info => do
-      let domainLevel ← inferExactSortLevel? structures normalizer declarations locals domain
-      let value := mkFVar (FVarId.mk ((`_check.exactPi).mkNum locals.size))
-      let bodyLevel ← inferExactSortLevel? structures normalizer declarations
-        (locals.push (value.fvarId!, domain)) (body.instantiate1 value)
-      let _ := name
-      let _ := info
+  | .forallE _ domain body _ => do
+      let domainLevel ← OptionT.mk
+        (inferExactSortLevelM structures normalizer declarations locals domain)
+      let value ← freshExactLocal `_check.exactPi
+      let bodyLevel ← OptionT.mk (inferExactSortLevelM structures normalizer declarations
+        (locals.push (value.fvarId!, domain)) (body.instantiate1 value))
       return .sort (Level.imax domainLevel bodyLevel).normalize
   | .letE _ _ value body _ =>
-      inferExactType? structures normalizer declarations locals (body.instantiate1 value)
-  | .mdata _ body => inferExactType? structures normalizer declarations locals body
+      OptionT.mk (inferExactTypeM structures normalizer declarations locals
+        (body.instantiate1 value))
+  | .mdata _ body => OptionT.mk (inferExactTypeM structures normalizer declarations locals body)
   | .proj owner fieldIndex struct => do
       let structType := normalizer.whnf
-        (← inferExactType? structures normalizer declarations locals struct)
-      let .const structOwner levels := structType.getAppFn | none
-      unless structOwner == owner do none
-      let (type, constructors) ← structures.find? owner
-      let constructorName ← type.ctors.head?
-      let constructor ← constructors.find? fun constructor =>
-        constructor.name == constructorName && constructor.induct == owner
-      unless type.ctors == [constructorName] do none
-      unless constructor.levelParams.length == levels.length do none
+        (← OptionT.mk (inferExactTypeM structures normalizer declarations locals struct))
+      let .const structOwner levels := structType.getAppFn | failure
+      unless structOwner == owner do failure
+      let some (type, constructors) := structures.find? owner | failure
+      let some constructorName := type.ctors.head? | failure
+      let some constructor := constructors.find? (fun constructor =>
+        constructor.name == constructorName && constructor.induct == owner) | failure
+      unless type.ctors == [constructorName] do failure
+      unless constructor.levelParams.length == levels.length do failure
       let ownerArguments := structType.getAppArgs
-      unless ownerArguments.size == type.numParams + type.numIndices do none
+      unless ownerArguments.size == type.numParams + type.numIndices do failure
       let params := ownerArguments.extract 0 type.numParams
       let mut current := constructor.type.instantiateLevelParams constructor.levelParams levels
       for param in params do
-        let .forallE _ _ body _ := normalizer.whnf current | none
+        let .forallE _ _ body _ := normalizer.whnf current | failure
         current := body.instantiate1 param
       let ownerIsProp := normalizer.isPropositionFormer type.type
       for earlier in [0:fieldIndex + 1] do
-        let .forallE _ fieldType rest _ := normalizer.whnf current | none
-        let fieldIsProp :=
-          inferExactSortLevel? structures normalizer declarations locals fieldType == some .zero
+        let .forallE _ fieldType rest _ := normalizer.whnf current | failure
+        let fieldLevel : Option Level ← (monadLift
+          (inferExactSortLevelM structures normalizer declarations locals fieldType) :
+            OptionT ExactInferM (Option Level))
+        let fieldIsProp := fieldLevel == some .zero
         if earlier == fieldIndex then
-          if ownerIsProp && !fieldIsProp then none else return fieldType
-        if ownerIsProp && rest.hasLooseBVars && !fieldIsProp then none
+          if ownerIsProp && !fieldIsProp then failure else return fieldType
+        if ownerIsProp && rest.hasLooseBVars && !fieldIsProp then failure
         current := rest.instantiate1 (.proj owner earlier struct)
-      none
-  | .lit (.natVal _) => some (.const ``Nat [])
-  | .lit (.strVal _) => some (.const ``String [])
-  | .bvar _ | .mvar _ => none
+      failure
+  | .lit (.natVal _) => return .const ``Nat []
+  | .lit (.strVal _) => return .const ``String []
+  | .bvar _ | .mvar _ => failure
 
-partial def inferExactSortLevel? (structures : StructureOwners)
+private partial def inferExactSortLevelM (structures : StructureOwners)
     (normalizer : ExactNormalizationEnv)
     (declarations : DeclarationTypes)
-    (locals : ExactLocals) (expression : Expr) : Option Level := do
-  let .sort level := normalizer.whnf
-    (← inferExactType? structures normalizer declarations locals expression) | none
-  return level
+    (locals : ExactLocals) (expression : Expr) : ExactInferM (Option Level) := do
+  let some type ← inferExactTypeM structures normalizer declarations locals expression
+    | return none
+  let .sort level := normalizer.whnf type | return none
+  return some level
 
 end
+
+/-- The sort level of `expression`'s exact type, if it has one: one memoized
+inference, linear in the expression's DAG. -/
+def inferExactSortLevel? (structures : StructureOwners)
+    (normalizer : ExactNormalizationEnv)
+    (declarations : DeclarationTypes)
+    (locals : ExactLocals) (expression : Expr) : Option Level :=
+  (inferExactSortLevelM structures normalizer declarations locals expression).run' {}
 
 /-- Check one intrinsic projection and its literal constructor rule.
 

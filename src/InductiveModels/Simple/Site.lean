@@ -489,7 +489,7 @@ subsingleton rule refuses that shape and mints no large eliminator for it"
             if let some i := pivotField[j]! then
               let jt ← ityp is[j]!
               for m in [0:ni] do
-                if pivotField[m]!.isNone && jt.containsFVar is[m]!.fvarId! then
+                if pivotField[m]!.isNone && jt.containsFVarDag is[m]!.fvarId! then
                   unless pivotTransports.contains (i, j) do
                     pivotTransports := pivotTransports.push (i, j)
           return (isD, pos, flds.map (·.rec?),
@@ -1042,7 +1042,7 @@ delivered neither a syntactic predecessor for the `Type u` core nor the constrai
             for q in [0:xs.size] do
               let reachable := xs.extract 0 q
               let stray := fs.filter fun f => !reachable.any fun x => x.fvarId! == f.fvarId!
-              if (← ityp xs[q]!).hasAnyFVar fun id => stray.any fun f => f.fvarId! == id then
+              if (← ityp xs[q]!).hasAnyFVarDag fun id => stray.any fun f => f.fvarId! == id then
                 badShape s!"{exportCtors[0]!.1}'s field {nrs[q]!} names a field the empty arm \
 does not store, which its positivity check should have made unspellable"
             match ← wTowerLevelOf w xs with

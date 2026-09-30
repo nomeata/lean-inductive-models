@@ -1,5 +1,6 @@
 import Lean
 import InductiveModels.Format.Types
+import InductiveModels.ExprDag
 
 /-!
 # Reading shapes off an export, without a monad
@@ -41,34 +42,27 @@ def exportRecName (all : Array Name) (k : Nat) : Name :=
 for. A head that consumes `p` arguments has them substituted into its
 replacement — that is how `Tree._nested.1 α` becomes `List (Tree α)` under a
 parameter — and a head that consumes none is a plain rename. -/
-partial def restore (heads : Std.HashMap Name (Nat × Expr)) (e : Expr) : Expr :=
+def restore (heads : Std.HashMap Name (Nat × Expr)) (e : Expr) : Expr :=
   if heads.isEmpty then e else
-  match e with
-  | .const n _ => match heads[n]? with
-    | some (0, repl) => repl
-    | _ => e
-  | .app .. =>
-    let h := e.getAppFn
-    let args := e.getAppArgs.map (restore heads)
-    match h with
-    | .const n _ =>
-      match heads[n]? with
-      | some (take, repl) =>
-        if args.size ≥ take then
-          mkAppN (repl.instantiateRev (args.extract 0 take)) (args.extract take args.size)
-        else mkAppN h args
-      | none => mkAppN h args
-    | _ => mkAppN (restore heads h) args
-  | .lam n t b bi => .lam n (restore heads t) (restore heads b) bi
-  | .forallE n t b bi => .forallE n (restore heads t) (restore heads b) bi
-  | .letE n t v b nd => .letE n (restore heads t) (restore heads v) (restore heads b) nd
-  | .proj tn i s =>
-    let restoredType := match heads[tn]? with
-      | some (0, .const name _) => name
-      | _ => tn
-    .proj restoredType i (restore heads s)
-  | .mdata data body => .mdata data (restore heads body)
-  | _ => e
+  Dag.mapRec (e := e) fun visit s => do
+    match s with
+    | .const n _ => match heads[n]? with
+      | some (0, repl) => return some repl
+      | _ => return some s
+    | .app .. =>
+      let .const n _ := s.getAppFn | return none
+      let some (take, repl) := heads[n]? | return none
+      let args ← s.getAppArgs.mapM visit
+      if args.size ≥ take then
+        return some (mkAppN (repl.instantiateRev (args.extract 0 take))
+          (args.extract take args.size))
+      else return some (mkAppN s.getAppFn args)
+    | .proj tn i b =>
+      let restoredType := match heads[tn]? with
+        | some (0, .const name _) => name
+        | _ => tn
+      return some (.proj restoredType i (← visit b))
+    | _ => return none
 
 /-- Close `body` over the already-opened `values`, taking each binder's name,
 domain and binder info from the exact `telescope` rather than from the local

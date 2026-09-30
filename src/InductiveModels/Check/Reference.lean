@@ -13,18 +13,15 @@ open Lean
 
 namespace InductiveModels.Check
 
-private partial def expressionReference? (targets : Std.HashSet Name) : Expr → Option Name
+/-- The first constant or projection type name in `targets`, in preorder.  The
+walk is [`InductiveModels.Dag.findSome?`]: each distinct subterm once. -/
+private def exprTarget? (targets : Std.HashSet Name) : Expr → Option Name
   | .const name _ => if targets.contains name then some name else none
-  | .proj typeName _ struct =>
-      if targets.contains typeName then some typeName else expressionReference? targets struct
-  | .app fn arg => expressionReference? targets fn <|> expressionReference? targets arg
-  | .lam _ type body _ | .forallE _ type body _ =>
-      expressionReference? targets type <|> expressionReference? targets body
-  | .letE _ type value body _ =>
-      expressionReference? targets type <|> expressionReference? targets value <|>
-        expressionReference? targets body
-  | .mdata _ body => expressionReference? targets body
-  | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => none
+  | .proj typeName _ _ => if targets.contains typeName then some typeName else none
+  | _ => none
+
+private def expressionReference? (targets : Std.HashSet Name) (e : Expr) : Option Name :=
+  Dag.findSome? (exprTarget? targets) e
 
 private def nameReference? (targets : Std.HashSet Name) (names : List Name) : Option Name :=
   names.find? targets.contains
@@ -62,21 +59,18 @@ reference traversal while that record is live, so intersecting this array with
 one discovered family's names later reproduces [`ownerReference?`] without an
 `EDecl` or `Expr` root. -/
 
-private partial def appendExpressionReferences (references : Array (Name × Name))
-    (owner : Name) : Expr → Array (Name × Name)
-  | .const name _ => references.push (owner, name)
-  | .proj typeName _ struct =>
-      appendExpressionReferences (references.push (owner, typeName)) owner struct
-  | .app fn arg =>
-      appendExpressionReferences (appendExpressionReferences references owner fn) owner arg
-  | .lam _ type body _ | .forallE _ type body _ =>
-      appendExpressionReferences (appendExpressionReferences references owner type) owner body
-  | .letE _ type value body _ =>
-      appendExpressionReferences
-        (appendExpressionReferences (appendExpressionReferences references owner type) owner value)
-        owner body
-  | .mdata _ body => appendExpressionReferences references owner body
-  | .bvar _ | .fvar _ | .mvar _ | .sort _ | .lit _ => references
+/-- Every constant and projection type name in `e`, in preorder, **once per
+distinct subterm** ([`InductiveModels.Dag.foldPreorder`]).  A name reached
+along several paths through a shared subterm is recorded at its first
+occurrence only; the first reference to any target — all a certificate is
+read for — is the same one [`ownerReference?`] finds. -/
+private def appendExpressionReferences (references : Array (Name × Name))
+    (owner : Name) (e : Expr) : Array (Name × Name) :=
+  Dag.foldPreorder (init := references) (e := e) fun references s =>
+    match s with
+    | .const name _ => references.push (owner, name)
+    | .proj typeName _ _ => references.push (owner, typeName)
+    | _ => references
 
 private def appendNameReferences (references : Array (Name × Name)) (owner : Name)
     (names : List Name) : Array (Name × Name) :=
@@ -85,7 +79,9 @@ private def appendNameReferences (references : Array (Name × Name)) (owner : Na
 /-- Ordered `(referring declaration, referenced declaration)` pairs from one
 inductive export record.  The order deliberately mirrors [`ownerReference?`]:
 types, constructors, and recursors in record order, and every direct-name field
-before the expression field which follows it.  Duplicates remain observable. -/
+before the expression field which follows it.  A subterm that occurs more than
+once is walked once, so the names inside it are recorded at its first
+occurrence only. -/
 def ownerReferenceCertificate : EDecl → Array (Name × Name)
   | .induct types constructors recursors => Id.run do
       let mut references : Array (Name × Name) := #[]

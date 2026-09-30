@@ -61,7 +61,7 @@ private def mutualFieldShape (all : Array Name) (np : Nat) (constructorType : Ex
           let .fvar fieldId := fields[index]!
             | return none
           for later in [index + 1:fields.size] do
-            if (← inferType fields[later]!).containsFVar fieldId then
+            if (← inferType fields[later]!).containsFVarDag fieldId then
               return none
         result := result.push { target? }
       return some result
@@ -905,23 +905,24 @@ private def sourceRecursorOwner! (types : Array EIndType) (recursor : ERec) : Na
   (types.find? fun type => Name.str type.name "rec" == recursor.name)
     |>.map (·.name) |>.getD (panic! s!"no source owner for {recursor.name}")
 
+/-- How many public-recursor applications `expression` contains, counted as a
+tree counts them — once per path — but computed on the DAG: the count of a
+node is memoized, so a shared subterm is counted once and multiplied. -/
 private partial def mutualRecursorApplicationCount (all : Array Name)
     (expression : Expr) : Nat :=
-  if all.any fun owner => expression.getAppFn.constName? == some (publicRecursor owner) then
-    expression.getAppArgs.foldl
-      (fun total argument => total + mutualRecursorApplicationCount all argument) 1
-  else
-    match expression with
-    | .app function argument =>
-      mutualRecursorApplicationCount all function + mutualRecursorApplicationCount all argument
-    | .lam _ type body _ | .forallE _ type body _ =>
-      mutualRecursorApplicationCount all type + mutualRecursorApplicationCount all body
-    | .letE _ type value body _ =>
-      mutualRecursorApplicationCount all type + mutualRecursorApplicationCount all value +
-        mutualRecursorApplicationCount all body
-    | .mdata _ body => mutualRecursorApplicationCount all body
-    | .proj _ _ projected => mutualRecursorApplicationCount all projected
-    | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => 0
+  (go expression).run' {}
+where
+  go (e : Expr) : StateM (Dag.Memo Nat) Nat := Dag.memo e fun _ => do
+    if all.any fun owner => e.getAppFn.constName? == some (publicRecursor owner) then
+      e.getAppArgs.foldlM (fun total argument => return total + (← go argument)) 1
+    else
+      match e with
+      | .app function argument => return (← go function) + (← go argument)
+      | .lam _ type body _ | .forallE _ type body _ => return (← go type) + (← go body)
+      | .letE _ type value body _ => return (← go type) + (← go value) + (← go body)
+      | .mdata _ body => go body
+      | .proj _ _ projected => go projected
+      | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => return 0
 
 private def replaceMutualRecursorCalls (all : Array Name) (pre : Array Expr)
     (locals : Array Expr) (expression : Expr) : Expr × Nat :=

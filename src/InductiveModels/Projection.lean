@@ -211,18 +211,10 @@ def indexedFibreOneLayerTypeShape (numParams numIndices : Nat)
   let .sort level := type | return false
   return level.normalize.isNeverZero
 
-private partial def occursIn (needle : Expr) : Expr → Bool
-  | expression =>
-    if expression == needle then true else
-    match expression with
-    | .app function argument => occursIn needle function || occursIn needle argument
-    | .lam _ type body _ | .forallE _ type body _ =>
-      occursIn needle type || occursIn needle body
-    | .letE _ type value body _ =>
-      occursIn needle type || occursIn needle value || occursIn needle body
-    | .mdata _ body => occursIn needle body
-    | .proj _ _ structureExpr => occursIn needle structureExpr
-    | .bvar _ | .fvar _ | .mvar _ | .sort _ | .const _ _ | .lit _ => false
+/-- Does `needle` occur in `expression`?  Memoized: a field type here can be
+a DAG whose tree is astronomically large. -/
+private def occursIn (needle expression : Expr) : Bool :=
+  Dag.occurs needle expression
 
 /-- Earlier binders on which binder `target` depends, transitively through the
 intervening binder types, in telescope order.  `values` are the opened binder
@@ -310,7 +302,7 @@ def recursiveIndexedFibreOneLayerShape (type : EIndType) (constructor : ECtor)
       recursiveFields := recursiveFields.push fieldIndex
   if recursiveFields.isEmpty then return false
   for recursiveIndex in recursiveFields do
-    if result.containsFVar fields[recursiveIndex]!.value.fvarId! then return false
+    if result.containsFVarDag fields[recursiveIndex]!.value.fvarId! then return false
   let values := fields.map (·.value)
   let types := fields.map (·.type)
   for fieldIndex in [:fields.size] do
@@ -432,20 +424,29 @@ private def openForall (tag : Name) (target slot : Nat) (type : Expr) :
   let binder := mkLocal tag target slot "value" name domain info
   return (binder, body.instantiate1 binder.value)
 
+/-- The transporters built so far in one normalization, by target field. -/
+private abbrev TransportM := StateT (Std.HashMap Nat Expr) (Except String)
+
 mutual
 
-  /-- The closed telescope transporter for one selected field. -/
+  /-- The closed telescope transporter for one selected field, built once per
+  field: it is a closed term that depends on nothing but `target`, and every
+  later field whose dependency closure contains `target` applies it. Rebuilt
+  per use, a chain of `n` dependent fields costs `2^n` transporters. -/
   private partial def transporter (eqi : EqInfo) (tag : Name)
-      (fields : Array ProjectionField) (target : Nat) : Except String Expr := do
+      (fields : Array ProjectionField) (target : Nat) : TransportM Expr := do
+    if let some built := (← get)[target]? then return built
     let type ← transporterType eqi tag fields target
-    transporterValue eqi tag fields target type
+    let built ← transporterValue eqi tag fields target type
+    modify (·.insert target built)
+    return built
 
   /-- Apply the canonical transporter to field values and iota proofs in the
   current scope.  Calls at a smaller target build the right-hand side of a
   later iota-proof binder, so the recursion is well founded by field index. -/
   private partial def normalizedWith (eqi : EqInfo) (tag : Name)
       (fields : Array ProjectionField) (target : Nat)
-      (values : Array Expr) (proofs : Array (Option Expr)) : Except String Expr := do
+      (values : Array Expr) (proofs : Array (Option Expr)) : TransportM Expr := do
     let dependencies := dependencies fields target
     if dependencies.isEmpty then return values[target]!
     let mut arguments : Array Expr := #[]
@@ -464,7 +465,7 @@ mutual
   A later equality binds `pᵢ = normᵢ xᵢ`, not `pᵢ = xᵢ`; this is the
   detail which makes arbitrary dependent telescopes type correctly. -/
   private partial def transporterType (eqi : EqInfo) (tag : Name)
-      (fields : Array ProjectionField) (target : Nat) : Except String Expr := do
+      (fields : Array ProjectionField) (target : Nat) : TransportM Expr := do
     if target >= fields.size then throw s!"projection field {target} is absent"
     let dependencies := dependencies fields target
     let mut values := fields.map (·.value)
@@ -536,7 +537,7 @@ binder itself. -/
 def normalizeProjectionField (eqi : EqInfo) (tag : Name)
     (fields : Array ProjectionField) (target : Nat) : Except String Expr := do
   if target >= fields.size then throw s!"projection field {target} is absent"
-  normalizedWith eqi tag fields target (fields.map (·.value)) (fields.map (·.iota?))
+  (normalizedWith eqi tag fields target (fields.map (·.value)) (fields.map (·.iota?))).run' {}
 
 end ProjectionField
 end InductiveModels
