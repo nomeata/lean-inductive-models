@@ -50,8 +50,10 @@ stream as written — together with con-leche's own expectation for comparison.
 pairing: nothing Lean's kernel rejects is ever accepted, and every run stays
 under a resident-memory bound.
 
-The table also records what this port found: the streams Lean's kernel accepts
-that this tool does not yet model (class `defect`), and one out-of-scope decline
-(class `scope`). A fixed defect moves to `accept`; `nested_pin_collide` and
-`nested_pin_collide2` are two, a nested container whose own recursion collapses
-at the occurrence (`test/fixtures/inductive-models/nest_pin_collapse.lean`).
+The table also records what this port found: streams Lean's kernel accepts
+that this tool does not yet model (class `defect`), and out-of-scope declines
+(class `scope`), each with its reason in the row's note. A fixed defect moves to
+`accept`, with a focused fixture of this repository's own under
+`test/fixtures/inductive-models/` pinning the shape; for example,
+`nested_pin_collide` and `nested_pin_collide2`, a nested container whose own
+recursion collapses at the occurrence, are pinned by `nest_pin_collapse.lean`.
