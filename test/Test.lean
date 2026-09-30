@@ -1664,10 +1664,8 @@ def runOne (root : String) (a : TAcc) (r : Row)
 /-- **What a replayed export is visible as**, captured as two checks rather
 than prose alone.
 
-Both are facts about *Lean* and not about this tool. The visibility hazard and
-the conclusion that the kernel-level API is unusable both disappear if
-`Environment.find?` gains a fallback to the kernel constant map. This is here
-so that day is a test failure with a name on it.
+Both are facts about *Lean* and not about this tool, pinned so that a toolchain
+bump that moves either is a test failure with a name on it.
 
 1. **`T.rec_1` is in the kernel map and not in `Environment.find?`.**
    `Declaration.getNames` says of itself that it omits *"auxiliary recursors
@@ -1675,8 +1673,16 @@ so that day is a test failure with a name on it.
    `addDeclCore` registers async constants from — so the constant every model
    in this repository is about is one `MetaM` cannot name. `Tree.rec` is the
    atom beside it: it **is** registered, so this is not "nothing is visible".
-2. **`ofKernelEnv` after a kernel replay shows nothing.** That is the whole of
+   `find?`'s fallback to the kernel map (below) reads `Environment.base`, which
+   `addDeclCore` does not advance, so it does not reach these.
+2. **`ofKernelEnv` after a kernel replay shows everything**, `T.rec_1`
+   included. Up to Lean v4.33.0 it showed nothing, and that was the whole of
    why this tool uses `Environment.addDeclCore` despite its collision panic.
+   leanprover/lean4#14771 (in v4.35.0) made `Environment.find?` fall back to
+   the kernel constant map of the environment `ofKernelEnv` builds, which
+   keys on the full name and so has no normalized-name collision. Moving the
+   construction onto the kernel-level API is therefore possible now; it has
+   not been done, and this check is what says the option exists.
 
 `tools/EnvProbe.lean` runs the same two probes at larger scale. -/
 def runWSpliceProbe (root : String) (a : TAcc) : IO TAcc := do
@@ -1792,9 +1798,10 @@ def runEnvProbe (root : String) (a : TAcc) : IO TAcc := do
     if let some dcl := toDeclaration (Environment.ofKernelEnv kenv2) d then
       if let .ok e := kenv2.addDeclWithoutChecking dcl then kenv2 := e
   let envB := Environment.ofKernelEnv kenv2
-  a := check a ((kenv2.find? `Tree).isSome && (envB.find? `Tree).isNone)
-    "Environment.ofKernelEnv now exposes a kernel-replayed constant to Environment.find? — \
-     the obstacle to using the kernel-level replay API is gone"
+  a := check a ((kenv2.find? `Tree).isSome && (envB.find? `Tree).isSome &&
+      (envB.find? `Tree.rec_1).isSome)
+    "Environment.ofKernelEnv no longer exposes kernel-replayed constants (Tree, Tree.rec_1) \
+     to Environment.find? — the fallback leanprover/lean4#14771 added is gone"
   return a
 
 /-- Every constant an export record introduces *or* refers to. A leaked alias
@@ -1930,16 +1937,19 @@ get wrong. Every claim here is a fact about *Lean* that this tool's
    introduced. Model generation uses this retry for normalized-name collisions;
    this probe pins the environment property it relies on.
 
-What is **not** an escape, all of it read off the pinned toolchain's
-`Lean/Environment.lean` rather than guessed: `addConstAsync` (`:1018`) and
-`replayConsts` (`:2440`) both insert through the same `AsyncConsts.add`, and
-`replayConsts` additionally cannot replay an inductive at all (`panic! "must
-be definition/theorem"`); `ofKernelEnv` is pinned above as strictly worse; and
+What is **not** an escape through `Environment`'s async map, all of it read
+off the pinned toolchain's (v4.35.0-rc3) `Lean/Environment.lean` rather than
+guessed: `addConstAsync` (`:1016`) and `replayConsts` (`:2551`) both insert
+through the same `AsyncConsts.add`, and `replayConsts` additionally cannot
+replay an inductive at all (`panic! "must be definition/theorem"`); and
 `Kernel.Environment`'s constructor is `private mk ::`, so the constant map
-cannot be rebuilt into stage 1 from outside that module.
+cannot be rebuilt into stage 1 from outside that module. A kernel-level replay
+read back through `ofKernelEnv` bypasses the async map altogether, and since
+leanprover/lean4#14771 `find?` sees what it holds (pinned in `runEnvProbe`
+above); the tool does not use that route yet.
 
 **And Lean's own commented-out `!isPrivateName` guard would not have fixed
-this.** `addDeclCore` (`:711`) adds to `asyncConstsMap.private`
+this.** `addDeclCore` (`:699`) adds to `asyncConstsMap.private`
 *unconditionally* and only the `.public` insertion sits behind the guard, so
 the private view collides whatever the guard does. A single colliding add
 prints the panic **twice**, once per view. The public-view guard therefore does

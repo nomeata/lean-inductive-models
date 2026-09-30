@@ -7,9 +7,11 @@
    checker restates every owner's telescope with the export's deliberately
    bounded normaliser (δβζ), so it could verify no model of either. The run
    stops before any construction with exit 3 and says so. It is not a decline:
-   the Kernel Arena's `bad/bugs/proj-of-stuck-prop`, `proj-of-subst-prop` and
-   `rec-of-subst-prop` prove `False` through Lean's kernel on exactly this
-   shape, and a decline would call such an input valid.
+   a decline would call the input valid on the kernel's word alone, and this
+   shape is where a since-fixed kernel bug lived (the Kernel Arena's
+   `bad/bugs/proj-of-stuck-prop`, `proj-of-subst-prop` and `rec-of-subst-prop`
+   prove `False` through Lean v4.33.0's kernel; leanprover/lean4#14807 fixed it
+   in v4.34.0). Both declarations here are kernel-valid.
    `test/MainCliTest.lean` pins the exit and the message.
 -/
 

@@ -78,9 +78,9 @@ jobs:
 
           # No `ulimit -v` here. That bounds VIRTUAL ADDRESS SPACE, never
           # resident memory, and since the v4.33.0 toolchain the two have
-          # nothing to do with each other: a v4.33.0 `lean` reserves about
-          # 12.8 GiB of address space at startup for allocator arenas while
-          # its peak RSS is unchanged at roughly 2.0 GiB. A cap low enough to
+          # nothing to do with each other: a `lean` reserves 12.6 GiB
+          # (v4.35.0-rc3) to 15 GiB (v4.33.0) of address space at startup for
+          # allocator arenas while its peak RSS stays around 2 GiB. A cap low enough to
           # catch a runaway aborts every `lean` with "failed to create
           # thread"; a cap high enough to let it start measures nothing.
           # RSS is the quantity of interest and the runner's own 16 GiB, with
@@ -131,8 +131,8 @@ jobs:
           set -euo pipefail
 
           # No `ulimit -v` here; see the Arena job for why. It bounds virtual
-          # address space, which a v4.33.0 `lean` reserves about 12.8 GiB of
-          # at startup against an unchanged 2.0 GiB peak RSS, so no value of
+          # address space, which a `lean` reserves 12.6 GiB or more of at
+          # startup against a peak RSS around 2 GiB, so no value of
           # it both lets `lean` start and catches a runaway. RSS is the
           # quantity of interest; the runner's 16 GiB bounds it here.
 

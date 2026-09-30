@@ -193,8 +193,9 @@ def main (args : List String) : IO UInt32 := do
 
   -- An owner whose type reaches its sort only by ι or a projection stops the
   -- run without a verdict: the structural checker cannot restate its
-  -- telescope, and Lean's kernel is unsound on that shape (the Arena's
-  -- `bad/bugs/*-subst-prop` and `proj-of-stuck-prop`), so it is not a decline.
+  -- telescope, and a decline would vouch for the input on the kernel's word
+  -- alone, on the shape where leanprover/lean4#14807 fixed a kernel soundness
+  -- bug (the Arena's `bad/bugs/*-subst-prop` and `proj-of-stuck-prop`).
   let beyondDelta ← runInductiveModels binary [
     "--inductives", "--check-input", "--check-output", "--type-check-input",
     "--type-check-generated", "--no-output",

@@ -353,10 +353,12 @@ The fast jobs set no per-process memory limit of their own: the runner's 16 GiB
 and the job timeout are what bound it. It used to cap each process at 12 GiB
 with `ulimit -v`, which bounds **virtual address space** rather than resident
 memory. Those were always different quantities and since the v4.33.0 toolchain
-they are unrelated: a v4.33.0 `lean` frontend reserves about 12.8 GiB of
-address space at startup for allocator arenas — eleven-plus 1 GiB anonymous
-mappings, and `MIMALLOC_ARENA_RESERVE` does not change it — while its peak RSS
-is unchanged at roughly 2.0 GiB. Under a 12 GiB `ulimit -v` no module builds at
+they are unrelated: a `lean` frontend reserves 12–15 GiB of address space at
+startup for allocator arenas — eleven-plus 1 GiB anonymous mappings, and
+`MIMALLOC_ARENA_RESERVE` does not change it — while its peak RSS stays around
+2 GiB. Compiling `Simple/Site.lean`, a v4.33.0 `lean` peaked at 14.8 GiB of
+address space and 1.62 GiB resident, and a v4.35.0-rc3 one at 12.6 GiB and
+1.62 GiB. Under a 12 GiB `ulimit -v` no module builds at
 all, aborting with `failed to create thread`; a cap high enough for `lean` to
 start no longer says anything about memory. **RSS is the quantity of interest.**
 That is why the one per-process bound CI does enforce — the verdict tables'

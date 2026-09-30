@@ -25,7 +25,8 @@
 # (the hand-written tower streams mention `Nat` and `Eq` without declaring
 # them), declines what its set model cannot yet certify, and rejects a few
 # streams the kernel accepts.  The kernel verdict here was taken with this
-# tool's `--type-check-input` replay, which is Lean's kernel.
+# tool's `--type-check-input` replay, which is Lean's kernel at the version
+# `lean-toolchain` pins; a toolchain bump that moves a verdict moves its row.
 #
 # The tower streams upstream writes without a prelude are rejected here for
 # exactly that; test/fixtures/dag-towers/ holds the same towers as complete
@@ -201,7 +202,7 @@
 0 accept  2 e2e/nested_comp_tower.ndjson                # con-leche declines
 0 accept  0 e2e/nested_lam_pin_prop.ndjson
 0 accept  2 e2e/nested_lam_pin_refl.ndjson              # con-leche declines
-0 accept  0 e2e/nested_nonuniform_param.ndjson
+1 reject  0 e2e/nested_nonuniform_param.ndjson          # Lean's kernel from v4.34.0 (leanprover/lean4#14582): invalid occurrence of datatype 'E' being declared; v4.33.0 and con-leche accept
 0 accept  2 e2e/nested_p01.ndjson                       # con-leche declines
 0 accept  0 e2e/nested_p02.ndjson
 0 accept  0 e2e/nested_p03.ndjson

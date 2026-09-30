@@ -88,8 +88,11 @@ definition in the way — returns after reading its spine alone.
 
 ## Lean's own walks
 
-What is and is not memoized in Lean v4.33.0, read off its source rather than
-assumed:
+What is and is not memoized in Lean v4.35.0-rc3 (the pinned toolchain), read
+off its source rather than assumed. Between v4.33.0 and v4.35.0-rc3 none of
+these walks changed except the two noted in the table (`foldConsts` and
+`instantiateMVars`); the kernel's definitional-equality cache, below the
+tables, changed too.
 
 | memoized — linear in the DAG | how |
 | --- | --- |
@@ -98,9 +101,9 @@ assumed:
 | `Expr.find?`, `Expr.findExt?` | C++ `for_each` with a visited set (`findExt?` does not cache partial applications, which only ever costs a spine) |
 | `Expr.hasLooseBVar` | C++ `for_each` with offsets, keyed on `(pointer, offset)` |
 | `==` (`Expr.eqv`), `Expr.equal` | C++ `expr_eq_fn`, with a cache of shared pointer *pairs* |
-| `foldConsts`, `getUsedConstants` | a `PtrSet` of visited nodes |
+| `foldConsts`, `getUsedConstants` | a `PtrSet` of visited nodes; since leanprover/lean4#14728 (v4.34.0) they also count a projection's structure name. `Order.lean` keeps its own copy of this walk because one visited set spans all of a record's roots |
 | `collectFVars`, `collectLevelParams`, `forEach` | an `ExprSet` or `MonadCacheT` of visited nodes |
-| `Meta.transform`, `Core.transform`, `instantiateMVars` | a cache keyed on `ExprStructEq` |
+| `Meta.transform`, `Core.transform`, `instantiateMVars` | a cache keyed on `ExprStructEq`; `instantiateMVars` also caches its lifts of substituted values, keyed on `(pointer, cutoff, amount)`, since leanprover/lean4#14520 (v4.34.0) |
 | `hash`, `hasLooseBVars`, `looseBVarRange`, `hasFVar`, `approxDepth` | stored in every node: constant time |
 
 | **not** memoized | instead |
@@ -117,7 +120,11 @@ calls one of the unmemoized ones.
 **Structural caches degrade on copies.** Lean's kernel and `Meta.inferType`
 cache on structural keys, and an equality test between two structurally equal
 terms that are *different objects* costs their size, with a fresh pair cache
-each time. Instantiating the parameters of an open tower — a `Π` tower over a
+each time. That includes the kernel's definitional-equality caches: since
+leanprover/lean4#14806 (v4.34.0) a successful `is_def_eq` is recorded in a plain
+set of expression pairs, like a failed one, where it used to be merged into a
+union-find (`equiv_manager`) that walked both terms under a pointer-keyed node
+map. Both sets hash and compare their keys structurally. Instantiating the parameters of an open tower — a `Π` tower over a
 parameter, say — produces such copies, one per binder offset the tower appears
 at, and both then run quadratic in the tower rather than linear. That is Lean's
 behavior on its own terms, polynomial, and visible only on adversarial arrow

@@ -251,12 +251,16 @@ private def FilterState.feedSource (state : FilterState α) (context : FilterCon
   -- A type that reaches its sort only through ι or a projection —
   -- `inductive X : pick true` with `pick` defined by `match` — is one whose
   -- model the checker could not verify. That is not a decline, which would
-  -- assert a valid input this tool merely leaves unmodelled: Lean's kernel is
-  -- itself unsound on inductives whose sort is computed this way (the Kernel
-  -- Arena's `bad/bugs/proj-of-stuck-prop`, `proj-of-subst-prop` and
-  -- `rec-of-subst-prop` prove `False` through one), so the run stops without a
-  -- verdict (exit 3), before any construction, and says why. Every block whose
-  -- types are reached by definitions alone is unaffected.
+  -- assert a valid input this tool merely leaves unmodelled: that assertion
+  -- would rest on Lean's kernel alone, and this shape is where a since-fixed
+  -- kernel bug lived. Up to Lean v4.33.0 `is_prop` answered "not a
+  -- proposition" for a stuck sort, and the Kernel Arena's
+  -- `bad/bugs/proj-of-stuck-prop`, `proj-of-subst-prop` and `rec-of-subst-prop`
+  -- prove `False` through it; leanprover/lean4#14807 (in v4.34.0) fixed it,
+  -- and `--type-check-input` now rejects all three before this point. So the
+  -- run stops without a verdict (exit 3), before any construction, and says
+  -- why. Every block whose types are reached by definitions alone is
+  -- unaffected.
   if let .induct types@(root :: _) _ _ := replayD then
     if unsafeRoot?.isNone && basisRoot?.isNone &&
         (generation.nested || generation.mutualModels || generation.modelsSimpleInput root.name) then

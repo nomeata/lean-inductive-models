@@ -71,9 +71,12 @@ structure DeclSummary where
 
 namespace ExprReferences
 
-/- `Expr.foldConsts` has exactly the pointer-visited traversal wanted here but
-   intentionally ignores `Expr.proj.typeName`.  Keep the same implementation
-   shape and count a projection's type name as a used declaration too. -/
+/- The same pointer-visited traversal as `Expr.foldConsts`, which since
+   leanprover/lean4#14728 (Lean v4.34.0) also counts `Expr.proj.typeName`, as
+   this does.  It is kept rather than calling `foldConsts` once per root
+   because one visited set spans all of a record's roots: a type and value, or
+   a block's constructor types, share subterms, and `foldConsts` would walk
+   each shared one again for every root that reaches it. -/
 unsafe structure State where
   visited : PtrSet Expr := mkPtrSet
   names : Std.HashSet Name := {}

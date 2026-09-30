@@ -966,9 +966,20 @@ definitions and β/ζ-reduces and does nothing else, because it is a pure
 function of the export text and not a second kernel — so it could verify no
 model of `XM`. The run stops before any construction, with exit `3` and a line
 naming the member. This is not a decline, which would call the input valid and
-merely unmodelled: Lean's kernel is unsound on inductives whose sort is
-computed this way, and the Kernel Arena's `bad/bugs/proj-of-stuck-prop`,
-`proj-of-subst-prop` and `rec-of-subst-prop` prove `False` through it. A type
+merely unmodelled. That claim would rest on Lean's kernel alone, because the
+checker cannot restate the owner, and this shape is where a specific,
+since-fixed kernel bug lived; the shape itself is not unsound. The Kernel
+Arena's `bad/bugs/proj-of-stuck-prop`, `proj-of-subst-prop` and
+`rec-of-subst-prop` prove `False` with an owner whose sort is `Prop` in one
+context and stuck in another. Up to Lean v4.33.0, the kernel's `is_prop` check
+answered "not a proposition" for a type whose sort was stuck, so data could be
+taken out of a proof. It was fixed by
+[leanprover/lean4#14807](https://github.com/leanprover/lean4/pull/14807),
+which makes `is_prop` require the inferred type to reduce to a sort. The first
+of the three also relies on the order-dependent definitional-equality cache
+that [#14806](https://github.com/leanprover/lean4/pull/14806) replaced. Both are in
+Lean v4.34.0 and later. On this repository's toolchain, `--type-check-input`
+rejects all three (exit `1`) before this check runs. A type
 former reached through definitions alone (`def MyFam := Nat → Type`, chains of
 them, irreducible ones) is in scope on every route. The elaborator writes this
 shape only when a type is *written* as a `match` or a projection;
