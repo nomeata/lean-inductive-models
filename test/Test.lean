@@ -840,6 +840,23 @@ def expectedPrim : List Row :=
        ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("WSlotBind", 22),
        ("WSlotOne", 24)],
       [("Eq", "prim model: a basis primitive")])
+  -- **Tree-arm owners at a sort with no predecessor**, holding fields at
+  -- their own parameter levels: `Sort (max 1 u)` with a field at `Sort u`
+  -- has no `Type ℓ` core, and the W core is at `Sort (max 1 w u)` so that it
+  -- needs none. The tuple tower, empty arm and direct route are here on the
+  -- same levels.
+  , ("tree_sort_level",
+      [("N", 15), ("TreeU", 215), ("_wcore.Subtype", 10), ("PProd'", 9),
+       ("_wcore.WT.PList", 6), ("_wcore.PSigma", 9), ("_wcore.WT.POption", 6),
+       ("_wcore.Exists", 4), ("_wcore.And", 8), ("_wcore.False", 2),
+       ("_wcore.Decidable", 6), ("_wcore.PUnit", 6), ("_wcore.True", 6),
+       ("_wcore.Or", 6), ("Iff", 8), ("Nonempty", 4), ("_wcore.Acc", 13),
+       ("_wcore.WellFounded", 6), ("_wcore.Bool", 6), ("_wcore.HEq", 5),
+       ("_wcore.PProd", 9), ("TreeUV", 12), ("TreeSucc", 14), ("TreeProp", 12),
+       ("TreeImax", 21), ("TreeOne", 14), ("TreeBind", 12), ("TreeBindImax", 19),
+       ("ListU", 6), ("ListImax", 13), ("OptSucc", 8), ("LoopU", 8),
+       ("LoopImax", 6), ("PairU", 9), ("PairSucc", 11), ("FunImax", 14)],
+      [("Eq", "prim model: a basis primitive")])
   -- **The tree arm**, and this row is three claims at once.
   --
   -- The four models are the shapes the tuple tower cannot express: `Wt` is a
