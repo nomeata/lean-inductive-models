@@ -817,15 +817,28 @@ def expectedPrim : List Row :=
   -- `((α → β) → β)` in the label tower; `WBind` stores the same type
   -- as an infinitary child's binder in the branch tower. The former is first
   -- and therefore carries the W fragment, while the latter is the arm's own
-  -- twelve declarations and the box's two arrow coercions. Both remain on the
-  -- tagged W instantiation.
+  -- twelve declarations, the box's two arrow coercions, and the round-trip
+  -- lemmas and transports its slot needs. Both remain on the tagged W
+  -- instantiation.
   , ("w_imax",
-      [("WData", 226), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
+      [("WData", 231), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
        ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
        ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
        ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
        ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
-       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("WBind", 14)],
+       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("WBind", 19)],
+      [("Eq", "prim model: a basis primitive")])
+  -- Boxed slots beside boxed components something later names, in the data
+  -- tower, in the branch tower and at a one-constructor owner's selectors;
+  -- `WSlotDep` is on the untagged W instantiation.
+  , ("w_box_slots",
+      [("WSlotDep", 231), ("_wcore.Subtype", 10), ("PProd'", 9), ("_wcore.List", 6),
+       ("_wcore.Sigma", 9), ("_wcore.Option", 6), ("_wcore.Exists", 4),
+       ("_wcore.And", 8), ("_wcore.False", 2), ("_wcore.Decidable", 6),
+       ("_wcore.PUnit", 6), ("_wcore.True", 6), ("_wcore.Or", 6), ("Iff", 8),
+       ("Nonempty", 4), ("_wcore.Acc", 13), ("_wcore.WellFounded", 6),
+       ("_wcore.Bool", 6), ("_wcore.HEq", 5), ("_wcore.PProd", 9), ("WSlotBind", 22),
+       ("WSlotOne", 24)],
       [("Eq", "prim model: a basis primitive")])
   -- **The tree arm**, and this row is three claims at once.
   --

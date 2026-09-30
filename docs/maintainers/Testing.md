@@ -227,8 +227,9 @@ Arena's command line (every generation route and check on, `--no-output`):
   differ in places, because it brings its own prelude and its own scope; the
   table header says how.
 * [`test/fixtures/dag-towers/`](../../test/fixtures/dag-towers/) are the DAG
-  towers — depth-60 towers, `2^60` nodes as a tree, in every record position —
-  which must all be accepted.
+  towers — depth-60 towers, `2^60` nodes as a tree, in every record position,
+  and the recursive box's construction gates at depth 60 or 30 — which must
+  all be accepted.
 
 Every run is also held to a resident bound (1 GiB, by the child's own
 `ru_maxrss`, with a watchdog that kills it on crossing) and a CPU backstop

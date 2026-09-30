@@ -161,8 +161,9 @@ field to store and `MZData`'s one data field sits in a one-component tower.
   The minor receives the recursively unboxed value. `unbox (box v) ≡ v`
   holds by βι, structure eta, proof irrelevance and function eta, but the
   kernel pays for that conversion with the field type's tree, so the tuple
-  tower and the empty arm never ask for it at a field no later field names:
-  they transport along the box's round-trip lemmas, and the ι and projection
+  tower, the empty arm and the tree arm never ask for it at a field no later
+  field names, nor the tree arm at such a binder of a recursive field: they
+  transport along the box's round-trip lemmas, and the ι and projection
   rules are theorems that use them ([`InductiveModels.chainFinish`]).
 
 **Church routes** — carrier sort literally `0`, or **maybe-zero**. One

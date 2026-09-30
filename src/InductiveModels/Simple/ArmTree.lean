@@ -23,9 +23,11 @@ whose projection reduces), and [`InductiveModels.wCoreRootFn`] takes it back to
 the label `⟨t, d⟩` by βιπ alone — `root (sup a f) ≡ a`. The label's two
 `PSigma'` projections give the tag and the data, one `Nat.rec` cascade over the
 tag lands on the owner's single constructor, and the data tower's own
-`PSigma'` projections select the field. No step of that is `WT.Wrec`, and
-`unbox (box v) ≡ v` closes the boxed components, so the selector reduces to the
-constructor's binder and the rule is `Eq.refl`.
+`PSigma'` projections select the field. No step of that is `WT.Wrec`, so the
+selector reduces to the constructor's binder and the rule is `Eq.refl` — or,
+for a boxed field, to `unbox (box f)`, and the rule is the box's round-trip
+lemma: the kernel would decide `unbox (box f) ≡ f` at the cost of the field
+type's tree.
 
 **And the fields it stores are exactly the fields anything can depend on.**
 The branch positions have no definitional selector — `WT.kids_sup` carries a
@@ -87,8 +89,14 @@ does not store, which its positivity check should have made unspellable"
       forallBoundedTelescope tele (some (numForalls tele)) fun fields _ => do
         let selected := fields[nrs[q]!]!
         let fieldType ← ityp selected
-        mkLambdaFVars (ps ++ fields)
-          (eqi.refl' (← ilevel fieldType) fieldType selected)
+        -- A boxed field comes back as `unbox (box f)`, which is `f` by its
+        -- box's round-trip lemma and not by a conversion the kernel would pay
+        -- for with the field type's tree ([`InductiveModels.boxRtOf`]).
+        let level ← ilevel fieldType
+        let proof ← if levelHasIMax level.normalize then
+            pure (mkApp (← boxRtOf fieldType) selected)
+          else pure (eqi.refl' level fieldType selected)
+        mkLambdaFVars (ps ++ fields) proof
     overrides := overrides.push (site.tname, nrs[q]!, selector, proof)
   return overrides
 

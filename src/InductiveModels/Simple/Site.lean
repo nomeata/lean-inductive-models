@@ -137,6 +137,38 @@ structure PrimSite where
   wEtaAt : Array Expr → Nat → Expr → Array Expr → Expr → GenM Expr
   wCtorParts : Array Expr → Nat → Array Expr → GenM (Expr × Expr)
   wMkF : Array Expr → Expr → Array Expr → GenM Expr
+  /-- The ι rule of constructor `j` at the recursor prefix, its fields, the
+  rule's left side and its type, where a boxed slot makes it more than
+  `WT.Wrec_iota`; `none` elsewhere. -/
+  wIotaAt : Array Expr → Nat → Array Expr → Expr → Expr → GenM (Option Expr)
+
+/-- One constructor's arm of the tree arm's `F`, taken apart
+([`InductiveModels.PrimSite.wArmParts`]): the dispatch rebuilt from the
+children, the children, their hypotheses, the minor at given children and
+hypotheses, the eta lemma, the transport's domain and family, and whether a
+branch slot makes that transport the box's `cast`. -/
+structure WArm where
+  disp : Expr
+  kids : Array Expr
+  ihs : Array Expr
+  minorAt : Array Expr → Array Expr → Expr
+  eta : Expr
+  αf : Expr
+  fam : Expr
+  cast : Bool
+
+/-- The tree arm's `F` arm at a data value: the value's components, the data
+tower's slots, the `boxFix` motive and rebuild, the arm's value at given
+component values, the data value those values stand for, and the motive's
+level. -/
+structure WArmSetup where
+  comps : Array WTowerComp
+  slots : Array Nat
+  target : Expr → GenM Expr
+  rebuild : Array (Option Expr) → GenM Expr
+  minorAt : Array Expr → GenM Expr
+  at' : Array Expr → GenM Expr
+  level : Level
 
 /-- The emission state an arm threads: the declarations built so far, the
 basis names spliced beside them, the skeleton the model still requires, and
@@ -1182,6 +1214,34 @@ does not store, which its positivity check should have made unspellable"
       let b2 := psigmaSnd (.succ .zero) wW wNatT β b
       mkLambdaFVars #[b] (mkApp (← wDispAt ps k key nrv child b1) b2)
 
+  -- ── A constructor's boxed slots ──
+  -- **A boxed component no later binder names is a slot**, exactly as in the
+  -- tuple tower ([`InductiveModels.ChainSlot`]): the recursor goes through the
+  -- box's `boxFix` and the ι rule through its `rt` and `sec` rather than asking
+  -- the kernel for a round trip, which it decides at the cost of the field
+  -- type's tree ([`InductiveModels.chainFinish`]). A boxed component something
+  -- later names stays a conversion, since that later type is stated at the
+  -- unboxed value. The data tower's slots are read off the export's
+  -- constructor telescope — a stored field is named later by a later stored
+  -- field or by a recursive field's binder — so the recursor and the ι rules
+  -- ask one question.
+  let wDataSlots : Array Expr → Nat → GenM (Array Nat) := fun ps k => do
+    let (nrs, _) ← wShapeOf k
+    let tele ← instForall exportCtors[k]!.2 ps
+    forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+      let xs := nrs.map (fs[·]!)
+      let recTys ← (fs.filter fun f => !xs.contains f).mapM ityp
+      wSlotsOf xs (← wTowerBoxed xs) recTys
+  -- A recursive field's branch-tower slots: boxed binders no later binder
+  -- names (the result is the owner at its parameters and names none).
+  let wHasBinderSlots : Array Expr → Nat → Array Expr → GenM Bool := fun ps k nrv => do
+    let (_, rcs) ← wShapeOf k
+    for r in [0:rcs.size] do
+      let has ← forallTelescope (← wRecDom ps k r nrv) fun zs _ => do
+        return !(← wSlotsOf zs (← wTowerBoxed zs)).isEmpty
+      if has then return true
+    return false
+
   -- **The eta lemma** — `dispatch = f`, and the whole of the per-constructor
   -- glue. It is
   -- enough to prove `∀ j tel, dispatch j tel = f ⟨j, tel⟩` and instantiate at
@@ -1191,6 +1251,10 @@ does not store, which its positivity check should have made unspellable"
   -- and the right is `f ⟨r, tel⟩`, and those are the same term by that eta
   -- once more and by the terminating unit's own canonicity. Off the end of the
   -- telescope the branch is uninhabited and the arm is its eliminator.
+  --
+  -- **A branch with a boxed slot is the exception.** Its left side stores
+  -- `box (unbox tel.i)` where the right stores `tel.i`, and the arm goes through
+  -- `boxFix` at each slot and the slot's `rt` instead ([`InductiveModels.slotCongr`]).
   let wEtaAt : Array Expr → Nat → Expr → Array Expr → Expr → GenM Expr :=
     fun ps k key nrv f => do
     let (_, rcs) ← wShapeOf k
@@ -1209,9 +1273,22 @@ does not store, which its positivity check should have made unspellable"
         mkLambdaFVars #[j] body
     let armAt : Nat → GenM Expr := fun r => do
       forallTelescope (← wRecDom ps k r nrv) fun zs _ => do
+        let boxedZ ← wTowerBoxed zs
+        let slots ← wSlotsOf zs boxedZ
         withLocalDeclD `tel (← wTowerTyOf wW zs) fun tel => do
-          mkLambdaFVars #[tel]
-            (eqi.refl' wW selfTy (mkApp f (← wBranch ps key (natNumeral r) tel)))
+          if slots.isEmpty then
+            return ← mkLambdaFVars #[tel]
+              (eqi.refl' wW selfTy (mkApp f (← wBranch ps key (natNumeral r) tel)))
+          let comps ← wTowerRead (unitAt wW) wW zs boxedZ tel
+          let rebuild := fun (ov : Array (Option Expr)) =>
+            pure (wTowerRebuild wW comps slots ov)
+          let minorAt := fun (vs : Array Expr) => do
+            let app := fun (args : Array Expr) => do
+              return mkApp f (← wBranch ps key (natNumeral r)
+                (← wTowerMk (unitAt wW) (unitAtCanon wW) wW zs boxedZ 0 args))
+            return (← slotCongr eqi wW selfTy vs slots app).2
+          mkLambdaFVars #[tel] (← chainFinish .zero eqi (comps.map (·.value))
+            (wTowerSlots wW comps slots) rebuild (stmt (natNumeral r)) minorAt none)
     let junkAt : Expr → GenM Expr := fun t => do
       let jj := natSuccs rcs.size t
       withLocalDeclD `tel (dom jj) fun tel => do
@@ -1241,6 +1318,116 @@ does not store, which its positivity check should have made unspellable"
       -- dispatch's children are applied to anyway.
       return (wLabel ps (natNumeral k) tower,
               ← wDispLam ps k (wKeyOf ps k tower) nrv child)
+
+  -- **One constructor's arm of `F`, taken apart**: at the data `t` of label
+  -- `⟨k, t⟩`, the children `f` and their hypotheses `ih`, and the data tower's
+  -- components `projs` read out of `t`. The minor is applied to the fields and
+  -- to the children and hypotheses read off `f` and `ih`, and its result is `C`
+  -- at the constructor **rebuilt from the children**, which is
+  -- `sup ⟨k, t⟩ dispatch` and not `sup ⟨k, t⟩ f`. The eta lemma is what closes
+  -- that, and it is the one place this arm spends anything the tuple tower
+  -- does not.
+  let wArmParts : Array Expr → Expr → Array Expr → Nat → Expr → Expr → Expr → Array Expr →
+      GenM WArm := fun ps motive minors kk t f ih projs => do
+    let selfTy := wLowSelfAt ps
+    let coreMotive ← wPlan.motive selfTy motive
+    let (nrs, rcs) ← wShapeOf kk
+    let tag := natNumeral kk
+    let a := wLabel ps tag t
+    let key := if wTagged then tag else a
+    -- the children and their induction hypotheses, read off `f` and `ih`
+    let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
+      return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs vs))
+    let disp ← wDispLam ps kk key projs child
+    let tele ← instForall exportCtors[kk]!.2 ps
+    let nf := numForalls tele
+    let mut kids : Array Expr := #[]
+    let mut ihs : Array Expr := #[]
+    for r in [0:rcs.size] do
+      let (kd, ihv) ← forallTelescope (← wRecDom ps kk r projs) fun zs _ => do
+        let bv ← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs zs)
+        return (← mkLambdaFVars zs (wPlan.wrap (wLowSelfAt ps) (mkApp f bv)),
+          ← mkLambdaFVars zs (mkApp ih bv))
+      kids := kids.push kd
+      ihs := ihs.push ihv
+    -- Lean's minor takes the fields in declaration order and then the
+    -- hypotheses, which is what the two towers have to be re-interleaved
+    -- into: the data tower's components and the branch tower's children
+    -- index different subsequences of one telescope.
+    let mut layout : Array (Bool × Nat) := #[]
+    for i in [0:nf] do
+      match nrs.findIdx? (· == i) with
+      | some q => layout := layout.push (true, q)
+      | none =>
+        let some r := rcs.findIdx? (· == i)
+          | badShape s!"{exportCtors[kk]!.1}'s field {i} is in neither tower"
+        layout := layout.push (false, r)
+    let minorAt := fun (ks hs : Array Expr) =>
+      mkAppN minors[kk]! (layout.map (fun (d, i) => if d then projs[i]! else ks[i]!) ++ hs)
+    let h ← wEtaAt ps kk key projs f
+    let αf := Expr.forallE `b (← wBAt ps key) selfTy .default
+    let fam ← withLocalDeclD `z αf fun z => mkLambdaFVars #[z] (mkApp coreMotive (wSup ps a z))
+    return { disp, kids, ihs, minorAt, eta := h, αf, fam
+             cast := ← wHasBinderSlots ps kk projs }
+  -- The arm's value. A branch with a boxed slot makes the eta lemma a theorem
+  -- whose endpoints are not convertible cheaply, so the transport along it is
+  -- the box's `cast`, at reducibility height `0` ([`InductiveModels.boxCastName`]):
+  -- the kernel then compares two such transports argument by argument and
+  -- never asks `Eq.rec`'s K-like reduction for the round trip.
+  let wArmBody : Array Expr → Expr → Array Expr → Nat → Expr → Expr → Expr → Array Expr →
+      GenM Expr := fun ps motive minors kk t f ih projs => do
+    let p ← wArmParts ps motive minors kk t f ih projs
+    let base := p.minorAt p.kids p.ihs
+    if p.cast then
+      return mkAppN (.const (← boxCastName) [← ilevel p.αf, v]) #[p.αf, p.disp, f, p.fam, p.eta, base]
+    let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
+    let a := wLabel ps (natNumeral kk) t
+    transportAlong eqi v wW p.αf p.disp f p.eta base fun z =>
+      pure (mkApp coreMotive (wSup ps a z))
+  -- **The arm at the data `d`**, as the terms the recursor and the ι rules
+  -- share: `d`'s components, its slots, and the arm's value at a data value and
+  -- its components, a function of the children and hypotheses. The arm itself
+  -- is that value at `d` where the data tower has no slot, and otherwise goes
+  -- through `boxFix` at each slot ([`InductiveModels.chainFinish`]) with the
+  -- children and hypotheses in the motive — untagged, their type names the
+  -- label, and with it the slot.
+  let wArmSetup : Array Expr → Expr → Array Expr → Nat → Expr → GenM WArmSetup :=
+    fun ps motive minors kk d => do
+    let selfTy := wLowSelfAt ps
+    let coreMotive ← wPlan.motive selfTy motive
+    let tag := natNumeral kk
+    let frameAt : Expr → (Expr → Expr → GenM Expr) → GenM Expr := fun t k => do
+      let key := if wTagged then tag else wLabel ps tag t
+      let bt ← wBAt ps key
+      withLocalDeclD `f (.forallE `b bt selfTy .default) fun f => do
+        let ihT ← withLocalDeclD `b bt fun b =>
+          mkForallFVars #[b] (mkApp coreMotive (mkApp f b))
+        withLocalDeclD `ih ihT fun ih => k f ih
+    let (nrs, _) ← wShapeOf kk
+    let slots ← wDataSlots ps kk
+    let tele ← instForall exportCtors[kk]!.2 ps
+    let comps ← forallBoundedTelescope tele (some (numForalls tele)) fun fs _ => do
+      let xs := nrs.map (fs[·]!)
+      wTowerRead (unitAt wW) wW xs (← wTowerBoxed xs) d
+    let rebuild := fun (ov : Array (Option Expr)) =>
+      if slots.isEmpty then d else wTowerRebuild wW comps slots ov
+    let at' := fun (vs : Array Expr) => do
+      let ov ← slots.mapM fun q => do return some (← boxValOf comps[q]!.original vs[q]!)
+      return rebuild ov
+    let body := fun (vs : Array Expr) => do
+      frameAt (← at' vs) fun f ih => do
+        mkLambdaFVars #[f, ih] (← wArmBody ps motive minors kk (← at' vs) f ih vs)
+    let target := fun (t : Expr) => frameAt t fun f ih => do
+      mkForallFVars #[f, ih] (mkApp coreMotive (wSup ps (wLabel ps tag t) f))
+    return { comps, slots, target, rebuild := fun ov => pure (rebuild ov), minorAt := body
+             at' , level := ← ilevel (← target d) }
+  let wArmAt : Array Expr → Expr → Array Expr → Nat → Expr → GenM Expr :=
+    fun ps motive minors kk d => do
+    let s ← wArmSetup ps motive minors kk d
+    let vals := s.comps.map (·.value)
+    if s.slots.isEmpty then return ← s.minorAt vals
+    chainFinish s.level eqi vals (wTowerSlots wW s.comps s.slots) s.rebuild s.target
+      s.minorAt none
 
   -- **`F`, the minor the core's recursor takes** — one `Nat.rec` cascade over
   -- the tag whose motive must be well-typed at *every* tag, the eta lemma's
@@ -1273,51 +1460,12 @@ does not store, which its positivity check should have made unspellable"
     let s ← withLocalDeclD `t wNatT fun t => do ilevel (← motBody 0 t)
     let motAt : Nat → GenM Expr := fun kk =>
       withLocalDeclD `t wNatT fun t => do mkLambdaFVars #[t] (← motBody kk t)
+    -- **The data tower's components come first**, because untagged they are
+    -- what the branch tower's own binder types are written in terms of —
+    -- `WType.mk`'s child is `β a → WType β` and the `a` here is `d.1`.
     let armAt : Nat → GenM Expr := fun kk => do
-      let (nrs, rcs) ← wShapeOf kk
-      let tag := natNumeral kk
-      frame tag fun d f ih a key => do
-        -- **The data tower's components come first**, because untagged they are
-        -- what the branch tower's own binder types are written in terms of —
-        -- `WType.mk`'s child is `β a → WType β` and the `a` here is `d.1`.
-        let projs ← wNrProjs ps kk d
-        -- the children and their induction hypotheses, read off `f` and `ih`
-        let child : Nat → Array Expr → Array Expr → GenM Expr := fun r zs vs =>
-          return mkApp f (← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs vs))
-        let disp ← wDispLam ps kk key projs child
-        let tele ← instForall exportCtors[kk]!.2 ps
-        let nf := numForalls tele
-        let mut kids : Array Expr := #[]
-        let mut ihs : Array Expr := #[]
-        for r in [0:rcs.size] do
-          let (kd, ihv) ← forallTelescope (← wRecDom ps kk r projs) fun zs _ => do
-            let bv ← wBranch ps key (natNumeral r) (← wTowerMkOf wW zs zs)
-            return (← mkLambdaFVars zs (wPlan.wrap (wLowSelfAt ps) (mkApp f bv)),
-              ← mkLambdaFVars zs (mkApp ih bv))
-          kids := kids.push kd
-          ihs := ihs.push ihv
-        -- Lean's minor takes the fields in declaration order and then the
-        -- hypotheses, which is what the two towers have to be re-interleaved
-        -- into: the data tower's components and the branch tower's children
-        -- index different subsequences of one telescope.
-        let mut args : Array Expr := #[]
-        for i in [0:nf] do
-          match nrs.findIdx? (· == i) with
-          | some q => args := args.push projs[q]!
-          | none =>
-            let some r := rcs.findIdx? (· == i)
-              | badShape s!"{exportCtors[kk]!.1}'s field {i} is in neither tower"
-            args := args.push kids[r]!
-        let base := mkAppN minors[kk]! (args ++ ihs)
-        -- The minor's result is `C` at the constructor **rebuilt from the
-        -- children**, which is `sup ⟨k, d⟩ dispatch` and not `sup ⟨k, d⟩ f`.
-        -- The eta lemma is what closes that, and it is the one place this arm
-        -- spends anything the tuple tower does not.
-        let h ← wEtaAt ps kk key projs f
-        let αf := Expr.forallE `b (← wBAt ps key) selfTy .default
-        mkLambdaFVars #[d, f, ih]
-          (← transportAlong eqi v wW αf disp f h base fun z =>
-            pure (mkApp coreMotive (wSup ps a z)))
+      withLocalDeclD `d (mkAppN (.const wDN us) (ps ++ #[natNumeral kk])) fun d => do
+        mkLambdaFVars #[d] (← wArmAt ps motive minors kk d)
     let junkAt : Expr → GenM Expr := fun t => do
       let tag := natSuccs nc t
       frame tag fun d f ih a _ => do
@@ -1328,7 +1476,103 @@ does not store, which its positivity check should have made unspellable"
       let a2 := psigmaSnd (.succ .zero) wW wNatT (wDAt ps) a
       mkLambdaFVars #[a] (mkApp (← natCascade s nc motAt armAt junkAt 0 a1) a2)
 
-  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armGraph, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armEmpty, emptyStored, directRoute?, armRecoveryProp, carveRoute?, wTagged, wPlan, armTree, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF },
+  -- **The ι rule of a constructor with a boxed slot**, which `WT.Wrec_iota`
+  -- alone would prove only through the kernel's conversion of the slots'
+  -- round trips. `none` for a constructor without one, whose rule is
+  -- `WT.Wrec_iota` as it stands. Otherwise the rule is the chain
+  --
+  --     rec (mk f⃗ k⃗) = F ⟨j, d⟩ δ ih        -- `WT.Wrec_iota`, δ the dispatch
+  --                  = G f⃗ δ ih            -- one `boxFix_iota` per data slot
+  --                  = minor f⃗ k⃗ (rec ∘ k⃗)  -- the eta transport, below
+  --
+  -- The last step is the one the branch slots cost. `G` transports
+  -- `minor f⃗ κ⃗ (rec ∘ κ⃗)` along the eta lemma, where `κᵣ` is the child read
+  -- back off the dispatch — `fun z⃗ => kᵣ (unbox (box z⃗))` at a slot — so the
+  -- step is `Eq.rec` on `κᵣ = kᵣ`, which is `funext` over the slot's `rt`,
+  -- once per child with a slot: at `κ⃗` itself the transport's endpoints are the
+  -- same term and its K-like reduction closes it.
+  let wIotaAt : Array Expr → Nat → Array Expr → Expr → Expr → GenM (Option Expr) :=
+    fun pre j fields lhs0 α => do
+    let ps := pre.extract 0 np
+    let motive := pre[np]!
+    let minors := pre.extract (np + 1) (np + 1 + nc)
+    let (nrs, rcs) ← wShapeOf j
+    let nrv := nrs.map (fields[·]!)
+    let dataSlots ← wDataSlots ps j
+    let binderSlots ← wHasBinderSlots ps j nrv
+    if dataSlots.isEmpty && !binderSlots then return none
+    let selfTy := wLowSelfAt ps
+    let coreMotive ← wPlan.motive selfTy motive
+    let (a, dispC) ← wCtorParts ps j fields
+    let d0 := a.appArg!
+    let wIota := mkAppN (.const wCoreIota [uL, v, wKL])
+      #[wKTy ps, wAAt ps, wBFn ps, wDecEq ps, wTgAt ps, coreMotive,
+        mkAppN (.const wFN recLs) pre, a, dispC]
+    let fa := (← ityp wIota).appArg!
+    let ih0 := fa.appArg!
+    -- `rec (mk f⃗ k⃗) = F ⟨j, d⟩ δ ih`, then along each further step.
+    let mut acc := wIota
+    let mut cur := fa
+    let s ← wArmSetup ps motive minors j d0
+    let vals := s.comps.map (·.value)
+    let vsFinal := dataSlots.foldl (fun vs q => vs.set! q nrv[q]!) vals
+    unless dataSlots.isEmpty do
+      let cs := wTowerSlots wW s.comps s.slots
+      let lhsFix ← chainFinish s.level eqi vals cs s.rebuild s.target s.minorAt none
+      let rhsFix ← s.minorAt vsFinal
+      let αFix ← s.target d0
+      let e1 ← chainFinish s.level eqi vals cs s.rebuild s.target s.minorAt
+        (some { fields := nrv, lhs := lhsFix, rhs := rhsFix, α := αFix })
+      let lhsApp := mkApp2 lhsFix dispC ih0
+      let e1' ← transportAlong eqi .zero s.level αFix lhsFix rhsFix e1
+        (eqi.refl' v α lhsApp) fun z => pure (eqi.mk' v α lhsApp (mkApp2 z dispC ih0))
+      let next := (mkApp2 rhsFix dispC ih0).headBeta
+      acc ← transportAlong eqi .zero v α cur next e1' acc fun z => pure (eqi.mk' v α lhs0 z)
+      cur := next
+    if binderSlots then
+      let t ← s.at' vsFinal
+      let p ← wArmParts ps motive minors j t dispC ih0 vsFinal
+      let key := if wTagged then natNumeral j else wLabel ps (natNumeral j) t
+      let kC := rcs.map (fields[·]!)
+      let ihsOf := fun (ks : Array Expr) => ks.mapM fun k => do
+        forallTelescope (← ityp k) fun zs _ =>
+          mkLambdaFVars zs (mkAppN (.const recN recLs) (pre.push (mkAppN k zs)))
+      let gAt := fun (ks : Array Expr) => do return p.minorAt ks (← ihsOf ks)
+      let dAt := fun (ks : Array Expr) => wDispLam ps j key vsFinal fun r _ vs =>
+        return wPlan.unwrap selfTy (mkAppN ks[r]! vs).headBeta
+      let castN ← boxCastName
+      let lαf ← ilevel p.αf
+      let gF ← gAt p.kids
+      let goal := fun (ks : Array Expr) => do
+        let dk ← dAt ks
+        withLocalDeclD `e (eqi.mk' lαf p.αf p.disp dk) fun e => do
+          let lhs := mkAppN (.const castN [lαf, v]) #[p.αf, p.disp, dk, p.fam, e, gF]
+          mkForallFVars #[e] (eqi.mk' v (mkApp p.fam dk) lhs (← gAt ks))
+      let mut ks := p.kids
+      let mut proof ← withLocalDeclD `e (eqi.mk' lαf p.αf p.disp (← dAt ks)) fun e => do
+        mkLambdaFVars #[e] (eqi.refl' v (mkApp p.fam (← dAt ks)) gF)
+      for r in [0:rcs.size] do
+        let kr := kC[r]!
+        let q? ← forallTelescope (← ityp kr) fun zs _ => do
+          let slots ← wSlotsOf zs (← wTowerBoxed zs)
+          if slots.isEmpty then return none
+          let res ← ityp (mkAppN kr zs)
+          let (lhsZ, pw) ← slotCongr eqi (← ilevel res) res zs slots
+            (fun args => pure (mkAppN kr args))
+          return some (← funextTele wCoreFunext zs lhsZ (mkAppN kr zs) pw)
+        let some q := q? | continue
+        let before := ks
+        let kty ← ityp kr
+        proof ← transportAlong eqi .zero (← ilevel kty) kty ks[r]! kr q proof fun y =>
+          goal (before.set! r y)
+        ks := ks.set! r kr
+      let e3 := mkApp proof p.eta
+      let last ← gAt ks
+      acc ← transportAlong eqi .zero v α cur last e3 acc fun z => pure (eqi.mk' v α lhs0 z)
+      cur := last
+    return some acc
+
+  return ({ tname, root, lparams, np, memberTy, exportCtors, sourceCtors, reserved, sourceRecursor?, us, model, impl, selfN, ern, recN, ctorN, iotaN, indN, skelN, goodN, skelCtorN, nc, taken, declaredMemberTy, ni, w, isRec, rv, large, v, recLs, nonrecursiveOneConstructor, route, erasureBare, erasureLinear, gIsData, gIdxPos, gRecNb, gNf, gPivotTransports, gNonPiv, armGraph, eqi, ctorPairs, tbl, installedRecTy, publicSource, publicRecTy, emptySlots, armEmpty, emptyStored, directRoute?, armRecoveryProp, carveRoute?, wTagged, wPlan, armTree, wW, wDN, wTelN, wBN, wAN, wTgN, wFN, andCMk, andCFst, andCSnd, wNatT, uL, wKL, wShapeOf, wRecCount, wDAt, wAAt, wLabel, wKTy, wKeyOf, wTelFn, wBAt, wBFn, wTgAt, wDecEq, wSup, wLowSelfAt, wBranch, wDataTy, wNrProjs, wRecDom, wTelTy, wDispAt, wDispLam, wEtaAt, wCtorParts, wMkF, wIotaAt },
           { out, requires, spliced, projectionOverrides })
 
 end InductiveModels

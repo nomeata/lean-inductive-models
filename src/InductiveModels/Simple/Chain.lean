@@ -360,12 +360,12 @@ Given `iota?`, the same term is built at the constructor's own values and the
 transitivity, which is `rt` of each slot's box and never its conversion. -/
 partial def chainFinish (v : Level) (eqi : EqInfo) (vals : Array Expr)
     (slots : Array ChainSlot) (rebuild : Array (Option Expr) → GenM Expr)
-    (target : Expr → GenM Expr) (minorAt : Array Expr → Expr)
+    (target : Expr → GenM Expr) (minorAt : Array Expr → GenM Expr)
     (iota? : Option ChainIota) : GenM Expr := do
   if slots.isEmpty then
-    return match iota? with
-      | some io => eqi.refl' v io.α io.lhs
-      | none => minorAt vals
+    match iota? with
+    | some io => return eqi.refl' v io.α io.lhs
+    | none => return ← minorAt vals
   let fixN ← boxFixName
   let k := slots.size
   let parts := fun (i : Nat) => do
@@ -377,7 +377,7 @@ partial def chainFinish (v : Level) (eqi : EqInfo) (vals : Array Expr)
     let i := pre.size
     if i == k then
       let vs := (Array.range k).foldl (fun vs m => vs.set! slots[m]!.src pre[m]!) vals
-      return (minorAt vs, none)
+      return (← minorAt vs, none)
     let (s, n, bt, bx, ubx, sec) ← parts i
     let boxedPre ← (Array.range i).mapM fun m => do
       boxValOf slots[m]!.ty pre[m]!
@@ -532,7 +532,7 @@ partial def chainDestruct (v : Level) (eqi : EqInfo) (pairs : Bool)
       for m in [0:slots.size] do
         if let (.leaf l, some e) := (slots[m]!.at', ov[m]!) then ps' := ps'.set! l e
       return above (rungVals ov) (← blockTuple chain ps' 0 n)
-    let body ← chainFinish v eqi vals slots rebuild target minorAt iota?
+    let body ← chainFinish v eqi vals slots rebuild target (pure ∘ minorAt) iota?
     let some p := pad? | return body
     if p.canonical then return body
     if iota?.isSome then
@@ -547,10 +547,10 @@ partial def chainDestruct (v : Level) (eqi : EqInfo) (pairs : Bool)
       let slots := slots.push { src := i, ty := t, at' := .whole, path := scrut }
       let rebuild := fun (ov : Array (Option Expr)) =>
         pure (above (rungVals ov) (ov[slots.size - 1]!.getD scrut))
-      return ← chainFinish v eqi (vals.push default) slots rebuild target minorAt iota?
+      return ← chainFinish v eqi (vals.push default) slots rebuild target (pure ∘ minorAt) iota?
     let rv ← if bx then unboxValOf t scrut else pure scrut
     return ← chainFinish v eqi (vals.push rv) slots
-      (fun ov => pure (above (rungVals ov) scrut)) target minorAt iota?
+      (fun ov => pure (above (rungVals ov) scrut)) target (pure ∘ minorAt) iota?
   if pairs && !rest.hasLooseBVar 0 then
     -- A block leaf: nothing is bound here, and the placeholder `vals` grows by
     -- one so that a field's slot is its source index throughout.

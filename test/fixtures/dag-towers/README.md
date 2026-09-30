@@ -36,10 +36,10 @@ the resource bound `test/scripts/check_fixture_verdicts.py` enforces.
   with
   `FIXTURE_DIR=$PWD/test/fixtures/dag-towers LEAN_INDUCTIVE_MODELS_FILTER=0 scripts/export-fixture.sh box_tower.lean`.
 * `box_tree_tower.lean` and `box_mutual_tower.lean` put the same kind of
-  boxed arrow tower, `bt 30`, into the two other routes that box a field: the
-  tree arm (a boxed leaf beside two recursive fields, a recursive field under
-  a boxed binder, and a one-constructor owner that owes a selector for its
-  boxed field) and the mutual one-layer adapter (a one-constructor member
-  with a boxed field and a direct recursive one). They gate the same
-  construction as `box_tower`. Regenerate each as `box_tower` is, with its
-  own file name.
+  boxed arrow tower, `bt 30`, into the tree arm (a boxed leaf beside two
+  recursive fields, a recursive field under a boxed binder, and a
+  one-constructor owner that owes a selector for its boxed field) and into a
+  mutual block (a one-constructor member with a boxed field and a direct
+  recursive one, the shape the mutual one-layer adapter used to claim and
+  failed on). They gate the same construction as `box_tower`. Regenerate each
+  as `box_tower` is, with its own file name.

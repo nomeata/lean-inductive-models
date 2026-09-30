@@ -126,6 +126,9 @@ def primIotaRules (site : PrimSite) (st : PrimOut) :
         -- reading them in a different order would select the same arm.
         let proof ←
           if armTree then do
+            -- A constructor with a boxed slot proves it through the box's
+            -- lemmas ([`InductiveModels.PrimSite.wIotaAt`]).
+            if let some proof ← site.wIotaAt pre j fields lhs α then pure proof else
             let (a, disp) ← wCtorParts ps j fields
             let coreMotive ← wPlan.motive (wLowSelfAt ps) motive
             pure (mkAppN (.const wCoreIota [uL, v, wKL])

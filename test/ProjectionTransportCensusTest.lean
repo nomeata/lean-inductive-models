@@ -381,6 +381,7 @@ def expectedProjectionIotas : Array (String × Nat) :=
     ("unused_level_param", 0),
     ("w_alias", 13),
     ("wide_block", 48),
+    ("w_box_slots", 16),
     ("w_core", 13), ("w_dependent_field", 30), ("w_imax", 13), ("w_late_iff", 13),
     ("w_max", 13)]
 

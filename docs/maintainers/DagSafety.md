@@ -201,27 +201,50 @@ caches degrading on copies), not the box's: an unboxed field of the same shape,
 `α → α → …` over `α : Sort u`, costs 1.9·10^10 and 2.8·10^11 at depths 60 and
 120.
 
-**Still open: the tree arm and the mutual one-layer route.** They box stored
-fields and recursive binders the same way, but their recursor, eta lemma and
-ι rules still convert the round trips; a boxed arrow tower in an owner either
-of them models is still exponential — 3.2·10^9 and 8.9·10^9 instructions at
-depths 12 and 14 for a branching `WBoxT` with such a leaf. Their ι rules are
-the core's `WT.Wrec_iota` up to conversion, with the round trips inside an
-`Eq.rec` whose K-like reduction asks for them, so moving them to the lemmas is
-a change to those proofs rather than to the box.
+**The tree arm boxes the same way, in two towers.** A branching owner stores
+its fields in a data tower and a recursive field's binders in a branch tower,
+and a boxed component either of them holds is a slot under the same rule: boxed,
+and named by nothing after it — for a stored field, neither a later stored
+field nor a recursive field's binder. The recursor's minor for a constructor
+goes through `boxFix` at each data slot, with the children and their
+hypotheses in the motive (untagged, their type names the label that holds the
+slot); the eta lemma `dispatch = f` goes through `boxFix` at each branch slot
+and the slot's `rt`; and the eta transport is the box's `cast` wherever a
+branch slot makes the lemma's endpoints differ by a round trip. The ι rule of a
+constructor with a slot is then `WT.Wrec_iota`, one `boxFix_iota` per data
+slot, and an `Eq.rec` per child with a branch slot along
+`(fun z⃗ => k (unbox (box z⃗))) = k` — `funext` over the slot's `rt` — after
+which the eta transport's endpoints are one term and its K-like reduction
+closes the rule. A one-constructor owner's selector returns `unbox (box f)`, and
+its rule is `rt f`. A branching owner with a boxed arrow-tower leaf cost
+3.2·10^9 and 8.9·10^9 instructions at depths 12 and 14 before; the three
+owners of `box_tree_tower` (depth 30) now cost 7.2·10^9 together.
+
+**The mutual one-layer adapter does not box.** Its laws and ι rules are
+reflexivity and stand only where `unroll (roll v) ≡ v` is a cheap conversion,
+which a boxed field's is not; it never stored one either — its public
+constructor stored the field unboxed and was refused by name, an internal
+error at every depth. A member that would store a boxed field therefore keeps
+its private carrier, like a multi-constructor member, and the block's private
+family models it through the tuple tower or the tree arm, which box with the
+lemmas above (`box_mutual_tower`, depth 30: 3.8·10^9 instructions).
 
 ## The fixtures that gate it
 
 [`test/fixtures/dag-towers/`](../../test/fixtures/dag-towers/) puts a depth-60
-tower — about 2^60 nodes as a tree, a few hundred as a DAG — into every record
+tower — about 2^60 nodes as a tree, a few hundred as a DAG; depth 30 in the two
+newest box fixtures — into every record
 position the tool reads: constructor field types (closed, open over a
 parameter, open over an earlier field, in `Prop`, in an index, as the domain of
 a function field), projection bodies, recursive and mutual and nested blocks,
 theorem types and values, axiom and quotient types, `Prod` towers of the
 instance-tower kind, and arrow towers that no reduction shrinks. Most are
-con-leche's, ported as complete kernel exports; `ctor_field_towers` and
-`box_tower` are this repository's own — the latter the recursive box's
-construction gate rather than a walk gate. `test/scripts/check_fixture_verdicts.py` runs each one and
+con-leche's, ported as complete kernel exports; `ctor_field_towers` and the
+three `box_*` fixtures are this repository's own — the latter the recursive
+box's construction gates rather than walk gates, one per route that stores a
+boxed field (`box_tower` the tuple tower, `box_tree_tower` the tree arm,
+`box_mutual_tower` a mutual block the one-layer adapter used to claim).
+`test/scripts/check_fixture_verdicts.py` runs each one and
 fails it if it is not accepted, if its peak resident set exceeds 1 GiB, or if
 it needs more than 120 s of CPU.
 
@@ -231,7 +254,8 @@ cannot stay under 1 GiB — or, if it expands without allocating, cannot finish 
 any time — whatever machine it runs on. The CPU bound only decides how long
 that takes to observe. On the `main` of 2026-09-29 eight of the fifteen tower
 fixtures fail it: six are killed at 1 GiB, and two exhaust the CPU bound. On
-`435f7c1` `box_tower` is killed at 1 GiB.
+`435f7c1` `box_tower` is killed at 1 GiB, and on `e9b69bf` so are
+`box_tree_tower` and `box_mutual_tower`.
 
 A new walk is not covered because a fixture happens to pass: the rule above is
 the contract, and the fixtures only catch the walks their records reach. When a

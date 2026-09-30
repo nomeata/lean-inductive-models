@@ -1,4 +1,4 @@
-import InductiveModels.Simple.Box
+import InductiveModels.Simple.Chain
 
 open Lean Meta
 
@@ -201,6 +201,119 @@ partial def wTowerTail (tail : Expr) (w : Level) (xs : Array Expr) (boxed : Arra
   let fst := psigmaFst ℓ w stored β d
   let value ← if boxed[i]! then unboxValOf original fst else pure fst
   wTowerTail tail w xs boxed (i + 1) (psigmaSnd ℓ w stored β d) (acc.push value)
+
+/-! ### A tower's boxed slots
+
+A tower component that is stored boxed and that no later binder names is a
+**slot**, exactly as in the tuple tower ([`InductiveModels.ChainSlot`]): nothing
+downstream is typed at its unboxed value, so whoever reads it can go through
+the box's `boxFix` instead of asking the kernel for its round trip
+([`InductiveModels.chainFinish`]). A boxed component a later binder names stays
+a conversion — that binder's type is stated at the unboxed value, and the
+tower holding it at the stored one. -/
+
+/-- Which of the binders `xs` are slots: boxed, and named neither by a later
+binder's type nor by any of `later`. -/
+def wSlotsOf (xs : Array Expr) (boxed : Array Bool) (later : Array Expr := #[]) :
+    GenM (Array Nat) := do
+  let tys ← xs.mapM ityp
+  let mut out := #[]
+  for i in [0:xs.size] do
+    unless boxed[i]! do continue
+    let id := xs[i]!.fvarId!
+    let named := (tys.extract (i + 1) tys.size ++ later).any (·.containsFVarDag id)
+    unless named do out := out.push i
+  return out
+
+/-- One component of a tower as it is read at a value `rung` of the tower from
+that component on: its stored type and fibre (as
+[`InductiveModels.wTowerAt`] writes them), its original type, and its value —
+unboxed where it is stored boxed. -/
+structure WTowerComp where
+  ℓ : Level
+  stored : Expr
+  β : Expr
+  rung : Expr
+  original : Expr
+  value : Expr
+  deriving Inhabited
+
+/-- The components of a tower, read at `d` — [`InductiveModels.wTowerProjs`]
+with everything it computes on the way kept. -/
+partial def wTowerRead (tail : Expr) (w : Level) (xs : Array Expr) (boxed : Array Bool)
+    (d : Expr) (i : Nat := 0) (acc : Array WTowerComp := #[]) : GenM (Array WTowerComp) := do
+  if i == xs.size then return acc
+  let (ℓ, original, stored, β) ← wTowerAt tail w xs boxed i (acc.map (·.value))
+  let fst := psigmaFst ℓ w stored β d
+  let value ← if boxed[i]! then unboxValOf original fst else pure fst
+  wTowerRead tail w xs boxed (psigmaSnd ℓ w stored β d) (i + 1)
+    (acc.push { ℓ, stored, β, rung := d, original, value })
+
+/-- The first projection a component is stored at. -/
+def WTowerComp.fst (c : WTowerComp) (w : Level) : Expr := psigmaFst c.ℓ w c.stored c.β c.rung
+
+/-- The tower's slots, as the chain's destructor takes them. -/
+def wTowerSlots (w : Level) (comps : Array WTowerComp) (slots : Array Nat) : Array ChainSlot :=
+  slots.map fun q => { src := q, ty := comps[q]!.original, at' := .whole, path := comps[q]!.fst w }
+
+/-- The tower read at `comps`, rebuilt with slot `m`'s stored value replaced by
+`ov[m]` where one is given: every component up to the last slot is paired again,
+and the rest is the read value's own tail. With every slot at its path this is
+the value itself, by `PSigma'` eta. -/
+def wTowerRebuild (w : Level) (comps : Array WTowerComp) (slots : Array Nat)
+    (ov : Array (Option Expr)) : Expr := Id.run do
+  let last := slots.foldl max 0
+  let c := comps[last]!
+  let mut acc := psigmaSnd c.ℓ w c.stored c.β c.rung
+  for i' in [0:last + 1] do
+    let i := last - i'
+    let c := comps[i]!
+    let comp := match slots.idxOf? i with
+      | some m => (ov[m]?.join).getD (c.fst w)
+      | none => c.fst w
+    acc := psigmaMk c.ℓ w c.stored c.β comp acc
+  return acc
+
+/-- `app zs⁰ = app zs`, where `zs⁰` is `zs` with `unbox (box z)` at every slot:
+one transport along the slot's `rt` per slot, which the slot being named by no
+later argument keeps well typed. `app` rebuilds the term at an argument vector
+and has type `α` at level `ℓ` whatever the slots hold. Returns `app zs⁰` and the
+proof. -/
+def slotCongr (eqi : EqInfo) (ℓ : Level) (α : Expr) (zs : Array Expr)
+    (slots : Array Nat) (app : Array Expr → GenM Expr) : GenM (Expr × Expr) := do
+  let mut args := zs
+  for i in slots do
+    let n ← boxNode (← ityp zs[i]!)
+    args := args.set! i (mkApp n.unbox (mkApp n.box zs[i]!))
+  let lhs ← app args
+  let mut acc := eqi.refl' ℓ α lhs
+  for i in slots do
+    let z := zs[i]!
+    let n ← boxNode (← ityp z)
+    let before := args
+    acc ← transportAlong eqi .zero n.uT n.ty args[i]! z (mkApp (← boxRtOfNode n) z) acc
+      fun y => do return eqi.mk' ℓ α lhs (← app (before.set! i y))
+    args := args.set! i z
+  return (lhs, acc)
+
+/-- `(fun z⃗ => lhs) = (fun z⃗ => rhs)` from `h : lhs = rhs` under the binders
+`z⃗`: one `funext` per binder, innermost first. `fx` is `funext.{u,v} {α : Sort u}
+{β : α → Sort v} (f g : ∀ x, β x) (h : ∀ x, f x = g x) : f = g`. -/
+def funextTele (fx : Name) (zs : Array Expr) (lhs rhs h : Expr) : GenM Expr := do
+  let mut l := lhs
+  let mut r := rhs
+  let mut p := h
+  for i' in [0:zs.size] do
+    let z := zs[zs.size - 1 - i']!
+    let dom ← ityp z
+    let cod ← ityp l
+    let β ← mkLambdaFVars #[z] cod
+    let lf ← mkLambdaFVars #[z] l
+    let rf ← mkLambdaFVars #[z] r
+    p := mkAppN (.const fx [← ilevel dom, ← ilevel cod]) #[dom, β, lf, rf, ← mkLambdaFVars #[z] p]
+    l := lf
+    r := rf
+  return p
 
 /-! ### The empty arm's tower
 

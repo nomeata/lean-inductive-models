@@ -65,6 +65,14 @@ private def mutualFieldShape (all : Array Name) (np : Nat) (constructorType : Ex
         result := result.push { target? }
       return some result
 
+/-- Does a constructor store a field the one-layer tower would box — one whose
+level retains an `imax` ([`InductiveModels.wTowerBoxed`])? -/
+private def mutualFieldsBoxed (np : Nat) (constructorType : Expr) : GenM Bool :=
+  forallBoundedTelescope constructorType (some np) fun parameters _ => do
+    let telescope ← instForall constructorType parameters
+    forallBoundedTelescope telescope (some (numForalls telescope)) fun fields _ => do
+      return (← wTowerBoxed fields).any id
+
 /-- Select the production tranche symmetrically across a source SCC.  Every
 member is unindexed, unnested, safe, and never-zero.  A changed member has one
 constructor and at least one direct recursive field; all recursive fields in
@@ -104,8 +112,25 @@ private def classifyMutualOneLayer (types : Array EIndType)
       for field in shape do
         if let some target := field.target? then edges := edges.push (type.name, target)
       constructorFields := constructorFields.push (constructor.name, shape)
-    let changed := type.ctors.length == 1 &&
+    -- **A member that would store a boxed field keeps its private carrier.**
+    -- The layer's laws and rules are reflexivity, and they stand only where
+    -- `unroll (roll v) ≡ v` is a conversion the kernel decides cheaply
+    -- ([`InductiveModels.buildMutualOneLayerRecursors`]). A field whose level
+    -- retains an `imax` is stored recursively boxed ([`InductiveModels.wTowerBoxed`]),
+    -- and the kernel decides a box's round trip at the cost of the field
+    -- type's tree, so the tuple tower and the tree arm never ask it for one
+    -- that a lemma can replace (`docs/maintainers/DagSafety.md`). The member is
+    -- then an identity member like a multi-constructor one: the block's
+    -- private family still models it, through those two routes and their
+    -- round-trip lemmas.
+    let stores := type.ctors.length == 1 &&
       constructorFields.any fun (_, fields) => fields.any (·.target?.isSome)
+    let boxed ← if stores then
+        let some constructor := constructors.find? (·.name == type.ctors.head!)
+          | badShape s!"{type.name} has no exact constructor record"
+        mutualFieldsBoxed np constructor.type
+      else pure false
+    let changed := stores && !boxed
     anyChanged := anyChanged || changed
     members := members.push { owner := type.name, changed, level, constructorFields }
   unless anyChanged do return none

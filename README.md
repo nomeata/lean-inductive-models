@@ -515,7 +515,11 @@ instead. Linear recursion stays with entry 9 because a depth-indexed storage
 spine is the simpler representation there: without a boxed field it uses no
 axiom and every ι rule is `Eq.refl`. Branching and infinitary recursion need the general tree, its
 support library, and theorem-proved ι rules; its models admit `propext` and
-`Quot.sound` — for some shapes also `Classical.choice`.
+`Quot.sound` — for some shapes also `Classical.choice`. A field, or a binder
+of a recursive field, that needs entry 9's box is boxed the same way here,
+and under the same rule: where nothing later mentions it, the recursor, the
+ι rules and a one-constructor declaration's projection rule use the box's
+round-trip lemmas instead of asking the kernel to confirm the round trip.
 
 **Dependencies.** The support library (the source calls it the `_wcore`
 fragment) — a fixed export of the well-founded-tree toolkit, twenty
@@ -775,10 +779,14 @@ mutual blocks or
 The *mutual one-layer adapter* applies to a safe, recursive, unindexed,
 never-`Prop` mutual strongly connected component whose recursive fields are
 direct and independent of later fields, and where at least one member has one
-constructor and a recursive field. It publishes one simultaneous family over
+constructor, a recursive field, and no field that needs entry 9's box. It
+publishes one simultaneous family over
 entry 2's tag-and-family encoding; the qualifying one-constructor members
 expose a constructor layer, while the others remain aliases of their private
-carriers. Mutual blocks outside that scope still use entry 2, just without
+carriers. A member with a boxed field is not a qualifying one: the layer's
+conversions and ι rules hold by `Eq.refl`, which a box's round trip would make
+the kernel confirm at the cost of the field type's tree. Entry 2's own models
+box that field with the round-trip lemmas instead. Mutual blocks outside that scope still use entry 2, just without
 this presentation layer.
 
 There is no adapter for a one-constructor recursive *unindexed*
